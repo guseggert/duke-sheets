@@ -1,0 +1,30 @@
+[package]
+name = "duke-sheets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "A Rust library for reading, writing, and manipulating spreadsheets (Excel, CSV)"
+keywords = ["excel", "xlsx", "xls", "spreadsheet", "csv"]
+categories = ["parser-implementations", "encoding"]
+
+[dependencies]
+duke-sheets-core.workspace = true
+duke-sheets-formula.workspace = true
+duke-sheets-xlsx.workspace = true
+duke-sheets-xls = { workspace = true, optional = true }
+duke-sheets-csv.workspace = true
+duke-sheets-chart.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true
+
+[features]
+default = ["xlsx", "csv"]
+xlsx = []
+xls = ["dep:duke-sheets-xls"]
+csv = []
+full = ["xlsx", "xls", "csv"]

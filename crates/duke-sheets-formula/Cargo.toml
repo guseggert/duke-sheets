@@ -1,0 +1,22 @@
+[package]
+name = "duke-sheets-formula"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Formula parser and evaluator for duke-sheets spreadsheet library"
+
+[dependencies]
+duke-sheets-core.workspace = true
+thiserror.workspace = true
+ahash.workspace = true
+chrono.workspace = true
+rust_decimal.workspace = true
+regex.workspace = true
+lazy-regex.workspace = true
+once_cell.workspace = true
+rand = "0.8"
+
+[dev-dependencies]
+pretty_assertions.workspace = true

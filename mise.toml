@@ -1,0 +1,222 @@
+# mise configuration for duke-sheets
+# See https://mise.jdx.dev for documentation
+
+[tools]
+uv = "0.9"
+rust = "1.92"
+node = "20"
+"cargo:wasm-pack" = "latest"
+
+# =============================================================================
+# Setup Tasks
+# =============================================================================
+
+[tasks.setup]
+description = "Install all binding dependencies (run once)"
+run = """
+#!/bin/bash
+set -e
+
+echo "=== Setting up duke-sheets bindings ==="
+
+echo ""
+echo "1. Adding WASM target to Rust toolchain..."
+rustup target add wasm32-unknown-unknown
+
+echo ""
+echo "2. Installing maturin via uv tool..."
+uv tool install maturin
+
+echo ""
+echo "3. Setting up Python bindings environment..."
+cd bindings/python
+uv sync
+
+echo ""
+echo "=== Setup complete! ==="
+echo ""
+echo "Available commands:"
+echo "  mise run build          # Build all bindings"
+echo "  mise run test           # Build and test all bindings"
+echo "  mise run build:python   # Build Python bindings only"
+echo "  mise run build:wasm     # Build WASM bindings only"
+"""
+
+# =============================================================================
+# Build Tasks
+# =============================================================================
+
+[tasks.build]
+description = "Build all bindings"
+depends = ["build:python", "build:wasm"]
+
+[tasks."build:python"]
+description = "Build Python bindings"
+dir = "bindings/python"
+run = "uv run maturin develop"
+
+[tasks."build:wasm"]
+description = "Build WASM bindings"
+dir = "bindings/wasm"
+run = "wasm-pack build --target web --dev"
+
+[tasks."build:wasm:release"]
+description = "Build WASM bindings (release)"
+dir = "bindings/wasm"
+run = "wasm-pack build --target web --release"
+
+# =============================================================================
+# Test Tasks
+# =============================================================================
+
+[tasks.test]
+description = "Build and test all bindings"
+depends = ["test:python", "test:wasm"]
+
+[tasks."test:python"]
+description = "Test Python bindings"
+dir = "bindings/python"
+depends = ["build:python"]
+run = "uv run pytest tests/ -v"
+
+[tasks."test:wasm"]
+description = "Test WASM bindings (requires Firefox)"
+dir = "bindings/wasm"
+run = "wasm-pack test --headless --firefox"
+
+[tasks."test:wasm:node"]
+description = "Test WASM bindings (Node.js)"
+dir = "bindings/wasm"
+run = "wasm-pack test --node"
+
+[tasks."test:bindings"]
+alias = "tb"
+description = "Alias for 'mise run test'"
+depends = ["test"]
+
+# =============================================================================
+# Clean Tasks
+# =============================================================================
+
+[tasks.clean]
+description = "Clean all binding build artifacts"
+depends = ["clean:python", "clean:wasm"]
+
+[tasks."clean:python"]
+description = "Clean Python binding artifacts"
+dir = "bindings/python"
+run = """
+rm -rf target/
+rm -rf .venv/
+rm -rf *.egg-info/
+rm -rf dist/
+rm -rf build/
+find . -name "*.so" -delete
+find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+"""
+
+[tasks."clean:wasm"]
+description = "Clean WASM binding artifacts"
+dir = "bindings/wasm"
+run = """
+rm -rf target/
+rm -rf pkg/
+"""
+
+# =============================================================================
+# Development Tasks
+# =============================================================================
+
+[tasks.dev]
+description = "Build bindings in development mode and run tests"
+depends = ["build", "test"]
+
+[tasks."dev:python"]
+description = "Python development cycle"
+depends = ["build:python", "test:python"]
+
+[tasks."dev:wasm"]
+description = "WASM development cycle"
+depends = ["build:wasm", "test:wasm:node"]
+
+# =============================================================================
+# PyUNO Fixture Tasks (E2E Testing)
+# =============================================================================
+
+[tasks."fixtures:build"]
+description = "Build the PyUNO Docker image for fixture generation"
+run = "docker build -t duke-sheets-pyuno tests/fixtures/pyuno"
+
+[tasks."fixtures:generate"]
+description = "Generate all PyUNO fixtures (requires Docker)"
+depends = ["fixtures:build"]
+run = """
+#!/bin/bash
+set -e
+mkdir -p tests/fixtures/pyuno/output
+docker run --rm \
+  -v "$(pwd)/tests/fixtures/pyuno/output:/output" \
+  duke-sheets-pyuno
+echo ""
+echo "Fixtures generated in tests/fixtures/pyuno/output/"
+ls -la tests/fixtures/pyuno/output/
+"""
+
+[tasks."fixtures:generate:one"]
+description = "Generate a specific fixture (usage: mise run fixtures:generate:one data_types.xlsx)"
+depends = ["fixtures:build"]
+run = """
+#!/bin/bash
+set -e
+if [ -z "$1" ]; then
+  echo "Usage: mise run fixtures:generate:one <fixture_name.xlsx>"
+  exit 1
+fi
+mkdir -p tests/fixtures/pyuno/output
+docker run --rm \
+  -v "$(pwd)/tests/fixtures/pyuno/output:/output" \
+  duke-sheets-pyuno \
+  /app/run.sh "$1"
+"""
+
+[tasks."fixtures:list"]
+description = "List available PyUNO fixtures"
+depends = ["fixtures:build"]
+run = "docker run --rm duke-sheets-pyuno /app/run.sh --list"
+
+[tasks."fixtures:clean"]
+description = "Remove generated fixture files"
+run = """
+rm -rf tests/fixtures/pyuno/output/*.xlsx
+rm -f tests/fixtures/dxf/*.xlsx
+"""
+
+[tasks."fixtures:dxf"]
+description = "Generate DXF test fixtures (requires openpyxl)"
+run = """
+#!/bin/bash
+set -e
+cd tests/fixtures/dxf
+if ! python3 -c "import openpyxl" 2>/dev/null; then
+  echo "Installing openpyxl..."
+  pip install openpyxl
+fi
+python3 generate_fixtures.py
+"""
+
+# =============================================================================
+# E2E Test Tasks
+# =============================================================================
+
+[tasks."fixtures:all"]
+description = "Generate all fixtures (DXF + PyUNO)"
+depends = ["fixtures:dxf", "fixtures:generate"]
+
+[tasks."test:e2e"]
+description = "Run E2E tests for XLSX reader (requires fixtures)"
+run = "cargo test -p duke-sheets-xlsx --test e2e -- --nocapture"
+
+[tasks."test:e2e:all"]
+description = "Generate fixtures and run E2E tests"
+depends = ["fixtures:all"]
+run = "cargo test -p duke-sheets-xlsx --test e2e -- --nocapture"

@@ -1,0 +1,18 @@
+[package]
+name = "duke-sheets-csv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "CSV reader/writer for duke-sheets"
+
+[dependencies]
+duke-sheets-core.workspace = true
+thiserror.workspace = true
+csv.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true
