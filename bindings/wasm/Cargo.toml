@@ -1,0 +1,32 @@
+[package]
+name = "duke-sheets-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WebAssembly bindings for duke-sheets - high-performance Excel library"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Only use core + formula for WASM (no file I/O with C deps)
+duke-sheets-core = { path = "../../crates/duke-sheets-core" }
+duke-sheets-formula = { path = "../../crates/duke-sheets-formula" }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+# For WASM random number generation
+getrandom = { version = "0.2", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Os"]

@@ -1,0 +1,91 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/duke-sheets-core",
+    "crates/duke-sheets-formula",
+    "crates/duke-sheets-xlsx",
+    "crates/duke-sheets-xls",
+    "crates/duke-sheets-csv",
+    "crates/duke-sheets-chart",
+    "crates/duke-sheets",
+    "crates/duke-sheets-ffi",
+    "crates/duke-sheets-cli",
+]
+# Bindings are excluded - they use their own build systems (maturin, wasm-pack)
+exclude = [
+    "bindings/python",
+    "bindings/wasm",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourorg/duke-sheets"
+rust-version = "1.70"
+
+[workspace.dependencies]
+# Internal crates
+duke-sheets-core = { path = "crates/duke-sheets-core" }
+duke-sheets-formula = { path = "crates/duke-sheets-formula" }
+duke-sheets-xlsx = { path = "crates/duke-sheets-xlsx" }
+duke-sheets-xls = { path = "crates/duke-sheets-xls" }
+duke-sheets-csv = { path = "crates/duke-sheets-csv" }
+duke-sheets-chart = { path = "crates/duke-sheets-chart" }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+log = "0.4"
+tracing = "0.1"
+
+# XML parsing (for XLSX)
+quick-xml = "0.31"
+
+# ZIP handling (for XLSX)
+zip = "2.1"
+
+# Compound File Binary (for XLS)
+cfb = "0.10"
+
+# CSV handling
+csv = "1.3"
+
+# Date/time
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+# Decimal precision for financial calculations
+rust_decimal = "1.35"
+
+# Regex (for formulas, number formats)
+regex = "1.10"
+lazy-regex = "3.1"
+
+# Lazy static (for FFI global context)
+lazy_static = "1.4"
+once_cell = "1.19"
+
+# Hash functions (for style deduplication)
+ahash = "0.8"
+
+# Serialization (optional, for debugging)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Dev dependencies (in workspace.dependencies so crates can inherit)
+tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.4"
+pretty_assertions = "1.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.bench]
+lto = true

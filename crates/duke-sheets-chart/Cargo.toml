@@ -1,0 +1,20 @@
+[package]
+name = "duke-sheets-chart"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Chart support for duke-sheets"
+
+[dependencies]
+duke-sheets-core.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde"]

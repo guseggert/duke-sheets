@@ -1,0 +1,22 @@
+[package]
+name = "duke-sheets-xlsx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "XLSX (Office Open XML) reader/writer for duke-sheets"
+
+[dependencies]
+duke-sheets-core.workspace = true
+duke-sheets-formula.workspace = true
+duke-sheets-chart.workspace = true
+thiserror.workspace = true
+quick-xml.workspace = true
+zip.workspace = true
+chrono.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true

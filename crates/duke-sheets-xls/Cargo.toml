@@ -1,0 +1,21 @@
+[package]
+name = "duke-sheets-xls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "XLS (BIFF8) reader/writer for duke-sheets"
+
+[dependencies]
+duke-sheets-core.workspace = true
+duke-sheets-formula.workspace = true
+duke-sheets-chart.workspace = true
+thiserror.workspace = true
+cfb.workspace = true
+chrono.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true

@@ -1,0 +1,48 @@
+[project]
+name = "duke-sheets"
+version = "0.1.0"
+description = "High-performance Excel file library for Python"
+authors = [{ name = "Duke Sheets Authors" }]
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.9"
+readme = "README.md"
+keywords = ["excel", "xlsx", "spreadsheet", "csv"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Office/Business :: Financial :: Spreadsheet",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourorg/duke-sheets"
+Repository = "https://github.com/yourorg/duke-sheets"
+
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "duke_sheets._native"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "maturin>=1.7",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

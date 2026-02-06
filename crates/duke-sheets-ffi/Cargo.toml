@@ -1,0 +1,22 @@
+[package]
+name = "duke-sheets-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "C FFI bindings for duke-sheets"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+duke-sheets = { path = "../duke-sheets", features = ["full"] }
+lazy_static.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+cbindgen = "0.26"
+
+[dev-dependencies]
+tempfile.workspace = true

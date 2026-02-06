@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Duke Sheets - WASM Spreadsheet Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            margin: 0 0 20px 0;
+            color: #333;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .spreadsheet {
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 0;
+            min-width: 80px;
+            height: 28px;
+        }
+        th {
+            background: #f0f0f0;
+            font-weight: 500;
+            font-size: 12px;
+            color: #666;
+        }
+        .row-header {
+            width: 40px;
+            min-width: 40px;
+            text-align: center;
+        }
+        td input {
+            width: 100%;
+            height: 100%;
+            border: none;
+            padding: 4px 8px;
+            font-size: 13px;
+            outline: none;
+        }
+        td input:focus {
+            background: #e8f4fc;
+        }
+        td.formula input {
+            color: #0066cc;
+        }
+        .toolbar {
+            padding: 10px;
+            background: #f8f8f8;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .toolbar button {
+            padding: 8px 16px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .toolbar button:hover {
+            background: #45a049;
+        }
+        .formula-bar {
+            padding: 8px 10px;
+            background: white;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .formula-bar .cell-ref {
+            font-weight: bold;
+            width: 50px;
+            text-align: center;
+            color: #666;
+        }
+        .formula-bar input {
+            flex: 1;
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .status {
+            padding: 8px 10px;
+            background: #f8f8f8;
+            border-top: 1px solid #ddd;
+            font-size: 12px;
+            color: #666;
+        }
+        .examples {
+            margin-top: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .examples h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+        }
+        .examples ul {
+            margin: 0;
+            padding-left: 20px;
+            font-size: 13px;
+        }
+        .examples li {
+            margin: 5px 0;
+        }
+        .examples code {
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Consolas', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Duke Sheets - WASM Spreadsheet Demo</h1>
+        
+        <div class="spreadsheet">
+            <div class="toolbar">
+                <button onclick="calculate()">Calculate (F9)</button>
+                <span id="calc-status"></span>
+            </div>
+            <div class="formula-bar">
+                <span class="cell-ref" id="current-cell">A1</span>
+                <input type="text" id="formula-input" placeholder="Enter value or formula (e.g., =A1+B1)">
+            </div>
+            <div style="overflow-x: auto;">
+                <table id="grid"></table>
+            </div>
+            <div class="status" id="status">Ready</div>
+        </div>
+
+        <div class="examples">
+            <h3>Try these formulas:</h3>
+            <ul>
+                <li>Basic math: <code>=A1+B1</code>, <code>=A1*2</code>, <code>=10/2</code></li>
+                <li>Functions: <code>=SUM(A1:A5)</code>, <code>=AVERAGE(A1:B3)</code></li>
+                <li>Conditionals: <code>=IF(A1>10,"Big","Small")</code></li>
+                <li>Text: <code>=CONCAT(A1," ",B1)</code>, <code>=LEN(A1)</code></li>
+            </ul>
+        </div>
+    </div>
+
+    <script type="module">
+        import init, { Workbook } from './pkg/duke_sheets_wasm.js';
+
+        let workbook;
+        let sheet;
+        let selectedCell = { row: 0, col: 0 };
+        const ROWS = 15;
+        const COLS = 8;
+
+        // Column letter helper
+        function colLetter(col) {
+            return String.fromCharCode(65 + col);
+        }
+
+        function cellAddress(row, col) {
+            return colLetter(col) + (row + 1);
+        }
+
+        // Initialize
+        async function main() {
+            await init();
+            
+            workbook = new Workbook();
+            sheet = workbook.getSheet(0);
+            
+            createGrid();
+            selectCell(0, 0);
+            
+            // Formula bar input handler
+            const formulaInput = document.getElementById('formula-input');
+            formulaInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    setCellValue(selectedCell.row, selectedCell.col, formulaInput.value);
+                    e.preventDefault();
+                }
+            });
+
+            // Keyboard shortcut for calculate
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'F9') {
+                    calculate();
+                    e.preventDefault();
+                }
+            });
+
+            document.getElementById('status').textContent = 'Spreadsheet ready - powered by Rust + WebAssembly';
+        }
+
+        function createGrid() {
+            const table = document.getElementById('grid');
+            let html = '<thead><tr><th class="row-header"></th>';
+            
+            // Column headers
+            for (let c = 0; c < COLS; c++) {
+                html += `<th>${colLetter(c)}</th>`;
+            }
+            html += '</tr></thead><tbody>';
+            
+            // Rows
+            for (let r = 0; r < ROWS; r++) {
+                html += `<tr><th class="row-header">${r + 1}</th>`;
+                for (let c = 0; c < COLS; c++) {
+                    const addr = cellAddress(r, c);
+                    html += `<td id="cell-${addr}"><input type="text" 
+                        data-row="${r}" data-col="${c}"
+                        onfocus="selectCell(${r}, ${c})"
+                        onchange="onCellChange(this)"
+                        onkeydown="onCellKeydown(event, ${r}, ${c})"></td>`;
+                }
+                html += '</tr>';
+            }
+            html += '</tbody>';
+            table.innerHTML = html;
+        }
+
+        window.selectCell = function(row, col) {
+            selectedCell = { row, col };
+            const addr = cellAddress(row, col);
+            document.getElementById('current-cell').textContent = addr;
+            
+            // Get cell value for formula bar
+            try {
+                const cellVal = sheet.getCell(addr);
+                const formulaInput = document.getElementById('formula-input');
+                if (cellVal.is_formula) {
+                    formulaInput.value = cellVal.formulaText() || '';
+                } else {
+                    formulaInput.value = cellVal.toString();
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        };
+
+        window.onCellChange = function(input) {
+            const row = parseInt(input.dataset.row);
+            const col = parseInt(input.dataset.col);
+            setCellValue(row, col, input.value);
+        };
+
+        window.onCellKeydown = function(event, row, col) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                // Move to next row
+                if (row < ROWS - 1) {
+                    const nextInput = document.querySelector(`input[data-row="${row+1}"][data-col="${col}"]`);
+                    if (nextInput) nextInput.focus();
+                }
+            } else if (event.key === 'Tab') {
+                event.preventDefault();
+                // Move to next column
+                const nextCol = event.shiftKey ? col - 1 : col + 1;
+                if (nextCol >= 0 && nextCol < COLS) {
+                    const nextInput = document.querySelector(`input[data-row="${row}"][data-col="${nextCol}"]`);
+                    if (nextInput) nextInput.focus();
+                }
+            } else if (event.key === 'ArrowDown' && !event.altKey) {
+                if (row < ROWS - 1) {
+                    const nextInput = document.querySelector(`input[data-row="${row+1}"][data-col="${col}"]`);
+                    if (nextInput) nextInput.focus();
+                }
+            } else if (event.key === 'ArrowUp' && !event.altKey) {
+                if (row > 0) {
+                    const nextInput = document.querySelector(`input[data-row="${row-1}"][data-col="${col}"]`);
+                    if (nextInput) nextInput.focus();
+                }
+            }
+        };
+
+        function setCellValue(row, col, value) {
+            const addr = cellAddress(row, col);
+            try {
+                if (value.startsWith('=')) {
+                    sheet.setFormula(addr, value);
+                } else if (value === '') {
+                    sheet.setCell(addr, null);
+                } else {
+                    // Try to parse as number
+                    const num = parseFloat(value);
+                    if (!isNaN(num) && value.trim() === num.toString()) {
+                        sheet.setCell(addr, num);
+                    } else {
+                        sheet.setCell(addr, value);
+                    }
+                }
+                updateGrid();
+            } catch (e) {
+                console.error('Error setting cell:', e);
+                document.getElementById('status').textContent = 'Error: ' + e.message;
+            }
+        }
+
+        window.calculate = function() {
+            try {
+                const start = performance.now();
+                const stats = workbook.calculate();
+                const elapsed = (performance.now() - start).toFixed(2);
+                
+                updateGrid();
+                
+                const statusText = `Calculated ${stats.cellsCalculated} cells in ${elapsed}ms`;
+                document.getElementById('calc-status').textContent = statusText;
+                document.getElementById('status').textContent = statusText + 
+                    (stats.errors > 0 ? ` (${stats.errors} errors)` : '');
+            } catch (e) {
+                console.error('Calculation error:', e);
+                document.getElementById('status').textContent = 'Calculation error: ' + e.message;
+            }
+        };
+
+        function updateGrid() {
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    const addr = cellAddress(r, c);
+                    const input = document.querySelector(`input[data-row="${r}"][data-col="${c}"]`);
+                    const td = input.parentElement;
+                    
+                    try {
+                        const cellVal = sheet.getCalculatedValue(addr);
+                        const rawVal = sheet.getCell(addr);
+                        
+                        if (rawVal.is_formula) {
+                            td.classList.add('formula');
+                            // Show calculated value
+                            const jsVal = cellVal.toJs();
+                            input.value = jsVal === null ? '' : jsVal;
+                        } else {
+                            td.classList.remove('formula');
+                            const jsVal = cellVal.toJs();
+                            input.value = jsVal === null ? '' : jsVal;
+                        }
+                    } catch (e) {
+                        input.value = '#ERR';
+                    }
+                }
+            }
+        }
+
+        main().catch(console.error);
+    </script>
+</body>
+</html>
