@@ -111,26 +111,37 @@ fn read_character_data(
 }
 
 /// Parse the entire SST (Shared String Table) from a concatenated buffer
-/// (SST body + all CONTINUE bodies already joined).
+/// (SST body + all CONTINUE bodies already joined), without CONTINUE awareness.
+///
+/// This is the legacy parser that treats the buffer as flat. Use
+/// [`parse_sst_continued`] for correct handling of SST records with
+/// CONTINUE extensions that may change string encoding at boundaries.
+pub fn parse_sst(data: &[u8]) -> XlsResult<Vec<String>> {
+    parse_sst_continued(data, &[])
+}
+
+/// Parse the SST with full CONTINUE boundary awareness.
+///
+/// When a string's character data spans a CONTINUE record boundary, the
+/// first byte at the boundary is a flags byte that may change the encoding
+/// (Latin-1 ↔ UTF-16LE). This parser correctly handles those transitions.
 ///
 /// The SST body starts with:
 /// - `total_strings` (4 bytes, u32) — total string refs in workbook
 /// - `unique_strings` (4 bytes, u32) — number of unique strings in this table
 /// - Then `unique_strings` Unicode string entries
-pub fn parse_sst(data: &[u8]) -> XlsResult<Vec<String>> {
-    let mut offset = 0;
+pub fn parse_sst_continued(data: &[u8], continue_offsets: &[usize]) -> XlsResult<Vec<String>> {
+    let mut reader = ContinueReader::new(data, continue_offsets);
 
-    let _total_strings = read_u32(data, &mut offset)?;
-    let unique_count = read_u32(data, &mut offset)? as usize;
+    let _total_strings = reader.read_u32()?;
+    let unique_count = reader.read_u32()? as usize;
 
     let mut strings = Vec::with_capacity(unique_count);
 
     for i in 0..unique_count {
-        match read_unicode_string(data, &mut offset) {
+        match reader.read_sst_string() {
             Ok(s) => strings.push(s),
             Err(e) => {
-                // If we hit a parse error near the end, log and stop.
-                // Some XLS files have SST padding or truncation issues.
                 log::warn!("SST parse error at string {i}/{unique_count}: {e}");
                 break;
             }
@@ -138,6 +149,186 @@ pub fn parse_sst(data: &[u8]) -> XlsResult<Vec<String>> {
     }
 
     Ok(strings)
+}
+
+// ─── ContinueReader ─────────────────────────────────────────────────────
+
+/// A reader over a concatenated BIFF8 record buffer that tracks CONTINUE
+/// record boundaries.
+///
+/// For character data, CONTINUE boundaries contain a 1-byte flags field
+/// that may change the string encoding. For all other data (headers, rich
+/// text runs, extended data), boundaries are transparent.
+struct ContinueReader<'a> {
+    data: &'a [u8],
+    /// Sorted byte offsets within `data` where each CONTINUE body begins.
+    boundaries: &'a [usize],
+    /// Current read position.
+    pos: usize,
+}
+
+impl<'a> ContinueReader<'a> {
+    fn new(data: &'a [u8], boundaries: &'a [usize]) -> Self {
+        Self {
+            data,
+            boundaries,
+            pos: 0,
+        }
+    }
+
+    /// Bytes from current position to the next CONTINUE boundary, or to end of
+    /// data if no more boundaries ahead.
+    fn bytes_to_next_boundary(&self) -> usize {
+        for &b in self.boundaries {
+            if b > self.pos {
+                return b - self.pos;
+            }
+        }
+        self.data.len() - self.pos
+    }
+
+    // ── Raw reads (boundaries are transparent) ──────────────────────
+
+    fn read_u8(&mut self) -> XlsResult<u8> {
+        if self.pos >= self.data.len() {
+            return Err(XlsError::Parse("unexpected end of data reading u8".into()));
+        }
+        let v = self.data[self.pos];
+        self.pos += 1;
+        Ok(v)
+    }
+
+    fn read_u16(&mut self) -> XlsResult<u16> {
+        if self.pos + 2 > self.data.len() {
+            return Err(XlsError::Parse("unexpected end of data reading u16".into()));
+        }
+        let v = u16::from_le_bytes([self.data[self.pos], self.data[self.pos + 1]]);
+        self.pos += 2;
+        Ok(v)
+    }
+
+    fn read_u32(&mut self) -> XlsResult<u32> {
+        if self.pos + 4 > self.data.len() {
+            return Err(XlsError::Parse("unexpected end of data reading u32".into()));
+        }
+        let v = u32::from_le_bytes([
+            self.data[self.pos],
+            self.data[self.pos + 1],
+            self.data[self.pos + 2],
+            self.data[self.pos + 3],
+        ]);
+        self.pos += 4;
+        Ok(v)
+    }
+
+    /// Advance position by `n` bytes (for run data / ext data — no flags
+    /// byte at boundaries).
+    fn skip(&mut self, n: usize) {
+        self.pos += n;
+    }
+
+    // ── CONTINUE-aware character data reading ───────────────────────
+
+    /// Read a full SST Unicode string, handling CONTINUE boundaries in
+    /// the character data portion.
+    fn read_sst_string(&mut self) -> XlsResult<String> {
+        let char_count = self.read_u16()? as usize;
+        let flags = self.read_u8()?;
+
+        let is_rich = (flags & 0x08) != 0;
+        let has_ext = (flags & 0x04) != 0;
+        let is_wide = (flags & 0x01) != 0;
+
+        let run_count = if is_rich {
+            self.read_u16()? as usize
+        } else {
+            0
+        };
+        let ext_size = if has_ext {
+            self.read_u32()? as usize
+        } else {
+            0
+        };
+
+        // Character data — this is where CONTINUE encoding changes happen.
+        let text = self.read_chars(char_count, is_wide)?;
+
+        // Rich text runs (4 bytes each) — raw data, no flags at boundaries.
+        if run_count > 0 {
+            self.skip(run_count * 4);
+        }
+        // Extended string data — raw data, no flags at boundaries.
+        if ext_size > 0 {
+            self.skip(ext_size);
+        }
+
+        Ok(text)
+    }
+
+    /// Read `char_count` characters from the buffer, handling encoding
+    /// changes at CONTINUE boundaries.
+    ///
+    /// At each CONTINUE boundary crossed during character reading, a 1-byte
+    /// flags field is consumed. Bit 0 of that byte indicates the encoding
+    /// for the remaining characters (0 = Latin-1, 1 = UTF-16LE).
+    fn read_chars(&mut self, char_count: usize, initial_wide: bool) -> XlsResult<String> {
+        if char_count == 0 {
+            return Ok(String::new());
+        }
+
+        let mut code_units: Vec<u16> = Vec::with_capacity(char_count);
+        let mut remaining = char_count;
+        let mut wide = initial_wide;
+
+        while remaining > 0 {
+            if self.pos >= self.data.len() {
+                return Err(XlsError::Parse(format!(
+                    "SST string data truncated: {} chars remaining at offset {}",
+                    remaining, self.pos
+                )));
+            }
+
+            let avail = self.bytes_to_next_boundary();
+            let char_width: usize = if wide { 2 } else { 1 };
+            let chars_can_fit = avail / char_width;
+            let n = remaining.min(chars_can_fit);
+
+            // Read n characters in the current encoding.
+            for _ in 0..n {
+                if wide {
+                    let lo = self.data[self.pos];
+                    let hi = self.data[self.pos + 1];
+                    code_units.push(u16::from_le_bytes([lo, hi]));
+                    self.pos += 2;
+                } else {
+                    code_units.push(self.data[self.pos] as u16);
+                    self.pos += 1;
+                }
+            }
+            remaining -= n;
+
+            if remaining > 0 {
+                // We need to cross a CONTINUE boundary.
+                // Skip any leftover padding bytes (e.g. 1 byte when a wide
+                // char can't fit before the boundary).
+                let leftover = avail - n * char_width;
+                self.pos += leftover;
+
+                // Consume the flags byte at the boundary.
+                if self.pos >= self.data.len() {
+                    return Err(XlsError::Parse(
+                        "SST string truncated at CONTINUE boundary".into(),
+                    ));
+                }
+                let new_flags = self.data[self.pos];
+                self.pos += 1;
+                wide = (new_flags & 0x01) != 0;
+            }
+        }
+
+        String::from_utf16(&code_units)
+            .map_err(|e| XlsError::Parse(format!("invalid UTF-16 in SST string: {e}")))
+    }
 }
 
 #[cfg(test)]
@@ -187,6 +378,212 @@ mod tests {
         buf.extend_from_slice(&[0x02, 0x00, 0x00, b'B', b'C']);
 
         let strings = parse_sst(&buf).unwrap();
+        assert_eq!(strings, vec!["A", "BC"]);
+    }
+
+    // ── CONTINUE boundary tests ─────────────────────────────────────
+
+    /// Helper: build an SST buffer from segments (simulating record + CONTINUE bodies).
+    /// Returns (concatenated_data, continue_offsets).
+    fn build_sst_segments(segments: &[&[u8]]) -> (Vec<u8>, Vec<usize>) {
+        let mut data = Vec::new();
+        let mut offsets = Vec::new();
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 {
+                offsets.push(data.len());
+            }
+            data.extend_from_slice(seg);
+        }
+        (data, offsets)
+    }
+
+    #[test]
+    fn test_sst_continue_same_encoding() {
+        // SST with 1 string "ABCDE" (5 chars, compressed).
+        // Split: first record has "AB", CONTINUE has "CDE" (same encoding).
+        //
+        // Record body: total(4) + unique(4) + header(3: char_count=5, flags=0) + "AB"
+        // CONTINUE body: flags_byte(0x00) + "CDE"
+        let mut seg0 = Vec::new();
+        seg0.extend_from_slice(&1u32.to_le_bytes()); // total_strings
+        seg0.extend_from_slice(&1u32.to_le_bytes()); // unique_strings
+        seg0.extend_from_slice(&5u16.to_le_bytes()); // char_count = 5
+        seg0.push(0x00); // flags: compressed
+        seg0.extend_from_slice(b"AB"); // first 2 chars
+
+        let seg1: &[u8] = &[
+            0x00, // flags byte at CONTINUE boundary: still compressed
+            b'C', b'D', b'E', // remaining 3 chars
+        ];
+
+        let (data, offsets) = build_sst_segments(&[&seg0, seg1]);
+        let strings = parse_sst_continued(&data, &offsets).unwrap();
+        assert_eq!(strings, vec!["ABCDE"]);
+    }
+
+    #[test]
+    fn test_sst_continue_latin1_to_utf16() {
+        // SST with 1 string "AB\u{00E9}" (3 chars).
+        // Starts compressed (Latin-1) with "AB", then CONTINUE switches to
+        // UTF-16LE for the accented char "é" (U+00E9).
+        //
+        // Record body: header + "AB"
+        // CONTINUE body: flags(0x01=wide) + é as UTF-16LE (0xE9, 0x00)
+        let mut seg0 = Vec::new();
+        seg0.extend_from_slice(&1u32.to_le_bytes());
+        seg0.extend_from_slice(&1u32.to_le_bytes());
+        seg0.extend_from_slice(&3u16.to_le_bytes()); // 3 chars total
+        seg0.push(0x00); // flags: compressed
+        seg0.extend_from_slice(b"AB");
+
+        let seg1: &[u8] = &[
+            0x01, // flags: wide (UTF-16LE)
+            0xE9, 0x00, // 'é' in UTF-16LE
+        ];
+
+        let (data, offsets) = build_sst_segments(&[&seg0, seg1]);
+        let strings = parse_sst_continued(&data, &offsets).unwrap();
+        assert_eq!(strings, vec!["AB\u{00E9}"]);
+    }
+
+    #[test]
+    fn test_sst_continue_utf16_to_latin1() {
+        // SST with 1 string: starts UTF-16LE, CONTINUE switches to Latin-1.
+        // "H" as wide + "ello" as compressed.
+        let mut seg0 = Vec::new();
+        seg0.extend_from_slice(&1u32.to_le_bytes());
+        seg0.extend_from_slice(&1u32.to_le_bytes());
+        seg0.extend_from_slice(&5u16.to_le_bytes()); // 5 chars total
+        seg0.push(0x01); // flags: wide
+        seg0.extend_from_slice(&[b'H', 0x00]); // 'H' as UTF-16LE
+
+        let seg1: &[u8] = &[
+            0x00, // flags: compressed (Latin-1)
+            b'e', b'l', b'l', b'o',
+        ];
+
+        let (data, offsets) = build_sst_segments(&[&seg0, seg1]);
+        let strings = parse_sst_continued(&data, &offsets).unwrap();
+        assert_eq!(strings, vec!["Hello"]);
+    }
+
+    #[test]
+    fn test_sst_continue_multiple_strings_across_boundary() {
+        // SST with 3 strings: "Hi", "World", "!" — "World" spans the boundary.
+        // Record body: header + "Hi" + partial "World" header + "Wo"
+        // CONTINUE body: flags(0x00) + "rld" + "!" header + "!"
+        let mut seg0 = Vec::new();
+        seg0.extend_from_slice(&3u32.to_le_bytes()); // total
+        seg0.extend_from_slice(&3u32.to_le_bytes()); // unique = 3
+
+        // String "Hi"
+        seg0.extend_from_slice(&2u16.to_le_bytes());
+        seg0.push(0x00);
+        seg0.extend_from_slice(b"Hi");
+
+        // String "World" (5 chars) — header + first 2 chars in this segment
+        seg0.extend_from_slice(&5u16.to_le_bytes());
+        seg0.push(0x00);
+        seg0.extend_from_slice(b"Wo");
+
+        // CONTINUE: flags byte + remaining 3 chars of "World" + string "!"
+        let mut seg1 = Vec::new();
+        seg1.push(0x00); // flags: still compressed
+        seg1.extend_from_slice(b"rld");
+
+        // String "!"
+        seg1.extend_from_slice(&1u16.to_le_bytes());
+        seg1.push(0x00);
+        seg1.push(b'!');
+
+        let (data, offsets) = build_sst_segments(&[&seg0, &seg1]);
+        let strings = parse_sst_continued(&data, &offsets).unwrap();
+        assert_eq!(strings, vec!["Hi", "World", "!"]);
+    }
+
+    #[test]
+    fn test_sst_continue_boundary_between_strings() {
+        // SST with 2 strings: "AB" and "CD".
+        // "AB" ends exactly at the boundary. "CD" starts in the CONTINUE.
+        // No flags byte needed because no character data is split.
+        let mut seg0 = Vec::new();
+        seg0.extend_from_slice(&2u32.to_le_bytes());
+        seg0.extend_from_slice(&2u32.to_le_bytes());
+
+        // String "AB" — fits entirely in segment 0
+        seg0.extend_from_slice(&2u16.to_le_bytes());
+        seg0.push(0x00);
+        seg0.extend_from_slice(b"AB");
+
+        // CONTINUE starts with string "CD" header (no flags byte)
+        let mut seg1 = Vec::new();
+        seg1.extend_from_slice(&2u16.to_le_bytes());
+        seg1.push(0x00);
+        seg1.extend_from_slice(b"CD");
+
+        let (data, offsets) = build_sst_segments(&[&seg0, &seg1]);
+        let strings = parse_sst_continued(&data, &offsets).unwrap();
+        assert_eq!(strings, vec!["AB", "CD"]);
+    }
+
+    #[test]
+    fn test_sst_continue_multiple_boundaries() {
+        // SST with 1 long string split across 3 segments (2 CONTINUE records).
+        // "ABCDEFGH" — 8 chars compressed.
+        // Seg0: header + "ABC"
+        // Seg1: flags(0x00) + "DE"
+        // Seg2: flags(0x00) + "FGH"
+        let mut seg0 = Vec::new();
+        seg0.extend_from_slice(&1u32.to_le_bytes());
+        seg0.extend_from_slice(&1u32.to_le_bytes());
+        seg0.extend_from_slice(&8u16.to_le_bytes());
+        seg0.push(0x00);
+        seg0.extend_from_slice(b"ABC");
+
+        let seg1: &[u8] = &[0x00, b'D', b'E'];
+        let seg2: &[u8] = &[0x00, b'F', b'G', b'H'];
+
+        let (data, offsets) = build_sst_segments(&[&seg0, seg1, seg2]);
+        let strings = parse_sst_continued(&data, &offsets).unwrap();
+        assert_eq!(strings, vec!["ABCDEFGH"]);
+    }
+
+    #[test]
+    fn test_sst_continue_rich_text_spans_boundary() {
+        // SST with 1 rich-text string "AB" with 1 formatting run.
+        // The run data spans the CONTINUE boundary (no flags byte for runs).
+        //
+        // String header: char_count=2, flags=0x08 (rich), run_count=1
+        // Char data: "AB" (2 bytes)
+        // Run data: 4 bytes (char_pos u16 + font_idx u16) — split across boundary
+        let mut seg0 = Vec::new();
+        seg0.extend_from_slice(&1u32.to_le_bytes());
+        seg0.extend_from_slice(&1u32.to_le_bytes());
+        seg0.extend_from_slice(&2u16.to_le_bytes()); // 2 chars
+        seg0.push(0x08); // flags: rich text
+        seg0.extend_from_slice(&1u16.to_le_bytes()); // 1 run
+        seg0.extend_from_slice(b"AB"); // char data
+        seg0.extend_from_slice(&[0x00, 0x00]); // first 2 bytes of run (char_pos=0)
+
+        // CONTINUE: remaining 2 bytes of run data (font_idx=1)
+        let seg1: &[u8] = &[0x01, 0x00];
+
+        let (data, offsets) = build_sst_segments(&[&seg0, seg1]);
+        let strings = parse_sst_continued(&data, &offsets).unwrap();
+        assert_eq!(strings, vec!["AB"]);
+    }
+
+    #[test]
+    fn test_sst_no_continue_offsets() {
+        // Verify parse_sst_continued works identically to parse_sst when
+        // there are no CONTINUE boundaries (empty offsets).
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&2u32.to_le_bytes());
+        buf.extend_from_slice(&2u32.to_le_bytes());
+        buf.extend_from_slice(&[0x01, 0x00, 0x00, b'A']);
+        buf.extend_from_slice(&[0x02, 0x00, 0x00, b'B', b'C']);
+
+        let strings = parse_sst_continued(&buf, &[]).unwrap();
         assert_eq!(strings, vec!["A", "BC"]);
     }
 }

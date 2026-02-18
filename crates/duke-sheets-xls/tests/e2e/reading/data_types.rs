@@ -51,21 +51,38 @@ fn test_xls_number_values() {
     cleanup_fixture(&path);
 }
 
+/// Test that a large SST (exceeding the 8224-byte record limit, forcing CONTINUE
+/// records) is parsed correctly, including strings that span record boundaries.
 #[test]
-fn test_xls_string_values() {
+fn test_xls_large_sst_with_continue() {
     skip_if_no_lo!();
     let path = temp_fixture_path();
+
+    // Generate 300 unique strings. Each is ~30 chars, so 300 × 33 bytes ≈ 9900
+    // bytes of SST data — well above the 8224-byte record limit, forcing at
+    // least one CONTINUE record.
+    //
+    // We also mix in Unicode strings (every 10th string) to exercise encoding
+    // changes at CONTINUE boundaries.
+    let mut expected: Vec<String> = Vec::with_capacity(300);
+    for i in 0..300 {
+        let s = if i % 10 == 5 {
+            // Unicode string with accented chars
+            format!("Ünïcödé string número {i:04}")
+        } else {
+            format!("Test string number {i:04} data")
+        };
+        expected.push(s);
+    }
 
     runtime().block_on(async {
         let lo = lo_bridge().await.unwrap();
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
-        wb.set_cell_value("A1", "Hello").await.unwrap();
-        wb.set_cell_value("B1", "World").await.unwrap();
-        wb.set_cell_value("C1", "").await.unwrap();
-        wb.set_cell_value("D1", "Special chars: <>&\"'")
-            .await
-            .unwrap();
+        for (i, s) in expected.iter().enumerate() {
+            let cell_ref = format!("A{}", i + 1);
+            wb.set_cell_value(&cell_ref, s.as_str()).await.unwrap();
+        }
         wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();
     });
@@ -73,21 +90,27 @@ fn test_xls_string_values() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
 
-    let a1 = sheet.get_value("A1").unwrap();
-    assert_eq!(a1.as_string(), Some("Hello"), "A1 should be 'Hello'");
-
-    let b1 = sheet.get_value("B1").unwrap();
-    assert_eq!(b1.as_string(), Some("World"), "B1 should be 'World'");
-
-    let d1 = sheet.get_value("D1").unwrap();
-    assert_eq!(
-        d1.as_string(),
-        Some("Special chars: <>&\"'"),
-        "D1 should preserve special chars"
-    );
+    // Verify all 300 strings were read correctly.
+    for (i, exp) in expected.iter().enumerate() {
+        let val = sheet.get_value_at(i as u32, 0);
+        match &val {
+            CellValue::String(shared) => {
+                assert_eq!(
+                    shared.as_str(),
+                    exp.as_str(),
+                    "Row {} mismatch: expected {:?}, got {:?}",
+                    i,
+                    exp,
+                    shared.as_str()
+                );
+            }
+            other => panic!("Row {i} should be String, got {other:?}"),
+        }
+    }
 
     cleanup_fixture(&path);
 }
+
 
 #[test]
 fn test_xls_boolean_values() {
