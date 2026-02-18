@@ -1,148 +1,275 @@
-//! Tests for reading font styles from PyUNO fixtures.
-//!
-//! Fixture: `font_styles.xlsx`
-//! - Bold, italic, underline, strikethrough
-//! - Font colors (RGB)
-//! - Font sizes
-//! - Font names/families
+//! Tests for reading font styles from XLSX files.
 
-use crate::{fixture_path, skip_if_no_fixtures};
+use crate::{cleanup_fixture, lo_bridge, runtime, skip_if_no_lo, temp_fixture_path};
+use duke_sheets_core::style::{FontVerticalAlign, Underline};
 use duke_sheets_xlsx::XlsxReader;
 
 #[test]
-fn test_font_styles_file_opens() {
-    skip_if_no_fixtures!();
+fn test_bold() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
 
-    let path = fixture_path("font_styles.xlsx");
-    let result = XlsxReader::read_file(&path);
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Bold").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            bold: true,
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
 
-    assert!(
-        result.is_ok(),
-        "Failed to open font_styles.xlsx: {:?}",
-        result.err()
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert!(style.font.bold, "Font should be bold");
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_superscript() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Super").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            font_vertical_align: Some("superscript".to_string()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert_eq!(
+        style.font.vertical_align,
+        FontVerticalAlign::Superscript,
+        "Font should be superscript"
     );
+
+    cleanup_fixture(&path);
 }
 
 #[test]
-fn test_bold_style() {
-    skip_if_no_fixtures!();
+fn test_subscript() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
 
-    let path = fixture_path("font_styles.xlsx");
-    let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
-    let sheet = workbook.worksheet(0).expect("No worksheet");
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Sub").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            font_vertical_align: Some("subscript".to_string()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
 
-    // Look for cells with bold styling
-    let mut found_bold = false;
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert_eq!(
+        style.font.vertical_align,
+        FontVerticalAlign::Subscript,
+        "Font should be subscript"
+    );
 
-    for row in 0..20 {
-        for col in 0..5 {
-            if let Some(style) = sheet.cell_style_at(row, col) {
-                if style.font.bold {
-                    found_bold = true;
-                    break;
-                }
-            }
-        }
-        if found_bold {
-            break;
-        }
-    }
+    cleanup_fixture(&path);
+}
 
-    assert!(found_bold, "Should find at least one bold cell");
+
+#[test]
+fn test_underline_single() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Underline").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            underline: Some("single".to_string()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert_eq!(style.font.underline, Underline::Single);
+
+    cleanup_fixture(&path);
 }
 
 #[test]
-fn test_italic_style() {
-    skip_if_no_fixtures!();
+fn test_strikethrough() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
 
-    let path = fixture_path("font_styles.xlsx");
-    let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
-    let sheet = workbook.worksheet(0).expect("No worksheet");
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Strike").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            strikethrough: true,
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
 
-    // Look for cells with italic styling
-    let mut found_italic = false;
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert!(style.font.strikethrough, "Font should be strikethrough");
 
-    for row in 0..20 {
-        for col in 0..5 {
-            if let Some(style) = sheet.cell_style_at(row, col) {
-                if style.font.italic {
-                    found_italic = true;
-                    break;
-                }
-            }
-        }
-        if found_italic {
-            break;
-        }
-    }
-
-    assert!(found_italic, "Should find at least one italic cell");
+    cleanup_fixture(&path);
 }
 
 #[test]
 fn test_font_color() {
-    skip_if_no_fixtures!();
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
 
-    let path = fixture_path("font_styles.xlsx");
-    let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
-    let sheet = workbook.worksheet(0).expect("No worksheet");
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Red text").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            font_color: Some(0xFF0000i32),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
 
-    // Look for cells with non-default font colors
-    let mut found_colored = false;
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    let (r, g, b) = style.font.color.to_rgb();
+    assert!(r > 200 && g < 50 && b < 50, "Expected red font, got ({r}, {g}, {b})");
 
-    for row in 0..30 {
-        for col in 0..5 {
-            if let Some(style) = sheet.cell_style_at(row, col) {
-                // Check for non-auto colors (any explicit color set)
-                if !style.font.color.is_auto() {
-                    let (r, g, b) = style.font.color.to_rgb();
-                    // Check for non-black colors
-                    if r != 0 || g != 0 || b != 0 {
-                        found_colored = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if found_colored {
-            break;
-        }
-    }
-
-    assert!(
-        found_colored,
-        "Should find at least one cell with colored font"
-    );
+    cleanup_fixture(&path);
 }
 
 #[test]
 fn test_font_size() {
-    skip_if_no_fixtures!();
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
 
-    let path = fixture_path("font_styles.xlsx");
-    let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
-    let sheet = workbook.worksheet(0).expect("No worksheet");
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Big").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            font_size: Some(20.0),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
 
-    // Look for cells with non-default font sizes (default is 11.0)
-    let mut found_large = false;
-    let mut found_small = false;
-
-    for row in 0..30 {
-        for col in 0..5 {
-            if let Some(style) = sheet.cell_style_at(row, col) {
-                let size = style.font.size;
-                if size > 14.0 {
-                    found_large = true;
-                }
-                if size < 10.0 {
-                    found_small = true;
-                }
-            }
-        }
-    }
-
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
     assert!(
-        found_large || found_small,
-        "Should find cells with non-default font sizes"
+        (style.font.size - 20.0).abs() < 0.5,
+        "Expected font size ~20, got {}",
+        style.font.size
     );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_font_name() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Courier").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            font_name: Some("Courier New".to_string()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert_eq!(style.font.name, "Courier New");
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_font_style_combination() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Combo").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            bold: true,
+            italic: true,
+            underline: Some("single".to_string()),
+            font_color: Some(0x0000FF),
+            font_size: Some(14.0),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert!(style.font.bold, "Should be bold");
+    assert!(style.font.italic, "Should be italic");
+    assert_eq!(style.font.underline, Underline::Single);
+    let (r, g, b) = style.font.color.to_rgb();
+    assert!(b > 200 && r < 50, "Should be blue, got ({r}, {g}, {b})");
+    assert!(
+        (style.font.size - 14.0).abs() < 0.5,
+        "Expected size ~14, got {}",
+        style.font.size
+    );
+
+    cleanup_fixture(&path);
 }

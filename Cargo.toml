@@ -10,11 +10,17 @@ members = [
     "crates/duke-sheets",
     "crates/duke-sheets-ffi",
     "crates/duke-sheets-cli",
+    "crates/excel-com-protocol",
+    "crates/duke-sheets-excel-com",
+    "crates/libreoffice-urp",
+    "crates/duke-sheets-libreoffice",
 ]
-# Bindings are excluded - they use their own build systems (maturin, wasm-pack)
+# Bindings and cross-compiled crates are excluded from the default workspace build
 exclude = [
     "bindings/python",
     "bindings/wasm",
+    # excel-com-bridge must be cross-compiled for Windows (--target x86_64-pc-windows-gnu)
+    "crates/excel-com-bridge",
 ]
 
 [workspace.package]
@@ -44,8 +50,8 @@ tracing = "0.1"
 # XML parsing (for XLSX)
 quick-xml = "0.31"
 
-# ZIP handling (for XLSX)
-zip = "2.1"
+# ZIP handling (for XLSX) - only deflate needed; bzip2/lzma/zstd use C deps that break WASM
+zip = { version = "2.1", default-features = false, features = ["deflate", "time"] }
 
 # Compound File Binary (for XLS)
 cfb = "0.10"

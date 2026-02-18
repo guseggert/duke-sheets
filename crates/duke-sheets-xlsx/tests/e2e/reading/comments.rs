@@ -1,70 +1,146 @@
-//! Tests for reading cell comments from PyUNO fixtures.
-//!
-//! Fixture: `comments.xlsx`
+//! Tests for reading cell comments from XLSX files.
 
-use crate::{fixture_path, skip_if_no_fixtures};
+use crate::{cleanup_fixture, lo_bridge, runtime, skip_if_no_lo, temp_fixture_path};
 use duke_sheets_xlsx::XlsxReader;
 
 #[test]
-fn test_comments_file_opens() {
-    skip_if_no_fixtures!();
+fn test_comment_basic_text() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
 
-    let path = fixture_path("comments.xlsx");
-    let result = XlsxReader::read_file(&path);
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Has comment").await.unwrap();
+        wb.add_comment(0, "A1", "This is a comment", None).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
 
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let comment = sheet.comment_at(0, 0).expect("A1 should have a comment");
     assert!(
-        result.is_ok(),
-        "Failed to open comments.xlsx: {:?}",
-        result.err()
+        comment.text.contains("This is a comment"),
+        "Comment text should contain our text, got: {}",
+        comment.text
     );
+
+    cleanup_fixture(&path);
 }
 
 #[test]
-fn test_comments_present() {
-    skip_if_no_fixtures!();
+fn test_comment_with_author() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
 
-    let path = fixture_path("comments.xlsx");
-    let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
-    let sheet = workbook.worksheet(0).expect("No worksheet");
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Authored").await.unwrap();
+        wb.add_comment(0, "A1", "Author comment", Some("Test Author"))
+            .await
+            .unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
 
-    // Look for cells with comments
-    let mut found_comment = false;
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let comment = sheet.comment_at(0, 0).expect("A1 should have a comment");
+    assert!(!comment.text.is_empty(), "Comment should have text");
 
-    for row in 0..30 {
-        for col in 0..5 {
-            if sheet.comment_at(row, col).is_some() {
-                found_comment = true;
-                break;
-            }
-        }
-        if found_comment {
-            break;
-        }
-    }
-
-    assert!(found_comment, "Should find at least one cell with comment");
+    cleanup_fixture(&path);
 }
 
 #[test]
-fn test_comment_text() {
-    skip_if_no_fixtures!();
+fn test_comment_unicode() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
 
-    let path = fixture_path("comments.xlsx");
-    let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
-    let sheet = workbook.worksheet(0).expect("No worksheet");
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Unicode").await.unwrap();
+        wb.add_comment(0, "A1", "\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{30b3}\u{30e1}\u{30f3}\u{30c8}", None)
+            .await
+            .unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
 
-    // Find a comment and verify it has text
-    for row in 0..30 {
-        for col in 0..5 {
-            if let Some(comment) = sheet.comment_at(row, col) {
-                assert!(
-                    !comment.text.is_empty(),
-                    "Comment should have non-empty text"
-                );
-                return; // Test passed
-            }
-        }
-    }
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let comment = sheet.comment_at(0, 0).expect("A1 should have a comment");
+    assert!(
+        comment.text.contains("\u{65e5}\u{672c}\u{8a9e}"),
+        "Comment should contain Japanese text, got: {}",
+        comment.text
+    );
 
-    panic!("No comments found to test");
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_multiple_comments() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Comment 1").await.unwrap();
+        wb.add_comment(0, "A1", "First comment", None).await.unwrap();
+        wb.set_cell_value("A2", "Comment 2").await.unwrap();
+        wb.add_comment(0, "A2", "Second comment", None).await.unwrap();
+        wb.set_cell_value("A3", "Comment 3").await.unwrap();
+        wb.add_comment(0, "A3", "Third comment", None).await.unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    assert_eq!(sheet.comment_count(), 3, "Should have 3 comments");
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_comment_on_styled_cell() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Styled + Comment").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            bold: true,
+            fill_color: Some(0xFFFF00),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.add_comment(0, "A1", "Comment on styled cell", None)
+            .await
+            .unwrap();
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsxReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert!(style.font.bold, "Should be bold");
+
+    let comment = sheet.comment_at(0, 0).expect("A1 should have comment");
+    assert!(!comment.text.is_empty(), "Comment should have text");
+
+    cleanup_fixture(&path);
 }

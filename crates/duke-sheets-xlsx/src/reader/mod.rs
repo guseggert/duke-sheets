@@ -393,6 +393,51 @@ impl XlsxReader {
         loop {
             match xml_reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => match e.name().as_ref() {
+                    b"row" => {
+                        // Parse row dimensions: ht, customHeight, hidden
+                        let mut row_num: Option<u32> = None;
+                        let mut ht: Option<f64> = None;
+                        let mut custom_height = false;
+                        let mut hidden = false;
+                        for attr in e.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"r" => {
+                                    row_num = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<u32>().ok());
+                                }
+                                b"ht" => {
+                                    ht = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<f64>().ok());
+                                }
+                                b"customHeight" => {
+                                    custom_height = attr.unescape_value().ok().map_or(false, |s| {
+                                        s.as_ref() == "1" || s.as_ref() == "true"
+                                    });
+                                }
+                                b"hidden" => {
+                                    hidden = attr.unescape_value().ok().map_or(false, |s| {
+                                        s.as_ref() == "1" || s.as_ref() == "true"
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(r) = row_num {
+                            let row_idx = r.saturating_sub(1); // 1-based to 0-based
+                            if custom_height {
+                                if let Some(h) = ht {
+                                    worksheet.set_row_height(row_idx, h);
+                                }
+                            }
+                            if hidden {
+                                worksheet.set_row_hidden(row_idx, true);
+                            }
+                        }
+                    }
                     b"c" => {
                         in_cell = true;
                         current_cell_ref = None;
@@ -668,6 +713,108 @@ impl XlsxReader {
                 }
                 Ok(Event::Empty(e)) => {
                     match e.name().as_ref() {
+                        b"row" => {
+                            // Self-closing <row .../> with no cells — may have dimensions
+                            let mut row_num: Option<u32> = None;
+                            let mut ht: Option<f64> = None;
+                            let mut custom_height = false;
+                            let mut hidden = false;
+                            for attr in e.attributes().flatten() {
+                                match attr.key.as_ref() {
+                                    b"r" => {
+                                        row_num = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u32>().ok());
+                                    }
+                                    b"ht" => {
+                                        ht = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok());
+                                    }
+                                    b"customHeight" => {
+                                        custom_height =
+                                            attr.unescape_value().ok().map_or(false, |s| {
+                                                s.as_ref() == "1" || s.as_ref() == "true"
+                                            });
+                                    }
+                                    b"hidden" => {
+                                        hidden = attr.unescape_value().ok().map_or(false, |s| {
+                                            s.as_ref() == "1" || s.as_ref() == "true"
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if let Some(r) = row_num {
+                                let row_idx = r.saturating_sub(1);
+                                if custom_height {
+                                    if let Some(h) = ht {
+                                        worksheet.set_row_height(row_idx, h);
+                                    }
+                                }
+                                if hidden {
+                                    worksheet.set_row_hidden(row_idx, true);
+                                }
+                            }
+                        }
+                        b"col" => {
+                            // Parse column dimensions: min, max, width, customWidth, hidden
+                            let mut col_min: Option<u16> = None;
+                            let mut col_max: Option<u16> = None;
+                            let mut width: Option<f64> = None;
+                            let mut custom_width = false;
+                            let mut hidden = false;
+                            for attr in e.attributes().flatten() {
+                                match attr.key.as_ref() {
+                                    b"min" => {
+                                        col_min = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u16>().ok());
+                                    }
+                                    b"max" => {
+                                        col_max = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u16>().ok());
+                                    }
+                                    b"width" => {
+                                        width = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok());
+                                    }
+                                    b"customWidth" => {
+                                        custom_width =
+                                            attr.unescape_value().ok().map_or(false, |s| {
+                                                s.as_ref() == "1" || s.as_ref() == "true"
+                                            });
+                                    }
+                                    b"hidden" => {
+                                        hidden = attr.unescape_value().ok().map_or(false, |s| {
+                                            s.as_ref() == "1" || s.as_ref() == "true"
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if let (Some(min), Some(max)) = (col_min, col_max) {
+                                // min/max are 1-based in XLSX
+                                for col in min..=max {
+                                    let col_idx = col.saturating_sub(1); // 0-based
+                                    if custom_width {
+                                        if let Some(w) = width {
+                                            worksheet.set_column_width(col_idx, w);
+                                        }
+                                    }
+                                    if hidden {
+                                        worksheet.set_column_hidden(col_idx, true);
+                                    }
+                                }
+                            }
+                        }
                         b"c" => {
                             // Empty cell element (may still carry a style)
                             let mut cell_ref: Option<String> = None;
@@ -741,6 +888,17 @@ impl XlsxReader {
                                 data_bar_color = Some(color);
                             }
                         }
+                        // Merged cells
+                        b"mergeCell" => {
+                            for attr in e.attributes().flatten() {
+                                if attr.key.as_ref() == b"ref" {
+                                    let ref_str = String::from_utf8_lossy(&attr.value);
+                                    if let Ok(range) = CellRange::parse(&ref_str) {
+                                        let _ = worksheet.merge_cells(&range);
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -771,7 +929,39 @@ impl XlsxReader {
 
         // Apply formula or value
         if let Some(f) = formula {
-            worksheet.set_cell_formula_at(addr.row, addr.col, f)?;
+            // Parse cached value (if any) from the <v> element
+            let cached = value.and_then(|v| match cell_type {
+                Some("b") => Some(CellValue::Boolean(
+                    v == "1" || v.eq_ignore_ascii_case("true"),
+                )),
+                Some("e") => CellError::from_str(v).map(CellValue::Error),
+                Some("s") => {
+                    let idx: usize = v.parse().ok()?;
+                    shared_strings
+                        .get(idx)
+                        .map(|s| CellValue::String(s.clone().into()))
+                }
+                Some("str") | Some("inlineStr") => Some(CellValue::String(v.to_string().into())),
+                None | Some("n") => v.parse::<f64>().ok().map(CellValue::Number),
+                Some(_) => Some(CellValue::String(v.to_string().into())),
+            });
+
+            // Ensure formula starts with '='
+            let formula_text = if f.starts_with('=') {
+                f.to_string()
+            } else {
+                format!("={}", f)
+            };
+
+            worksheet.set_cell_value_at(
+                addr.row,
+                addr.col,
+                CellValue::Formula {
+                    text: formula_text,
+                    cached_value: cached.map(Box::new),
+                    array_result: None,
+                },
+            )?;
         } else if let Some(value) = value {
             // Process value based on type
             let cell_value = match cell_type {

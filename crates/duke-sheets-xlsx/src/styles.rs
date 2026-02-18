@@ -9,8 +9,8 @@ use quick_xml::reader::Reader;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::style::{
     Alignment, BorderEdge, BorderLineStyle, BorderStyle, Color, FillStyle, FontStyle,
-    HorizontalAlignment, NumberFormat, PatternType, Protection, ReadingOrder, Style, Underline,
-    VerticalAlignment,
+    FontVerticalAlign, GradientStop, GradientType, HorizontalAlignment, NumberFormat, PatternType,
+    Protection, ReadingOrder, Style, Underline, VerticalAlignment,
 };
 use duke_sheets_core::Workbook;
 
@@ -173,24 +173,16 @@ impl XlsxStyleTable {
                 }
             };
 
-            // Fill (normalize gradients to solid first-stop or none)
-            let norm_fill = match &style.fill {
-                FillStyle::Gradient { stops, .. } => stops
-                    .first()
-                    .map(|s| FillStyle::Solid { color: s.color })
-                    .unwrap_or(FillStyle::None),
-                other => other.clone(),
-            };
-
-            let fill_id = match norm_fill {
+            // Fill
+            let fill_id = match &style.fill {
                 FillStyle::None => 0,
                 other => {
-                    if let Some(&id) = fill_ids.get(&other) {
+                    if let Some(&id) = fill_ids.get(other) {
                         id
                     } else {
                         let id = fills.len() as u32;
                         fills.push(other.clone());
-                        fill_ids.insert(other, id);
+                        fill_ids.insert(other.clone(), id);
                         id
                     }
                 }
@@ -367,6 +359,11 @@ fn write_font(font: &FontStyle) -> String {
         Underline::SingleAccounting => s.push_str("<u val=\"singleAccounting\"/>"),
         Underline::DoubleAccounting => s.push_str("<u val=\"doubleAccounting\"/>"),
     }
+    match font.vertical_align {
+        FontVerticalAlign::Baseline => {}
+        FontVerticalAlign::Superscript => s.push_str("<vertAlign val=\"superscript\"/>"),
+        FontVerticalAlign::Subscript => s.push_str("<vertAlign val=\"subscript\"/>"),
+    }
     s.push_str(&format!("<sz val=\"{}\"/>", font.size));
 
     if !matches!(font.color, Color::Auto) {
@@ -448,9 +445,34 @@ fn write_fill(fill: &FillStyle) -> String {
                 write_color("bgColor", background)
             )
         }
-        FillStyle::Gradient { .. } => {
-            // Gradients are currently downgraded when building the table; keep a safe fallback.
-            "<fill><patternFill patternType=\"none\"/></fill>".to_string()
+        FillStyle::Gradient {
+            gradient_type,
+            angle,
+            stops,
+        } => {
+            let mut s = String::from("<fill><gradientFill");
+            match gradient_type {
+                GradientType::Linear => {
+                    if *angle != 0.0 {
+                        s.push_str(&format!(" degree=\"{}\"", angle));
+                    }
+                }
+                GradientType::Path => {
+                    s.push_str(" type=\"path\"");
+                }
+            }
+            if stops.is_empty() {
+                s.push_str("/></fill>");
+            } else {
+                s.push('>');
+                for stop in stops {
+                    s.push_str(&format!("<stop position=\"{}\">", stop.position));
+                    s.push_str(&write_color("color", &stop.color));
+                    s.push_str("</stop>");
+                }
+                s.push_str("</gradientFill></fill>");
+            }
+            s
         }
     }
 }
@@ -662,9 +684,29 @@ fn write_dxf(style: &Style) -> String {
         s.push_str(&write_font(&style.font));
     }
 
+    // Number format (inline in DXF with both numFmtId and formatCode)
+    if style.number_format != NumberFormat::General {
+        let (id, code) = match &style.number_format {
+            NumberFormat::General => unreachable!(),
+            NumberFormat::BuiltIn(id) => (*id, style.number_format.format_string().to_string()),
+            NumberFormat::Custom(code) => (164, code.clone()),
+        };
+        s.push_str(&format!(
+            "<numFmt numFmtId=\"{}\" formatCode=\"{}\"/>",
+            id,
+            escape_xml_attr(&code)
+        ));
+    }
+
     // Fill (only if non-default)
     if style.fill != FillStyle::None {
         s.push_str(&write_fill(&style.fill));
+    }
+
+    // Alignment (only if non-default)
+    let alignment_xml = write_alignment(&style.alignment);
+    if !alignment_xml.is_empty() {
+        s.push_str(&alignment_xml);
     }
 
     // Border (only if non-default)
@@ -704,6 +746,12 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     let mut current_fill_fg: Color = Color::Auto;
     let mut current_fill_bg: Color = Color::Auto;
     let mut in_fill = false;
+    let mut in_gradient_fill = false;
+    let mut gradient_type: GradientType = GradientType::Linear;
+    let mut gradient_angle: f64 = 0.0;
+    let mut gradient_stops: Vec<GradientStop> = Vec::new();
+    let mut in_gradient_stop = false;
+    let mut current_stop_position: f64 = 0.0;
 
     let mut current_border: Option<BorderStyle> = None;
     let mut current_border_edge: Option<&'static str> = None;
@@ -721,6 +769,12 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     let mut dxf_fill_fg: Color = Color::Auto;
     let mut dxf_fill_bg: Color = Color::Auto;
     let mut in_dxf_fill = false;
+    let mut dxf_in_gradient_fill = false;
+    let mut dxf_gradient_type: GradientType = GradientType::Linear;
+    let mut dxf_gradient_angle: f64 = 0.0;
+    let mut dxf_gradient_stops: Vec<GradientStop> = Vec::new();
+    let mut dxf_in_gradient_stop = false;
+    let mut dxf_current_stop_position: f64 = 0.0;
     let mut dxf_border: Option<BorderStyle> = None;
     let mut dxf_border_edge: Option<&'static str> = None;
 
@@ -770,6 +824,43 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     }
                 }
 
+                b"gradientFill" if in_dxf_fill => {
+                    dxf_in_gradient_fill = true;
+                    dxf_gradient_type = GradientType::Linear;
+                    dxf_gradient_angle = 0.0;
+                    dxf_gradient_stops.clear();
+                    for attr in e.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"type" => {
+                                if let Ok(v) = attr.unescape_value() {
+                                    dxf_gradient_type = match v.as_ref() {
+                                        "path" => GradientType::Path,
+                                        _ => GradientType::Linear,
+                                    };
+                                }
+                            }
+                            b"degree" => {
+                                if let Ok(v) = attr.unescape_value() {
+                                    dxf_gradient_angle = v.parse::<f64>().unwrap_or(0.0);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                b"stop" if dxf_in_gradient_fill => {
+                    dxf_in_gradient_stop = true;
+                    dxf_current_stop_position = 0.0;
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"position" {
+                            if let Ok(v) = attr.unescape_value() {
+                                dxf_current_stop_position = v.parse::<f64>().unwrap_or(0.0);
+                            }
+                        }
+                    }
+                }
+
                 b"border" if in_dxf => {
                     let mut b = BorderStyle::default();
                     for attr in e.attributes().flatten() {
@@ -813,6 +904,43 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     }
                 }
 
+                b"gradientFill" if in_fill => {
+                    in_gradient_fill = true;
+                    gradient_type = GradientType::Linear;
+                    gradient_angle = 0.0;
+                    gradient_stops.clear();
+                    for attr in e.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"type" => {
+                                if let Ok(v) = attr.unescape_value() {
+                                    gradient_type = match v.as_ref() {
+                                        "path" => GradientType::Path,
+                                        _ => GradientType::Linear,
+                                    };
+                                }
+                            }
+                            b"degree" => {
+                                if let Ok(v) = attr.unescape_value() {
+                                    gradient_angle = v.parse::<f64>().unwrap_or(0.0);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                b"stop" if in_gradient_fill => {
+                    in_gradient_stop = true;
+                    current_stop_position = 0.0;
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"position" {
+                            if let Ok(v) = attr.unescape_value() {
+                                current_stop_position = v.parse::<f64>().unwrap_or(0.0);
+                            }
+                        }
+                    }
+                }
+
                 b"border" => {
                     let mut b = BorderStyle::default();
                     for attr in e.attributes().flatten() {
@@ -837,37 +965,52 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
                 // Border edges
                 b"left" | b"right" | b"top" | b"bottom" | b"diagonal" => {
-                    if current_border.is_some() {
-                        current_border_edge = Some(match e.name().as_ref() {
-                            b"left" => "left",
-                            b"right" => "right",
-                            b"top" => "top",
-                            b"bottom" => "bottom",
-                            _ => "diagonal",
-                        });
+                    let edge_name: &'static str = match e.name().as_ref() {
+                        b"left" => "left",
+                        b"right" => "right",
+                        b"top" => "top",
+                        b"bottom" => "bottom",
+                        _ => "diagonal",
+                    };
 
-                        // Parse style attribute
-                        if let Some(border) = current_border.as_mut() {
-                            let mut style: Option<BorderLineStyle> = None;
-                            for attr in e.attributes().flatten() {
-                                if attr.key.as_ref() == b"style" {
-                                    if let Ok(v) = attr.unescape_value() {
-                                        style = str_to_border_style(&v);
-                                    }
-                                }
+                    // Parse style attribute
+                    let mut style: Option<BorderLineStyle> = None;
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"style" {
+                            if let Ok(v) = attr.unescape_value() {
+                                style = str_to_border_style(&v);
                             }
-                            // Create edge with default color; color may be overwritten by nested <color>
-                            if let Some(st) = style {
-                                if st != BorderLineStyle::None {
-                                    set_border_edge(
-                                        border,
-                                        current_border_edge.unwrap(),
-                                        Some(BorderEdge {
-                                            style: st,
-                                            color: Color::Auto,
-                                        }),
-                                    );
-                                }
+                        }
+                    }
+
+                    if let Some(border) = dxf_border.as_mut() {
+                        dxf_border_edge = Some(edge_name);
+                        // Create edge with default color; color may be overwritten by nested <color>
+                        if let Some(st) = style {
+                            if st != BorderLineStyle::None {
+                                set_border_edge(
+                                    border,
+                                    edge_name,
+                                    Some(BorderEdge {
+                                        style: st,
+                                        color: Color::Auto,
+                                    }),
+                                );
+                            }
+                        }
+                    } else if let Some(border) = current_border.as_mut() {
+                        current_border_edge = Some(edge_name);
+                        // Create edge with default color; color may be overwritten by nested <color>
+                        if let Some(st) = style {
+                            if st != BorderLineStyle::None {
+                                set_border_edge(
+                                    border,
+                                    edge_name,
+                                    Some(BorderEdge {
+                                        style: st,
+                                        color: Color::Auto,
+                                    }),
+                                );
                             }
                         }
                     }
@@ -923,45 +1066,13 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                 }
 
                 b"alignment" => {
-                    if let Some((_n, _f, _fi, _b, align, _p)) = current_xf.as_mut() {
-                        for attr in e.attributes().flatten() {
-                            let val = match attr.unescape_value() {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            match attr.key.as_ref() {
-                                b"horizontal" => {
-                                    if let Some(h) = str_to_horizontal(&val) {
-                                        align.horizontal = h;
-                                    }
-                                }
-                                b"vertical" => {
-                                    if let Some(v) = str_to_vertical(&val) {
-                                        align.vertical = v;
-                                    }
-                                }
-                                b"wrapText" => {
-                                    align.wrap_text = val.as_ref() == "1";
-                                }
-                                b"shrinkToFit" => {
-                                    align.shrink_to_fit = val.as_ref() == "1";
-                                }
-                                b"indent" => {
-                                    align.indent = val.parse::<u8>().unwrap_or(0);
-                                }
-                                b"textRotation" => {
-                                    align.rotation = val.parse::<i16>().unwrap_or(0);
-                                }
-                                b"readingOrder" => {
-                                    align.reading_order = match val.as_ref() {
-                                        "1" => ReadingOrder::LeftToRight,
-                                        "2" => ReadingOrder::RightToLeft,
-                                        _ => ReadingOrder::ContextDependent,
-                                    };
-                                }
-                                _ => {}
-                            }
+                    // DXF alignment takes priority
+                    if in_dxf {
+                        if let Some(dxf) = current_dxf.as_mut() {
+                            parse_alignment_attrs(&e, &mut dxf.alignment);
                         }
+                    } else if let Some((_n, _f, _fi, _b, align, _p)) = current_xf.as_mut() {
+                        parse_alignment_attrs(&e, align);
                     }
                 }
 
@@ -1039,11 +1150,33 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     }
                 }
 
+                b"vertAlign" => {
+                    let font = dxf_font.as_mut().or(current_font.as_mut());
+                    if let Some(font) = font {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    font.vertical_align = match v.as_ref() {
+                                        "superscript" => FontVerticalAlign::Superscript,
+                                        "subscript" => FontVerticalAlign::Subscript,
+                                        _ => FontVerticalAlign::Baseline,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+
                 b"color" => {
-                    // Font color or border color depending on context
+                    // Font color, border color, or gradient stop color depending on context
                     let color = parse_color_attrs(&e);
-                    // Check DXF context first
-                    if let Some(font) = dxf_font.as_mut() {
+                    // Gradient stop colors take priority
+                    if dxf_in_gradient_stop {
+                        dxf_gradient_stops
+                            .push(GradientStop::new(dxf_current_stop_position, color));
+                    } else if in_gradient_stop {
+                        gradient_stops.push(GradientStop::new(current_stop_position, color));
+                    } else if let Some(font) = dxf_font.as_mut() {
                         font.color = color;
                     } else if let (Some(border), Some(edge_name)) =
                         (dxf_border.as_mut(), dxf_border_edge)
@@ -1087,8 +1220,8 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
             Ok(Event::Empty(e)) => match e.name().as_ref() {
                 b"numFmt" => {
-                    let mut id = None;
-                    let mut code = None;
+                    let mut id: Option<u32> = None;
+                    let mut code: Option<String> = None;
                     for attr in e.attributes().flatten() {
                         match attr.key.as_ref() {
                             b"numFmtId" => {
@@ -1100,7 +1233,17 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                             _ => {}
                         }
                     }
-                    if let (Some(id), Some(code)) = (id, code) {
+                    if in_dxf {
+                        // DXF numFmt: apply directly to the current DXF style
+                        if let Some(dxf) = current_dxf.as_mut() {
+                            dxf.number_format = match (id, code) {
+                                (Some(0), _) => NumberFormat::General,
+                                (_, Some(c)) => NumberFormat::Custom(c),
+                                (Some(id), None) => NumberFormat::BuiltIn(id),
+                                _ => NumberFormat::General,
+                            };
+                        }
+                    } else if let (Some(id), Some(code)) = (id, code) {
                         numfmts.insert(id, code);
                     }
                 }
@@ -1138,6 +1281,22 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                         font.underline = underline;
                     }
                 }
+                b"vertAlign" => {
+                    let font = dxf_font.as_mut().or(current_font.as_mut());
+                    if let Some(font) = font {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    font.vertical_align = match v.as_ref() {
+                                        "superscript" => FontVerticalAlign::Superscript,
+                                        "subscript" => FontVerticalAlign::Subscript,
+                                        _ => FontVerticalAlign::Baseline,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
                 b"sz" => {
                     let font = dxf_font.as_mut().or(current_font.as_mut());
                     if let Some(font) = font {
@@ -1164,8 +1323,13 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                 }
                 b"color" => {
                     let color = parse_color_attrs(&e);
-                    // Check DXF context first
-                    if let Some(font) = dxf_font.as_mut() {
+                    // Gradient stop colors take priority
+                    if dxf_in_gradient_stop {
+                        dxf_gradient_stops
+                            .push(GradientStop::new(dxf_current_stop_position, color));
+                    } else if in_gradient_stop {
+                        gradient_stops.push(GradientStop::new(current_stop_position, color));
+                    } else if let Some(font) = dxf_font.as_mut() {
                         font.color = color;
                     } else if let (Some(border), Some(edge_name)) =
                         (dxf_border.as_mut(), dxf_border_edge)
@@ -1206,45 +1370,13 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
                 // alignment can be self-closing
                 b"alignment" => {
-                    if let Some((_n, _f, _fi, _b, align, _p)) = current_xf.as_mut() {
-                        for attr in e.attributes().flatten() {
-                            let val = match attr.unescape_value() {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            match attr.key.as_ref() {
-                                b"horizontal" => {
-                                    if let Some(h) = str_to_horizontal(&val) {
-                                        align.horizontal = h;
-                                    }
-                                }
-                                b"vertical" => {
-                                    if let Some(v) = str_to_vertical(&val) {
-                                        align.vertical = v;
-                                    }
-                                }
-                                b"wrapText" => {
-                                    align.wrap_text = val.as_ref() == "1";
-                                }
-                                b"shrinkToFit" => {
-                                    align.shrink_to_fit = val.as_ref() == "1";
-                                }
-                                b"indent" => {
-                                    align.indent = val.parse::<u8>().unwrap_or(0);
-                                }
-                                b"textRotation" => {
-                                    align.rotation = val.parse::<i16>().unwrap_or(0);
-                                }
-                                b"readingOrder" => {
-                                    align.reading_order = match val.as_ref() {
-                                        "1" => ReadingOrder::LeftToRight,
-                                        "2" => ReadingOrder::RightToLeft,
-                                        _ => ReadingOrder::ContextDependent,
-                                    };
-                                }
-                                _ => {}
-                            }
+                    // DXF alignment takes priority
+                    if in_dxf {
+                        if let Some(dxf) = current_dxf.as_mut() {
+                            parse_alignment_attrs(&e, &mut dxf.alignment);
                         }
+                    } else if let Some((_n, _f, _fi, _b, align, _p)) = current_xf.as_mut() {
+                        parse_alignment_attrs(&e, align);
                     }
                 }
 
@@ -1262,6 +1394,87 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                                 _ => {}
                             }
                         }
+                    }
+                }
+
+                // Border edges can be self-closing (e.g. <left style="dotted"/>)
+                b"left" | b"right" | b"top" | b"bottom" | b"diagonal" => {
+                    let edge_name: &'static str = match e.name().as_ref() {
+                        b"left" => "left",
+                        b"right" => "right",
+                        b"top" => "top",
+                        b"bottom" => "bottom",
+                        _ => "diagonal",
+                    };
+
+                    // Parse style attribute
+                    let mut style: Option<BorderLineStyle> = None;
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"style" {
+                            if let Ok(v) = attr.unescape_value() {
+                                style = str_to_border_style(&v);
+                            }
+                        }
+                    }
+
+                    if let Some(border) = dxf_border.as_mut() {
+                        if let Some(st) = style {
+                            if st != BorderLineStyle::None {
+                                set_border_edge(
+                                    border,
+                                    edge_name,
+                                    Some(BorderEdge {
+                                        style: st,
+                                        color: Color::Auto,
+                                    }),
+                                );
+                            }
+                        }
+                    } else if let Some(border) = current_border.as_mut() {
+                        if let Some(st) = style {
+                            if st != BorderLineStyle::None {
+                                set_border_edge(
+                                    border,
+                                    edge_name,
+                                    Some(BorderEdge {
+                                        style: st,
+                                        color: Color::Auto,
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // patternFill can be self-closing
+                b"patternFill" => {
+                    if in_dxf_fill {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"patternType" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    dxf_fill_pattern = str_to_pattern_type(&v);
+                                }
+                            }
+                        }
+                    } else if in_fill {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"patternType" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    current_fill_pattern = str_to_pattern_type(&v);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // gradientFill can be self-closing (no stops — degenerate case)
+                b"gradientFill" => {
+                    // Self-closing gradientFill with no stops is a no-op,
+                    // but parse attributes in case we need them.
+                    if in_dxf_fill {
+                        dxf_in_gradient_fill = false;
+                    } else if in_fill {
+                        in_gradient_fill = false;
                     }
                 }
 
@@ -1335,21 +1548,47 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                         fonts.push(f);
                     }
                 }
+                b"stop" => {
+                    dxf_in_gradient_stop = false;
+                    in_gradient_stop = false;
+                }
+                b"gradientFill" => {
+                    dxf_in_gradient_fill = false;
+                    in_gradient_fill = false;
+                }
                 b"fill" => {
                     if in_dxf_fill {
-                        // DXF fill - apply to current DXF style
-                        let fill = finalize_fill(dxf_fill_pattern, dxf_fill_fg, dxf_fill_bg);
+                        // DXF fill - check if gradient was parsed
+                        let fill = if !dxf_gradient_stops.is_empty() {
+                            FillStyle::Gradient {
+                                gradient_type: dxf_gradient_type,
+                                angle: dxf_gradient_angle,
+                                stops: std::mem::take(&mut dxf_gradient_stops),
+                            }
+                        } else {
+                            finalize_fill(dxf_fill_pattern, dxf_fill_fg, dxf_fill_bg)
+                        };
                         if let Some(dxf) = current_dxf.as_mut() {
                             dxf.fill = fill;
                         }
                         in_dxf_fill = false;
                         dxf_fill_pattern = None;
+                        dxf_in_gradient_fill = false;
                     } else if in_fill {
-                        let fill =
-                            finalize_fill(current_fill_pattern, current_fill_fg, current_fill_bg);
+                        // Regular fill - check if gradient was parsed
+                        let fill = if !gradient_stops.is_empty() {
+                            FillStyle::Gradient {
+                                gradient_type,
+                                angle: gradient_angle,
+                                stops: std::mem::take(&mut gradient_stops),
+                            }
+                        } else {
+                            finalize_fill(current_fill_pattern, current_fill_fg, current_fill_bg)
+                        };
                         fills.push(fill);
                         in_fill = false;
                         current_fill_pattern = None;
+                        in_gradient_fill = false;
                     }
                 }
                 b"border" => {
@@ -1445,9 +1684,29 @@ fn resolve_style(
 }
 
 fn finalize_fill(pattern: Option<PatternType>, fg: Color, bg: Color) -> FillStyle {
-    match pattern.unwrap_or(PatternType::None) {
+    // When patternType is absent but colors are present (common in DXF entries
+    // from LibreOffice), infer solid fill.
+    let effective_pattern = match pattern {
+        Some(p) => p,
+        None => {
+            let has_fg = !matches!(fg, Color::Auto);
+            let has_bg = !matches!(bg, Color::Auto);
+            if has_fg || has_bg {
+                PatternType::Solid
+            } else {
+                PatternType::None
+            }
+        }
+    };
+
+    match effective_pattern {
         PatternType::None => FillStyle::None,
-        PatternType::Solid => FillStyle::Solid { color: fg },
+        PatternType::Solid => {
+            // For solid fills, prefer fg; fall back to bg (LO DXF entries often
+            // put the fill color in bgColor rather than fgColor).
+            let color = if matches!(fg, Color::Auto) { bg } else { fg };
+            FillStyle::Solid { color }
+        }
         PatternType::Gray125 => FillStyle::None,
         p => FillStyle::Pattern {
             pattern: p,
@@ -1631,5 +1890,48 @@ fn set_border_edge(border: &mut BorderStyle, edge: &str, val: Option<BorderEdge>
         "top" => border.top = val,
         "bottom" => border.bottom = val,
         _ => border.diagonal = val,
+    }
+}
+
+/// Parse alignment attributes from an XML element into an Alignment struct.
+/// Handles both `"1"` and `"true"` for boolean attributes (Excel vs LibreOffice).
+fn parse_alignment_attrs(e: &quick_xml::events::BytesStart<'_>, align: &mut Alignment) {
+    for attr in e.attributes().flatten() {
+        let val = match attr.unescape_value() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match attr.key.as_ref() {
+            b"horizontal" => {
+                if let Some(h) = str_to_horizontal(&val) {
+                    align.horizontal = h;
+                }
+            }
+            b"vertical" => {
+                if let Some(v) = str_to_vertical(&val) {
+                    align.vertical = v;
+                }
+            }
+            b"wrapText" => {
+                align.wrap_text = val.as_ref() == "1" || val.as_ref() == "true";
+            }
+            b"shrinkToFit" => {
+                align.shrink_to_fit = val.as_ref() == "1" || val.as_ref() == "true";
+            }
+            b"indent" => {
+                align.indent = val.parse::<u8>().unwrap_or(0);
+            }
+            b"textRotation" => {
+                align.rotation = val.parse::<i16>().unwrap_or(0);
+            }
+            b"readingOrder" => {
+                align.reading_order = match val.as_ref() {
+                    "1" => ReadingOrder::LeftToRight,
+                    "2" => ReadingOrder::RightToLeft,
+                    _ => ReadingOrder::ContextDependent,
+                };
+            }
+            _ => {}
+        }
     }
 }

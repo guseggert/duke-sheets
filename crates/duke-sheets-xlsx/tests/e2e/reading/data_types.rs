@@ -1,150 +1,236 @@
-//! Tests for reading data types from PyUNO fixtures.
+//! Tests for reading data types from XLSX files.
 //!
-//! Fixture: `data_types.xlsx`
-//! - Numbers (integers, decimals, negative, scientific)
-//! - Strings (ASCII, Unicode, escaped characters)
-//! - Booleans (TRUE/FALSE)
-//! - Formulas (with cached values)
-//! - Errors (#DIV/0!, #VALUE!, #REF!, etc.)
+//! Each test creates its fixture on-demand via LibreOffice, saves to a temp
+//! file, reads it back with `XlsxReader`, and asserts.
 
-use crate::{fixture_path, skip_if_no_fixtures};
+use crate::{cleanup_fixture, lo_bridge, runtime, skip_if_no_lo, temp_fixture_path};
 use duke_sheets_xlsx::XlsxReader;
 
 #[test]
-fn test_data_types_file_opens() {
-    skip_if_no_fixtures!();
-
-    let path = fixture_path("data_types.xlsx");
-    let result = XlsxReader::read_file(&path);
-
-    assert!(
-        result.is_ok(),
-        "Failed to open data_types.xlsx: {:?}",
-        result.err()
-    );
-}
-
-#[test]
 fn test_number_values() {
-    skip_if_no_fixtures!();
+    skip_if_no_lo!();
 
-    let path = fixture_path("data_types.xlsx");
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.expect("LO should be available");
+        let mut bridge = lo.lock().await;
+        let mut wb = bridge.create_workbook().await.expect("create workbook");
+
+        wb.set_cell_value("A1", 42.0).await.unwrap();
+        wb.set_cell_value("A2", 3.14159).await.unwrap();
+        wb.set_cell_value("A3", -100.0).await.unwrap();
+        wb.set_cell_value("A4", 0.0).await.unwrap();
+
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
     let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
     let sheet = workbook.worksheet(0).expect("No worksheet");
 
-    // Test integer - B2 should have 42
-    if let Some(cell) = sheet.cell_at(1, 1) {
-        // B2
-        match &cell.value {
-            duke_sheets_core::CellValue::Number(n) => {
-                assert!((*n - 42.0).abs() < 0.001, "Expected 42, got {}", n);
-            }
-            other => panic!("Expected Number, got {:?}", other),
+    let cell = sheet.cell_at(0, 0).expect("A1 should exist");
+    match &cell.value {
+        duke_sheets_core::CellValue::Number(n) => {
+            assert!((*n - 42.0).abs() < 0.001, "Expected 42, got {n}");
         }
+        other => panic!("Expected Number, got {other:?}"),
     }
+
+    let cell = sheet.cell_at(1, 0).expect("A2 should exist");
+    match &cell.value {
+        duke_sheets_core::CellValue::Number(n) => {
+            assert!((*n - 3.14159).abs() < 0.001, "Expected 3.14159, got {n}");
+        }
+        other => panic!("Expected Number, got {other:?}"),
+    }
+
+    let cell = sheet.cell_at(2, 0).expect("A3 should exist");
+    match &cell.value {
+        duke_sheets_core::CellValue::Number(n) => {
+            assert!((*n + 100.0).abs() < 0.001, "Expected -100, got {n}");
+        }
+        other => panic!("Expected Number, got {other:?}"),
+    }
+
+    let cell = sheet.cell_at(3, 0).expect("A4 should exist");
+    match &cell.value {
+        duke_sheets_core::CellValue::Number(n) => {
+            assert!(n.abs() < 0.001, "Expected 0, got {n}");
+        }
+        other => panic!("Expected Number, got {other:?}"),
+    }
+
+    cleanup_fixture(&path);
 }
 
 #[test]
 fn test_string_values() {
-    skip_if_no_fixtures!();
+    skip_if_no_lo!();
 
-    let path = fixture_path("data_types.xlsx");
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.expect("LO should be available");
+        let mut bridge = lo.lock().await;
+        let mut wb = bridge.create_workbook().await.expect("create workbook");
+
+        wb.set_cell_value("A1", "Hello").await.unwrap();
+        wb.set_cell_value("A2", "World with spaces").await.unwrap();
+        wb.set_cell_value("A3", "Unicode: \u{65e5}\u{672c}\u{8a9e}").await.unwrap();
+
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
     let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
     let sheet = workbook.worksheet(0).expect("No worksheet");
 
-    // Look for "Hello" string somewhere in the sheet
-    let mut found_hello = false;
-    for row in 0..20 {
-        for col in 0..5 {
-            if let Some(cell) = sheet.cell_at(row, col) {
-                if let duke_sheets_core::CellValue::String(s) = &cell.value {
-                    if s.as_ref().contains("Hello") {
-                        found_hello = true;
-                    }
-                }
-            }
+    let cell = sheet.cell_at(0, 0).expect("A1 should exist");
+    match &cell.value {
+        duke_sheets_core::CellValue::String(s) => {
+            assert_eq!(s.as_ref(), "Hello");
         }
+        other => panic!("Expected String, got {other:?}"),
     }
-    assert!(
-        found_hello,
-        "Should find 'Hello' string somewhere in the sheet"
-    );
+
+    let cell = sheet.cell_at(1, 0).expect("A2 should exist");
+    match &cell.value {
+        duke_sheets_core::CellValue::String(s) => {
+            assert_eq!(s.as_ref(), "World with spaces");
+        }
+        other => panic!("Expected String, got {other:?}"),
+    }
+
+    let cell = sheet.cell_at(2, 0).expect("A3 should exist");
+    match &cell.value {
+        duke_sheets_core::CellValue::String(s) => {
+            assert!(
+                s.as_ref().contains("\u{65e5}\u{672c}\u{8a9e}"),
+                "Expected Japanese text, got {s}"
+            );
+        }
+        other => panic!("Expected String, got {other:?}"),
+    }
+
+    cleanup_fixture(&path);
 }
 
 #[test]
 fn test_boolean_values() {
-    skip_if_no_fixtures!();
+    skip_if_no_lo!();
 
-    let path = fixture_path("data_types.xlsx");
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.expect("LO should be available");
+        let mut bridge = lo.lock().await;
+        let mut wb = bridge.create_workbook().await.expect("create workbook");
+
+        // Use =TRUE() and =FALSE() as formulas so LO preserves them
+        // (plain "TRUE" gets optimized to a numeric constant on save)
+        wb.set_cell_formula("A1", "=TRUE()").await.unwrap();
+        wb.set_cell_formula("A2", "=FALSE()").await.unwrap();
+
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
     let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
     let sheet = workbook.worksheet(0).expect("No worksheet");
 
-    // Look for boolean values in the sheet
+    // Use effective_value() to look through formulas to their cached values
     let mut found_true = false;
     let mut found_false = false;
-
-    for row in 0..30 {
+    for row in 0..5 {
         for col in 0..5 {
             if let Some(cell) = sheet.cell_at(row, col) {
-                if let duke_sheets_core::CellValue::Boolean(b) = &cell.value {
-                    if *b {
-                        found_true = true;
-                    } else {
-                        found_false = true;
+                match cell.value.effective_value() {
+                    duke_sheets_core::CellValue::Boolean(b) => {
+                        if *b {
+                            found_true = true;
+                        } else {
+                            found_false = true;
+                        }
                     }
+                    // LO may also cache boolean results as numbers (1/0)
+                    duke_sheets_core::CellValue::Number(n) => {
+                        if (*n - 1.0).abs() < 0.001 {
+                            found_true = true;
+                        } else if n.abs() < 0.001 {
+                            found_false = true;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
     }
 
-    // At least one of TRUE/FALSE should be found
-    assert!(
-        found_true || found_false,
-        "Should find at least one boolean value"
-    );
+    assert!(found_true, "Should find TRUE value");
+    assert!(found_false, "Should find FALSE value");
+
+    cleanup_fixture(&path);
 }
 
 #[test]
 fn test_formula_values() {
-    skip_if_no_fixtures!();
+    skip_if_no_lo!();
 
-    let path = fixture_path("data_types.xlsx");
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.expect("LO should be available");
+        let mut bridge = lo.lock().await;
+        let mut wb = bridge.create_workbook().await.expect("create workbook");
+
+        wb.set_cell_value("A1", 10.0).await.unwrap();
+        wb.set_cell_value("A2", 20.0).await.unwrap();
+        wb.set_cell_formula("A3", "=A1+A2").await.unwrap();
+        wb.set_cell_formula("A4", "=SUM(A1:A2)").await.unwrap();
+
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
     let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
     let sheet = workbook.worksheet(0).expect("No worksheet");
 
-    // Look for cells with formulas
-    let mut found_formula = false;
+    let formula = sheet.get_formula_at(2, 0);
+    assert!(formula.is_some(), "A3 should have a formula");
 
-    for row in 0..30 {
-        for col in 0..5 {
-            if sheet.get_formula_at(row, col).is_some() {
-                found_formula = true;
-                break;
-            }
-        }
-        if found_formula {
-            break;
-        }
-    }
+    let formula = sheet.get_formula_at(3, 0);
+    assert!(formula.is_some(), "A4 should have a formula");
 
-    assert!(found_formula, "Should find at least one formula");
+    cleanup_fixture(&path);
 }
 
 #[test]
 fn test_error_values() {
-    skip_if_no_fixtures!();
+    skip_if_no_lo!();
 
-    let path = fixture_path("data_types.xlsx");
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.expect("LO should be available");
+        let mut bridge = lo.lock().await;
+        let mut wb = bridge.create_workbook().await.expect("create workbook");
+
+        wb.set_cell_formula("A1", "=1/0").await.unwrap(); // #DIV/0!
+        wb.set_cell_formula("A2", "=VALUE(\"x\")").await.unwrap(); // #VALUE!
+
+        wb.save(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
     let workbook = XlsxReader::read_file(&path).expect("Failed to read workbook");
     let sheet = workbook.worksheet(0).expect("No worksheet");
 
-    // Look for error values
     let mut found_error = false;
-
-    for row in 0..40 {
+    for row in 0..5 {
         for col in 0..5 {
             if let Some(cell) = sheet.cell_at(row, col) {
-                if let duke_sheets_core::CellValue::Error(_) = &cell.value {
+                if let duke_sheets_core::CellValue::Error(_) = cell.value.effective_value() {
                     found_error = true;
                     break;
                 }
@@ -156,4 +242,6 @@ fn test_error_values() {
     }
 
     assert!(found_error, "Should find at least one error value");
+
+    cleanup_fixture(&path);
 }

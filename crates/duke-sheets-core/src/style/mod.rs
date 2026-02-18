@@ -20,7 +20,7 @@ pub use alignment::{Alignment, HorizontalAlignment, ReadingOrder, VerticalAlignm
 pub use border::{BorderEdge, BorderLineStyle, BorderStyle, DiagonalDirection};
 pub use color::Color;
 pub use fill::{FillStyle, GradientStop, GradientType, PatternType};
-pub use font::{FontStyle, Underline};
+pub use font::{FontStyle, FontVerticalAlign, Underline};
 pub use number_format::NumberFormat;
 pub use pool::StylePool;
 

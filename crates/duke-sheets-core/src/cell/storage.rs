@@ -419,6 +419,26 @@ impl CellStorage {
         }
     }
 
+    /// Get all custom row heights (row index → height in points).
+    pub fn custom_row_heights(&self) -> &std::collections::BTreeMap<u32, f64> {
+        &self.row_heights
+    }
+
+    /// Get all hidden rows (row index → true).
+    pub fn hidden_rows(&self) -> &std::collections::BTreeMap<u32, bool> {
+        &self.hidden_rows
+    }
+
+    /// Get all custom column widths (column index → width in characters).
+    pub fn custom_column_widths(&self) -> &std::collections::BTreeMap<u16, f64> {
+        &self.column_widths
+    }
+
+    /// Get all hidden columns (column index → true).
+    pub fn hidden_columns(&self) -> &std::collections::BTreeMap<u16, bool> {
+        &self.hidden_columns
+    }
+
     /// Get merged regions
     pub fn merged_regions(&self) -> &[crate::CellRange] {
         &self.merged_regions

@@ -313,6 +313,26 @@ impl Worksheet {
         self.cells.set_column_hidden(col, hidden);
     }
 
+    /// Get all custom row heights (row index → height in points).
+    pub fn custom_row_heights(&self) -> &std::collections::BTreeMap<u32, f64> {
+        self.cells.custom_row_heights()
+    }
+
+    /// Get all hidden rows (row index → true).
+    pub fn hidden_rows(&self) -> &std::collections::BTreeMap<u32, bool> {
+        self.cells.hidden_rows()
+    }
+
+    /// Get all custom column widths (column index → width in characters).
+    pub fn custom_column_widths(&self) -> &std::collections::BTreeMap<u16, f64> {
+        self.cells.custom_column_widths()
+    }
+
+    /// Get all hidden columns (column index → true).
+    pub fn hidden_columns(&self) -> &std::collections::BTreeMap<u16, bool> {
+        self.cells.hidden_columns()
+    }
+
     // === Merged Cells ===
 
     /// Get merged regions
