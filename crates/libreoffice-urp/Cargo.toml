@@ -1,0 +1,19 @@
+[package]
+name = "libreoffice-urp"
+description = "Pure Rust implementation of the UNO Remote Protocol (URP) for communicating with LibreOffice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tokio = { version = "1", features = ["net", "io-util", "rt", "sync", "macros", "time"] }
+bytes = "1"
+tracing.workspace = true
+rand = "0.8"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+pretty_assertions.workspace = true

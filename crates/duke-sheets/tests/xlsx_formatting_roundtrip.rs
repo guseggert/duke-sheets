@@ -548,7 +548,7 @@ fn test_roundtrip_dxf_styles() {
 /// Test multiple rules with different DXF styles
 #[test]
 fn test_roundtrip_multiple_dxf_styles() {
-    use duke_sheets::prelude::{Color, FillStyle, Style};
+    use duke_sheets::prelude::{Color, Style};
 
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
@@ -596,5 +596,182 @@ fn test_roundtrip_multiple_dxf_styles() {
     let rules = sheet2.conditional_formats();
     for (i, rule) in rules.iter().enumerate() {
         assert!(rule.format.is_some(), "Rule {} should have a format", i);
+    }
+}
+
+/// Test DXF border edges roundtrip (border reading was previously broken for DXF)
+#[test]
+fn test_roundtrip_dxf_border_edges() {
+    use duke_sheets::prelude::{BorderEdge, BorderLineStyle, Color, Style};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    for i in 0..5 {
+        sheet
+            .set_cell_value_at(i, 0, (i as f64 + 1.0) * 100.0)
+            .unwrap();
+    }
+
+    // Create style with specific border edges
+    let mut border_style = Style::new();
+    let border = border_style.border_mut();
+    border.left = Some(BorderEdge {
+        style: BorderLineStyle::Thin,
+        color: Color::rgb(0, 0, 0),
+    });
+    border.right = Some(BorderEdge {
+        style: BorderLineStyle::Thin,
+        color: Color::rgb(0, 0, 0),
+    });
+    border.top = Some(BorderEdge {
+        style: BorderLineStyle::Medium,
+        color: Color::rgb(0, 0, 255),
+    });
+    border.bottom = Some(BorderEdge {
+        style: BorderLineStyle::Medium,
+        color: Color::rgb(0, 0, 255),
+    });
+
+    let rule = ConditionalFormatRule::cell_is_greater_than("200")
+        .with_range(CellRange::parse("A1:A5").unwrap())
+        .with_format(border_style);
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        assert!(rule.format.is_some(), "Rule should have a format");
+        let format = rule.format.as_ref().unwrap();
+
+        // Check left border
+        assert!(format.border.left.is_some(), "Should have left border");
+        let left = format.border.left.as_ref().unwrap();
+        assert_eq!(left.style, BorderLineStyle::Thin, "Left should be thin");
+
+        // Check top border
+        assert!(format.border.top.is_some(), "Should have top border");
+        let top = format.border.top.as_ref().unwrap();
+        assert_eq!(top.style, BorderLineStyle::Medium, "Top should be medium");
+
+        // Check right border
+        assert!(format.border.right.is_some(), "Should have right border");
+
+        // Check bottom border
+        assert!(format.border.bottom.is_some(), "Should have bottom border");
+    }
+}
+
+/// Test DXF number format roundtrip
+#[test]
+fn test_roundtrip_dxf_number_format() {
+    use duke_sheets::prelude::{NumberFormat, Style};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    for i in 0..5 {
+        sheet
+            .set_cell_value_at(i, 0, (i as f64 + 1.0) * 0.123)
+            .unwrap();
+    }
+
+    // Create style with custom number format
+    let numfmt_style = Style::new().number_format("#,##0.00%");
+
+    let rule = ConditionalFormatRule::cell_is_greater_than("0.5")
+        .with_range(CellRange::parse("A1:A5").unwrap())
+        .with_format(numfmt_style);
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        assert!(rule.format.is_some(), "Rule should have a format");
+        let format = rule.format.as_ref().unwrap();
+
+        match &format.number_format {
+            NumberFormat::Custom(code) => {
+                assert_eq!(code, "#,##0.00%", "Number format should be #,##0.00%");
+            }
+            other => panic!("Expected Custom number format, got {:?}", other),
+        }
+    }
+}
+
+/// Test DXF alignment roundtrip
+#[test]
+fn test_roundtrip_dxf_alignment() {
+    use duke_sheets::prelude::{HorizontalAlignment, Style, VerticalAlignment};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    for i in 0..5 {
+        sheet
+            .set_cell_value_at(i, 0, format!("Text {}", i + 1))
+            .unwrap();
+    }
+
+    // Create style with alignment
+    let mut align_style = Style::new()
+        .horizontal_alignment(HorizontalAlignment::Center)
+        .vertical_alignment(VerticalAlignment::Center)
+        .wrap_text(true);
+    align_style.alignment.rotation = 45;
+
+    let rule = ConditionalFormatRule::cell_is_greater_than("0")
+        .with_range(CellRange::parse("A1:A5").unwrap())
+        .with_format(align_style);
+    sheet.add_conditional_format(rule);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.conditional_format_count(), 1);
+    let rules = sheet2.conditional_formats_at(0, 0);
+    assert!(!rules.is_empty(), "A1 should have conditional formatting");
+
+    if let Some(rule) = rules.first() {
+        assert!(rule.format.is_some(), "Rule should have a format");
+        let format = rule.format.as_ref().unwrap();
+
+        assert_eq!(
+            format.alignment.horizontal,
+            HorizontalAlignment::Center,
+            "Horizontal alignment should be Center"
+        );
+        assert_eq!(
+            format.alignment.vertical,
+            VerticalAlignment::Center,
+            "Vertical alignment should be Center"
+        );
+        assert!(format.alignment.wrap_text, "Wrap text should be true");
+        assert_eq!(format.alignment.rotation, 45, "Text rotation should be 45");
     }
 }

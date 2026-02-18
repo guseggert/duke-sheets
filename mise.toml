@@ -127,6 +127,12 @@ rm -rf pkg/
 # Development Tasks
 # =============================================================================
 
+[tasks.demo]
+description = "Build WASM bindings and serve the demo at http://localhost:8080"
+depends = ["build:wasm"]
+dir = "bindings/wasm"
+run = "python3 -m http.server 8080"
+
 [tasks.dev]
 description = "Build bindings in development mode and run tests"
 depends = ["build", "test"]
@@ -140,83 +146,76 @@ description = "WASM development cycle"
 depends = ["build:wasm", "test:wasm:node"]
 
 # =============================================================================
-# PyUNO Fixture Tasks (E2E Testing)
+# Docker Image Tasks
 # =============================================================================
 
-[tasks."fixtures:build"]
-description = "Build the PyUNO Docker image for fixture generation"
+[tasks."docker:build"]
+description = "Build the PyUNO Docker image (LibreOffice + URP)"
 run = "docker build -t duke-sheets-pyuno tests/fixtures/pyuno"
-
-[tasks."fixtures:generate"]
-description = "Generate all PyUNO fixtures (requires Docker)"
-depends = ["fixtures:build"]
-run = """
-#!/bin/bash
-set -e
-mkdir -p tests/fixtures/pyuno/output
-docker run --rm \
-  -v "$(pwd)/tests/fixtures/pyuno/output:/output" \
-  duke-sheets-pyuno
-echo ""
-echo "Fixtures generated in tests/fixtures/pyuno/output/"
-ls -la tests/fixtures/pyuno/output/
-"""
-
-[tasks."fixtures:generate:one"]
-description = "Generate a specific fixture (usage: mise run fixtures:generate:one data_types.xlsx)"
-depends = ["fixtures:build"]
-run = """
-#!/bin/bash
-set -e
-if [ -z "$1" ]; then
-  echo "Usage: mise run fixtures:generate:one <fixture_name.xlsx>"
-  exit 1
-fi
-mkdir -p tests/fixtures/pyuno/output
-docker run --rm \
-  -v "$(pwd)/tests/fixtures/pyuno/output:/output" \
-  duke-sheets-pyuno \
-  /app/run.sh "$1"
-"""
-
-[tasks."fixtures:list"]
-description = "List available PyUNO fixtures"
-depends = ["fixtures:build"]
-run = "docker run --rm duke-sheets-pyuno /app/run.sh --list"
-
-[tasks."fixtures:clean"]
-description = "Remove generated fixture files"
-run = """
-rm -rf tests/fixtures/pyuno/output/*.xlsx
-rm -f tests/fixtures/dxf/*.xlsx
-"""
-
-[tasks."fixtures:dxf"]
-description = "Generate DXF test fixtures (requires openpyxl)"
-run = """
-#!/bin/bash
-set -e
-cd tests/fixtures/dxf
-if ! python3 -c "import openpyxl" 2>/dev/null; then
-  echo "Installing openpyxl..."
-  pip install openpyxl
-fi
-python3 generate_fixtures.py
-"""
 
 # =============================================================================
 # E2E Test Tasks
 # =============================================================================
 
-[tasks."fixtures:all"]
-description = "Generate all fixtures (DXF + PyUNO)"
-depends = ["fixtures:dxf", "fixtures:generate"]
-
 [tasks."test:e2e"]
-description = "Run E2E tests for XLSX reader (requires fixtures)"
-run = "cargo test -p duke-sheets-xlsx --test e2e -- --nocapture"
+description = "Run E2E tests for XLSX reader (requires LibreOffice via urp:start)"
+run = "cargo test -p duke-sheets-xlsx --test e2e -- --test-threads=1 --nocapture"
 
-[tasks."test:e2e:all"]
-description = "Generate fixtures and run E2E tests"
-depends = ["fixtures:all"]
-run = "cargo test -p duke-sheets-xlsx --test e2e -- --nocapture"
+# =============================================================================
+# URP Bridge Tasks (LibreOffice direct connection via UNO Remote Protocol)
+# =============================================================================
+
+[tasks."urp:start"]
+description = "Start LibreOffice in Docker with URP socket on port 2002 and shared /tmp volume"
+depends = ["docker:build"]
+run = """
+#!/bin/bash
+set -e
+mkdir -p /tmp/duke-sheets-urp
+echo "Starting LibreOffice with URP socket on localhost:2002..."
+echo "Shared volume: /tmp/duke-sheets-urp"
+echo "Press Ctrl+C to stop."
+docker run --rm -p 2002:2002 -v /tmp/duke-sheets-urp:/tmp/duke-sheets-urp duke-sheets-pyuno \
+  bash -c 'soffice --headless --accept="socket,host=0.0.0.0,port=2002;urp;StarOffice.ComponentContext" & sleep 2 && echo "LibreOffice ready on port 2002" && wait'
+"""
+
+[tasks."test:urp"]
+description = "Run URP integration tests (starts LibreOffice in Docker automatically)"
+depends = ["docker:build"]
+run = """
+#!/bin/bash
+set -e
+
+mkdir -p /tmp/duke-sheets-urp
+
+# Start LibreOffice in Docker in the background
+echo "Starting LibreOffice in Docker..."
+CONTAINER_ID=$(docker run -d --rm -p 2002:2002 -v /tmp/duke-sheets-urp:/tmp/duke-sheets-urp duke-sheets-pyuno \
+  bash -c 'soffice --headless --accept="socket,host=0.0.0.0,port=2002;urp;StarOffice.ComponentContext" & sleep 999999')
+
+# Wait for port to be ready
+echo "Waiting for LibreOffice to be ready..."
+for i in $(seq 1 30); do
+  if nc -z localhost 2002 2>/dev/null; then
+    echo "LibreOffice ready (took ${i}s)"
+    break
+  fi
+  if [ "$i" -eq 30 ]; then
+    echo "ERROR: Timeout waiting for LibreOffice"
+    docker stop "$CONTAINER_ID" 2>/dev/null || true
+    exit 1
+  fi
+  sleep 1
+done
+
+# Run the integration tests
+echo "Running URP integration tests..."
+cargo test -p duke-sheets-libreoffice --test integration -- --nocapture
+TEST_EXIT=$?
+
+# Stop the container
+echo "Stopping LibreOffice..."
+docker stop "$CONTAINER_ID" 2>/dev/null || true
+
+exit $TEST_EXIT
+"""

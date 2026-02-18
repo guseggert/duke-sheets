@@ -214,21 +214,62 @@ impl XlsxWriter {
 
         let mut content = String::from(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-    <sheetData>"#,
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
         );
+
+        // Write column definitions (if any custom widths or hidden columns)
+        let col_widths = sheet.custom_column_widths();
+        let col_hidden = sheet.hidden_columns();
+        if !col_widths.is_empty() || !col_hidden.is_empty() {
+            content.push_str("\n    <cols>");
+            // Collect all columns that need a <col> element
+            let mut cols_to_write: std::collections::BTreeSet<u16> = Default::default();
+            for &col in col_widths.keys() {
+                cols_to_write.insert(col);
+            }
+            for &col in col_hidden.keys() {
+                cols_to_write.insert(col);
+            }
+            for col in cols_to_write {
+                let col1 = col as u32 + 1; // 0-based to 1-based
+                let width = col_widths.get(&col).copied().unwrap_or(8.43);
+                let hidden = col_hidden.get(&col).copied().unwrap_or(false);
+                let mut attrs = format!(
+                    " min=\"{}\" max=\"{}\" width=\"{:.2}\" customWidth=\"1\"",
+                    col1, col1, width
+                );
+                if hidden {
+                    attrs.push_str(" hidden=\"1\"");
+                }
+                content.push_str(&format!("\n        <col{}/>", attrs));
+            }
+            content.push_str("\n    </cols>");
+        }
+
+        content.push_str("\n    <sheetData>");
 
         // Write cell data (sparse, row-major)
         let mut current_row: Option<u32> = None;
+        let mut written_rows: std::collections::HashSet<u32> = Default::default();
         for (row, col, cell) in sheet.iter_cells() {
             if current_row != Some(row) {
                 // Close previous row
                 if current_row.is_some() {
                     content.push_str("\n        </row>");
                 }
-                // Open new row
-                content.push_str(&format!("\n        <row r=\"{}\">", row + 1));
+                // Open new row with optional dimension attributes
+                let mut row_tag = format!("\n        <row r=\"{}\"", row + 1);
+                let custom_heights = sheet.custom_row_heights();
+                if let Some(&ht) = custom_heights.get(&row) {
+                    row_tag.push_str(&format!(" ht=\"{:.2}\" customHeight=\"1\"", ht));
+                }
+                if sheet.is_row_hidden(row) {
+                    row_tag.push_str(" hidden=\"1\"");
+                }
+                row_tag.push('>');
+                content.push_str(&row_tag);
                 current_row = Some(row);
+                written_rows.insert(row);
             }
 
             let addr = duke_sheets_core::CellAddress::new(row, col);
@@ -305,6 +346,33 @@ impl XlsxWriter {
 
         if current_row.is_some() {
             content.push_str("\n        </row>");
+        }
+
+        // Write empty rows that have custom heights or are hidden but had no cells
+        {
+            let custom_heights = sheet.custom_row_heights();
+            let hidden_rows = sheet.hidden_rows();
+            let mut empty_dim_rows: std::collections::BTreeSet<u32> = Default::default();
+            for &row in custom_heights.keys() {
+                empty_dim_rows.insert(row);
+            }
+            for &row in hidden_rows.keys() {
+                empty_dim_rows.insert(row);
+            }
+            for row in empty_dim_rows {
+                if written_rows.contains(&row) {
+                    continue;
+                }
+                let mut row_tag = format!("\n        <row r=\"{}\"", row + 1);
+                if let Some(&ht) = custom_heights.get(&row) {
+                    row_tag.push_str(&format!(" ht=\"{:.2}\" customHeight=\"1\"", ht));
+                }
+                if hidden_rows.get(&row).copied().unwrap_or(false) {
+                    row_tag.push_str(" hidden=\"1\"");
+                }
+                row_tag.push_str("/>");
+                content.push_str(&row_tag);
+            }
         }
 
         content.push_str("\n    </sheetData>");

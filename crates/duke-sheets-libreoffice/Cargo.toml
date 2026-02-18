@@ -1,0 +1,19 @@
+[package]
+name = "duke-sheets-libreoffice"
+description = "LibreOffice automation bridge for duke-sheets, using URP protocol over TCP"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libreoffice-urp = { path = "../libreoffice-urp" }
+thiserror.workspace = true
+tokio = { version = "1", features = ["net", "process", "rt", "sync", "macros", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+tempfile.workspace = true
+duke-sheets = { path = "../duke-sheets", features = ["xlsx"] }

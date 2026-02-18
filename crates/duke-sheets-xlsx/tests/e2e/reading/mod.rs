@@ -1,12 +1,14 @@
-//! Reading tests - verify that our XLSX reader correctly interprets PyUNO fixtures.
+//! Reading tests — create XLSX fixtures via LibreOffice URP bridge, read them
+//! back with `XlsxReader`, and assert correctness.
 
-mod data_types;
-mod font_styles;
-mod fill_styles;
-mod border_styles;
 mod alignment;
-mod number_formats;
-mod data_validation;
-mod conditional_format;
+mod border_styles;
 mod comments;
+mod conditional_format;
+mod data_types;
+mod data_validation;
+mod dimensions;
+mod fill_styles;
+mod font_styles;
 mod merged_cells;
+mod number_formats;

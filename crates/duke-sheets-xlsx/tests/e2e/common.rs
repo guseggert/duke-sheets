@@ -1,181 +1,100 @@
 //! Common utilities for E2E tests.
+//!
+//! Provides a global LibreOffice connection singleton (mutex-protected) and a
+//! shared tokio runtime. Each test creates fixtures on-demand: acquires the
+//! lock, builds the spreadsheet it needs, saves to a temp file under the shared
+//! Docker volume, reads it back with `XlsxReader`, asserts, and cleans up.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
-/// Get the path to a PyUNO-generated fixture file.
-///
-/// This looks for fixtures in `tests/fixtures/pyuno/output/`.
-/// If fixtures haven't been generated yet, the tests using this will be skipped.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let path = fixture_path("data_types.xlsx");
-/// // Returns: tests/fixtures/pyuno/output/data_types.xlsx
-/// ```
-pub fn fixture_path(filename: &str) -> PathBuf {
-    // Navigate from the crate directory to the workspace root, then to fixtures
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let workspace_root = Path::new(manifest_dir)
-        .parent()
-        .expect("crate should be in crates/")
-        .parent()
-        .expect("crates/ should be in workspace root");
+use duke_sheets_libreoffice::bridge::LibreOfficeBridge;
+use tokio::runtime::Runtime;
+use tokio::sync::Mutex;
 
-    workspace_root
-        .join("tests")
-        .join("fixtures")
-        .join("pyuno")
-        .join("output")
-        .join(filename)
+/// Shared Docker volume path — accessible from both the host and the
+/// LibreOffice Docker container.
+const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
+
+/// A single tokio runtime shared across all tests. This ensures the TCP
+/// connection to LibreOffice outlives any individual test.
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+/// Global LO bridge, initialized once and shared across all tests.
+/// Protected by a tokio Mutex so only one test talks to LO at a time.
+static LO_BRIDGE: OnceLock<Mutex<LibreOfficeBridge>> = OnceLock::new();
+
+/// Counter for generating unique temp file names.
+static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Check if LibreOffice URP is reachable on localhost:2002.
+pub fn lo_available() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:2002".parse().unwrap(),
+        std::time::Duration::from_secs(2),
+    )
+    .is_ok()
 }
 
-/// Check if PyUNO fixtures have been generated.
-///
-/// Returns true if the output directory exists and contains files.
-pub fn fixtures_available() -> bool {
-    let output_dir = fixture_path("");
-    output_dir.exists()
-        && output_dir
-            .read_dir()
-            .map(|d| d.count() > 0)
-            .unwrap_or(false)
+/// Get the shared tokio runtime.
+pub fn runtime() -> &'static Runtime {
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create tokio runtime")
+    })
 }
 
-/// Verify an XLSX file using PyUNO (requires Docker).
+/// Get the global LibreOffice bridge, connecting on first call.
 ///
-/// This function runs the PyUNO verifier in a Docker container to verify
-/// that an XLSX file written by Rust is valid and contains the expected content.
-///
-/// # Arguments
-///
-/// * `xlsx_path` - Path to the XLSX file to verify
-/// * `spec_json` - JSON string containing verification assertions
-///
-/// # Returns
-///
-/// * `Ok(())` if verification passes
-/// * `Err(String)` with error message if verification fails
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let spec = r#"{
-///     "cells": {
-///         "A1": {"value": "Hello", "type": "string"}
-///     }
-/// }"#;
-///
-/// verify_with_pyuno("/tmp/test.xlsx", spec)?;
-/// ```
-#[allow(dead_code)]
-pub fn verify_with_pyuno(xlsx_path: &Path, spec_json: &str) -> Result<(), String> {
-    // Check if Docker is available
-    let docker_check = Command::new("docker")
-        .args(["info"])
-        .output()
-        .map_err(|e| format!("Docker not available: {}", e))?;
-
-    if !docker_check.status.success() {
-        return Err("Docker daemon not running".to_string());
+/// Returns `None` if LibreOffice is not available (test should skip).
+/// Must be called from within the shared `runtime()`.
+pub async fn lo_bridge() -> Option<&'static Mutex<LibreOfficeBridge>> {
+    if !lo_available() {
+        return None;
     }
 
-    // Create a temp file for the spec
-    let spec_path = std::env::temp_dir().join("verify_spec.json");
-    std::fs::write(&spec_path, spec_json)
-        .map_err(|e| format!("Failed to write spec file: {}", e))?;
+    // Ensure the shared directory exists
+    let _ = std::fs::create_dir_all(SHARED_DIR);
 
-    // Get absolute paths
-    let xlsx_abs = xlsx_path
-        .canonicalize()
-        .map_err(|e| format!("XLSX file not found: {}", e))?;
-    let spec_abs = spec_path
-        .canonicalize()
-        .map_err(|e| format!("Spec file not found: {}", e))?;
-
-    // Run verification in Docker
-    let output = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-v",
-            &format!("{}:/input/file.xlsx:ro", xlsx_abs.display()),
-            "-v",
-            &format!("{}:/input/spec.json:ro", spec_abs.display()),
-            "duke-sheets-pyuno",
-            "/app/run.sh",
-            "--verify",
-            "/input/file.xlsx",
-            "/input/spec.json",
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run Docker: {}", e))?;
-
-    // Clean up spec file
-    let _ = std::fs::remove_file(&spec_path);
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Err(format!(
-            "Verification failed:\nstdout: {}\nstderr: {}",
-            stdout, stderr
-        ))
+    // Initialize if needed
+    if LO_BRIDGE.get().is_none() {
+        let bridge = LibreOfficeBridge::connect("127.0.0.1", 2002)
+            .await
+            .expect("Failed to connect to LibreOffice on localhost:2002");
+        let _ = LO_BRIDGE.set(Mutex::new(bridge));
     }
+
+    LO_BRIDGE.get()
 }
 
-/// Macro to skip a test if fixtures are not available.
+/// Generate a unique temp file path under the shared Docker volume.
 ///
-/// This is useful for tests that depend on PyUNO-generated fixtures,
-/// which may not exist if Docker hasn't been run.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// #[test]
-/// fn test_data_types() {
-///     skip_if_no_fixtures!();
-///     let path = fixture_path("data_types.xlsx");
-///     // ... rest of test
-/// }
-/// ```
+/// The file is placed in `/tmp/duke-sheets-urp/` so that LibreOffice (inside
+/// Docker) can write to it and the host test process can read it back.
+pub fn temp_fixture_path() -> PathBuf {
+    let n = FILE_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    PathBuf::from(format!("{SHARED_DIR}/test_{pid}_{n}.xlsx"))
+}
+
+/// Clean up a temp fixture file. Ignores errors.
+pub fn cleanup_fixture(path: &PathBuf) {
+    let _ = std::fs::remove_file(path);
+}
+
+/// Skip the test if LibreOffice is not available.
 #[macro_export]
-macro_rules! skip_if_no_fixtures {
+macro_rules! skip_if_no_lo {
     () => {
-        if !$crate::fixtures_available() {
+        if !$crate::lo_available() {
             eprintln!(
-                "SKIP: PyUNO fixtures not available. Run `mise run fixtures:generate` to generate them."
+                "SKIP: LibreOffice not available on localhost:2002. \
+                 Start with: docker run --rm -d -p 2002:2002 -v /tmp/duke-sheets-urp:/tmp/duke-sheets-urp duke-sheets-pyuno \
+                 bash -c 'soffice --headless --accept=\"socket,host=0.0.0.0,port=2002;urp;StarOffice.ComponentContext\" & sleep infinity'"
             );
-            return;
-        }
-    };
-}
-
-/// Macro to mark a test as requiring Docker for write verification.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// #[test]
-/// #[ignore = "Requires Docker for PyUNO verification"]
-/// fn test_write_basic() {
-///     requires_docker!();
-///     // ... rest of test
-/// }
-/// ```
-#[macro_export]
-macro_rules! requires_docker {
-    () => {
-        if std::process::Command::new("docker")
-            .args(["info"])
-            .output()
-            .map(|o| !o.status.success())
-            .unwrap_or(true)
-        {
-            eprintln!("SKIP: Docker not available for PyUNO verification");
             return;
         }
     };

@@ -16,12 +16,18 @@ target
 **/mutants.out*/
 
 # Test fixtures - binary xlsx files
-# Regenerate with: mise run fixtures:generate (pyuno) or python3 tests/fixtures/dxf/generate_fixtures.py
+# Regenerate with: mise run fixtures:generate
 tests/fixtures/pyuno/output/
-tests/fixtures/dxf/*.xlsx
 
 # Test artifacts
 bindings/python/test.xlsx
+
+# Sample/test Excel files (not source)
+excel_samples/
+excel_samples.zip
+
+# Local cargo config
+.cargo/
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

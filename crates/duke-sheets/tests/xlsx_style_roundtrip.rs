@@ -483,3 +483,128 @@ fn test_roundtrip_styles_multiple_sheets() {
     let style2_read = style2_read.unwrap();
     assert!(style2_read.font.italic, "Sheet2 A1 should be italic");
 }
+
+/// Test gradient fill roundtrip
+#[test]
+fn test_roundtrip_gradient_fill() {
+    use duke_sheets_core::style::{GradientStop, GradientType};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // A1: Linear gradient, 90°, red→blue
+    let mut style_a1 = Style::new();
+    style_a1.fill = FillStyle::Gradient {
+        gradient_type: GradientType::Linear,
+        angle: 90.0,
+        stops: vec![
+            GradientStop::new(0.0, Color::rgb(255, 0, 0)),
+            GradientStop::new(1.0, Color::rgb(0, 0, 255)),
+        ],
+    };
+    sheet.set_cell_value("A1", "Gradient").unwrap();
+    sheet.set_cell_style("A1", &style_a1).unwrap();
+
+    // B1: Path gradient, 0°, green→white
+    let mut style_b1 = Style::new();
+    style_b1.fill = FillStyle::Gradient {
+        gradient_type: GradientType::Path,
+        angle: 0.0,
+        stops: vec![
+            GradientStop::new(0.0, Color::rgb(0, 128, 0)),
+            GradientStop::new(0.5, Color::rgb(255, 255, 255)),
+            GradientStop::new(1.0, Color::rgb(0, 128, 0)),
+        ],
+    };
+    sheet.set_cell_value("B1", "Path Gradient").unwrap();
+    sheet.set_cell_style("B1", &style_b1).unwrap();
+
+    // Write and read back
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    // Verify A1 gradient
+    let s_a1 = sheet2
+        .cell_style("A1")
+        .unwrap()
+        .expect("A1 should have style");
+    match &s_a1.fill {
+        FillStyle::Gradient {
+            gradient_type,
+            angle,
+            stops,
+        } => {
+            assert_eq!(*gradient_type, GradientType::Linear);
+            assert!((angle - 90.0).abs() < f64::EPSILON, "angle should be 90.0");
+            assert_eq!(stops.len(), 2);
+            assert!((stops[0].position - 0.0).abs() < f64::EPSILON);
+            assert!((stops[1].position - 1.0).abs() < f64::EPSILON);
+            let (r, _, b) = stops[0].color.to_rgb();
+            assert_eq!((r, b), (255, 0), "First stop should be red");
+            let (r, _, b) = stops[1].color.to_rgb();
+            assert_eq!((r, b), (0, 255), "Second stop should be blue");
+        }
+        other => panic!("Expected Gradient fill for A1, got {other:?}"),
+    }
+
+    // Verify B1 path gradient
+    let s_b1 = sheet2
+        .cell_style("B1")
+        .unwrap()
+        .expect("B1 should have style");
+    match &s_b1.fill {
+        FillStyle::Gradient {
+            gradient_type,
+            stops,
+            ..
+        } => {
+            assert_eq!(*gradient_type, GradientType::Path);
+            assert_eq!(stops.len(), 3);
+        }
+        other => panic!("Expected Gradient fill for B1, got {other:?}"),
+    }
+}
+
+/// Test font vertical alignment (superscript/subscript) roundtrip
+#[test]
+fn test_roundtrip_font_vertical_align() {
+    use duke_sheets_core::style::FontVerticalAlign;
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // A1: Superscript
+    let mut style_a1 = Style::new();
+    style_a1.font.vertical_align = FontVerticalAlign::Superscript;
+    sheet.set_cell_value("A1", "Super").unwrap();
+    sheet.set_cell_style("A1", &style_a1).unwrap();
+
+    // B1: Subscript
+    let mut style_b1 = Style::new();
+    style_b1.font.vertical_align = FontVerticalAlign::Subscript;
+    sheet.set_cell_value("B1", "Sub").unwrap();
+    sheet.set_cell_style("B1", &style_b1).unwrap();
+
+    // C1: Baseline (default)
+    sheet.set_cell_value("C1", "Normal").unwrap();
+
+    // Write and read back
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let s_a1 = sheet2
+        .cell_style("A1")
+        .unwrap()
+        .expect("A1 should have style");
+    assert_eq!(s_a1.font.vertical_align, FontVerticalAlign::Superscript);
+
+    let s_b1 = sheet2
+        .cell_style("B1")
+        .unwrap()
+        .expect("B1 should have style");
+    assert_eq!(s_b1.font.vertical_align, FontVerticalAlign::Subscript);
+}

@@ -3,12 +3,14 @@
 //! This module provides wasm-bindgen-based WebAssembly bindings for the duke-sheets library,
 //! allowing JavaScript/TypeScript code to create and manipulate spreadsheets in the browser.
 
+use std::io::Cursor;
 use std::sync::{Arc, RwLock};
 use wasm_bindgen::prelude::*;
 
 use duke_sheets_core::{
     CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
+use duke_sheets_xlsx::XlsxReader;
 
 // =============================================================================
 // Error Conversion
@@ -281,6 +283,16 @@ impl Workbook {
         Self {
             inner: Arc::new(RwLock::new(CoreWorkbook::new())),
         }
+    }
+
+    /// Load a workbook from .xlsx file bytes (Uint8Array in JS)
+    #[wasm_bindgen(js_name = fromXlsxBytes)]
+    pub fn from_xlsx_bytes(data: &[u8]) -> Result<Workbook, JsError> {
+        let cursor = Cursor::new(data);
+        let wb = XlsxReader::read(cursor).map_err(to_js_error)?;
+        Ok(Workbook {
+            inner: Arc::new(RwLock::new(wb)),
+        })
     }
 
     #[wasm_bindgen(getter, js_name = sheetCount)]

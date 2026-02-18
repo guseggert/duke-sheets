@@ -327,3 +327,64 @@ fn test_roundtrip_special_sheet_names() {
     assert_eq!(wb2.worksheet(1).unwrap().name(), "Q1 Report");
     assert_eq!(wb2.worksheet(2).unwrap().name(), "Sales-Summary");
 }
+
+/// Test row heights and column widths roundtrip
+#[test]
+fn test_roundtrip_row_heights_column_widths() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    sheet.set_cell_value("A1", "Tall row").unwrap();
+    sheet.set_row_height(0, 30.0);
+    sheet.set_row_height(2, 50.0);
+    sheet.set_column_width(0, 20.0);
+    sheet.set_column_width(2, 5.0);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert!(
+        (sheet2.row_height(0) - 30.0).abs() < 0.1,
+        "Row 0 height should be ~30, got {}",
+        sheet2.row_height(0)
+    );
+    assert!(
+        (sheet2.row_height(2) - 50.0).abs() < 0.1,
+        "Row 2 height should be ~50, got {}",
+        sheet2.row_height(2)
+    );
+    assert!(
+        (sheet2.column_width(0) - 20.0).abs() < 0.1,
+        "Column A width should be ~20, got {}",
+        sheet2.column_width(0)
+    );
+    assert!(
+        (sheet2.column_width(2) - 5.0).abs() < 0.1,
+        "Column C width should be ~5, got {}",
+        sheet2.column_width(2)
+    );
+}
+
+/// Test hidden rows/columns roundtrip
+#[test]
+fn test_roundtrip_hidden_rows_columns() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    sheet.set_cell_value("A1", "Visible").unwrap();
+    sheet.set_cell_value("A2", "Hidden row").unwrap();
+    sheet.set_row_hidden(1, true);
+    sheet.set_column_hidden(1, true);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert!(!sheet2.is_row_hidden(0), "Row 0 should not be hidden");
+    assert!(sheet2.is_row_hidden(1), "Row 1 should be hidden");
+    assert!(!sheet2.is_column_hidden(0), "Col A should not be hidden");
+    assert!(sheet2.is_column_hidden(1), "Col B should be hidden");
+}
