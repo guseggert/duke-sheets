@@ -2,7 +2,7 @@
 
 use crate::{cleanup_fixture, lo_bridge, runtime, skip_if_no_lo, temp_fixture_path};
 use duke_sheets_core::{
-    BorderLineStyle, FillStyle, HorizontalAlignment, NumberFormat, VerticalAlignment,
+    BorderLineStyle, CellValue, FillStyle, HorizontalAlignment, NumberFormat, VerticalAlignment,
 };
 use duke_sheets_xls::XlsReader;
 
@@ -397,6 +397,131 @@ fn test_xls_number_format_percentage() {
     assert!(
         is_percent,
         "A1 should have percentage format, got {:?}",
+        style.number_format
+    );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_number_format_date() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        // Excel serial 45366 = 2024-03-12
+        wb.set_cell_value("A1", 45366.0).await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            number_format: Some("YYYY-MM-DD".into()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+
+    // Value should be the serial number
+    let val = sheet.get_value_at(0, 0);
+    match val {
+        CellValue::Number(n) => assert!(
+            (n - 45366.0).abs() < 0.01,
+            "Date serial should be ~45366, got {}",
+            n
+        ),
+        other => panic!("A1 should be Number, got {:?}", other),
+    }
+
+    // Format should be identified as a date format
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert!(
+        style.number_format.is_date_format(),
+        "A1 should have date format, got {:?}",
+        style.number_format
+    );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_number_format_datetime() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        // 45366.5 = 2024-03-12 12:00:00
+        wb.set_cell_value("A1", 45366.5).await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            number_format: Some("YYYY-MM-DD HH:MM:SS".into()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+
+    let val = sheet.get_value_at(0, 0);
+    match val {
+        CellValue::Number(n) => assert!(
+            (n - 45366.5).abs() < 0.01,
+            "DateTime serial should be ~45366.5, got {}",
+            n
+        ),
+        other => panic!("A1 should be Number, got {:?}", other),
+    }
+
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert!(
+        style.number_format.is_date_format(),
+        "A1 should have datetime format, got {:?}",
+        style.number_format
+    );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_number_format_currency() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", 1234.56).await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            number_format: Some("#,##0.00".into()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    // Should be either BuiltIn(4) for "#,##0.00" or Custom("#,##0.00")
+    let is_number_fmt = match &style.number_format {
+        NumberFormat::BuiltIn(4) => true,
+        NumberFormat::Custom(s) => s.contains("#,##0"),
+        _ => false,
+    };
+    assert!(
+        is_number_fmt,
+        "A1 should have #,##0.00 format, got {:?}",
         style.number_format
     );
 
