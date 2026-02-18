@@ -116,7 +116,8 @@ Common functions needed:
 - [x] Structure: MERGECELLS, ROW, COLINFO, BOUNDSHEET, DATEMODE
 - [x] Integrated into `WorkbookExt::open()` via `xls` feature gate
 - [ ] Formula token parsing — currently only cached results are used; formula text is empty (~80 BIFF8 token types)
-- [ ] Style E2E tests: strikethrough, underline, text rotation, indent, shrink-to-fit (parsed but untested)
+- [x] Style E2E tests: strikethrough, underline (single + double), text rotation, shrink-to-fit
+- [ ] Style E2E test: indent level (LO `ParaIndent` physical units vs BIFF8 abstract level — needs investigation)
 - [ ] Style E2E tests + LO bridge extension: pattern fills (non-solid), diagonal borders, protection, reading order
 - [ ] Sheet-level properties: hidden sheets, sheet protection, active sheet index
 
@@ -168,11 +169,11 @@ Common functions needed:
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
 | XLS unit (BIFF parser, strings, styles) | 31 | ✅ |
-| XLS E2E (data types, styles, merged cells, dimensions) | 31 | ✅ |
+| XLS E2E (data types, styles, merged cells, dimensions) | 35 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E via LibreOffice URP (XLSX) | 56 | ✅ |
 | Other (unit, doc, integration) | 155 | ✅ |
-| **Total** | **401** | ✅ |
+| **Total** | **406** | ✅ |
 
 ---
 
