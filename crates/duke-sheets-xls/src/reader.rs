@@ -11,7 +11,7 @@ use duke_sheets_core::{CellError, CellValue, Style, Workbook};
 
 use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32};
 use crate::biff::records;
-use crate::biff::strings::{parse_sst, read_short_string, read_unicode_string};
+use crate::biff::strings::{parse_sst_continued, read_short_string, read_unicode_string};
 use crate::biff::{self, BiffRecord};
 use crate::error::{XlsError, XlsResult};
 use crate::styles::{self, StyleContext};
@@ -96,7 +96,7 @@ impl XlsReader {
                     break;
                 }
                 records::SST if in_globals => {
-                    sst = parse_sst(&rec.data)?;
+                    sst = parse_sst_continued(&rec.data, &rec.continue_offsets)?;
                 }
                 records::BOUNDSHEET if in_globals => {
                     let info = Self::parse_boundsheet(&rec.data)?;

@@ -23,6 +23,11 @@ pub struct BiffRecord {
     pub data: Vec<u8>,
     /// Byte offset of this record's header in the stream (for debugging).
     pub stream_offset: u64,
+    /// Byte offsets within `data` where each CONTINUE record body begins.
+    /// Empty if the record had no CONTINUE extensions.
+    /// These offsets are needed by the SST parser to handle encoding changes
+    /// at CONTINUE boundaries.
+    pub continue_offsets: Vec<usize>,
 }
 
 /// Reads all BIFF8 records from a byte stream, merging CONTINUE records
@@ -54,8 +59,9 @@ pub fn read_all_records<R: Read + Seek>(stream: &mut R) -> XlsResult<Vec<BiffRec
         }
 
         if record_type == records::CONTINUE {
-            // Append to the previous record's data
+            // Append to the previous record's data, tracking the boundary offset
             if let Some(prev) = records.last_mut() {
+                prev.continue_offsets.push(prev.data.len());
                 prev.data.extend_from_slice(&body);
             }
             // If there's no previous record, we just drop the orphaned CONTINUE
@@ -64,6 +70,7 @@ pub fn read_all_records<R: Read + Seek>(stream: &mut R) -> XlsResult<Vec<BiffRec
                 record_type,
                 data: body,
                 stream_offset,
+                continue_offsets: Vec::new(),
             });
         }
     }
