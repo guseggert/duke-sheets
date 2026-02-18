@@ -80,6 +80,13 @@ pub fn temp_fixture_path() -> PathBuf {
     PathBuf::from(format!("{SHARED_DIR}/test_{pid}_{n}.xlsx"))
 }
 
+/// Same as `temp_fixture_path()` but with `.xls` extension (for BIFF8/XLS tests).
+pub fn temp_fixture_path_xls() -> PathBuf {
+    let n = FILE_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    PathBuf::from(format!("{SHARED_DIR}/test_{pid}_{n}.xls"))
+}
+
 /// Clean up a temp fixture file. Ignores errors.
 pub fn cleanup_fixture(path: &PathBuf) {
     let _ = std::fs::remove_file(path);

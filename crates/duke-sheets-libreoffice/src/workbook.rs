@@ -235,7 +235,7 @@ impl<'a> Workbook<'a> {
     }
 
     /// Set a cell's value given its proxy.
-    pub(crate) async fn set_cell_value_on_proxy(
+    pub async fn set_cell_value_on_proxy(
         &mut self,
         cell: &UnoProxy,
         cv: CellValue,
@@ -1379,6 +1379,43 @@ impl<'a> Workbook<'a> {
             .await?;
 
         tracing::info!("Saved workbook to {path}");
+        Ok(())
+    }
+
+    /// Save the workbook as XLS (Excel 97) to the given file path.
+    pub async fn save_as_xls(&mut self, path: &str) -> Result<()> {
+        let url = if path.starts_with("file://") {
+            path.to_string()
+        } else {
+            let abs = if path.starts_with('/') {
+                path.to_string()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(path)
+                    .display()
+                    .to_string()
+            };
+            format!("file://{abs}")
+        };
+
+        let storable_proxy = self.doc_qi(type_names::X_STORABLE).await?;
+
+        let filter_pv = make_property_value(
+            "FilterName",
+            UnoValue::String("MS Excel 97".to_string()),
+            Type::string(),
+        );
+        let overwrite_pv =
+            make_property_value("Overwrite", UnoValue::Bool(true), Type::boolean());
+        let props = UnoValue::Sequence(vec![filter_pv, overwrite_pv]);
+
+        let method = interface::store_to_url();
+        self.conn
+            .call(&storable_proxy, &method, &[UnoValue::String(url), props])
+            .await?;
+
+        tracing::info!("Saved workbook as XLS to {path}");
         Ok(())
     }
 

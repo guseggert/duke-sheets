@@ -111,6 +111,8 @@ pub use duke_sheets_chart::{
 
 // Re-export I/O types
 pub use duke_sheets_csv::{CsvError, CsvReadOptions, CsvReader, CsvWriteOptions, CsvWriter};
+#[cfg(feature = "xls")]
+pub use duke_sheets_xls::{XlsError, XlsReader};
 pub use duke_sheets_xlsx::{XlsxError, XlsxReader, XlsxWriter};
 
 use std::path::Path;
@@ -136,6 +138,8 @@ impl WorkbookExt for Workbook {
             Some("xlsx") | Some("xlsm") => {
                 XlsxReader::read_file(path).map_err(|e| Error::other(e.to_string()))
             }
+            #[cfg(feature = "xls")]
+            Some("xls") => XlsReader::read_file(path).map_err(|e| Error::other(e.to_string())),
             Some("csv") => {
                 let worksheet = CsvReader::read_file(path, &CsvReadOptions::default())
                     .map_err(|e| Error::other(e.to_string()))?;
