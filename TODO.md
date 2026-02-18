@@ -107,11 +107,18 @@ Common functions needed:
 
 ### Medium Priority
 
-#### XLS Support (Legacy Excel)
-- [ ] Compound File Binary (CFB) reader
-- [ ] BIFF8 record parsing  
-- [ ] XLS reader implementation
-- [ ] XLS writer implementation
+#### XLS Reader (Legacy Excel) — Remaining Items
+- [x] Compound File Binary (CFB) reader (via `cfb` crate)
+- [x] BIFF8 record parsing with CONTINUE record merging and boundary tracking
+- [x] Cell data: LABELSST, LABEL, NUMBER, RK, MULRK, BLANK, MULBLANK, BOOLERR, FORMULA
+- [x] Shared String Table with CONTINUE encoding-change handling (Latin-1 ↔ UTF-16LE)
+- [x] Styles: FONT, FORMAT, XF, PALETTE → full Style resolution (font, fill, border, alignment, number format, protection)
+- [x] Structure: MERGECELLS, ROW, COLINFO, BOUNDSHEET, DATEMODE
+- [x] Integrated into `WorkbookExt::open()` via `xls` feature gate
+- [ ] Formula token parsing — currently only cached results are used; formula text is empty (~80 BIFF8 token types)
+- [ ] Style E2E tests: strikethrough, underline, text rotation, indent, shrink-to-fit (parsed but untested)
+- [ ] Style E2E tests + LO bridge extension: pattern fills (non-solid), diagonal borders, protection, reading order
+- [ ] Sheet-level properties: hidden sheets, sheet protection, active sheet index
 
 #### Large File Support
 - [ ] Streaming XLSX reader (SAX-style, low memory)
@@ -160,16 +167,19 @@ Common functions needed:
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
-| E2E via LibreOffice URP | 56 | ✅ |
+| XLS unit (BIFF parser, strings, styles) | 31 | ✅ |
+| XLS E2E (data types, styles, merged cells, dimensions) | 31 | ✅ |
+| XLS real-file integration | 2 | ✅ |
+| E2E via LibreOffice URP (XLSX) | 56 | ✅ |
 | Other (unit, doc, integration) | 155 | ✅ |
-| **Total** | **337** | ✅ |
+| **Total** | **401** | ✅ |
 
 ---
 
 ## Known Issues
 
 1. **Formula parsing failures** - Some complex real-world formulas fail with "Unexpected token: Eof"
-2. **XLS not supported** - `.xls` files cannot be read (stub only)
+2. **XLS formula text unavailable** - XLS reader uses cached formula results but does not parse BIFF8 formula tokens into text
 3. **Limited function coverage** - Only 35 of ~450 Excel functions implemented
 
 ---
@@ -182,7 +192,7 @@ duke-sheets/
 ├── duke-sheets-core      # Data model, cell storage
 ├── duke-sheets-formula   # Parser, evaluator, functions
 ├── duke-sheets-xlsx      # XLSX read/write
-├── duke-sheets-xls       # XLS read/write (stub)
+├── duke-sheets-xls       # XLS reader (BIFF8, read-only)
 ├── duke-sheets-csv       # CSV read/write
 ├── duke-sheets-chart     # Chart support (stub)
 ├── duke-sheets-ffi       # C FFI bindings
