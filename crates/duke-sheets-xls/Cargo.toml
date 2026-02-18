@@ -19,3 +19,5 @@ log.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 pretty_assertions.workspace = true
+duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
+tokio = { version = "1", features = ["rt", "sync", "net"] }

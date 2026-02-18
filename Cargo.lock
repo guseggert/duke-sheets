@@ -553,10 +553,12 @@ dependencies = [
  "duke-sheets-chart",
  "duke-sheets-core",
  "duke-sheets-formula",
+ "duke-sheets-libreoffice",
  "log",
  "pretty_assertions",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
