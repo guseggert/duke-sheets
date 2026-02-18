@@ -2,7 +2,8 @@
 
 use crate::{cleanup_fixture, lo_bridge, runtime, skip_if_no_lo, temp_fixture_path};
 use duke_sheets_core::{
-    BorderLineStyle, CellValue, FillStyle, HorizontalAlignment, NumberFormat, VerticalAlignment,
+    style::Underline, BorderLineStyle, CellValue, FillStyle, HorizontalAlignment, NumberFormat,
+    VerticalAlignment,
 };
 use duke_sheets_xls::XlsReader;
 
@@ -121,6 +122,98 @@ fn test_xls_font_color() {
     assert!(
         r > 200 && g < 50 && b < 50,
         "A1 font color should be red-ish, got ({r}, {g}, {b})"
+    );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_font_strikethrough() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Strikethrough").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            strikethrough: true,
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert!(
+        style.font.strikethrough,
+        "A1 should have strikethrough enabled"
+    );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_font_underline_single() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Underlined").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            underline: Some("single".into()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert_eq!(
+        style.font.underline,
+        Underline::Single,
+        "A1 should have single underline"
+    );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_font_underline_double() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Double underline").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            underline: Some("double".into()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert_eq!(
+        style.font.underline,
+        Underline::Double,
+        "A1 should have double underline"
     );
 
     cleanup_fixture(&path);
@@ -360,6 +453,69 @@ fn test_xls_wrap_text() {
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
     assert!(style.alignment.wrap_text, "A1 should have wrap text enabled");
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_text_rotation() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Rotated").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            rotation: 45,
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert_eq!(
+        style.alignment.rotation, 45,
+        "A1 should have 45-degree rotation, got {}",
+        style.alignment.rotation
+    );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_shrink_to_fit() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Shrink this text to fit the cell")
+            .await
+            .unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            shrink_to_fit: true,
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert!(
+        style.alignment.shrink_to_fit,
+        "A1 should have shrink-to-fit enabled"
+    );
 
     cleanup_fixture(&path);
 }
