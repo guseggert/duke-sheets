@@ -76,9 +76,13 @@
 ## In Progress / Partial
 
 ### Formula Parser
-- [ ] Some complex formulas fail to parse (seen "Unexpected token: Eof" errors)
-- [ ] Structured references (`Table1[Column]`)
-- [ ] External workbook references (`[Book1.xlsx]Sheet1!A1`)
+- [x] Quoted sheet references (`'Sheet Name'!A1`)
+- [x] Structured references (`Table1[Column]`)
+- [x] External workbook references (`[Book1.xlsx]Sheet1!A1`)
+- [x] Implicit intersection operator (`@`)
+- [x] Spill range operator (`#`)
+- [x] Better error messages for unknown characters (no more "Unexpected token: Eof")
+- [ ] Some complex formulas may still fail to parse (edge cases)
 
 ### Array Formulas
 - [x] Array literals (`{1,2,3}`)
@@ -102,9 +106,9 @@ Common functions needed:
 - [ ] **Financial**: PMT, FV, PV, NPV, IRR, RATE, NPER, SLN, DB, DDB
 
 #### Formula Parser Fixes
-- [ ] Investigate parse failures on real-world files
-- [ ] Add support for implicit intersection (`@`)
-- [ ] Add support for spill operator (`#`)
+- [x] Investigate parse failures on real-world files (quoted sheet refs were the #1 cause)
+- [x] Add support for implicit intersection (`@`)
+- [x] Add support for spill operator (`#`)
 
 ### Medium Priority
 
@@ -163,8 +167,8 @@ Common functions needed:
 | Test Suite | Count | Status |
 |------------|-------|--------|
 | Core (cell, workbook, worksheet) | 36 | ✅ |
-| Formula parser | 17 | ✅ |
-| Formula evaluator | 24 | ✅ |
+| Formula parser | 37 | ✅ |
+| Formula evaluator + functions | 74 | ✅ |
 | Calculation engine | 8 | ✅ |
 | XLSX roundtrip | 17 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
@@ -174,16 +178,17 @@ Common functions needed:
 | XLS E2E (data types, styles, merged cells, dimensions, sheet properties) | 44 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E via LibreOffice URP (XLSX) | 56 | ✅ |
-| Other (unit, doc, integration) | 155 | ✅ |
-| **Total** | **420** | ✅ |
+| Other (unit, doc, integration) | 105 | ✅ |
+| **Total** | **439** | ✅ |
 
 ---
 
 ## Known Issues
 
-1. **Formula parsing failures** - Some complex real-world formulas fail with "Unexpected token: Eof"
+1. ~~**Formula parsing failures**~~ — Fixed. Quoted sheet refs, structured refs, external refs, @/# operators now parsed. Unknown chars give clear error messages.
 2. **XLS formula text unavailable** - XLS reader uses cached formula results but does not parse BIFF8 formula tokens into text (see `crates/duke-sheets-xls/FORMULA_TOKENS.md` for implementation plan)
 3. **Limited function coverage** - Only 35 of ~450 Excel functions implemented
+4. **Structured refs / external refs not evaluated** — Parser handles them, but evaluator returns #NAME? / #REF! (tables and external workbooks not implemented)
 
 ---
 
