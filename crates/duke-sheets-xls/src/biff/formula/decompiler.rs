@@ -70,20 +70,39 @@ fn col_to_letter(mut col: u16) -> String {
     result
 }
 
-/// Format a cell reference (row, col) in A1 notation.
-fn format_ref(row: u16, col: u16) -> String {
-    format!("{}{}", col_to_letter(col), row + 1)
+/// Format a cell reference (row, col) in A1 notation with optional `$` for
+/// absolute dimensions.  When `row_rel` is false the row is absolute (`$1`),
+/// when `col_rel` is false the column is absolute (`$A`).
+fn format_ref(row: u16, col: u16, row_rel: bool, col_rel: bool) -> String {
+    let col_prefix = if col_rel { "" } else { "$" };
+    let row_prefix = if row_rel { "" } else { "$" };
+    format!(
+        "{}{}{}{}",
+        col_prefix,
+        col_to_letter(col),
+        row_prefix,
+        row + 1
+    )
 }
 
-/// Format an area reference.
-fn format_area(first_row: u16, last_row: u16, first_col: u16, last_col: u16) -> String {
+/// Format an area reference with optional `$` for absolute dimensions.
+fn format_area(
+    first_row: u16,
+    last_row: u16,
+    first_col: u16,
+    last_col: u16,
+    first_row_rel: bool,
+    first_col_rel: bool,
+    last_row_rel: bool,
+    last_col_rel: bool,
+) -> String {
     if first_row == last_row && first_col == last_col {
-        format_ref(first_row, first_col)
+        format_ref(first_row, first_col, first_row_rel, first_col_rel)
     } else {
         format!(
             "{}:{}",
-            format_ref(first_row, first_col),
-            format_ref(last_row, last_col)
+            format_ref(first_row, first_col, first_row_rel, first_col_rel),
+            format_ref(last_row, last_col, last_row_rel, last_col_rel)
         )
     }
 }
@@ -227,18 +246,38 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
             }
 
             // ---- Cell references ----
-            ParsedToken::Ref { row, col, .. } => {
-                stack.push(StackEntry::atom(format_ref(*row, *col)));
+            ParsedToken::Ref {
+                row,
+                col,
+                row_relative,
+                col_relative,
+            } => {
+                stack.push(StackEntry::atom(format_ref(
+                    *row,
+                    *col,
+                    *row_relative,
+                    *col_relative,
+                )));
             }
             ParsedToken::Area {
                 first_row,
                 last_row,
                 first_col,
                 last_col,
-                ..
+                first_row_rel,
+                first_col_rel,
+                last_row_rel,
+                last_col_rel,
             } => {
                 stack.push(StackEntry::atom(format_area(
-                    *first_row, *last_row, *first_col, *last_col,
+                    *first_row,
+                    *last_row,
+                    *first_col,
+                    *last_col,
+                    *first_row_rel,
+                    *first_col_rel,
+                    *last_row_rel,
+                    *last_col_rel,
                 )));
             }
             ParsedToken::RefErr | ParsedToken::AreaErr => {
@@ -300,9 +339,10 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 extern_sheet_idx,
                 row,
                 col,
-                ..
+                row_relative,
+                col_relative,
             } => {
-                let ref_str = format_ref(*row, *col);
+                let ref_str = format_ref(*row, *col, *row_relative, *col_relative);
                 let sheet = resolve_sheet_prefix(ctx, *extern_sheet_idx);
                 stack.push(StackEntry::atom(format!("{}!{}", sheet, ref_str)));
             }
@@ -312,9 +352,21 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 last_row,
                 first_col,
                 last_col,
-                ..
+                first_row_rel,
+                first_col_rel,
+                last_row_rel,
+                last_col_rel,
             } => {
-                let area_str = format_area(*first_row, *last_row, *first_col, *last_col);
+                let area_str = format_area(
+                    *first_row,
+                    *last_row,
+                    *first_col,
+                    *last_col,
+                    *first_row_rel,
+                    *first_col_rel,
+                    *last_row_rel,
+                    *last_col_rel,
+                );
                 let sheet = resolve_sheet_prefix(ctx, *extern_sheet_idx);
                 stack.push(StackEntry::atom(format!("{}!{}", sheet, area_str)));
             }
@@ -967,7 +1019,7 @@ mod tests {
             row_relative: false,
             col_relative: false,
         }];
-        assert_eq!(decompile(&tokens, &ctx), "Sheet2!A1");
+        assert_eq!(decompile(&tokens, &ctx), "Sheet2!$A$1");
     }
 
     #[test]
@@ -981,7 +1033,7 @@ mod tests {
             row_relative: false,
             col_relative: false,
         }];
-        assert_eq!(decompile(&tokens, &ctx), "Sheet2!A1");
+        assert_eq!(decompile(&tokens, &ctx), "Sheet2!$A$1");
     }
 
     #[test]
@@ -994,7 +1046,7 @@ mod tests {
             row_relative: false,
             col_relative: false,
         }];
-        assert_eq!(decompile(&tokens, &ctx), "'My Sheet'!B5");
+        assert_eq!(decompile(&tokens, &ctx), "'My Sheet'!$B$5");
     }
 
     #[test]
@@ -1025,7 +1077,7 @@ mod tests {
             last_row_rel: false,
             last_col_rel: false,
         }];
-        assert_eq!(decompile(&tokens, &ctx), "Sheet1:Sheet3!A1:A10");
+        assert_eq!(decompile(&tokens, &ctx), "Sheet1:Sheet3!$A$1:$A$10");
     }
 
     #[test]
@@ -1051,6 +1103,58 @@ mod tests {
         // No names defined — should fall back to placeholder
         let tokens = vec![ParsedToken::Name { name_idx: 5 }];
         assert_eq!(decompile(&tokens, &ctx), "_name5");
+    }
+
+    #[test]
+    fn test_absolute_ref() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Ref {
+            row: 0,
+            col: 0,
+            row_relative: false,
+            col_relative: false,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "$A$1");
+    }
+
+    #[test]
+    fn test_mixed_ref_absolute_col() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Ref {
+            row: 4,
+            col: 2,
+            row_relative: true,
+            col_relative: false,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "$C5");
+    }
+
+    #[test]
+    fn test_mixed_ref_absolute_row() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Ref {
+            row: 4,
+            col: 2,
+            row_relative: false,
+            col_relative: true,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "C$5");
+    }
+
+    #[test]
+    fn test_mixed_area_ref() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Area {
+            first_row: 0,
+            last_row: 9,
+            first_col: 0,
+            last_col: 2,
+            first_row_rel: false,
+            first_col_rel: false,
+            last_row_rel: true,
+            last_col_rel: true,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "$A$1:C10");
     }
 
     #[test]
