@@ -388,3 +388,162 @@ fn test_roundtrip_hidden_rows_columns() {
     assert!(!sheet2.is_column_hidden(0), "Col A should not be hidden");
     assert!(sheet2.is_column_hidden(1), "Col B should be hidden");
 }
+
+// --- Formula cached value roundtrip tests ---
+
+/// Test roundtrip of formula with numeric cached value
+#[test]
+fn test_roundtrip_formula_cached_number() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    sheet
+        .set_cell_value_at(
+            0,
+            0,
+            CellValue::Formula {
+                text: "=1+2".to_string(),
+                cached_value: Some(Box::new(CellValue::Number(3.0))),
+                array_result: None,
+            },
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let val = sheet2.get_value("A1").unwrap();
+    assert_eq!(val.formula_text(), Some("=1+2"));
+    match val.effective_value() {
+        CellValue::Number(n) => assert!((n - 3.0).abs() < 1e-10),
+        other => panic!("Expected Number(3.0), got {:?}", other),
+    }
+}
+
+/// Test roundtrip of formula with string cached value
+#[test]
+fn test_roundtrip_formula_cached_string() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    sheet
+        .set_cell_value_at(
+            0,
+            0,
+            CellValue::Formula {
+                text: "=CONCAT(\"hello\")".to_string(),
+                cached_value: Some(Box::new(CellValue::string("hello"))),
+                array_result: None,
+            },
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let val = sheet2.get_value("A1").unwrap();
+    assert_eq!(val.formula_text(), Some("=CONCAT(\"hello\")"));
+    match val.effective_value() {
+        CellValue::String(s) => assert_eq!(s.as_str(), "hello"),
+        other => panic!("Expected String(\"hello\"), got {:?}", other),
+    }
+}
+
+/// Test roundtrip of formula with boolean cached value
+#[test]
+fn test_roundtrip_formula_cached_boolean() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    sheet
+        .set_cell_value_at(
+            0,
+            0,
+            CellValue::Formula {
+                text: "=TRUE()".to_string(),
+                cached_value: Some(Box::new(CellValue::Boolean(true))),
+                array_result: None,
+            },
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let val = sheet2.get_value("A1").unwrap();
+    assert_eq!(val.formula_text(), Some("=TRUE()"));
+    match val.effective_value() {
+        CellValue::Boolean(b) => assert!(*b),
+        other => panic!("Expected Boolean(true), got {:?}", other),
+    }
+}
+
+/// Test roundtrip of formula with error cached value
+#[test]
+fn test_roundtrip_formula_cached_error() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    sheet
+        .set_cell_value_at(
+            0,
+            0,
+            CellValue::Formula {
+                text: "=1/0".to_string(),
+                cached_value: Some(Box::new(CellValue::Error(CellError::Div0))),
+                array_result: None,
+            },
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let val = sheet2.get_value("A1").unwrap();
+    assert_eq!(val.formula_text(), Some("=1/0"));
+    match val.effective_value() {
+        CellValue::Error(e) => assert_eq!(e.as_str(), "#DIV/0!"),
+        other => panic!("Expected Error(Div0), got {:?}", other),
+    }
+}
+
+/// Test roundtrip of formula with no cached value (regression)
+#[test]
+fn test_roundtrip_formula_no_cached_value() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    sheet
+        .set_cell_value_at(
+            0,
+            0,
+            CellValue::Formula {
+                text: "=SUM(B1:B10)".to_string(),
+                cached_value: None,
+                array_result: None,
+            },
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let val = sheet2.get_value("A1").unwrap();
+    assert_eq!(val.formula_text(), Some("=SUM(B1:B10)"));
+    // No cached value expected — effective_value is the formula itself
+    assert!(val.is_formula());
+    match val {
+        CellValue::Formula { cached_value, .. } => assert!(cached_value.is_none()),
+        _ => panic!("Expected Formula variant"),
+    }
+}

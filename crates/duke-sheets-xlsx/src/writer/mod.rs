@@ -305,17 +305,40 @@ impl XlsxWriter {
                         if *b { 1 } else { 0 }
                     ));
                 }
-                duke_sheets_core::CellValue::Formula { text, .. } => {
+                duke_sheets_core::CellValue::Formula {
+                    text, cached_value, ..
+                } => {
                     let formula_text = if text.starts_with('=') {
                         &text[1..]
                     } else {
                         text.as_str()
                     };
+                    // Determine type attribute and <v> element from cached value
+                    let (type_attr, value_elem) = match cached_value.as_deref() {
+                        Some(duke_sheets_core::CellValue::Number(n)) => {
+                            (String::new(), format!("<v>{}</v>", n))
+                        }
+                        Some(duke_sheets_core::CellValue::String(s)) => (
+                            " t=\"str\"".to_string(),
+                            format!("<v>{}</v>", Self::escape_xml(s.as_str())),
+                        ),
+                        Some(duke_sheets_core::CellValue::Boolean(b)) => (
+                            " t=\"b\"".to_string(),
+                            format!("<v>{}</v>", if *b { 1 } else { 0 }),
+                        ),
+                        Some(duke_sheets_core::CellValue::Error(e)) => (
+                            " t=\"e\"".to_string(),
+                            format!("<v>{}</v>", Self::escape_xml(e.as_str())),
+                        ),
+                        _ => (String::new(), String::new()),
+                    };
                     content.push_str(&format!(
-                        "\n            <c r=\"{}\"{}><f>{}</f></c>",
+                        "\n            <c r=\"{}\"{}{}><f>{}</f>{}</c>",
                         cell_ref,
                         style_attr,
-                        Self::escape_xml(formula_text)
+                        type_attr,
+                        Self::escape_xml(formula_text),
+                        value_elem,
                     ));
                 }
                 duke_sheets_core::CellValue::Error(e) => {
