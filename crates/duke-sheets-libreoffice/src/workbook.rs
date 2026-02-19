@@ -1023,6 +1023,74 @@ impl<'a> Workbook<'a> {
             }
         }
 
+        // Diagonal borders
+        for (prop_name, border_opt) in [
+            ("DiagonalTLBR", &spec.diagonal_tl_br),
+            ("DiagonalBLTR", &spec.diagonal_bl_tr),
+        ] {
+            if let Some((ref style_name, color)) = border_opt {
+                let (line_style, line_width) =
+                    uno_types::border_line_style::from_name(style_name);
+                let border = BorderLine2::new(*color, line_style, line_width);
+                self.set_property(
+                    target,
+                    prop_name,
+                    UnoValue::Any(Box::new(Any {
+                        type_desc: Type::r#struct(
+                            uno_types::struct_type_names::BORDER_LINE2,
+                        ),
+                        value: border.to_uno(),
+                    })),
+                )
+                .await?;
+            }
+        }
+
+        // Cell protection
+        // CellProtection is a struct { IsLocked(bool), IsFormulaHidden(bool),
+        //   IsHidden(bool), IsPrintHidden(bool) }
+        if spec.locked.is_some() || spec.formula_hidden.is_some() {
+            let locked = spec.locked.unwrap_or(true);
+            let formula_hidden = spec.formula_hidden.unwrap_or(false);
+            let protection = UnoValue::Struct(vec![
+                UnoValue::Bool(locked),
+                UnoValue::Bool(formula_hidden),
+                UnoValue::Bool(false), // IsHidden
+                UnoValue::Bool(false), // IsPrintHidden
+            ]);
+            self.set_property(
+                target,
+                "CellProtection",
+                UnoValue::Any(Box::new(Any {
+                    type_desc: Type::r#struct(
+                        uno_types::struct_type_names::CELL_PROTECTION,
+                    ),
+                    value: protection,
+                })),
+            )
+            .await?;
+        }
+
+        // Reading order / writing mode
+        if let Some(ref ro) = spec.reading_order {
+            // WritingMode: 0=LR_TB (ltr), 1=RL_TB (rtl), 4=PAGE (context)
+            let writing_mode: i16 = match ro.as_str() {
+                "ltr" => 0,
+                "rtl" => 1,
+                "context" => 4,
+                _ => 4,
+            };
+            self.set_property(
+                target,
+                "WritingMode",
+                UnoValue::Any(Box::new(Any {
+                    type_desc: Type::short(),
+                    value: UnoValue::Short(writing_mode),
+                })),
+            )
+            .await?;
+        }
+
         // Number format
         if let Some(ref fmt) = spec.number_format {
             let fmt_id = self.get_or_create_number_format(fmt).await?;
