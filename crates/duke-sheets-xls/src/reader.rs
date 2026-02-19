@@ -10,9 +10,12 @@ use duke_sheets_core::cell::SharedString;
 use duke_sheets_core::worksheet::SheetProtection;
 use duke_sheets_core::{CellError, CellValue, Style, Workbook};
 
+use crate::biff::formula::{ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES};
 use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32};
 use crate::biff::records;
-use crate::biff::strings::{parse_sst_continued, read_short_string, read_unicode_string};
+use crate::biff::strings::{
+    parse_sst_continued, read_character_data, read_short_string, read_unicode_string,
+};
 use crate::biff::{self, BiffRecord};
 use crate::error::{XlsError, XlsResult};
 use crate::styles::{self, StyleContext};
@@ -76,6 +79,9 @@ impl XlsReader {
         let mut active_sheet_idx: u16 = 0;
         let mut workbook_protected = false;
         let mut workbook_password_hash: Option<u16> = None;
+        let mut supbooks: Vec<SupBook> = Vec::new();
+        let mut extern_sheet: Vec<ExternSheetEntry> = Vec::new();
+        let mut names: Vec<NameRecord> = Vec::new();
 
         // Find where globals end by iterating until we see an EOF
         // after the first BOF (globals BOF).
@@ -150,6 +156,22 @@ impl XlsReader {
                         }
                     }
                 }
+                // ── Formula context records ──────────────────────────
+                records::SUPBOOK if in_globals => {
+                    if let Ok(sb) = Self::parse_supbook(&rec.data) {
+                        supbooks.push(sb);
+                    }
+                }
+                records::EXTERNSHEET if in_globals => {
+                    if let Ok(entries) = Self::parse_externsheet(&rec.data) {
+                        extern_sheet = entries;
+                    }
+                }
+                records::NAME if in_globals => {
+                    if let Ok(nr) = Self::parse_name(&rec.data) {
+                        names.push(nr);
+                    }
+                }
                 _ => {}
             }
         }
@@ -166,6 +188,15 @@ impl XlsReader {
         // Build the workbook
         let mut workbook = Workbook::empty();
         workbook.settings_mut().date_1904 = date_mode_1904;
+
+        // Build formula context from globals data
+        let sheet_names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
+        let formula_ctx = FormulaContext {
+            sheet_names,
+            extern_sheet,
+            supbooks,
+            names,
+        };
 
         // Phase 2: Parse each worksheet substream
         // The records after globals_end_idx contain per-sheet substreams
@@ -192,12 +223,9 @@ impl XlsReader {
                 ws.set_visible(false);
             }
 
-            // Collect sheet names for formula decompiler (3D refs)
-            let sheet_names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
-
             // Get this sheet's records (indexed by BIFF order, not wb order)
             if let Some(sheet_records) = sheet_record_groups.get(biff_idx) {
-                Self::parse_sheet_records(sheet_records, ws, &sst, &style_table, &sheet_names)?;
+                Self::parse_sheet_records(sheet_records, ws, &sst, &style_table, &formula_ctx)?;
             }
 
             wb_sheet_idx += 1;
@@ -273,7 +301,7 @@ impl XlsReader {
         ws: &mut duke_sheets_core::Worksheet,
         sst: &[String],
         styles: &[Style],
-        sheet_names: &[String],
+        formula_ctx: &FormulaContext,
     ) -> XlsResult<()> {
         // We need to track the last FORMULA record to associate a STRING record
         let mut pending_formula_cell: Option<(u32, u16)> = None;
@@ -315,7 +343,7 @@ impl XlsReader {
                     pending_formula_cell = None;
                 }
                 records::FORMULA => {
-                    pending_formula_cell = Self::parse_formula(&rec.data, ws, styles, sheet_names)?;
+                    pending_formula_cell = Self::parse_formula(&rec.data, ws, styles, formula_ctx)?;
                 }
                 records::STRING => {
                     // Cached string value for the preceding FORMULA
@@ -575,7 +603,7 @@ impl XlsReader {
         data: &[u8],
         ws: &mut duke_sheets_core::Worksheet,
         styles: &[Style],
-        sheet_names: &[String],
+        formula_ctx: &FormulaContext,
     ) -> XlsResult<Option<(u32, u16)>> {
         if data.len() < 20 {
             return Err(XlsError::Parse("FORMULA record too short".into()));
@@ -599,7 +627,7 @@ impl XlsReader {
             let cce = read_u16(data, &mut off)? as usize;
             if cce > 0 && off + cce <= data.len() {
                 let token_bytes = &data[off..off + cce];
-                let text = crate::biff::formula::decompile(token_bytes, sheet_names);
+                let text = crate::biff::formula::decompile(token_bytes, formula_ctx);
                 if text.is_empty() {
                     String::new()
                 } else {
@@ -786,6 +814,141 @@ impl XlsReader {
         }
 
         Ok(())
+    }
+
+    // ── Formula context record parsers ──────────────────────────────────
+
+    /// Parse a SUPBOOK record.
+    ///
+    /// Self-reference: cch == 0x0401. Add-in: ctab == 1, cch == 0x003A.
+    /// External: virtPath + sheet names.
+    fn parse_supbook(data: &[u8]) -> XlsResult<SupBook> {
+        if data.len() < 4 {
+            return Err(XlsError::Parse("SUPBOOK record too short".into()));
+        }
+        let mut off = 0;
+        let ctab = read_u16(data, &mut off)?;
+        let cch = read_u16(data, &mut off)?;
+
+        if cch == 0x0401 {
+            // Self-reference: this workbook
+            return Ok(SupBook::SelfRef { sheet_count: ctab });
+        }
+
+        if ctab == 1 && cch == 0x003A {
+            // Add-in functions sentinel
+            return Ok(SupBook::AddIn);
+        }
+
+        // External workbook reference: read encoded path + sheet names.
+        // Path is encoded as XLUnicodeStringNoCch: flags(1) + chars(cch).
+        let path = if off < data.len() && cch > 0 {
+            let flags = data[off];
+            off += 1;
+            // The first byte of the path may be 0x01 (encoded virtPath)
+            // We read cch chars and strip the leading 0x01 if present.
+            let raw = read_character_data(data, &mut off, cch, flags)?;
+            // Strip leading encoding byte if present
+            if raw.starts_with('\x01') {
+                raw[1..].to_string()
+            } else {
+                raw
+            }
+        } else {
+            String::new()
+        };
+
+        // Read ctab sheet name strings
+        let mut sheets = Vec::with_capacity(ctab as usize);
+        for _ in 0..ctab {
+            if off >= data.len() {
+                break;
+            }
+            let s = read_unicode_string(data, &mut off)?;
+            sheets.push(s);
+        }
+
+        Ok(SupBook::External { path, sheets })
+    }
+
+    /// Parse an EXTERNSHEET record.
+    ///
+    /// Format: cXTI(u16) + cXTI × (iSupBook(u16), itabFirst(u16), itabLast(u16))
+    fn parse_externsheet(data: &[u8]) -> XlsResult<Vec<ExternSheetEntry>> {
+        if data.len() < 2 {
+            return Err(XlsError::Parse("EXTERNSHEET record too short".into()));
+        }
+        let mut off = 0;
+        let count = read_u16(data, &mut off)? as usize;
+        let mut entries = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            if off + 6 > data.len() {
+                break;
+            }
+            let sup_book_idx = read_u16(data, &mut off)?;
+            let first_sheet = read_u16(data, &mut off)?;
+            let last_sheet = read_u16(data, &mut off)?;
+            entries.push(ExternSheetEntry {
+                sup_book_idx,
+                first_sheet,
+                last_sheet,
+            });
+        }
+
+        Ok(entries)
+    }
+
+    /// Parse a NAME (defined name / Lbl) record.
+    ///
+    /// 14-byte header: flags(2) + chKey(1) + cch(1) + cce(2) + reserved(2) +
+    /// itab(2) + reserved(4). Then name string (XLUnicodeStringNoCch format:
+    /// flags byte + character data). Built-in names have cch == 1 and the
+    /// "character" is an index into BUILTIN_NAMES.
+    fn parse_name(data: &[u8]) -> XlsResult<NameRecord> {
+        if data.len() < 14 {
+            return Err(XlsError::Parse("NAME record too short".into()));
+        }
+        let mut off = 0;
+        let flags = read_u16(data, &mut off)?;
+        let _ch_key = data[off];
+        off += 1;
+        let cch = data[off] as u16;
+        off += 1;
+        let _cce = read_u16(data, &mut off)?;
+        let _reserved1 = read_u16(data, &mut off)?;
+        let itab = read_u16(data, &mut off)?;
+        off += 4; // reserved 4 bytes
+                  // off is now 14
+
+        let is_builtin = (flags & 0x0020) != 0;
+
+        // Read name string: XLUnicodeStringNoCch format = flags_byte + chars
+        let name = if off < data.len() && cch > 0 {
+            let name_flags = data[off];
+            off += 1;
+
+            if is_builtin && cch == 1 {
+                // Built-in name: the single "character" is an index byte
+                let idx = data.get(off).copied().unwrap_or(0) as usize;
+                let _skip = if (name_flags & 0x01) != 0 { 2 } else { 1 };
+                if idx < BUILTIN_NAMES.len() {
+                    BUILTIN_NAMES[idx].to_string()
+                } else {
+                    format!("_builtin{}", idx)
+                }
+            } else {
+                read_character_data(data, &mut off, cch, name_flags)?
+            }
+        } else {
+            String::new()
+        };
+
+        Ok(NameRecord {
+            name,
+            sheet_idx: itab,
+            is_builtin,
+        })
     }
 
     /// COLINFO: first_col(2) + last_col(2) + width(2) + xf(2) + options(2) + reserved(2)

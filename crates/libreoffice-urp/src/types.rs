@@ -398,6 +398,7 @@ pub mod type_names {
     pub const X_MODEL: &str = "com.sun.star.frame.XModel";
     pub const X_SPREADSHEET_VIEW: &str = "com.sun.star.sheet.XSpreadsheetView";
     pub const X_PROTECTABLE: &str = "com.sun.star.util.XProtectable";
+    pub const X_NAMED_RANGES: &str = "com.sun.star.sheet.XNamedRanges";
 
     pub const PROPERTY_VALUE: &str = "com.sun.star.beans.PropertyValue";
     pub const PROTOCOL_PROPERTY: &str = "com.sun.star.bridge.ProtocolProperty";

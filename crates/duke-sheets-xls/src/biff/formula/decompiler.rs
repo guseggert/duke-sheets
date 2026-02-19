@@ -6,6 +6,7 @@
 
 use super::function_table;
 use super::token_parser::ParsedToken;
+use super::{FormulaContext, SupBook};
 
 /// Operator precedence levels (higher = binds tighter).
 ///
@@ -119,12 +120,12 @@ fn format_number(val: f64) -> String {
 
 /// Decompile a sequence of parsed tokens into an infix formula string.
 ///
-/// The `sheet_names` slice is used for 3D references (Phase 2) — for now
-/// it can be empty.
+/// The `ctx` provides EXTERNSHEET/SUPBOOK/NAME data for resolving 3D
+/// references and defined names.
 ///
 /// Returns the formula text (without leading `=`), or an empty string if
 /// decompilation fails.
-pub fn decompile(tokens: &[ParsedToken], sheet_names: &[String]) -> String {
+pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
     let mut stack: Vec<StackEntry> = Vec::new();
 
     for token in tokens {
@@ -273,17 +274,28 @@ pub fn decompile(tokens: &[ParsedToken], sheet_names: &[String]) -> String {
                 // Whitespace preservation — ignore for now
             }
 
-            // ---- Phase 2 stubs ----
+            // ---- Defined names ----
             ParsedToken::Name { name_idx } => {
-                // Without NAME records parsed, emit a placeholder
-                stack.push(StackEntry::atom(format!("_name{}", name_idx)));
+                // name_idx is 1-based
+                let idx = (*name_idx as usize).wrapping_sub(1);
+                let name = ctx
+                    .names
+                    .get(idx)
+                    .map(|nr| nr.name.clone())
+                    .unwrap_or_else(|| format!("_name{}", name_idx));
+                stack.push(StackEntry::atom(name));
             }
             ParsedToken::NameX {
-                extern_sheet_idx: _,
+                extern_sheet_idx,
                 name_idx,
             } => {
-                stack.push(StackEntry::atom(format!("_namex{}", name_idx)));
+                // NameX: name_idx is 1-based into the external workbook's name table.
+                // For self-ref SUPBOOKs this is the same as tName.
+                let resolved = resolve_namex(ctx, *extern_sheet_idx, *name_idx);
+                stack.push(StackEntry::atom(resolved));
             }
+
+            // ---- 3D references ----
             ParsedToken::Ref3d {
                 extern_sheet_idx,
                 row,
@@ -291,7 +303,7 @@ pub fn decompile(tokens: &[ParsedToken], sheet_names: &[String]) -> String {
                 ..
             } => {
                 let ref_str = format_ref(*row, *col);
-                let sheet = resolve_sheet_name(sheet_names, *extern_sheet_idx);
+                let sheet = resolve_sheet_prefix(ctx, *extern_sheet_idx);
                 stack.push(StackEntry::atom(format!("{}!{}", sheet, ref_str)));
             }
             ParsedToken::Area3d {
@@ -303,7 +315,7 @@ pub fn decompile(tokens: &[ParsedToken], sheet_names: &[String]) -> String {
                 ..
             } => {
                 let area_str = format_area(*first_row, *last_row, *first_col, *last_col);
-                let sheet = resolve_sheet_name(sheet_names, *extern_sheet_idx);
+                let sheet = resolve_sheet_prefix(ctx, *extern_sheet_idx);
                 stack.push(StackEntry::atom(format!("{}!{}", sheet, area_str)));
             }
             ParsedToken::RefErr3d { .. } | ParsedToken::AreaErr3d { .. } => {
@@ -395,27 +407,128 @@ fn decompile_function(stack: &mut Vec<StackEntry>, name: &str, func_idx: u16, ar
     )));
 }
 
-/// Resolve an EXTERNSHEET index to a sheet name string.
+/// Resolve an EXTERNSHEET index to a sheet prefix string for 3D references.
 ///
-/// For Phase 1 without EXTERNSHEET records, we just use the sheet_names
-/// array as a simple lookup: the EXTERNSHEET index often maps directly to
-/// the sheet index for internal references.
-///
-/// Phase 2 will properly parse EXTERNSHEET records and do the full
-/// (sup_book, first_sheet, last_sheet) resolution.
-fn resolve_sheet_name(sheet_names: &[String], extern_sheet_idx: u16) -> String {
-    let idx = extern_sheet_idx as usize;
-    if idx < sheet_names.len() {
-        let name = &sheet_names[idx];
-        // Quote sheet name if it contains spaces or special characters
+/// Uses the EXTERNSHEET → SUPBOOK → sheet name resolution chain:
+/// 1. Look up the EXTERNSHEET entry by `extern_sheet_idx`
+/// 2. Get the SUPBOOK it points to
+/// 3. For self-ref SUPBOOKs, resolve `itabFirst`/`itabLast` to sheet names
+/// 4. For multi-sheet ranges (first != last), emit `"Sheet1:Sheet3"`
+fn resolve_sheet_prefix(ctx: &FormulaContext, extern_sheet_idx: u16) -> String {
+    let eidx = extern_sheet_idx as usize;
+
+    // If no EXTERNSHEET data, fall back to direct index into sheet_names
+    if ctx.extern_sheet.is_empty() {
+        return direct_sheet_lookup(&ctx.sheet_names, extern_sheet_idx);
+    }
+
+    let entry = match ctx.extern_sheet.get(eidx) {
+        Some(e) => e,
+        None => return format!("_sheet{}", extern_sheet_idx),
+    };
+
+    let supbook = match ctx.supbooks.get(entry.sup_book_idx as usize) {
+        Some(sb) => sb,
+        None => return format!("_sheet{}", extern_sheet_idx),
+    };
+
+    match supbook {
+        SupBook::SelfRef { .. } => {
+            // 0xFFFE means workbook-level (e.g. workbook-scoped name) — no sheet prefix
+            if entry.first_sheet == 0xFFFE {
+                return String::new();
+            }
+
+            let first_name = direct_sheet_lookup(&ctx.sheet_names, entry.first_sheet);
+
+            if entry.first_sheet == entry.last_sheet {
+                // Single sheet
+                first_name
+            } else {
+                // Multi-sheet range: Sheet1:Sheet3
+                // If either name needs quoting, quote the whole range
+                let first_raw = ctx
+                    .sheet_names
+                    .get(entry.first_sheet as usize)
+                    .cloned()
+                    .unwrap_or_default();
+                let last_raw = ctx
+                    .sheet_names
+                    .get(entry.last_sheet as usize)
+                    .cloned()
+                    .unwrap_or_default();
+                if needs_quoting(&first_raw) || needs_quoting(&last_raw) {
+                    format!(
+                        "'{}'",
+                        format!(
+                            "{}:{}",
+                            first_raw.replace('\'', "''"),
+                            last_raw.replace('\'', "''")
+                        )
+                    )
+                } else {
+                    format!("{}:{}", first_raw, last_raw)
+                }
+            }
+        }
+        SupBook::AddIn => {
+            // Add-in function — no sheet prefix needed
+            String::new()
+        }
+        SupBook::External { path, sheets } => {
+            // External workbook reference: [path]SheetName
+            let sheet_name = sheets
+                .get(entry.first_sheet as usize)
+                .cloned()
+                .unwrap_or_else(|| format!("_extsheet{}", entry.first_sheet));
+            format!("[{}]{}", path, sheet_name)
+        }
+    }
+}
+
+/// Direct lookup into sheet_names with quoting.
+fn direct_sheet_lookup(sheet_names: &[String], idx: u16) -> String {
+    let i = idx as usize;
+    if i < sheet_names.len() {
+        let name = &sheet_names[i];
         if needs_quoting(name) {
             format!("'{}'", name.replace('\'', "''"))
         } else {
             name.clone()
         }
     } else {
-        format!("_sheet{}", extern_sheet_idx)
+        format!("_sheet{}", idx)
     }
+}
+
+/// Resolve a NameX token (external name reference).
+///
+/// For self-ref SUPBOOKs, the name_idx is 1-based into the workbook's
+/// NAME record array (same as tName). For external SUPBOOKs, we emit
+/// a placeholder since we don't parse external name tables.
+fn resolve_namex(ctx: &FormulaContext, extern_sheet_idx: u16, name_idx: u16) -> String {
+    let eidx = extern_sheet_idx as usize;
+
+    if let Some(entry) = ctx.extern_sheet.get(eidx) {
+        if let Some(supbook) = ctx.supbooks.get(entry.sup_book_idx as usize) {
+            match supbook {
+                SupBook::SelfRef { .. } | SupBook::AddIn => {
+                    // 1-based index into workbook's NAME records
+                    let idx = (name_idx as usize).wrapping_sub(1);
+                    return ctx
+                        .names
+                        .get(idx)
+                        .map(|nr| nr.name.clone())
+                        .unwrap_or_else(|| format!("_namex{}", name_idx));
+                }
+                SupBook::External { path, .. } => {
+                    return format!("[{}]_name{}", path, name_idx);
+                }
+            }
+        }
+    }
+
+    format!("_namex{}", name_idx)
 }
 
 /// Check if a sheet name needs to be quoted in a formula.
@@ -437,23 +550,56 @@ fn needs_quoting(name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::biff::formula::token_parser::ParsedToken;
+    use crate::biff::formula::{ExternSheetEntry, NameRecord};
+
+    /// Create an empty FormulaContext for tests that don't need sheet/name data.
+    fn empty_ctx() -> FormulaContext {
+        FormulaContext::new(vec![])
+    }
+
+    /// Create a FormulaContext with just sheet names (no EXTERNSHEET/SUPBOOK).
+    /// This tests the fallback path (direct index into sheet_names).
+    fn ctx_with_sheets(names: Vec<String>) -> FormulaContext {
+        FormulaContext::new(names)
+    }
+
+    /// Create a FormulaContext with self-ref SUPBOOK and EXTERNSHEET entries.
+    fn ctx_with_self_ref(sheet_names: Vec<String>) -> FormulaContext {
+        let sheet_count = sheet_names.len() as u16;
+        let supbooks = vec![SupBook::SelfRef { sheet_count }];
+        // Create one EXTERNSHEET entry per sheet, all pointing to supbook 0
+        let extern_sheet: Vec<ExternSheetEntry> = (0..sheet_count)
+            .map(|i| ExternSheetEntry {
+                sup_book_idx: 0,
+                first_sheet: i,
+                last_sheet: i,
+            })
+            .collect();
+        FormulaContext {
+            sheet_names,
+            extern_sheet,
+            supbooks,
+            names: Vec::new(),
+        }
+    }
 
     #[test]
     fn test_simple_addition() {
-        // =1+2
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Int(1), ParsedToken::Int(2), ParsedToken::Add];
-        assert_eq!(decompile(&tokens, &[]), "1+2");
+        assert_eq!(decompile(&tokens, &ctx), "1+2");
     }
 
     #[test]
     fn test_subtraction() {
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Int(5), ParsedToken::Int(3), ParsedToken::Sub];
-        assert_eq!(decompile(&tokens, &[]), "5-3");
+        assert_eq!(decompile(&tokens, &ctx), "5-3");
     }
 
     #[test]
     fn test_precedence_mul_add() {
-        // =A1+B1*C1 → RPN: A1 B1 C1 * +
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Ref {
                 row: 0,
@@ -476,12 +622,12 @@ mod tests {
             ParsedToken::Mul,
             ParsedToken::Add,
         ];
-        assert_eq!(decompile(&tokens, &[]), "A1+B1*C1");
+        assert_eq!(decompile(&tokens, &ctx), "A1+B1*C1");
     }
 
     #[test]
     fn test_precedence_needs_parens() {
-        // =(A1+B1)*C1 → RPN: A1 B1 + C1 *
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Ref {
                 row: 0,
@@ -504,12 +650,12 @@ mod tests {
             },
             ParsedToken::Mul,
         ];
-        assert_eq!(decompile(&tokens, &[]), "(A1+B1)*C1");
+        assert_eq!(decompile(&tokens, &ctx), "(A1+B1)*C1");
     }
 
     #[test]
     fn test_unary_minus() {
-        // =-A1
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Ref {
                 row: 0,
@@ -519,55 +665,61 @@ mod tests {
             },
             ParsedToken::Uminus,
         ];
-        assert_eq!(decompile(&tokens, &[]), "-A1");
+        assert_eq!(decompile(&tokens, &ctx), "-A1");
     }
 
     #[test]
     fn test_percent() {
-        // =50%
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Int(50), ParsedToken::Percent];
-        assert_eq!(decompile(&tokens, &[]), "50%");
+        assert_eq!(decompile(&tokens, &ctx), "50%");
     }
 
     #[test]
     fn test_string_literal() {
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Str("hello".to_string())];
-        assert_eq!(decompile(&tokens, &[]), "\"hello\"");
+        assert_eq!(decompile(&tokens, &ctx), "\"hello\"");
     }
 
     #[test]
     fn test_string_with_quotes() {
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Str("say \"hi\"".to_string())];
-        assert_eq!(decompile(&tokens, &[]), "\"say \"\"hi\"\"\"");
+        assert_eq!(decompile(&tokens, &ctx), "\"say \"\"hi\"\"\"");
     }
 
     #[test]
     fn test_bool_true() {
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Bool(true)];
-        assert_eq!(decompile(&tokens, &[]), "TRUE");
+        assert_eq!(decompile(&tokens, &ctx), "TRUE");
     }
 
     #[test]
     fn test_error_constant() {
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Err(0x2A)];
-        assert_eq!(decompile(&tokens, &[]), "#N/A");
+        assert_eq!(decompile(&tokens, &ctx), "#N/A");
     }
 
     #[test]
     fn test_float_number() {
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Num(3.14)];
-        assert_eq!(decompile(&tokens, &[]), "3.14");
+        assert_eq!(decompile(&tokens, &ctx), "3.14");
     }
 
     #[test]
     fn test_integer_float() {
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Num(100.0)];
-        assert_eq!(decompile(&tokens, &[]), "100");
+        assert_eq!(decompile(&tokens, &ctx), "100");
     }
 
     #[test]
     fn test_area_ref() {
-        // =A1:C3
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Area {
             first_row: 0,
             last_row: 2,
@@ -578,12 +730,12 @@ mod tests {
             last_row_rel: true,
             last_col_rel: true,
         }];
-        assert_eq!(decompile(&tokens, &[]), "A1:C3");
+        assert_eq!(decompile(&tokens, &ctx), "A1:C3");
     }
 
     #[test]
     fn test_func_sum() {
-        // =SUM(A1:A10)
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Area {
                 first_row: 0,
@@ -597,12 +749,12 @@ mod tests {
             },
             ParsedToken::AttrSum,
         ];
-        assert_eq!(decompile(&tokens, &[]), "SUM(A1:A10)");
+        assert_eq!(decompile(&tokens, &ctx), "SUM(A1:A10)");
     }
 
     #[test]
     fn test_funcvar_if() {
-        // =IF(A1>0,1,0)
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Ref {
                 row: 0,
@@ -621,12 +773,12 @@ mod tests {
                 func_idx: 1,
             },
         ];
-        assert_eq!(decompile(&tokens, &[]), "IF(A1>0,1,0)");
+        assert_eq!(decompile(&tokens, &ctx), "IF(A1>0,1,0)");
     }
 
     #[test]
     fn test_func_len() {
-        // =LEN(A1) — fixed-arg function
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Ref {
                 row: 0,
@@ -636,12 +788,12 @@ mod tests {
             },
             ParsedToken::Func { func_idx: 32 },
         ];
-        assert_eq!(decompile(&tokens, &[]), "LEN(A1)");
+        assert_eq!(decompile(&tokens, &ctx), "LEN(A1)");
     }
 
     #[test]
     fn test_missing_arg() {
-        // =MATCH(1,A1:A10,) — trailing missing arg
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Int(1),
             ParsedToken::Area {
@@ -660,12 +812,12 @@ mod tests {
                 func_idx: 64,
             },
         ];
-        assert_eq!(decompile(&tokens, &[]), "MATCH(1,A1:A10,)");
+        assert_eq!(decompile(&tokens, &ctx), "MATCH(1,A1:A10,)");
     }
 
     #[test]
     fn test_concat_operator() {
-        // ="hello"&A1
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Str("hello".to_string()),
             ParsedToken::Ref {
@@ -676,12 +828,12 @@ mod tests {
             },
             ParsedToken::Concat,
         ];
-        assert_eq!(decompile(&tokens, &[]), "\"hello\"&A1");
+        assert_eq!(decompile(&tokens, &ctx), "\"hello\"&A1");
     }
 
     #[test]
     fn test_comparison_operators() {
-        // =A1>=B1
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Ref {
                 row: 0,
@@ -697,12 +849,12 @@ mod tests {
             },
             ParsedToken::Ge,
         ];
-        assert_eq!(decompile(&tokens, &[]), "A1>=B1");
+        assert_eq!(decompile(&tokens, &ctx), "A1>=B1");
     }
 
     #[test]
     fn test_nested_functions() {
-        // =SUM(LEN(A1),LEN(B1)) — SUM with 2 args via FuncVar
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Ref {
                 row: 0,
@@ -710,26 +862,25 @@ mod tests {
                 row_relative: true,
                 col_relative: true,
             },
-            ParsedToken::Func { func_idx: 32 }, // LEN
+            ParsedToken::Func { func_idx: 32 },
             ParsedToken::Ref {
                 row: 0,
                 col: 1,
                 row_relative: true,
                 col_relative: true,
             },
-            ParsedToken::Func { func_idx: 32 }, // LEN
+            ParsedToken::Func { func_idx: 32 },
             ParsedToken::FuncVar {
                 argc: 2,
-                func_idx: 4, // SUM
+                func_idx: 4,
             },
         ];
-        assert_eq!(decompile(&tokens, &[]), "SUM(LEN(A1),LEN(B1))");
+        assert_eq!(decompile(&tokens, &ctx), "SUM(LEN(A1),LEN(B1))");
     }
 
     #[test]
     fn test_power_right_associative() {
-        // =2^3^4 → RPN: 2 3 4 ^ ^
-        // Right-associative: should be 2^3^4 (not (2^3)^4)
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Int(2),
             ParsedToken::Int(3),
@@ -737,20 +888,21 @@ mod tests {
             ParsedToken::Power,
             ParsedToken::Power,
         ];
-        assert_eq!(decompile(&tokens, &[]), "2^3^4");
+        assert_eq!(decompile(&tokens, &ctx), "2^3^4");
     }
 
     #[test]
     fn test_ref_err() {
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::RefErr];
-        assert_eq!(decompile(&tokens, &[]), "#REF!");
+        assert_eq!(decompile(&tokens, &ctx), "#REF!");
     }
 
     #[test]
     fn test_paren_display() {
-        // tParen wraps top of stack
+        let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Int(42), ParsedToken::Paren];
-        assert_eq!(decompile(&tokens, &[]), "(42)");
+        assert_eq!(decompile(&tokens, &ctx), "(42)");
     }
 
     #[test]
@@ -760,28 +912,28 @@ mod tests {
         assert_eq!(col_to_letter(25), "Z");
         assert_eq!(col_to_letter(26), "AA");
         assert_eq!(col_to_letter(27), "AB");
-        assert_eq!(col_to_letter(255), "IV"); // max BIFF8 column
+        assert_eq!(col_to_letter(255), "IV");
     }
 
     #[test]
     fn test_empty_tokens() {
-        assert_eq!(decompile(&[], &[]), "");
+        let ctx = empty_ctx();
+        assert_eq!(decompile(&[], &ctx), "");
     }
 
     #[test]
     fn test_volatile_ignored() {
-        // tAttrVolatile before NOW() — should not appear in output
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::AttrVolatile,
-            ParsedToken::Func { func_idx: 74 }, // NOW
+            ParsedToken::Func { func_idx: 74 },
         ];
-        assert_eq!(decompile(&tokens, &[]), "NOW()");
+        assert_eq!(decompile(&tokens, &ctx), "NOW()");
     }
 
     #[test]
     fn test_left_associativity_subtraction() {
-        // =1-2-3 → RPN: 1 2 - 3 -
-        // Should produce "1-2-3" not "1-(2-3)"
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Int(1),
             ParsedToken::Int(2),
@@ -789,12 +941,12 @@ mod tests {
             ParsedToken::Int(3),
             ParsedToken::Sub,
         ];
-        assert_eq!(decompile(&tokens, &[]), "1-2-3");
+        assert_eq!(decompile(&tokens, &ctx), "1-2-3");
     }
 
     #[test]
     fn test_right_operand_needs_parens() {
-        // =1-(2+3) → RPN: 1 2 3 + -
+        let ctx = empty_ctx();
         let tokens = vec![
             ParsedToken::Int(1),
             ParsedToken::Int(2),
@@ -802,12 +954,12 @@ mod tests {
             ParsedToken::Add,
             ParsedToken::Sub,
         ];
-        assert_eq!(decompile(&tokens, &[]), "1-(2+3)");
+        assert_eq!(decompile(&tokens, &ctx), "1-(2+3)");
     }
 
     #[test]
-    fn test_3d_ref_with_sheet_names() {
-        let sheet_names = vec!["Sheet1".to_string(), "Sheet2".to_string()];
+    fn test_3d_ref_with_self_ref_supbook() {
+        let ctx = ctx_with_self_ref(vec!["Sheet1".to_string(), "Sheet2".to_string()]);
         let tokens = vec![ParsedToken::Ref3d {
             extern_sheet_idx: 1,
             row: 0,
@@ -815,12 +967,26 @@ mod tests {
             row_relative: false,
             col_relative: false,
         }];
-        assert_eq!(decompile(&tokens, &sheet_names), "Sheet2!A1");
+        assert_eq!(decompile(&tokens, &ctx), "Sheet2!A1");
+    }
+
+    #[test]
+    fn test_3d_ref_fallback_no_externsheet() {
+        // No EXTERNSHEET data — falls back to direct sheet_names lookup
+        let ctx = ctx_with_sheets(vec!["Sheet1".to_string(), "Sheet2".to_string()]);
+        let tokens = vec![ParsedToken::Ref3d {
+            extern_sheet_idx: 1,
+            row: 0,
+            col: 0,
+            row_relative: false,
+            col_relative: false,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "Sheet2!A1");
     }
 
     #[test]
     fn test_3d_ref_quoted_sheet() {
-        let sheet_names = vec!["My Sheet".to_string()];
+        let ctx = ctx_with_self_ref(vec!["My Sheet".to_string()]);
         let tokens = vec![ParsedToken::Ref3d {
             extern_sheet_idx: 0,
             row: 4,
@@ -828,6 +994,85 @@ mod tests {
             row_relative: false,
             col_relative: false,
         }];
-        assert_eq!(decompile(&tokens, &sheet_names), "'My Sheet'!B5");
+        assert_eq!(decompile(&tokens, &ctx), "'My Sheet'!B5");
+    }
+
+    #[test]
+    fn test_3d_area_multi_sheet_range() {
+        // EXTERNSHEET entry with first_sheet=0, last_sheet=2 → Sheet1:Sheet3
+        let ctx = FormulaContext {
+            sheet_names: vec![
+                "Sheet1".to_string(),
+                "Sheet2".to_string(),
+                "Sheet3".to_string(),
+            ],
+            supbooks: vec![SupBook::SelfRef { sheet_count: 3 }],
+            extern_sheet: vec![ExternSheetEntry {
+                sup_book_idx: 0,
+                first_sheet: 0,
+                last_sheet: 2,
+            }],
+            names: Vec::new(),
+        };
+        let tokens = vec![ParsedToken::Area3d {
+            extern_sheet_idx: 0,
+            first_row: 0,
+            last_row: 9,
+            first_col: 0,
+            last_col: 0,
+            first_row_rel: false,
+            first_col_rel: false,
+            last_row_rel: false,
+            last_col_rel: false,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "Sheet1:Sheet3!A1:A10");
+    }
+
+    #[test]
+    fn test_name_lookup() {
+        let ctx = FormulaContext {
+            sheet_names: vec!["Sheet1".to_string()],
+            supbooks: vec![],
+            extern_sheet: vec![],
+            names: vec![NameRecord {
+                name: "MyRange".to_string(),
+                sheet_idx: 0,
+                is_builtin: false,
+            }],
+        };
+        // tName with name_idx=1 (1-based) → "MyRange"
+        let tokens = vec![ParsedToken::Name { name_idx: 1 }];
+        assert_eq!(decompile(&tokens, &ctx), "MyRange");
+    }
+
+    #[test]
+    fn test_name_lookup_unknown() {
+        let ctx = empty_ctx();
+        // No names defined — should fall back to placeholder
+        let tokens = vec![ParsedToken::Name { name_idx: 5 }];
+        assert_eq!(decompile(&tokens, &ctx), "_name5");
+    }
+
+    #[test]
+    fn test_namex_self_ref() {
+        let ctx = FormulaContext {
+            sheet_names: vec!["Sheet1".to_string()],
+            supbooks: vec![SupBook::SelfRef { sheet_count: 1 }],
+            extern_sheet: vec![ExternSheetEntry {
+                sup_book_idx: 0,
+                first_sheet: 0xFFFE,
+                last_sheet: 0xFFFE,
+            }],
+            names: vec![NameRecord {
+                name: "TaxRate".to_string(),
+                sheet_idx: 0,
+                is_builtin: false,
+            }],
+        };
+        let tokens = vec![ParsedToken::NameX {
+            extern_sheet_idx: 0,
+            name_idx: 1,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "TaxRate");
     }
 }

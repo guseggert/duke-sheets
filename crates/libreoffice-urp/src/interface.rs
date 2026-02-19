@@ -775,3 +775,27 @@ pub fn protectable_is_protected() -> MethodDef {
         one_way: false,
     }
 }
+
+// ============================================================================
+// XNamedRanges — com.sun.star.sheet.XNamedRanges
+// Extends XNameAccess -> XElementAccess -> XInterface
+// XElementAccess: getElementType(3), hasElements(4)
+// XNameAccess: getByName(5), getElementNames(6), hasByName(7)
+// XNamedRanges: addNewByName(8), addNewFromTitles(9), removeByName(10),
+//               outputList(11)
+// ============================================================================
+
+pub fn named_ranges_add_new_by_name() -> MethodDef {
+    MethodDef {
+        name: "addNewByName",
+        index: 8,
+        params: &[
+            ParamType::String,                                   // aName
+            ParamType::String,                                   // aContent (formula/range)
+            ParamType::Struct("com.sun.star.table.CellAddress"), // aPosition
+            ParamType::Long,                                     // nType (0 = normal)
+        ],
+        return_type: Type::void(),
+        one_way: false,
+    }
+}
