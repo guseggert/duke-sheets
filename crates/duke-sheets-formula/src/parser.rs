@@ -61,6 +61,8 @@ enum Token {
     Caret,
     Percent,
     Ampersand,
+    At,   // @ implicit intersection
+    Hash, // # spill range
     Equal,
     NotEqual,
     LessThan,
@@ -218,6 +220,12 @@ impl<'a> FormulaParser<'a> {
             return self.scan_number();
         }
 
+        // Implicit intersection operator
+        if c == '@' {
+            self.advance();
+            return Token::At;
+        }
+
         // Quoted sheet reference: 'Sheet Name'!
         if c == '\'' {
             return self.scan_quoted_sheet_ref();
@@ -335,7 +343,17 @@ impl<'a> FormulaParser<'a> {
 
     fn scan_identifier_or_ref(&mut self) -> Token {
         // Check for error values first (#VALUE!, #REF!, etc.)
+        // or standalone # (spill range operator)
         if self.peek_char() == Some('#') {
+            // Peek ahead: if next char after # isn't alphanumeric, it's the
+            // spill range operator (e.g., A1#)
+            if !self
+                .peek_char_at(1)
+                .map_or(false, |c| c.is_ascii_alphabetic())
+            {
+                self.advance();
+                return Token::Hash;
+            }
             let start = self.pos;
             self.advance();
             while self.peek_char().map_or(false, |c| {
@@ -609,15 +627,37 @@ impl<'a> FormulaParser<'a> {
             return self.parse_unary();
         }
 
-        // Parse primary, then check for postfix percent
+        // Prefix implicit intersection (@)
+        if matches!(self.current_token(), Token::At) {
+            self.consume();
+            let operand = self.parse_unary()?;
+            return Ok(FormulaExpr::UnaryOp {
+                op: UnaryOperator::ImplicitIntersection,
+                operand: Box::new(operand),
+            });
+        }
+
+        // Parse primary, then check for postfix operators (%, #)
         let mut expr = self.parse_range()?;
 
-        while matches!(self.current_token(), Token::Percent) {
-            self.consume();
-            expr = FormulaExpr::UnaryOp {
-                op: UnaryOperator::Percent,
-                operand: Box::new(expr),
-            };
+        loop {
+            match self.current_token() {
+                Token::Percent => {
+                    self.consume();
+                    expr = FormulaExpr::UnaryOp {
+                        op: UnaryOperator::Percent,
+                        operand: Box::new(expr),
+                    };
+                }
+                Token::Hash => {
+                    self.consume();
+                    expr = FormulaExpr::UnaryOp {
+                        op: UnaryOperator::SpillRange,
+                        operand: Box::new(expr),
+                    };
+                }
+                _ => break,
+            }
         }
 
         Ok(expr)
@@ -1165,5 +1205,93 @@ mod tests {
         // Unterminated quoted sheet name should produce error
         let err = parse_formula("='Sheet 1!A1").unwrap_err();
         assert!(err.to_string().contains("Unexpected character"));
+    }
+
+    #[test]
+    fn test_parse_implicit_intersection() {
+        // @ as prefix operator
+        let ast = parse_formula("=@A1").unwrap();
+        if let FormulaExpr::UnaryOp { op, operand } = ast {
+            assert_eq!(op, UnaryOperator::ImplicitIntersection);
+            assert!(matches!(*operand, FormulaExpr::CellRef(_)));
+        } else {
+            panic!("Expected UnaryOp, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_implicit_intersection_range() {
+        // @ with a range reference
+        let ast = parse_formula("=@A1:A10").unwrap();
+        if let FormulaExpr::UnaryOp { op, operand } = ast {
+            assert_eq!(op, UnaryOperator::ImplicitIntersection);
+            assert!(matches!(*operand, FormulaExpr::RangeRef(_)));
+        } else {
+            panic!("Expected UnaryOp, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_implicit_intersection_in_function() {
+        // @ inside a function call
+        let ast = parse_formula("=SUM(@A1:A10)").unwrap();
+        if let FormulaExpr::Function { name, args } = ast {
+            assert_eq!(name, "SUM");
+            assert_eq!(args.len(), 1);
+            assert!(matches!(
+                &args[0],
+                FormulaExpr::UnaryOp {
+                    op: UnaryOperator::ImplicitIntersection,
+                    ..
+                }
+            ));
+        } else {
+            panic!("Expected Function, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_spill_range() {
+        // # as postfix operator on a cell reference
+        let ast = parse_formula("=A1#").unwrap();
+        if let FormulaExpr::UnaryOp { op, operand } = ast {
+            assert_eq!(op, UnaryOperator::SpillRange);
+            assert!(matches!(*operand, FormulaExpr::CellRef(_)));
+        } else {
+            panic!("Expected UnaryOp, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_spill_range_in_function() {
+        // # inside SUM
+        let ast = parse_formula("=SUM(A1#)").unwrap();
+        if let FormulaExpr::Function { name, args } = ast {
+            assert_eq!(name, "SUM");
+            assert_eq!(args.len(), 1);
+            assert!(matches!(
+                &args[0],
+                FormulaExpr::UnaryOp {
+                    op: UnaryOperator::SpillRange,
+                    ..
+                }
+            ));
+        } else {
+            panic!("Expected Function, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_error_values_still_work() {
+        // Make sure error values like #VALUE! still parse correctly
+        // (they also start with # so we need to verify no regression)
+        let ast = parse_formula("=#VALUE!").unwrap();
+        assert_eq!(ast, FormulaExpr::Error(CellError::Value));
+
+        let ast = parse_formula("=#N/A").unwrap();
+        assert_eq!(ast, FormulaExpr::Error(CellError::Na));
+
+        let ast = parse_formula("=#REF!").unwrap();
+        assert_eq!(ast, FormulaExpr::Error(CellError::Ref));
     }
 }

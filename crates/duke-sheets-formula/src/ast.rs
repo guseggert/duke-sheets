@@ -92,4 +92,8 @@ pub enum BinaryOperator {
 pub enum UnaryOperator {
     Negate,
     Percent,
+    /// Implicit intersection operator (@) — selects a single value from a range
+    ImplicitIntersection,
+    /// Spill range operator (#) — references the entire spill range of a cell
+    SpillRange,
 }

@@ -594,6 +594,18 @@ fn evaluate_unary_op(
                 .ok_or_else(|| FormulaError::Evaluation("Expected number".into()))?;
             Ok(FormulaValue::Number(n / 100.0))
         }
+        UnaryOperator::ImplicitIntersection => {
+            // @ operator: in a non-dynamic-array context, just pass through the value.
+            // Full implicit intersection would select a single value from a
+            // range based on the formula cell's row/column, but we don't have
+            // that context here. Pass through for now.
+            Ok(val)
+        }
+        UnaryOperator::SpillRange => {
+            // # operator: references the spill range of a dynamic array formula.
+            // We don't support dynamic array spilling yet, so return #CALC! error.
+            Ok(FormulaValue::Error(CellError::Calc))
+        }
     }
 }
 
