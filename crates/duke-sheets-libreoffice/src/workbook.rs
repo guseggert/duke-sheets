@@ -626,6 +626,77 @@ impl<'a> Workbook<'a> {
         .await
     }
 
+    /// Hide or show a sheet by its zero-based index.
+    ///
+    /// Note: At least one sheet must remain visible in a workbook.
+    pub async fn set_sheet_hidden(
+        &mut self,
+        sheet_index: i32,
+        hidden: bool,
+    ) -> Result<()> {
+        let sheet = self
+            .get_sheet_proxy_as(sheet_index, type_names::X_PROPERTY_SET)
+            .await?;
+        self.set_property(
+            &sheet,
+            "IsVisible",
+            UnoValue::Any(Box::new(Any {
+                type_desc: Type::boolean(),
+                value: UnoValue::Bool(!hidden),
+            })),
+        )
+        .await
+    }
+
+    /// Set the active (selected) sheet by its zero-based index.
+    ///
+    /// This uses the XSpreadsheetView interface on the document's controller.
+    pub async fn set_active_sheet(&mut self, sheet_index: i32) -> Result<()> {
+        // Get the sheet as XSpreadsheet
+        let sheet = self
+            .get_sheet_proxy_as(sheet_index, type_names::X_SPREADSHEET)
+            .await?;
+
+        // Get the current controller via XModel
+        let model = self.doc_qi(type_names::X_MODEL).await?;
+        let method = interface::get_current_controller();
+        let result = self.conn.call(&model, &method, &[]).await?;
+        let ctrl_oid = Self::require_oid(&result, "getCurrentController")?;
+
+        // Query the controller for XSpreadsheetView
+        let ctrl_raw = UnoProxy::new(
+            ctrl_oid,
+            Type::interface(type_names::X_SPREADSHEET_VIEW),
+        );
+        let ctrl = self
+            .conn
+            .query_interface(
+                &ctrl_raw,
+                Type::interface(type_names::X_SPREADSHEET_VIEW),
+            )
+            .await?
+            .unwrap_or(ctrl_raw);
+
+        // Call setActiveSheet
+        let method = interface::set_active_sheet();
+        self.conn
+            .call(&ctrl, &method, &[UnoValue::Interface(sheet.oid.clone())])
+            .await?;
+        Ok(())
+    }
+
+    /// Protect a sheet with a password (empty string for no password).
+    pub async fn protect_sheet(&mut self, sheet_index: i32, password: &str) -> Result<()> {
+        let sheet = self
+            .get_sheet_proxy_as(sheet_index, type_names::X_PROTECTABLE)
+            .await?;
+        let method = interface::protectable_protect();
+        self.conn
+            .call(&sheet, &method, &[UnoValue::String(password.to_string())])
+            .await?;
+        Ok(())
+    }
+
     // ========================================================================
     // Number formats
     // ========================================================================

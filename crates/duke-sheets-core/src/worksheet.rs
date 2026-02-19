@@ -22,7 +22,6 @@ pub struct Worksheet {
     /// Sheet is selected
     selected: bool,
     /// Sheet protection settings
-    #[allow(dead_code)]
     protection: Option<SheetProtection>,
     /// Freeze pane settings
     freeze_panes: Option<FreezePanes>,
@@ -98,6 +97,16 @@ impl Worksheet {
     /// Set the tab color
     pub fn set_tab_color(&mut self, color: Option<crate::style::Color>) {
         self.tab_color = color;
+    }
+
+    /// Get the sheet protection settings
+    pub fn protection(&self) -> Option<&SheetProtection> {
+        self.protection.as_ref()
+    }
+
+    /// Set sheet protection settings
+    pub fn set_protection(&mut self, protection: Option<SheetProtection>) {
+        self.protection = protection;
     }
 
     // === Cell Access ===

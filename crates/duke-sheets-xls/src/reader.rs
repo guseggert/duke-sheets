@@ -7,6 +7,7 @@ use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 
 use duke_sheets_core::cell::SharedString;
+use duke_sheets_core::worksheet::SheetProtection;
 use duke_sheets_core::{CellError, CellValue, Style, Workbook};
 
 use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32};
@@ -26,7 +27,6 @@ struct SheetInfo {
     #[allow(dead_code)]
     offset: u32,
     /// Sheet visibility: 0 = visible, 1 = hidden, 2 = very hidden.
-    #[allow(dead_code)]
     visibility: u8,
     /// Sheet type: 0 = worksheet, 2 = chart, 6 = macro/VBA.
     sheet_type: u8,
@@ -73,6 +73,9 @@ impl XlsReader {
         let mut date_mode_1904 = false;
         let mut in_globals = false;
         let mut style_ctx = StyleContext::new();
+        let mut active_sheet_idx: u16 = 0;
+        let mut workbook_protected = false;
+        let mut workbook_password_hash: Option<u16> = None;
 
         // Find where globals end by iterating until we see an EOF
         // after the first BOF (globals BOF).
@@ -127,6 +130,26 @@ impl XlsReader {
                 records::PALETTE if in_globals => {
                     let _ = styles::apply_palette(&rec.data, &mut style_ctx.palette);
                 }
+                records::WINDOW1 if in_globals => {
+                    // WINDOW1: bytes 10-11 = active/selected sheet index (u16)
+                    if rec.data.len() >= 12 {
+                        active_sheet_idx = u16::from_le_bytes([rec.data[10], rec.data[11]]);
+                    }
+                }
+                records::PROTECT if in_globals => {
+                    if rec.data.len() >= 2 {
+                        let val = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+                        workbook_protected = val == 1;
+                    }
+                }
+                records::PASSWORD if in_globals => {
+                    if rec.data.len() >= 2 {
+                        let hash = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+                        if hash != 0 {
+                            workbook_password_hash = Some(hash);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -164,6 +187,11 @@ impl XlsReader {
 
             let ws = workbook.worksheet_mut(wb_sheet_idx).unwrap();
 
+            // Apply sheet visibility (0 = visible, 1 = hidden, 2 = very hidden)
+            if info.visibility != 0 {
+                ws.set_visible(false);
+            }
+
             // Get this sheet's records (indexed by BIFF order, not wb order)
             if let Some(sheet_records) = sheet_record_groups.get(biff_idx) {
                 Self::parse_sheet_records(sheet_records, ws, &sst, &style_table)?;
@@ -171,6 +199,15 @@ impl XlsReader {
 
             wb_sheet_idx += 1;
         }
+
+        // Apply active sheet index (WINDOW1)
+        let active = active_sheet_idx as usize;
+        if active < workbook.sheet_count() {
+            let _ = workbook.set_active_sheet(active);
+        }
+
+        // Store workbook-level protection info (currently unused, but parsed)
+        let _ = (workbook_protected, workbook_password_hash);
 
         Ok(workbook)
     }
@@ -236,6 +273,8 @@ impl XlsReader {
     ) -> XlsResult<()> {
         // We need to track the last FORMULA record to associate a STRING record
         let mut pending_formula_cell: Option<(u32, u16)> = None;
+        let mut sheet_protected = false;
+        let mut sheet_password_hash: Option<u16> = None;
 
         for rec in records {
             match rec.record_type {
@@ -289,10 +328,33 @@ impl XlsReader {
                 records::COLINFO => {
                     Self::parse_colinfo(&rec.data, ws)?;
                 }
+                records::PROTECT => {
+                    if rec.data.len() >= 2 {
+                        let val = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+                        sheet_protected = val == 1;
+                    }
+                }
+                records::PASSWORD => {
+                    if rec.data.len() >= 2 {
+                        let hash = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+                        if hash != 0 {
+                            sheet_password_hash = Some(hash);
+                        }
+                    }
+                }
                 _ => {
                     // Skip unknown/unhandled records
                 }
             }
+        }
+
+        // Apply sheet protection if the PROTECT record was present
+        if sheet_protected {
+            ws.set_protection(Some(SheetProtection {
+                protected: true,
+                password_hash: sheet_password_hash,
+                ..Default::default()
+            }));
         }
 
         Ok(())

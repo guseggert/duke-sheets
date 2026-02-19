@@ -520,6 +520,40 @@ fn test_xls_shrink_to_fit() {
     cleanup_fixture(&path);
 }
 
+#[test]
+fn test_xls_indent_level() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", "Indented text").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            indent: 2,
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    // BIFF8 stores indent as abstract level 0-15. LO sets ParaIndent in
+    // physical units (indent * 200 = 1/100 mm). Whether the roundtrip
+    // preserves the exact level depends on LO's XLS writer conversion.
+    assert!(
+        style.alignment.indent > 0,
+        "A1 should have non-zero indent, got {}",
+        style.alignment.indent
+    );
+
+    cleanup_fixture(&path);
+}
+
 // ── Number formats ──────────────────────────────────────────────────────
 
 #[test]

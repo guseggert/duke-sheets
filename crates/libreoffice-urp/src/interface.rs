@@ -694,3 +694,84 @@ pub fn get_style_families() -> MethodDef {
         one_way: false,
     }
 }
+
+// ============================================================================
+// XModel — com.sun.star.frame.XModel
+// Extends XComponent(3..5) extends XInterface(0..2)
+// Methods: attachResource(6), getURL(7), getArgs(8), connectController(9),
+//          disconnectController(10), lock(11), unlock(12),
+//          hasControllersLocked(13), getCurrentController(14),
+//          getCurrentSelection(15)
+// ============================================================================
+
+pub fn get_current_controller() -> MethodDef {
+    MethodDef {
+        name: "getCurrentController",
+        index: 14,
+        params: &[],
+        return_type: Type::interface("com.sun.star.frame.XController"),
+        one_way: false,
+    }
+}
+
+// ============================================================================
+// XSpreadsheetView — com.sun.star.sheet.XSpreadsheetView
+// Extends XInterface(0..2)
+// Methods: getActiveSheet(3), setActiveSheet(4)
+// ============================================================================
+
+pub fn get_active_sheet() -> MethodDef {
+    MethodDef {
+        name: "getActiveSheet",
+        index: 3,
+        params: &[],
+        return_type: Type::interface("com.sun.star.sheet.XSpreadsheet"),
+        one_way: false,
+    }
+}
+
+pub fn set_active_sheet() -> MethodDef {
+    MethodDef {
+        name: "setActiveSheet",
+        index: 4,
+        params: &[ParamType::Interface("com.sun.star.sheet.XSpreadsheet")],
+        return_type: Type::void(),
+        one_way: false,
+    }
+}
+
+// ============================================================================
+// XProtectable — com.sun.star.util.XProtectable
+// Extends XInterface(0..2)
+// Methods: protect(3), unprotect(4), isProtected(5)
+// ============================================================================
+
+pub fn protectable_protect() -> MethodDef {
+    MethodDef {
+        name: "protect",
+        index: 3,
+        params: &[ParamType::String],
+        return_type: Type::void(),
+        one_way: false,
+    }
+}
+
+pub fn protectable_unprotect() -> MethodDef {
+    MethodDef {
+        name: "unprotect",
+        index: 4,
+        params: &[ParamType::String],
+        return_type: Type::void(),
+        one_way: false,
+    }
+}
+
+pub fn protectable_is_protected() -> MethodDef {
+    MethodDef {
+        name: "isProtected",
+        index: 5,
+        params: &[],
+        return_type: Type::boolean(),
+        one_way: false,
+    }
+}

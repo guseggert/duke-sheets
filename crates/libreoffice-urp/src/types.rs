@@ -395,6 +395,9 @@ pub mod type_names {
     pub const X_MULTI_SERVICE_FACTORY: &str = "com.sun.star.lang.XMultiServiceFactory";
     pub const X_SHEET_CONDITIONAL_ENTRIES: &str = "com.sun.star.sheet.XSheetConditionalEntries";
     pub const X_STYLE_FAMILIES_SUPPLIER: &str = "com.sun.star.style.XStyleFamiliesSupplier";
+    pub const X_MODEL: &str = "com.sun.star.frame.XModel";
+    pub const X_SPREADSHEET_VIEW: &str = "com.sun.star.sheet.XSpreadsheetView";
+    pub const X_PROTECTABLE: &str = "com.sun.star.util.XProtectable";
 
     pub const PROPERTY_VALUE: &str = "com.sun.star.beans.PropertyValue";
     pub const PROTOCOL_PROPERTY: &str = "com.sun.star.bridge.ProtocolProperty";

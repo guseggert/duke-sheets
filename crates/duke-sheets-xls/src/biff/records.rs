@@ -18,6 +18,9 @@ pub const FONT: u16 = 0x0031; // Font definition
 pub const FORMAT: u16 = 0x041E; // Number format string
 pub const XF: u16 = 0x00E0; // Extended Format (cell format record)
 pub const STYLE: u16 = 0x0293; // Named cell style
+pub const WINDOW1: u16 = 0x003D; // Workbook window settings (active sheet, etc.)
+pub const PROTECT: u16 = 0x0012; // Sheet/workbook protection flag
+pub const PASSWORD: u16 = 0x0013; // Sheet/workbook protection password hash
 
 // ── Cell records ────────────────────────────────────────────────────────
 pub const DIMENSION: u16 = 0x0200; // Used range (first/last row/col)
