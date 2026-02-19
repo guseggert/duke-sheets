@@ -24,7 +24,10 @@ pub mod evaluator;
 pub mod functions;
 pub mod parser;
 
-pub use ast::{BinaryOperator, CellReference, FormulaExpr, RangeReference, UnaryOperator};
+pub use ast::{
+    BinaryOperator, CellReference, ExternalReference, FormulaExpr, RangeReference,
+    StructuredRefSpecifier, StructuredReference, UnaryOperator,
+};
 pub use error::{FormulaError, FormulaResult};
 pub use evaluator::{evaluate, EvaluationContext, FormulaValue};
 pub use parser::parse_formula;

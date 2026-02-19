@@ -438,12 +438,14 @@ fn extract_references_recursive(
                 }
             }
         }
-        // Literals have no references
+        // Literals and unresolvable references have no extractable cell refs
         FormulaExpr::Number(_)
         | FormulaExpr::String(_)
         | FormulaExpr::Boolean(_)
         | FormulaExpr::Error(_)
-        | FormulaExpr::NameRef(_) => {}
+        | FormulaExpr::NameRef(_)
+        | FormulaExpr::StructuredRef(_)
+        | FormulaExpr::ExternalRef(_) => {}
     }
 }
 
@@ -475,7 +477,9 @@ fn contains_volatile_function(expr: &FormulaExpr) -> bool {
         | FormulaExpr::Error(_)
         | FormulaExpr::CellRef(_)
         | FormulaExpr::RangeRef(_)
-        | FormulaExpr::NameRef(_) => false,
+        | FormulaExpr::NameRef(_)
+        | FormulaExpr::StructuredRef(_)
+        | FormulaExpr::ExternalRef(_) => false,
     }
 }
 

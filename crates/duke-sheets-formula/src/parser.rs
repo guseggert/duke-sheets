@@ -2,7 +2,10 @@
 //!
 //! A recursive descent parser for Excel formulas with proper operator precedence.
 
-use crate::ast::{BinaryOperator, CellReference, FormulaExpr, RangeReference, UnaryOperator};
+use crate::ast::{
+    BinaryOperator, CellReference, ExternalReference, FormulaExpr, RangeReference,
+    StructuredRefSpecifier, StructuredReference, UnaryOperator,
+};
 use crate::error::{FormulaError, FormulaResult};
 use duke_sheets_core::{CellAddress, CellError, CellRange};
 
@@ -78,6 +81,9 @@ enum Token {
     RightParen,
     LeftBrace,
     RightBrace,
+
+    /// Content between [ and ] (including nested brackets preserved)
+    BracketExpr(String),
 
     // Unknown character (for better error reporting)
     Unknown(char),
@@ -177,6 +183,14 @@ impl<'a> FormulaParser<'a> {
             '}' => {
                 self.advance();
                 return Token::RightBrace;
+            }
+            '[' => {
+                return self.scan_bracket_expr();
+            }
+            ']' => {
+                // Stray ']' without matching '[' — treat as unknown
+                self.advance();
+                return Token::Unknown(']');
             }
             _ => {}
         }
@@ -309,6 +323,32 @@ impl<'a> FormulaParser<'a> {
         }
     }
 
+    fn scan_bracket_expr(&mut self) -> Token {
+        self.advance(); // Skip opening '['
+        let start = self.pos;
+        let mut depth = 0;
+        while let Some(c) = self.peek_char() {
+            match c {
+                '[' => {
+                    depth += 1;
+                    self.advance();
+                }
+                ']' => {
+                    if depth == 0 {
+                        let content = self.input[start..self.pos].to_string();
+                        self.advance(); // Skip closing ']'
+                        return Token::BracketExpr(content);
+                    }
+                    depth -= 1;
+                    self.advance();
+                }
+                _ => self.advance(),
+            }
+        }
+        // Unterminated bracket expression
+        Token::Unknown('[')
+    }
+
     fn scan_number(&mut self) -> Token {
         let start = self.pos;
 
@@ -398,7 +438,11 @@ impl<'a> FormulaParser<'a> {
 
         // Check if it looks like a cell reference (letter(s) followed by number(s))
         // BUT if followed by '(' it's a function call (e.g., LOG10(100) is function, not cell ref)
-        if Self::is_cell_reference(text) && self.peek_char() != Some('(') {
+        // AND if followed by '[' it's a table name for structured refs (e.g., Table1[Column])
+        if Self::is_cell_reference(text)
+            && self.peek_char() != Some('(')
+            && self.peek_char() != Some('[')
+        {
             return Token::CellRef(text.to_string());
         }
 
@@ -751,10 +795,24 @@ impl<'a> FormulaParser<'a> {
                 // Check if it's a function call
                 if matches!(self.current_token(), Token::LeftParen) {
                     self.parse_function_call(name)
+                } else if let Token::BracketExpr(_) = self.current_token() {
+                    // Structured table reference: Table1[Column1]
+                    let Token::BracketExpr(content) = self.consume() else {
+                        unreachable!()
+                    };
+                    self.parse_structured_ref_content(Some(name), &content)
                 } else {
                     // Named range
                     Ok(FormulaExpr::NameRef(name))
                 }
+            }
+
+            Token::BracketExpr(content) => {
+                self.consume();
+                // Could be:
+                // 1. External workbook ref: [Book.xlsx]Sheet1!A1
+                // 2. Unqualified structured ref: [Column1] or [#Headers]
+                self.parse_bracket_expression(content)
             }
 
             Token::Unknown(c) => Err(FormulaError::Parse(format!(
@@ -857,6 +915,165 @@ impl<'a> FormulaParser<'a> {
         })?;
 
         Ok(FormulaExpr::CellRef(CellReference { sheet, address }))
+    }
+
+    /// Parse a bracket expression at expression start (no preceding table name).
+    /// Could be an external workbook ref or an unqualified structured ref.
+    /// `content` is the text that was between [ and ].
+    fn parse_bracket_expression(&mut self, content: String) -> FormulaResult<FormulaExpr> {
+        // Check if what follows is a sheet reference or cell reference
+        // → external workbook reference: [Book.xlsx]Sheet1!A1
+        match self.current_token().clone() {
+            Token::SheetRef(sheet) => {
+                self.consume();
+                match self.current_token().clone() {
+                    Token::CellRef(ref_str) => {
+                        self.consume();
+                        let clean_ref = ref_str.replace('$', "");
+                        let address = CellAddress::parse(&clean_ref).map_err(|e| {
+                            FormulaError::Parse(format!(
+                                "Invalid cell reference '{}': {}",
+                                ref_str, e
+                            ))
+                        })?;
+                        Ok(FormulaExpr::ExternalRef(ExternalReference {
+                            book: content,
+                            sheet: Some(sheet),
+                            address,
+                        }))
+                    }
+                    _ => Err(FormulaError::Parse(
+                        "Expected cell reference after external sheet name".into(),
+                    )),
+                }
+            }
+            Token::CellRef(ref_str) => {
+                self.consume();
+                let clean_ref = ref_str.replace('$', "");
+                let address = CellAddress::parse(&clean_ref).map_err(|e| {
+                    FormulaError::Parse(format!("Invalid cell reference '{}': {}", ref_str, e))
+                })?;
+                Ok(FormulaExpr::ExternalRef(ExternalReference {
+                    book: content,
+                    sheet: None,
+                    address,
+                }))
+            }
+            Token::Identifier(name) => {
+                self.consume();
+                // Named range in external workbook
+                Ok(FormulaExpr::NameRef(format!("[{}]{}", content, name)))
+            }
+            _ => {
+                // Not followed by a reference — unqualified structured ref
+                self.parse_structured_ref_content(None, &content)
+            }
+        }
+    }
+
+    /// Parse the content of a structured reference bracket.
+    /// `table` is the optional table name. `content` is the text between [ and ].
+    fn parse_structured_ref_content(
+        &self,
+        table: Option<String>,
+        content: &str,
+    ) -> FormulaResult<FormulaExpr> {
+        let content = content.trim();
+
+        // Check for nested brackets: [[#Headers],[Column1]]
+        if content.starts_with('[') && content.ends_with(']') {
+            // Complex structured ref with multiple bracket groups
+            let inner = &content[1..content.len() - 1];
+            let mut specifiers = Vec::new();
+            let mut column = None;
+
+            // Split on "],[" to separate bracket groups
+            for part in Self::split_bracket_groups(inner) {
+                let part = part.trim();
+                if part.starts_with('#') {
+                    specifiers.push(Self::parse_specifier_keyword(part)?);
+                } else if part.starts_with('@') {
+                    specifiers.push(StructuredRefSpecifier::ThisRow);
+                    let col_name = part[1..].trim();
+                    if !col_name.is_empty() {
+                        column = Some(col_name.to_string());
+                    }
+                } else {
+                    column = Some(part.to_string());
+                }
+            }
+
+            Ok(FormulaExpr::StructuredRef(StructuredReference {
+                table,
+                column,
+                specifiers,
+            }))
+        } else if content.starts_with('#') {
+            // Simple specifier: [#All], [#Headers], etc.
+            let spec = Self::parse_specifier_keyword(content)?;
+            Ok(FormulaExpr::StructuredRef(StructuredReference {
+                table,
+                column: None,
+                specifiers: vec![spec],
+            }))
+        } else if content.starts_with('@') {
+            // This-row shorthand: [@Column1]
+            let col_name = content[1..].trim();
+            Ok(FormulaExpr::StructuredRef(StructuredReference {
+                table,
+                column: if col_name.is_empty() {
+                    None
+                } else {
+                    Some(col_name.to_string())
+                },
+                specifiers: vec![StructuredRefSpecifier::ThisRow],
+            }))
+        } else {
+            // Plain column name: [Column1]
+            Ok(FormulaExpr::StructuredRef(StructuredReference {
+                table,
+                column: Some(content.to_string()),
+                specifiers: vec![],
+            }))
+        }
+    }
+
+    /// Split bracket group content on "],["  boundaries.
+    /// E.g., "#Headers],[Column1" → ["#Headers", "Column1"]
+    fn split_bracket_groups(inner: &str) -> Vec<&str> {
+        let mut parts = Vec::new();
+        let mut start = 0;
+        let bytes = inner.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b']'
+                && i + 2 < bytes.len()
+                && bytes[i + 1] == b','
+                && bytes[i + 2] == b'['
+            {
+                parts.push(&inner[start..i]);
+                i += 3; // skip ],[
+                start = i;
+            } else {
+                i += 1;
+            }
+        }
+        parts.push(&inner[start..]);
+        parts
+    }
+
+    fn parse_specifier_keyword(s: &str) -> FormulaResult<StructuredRefSpecifier> {
+        match s.to_lowercase().as_str() {
+            "#all" => Ok(StructuredRefSpecifier::All),
+            "#data" => Ok(StructuredRefSpecifier::Data),
+            "#headers" => Ok(StructuredRefSpecifier::Headers),
+            "#totals" => Ok(StructuredRefSpecifier::Totals),
+            "#this row" => Ok(StructuredRefSpecifier::ThisRow),
+            _ => Err(FormulaError::Parse(format!(
+                "Unknown structured reference specifier: '{}'",
+                s
+            ))),
+        }
     }
 }
 
@@ -1293,5 +1510,111 @@ mod tests {
 
         let ast = parse_formula("=#REF!").unwrap();
         assert_eq!(ast, FormulaExpr::Error(CellError::Ref));
+    }
+
+    #[test]
+    fn test_parse_structured_ref_simple() {
+        // Table1[Column1]
+        let ast = parse_formula("=Table1[Column1]").unwrap();
+        if let FormulaExpr::StructuredRef(sr) = ast {
+            assert_eq!(sr.table, Some("Table1".to_string()));
+            assert_eq!(sr.column, Some("Column1".to_string()));
+            assert!(sr.specifiers.is_empty());
+        } else {
+            panic!("Expected StructuredRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_structured_ref_this_row() {
+        // Table1[@Column1] — shorthand for this-row
+        let ast = parse_formula("=Table1[@Column1]").unwrap();
+        if let FormulaExpr::StructuredRef(sr) = ast {
+            assert_eq!(sr.table, Some("Table1".to_string()));
+            assert_eq!(sr.column, Some("Column1".to_string()));
+            assert_eq!(sr.specifiers, vec![StructuredRefSpecifier::ThisRow]);
+        } else {
+            panic!("Expected StructuredRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_structured_ref_specifier() {
+        // Table1[#All]
+        let ast = parse_formula("=Table1[#All]").unwrap();
+        if let FormulaExpr::StructuredRef(sr) = ast {
+            assert_eq!(sr.table, Some("Table1".to_string()));
+            assert!(sr.column.is_none());
+            assert_eq!(sr.specifiers, vec![StructuredRefSpecifier::All]);
+        } else {
+            panic!("Expected StructuredRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_structured_ref_complex() {
+        // Table1[[#Headers],[Column1]]
+        let ast = parse_formula("=Table1[[#Headers],[Column1]]").unwrap();
+        if let FormulaExpr::StructuredRef(sr) = ast {
+            assert_eq!(sr.table, Some("Table1".to_string()));
+            assert_eq!(sr.column, Some("Column1".to_string()));
+            assert_eq!(sr.specifiers, vec![StructuredRefSpecifier::Headers]);
+        } else {
+            panic!("Expected StructuredRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_structured_ref_in_function() {
+        // SUM(Table1[Sales])
+        let ast = parse_formula("=SUM(Table1[Sales])").unwrap();
+        if let FormulaExpr::Function { name, args } = ast {
+            assert_eq!(name, "SUM");
+            assert_eq!(args.len(), 1);
+            assert!(matches!(&args[0], FormulaExpr::StructuredRef(_)));
+        } else {
+            panic!("Expected Function, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_unqualified_structured_ref() {
+        // [Column1] — no table name
+        let ast = parse_formula("=[Column1]").unwrap();
+        if let FormulaExpr::StructuredRef(sr) = ast {
+            assert!(sr.table.is_none());
+            assert_eq!(sr.column, Some("Column1".to_string()));
+            assert!(sr.specifiers.is_empty());
+        } else {
+            panic!("Expected StructuredRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_external_ref() {
+        // [Book.xlsx]Sheet1!A1
+        let ast = parse_formula("=[Book.xlsx]Sheet1!A1").unwrap();
+        if let FormulaExpr::ExternalRef(ext) = ast {
+            assert_eq!(ext.book, "Book.xlsx");
+            assert_eq!(ext.sheet, Some("Sheet1".to_string()));
+            assert_eq!(ext.address.row, 0);
+            assert_eq!(ext.address.col, 0);
+        } else {
+            panic!("Expected ExternalRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_external_ref_quoted_sheet() {
+        // [Data.xlsx]'Sheet 1'!B5
+        let ast = parse_formula("=[Data.xlsx]'Sheet 1'!B5").unwrap();
+        if let FormulaExpr::ExternalRef(ext) = ast {
+            assert_eq!(ext.book, "Data.xlsx");
+            assert_eq!(ext.sheet, Some("Sheet 1".to_string()));
+            assert_eq!(ext.address.row, 4);
+            assert_eq!(ext.address.col, 1);
+        } else {
+            panic!("Expected ExternalRef, got {:?}", ast);
+        }
     }
 }

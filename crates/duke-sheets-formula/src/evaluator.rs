@@ -386,6 +386,12 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
             ctx.resolve_named_range(name)
         }
 
+        // Structured table references — not yet evaluated (tables not implemented)
+        FormulaExpr::StructuredRef(_) => Ok(FormulaValue::Error(CellError::Name)),
+
+        // External workbook references — external books are not loaded
+        FormulaExpr::ExternalRef(_) => Ok(FormulaValue::Error(CellError::Ref)),
+
         // === Operators ===
         FormulaExpr::BinaryOp { op, left, right } => evaluate_binary_op(*op, left, right, ctx),
 
