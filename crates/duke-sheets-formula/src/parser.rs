@@ -77,6 +77,9 @@ enum Token {
     LeftBrace,
     RightBrace,
 
+    // Unknown character (for better error reporting)
+    Unknown(char),
+
     // End of input
     Eof,
 }
@@ -215,14 +218,20 @@ impl<'a> FormulaParser<'a> {
             return self.scan_number();
         }
 
+        // Quoted sheet reference: 'Sheet Name'!
+        if c == '\'' {
+            return self.scan_quoted_sheet_ref();
+        }
+
         // Identifier, cell reference, or boolean/error
         if c.is_ascii_alphabetic() || c == '_' || c == '$' || c == '#' {
             return self.scan_identifier_or_ref();
         }
 
-        // Unknown character
+        // Unknown character — emit Token::Unknown for better error messages
+        let unknown = c;
         self.advance();
-        Token::Eof
+        Token::Unknown(unknown)
     }
 
     fn scan_string(&mut self) -> Token {
@@ -251,6 +260,45 @@ impl<'a> FormulaParser<'a> {
         }
 
         Token::String(s)
+    }
+
+    fn scan_quoted_sheet_ref(&mut self) -> Token {
+        self.advance(); // Skip opening apostrophe
+
+        let mut name = String::new();
+        loop {
+            match self.peek_char() {
+                Some('\'') => {
+                    self.advance();
+                    // Doubled apostrophe '' is an escaped literal apostrophe
+                    if self.peek_char() == Some('\'') {
+                        name.push('\'');
+                        self.advance();
+                    } else {
+                        // End of quoted name — expect '!' next
+                        break;
+                    }
+                }
+                Some(c) => {
+                    name.push(c);
+                    self.advance();
+                }
+                None => {
+                    // Unterminated quoted sheet name — return as unknown
+                    return Token::Unknown('\'');
+                }
+            }
+        }
+
+        // After closing apostrophe, expect '!'
+        if self.peek_char() == Some('!') {
+            self.advance();
+            Token::SheetRef(name)
+        } else {
+            // Quoted string without '!' — not a sheet ref
+            // Return as unknown since we've consumed the content
+            Token::Unknown('\'')
+        }
     }
 
     fn scan_number(&mut self) -> Token {
@@ -587,18 +635,24 @@ impl<'a> FormulaParser<'a> {
             if let (FormulaExpr::CellRef(start_ref), FormulaExpr::CellRef(end_ref)) =
                 (&left, &right)
             {
-                // Make sure sheets match
-                if start_ref.sheet != end_ref.sheet {
-                    return Err(FormulaError::Parse(
-                        "Range references must be on the same sheet".into(),
-                    ));
-                }
+                // Resolve sheet: if right has no sheet, inherit from left
+                // (e.g., Sheet1!A1:B10 means both A1 and B10 are on Sheet1)
+                let left_sheet = &start_ref.sheet;
+                let right_sheet = &end_ref.sheet;
+                let sheet = match (left_sheet, right_sheet) {
+                    (s, None) => s.clone(),
+                    (None, s) => s.clone(),
+                    (Some(a), Some(b)) if a == b => Some(a.clone()),
+                    (Some(a), Some(b)) => {
+                        return Err(FormulaError::Parse(format!(
+                            "Range references must be on the same sheet: '{}' vs '{}'",
+                            a, b
+                        )));
+                    }
+                };
 
                 let range = CellRange::new(start_ref.address, end_ref.address);
-                return Ok(FormulaExpr::RangeRef(RangeReference {
-                    sheet: start_ref.sheet.clone(),
-                    range,
-                }));
+                return Ok(FormulaExpr::RangeRef(RangeReference { sheet, range }));
             }
 
             return Ok(FormulaExpr::BinaryOp {
@@ -662,6 +716,11 @@ impl<'a> FormulaParser<'a> {
                     Ok(FormulaExpr::NameRef(name))
                 }
             }
+
+            Token::Unknown(c) => Err(FormulaError::Parse(format!(
+                "Unexpected character: '{}'",
+                c
+            ))),
 
             _ => Err(FormulaError::Parse(format!(
                 "Unexpected token: {:?}",
@@ -991,5 +1050,120 @@ mod tests {
         // A complex real-world formula
         let ast = parse_formula("=IF(AND(A1>0,B1<100),A1*B1/100,0)").unwrap();
         assert!(matches!(ast, FormulaExpr::Function { .. }));
+    }
+
+    #[test]
+    fn test_parse_quoted_sheet_ref() {
+        // Basic quoted sheet name with space
+        let ast = parse_formula("='Sheet 1'!A1").unwrap();
+        if let FormulaExpr::CellRef(cell_ref) = ast {
+            assert_eq!(cell_ref.sheet, Some("Sheet 1".to_string()));
+            assert_eq!(cell_ref.address.row, 0);
+            assert_eq!(cell_ref.address.col, 0);
+        } else {
+            panic!("Expected CellRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_quoted_sheet_ref_hyphen() {
+        // Sheet name with hyphen
+        let ast = parse_formula("='Data-2025'!B2").unwrap();
+        if let FormulaExpr::CellRef(cell_ref) = ast {
+            assert_eq!(cell_ref.sheet, Some("Data-2025".to_string()));
+            assert_eq!(cell_ref.address.row, 1);
+            assert_eq!(cell_ref.address.col, 1);
+        } else {
+            panic!("Expected CellRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_quoted_sheet_ref_escaped_apostrophe() {
+        // Doubled apostrophe escape: 'It''s A Sheet'!A1
+        let ast = parse_formula("='It''s A Sheet'!A1").unwrap();
+        if let FormulaExpr::CellRef(cell_ref) = ast {
+            assert_eq!(cell_ref.sheet, Some("It's A Sheet".to_string()));
+        } else {
+            panic!("Expected CellRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_quoted_sheet_ref_range() {
+        // Quoted sheet ref with range
+        let ast = parse_formula("='Sheet 1'!B2:C10").unwrap();
+        if let FormulaExpr::RangeRef(range_ref) = ast {
+            assert_eq!(range_ref.sheet, Some("Sheet 1".to_string()));
+            assert_eq!(range_ref.range.start.row, 1);
+            assert_eq!(range_ref.range.start.col, 1);
+            assert_eq!(range_ref.range.end.row, 9);
+            assert_eq!(range_ref.range.end.col, 2);
+        } else {
+            panic!("Expected RangeRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_quoted_sheet_ref_in_function() {
+        // Quoted sheet ref inside a function call
+        let ast = parse_formula("=SUM('Sheet 1'!A1:A10)").unwrap();
+        if let FormulaExpr::Function { name, args } = ast {
+            assert_eq!(name, "SUM");
+            assert_eq!(args.len(), 1);
+            if let FormulaExpr::RangeRef(range_ref) = &args[0] {
+                assert_eq!(range_ref.sheet, Some("Sheet 1".to_string()));
+            } else {
+                panic!("Expected RangeRef arg, got {:?}", args[0]);
+            }
+        } else {
+            panic!("Expected Function, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_multiple_quoted_sheet_refs() {
+        // Two quoted sheet refs combined with operator
+        let ast = parse_formula("='Sheet1'!A1+'Sheet2'!B1").unwrap();
+        if let FormulaExpr::BinaryOp {
+            op: BinaryOperator::Add,
+            left,
+            right,
+        } = ast
+        {
+            if let FormulaExpr::CellRef(r) = left.as_ref() {
+                assert_eq!(r.sheet, Some("Sheet1".to_string()));
+            } else {
+                panic!("Expected CellRef left");
+            }
+            if let FormulaExpr::CellRef(r) = right.as_ref() {
+                assert_eq!(r.sheet, Some("Sheet2".to_string()));
+            } else {
+                panic!("Expected CellRef right");
+            }
+        } else {
+            panic!("Expected BinaryOp Add");
+        }
+    }
+
+    #[test]
+    fn test_unknown_char_error_message() {
+        // Unknown character should produce a clear error, not "Unexpected token: Eof"
+        let err = parse_formula("=~A1").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unexpected character: '~'"),
+            "Expected descriptive error, got: {}",
+            msg
+        );
+        // Verify it does NOT say "Eof"
+        assert!(!msg.contains("Eof"), "Should not mention Eof: {}", msg);
+    }
+
+    #[test]
+    fn test_unterminated_quoted_sheet_ref() {
+        // Unterminated quoted sheet name should produce error
+        let err = parse_formula("='Sheet 1!A1").unwrap_err();
+        assert!(err.to_string().contains("Unexpected character"));
     }
 }
