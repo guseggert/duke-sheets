@@ -62,7 +62,11 @@ pub fn read_unicode_string(data: &[u8], offset: &mut usize) -> XlsResult<String>
 }
 
 /// Read character data (no header) given char_count and flags byte.
-fn read_character_data(
+///
+/// This is the low-level decoder: given a character count and a flags byte
+/// (bit 0 = wide/compressed), reads the appropriate number of bytes and
+/// returns the decoded string.
+pub(crate) fn read_character_data(
     data: &[u8],
     offset: &mut usize,
     char_count: u16,

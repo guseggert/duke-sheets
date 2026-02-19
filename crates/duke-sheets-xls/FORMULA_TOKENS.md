@@ -104,7 +104,7 @@ These tokens have three class variants, determined by adding 0x00 (R),
 | 0x20 | tArray     | Array constant               | 7                  | [ ] P3 |
 | 0x21 | tFunc      | Fixed-arg function call      | 2                  | [x]    |
 | 0x22 | tFuncVar   | Variable-arg function call   | 3                  | [x]    |
-| 0x23 | tName      | Defined name reference       | 4                  | [ ] P2 |
+| 0x23 | tName      | Defined name reference       | 4                  | [x]    |
 | 0x24 | tRef       | Single cell reference        | 4                  | [x]    |
 | 0x25 | tArea      | Cell range reference         | 8                  | [x]    |
 | 0x26 | tMemArea   | Memory area (cached range)   | 6                  | [ ] P3 |
@@ -115,11 +115,11 @@ These tokens have three class variants, determined by adding 0x00 (R),
 | 0x2B | tAreaErr   | Deleted area reference       | 8                  | [x]    |
 | 0x2C | tRefN      | Relative ref (shared fmla)   | 4                  | [ ] P3 |
 | 0x2D | tAreaN     | Relative area (shared fmla)  | 8                  | [ ] P3 |
-| 0x39 | tNameX     | External name reference      | 6                  | [ ] P2 |
-| 0x3A | tRef3d     | 3D single cell reference     | 6                  | [ ] P2 |
-| 0x3B | tArea3d    | 3D cell range reference      | 10                 | [ ] P2 |
-| 0x3C | tRefErr3d  | Deleted 3D cell reference    | 6                  | [ ] P2 |
-| 0x3D | tAreaErr3d | Deleted 3D area reference    | 10                 | [ ] P2 |
+| 0x39 | tNameX     | External name reference      | 6                  | [x]    |
+| 0x3A | tRef3d     | 3D single cell reference     | 6                  | [x]    |
+| 0x3B | tArea3d    | 3D cell range reference      | 10                 | [x]    |
+| 0x3C | tRefErr3d  | Deleted 3D cell reference    | 6                  | [x]    |
+| 0x3D | tAreaErr3d | Deleted 3D area reference    | 10                 | [x]    |
 
 > **Class variants**: R (reference) = base+0x00, V (value) = base+0x20,
 > A (array) = base+0x40. For decompilation purposes the class does not affect
@@ -192,10 +192,11 @@ additional global records (EXTERNSHEET, NAME).
 
 ### New Global Records to Parse
 
-- [ ] **EXTERNSHEET** (0x0017) — Maps sheet reference indices to actual sheets.
+- [x] **EXTERNSHEET** (0x0017) — Maps sheet reference indices to actual sheets.
   Format: `num_entries: u16`, then for each: `sup_book_idx: u16`,
   `first_sheet: u16`, `last_sheet: u16`.
-- [ ] **NAME** (0x0018/0x0218) — Defined name records.
+- [x] **SUPBOOK** (0x01AE) — Supporting workbook record (self-ref, add-in, external).
+- [x] **NAME** (0x0018/0x0218) — Defined name records.
   Format: flags, keyboard_shortcut, name_length, formula_length,
   sheet_index, name_string, formula_tokens.
 
@@ -203,12 +204,12 @@ additional global records (EXTERNSHEET, NAME).
 
 | Base | Name       | Parsing notes                                     | Status |
 |------|------------|----------------------------------------------------|--------|
-| 0x23 | tName      | 4 bytes: name_idx (u16, 1-based) + 2 reserved      | [ ]    |
-| 0x39 | tNameX     | 6 bytes: extern_sheet_idx (u16), name_idx (u16), 2 reserved | [ ] |
-| 0x3A | tRef3d     | 6 bytes: extern_sheet_idx (u16) + tRef data (4)     | [ ]    |
-| 0x3B | tArea3d    | 10 bytes: extern_sheet_idx (u16) + tArea data (8)   | [ ]    |
-| 0x3C | tRefErr3d  | 6 bytes: extern_sheet_idx (u16) + 4 ignored         | [ ]    |
-| 0x3D | tAreaErr3d | 10 bytes: extern_sheet_idx (u16) + 8 ignored        | [ ]    |
+| 0x23 | tName      | 4 bytes: name_idx (u16, 1-based) + 2 reserved      | [x]    |
+| 0x39 | tNameX     | 6 bytes: extern_sheet_idx (u16), name_idx (u16), 2 reserved | [x] |
+| 0x3A | tRef3d     | 6 bytes: extern_sheet_idx (u16) + tRef data (4)     | [x]    |
+| 0x3B | tArea3d    | 10 bytes: extern_sheet_idx (u16) + tArea data (8)   | [x]    |
+| 0x3C | tRefErr3d  | 6 bytes: extern_sheet_idx (u16) + 4 ignored         | [x]    |
+| 0x3D | tAreaErr3d | 10 bytes: extern_sheet_idx (u16) + 8 ignored        | [x]    |
 
 ### 3D Reference Formatting
 
@@ -222,17 +223,17 @@ extern_sheet_idx → (sup_book, first_sheet, last_sheet)
 
 ### Populate Full Function Table (485 entries)
 
-- [ ] Copy full FTAB from calamine reference (MIT-licensed)
-- [ ] Include argc for variable-arg validation
+- [x] Copy full FTAB from calamine reference (MIT-licensed)
+- [x] Include argc for variable-arg validation
 - [ ] Map future functions (index >= 0x8000) → `_xlfn.NAME`
 
 ### Phase 2 Test Cases
 
-- [ ] Cross-sheet ref: `=Sheet2!A1`
-- [ ] Multi-sheet range: `=SUM(Sheet1:Sheet3!A1)`
-- [ ] Sheet name with spaces: `='My Sheet'!A1`
-- [ ] Defined name: `=MyRange*2`
-- [ ] External name: `=[Book1.xlsx]Sheet1!A1`
+- [x] Cross-sheet ref: `=Sheet2!A1` (E2E: `test_xls_formula_cross_sheet_ref`)
+- [ ] Multi-sheet range: `=SUM(Sheet1:Sheet3!A1)` (unit test only — LO bridge can't create multi-sheet formulas)
+- [x] Sheet name with spaces: `='My Sheet'!A1` (E2E: `test_xls_formula_cross_sheet_quoted_name`)
+- [x] Defined name: `=MyRange*2` (E2E: `test_xls_formula_named_range`, `test_xls_formula_named_range_in_expression`)
+- [ ] External name: `=[Book1.xlsx]Sheet1!A1` (unit test only — requires external workbook)
 
 ---
 
@@ -501,13 +502,14 @@ Values: 0-253 = fixed; 254 = variable (min from table); 255 = variable (0+);
 
 ## Integration Checklist
 
-- [ ] Parse EXTERNSHEET record in globals section of reader.rs
-- [ ] Parse NAME records in globals section of reader.rs
-- [ ] Build `FormulaContext` from parsed globals
-- [ ] In FORMULA record handler: call `decompile()` instead of setting empty text
-- [ ] Handle decompile failures gracefully — fall back to empty string, log warning
-- [ ] Remove "formula text unavailable" known issue from TODO.md when complete
-- [ ] Add `formula` module to `biff/mod.rs` exports
+- [x] Parse EXTERNSHEET record in globals section of reader.rs
+- [x] Parse SUPBOOK records in globals section of reader.rs
+- [x] Parse NAME records in globals section of reader.rs
+- [x] Build `FormulaContext` from parsed globals
+- [x] In FORMULA record handler: call `decompile()` with `FormulaContext`
+- [x] Handle decompile failures gracefully — fall back to empty string, log warning
+- [ ] Remove "formula text partial" known issue from TODO.md when Phase 3 complete
+- [x] Add `formula` module to `biff/mod.rs` exports
 
 ---
 

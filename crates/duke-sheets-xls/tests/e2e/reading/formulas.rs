@@ -301,3 +301,189 @@ fn test_xls_formula_cached_values() {
 
     cleanup_fixture(&path);
 }
+
+// ── Phase 2: Cross-sheet references and defined names ───────────────
+
+#[test]
+fn test_xls_formula_cross_sheet_ref() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        // Add a second sheet
+        wb.add_sheet("Data").await.unwrap();
+        // Put a value on Sheet2 (index 1), cell A1
+        let cell = wb.get_cell_on_sheet(1, 0, 0).await.unwrap();
+        wb.set_cell_value_on_proxy(&cell, duke_sheets_libreoffice::CellValue::Number(42.0))
+            .await
+            .unwrap();
+        // On Sheet1, B1 = Data.A1 (cross-sheet reference)
+        // LO uses dot notation for sheet refs: Data.A1
+        wb.set_cell_formula("B1", "=Data.A1").await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+
+    let b1 = sheet.get_value_at(0, 1);
+    let text = formula_text(&b1);
+    // The decompiler should produce "=Data!A1" (Excel-style ! separator)
+    assert_eq!(text, "=Data!A1", "cross-sheet ref formula");
+
+    // Verify cached value is 42
+    match &b1 {
+        CellValue::Formula { cached_value, .. } => {
+            match cached_value.as_deref() {
+                Some(CellValue::Number(n)) => {
+                    assert!(
+                        (*n - 42.0).abs() < f64::EPSILON,
+                        "cached value should be 42.0, got {n}"
+                    );
+                }
+                other => panic!("Expected cached Number(42.0), got {:?}", other),
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_formula_cross_sheet_quoted_name() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        // Rename Sheet1 to "My Sheet" (contains a space → needs quoting)
+        wb.set_sheet_name(0, "My Sheet").await.unwrap();
+        wb.add_sheet("Other").await.unwrap();
+        // Put 99 on Other.A1
+        let cell = wb.get_cell_on_sheet(1, 0, 0).await.unwrap();
+        wb.set_cell_value_on_proxy(&cell, duke_sheets_libreoffice::CellValue::Number(99.0))
+            .await
+            .unwrap();
+        // On "My Sheet", B1 = Other.A1
+        wb.set_cell_formula("B1", "=Other.A1").await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    // First sheet is "My Sheet"
+    assert_eq!(workbook.worksheet(0).unwrap().name(), "My Sheet");
+    let sheet = workbook.worksheet(0).unwrap();
+
+    let b1 = sheet.get_value_at(0, 1);
+    let text = formula_text(&b1);
+    assert_eq!(text, "=Other!A1", "cross-sheet ref to plain-named sheet");
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_formula_named_range() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        // Put values in A1:A5
+        for i in 1..=5 {
+            wb.set_cell_value(&format!("A{i}"), i as f64)
+                .await
+                .unwrap();
+        }
+        // Define a named range "MyData" = $Sheet1.$A$1:$A$5
+        // LO named range content uses absolute $-notation with dot separator
+        wb.add_named_range("MyData", "$Sheet1.$A$1:$A$5", 0, 0, 0)
+            .await
+            .unwrap();
+        // B1 = SUM(MyData)
+        wb.set_cell_formula("B1", "=SUM(MyData)").await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+
+    let b1 = sheet.get_value_at(0, 1);
+    let text = formula_text(&b1);
+    assert_eq!(text, "=SUM(MyData)", "named range in formula");
+
+    // Cached value should be 15 (1+2+3+4+5)
+    match &b1 {
+        CellValue::Formula { cached_value, .. } => {
+            match cached_value.as_deref() {
+                Some(CellValue::Number(n)) => {
+                    assert!(
+                        (*n - 15.0).abs() < f64::EPSILON,
+                        "cached value should be 15.0, got {n}"
+                    );
+                }
+                other => panic!("Expected cached Number(15.0), got {:?}", other),
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_formula_named_range_in_expression() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        wb.set_cell_value("A1", 10.0).await.unwrap();
+        // Define "TaxRate" = 0.15 (a named constant)
+        // LO syntax: named range content is a formula string
+        wb.add_named_range("TaxRate", "0.15", 0, 0, 0)
+            .await
+            .unwrap();
+        // B1 = A1*TaxRate
+        wb.set_cell_formula("B1", "=A1*TaxRate").await.unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+
+    let b1 = sheet.get_value_at(0, 1);
+    let text = formula_text(&b1);
+    assert_eq!(text, "=A1*TaxRate", "named range in expression");
+
+    // Cached value should be 1.5 (10 * 0.15)
+    match &b1 {
+        CellValue::Formula { cached_value, .. } => {
+            match cached_value.as_deref() {
+                Some(CellValue::Number(n)) => {
+                    assert!(
+                        (*n - 1.5).abs() < f64::EPSILON,
+                        "cached value should be 1.5, got {n}"
+                    );
+                }
+                other => panic!("Expected cached Number(1.5), got {:?}", other),
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    cleanup_fixture(&path);
+}

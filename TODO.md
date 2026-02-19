@@ -121,7 +121,7 @@ Common functions needed:
 - [x] Structure: MERGECELLS, ROW, COLINFO, BOUNDSHEET, DATEMODE
 - [x] Integrated into `WorkbookExt::open()` via `xls` feature gate
 - [x] Formula token parsing Phase 1 — decompiles RPN tokens to infix text (~90% coverage: operators, constants, refs, functions)
-- [ ] Formula token parsing Phase 2 — 3D references (tRef3d/tArea3d), defined names (tName), requires EXTERNSHEET/NAME record parsing
+- [x] Formula token parsing Phase 2 — 3D references (tRef3d/tArea3d), defined names (tName/tNameX), EXTERNSHEET/SUPBOOK/NAME record parsing (~98% coverage)
 - [ ] Formula token parsing Phase 3 — shared formulas (tRefN/tAreaN), array constants (tArray), memory tokens
 - [x] Style E2E tests: strikethrough, underline (single + double), text rotation, shrink-to-fit
 - [x] Style E2E test: indent level
@@ -176,19 +176,19 @@ Common functions needed:
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
-| XLS unit (BIFF parser, strings, styles, formula decompiler) | 82 | ✅ |
-| XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 52 | ✅ |
+| XLS unit (BIFF parser, strings, styles, formula decompiler) | 87 | ✅ |
+| XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E via LibreOffice URP (XLSX) | 56 | ✅ |
 | Other (unit, doc, integration) | 279 | ✅ |
-| **Total** | **471** | ✅ |
+| **Total** | **479** | ✅ |
 
 ---
 
 ## Known Issues
 
 1. ~~**Formula parsing failures**~~ — Fixed. Quoted sheet refs, structured refs, external refs, @/# operators now parsed. Unknown chars give clear error messages.
-2. **XLS formula text partial** - Phase 1 decompiles ~90% of formulas (operators, constants, refs, functions); Phase 2 (3D refs, names) and Phase 3 (shared formulas, arrays) pending
+2. **XLS formula text partial** - Phases 1+2 decompile ~98% of formulas (operators, constants, refs, functions, 3D refs, defined names); Phase 3 (shared formulas, arrays) pending
 3. **Limited function coverage** - Only 35 of ~450 Excel functions implemented
 4. **Structured refs / external refs not evaluated** — Parser handles them, but evaluator returns #NAME? / #REF! (tables and external workbooks not implemented)
 

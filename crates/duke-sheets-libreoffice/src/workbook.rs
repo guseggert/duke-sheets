@@ -377,6 +377,58 @@ impl<'a> Workbook<'a> {
     }
 
     // ========================================================================
+    // Named ranges
+    // ========================================================================
+
+    /// Add a named range to the document.
+    ///
+    /// - `name`: The defined name (e.g., "MyRange")
+    /// - `content`: The range formula (e.g., "$Sheet1.$A$1:$B$10")
+    /// - `sheet_index`: Sheet for the base cell address (0-based)
+    /// - `col`, `row`: Base cell position (0-based)
+    /// - `range_type`: 0 = normal named range
+    pub async fn add_named_range(
+        &mut self,
+        name: &str,
+        content: &str,
+        sheet_index: i32,
+        col: i32,
+        row: i32,
+    ) -> Result<()> {
+        // Get NamedRanges via getPropertyValue("NamedRanges") on the document
+        let nr_value = self.get_property(&self.doc.clone(), "NamedRanges").await?;
+        let nr_oid = proxy::extract_oid_from_return(&nr_value).ok_or_else(|| {
+            BridgeError::OperationFailed(
+                "getPropertyValue(NamedRanges) returned null".into(),
+            )
+        })?;
+        let nr_proxy = UnoProxy::new(
+            nr_oid,
+            Type::interface(type_names::X_NAMED_RANGES),
+        );
+
+        // Build CellAddress struct for the base position
+        let cell_addr = CellAddress::new(sheet_index as i16, col, row);
+
+        // Call addNewByName(name, content, cellAddress, type=0)
+        let method = interface::named_ranges_add_new_by_name();
+        self.conn
+            .call(
+                &nr_proxy,
+                &method,
+                &[
+                    UnoValue::String(name.to_string()),
+                    UnoValue::String(content.to_string()),
+                    cell_addr.to_uno(),
+                    UnoValue::Long(0), // normal named range
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    // ========================================================================
     // Property access (XPropertySet)
     // ========================================================================
 
