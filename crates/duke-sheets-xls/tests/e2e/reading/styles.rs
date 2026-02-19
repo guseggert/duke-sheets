@@ -2,8 +2,8 @@
 
 use crate::{cleanup_fixture, lo_bridge, runtime, skip_if_no_lo, temp_fixture_path};
 use duke_sheets_core::{
-    style::Underline, BorderLineStyle, CellValue, FillStyle, HorizontalAlignment, NumberFormat,
-    VerticalAlignment,
+    style::{DiagonalDirection, ReadingOrder, Underline},
+    BorderLineStyle, CellValue, FillStyle, HorizontalAlignment, NumberFormat, VerticalAlignment,
 };
 use duke_sheets_xls::XlsReader;
 
@@ -787,6 +787,223 @@ fn test_xls_combined_styles() {
         // If it has a style, it should be default-ish (not bold, etc.)
         assert!(!ps.font.bold, "B1 should not be bold");
     }
+
+    cleanup_fixture(&path);
+}
+
+// ── Cell protection ─────────────────────────────────────────────────────
+
+#[test]
+fn test_xls_cell_protection_locked() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+
+        // A1: locked (default is locked=true in Excel, but LO defaults may differ)
+        wb.set_cell_value("A1", "Locked cell").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            locked: Some(true),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+
+        // B1: unlocked
+        wb.set_cell_value("B1", "Unlocked cell").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            locked: Some(false),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "B1", &spec).await.unwrap();
+
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+
+    let style_a = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert!(
+        style_a.protection.locked,
+        "A1 should be locked"
+    );
+
+    let style_b = sheet.cell_style_at(0, 1).expect("B1 should have style");
+    assert!(
+        !style_b.protection.locked,
+        "B1 should be unlocked"
+    );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_cell_protection_formula_hidden() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+
+        wb.set_cell_value("A1", "Hidden formula").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            locked: Some(true),
+            formula_hidden: Some(true),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert!(style.protection.locked, "A1 should be locked");
+    assert!(style.protection.hidden, "A1 should have hidden flag");
+
+    cleanup_fixture(&path);
+}
+
+// ── Reading order ───────────────────────────────────────────────────────
+
+#[test]
+fn test_xls_reading_order_rtl() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+
+        wb.set_cell_value("A1", "RTL text").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            reading_order: Some("rtl".into()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+
+        wb.set_cell_value("B1", "LTR text").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            reading_order: Some("ltr".into()),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "B1", &spec).await.unwrap();
+
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+
+    let style_a = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    assert_eq!(
+        style_a.alignment.reading_order,
+        ReadingOrder::RightToLeft,
+        "A1 should be RTL"
+    );
+
+    let style_b = sheet.cell_style_at(0, 1).expect("B1 should have style");
+    assert_eq!(
+        style_b.alignment.reading_order,
+        ReadingOrder::LeftToRight,
+        "B1 should be LTR"
+    );
+
+    cleanup_fixture(&path);
+}
+
+// ── Diagonal borders ────────────────────────────────────────────────────
+
+#[test]
+fn test_xls_diagonal_border_down() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+
+        wb.set_cell_value("A1", "Diag down").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            diagonal_tl_br: Some(("thin".into(), 0xFF0000_u32 as i32)),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+
+    assert!(
+        style.border.diagonal.is_some(),
+        "A1 should have diagonal border"
+    );
+    let diag = style.border.diagonal.as_ref().unwrap();
+    assert_eq!(diag.style, BorderLineStyle::Thin);
+
+    // Direction should include Down
+    assert!(
+        matches!(
+            style.border.diagonal_direction,
+            DiagonalDirection::Down | DiagonalDirection::Both
+        ),
+        "A1 diagonal direction should include Down, got {:?}",
+        style.border.diagonal_direction
+    );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_xls_diagonal_border_both() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+
+        wb.set_cell_value("A1", "Diag both").await.unwrap();
+        let spec = duke_sheets_libreoffice::StyleSpec {
+            diagonal_tl_br: Some(("thin".into(), 0x000000_u32 as i32)),
+            diagonal_bl_tr: Some(("thin".into(), 0x000000_u32 as i32)),
+            ..Default::default()
+        };
+        wb.set_cell_style(0, "A1", &spec).await.unwrap();
+
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let workbook = XlsReader::read_file(&path).unwrap();
+    let sheet = workbook.worksheet(0).unwrap();
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+
+    assert!(
+        style.border.diagonal.is_some(),
+        "A1 should have diagonal border"
+    );
+    assert_eq!(
+        style.border.diagonal_direction,
+        DiagonalDirection::Both,
+        "A1 should have both diagonal directions"
+    );
 
     cleanup_fixture(&path);
 }

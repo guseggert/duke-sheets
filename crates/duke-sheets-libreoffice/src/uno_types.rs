@@ -448,8 +448,9 @@ pub mod gradient_type_names {
 
 /// Fully-qualified UNO type names for structs used in this crate.
 pub mod struct_type_names {
-    pub const CELL_ADDRESS: &str = "com.sun.star.table.CellAddress";
     pub const BORDER_LINE2: &str = "com.sun.star.table.BorderLine2";
+    pub const CELL_PROTECTION: &str = "com.sun.star.util.CellProtection";
+
     pub const LOCALE: &str = "com.sun.star.lang.Locale";
     pub const CELL_STYLE: &str = "com.sun.star.style.CellStyle";
 }
@@ -497,8 +498,22 @@ pub struct StyleSpec {
     pub top_border: Option<(String, i32)>,
     pub bottom_border: Option<(String, i32)>,
 
+    // Individual diagonal borders: (style, color)
+    pub diagonal_tl_br: Option<(String, i32)>,
+    pub diagonal_bl_tr: Option<(String, i32)>,
+
     // Number format
     pub number_format: Option<String>,
+
+    // Cell protection
+    /// Lock the cell (effective when sheet is protected)
+    pub locked: Option<bool>,
+    /// Hide the formula in the formula bar (effective when sheet is protected)
+    pub formula_hidden: Option<bool>,
+
+    // Reading order / writing mode
+    /// "ltr", "rtl", or "context"
+    pub reading_order: Option<String>,
 }
 
 // ============================================================================

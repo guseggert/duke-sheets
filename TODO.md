@@ -119,7 +119,8 @@ Common functions needed:
 - [x] Style E2E tests: strikethrough, underline (single + double), text rotation, shrink-to-fit
 - [x] Style E2E test: indent level
 - [x] Sheet-level properties: hidden sheets (BOUNDSHEET visibility), active sheet (WINDOW1), sheet protection (PROTECT/PASSWORD)
-- [ ] Style E2E tests + LO bridge extension: pattern fills (non-solid), diagonal borders, cell protection, reading order
+- [x] Style E2E tests + LO bridge extension: diagonal borders, cell protection, reading order
+- [ ] Pattern fills (non-solid) E2E — LO Calc cells don't support Excel-style pattern fills; reader + unit test coverage only
 
 #### Large File Support
 - [ ] Streaming XLSX reader (SAX-style, low memory)
@@ -169,11 +170,11 @@ Common functions needed:
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
 | XLS unit (BIFF parser, strings, styles) | 31 | ✅ |
-| XLS E2E (data types, styles, merged cells, dimensions, sheet properties) | 39 | ✅ |
+| XLS E2E (data types, styles, merged cells, dimensions, sheet properties) | 44 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E via LibreOffice URP (XLSX) | 56 | ✅ |
 | Other (unit, doc, integration) | 155 | ✅ |
-| **Total** | **410** | ✅ |
+| **Total** | **415** | ✅ |
 
 ---
 
