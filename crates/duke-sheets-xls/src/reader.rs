@@ -192,9 +192,12 @@ impl XlsReader {
                 ws.set_visible(false);
             }
 
+            // Collect sheet names for formula decompiler (3D refs)
+            let sheet_names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
+
             // Get this sheet's records (indexed by BIFF order, not wb order)
             if let Some(sheet_records) = sheet_record_groups.get(biff_idx) {
-                Self::parse_sheet_records(sheet_records, ws, &sst, &style_table)?;
+                Self::parse_sheet_records(sheet_records, ws, &sst, &style_table, &sheet_names)?;
             }
 
             wb_sheet_idx += 1;
@@ -270,6 +273,7 @@ impl XlsReader {
         ws: &mut duke_sheets_core::Worksheet,
         sst: &[String],
         styles: &[Style],
+        sheet_names: &[String],
     ) -> XlsResult<()> {
         // We need to track the last FORMULA record to associate a STRING record
         let mut pending_formula_cell: Option<(u32, u16)> = None;
@@ -311,7 +315,7 @@ impl XlsReader {
                     pending_formula_cell = None;
                 }
                 records::FORMULA => {
-                    pending_formula_cell = Self::parse_formula(&rec.data, ws, styles)?;
+                    pending_formula_cell = Self::parse_formula(&rec.data, ws, styles, sheet_names)?;
                 }
                 records::STRING => {
                     // Cached string value for the preceding FORMULA
@@ -562,7 +566,8 @@ impl XlsReader {
         Ok(())
     }
 
-    /// FORMULA: row(2) + col(2) + xf(2) + result(8) + options(2) + reserved(4) + formula_data(...)
+    /// FORMULA: row(2) + col(2) + xf(2) + result(8) + options(2) + reserved(4)
+    ///        + cce(2) + formula_tokens(cce bytes)
     ///
     /// Returns the (row, col) if the cached result is a string (meaning a
     /// STRING record should follow).
@@ -570,6 +575,7 @@ impl XlsReader {
         data: &[u8],
         ws: &mut duke_sheets_core::Worksheet,
         styles: &[Style],
+        sheet_names: &[String],
     ) -> XlsResult<Option<(u32, u16)>> {
         if data.len() < 20 {
             return Err(XlsError::Parse("FORMULA record too short".into()));
@@ -586,6 +592,25 @@ impl XlsReader {
 
         let _options = read_u16(data, &mut off)?;
         let _reserved = read_u32(data, &mut off)?;
+        // off is now 20
+
+        // Decompile formula token bytes into text
+        let formula_text = if off + 2 <= data.len() {
+            let cce = read_u16(data, &mut off)? as usize;
+            if cce > 0 && off + cce <= data.len() {
+                let token_bytes = &data[off..off + cce];
+                let text = crate::biff::formula::decompile(token_bytes, sheet_names);
+                if text.is_empty() {
+                    String::new()
+                } else {
+                    format!("={}", text)
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
 
         // Check if result is a special type (bytes 6-7 == 0xFFFF)
         let mut return_pending = false;
@@ -598,7 +623,7 @@ impl XlsReader {
                         row,
                         col,
                         CellValue::Formula {
-                            text: String::new(),
+                            text: formula_text,
                             cached_value: None,
                             array_result: None,
                         },
@@ -611,7 +636,7 @@ impl XlsReader {
                         row,
                         col,
                         CellValue::Formula {
-                            text: String::new(),
+                            text: formula_text,
                             cached_value: Some(Box::new(CellValue::Boolean(bool_val))),
                             array_result: None,
                         },
@@ -632,7 +657,7 @@ impl XlsReader {
                         row,
                         col,
                         CellValue::Formula {
-                            text: String::new(),
+                            text: formula_text,
                             cached_value: Some(Box::new(CellValue::Error(err))),
                             array_result: None,
                         },
@@ -644,7 +669,7 @@ impl XlsReader {
                         row,
                         col,
                         CellValue::Formula {
-                            text: String::new(),
+                            text: formula_text,
                             cached_value: None,
                             array_result: None,
                         },
@@ -658,7 +683,7 @@ impl XlsReader {
                 row,
                 col,
                 CellValue::Formula {
-                    text: String::new(),
+                    text: formula_text,
                     cached_value: Some(Box::new(CellValue::Number(value))),
                     array_result: None,
                 },
@@ -675,6 +700,9 @@ impl XlsReader {
     }
 
     /// STRING record: cached string value for a preceding FORMULA.
+    ///
+    /// Updates the cached_value of the preceding FORMULA cell while preserving
+    /// the decompiled formula text.
     fn parse_formula_string(
         data: &[u8],
         ws: &mut duke_sheets_core::Worksheet,
@@ -682,14 +710,21 @@ impl XlsReader {
         col: u16,
     ) -> XlsResult<()> {
         let mut off = 0;
-        let text = read_unicode_string(data, &mut off)?;
+        let string_val = read_unicode_string(data, &mut off)?;
+
+        // Preserve the formula text that was already decompiled from the
+        // FORMULA record's token bytes.
+        let existing_text = match ws.get_value_at(row, col) {
+            CellValue::Formula { text, .. } => text.to_string(),
+            _ => String::new(),
+        };
 
         ws.set_cell_value_at(
             row,
             col,
             CellValue::Formula {
-                text: String::new(),
-                cached_value: Some(Box::new(CellValue::String(SharedString::new(&text)))),
+                text: existing_text,
+                cached_value: Some(Box::new(CellValue::String(SharedString::new(&string_val)))),
                 array_result: None,
             },
         )?;

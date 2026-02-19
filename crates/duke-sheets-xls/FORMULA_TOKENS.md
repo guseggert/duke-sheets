@@ -48,37 +48,37 @@ This phase handles ~90% of real-world formulas.
 
 | Byte | Name        | Description               | Size | Status |
 |------|-------------|---------------------------|------|--------|
-| 0x03 | tAdd        | Addition (+)              | 1    | [ ]    |
-| 0x04 | tSub        | Subtraction (-)           | 1    | [ ]    |
-| 0x05 | tMul        | Multiplication (*)        | 1    | [ ]    |
-| 0x06 | tDiv        | Division (/)              | 1    | [ ]    |
-| 0x07 | tPower      | Exponentiation (^)        | 1    | [ ]    |
-| 0x08 | tConcat     | Concatenation (&)         | 1    | [ ]    |
-| 0x09 | tLT         | Less than (<)             | 1    | [ ]    |
-| 0x0A | tLE         | Less than or equal (<=)   | 1    | [ ]    |
-| 0x0B | tEQ         | Equal (=)                 | 1    | [ ]    |
-| 0x0C | tGE         | Greater or equal (>=)     | 1    | [ ]    |
-| 0x0D | tGT         | Greater than (>)          | 1    | [ ]    |
-| 0x0E | tNE         | Not equal (<>)            | 1    | [ ]    |
-| 0x0F | tIsect      | Intersection (space)      | 1    | [ ]    |
-| 0x10 | tList       | Union (comma in refs)     | 1    | [ ]    |
-| 0x11 | tRange      | Range operator (:)        | 1    | [ ]    |
-| 0x12 | tUplus      | Unary plus (+)            | 1    | [ ]    |
-| 0x13 | tUminus     | Unary minus (-)           | 1    | [ ]    |
-| 0x14 | tPercent    | Percent (%)               | 1    | [ ]    |
-| 0x15 | tParen      | Parentheses (display)     | 1    | [ ]    |
+| 0x03 | tAdd        | Addition (+)              | 1    | [x]    |
+| 0x04 | tSub        | Subtraction (-)           | 1    | [x]    |
+| 0x05 | tMul        | Multiplication (*)        | 1    | [x]    |
+| 0x06 | tDiv        | Division (/)              | 1    | [x]    |
+| 0x07 | tPower      | Exponentiation (^)        | 1    | [x]    |
+| 0x08 | tConcat     | Concatenation (&)         | 1    | [x]    |
+| 0x09 | tLT         | Less than (<)             | 1    | [x]    |
+| 0x0A | tLE         | Less than or equal (<=)   | 1    | [x]    |
+| 0x0B | tEQ         | Equal (=)                 | 1    | [x]    |
+| 0x0C | tGE         | Greater or equal (>=)     | 1    | [x]    |
+| 0x0D | tGT         | Greater than (>)          | 1    | [x]    |
+| 0x0E | tNE         | Not equal (<>)            | 1    | [x]    |
+| 0x0F | tIsect      | Intersection (space)      | 1    | [x]    |
+| 0x10 | tList       | Union (comma in refs)     | 1    | [x]    |
+| 0x11 | tRange      | Range operator (:)        | 1    | [x]    |
+| 0x12 | tUplus      | Unary plus (+)            | 1    | [x]    |
+| 0x13 | tUminus     | Unary minus (-)           | 1    | [x]    |
+| 0x14 | tPercent    | Percent (%)               | 1    | [x]    |
+| 0x15 | tParen      | Parentheses (display)     | 1    | [x]    |
 
 #### Constant Operands (unclassified, 0x16–0x1E)
 
 | Byte | Name        | Description               | Size | Status |
 |------|-------------|---------------------------|------|--------|
-| 0x16 | tMissArg    | Missing argument          | 1    | [ ]    |
-| 0x17 | tStr        | String literal            | var  | [ ]    |
-| 0x19 | tAttr       | Attribute (sub-types)     | var  | [ ]    |
-| 0x1C | tErr        | Error constant            | 2    | [ ]    |
-| 0x1D | tBool       | Boolean constant          | 2    | [ ]    |
-| 0x1E | tInt        | 16-bit integer constant   | 3    | [ ]    |
-| 0x1F | tNum        | 64-bit float constant     | 9    | [ ]    |
+| 0x16 | tMissArg    | Missing argument          | 1    | [x]    |
+| 0x17 | tStr        | String literal            | var  | [x]    |
+| 0x19 | tAttr       | Attribute (sub-types)     | var  | [x]    |
+| 0x1C | tErr        | Error constant            | 2    | [x]    |
+| 0x1D | tBool       | Boolean constant          | 2    | [x]    |
+| 0x1E | tInt        | 16-bit integer constant   | 3    | [x]    |
+| 0x1F | tNum        | 64-bit float constant     | 9    | [x]    |
 
 #### tAttr Sub-Types (byte 0x19)
 
@@ -86,13 +86,13 @@ The tAttr token has a flags byte at offset +1 that determines the sub-type:
 
 | Flags | Name           | Description                          | Extra bytes | Status |
 |-------|----------------|--------------------------------------|-------------|--------|
-| 0x01  | tAttrVolatile  | Mark formula as volatile             | 2           | [ ]    |
-| 0x02  | tAttrIf        | IF function optimization             | 2           | [ ]    |
-| 0x04  | tAttrChoose    | CHOOSE function optimization         | var         | [ ]    |
-| 0x08  | tAttrSkip      | Skip bytes (after IF/CHOOSE branch)  | 2           | [ ]    |
-| 0x10  | tAttrSum       | Optimized SUM (SUM of single arg)    | 2           | [ ]    |
-| 0x20  | tAttrAssign    | Assign to name (macro sheets)        | 2           | [ ]    |
-| 0x40  | tAttrSpace     | Whitespace/formatting preservation   | 2           | [ ]    |
+| 0x01  | tAttrVolatile  | Mark formula as volatile             | 2           | [x]    |
+| 0x02  | tAttrIf        | IF function optimization             | 2           | [x]    |
+| 0x04  | tAttrChoose    | CHOOSE function optimization         | var         | [x]    |
+| 0x08  | tAttrSkip      | Skip bytes (after IF/CHOOSE branch)  | 2           | [x]    |
+| 0x10  | tAttrSum       | Optimized SUM (SUM of single arg)    | 2           | [x]    |
+| 0x20  | tAttrAssign    | Assign to name (macro sheets)        | 2           | [x]    |
+| 0x40  | tAttrSpace     | Whitespace/formatting preservation   | 2           | [x]    |
 
 #### Classified Operand Tokens (base 0x20–0x3F, with R/V/A variants)
 
@@ -102,17 +102,17 @@ These tokens have three class variants, determined by adding 0x00 (R),
 | Base | Name       | Description                  | Size (excl. byte) | Status |
 |------|------------|------------------------------|--------------------|--------|
 | 0x20 | tArray     | Array constant               | 7                  | [ ] P3 |
-| 0x21 | tFunc      | Fixed-arg function call      | 2                  | [ ]    |
-| 0x22 | tFuncVar   | Variable-arg function call   | 3                  | [ ]    |
+| 0x21 | tFunc      | Fixed-arg function call      | 2                  | [x]    |
+| 0x22 | tFuncVar   | Variable-arg function call   | 3                  | [x]    |
 | 0x23 | tName      | Defined name reference       | 4                  | [ ] P2 |
-| 0x24 | tRef       | Single cell reference        | 4                  | [ ]    |
-| 0x25 | tArea      | Cell range reference         | 8                  | [ ]    |
+| 0x24 | tRef       | Single cell reference        | 4                  | [x]    |
+| 0x25 | tArea      | Cell range reference         | 8                  | [x]    |
 | 0x26 | tMemArea   | Memory area (cached range)   | 6                  | [ ] P3 |
 | 0x27 | tMemErr    | Erroneous memory area        | 6                  | [ ] P3 |
 | 0x28 | tMemNoMem  | Non-cached memory area       | 6                  | [ ] P3 |
 | 0x29 | tMemFunc   | Memory function              | 2                  | [ ] P3 |
-| 0x2A | tRefErr    | Deleted cell reference       | 4                  | [ ]    |
-| 0x2B | tAreaErr   | Deleted area reference       | 8                  | [ ]    |
+| 0x2A | tRefErr    | Deleted cell reference       | 4                  | [x]    |
+| 0x2B | tAreaErr   | Deleted area reference       | 8                  | [x]    |
 | 0x2C | tRefN      | Relative ref (shared fmla)   | 4                  | [ ] P3 |
 | 0x2D | tAreaN     | Relative area (shared fmla)  | 8                  | [ ] P3 |
 | 0x39 | tNameX     | External name reference      | 6                  | [ ] P2 |
@@ -156,32 +156,32 @@ emit absolute-style A1 notation (e.g., `A1`, `B2:C10`).
 
 ### Phase 1 Implementation Steps
 
-- [ ] Create `crates/duke-sheets-xls/src/biff/formula/` directory
-- [ ] `mod.rs` — `pub fn decompile(data: &[u8], ctx: &FormulaContext) -> String`
-- [ ] `ptg.rs` — `enum Ptg` with all token types (even if parsing deferred)
-- [ ] `function_table.rs` — `fn function_name(idx: u16) -> &'static str`
-  - Only need ~100 common functions for MVP; return `_xlfn.{idx}` for unknown
-- [ ] `token_parser.rs` — `fn parse_tokens(data: &[u8]) -> Vec<ParsedToken>`
-  - ParsedToken = (Ptg, associated data bytes)
-  - Skip unknown tokens by reading their known sizes
-- [ ] `decompiler.rs` — `fn decompile_tokens(tokens: &[ParsedToken], ctx: &FormulaContext) -> String`
-  - RPN stack machine → infix string
-- [ ] Hook into `reader.rs`: in FORMULA record parsing, call `decompile()` and store result as `text` field of `CellValue::Formula`
-- [ ] Operator precedence table for minimal parenthesization
+- [x] Create `crates/duke-sheets-xls/src/biff/formula/` directory
+- [x] `mod.rs` — `pub fn decompile(data: &[u8], sheet_names: &[String]) -> String`
+- [x] `ptg.rs` — token byte constants, `base_ptg()` class stripper, `token_data_size()`
+- [x] `function_table.rs` — `fn function_name(idx: u16) -> &'static str` (all 485 entries)
+- [x] `token_parser.rs` — `fn parse_tokens(data: &[u8]) -> Vec<ParsedToken>`
+  - ParsedToken enum with all Phase 1 token types + Phase 2/3 stubs
+  - Handles R/V/A class variants transparently
+- [x] `decompiler.rs` — `fn decompile(tokens: &[ParsedToken], sheet_names: &[String]) -> String`
+  - RPN stack machine → infix string with operator precedence
+- [x] Hook into `reader.rs`: extract `cce` + token bytes from FORMULA record, call `decompile()`
+- [x] Operator precedence table for minimal parenthesization
+- [x] Fix `parse_formula_string` to preserve decompiled formula text
 
 ### Phase 1 Test Cases
 
-- [ ] Simple arithmetic: `=1+2`, `=A1*B1`, `=A1^2`
-- [ ] String literal: `="hello"&A1`
-- [ ] Boolean/error constants: `=TRUE`, `=IF(ISERROR(A1),#N/A,A1)`
-- [ ] Fixed-arg function: `=LEN(A1)`, `=MID(A1,2,3)`
-- [ ] Variable-arg function: `=SUM(A1:A10)`, `=IF(A1>0,1,0)`
-- [ ] Nested functions: `=SUM(IF(A1:A10>0,A1:A10,0))`
-- [ ] Missing arg: `=MATCH(1,A1:A10,)`
-- [ ] Unary operators: `=-A1`, `=+A1`, `=50%`
-- [ ] Comparison operators: `=A1>=B1`, `=A1<>B1`
-- [ ] Parentheses: `=(A1+B1)*C1`
-- [ ] Integer and float constants: `=100`, `=3.14159`
+- [x] Simple arithmetic: `=1+2`, `=A1*B1`, `=A1^2`
+- [x] String literal: `="hello"&A1`
+- [x] Boolean/error constants: `=TRUE`, `=IF(ISERROR(A1),#N/A,A1)`
+- [x] Fixed-arg function: `=LEN(A1)`, `=MID(A1,2,3)`
+- [x] Variable-arg function: `=SUM(A1:A10)`, `=IF(A1>0,1,0)`
+- [x] Nested functions: `=SUM(LEN(A1),LEN(B1))`
+- [x] Missing arg: `=MATCH(1,A1:A10,)`
+- [x] Unary operators: `=-A1`, `=+A1`, `=50%`
+- [x] Comparison operators: `=A1>=B1`, `=A1<>B1`
+- [x] Parentheses: `=(A1+B1)*C1`
+- [x] Integer and float constants: `=100`, `=3.14159`
 
 ---
 
