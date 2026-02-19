@@ -1,0 +1,790 @@
+//! Parse BIFF8 formula token bytes into structured `ParsedToken` values.
+//!
+//! The input is the raw RPN byte array from a FORMULA record (the `cce` bytes
+//! starting at offset 22 in the record body). The output is a `Vec<ParsedToken>`
+//! that the decompiler can process via a stack machine.
+
+use super::ptg;
+
+/// A parsed formula token with its associated data.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedToken {
+    // --- Binary operators ---
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Power,
+    Concat,
+    Lt,
+    Le,
+    Eq,
+    Ge,
+    Gt,
+    Ne,
+    Isect, // intersection (space)
+    List,  // union (comma)
+    Range, // colon
+
+    // --- Unary operators ---
+    Uplus,
+    Uminus,
+    Percent,
+    Paren,
+
+    // --- Constants ---
+    MissArg,
+    Str(String),
+    Err(u8), // error code byte
+    Bool(bool),
+    Int(u16),
+    Num(f64),
+
+    // --- Cell references ---
+    Ref {
+        row: u16,
+        col: u16,
+        row_relative: bool,
+        col_relative: bool,
+    },
+    Area {
+        first_row: u16,
+        last_row: u16,
+        first_col: u16,
+        last_col: u16,
+        first_row_rel: bool,
+        first_col_rel: bool,
+        last_row_rel: bool,
+        last_col_rel: bool,
+    },
+    RefErr,
+    AreaErr,
+
+    // --- Functions ---
+    Func {
+        /// Function index in the BIFF8 function table.
+        func_idx: u16,
+    },
+    FuncVar {
+        /// Number of arguments actually passed.
+        argc: u8,
+        /// Function index (bits 0-14). Bit 15 = CE (command-equivalent) flag.
+        func_idx: u16,
+    },
+
+    // --- tAttr sub-types ---
+    AttrVolatile,
+    AttrIf {
+        offset: u16,
+    },
+    AttrChoose {
+        count: u16,
+        offsets: Vec<u16>,
+    },
+    AttrSkip {
+        offset: u16,
+    },
+    AttrSum,
+    AttrAssign,
+    AttrSpace {
+        space_type: u8,
+        count: u8,
+    },
+
+    // --- Phase 2/3 stubs (skip data, emit placeholder) ---
+    /// Named range reference (Phase 2).
+    Name {
+        name_idx: u16,
+    },
+    /// External name reference (Phase 2).
+    NameX {
+        extern_sheet_idx: u16,
+        name_idx: u16,
+    },
+    /// 3D cell reference (Phase 2).
+    Ref3d {
+        extern_sheet_idx: u16,
+        row: u16,
+        col: u16,
+        row_relative: bool,
+        col_relative: bool,
+    },
+    /// 3D area reference (Phase 2).
+    Area3d {
+        extern_sheet_idx: u16,
+        first_row: u16,
+        last_row: u16,
+        first_col: u16,
+        last_col: u16,
+        first_row_rel: bool,
+        first_col_rel: bool,
+        last_row_rel: bool,
+        last_col_rel: bool,
+    },
+    /// Deleted 3D ref (Phase 2).
+    RefErr3d {
+        extern_sheet_idx: u16,
+    },
+    /// Deleted 3D area (Phase 2).
+    AreaErr3d {
+        extern_sheet_idx: u16,
+    },
+    /// Array/shared formula indicator (tExp).
+    Exp {
+        row: u16,
+        col: u16,
+    },
+    /// Memory function — the decompiler treats this as a no-op; the
+    /// sub-expression tokens that follow produce the actual reference.
+    MemFunc {
+        subexpr_len: u16,
+    },
+
+    /// Unknown token — skipped. Carries original byte for debugging.
+    Unknown(u8),
+}
+
+/// Parse a BIFF8 formula token byte stream into structured tokens.
+///
+/// The `data` slice should be exactly `cce` bytes from the FORMULA record
+/// (the RPN token array, not including any extra data appended for tArray).
+pub fn parse_tokens(data: &[u8]) -> Vec<ParsedToken> {
+    let mut tokens = Vec::new();
+    let mut pos = 0;
+
+    while pos < data.len() {
+        let raw_byte = data[pos];
+        pos += 1;
+
+        let base = ptg::base_ptg(raw_byte);
+
+        match base {
+            // ---- Binary operators (1 byte each, no data) ----
+            ptg::PTG_ADD => tokens.push(ParsedToken::Add),
+            ptg::PTG_SUB => tokens.push(ParsedToken::Sub),
+            ptg::PTG_MUL => tokens.push(ParsedToken::Mul),
+            ptg::PTG_DIV => tokens.push(ParsedToken::Div),
+            ptg::PTG_POWER => tokens.push(ParsedToken::Power),
+            ptg::PTG_CONCAT => tokens.push(ParsedToken::Concat),
+            ptg::PTG_LT => tokens.push(ParsedToken::Lt),
+            ptg::PTG_LE => tokens.push(ParsedToken::Le),
+            ptg::PTG_EQ => tokens.push(ParsedToken::Eq),
+            ptg::PTG_GE => tokens.push(ParsedToken::Ge),
+            ptg::PTG_GT => tokens.push(ParsedToken::Gt),
+            ptg::PTG_NE => tokens.push(ParsedToken::Ne),
+            ptg::PTG_ISECT => tokens.push(ParsedToken::Isect),
+            ptg::PTG_LIST => tokens.push(ParsedToken::List),
+            ptg::PTG_RANGE => tokens.push(ParsedToken::Range),
+
+            // ---- Unary operators ----
+            ptg::PTG_UPLUS => tokens.push(ParsedToken::Uplus),
+            ptg::PTG_UMINUS => tokens.push(ParsedToken::Uminus),
+            ptg::PTG_PERCENT => tokens.push(ParsedToken::Percent),
+            ptg::PTG_PAREN => tokens.push(ParsedToken::Paren),
+
+            // ---- Constants ----
+            ptg::PTG_MISS_ARG => tokens.push(ParsedToken::MissArg),
+
+            ptg::PTG_STR => {
+                // BIFF8 short string: 1-byte length, then flags byte, then chars
+                if pos >= data.len() {
+                    break;
+                }
+                let str_len = data[pos] as usize;
+                pos += 1;
+                if pos >= data.len() {
+                    break;
+                }
+                let flags = data[pos];
+                pos += 1;
+                let wide = (flags & 0x01) != 0;
+                let s = if wide {
+                    let byte_len = str_len * 2;
+                    if pos + byte_len > data.len() {
+                        break;
+                    }
+                    let chars: Vec<u16> = data[pos..pos + byte_len]
+                        .chunks_exact(2)
+                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                        .collect();
+                    pos += byte_len;
+                    String::from_utf16_lossy(&chars)
+                } else {
+                    if pos + str_len > data.len() {
+                        break;
+                    }
+                    let s = data[pos..pos + str_len]
+                        .iter()
+                        .map(|&b| b as char)
+                        .collect::<String>();
+                    pos += str_len;
+                    s
+                };
+                tokens.push(ParsedToken::Str(s));
+            }
+
+            ptg::PTG_ERR => {
+                if pos >= data.len() {
+                    break;
+                }
+                tokens.push(ParsedToken::Err(data[pos]));
+                pos += 1;
+            }
+
+            ptg::PTG_BOOL => {
+                if pos >= data.len() {
+                    break;
+                }
+                tokens.push(ParsedToken::Bool(data[pos] != 0));
+                pos += 1;
+            }
+
+            ptg::PTG_INT => {
+                if pos + 2 > data.len() {
+                    break;
+                }
+                let val = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                pos += 2;
+                tokens.push(ParsedToken::Int(val));
+            }
+
+            ptg::PTG_NUM => {
+                if pos + 8 > data.len() {
+                    break;
+                }
+                let val = f64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
+                pos += 8;
+                tokens.push(ParsedToken::Num(val));
+            }
+
+            // ---- tAttr (0x19) — sub-types ----
+            ptg::PTG_ATTR => {
+                if pos + 2 > data.len() {
+                    break;
+                }
+                let flags = data[pos];
+                pos += 1;
+                let attr_data = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                pos += 2;
+
+                if (flags & ptg::ATTR_SPACE) != 0 {
+                    // tAttrSpace: type(1) + count(1) encoded in the 2-byte data
+                    tokens.push(ParsedToken::AttrSpace {
+                        space_type: (attr_data & 0xFF) as u8,
+                        count: (attr_data >> 8) as u8,
+                    });
+                } else if (flags & ptg::ATTR_SUM) != 0 {
+                    tokens.push(ParsedToken::AttrSum);
+                } else if (flags & ptg::ATTR_IF) != 0 {
+                    tokens.push(ParsedToken::AttrIf { offset: attr_data });
+                } else if (flags & ptg::ATTR_CHOOSE) != 0 {
+                    // tAttrChoose: attr_data = number of choices (nc)
+                    // Followed by (nc+1) u16 jump offsets
+                    let nc = attr_data as usize;
+                    let jump_count = nc + 1;
+                    let mut offsets = Vec::with_capacity(jump_count);
+                    for _ in 0..jump_count {
+                        if pos + 2 > data.len() {
+                            break;
+                        }
+                        let off = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                        pos += 2;
+                        offsets.push(off);
+                    }
+                    tokens.push(ParsedToken::AttrChoose {
+                        count: attr_data,
+                        offsets,
+                    });
+                } else if (flags & ptg::ATTR_SKIP) != 0 {
+                    tokens.push(ParsedToken::AttrSkip { offset: attr_data });
+                } else if (flags & ptg::ATTR_VOLATILE) != 0 {
+                    tokens.push(ParsedToken::AttrVolatile);
+                } else if (flags & ptg::ATTR_ASSIGN) != 0 {
+                    tokens.push(ParsedToken::AttrAssign);
+                } else {
+                    // Unknown attr sub-type, data already consumed
+                }
+            }
+
+            // ---- Cell references ----
+            ptg::PTG_REF => {
+                if pos + 4 > data.len() {
+                    break;
+                }
+                let (row, col, row_rel, col_rel) = parse_ref_fields(&data[pos..]);
+                pos += 4;
+                tokens.push(ParsedToken::Ref {
+                    row,
+                    col,
+                    row_relative: row_rel,
+                    col_relative: col_rel,
+                });
+            }
+
+            ptg::PTG_AREA => {
+                if pos + 8 > data.len() {
+                    break;
+                }
+                let (fr, lr, fc, lc, frr, fcr, lrr, lcr) = parse_area_fields(&data[pos..]);
+                pos += 8;
+                tokens.push(ParsedToken::Area {
+                    first_row: fr,
+                    last_row: lr,
+                    first_col: fc,
+                    last_col: lc,
+                    first_row_rel: frr,
+                    first_col_rel: fcr,
+                    last_row_rel: lrr,
+                    last_col_rel: lcr,
+                });
+            }
+
+            ptg::PTG_REF_ERR => {
+                // 4 bytes of deleted ref data — skip
+                if pos + 4 > data.len() {
+                    break;
+                }
+                pos += 4;
+                tokens.push(ParsedToken::RefErr);
+            }
+
+            ptg::PTG_AREA_ERR => {
+                // 8 bytes of deleted area data — skip
+                if pos + 8 > data.len() {
+                    break;
+                }
+                pos += 8;
+                tokens.push(ParsedToken::AreaErr);
+            }
+
+            // ---- Functions ----
+            ptg::PTG_FUNC => {
+                if pos + 2 > data.len() {
+                    break;
+                }
+                let func_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                pos += 2;
+                tokens.push(ParsedToken::Func { func_idx });
+            }
+
+            ptg::PTG_FUNC_VAR => {
+                if pos + 3 > data.len() {
+                    break;
+                }
+                let argc = data[pos] & 0x7F; // bits 0-6 = argument count
+                pos += 1;
+                let func_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                pos += 2;
+                tokens.push(ParsedToken::FuncVar { argc, func_idx });
+            }
+
+            // ---- Phase 2 tokens: parse data, emit stubs ----
+            ptg::PTG_NAME => {
+                if pos + 4 > data.len() {
+                    break;
+                }
+                let name_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                pos += 4; // 2 bytes name_idx + 2 reserved
+                tokens.push(ParsedToken::Name { name_idx });
+            }
+
+            ptg::PTG_NAME_X => {
+                if pos + 6 > data.len() {
+                    break;
+                }
+                let extern_sheet_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                let name_idx = u16::from_le_bytes([data[pos + 2], data[pos + 3]]);
+                pos += 6; // 2+2+2 reserved
+                tokens.push(ParsedToken::NameX {
+                    extern_sheet_idx,
+                    name_idx,
+                });
+            }
+
+            ptg::PTG_REF_3D => {
+                if pos + 6 > data.len() {
+                    break;
+                }
+                let extern_sheet_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                let (row, col, row_rel, col_rel) = parse_ref_fields(&data[pos + 2..]);
+                pos += 6;
+                tokens.push(ParsedToken::Ref3d {
+                    extern_sheet_idx,
+                    row,
+                    col,
+                    row_relative: row_rel,
+                    col_relative: col_rel,
+                });
+            }
+
+            ptg::PTG_AREA_3D => {
+                if pos + 10 > data.len() {
+                    break;
+                }
+                let extern_sheet_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                let (fr, lr, fc, lc, frr, fcr, lrr, lcr) = parse_area_fields(&data[pos + 2..]);
+                pos += 10;
+                tokens.push(ParsedToken::Area3d {
+                    extern_sheet_idx,
+                    first_row: fr,
+                    last_row: lr,
+                    first_col: fc,
+                    last_col: lc,
+                    first_row_rel: frr,
+                    first_col_rel: fcr,
+                    last_row_rel: lrr,
+                    last_col_rel: lcr,
+                });
+            }
+
+            ptg::PTG_REF_ERR_3D => {
+                if pos + 6 > data.len() {
+                    break;
+                }
+                let extern_sheet_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                pos += 6;
+                tokens.push(ParsedToken::RefErr3d { extern_sheet_idx });
+            }
+
+            ptg::PTG_AREA_ERR_3D => {
+                if pos + 10 > data.len() {
+                    break;
+                }
+                let extern_sheet_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                pos += 10;
+                tokens.push(ParsedToken::AreaErr3d { extern_sheet_idx });
+            }
+
+            // ---- tExp: array/shared formula indicator ----
+            ptg::PTG_EXP => {
+                if pos + 4 > data.len() {
+                    break;
+                }
+                let row = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                let col = u16::from_le_bytes([data[pos + 2], data[pos + 3]]);
+                pos += 4;
+                tokens.push(ParsedToken::Exp { row, col });
+            }
+
+            // ---- Memory tokens (Phase 3 — skip sub-expression bytes) ----
+            ptg::PTG_MEM_FUNC => {
+                if pos + 2 > data.len() {
+                    break;
+                }
+                let subexpr_len = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                pos += 2;
+                // Don't skip the sub-expression — it contains real tokens
+                // that the decompiler needs to process. MemFunc is just a
+                // hint to Excel's evaluator.
+                tokens.push(ParsedToken::MemFunc { subexpr_len });
+            }
+
+            ptg::PTG_MEM_AREA | ptg::PTG_MEM_ERR | ptg::PTG_MEM_NO_MEM => {
+                // 6 bytes: reserved(4) + subexpr_len(2)
+                if pos + 6 > data.len() {
+                    break;
+                }
+                let subexpr_len = u16::from_le_bytes([data[pos + 4], data[pos + 5]]);
+                pos += 6;
+                // Like MemFunc, sub-expression tokens follow in the stream.
+                tokens.push(ParsedToken::MemFunc { subexpr_len });
+            }
+
+            // ---- Phase 3 stubs: relative refs, array, table ----
+            ptg::PTG_REF_N => {
+                // Same shape as tRef (4 bytes) but offsets are signed.
+                // For now treat exactly like tRef — works for non-shared formulas.
+                if pos + 4 > data.len() {
+                    break;
+                }
+                let (row, col, row_rel, col_rel) = parse_ref_fields(&data[pos..]);
+                pos += 4;
+                tokens.push(ParsedToken::Ref {
+                    row,
+                    col,
+                    row_relative: row_rel,
+                    col_relative: col_rel,
+                });
+            }
+
+            ptg::PTG_AREA_N => {
+                if pos + 8 > data.len() {
+                    break;
+                }
+                let (fr, lr, fc, lc, frr, fcr, lrr, lcr) = parse_area_fields(&data[pos..]);
+                pos += 8;
+                tokens.push(ParsedToken::Area {
+                    first_row: fr,
+                    last_row: lr,
+                    first_col: fc,
+                    last_col: lc,
+                    first_row_rel: frr,
+                    first_col_rel: fcr,
+                    last_row_rel: lrr,
+                    last_col_rel: lcr,
+                });
+            }
+
+            ptg::PTG_ARRAY => {
+                // 7 bytes header in token stream; actual data in extra section
+                if pos + 7 > data.len() {
+                    break;
+                }
+                pos += 7;
+                tokens.push(ParsedToken::Unknown(raw_byte));
+            }
+
+            ptg::PTG_TBL => {
+                if pos + 4 > data.len() {
+                    break;
+                }
+                pos += 4;
+                tokens.push(ParsedToken::Unknown(raw_byte));
+            }
+
+            _ => {
+                // Truly unknown token — can't determine size, stop parsing
+                tokens.push(ParsedToken::Unknown(raw_byte));
+                break;
+            }
+        }
+    }
+
+    tokens
+}
+
+/// Parse a BIFF8 cell reference from 4 bytes: row(u16) + col_rw(u16).
+///
+/// Returns (row, col, row_relative, col_relative).
+fn parse_ref_fields(data: &[u8]) -> (u16, u16, bool, bool) {
+    let row = u16::from_le_bytes([data[0], data[1]]);
+    let col_rw = u16::from_le_bytes([data[2], data[3]]);
+    let col = col_rw & 0x00FF; // bits 0-7
+    let row_rel = (col_rw & 0x4000) != 0; // bit 14
+    let col_rel = (col_rw & 0x8000) != 0; // bit 15
+    (row, col, row_rel, col_rel)
+}
+
+/// Parse a BIFF8 area reference from 8 bytes.
+///
+/// Returns (first_row, last_row, first_col, last_col,
+///          first_row_rel, first_col_rel, last_row_rel, last_col_rel).
+fn parse_area_fields(data: &[u8]) -> (u16, u16, u16, u16, bool, bool, bool, bool) {
+    let first_row = u16::from_le_bytes([data[0], data[1]]);
+    let last_row = u16::from_le_bytes([data[2], data[3]]);
+    let first_col_rw = u16::from_le_bytes([data[4], data[5]]);
+    let last_col_rw = u16::from_le_bytes([data[6], data[7]]);
+
+    let first_col = first_col_rw & 0x00FF;
+    let first_row_rel = (first_col_rw & 0x4000) != 0;
+    let first_col_rel = (first_col_rw & 0x8000) != 0;
+
+    let last_col = last_col_rw & 0x00FF;
+    let last_row_rel = (last_col_rw & 0x4000) != 0;
+    let last_col_rel = (last_col_rw & 0x8000) != 0;
+
+    (
+        first_row,
+        last_row,
+        first_col,
+        last_col,
+        first_row_rel,
+        first_col_rel,
+        last_row_rel,
+        last_col_rel,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_int_constant() {
+        // tInt(0x1E) + value 42 (u16 LE)
+        let data = [0x1E, 0x2A, 0x00];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::Int(42)]);
+    }
+
+    #[test]
+    fn test_parse_num_constant() {
+        // tNum(0x1F) + 3.14 as f64 LE
+        let val: f64 = 3.14;
+        let mut data = vec![0x1F];
+        data.extend_from_slice(&val.to_le_bytes());
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::Num(3.14)]);
+    }
+
+    #[test]
+    fn test_parse_bool_true() {
+        let data = [0x1D, 0x01];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::Bool(true)]);
+    }
+
+    #[test]
+    fn test_parse_bool_false() {
+        let data = [0x1D, 0x00];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::Bool(false)]);
+    }
+
+    #[test]
+    fn test_parse_err() {
+        // tErr(0x1C) + #VALUE! (0x0F)
+        let data = [0x1C, 0x0F];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::Err(0x0F)]);
+    }
+
+    #[test]
+    fn test_parse_str_compressed() {
+        // tStr: len=5, flags=0x00 (compressed), "hello"
+        let data = [0x17, 0x05, 0x00, b'h', b'e', b'l', b'l', b'o'];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::Str("hello".to_string())]);
+    }
+
+    #[test]
+    fn test_parse_str_wide() {
+        // tStr: len=2, flags=0x01 (wide), "AB"
+        let data = [0x17, 0x02, 0x01, b'A', 0x00, b'B', 0x00];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::Str("AB".to_string())]);
+    }
+
+    #[test]
+    fn test_parse_ref() {
+        // tRefV (0x44 = 0x24 + 0x20 V-class): row=0, col=0 (A1, absolute)
+        let data = [0x44, 0x00, 0x00, 0x00, 0x00];
+        let tokens = parse_tokens(&data);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::Ref {
+                row: 0,
+                col: 0,
+                row_relative: false,
+                col_relative: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_ref_relative() {
+        // tRefV: row=4, col=2, both relative (bits 14+15 set)
+        // col_rw = 2 | 0x4000 | 0x8000 = 0xC002
+        let data = [0x44, 0x04, 0x00, 0x02, 0xC0];
+        let tokens = parse_tokens(&data);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::Ref {
+                row: 4,
+                col: 2,
+                row_relative: true,
+                col_relative: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_area() {
+        // tAreaV (0x45 = 0x25+0x20): A1:C3 (rows 0-2, cols 0-2)
+        let data = [
+            0x45, 0x00, 0x00, // first_row=0
+            0x02, 0x00, // last_row=2
+            0x00, 0x00, // first_col=0
+            0x02, 0x00, // last_col=2
+        ];
+        let tokens = parse_tokens(&data);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::Area {
+                first_row: 0,
+                last_row: 2,
+                first_col: 0,
+                last_col: 2,
+                first_row_rel: false,
+                first_col_rel: false,
+                last_row_rel: false,
+                last_col_rel: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_func_sum() {
+        // tFuncV (0x41 = 0x21+0x20): SUM = index 4
+        let data = [0x41, 0x04, 0x00];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::Func { func_idx: 4 }]);
+    }
+
+    #[test]
+    fn test_parse_funcvar_if() {
+        // tFuncVarV (0x42 = 0x22+0x20): IF = index 1, 3 args
+        let data = [0x42, 0x03, 0x01, 0x00];
+        let tokens = parse_tokens(&data);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::FuncVar {
+                argc: 3,
+                func_idx: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_add_two_ints() {
+        // 1 + 2: tInt(1) tInt(2) tAdd
+        let data = [0x1E, 0x01, 0x00, 0x1E, 0x02, 0x00, 0x03];
+        let tokens = parse_tokens(&data);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::Int(1), ParsedToken::Int(2), ParsedToken::Add,]
+        );
+    }
+
+    #[test]
+    fn test_parse_miss_arg() {
+        let data = [0x16];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::MissArg]);
+    }
+
+    #[test]
+    fn test_parse_attr_sum() {
+        // tAttr(0x19) + flags=0x10 (SUM) + 2 bytes data
+        let data = [0x19, 0x10, 0x00, 0x00];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::AttrSum]);
+    }
+
+    #[test]
+    fn test_parse_attr_volatile() {
+        let data = [0x19, 0x01, 0x00, 0x00];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::AttrVolatile]);
+    }
+
+    #[test]
+    fn test_parse_classified_variants() {
+        // tRefR (0x24), tRefV (0x44), tRefA (0x64) should all produce same Ref
+        for ptg_byte in [0x24, 0x44, 0x64] {
+            let data = [ptg_byte, 0x00, 0x00, 0x00, 0x00];
+            let tokens = parse_tokens(&data);
+            assert_eq!(
+                tokens,
+                vec![ParsedToken::Ref {
+                    row: 0,
+                    col: 0,
+                    row_relative: false,
+                    col_relative: false,
+                }],
+                "failed for ptg byte 0x{:02X}",
+                ptg_byte
+            );
+        }
+    }
+}
