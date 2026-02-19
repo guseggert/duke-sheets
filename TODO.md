@@ -17,7 +17,8 @@
 - [x] Shared strings table
 - [x] Style preservation on roundtrip
 - [x] Excel `_xHHHH_` escape sequence decoding
-- [x] Formula cached value preservation (error, boolean, string, number)
+- [x] Formula cached value preservation in reader (error, boolean, string, number)
+- [x] Formula cached value preservation in writer (`<v>` element + `t` attribute)
 - [x] Data validation reading (list, whole, decimal, date, time, textLength, custom)
 - [x] Conditional formatting reading (cellIs, expression, colorScale, dataBar, iconSet, etc.)
 - [x] DXF (differential format) style reading for conditional formatting
@@ -115,7 +116,7 @@ Common functions needed:
 - [x] Styles: FONT, FORMAT, XF, PALETTE → full Style resolution (font, fill, border, alignment, number format, protection)
 - [x] Structure: MERGECELLS, ROW, COLINFO, BOUNDSHEET, DATEMODE
 - [x] Integrated into `WorkbookExt::open()` via `xls` feature gate
-- [ ] Formula token parsing — currently only cached results are used; formula text is empty (~80 BIFF8 token types)
+- [ ] Formula token parsing — currently only cached results are used; formula text is empty (~43 base token types, see `FORMULA_TOKENS.md` checklist)
 - [x] Style E2E tests: strikethrough, underline (single + double), text rotation, shrink-to-fit
 - [x] Style E2E test: indent level
 - [x] Sheet-level properties: hidden sheets (BOUNDSHEET visibility), active sheet (WINDOW1), sheet protection (PROTECT/PASSWORD)
@@ -165,7 +166,7 @@ Common functions needed:
 | Formula parser | 17 | ✅ |
 | Formula evaluator | 24 | ✅ |
 | Calculation engine | 8 | ✅ |
-| XLSX roundtrip | 12 | ✅ |
+| XLSX roundtrip | 17 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
@@ -174,14 +175,14 @@ Common functions needed:
 | XLS real-file integration | 2 | ✅ |
 | E2E via LibreOffice URP (XLSX) | 56 | ✅ |
 | Other (unit, doc, integration) | 155 | ✅ |
-| **Total** | **415** | ✅ |
+| **Total** | **420** | ✅ |
 
 ---
 
 ## Known Issues
 
 1. **Formula parsing failures** - Some complex real-world formulas fail with "Unexpected token: Eof"
-2. **XLS formula text unavailable** - XLS reader uses cached formula results but does not parse BIFF8 formula tokens into text
+2. **XLS formula text unavailable** - XLS reader uses cached formula results but does not parse BIFF8 formula tokens into text (see `crates/duke-sheets-xls/FORMULA_TOKENS.md` for implementation plan)
 3. **Limited function coverage** - Only 35 of ~450 Excel functions implemented
 
 ---
