@@ -22,6 +22,10 @@ pub enum FormulaExpr {
     RangeRef(RangeReference),
     /// Named range or defined name
     NameRef(String),
+    /// Structured table reference (e.g., Table1[Column1], Table1[[#Headers],[Col]])
+    StructuredRef(StructuredReference),
+    /// External workbook reference (e.g., [Book.xlsx]Sheet1!A1)
+    ExternalRef(ExternalReference),
 
     // === Operators ===
     /// Binary operation
@@ -85,6 +89,38 @@ pub enum BinaryOperator {
     Range,
     Union,
     Intersect,
+}
+
+/// Structured table reference
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructuredReference {
+    /// Table name (e.g., "Table1"). None for unqualified refs like [Column]
+    pub table: Option<String>,
+    /// Column name (e.g., "Column1"). None when only specifiers are used
+    pub column: Option<String>,
+    /// Special item specifiers (#All, #Data, #Headers, #Totals, #This Row)
+    pub specifiers: Vec<StructuredRefSpecifier>,
+}
+
+/// Structured reference specifier keywords
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructuredRefSpecifier {
+    All,
+    Data,
+    Headers,
+    Totals,
+    ThisRow,
+}
+
+/// External workbook reference
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternalReference {
+    /// Workbook filename (e.g., "Book1.xlsx")
+    pub book: String,
+    /// Sheet name (optional, e.g., "Sheet1")
+    pub sheet: Option<String>,
+    /// Cell address
+    pub address: CellAddress,
 }
 
 /// Unary operators
