@@ -689,9 +689,13 @@ impl XlsReader {
             let cce = read_u16(data, &mut off)? as usize;
             if cce > 0 && off + cce <= data.len() {
                 let token_bytes = &data[off..off + cce];
+                let extra_data = &data[off + cce..];
 
                 // Check if this is a shared formula (tExp + fShared flag)
-                let tokens = crate::biff::formula::token_parser::parse_tokens(token_bytes);
+                let tokens = crate::biff::formula::token_parser::parse_tokens_with_extra(
+                    token_bytes,
+                    extra_data,
+                );
                 if f_shared {
                     if let Some(ParsedToken::Exp {
                         row: master_row,

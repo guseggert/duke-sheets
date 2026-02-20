@@ -151,6 +151,11 @@ pub enum ParsedToken {
         last_col_rel: bool,
     },
 
+    /// Array constant (tArray) with pre-formatted text like `{1,2,3;4,5,6}`.
+    Array {
+        text: String,
+    },
+
     /// Array/shared formula indicator (tExp).
     Exp {
         row: u16,
@@ -169,10 +174,17 @@ pub enum ParsedToken {
 /// Parse a BIFF8 formula token byte stream into structured tokens.
 ///
 /// The `data` slice should be exactly `cce` bytes from the FORMULA record
-/// (the RPN token array, not including any extra data appended for tArray).
+/// (the RPN token array). The `extra_data` slice contains any extra data
+/// appended after the token stream (used by tArray for array constants).
 pub fn parse_tokens(data: &[u8]) -> Vec<ParsedToken> {
+    parse_tokens_with_extra(data, &[])
+}
+
+/// Parse tokens with an optional extra-data section for tArray constants.
+pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToken> {
     let mut tokens = Vec::new();
     let mut pos = 0;
+    let mut extra_pos = 0usize; // tracks position within extra_data for tArray
 
     while pos < data.len() {
         let raw_byte = data[pos];
@@ -553,7 +565,9 @@ pub fn parse_tokens(data: &[u8]) -> Vec<ParsedToken> {
                     break;
                 }
                 pos += 7;
-                tokens.push(ParsedToken::Unknown(raw_byte));
+                // Parse array constant from extra_data at current extra_pos
+                let text = parse_array_constant(extra_data, &mut extra_pos);
+                tokens.push(ParsedToken::Array { text });
             }
 
             ptg::PTG_TBL => {
@@ -573,6 +587,145 @@ pub fn parse_tokens(data: &[u8]) -> Vec<ParsedToken> {
     }
 
     tokens
+}
+
+/// Parse an array constant from the extra-data section of a FORMULA record.
+///
+/// Format: nc(1) + nr(2) + elements(nc*nr), where:
+///   - nc = number of columns minus 1 (so actual = nc + 1)
+///   - nr = number of rows minus 1 (so actual = nr + 1)
+///   - Each element: type_byte + data
+///     - 0x00: empty (0 extra bytes, some writers pad with 8 bytes)
+///     - 0x01: f64 (8 bytes)
+///     - 0x02: string (BIFF8 unicode: len(u16) + flags(1) + chars)
+///     - 0x04: bool (8 bytes: val(1) + 7 padding)
+///     - 0x10: error (8 bytes: code(1) + 7 padding)
+///
+/// Returns formatted text like `{1,2,3;4,5,6}` (commas between columns,
+/// semicolons between rows).
+fn parse_array_constant(extra: &[u8], epos: &mut usize) -> String {
+    if *epos + 3 > extra.len() {
+        return "{<?>}".to_string();
+    }
+    let nc = extra[*epos] as usize + 1;
+    let nr = u16::from_le_bytes([extra[*epos + 1], extra[*epos + 2]]) as usize + 1;
+    *epos += 3;
+
+    let mut rows: Vec<String> = Vec::with_capacity(nr);
+    for _r in 0..nr {
+        let mut cols: Vec<String> = Vec::with_capacity(nc);
+        for _c in 0..nc {
+            if *epos >= extra.len() {
+                cols.push("<?>".to_string());
+                continue;
+            }
+            let type_byte = extra[*epos];
+            *epos += 1;
+            let val_str = match type_byte {
+                0x00 => {
+                    // Empty — some implementations write 8 padding bytes
+                    if *epos + 8 <= extra.len() {
+                        *epos += 8;
+                    }
+                    String::new()
+                }
+                0x01 => {
+                    // IEEE 754 double
+                    if *epos + 8 > extra.len() {
+                        "<?>".to_string()
+                    } else {
+                        let val = f64::from_le_bytes(extra[*epos..*epos + 8].try_into().unwrap());
+                        *epos += 8;
+                        if val == val.trunc() && val.abs() < 1e15 {
+                            format!("{}", val as i64)
+                        } else {
+                            format!("{}", val)
+                        }
+                    }
+                }
+                0x02 => {
+                    // String: len(u16) + flags(1) + chars
+                    if *epos + 3 > extra.len() {
+                        "<?>".to_string()
+                    } else {
+                        let slen = u16::from_le_bytes([extra[*epos], extra[*epos + 1]]) as usize;
+                        let flags = extra[*epos + 2];
+                        *epos += 3;
+                        let wide = (flags & 0x01) != 0;
+                        let s = if wide {
+                            let byte_count = slen * 2;
+                            if *epos + byte_count > extra.len() {
+                                *epos = extra.len();
+                                "<?>".to_string()
+                            } else {
+                                let chars: Vec<u16> = (0..slen)
+                                    .map(|i| {
+                                        u16::from_le_bytes([
+                                            extra[*epos + i * 2],
+                                            extra[*epos + i * 2 + 1],
+                                        ])
+                                    })
+                                    .collect();
+                                *epos += byte_count;
+                                String::from_utf16_lossy(&chars)
+                            }
+                        } else if *epos + slen > extra.len() {
+                            *epos = extra.len();
+                            "<?>".to_string()
+                        } else {
+                            let s: String = extra[*epos..*epos + slen]
+                                .iter()
+                                .map(|&b| b as char)
+                                .collect();
+                            *epos += slen;
+                            s
+                        };
+                        format!("\"{}\"", s.replace('"', "\"\""))
+                    }
+                }
+                0x04 => {
+                    // Boolean: val(1) + 7 padding bytes
+                    if *epos + 8 > extra.len() {
+                        "<?>".to_string()
+                    } else {
+                        let val = extra[*epos] != 0;
+                        *epos += 8;
+                        if val { "TRUE" } else { "FALSE" }.to_string()
+                    }
+                }
+                0x10 => {
+                    // Error: code(1) + 7 padding bytes
+                    if *epos + 8 > extra.len() {
+                        "<?>".to_string()
+                    } else {
+                        let code = extra[*epos];
+                        *epos += 8;
+                        match code {
+                            0x00 => "#NULL!",
+                            0x07 => "#DIV/0!",
+                            0x0F => "#VALUE!",
+                            0x17 => "#REF!",
+                            0x1D => "#NAME?",
+                            0x24 => "#NUM!",
+                            0x2A => "#N/A",
+                            _ => "#UNKNOWN!",
+                        }
+                        .to_string()
+                    }
+                }
+                _ => {
+                    // Unknown element type — skip 8 bytes (common padding)
+                    if *epos + 8 <= extra.len() {
+                        *epos += 8;
+                    }
+                    "<?>".to_string()
+                }
+            };
+            cols.push(val_str);
+        }
+        rows.push(cols.join(","));
+    }
+    format!("{{{}}}", rows.join(";"))
 }
 
 /// Parse a BIFF8 cell reference from 4 bytes: row(u16) + col_rw(u16).
@@ -913,6 +1066,80 @@ mod tests {
                 first_col_rel: true,
                 last_row_rel: true,
                 last_col_rel: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_array_constant_simple() {
+        // tArrayV (0x60 = 0x20 + 0x40): 7-byte header in token stream
+        // Extra data: nc=2 (3 cols), nr=0 (1 row), three f64 values: 1.0, 2.0, 3.0
+        let token_data = [0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut extra = Vec::new();
+        extra.push(2u8); // nc = 2 → 3 columns
+        extra.extend_from_slice(&0u16.to_le_bytes()); // nr = 0 → 1 row
+        for val in [1.0f64, 2.0, 3.0] {
+            extra.push(0x01); // type = f64
+            extra.extend_from_slice(&val.to_le_bytes());
+        }
+        let tokens = parse_tokens_with_extra(&token_data, &extra);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::Array {
+                text: "{1,2,3}".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_array_constant_2d() {
+        // 2x2 array: {1,2;3,4}
+        let token_data = [0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut extra = Vec::new();
+        extra.push(1u8); // nc = 1 → 2 columns
+        extra.extend_from_slice(&1u16.to_le_bytes()); // nr = 1 → 2 rows
+        for val in [1.0f64, 2.0, 3.0, 4.0] {
+            extra.push(0x01); // type = f64
+            extra.extend_from_slice(&val.to_le_bytes());
+        }
+        let tokens = parse_tokens_with_extra(&token_data, &extra);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::Array {
+                text: "{1,2;3,4}".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_array_constant_mixed_types() {
+        // 1x3 array with string, bool, error: {"hello",TRUE,#N/A}
+        let token_data = [0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut extra = Vec::new();
+        extra.push(2u8); // nc = 2 → 3 columns
+        extra.extend_from_slice(&0u16.to_le_bytes()); // nr = 0 → 1 row
+
+        // String "hello": type=0x02, len=5, flags=0x00 (compressed), "hello"
+        extra.push(0x02);
+        extra.extend_from_slice(&5u16.to_le_bytes());
+        extra.push(0x00); // flags: compressed
+        extra.extend_from_slice(b"hello");
+
+        // Bool TRUE: type=0x04, val=1, + 7 padding
+        extra.push(0x04);
+        extra.push(0x01);
+        extra.extend_from_slice(&[0; 7]);
+
+        // Error #N/A: type=0x10, code=0x2A, + 7 padding
+        extra.push(0x10);
+        extra.push(0x2A);
+        extra.extend_from_slice(&[0; 7]);
+
+        let tokens = parse_tokens_with_extra(&token_data, &extra);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::Array {
+                text: "{\"hello\",TRUE,#N/A}".to_string()
             }]
         );
     }

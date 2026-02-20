@@ -488,6 +488,55 @@ fn test_xls_formula_named_range_in_expression() {
     cleanup_fixture(&path);
 }
 
+/// Phase 3: Array constant in formula — `=SUM({1;2;3})` uses tArray tokens.
+/// LO semicolons separate rows in array constants (same as args).
+#[test]
+fn test_xls_formula_array_constant() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        // SUM({1;2;3}) — column array constant (LO uses ; for row separator)
+        // In LO locale, both arg separator and array row separator are ;
+        // so =SUM({1;2;3}) means SUM of a 3x1 column array = 6
+        wb.set_cell_formula("A1", "=SUM({1;2;3})")
+            .await
+            .unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let wb = XlsReader::read_file(&path).unwrap();
+    let ws = wb.worksheet(0).unwrap();
+
+    let val = ws.get_value_at(0, 0);
+    let text = formula_text(&val);
+    // BIFF8 decompiles with commas between columns and semicolons between rows.
+    // LO stores this as a 1-row × 3-column array → "SUM({1,2,3})"
+    assert_eq!(text, "=SUM({1,2,3})", "array constant formula");
+
+    // Cached value should be 6.0
+    match &val {
+        CellValue::Formula { cached_value, .. } => {
+            match cached_value.as_deref() {
+                Some(CellValue::Number(n)) => {
+                    assert!(
+                        (*n - 6.0).abs() < f64::EPSILON,
+                        "expected cached 6.0, got {n}"
+                    );
+                }
+                other => panic!("Expected cached Number(6.0), got {:?}", other),
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    cleanup_fixture(&path);
+}
+
 /// Phase 3: Shared formulas — when a column has the same formula pattern,
 /// Excel stores a single SHAREDFMLA record and each cell uses tExp + tRefN.
 /// LO does this automatically when adjacent cells have the same pattern.
