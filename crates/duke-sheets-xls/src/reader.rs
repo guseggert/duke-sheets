@@ -329,7 +329,10 @@ impl XlsReader {
         // Shared formula support: stores (master_row, master_col) → token bytes
         let mut shared_formulas: std::collections::HashMap<(u16, u16), Vec<u8>> =
             std::collections::HashMap::new();
-        // Master cell that appeared before its SHAREDFMLA record.
+        // Array formula support: stores (top_left_row, top_left_col) → (token_data, extra_data)
+        let mut array_formulas: std::collections::HashMap<(u16, u16), (Vec<u8>, Vec<u8>)> =
+            std::collections::HashMap::new();
+        // Master cell that appeared before its SHAREDFMLA or ARRAY record.
         // (cell_row, cell_col, master_row, master_col)
         let mut pending_shared: Option<(u32, u16, u16, u16)> = None;
 
@@ -368,8 +371,14 @@ impl XlsReader {
                     pending_formula_cell = None;
                 }
                 records::FORMULA => {
-                    let result =
-                        Self::parse_formula(&rec.data, ws, styles, formula_ctx, &shared_formulas)?;
+                    let result = Self::parse_formula(
+                        &rec.data,
+                        ws,
+                        styles,
+                        formula_ctx,
+                        &shared_formulas,
+                        &array_formulas,
+                    )?;
                     match result {
                         FormulaResult::Done(string_pending) => {
                             pending_formula_cell = string_pending;
@@ -407,6 +416,31 @@ impl XlsReader {
                                     cell_row,
                                     cell_col,
                                     &token_data,
+                                    formula_ctx,
+                                )?;
+                            }
+                        }
+                    }
+                }
+                records::ARRAY => {
+                    // Parse array formula and store for tExp resolution.
+                    // ARRAY record: Ref8U(6) + options(2) + reserved(4) + cce(2) + rgce + rgcb
+                    if let Some((master_row, master_col, token_data, extra_data)) =
+                        Self::parse_array_record(&rec.data)
+                    {
+                        let key = (master_row, master_col);
+                        array_formulas.insert(key, (token_data.clone(), extra_data.clone()));
+
+                        // Backfill any pending cell waiting for this array formula
+                        if let Some((cell_row, cell_col, exp_row, exp_col)) = pending_shared.take()
+                        {
+                            if exp_row == master_row && exp_col == master_col {
+                                Self::backfill_array_formula(
+                                    ws,
+                                    cell_row,
+                                    cell_col,
+                                    &token_data,
+                                    &extra_data,
                                     formula_ctx,
                                 )?;
                             }
@@ -664,6 +698,7 @@ impl XlsReader {
         styles: &[Style],
         formula_ctx: &FormulaContext,
         shared_formulas: &std::collections::HashMap<(u16, u16), Vec<u8>>,
+        array_formulas: &std::collections::HashMap<(u16, u16), (Vec<u8>, Vec<u8>)>,
     ) -> XlsResult<FormulaResult> {
         if data.len() < 20 {
             return Err(XlsError::Parse("FORMULA record too short".into()));
@@ -748,6 +783,44 @@ impl XlsReader {
                         } else {
                             format!("={}", text)
                         }
+                    }
+                } else if let Some(ParsedToken::Exp {
+                    row: master_row,
+                    col: master_col,
+                }) = tokens.first()
+                {
+                    // tExp without fShared → array formula (CSE)
+                    if let Some((arr_tokens, arr_extra)) =
+                        array_formulas.get(&(*master_row, *master_col))
+                    {
+                        let text = crate::biff::formula::decompile_with_extra(
+                            arr_tokens,
+                            arr_extra,
+                            formula_ctx,
+                        );
+                        if text.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{{={}}}", text)
+                        }
+                    } else {
+                        // ARRAY record not seen yet — write cell with empty
+                        // text; caller will backfill later.
+                        Self::write_formula_cell(
+                            ws,
+                            row,
+                            col,
+                            xf_idx,
+                            result_bytes,
+                            String::new(),
+                            styles,
+                        )?;
+                        return Ok(FormulaResult::SharedPending {
+                            cell_row: row,
+                            cell_col: col,
+                            master_row: *master_row,
+                            master_col: *master_col,
+                        });
                     }
                 } else {
                     // Normal formula — decompile from already-parsed tokens
@@ -939,6 +1012,68 @@ impl XlsReader {
             String::new()
         } else {
             format!("={}", text)
+        };
+
+        // Get the existing cached value and replace the formula text
+        let (cached, array) = match ws.get_value_at(cell_row, cell_col) {
+            CellValue::Formula {
+                cached_value,
+                array_result,
+                ..
+            } => (cached_value.clone(), array_result.clone()),
+            _ => (None, None),
+        };
+        ws.set_cell_value_at(
+            cell_row,
+            cell_col,
+            CellValue::Formula {
+                text: formula_text,
+                cached_value: cached,
+                array_result: array,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Parse an ARRAY record.
+    ///
+    /// Format: Ref8U(6) + options(2) + reserved(4) + cce(2) + rgce(cce) + rgcb(rest)
+    /// Ref8U: rwFirst(2) + rwLast(2) + colFirst(1) + colLast(1) = 6 bytes.
+    /// Returns (master_row, master_col, token_data, extra_data) or None.
+    fn parse_array_record(data: &[u8]) -> Option<(u16, u16, Vec<u8>, Vec<u8>)> {
+        // Minimum: 6 (Ref8U) + 2 (options) + 4 (reserved) + 2 (cce) = 14
+        if data.len() < 14 {
+            return None;
+        }
+        let first_row = u16::from_le_bytes([data[0], data[1]]);
+        let _last_row = u16::from_le_bytes([data[2], data[3]]);
+        let first_col = data[4] as u16;
+        let _last_col = data[5];
+        // data[6..8] = options (fAlwaysCalc, fCalcOnLoad)
+        // data[8..12] = reserved
+        let cce = u16::from_le_bytes([data[12], data[13]]) as usize;
+        if data.len() < 14 + cce {
+            return None;
+        }
+        let token_data = data[14..14 + cce].to_vec();
+        let extra_data = data[14 + cce..].to_vec();
+        Some((first_row, first_col, token_data, extra_data))
+    }
+
+    /// Backfill a cell's formula text after its ARRAY record is found.
+    fn backfill_array_formula(
+        ws: &mut duke_sheets_core::Worksheet,
+        cell_row: u32,
+        cell_col: u16,
+        token_data: &[u8],
+        extra_data: &[u8],
+        formula_ctx: &FormulaContext,
+    ) -> XlsResult<()> {
+        let text = crate::biff::formula::decompile_with_extra(token_data, extra_data, formula_ctx);
+        let formula_text = if text.is_empty() {
+            String::new()
+        } else {
+            format!("{{={}}}", text)
         };
 
         // Get the existing cached value and replace the formula text
