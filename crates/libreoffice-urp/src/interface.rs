@@ -785,6 +785,22 @@ pub fn protectable_is_protected() -> MethodDef {
 //               outputList(11)
 // ============================================================================
 
+// ============================================================================
+// XArrayFormulaRange — com.sun.star.sheet.XArrayFormulaRange
+// Extends XInterface (3 base methods)
+// getArrayFormula(3), setArrayFormula(4), getArrayTokens(5), setArrayTokens(6)
+// ============================================================================
+
+pub fn set_array_formula() -> MethodDef {
+    MethodDef {
+        name: "setArrayFormula",
+        index: 4,
+        params: &[ParamType::String], // aFormula
+        return_type: Type::void(),
+        one_way: false,
+    }
+}
+
 pub fn named_ranges_add_new_by_name() -> MethodDef {
     MethodDef {
         name: "addNewByName",

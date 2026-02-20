@@ -219,3 +219,29 @@ async fn test_save_and_read_back_with_duke_sheets() {
 
     eprintln!("OK: Saved XLSX via URP, read back with duke-sheets, values match");
 }
+
+#[tokio::test]
+async fn test_set_array_formula() {
+    skip_if_no_urp!();
+
+    let mut bridge =
+        duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002).await
+            .expect("connect");
+    let mut wb = bridge.create_workbook().await.expect("create_workbook");
+
+    wb.set_cell_value("A1", 1.0).await.unwrap();
+    wb.set_cell_value("A2", 2.0).await.unwrap();
+    wb.set_cell_value("B1", 10.0).await.unwrap();
+    wb.set_cell_value("B2", 20.0).await.unwrap();
+
+    // Enter a CSE array formula via set_array_formula
+    wb.set_array_formula(0, "C1", "=SUM(A1:A2*B1:B2)")
+        .await
+        .expect("set_array_formula");
+
+    // Read back — LO wraps array formulas in braces
+    let formula = wb.get_cell_formula("C1").await.expect("get_cell_formula");
+    assert_eq!(formula, "{=SUM(A1:A2*B1:B2)}");
+
+    wb.close().await.unwrap();
+}

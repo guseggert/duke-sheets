@@ -492,6 +492,25 @@ impl<'a> Workbook<'a> {
         ))
     }
 
+    /// Set a CSE (Ctrl+Shift+Enter) array formula on a range of cells.
+    ///
+    /// `range_ref` is an A1-style range (e.g. "A1:C1"), and `formula` is the
+    /// formula string including the leading `=`.
+    pub async fn set_array_formula(
+        &mut self,
+        sheet_index: i32,
+        range_ref: &str,
+        formula: &str,
+    ) -> Result<()> {
+        let range = self.get_cell_range_by_name(sheet_index, range_ref).await?;
+        let fa = self.qi(&range, type_names::X_ARRAY_FORMULA_RANGE).await?;
+        let method = interface::set_array_formula();
+        self.conn
+            .call(&fa, &method, &[UnoValue::String(formula.to_string())])
+            .await?;
+        Ok(())
+    }
+
     /// Merge a range of cells on a sheet.
     pub async fn merge_range(&mut self, sheet_index: i32, range_ref: &str) -> Result<()> {
         let range = self.get_cell_range_by_name(sheet_index, range_ref).await?;

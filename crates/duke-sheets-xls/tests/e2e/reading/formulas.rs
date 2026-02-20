@@ -537,6 +537,61 @@ fn test_xls_formula_array_constant() {
     cleanup_fixture(&path);
 }
 
+/// Phase 3: CSE array formula — entered with Ctrl+Shift+Enter.
+/// LO stores these as FORMULA records with tExp + ARRAY record.
+/// The decompiled text should be wrapped in `{=...}`.
+#[test]
+fn test_xls_formula_cse_array_formula() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        // Set data: A1=1, A2=2, A3=3, B1=10, B2=20, B3=30
+        for i in 1..=3 {
+            wb.set_cell_value(&format!("A{i}"), i as f64)
+                .await
+                .unwrap();
+            wb.set_cell_value(&format!("B{i}"), (i * 10) as f64)
+                .await
+                .unwrap();
+        }
+        // Enter a CSE array formula: {=SUM(A1:A3*B1:B3)} in C1
+        wb.set_array_formula(0, "C1", "=SUM(A1:A3*B1:B3)")
+            .await
+            .unwrap();
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let wb = XlsReader::read_file(&path).unwrap();
+    let ws = wb.worksheet(0).unwrap();
+
+    let val = ws.get_value_at(0, 2); // C1
+    let text = formula_text(&val);
+    assert_eq!(text, "{=SUM(A1:A3*B1:B3)}", "CSE array formula");
+
+    // Cached value should be 1*10 + 2*20 + 3*30 = 140
+    match &val {
+        CellValue::Formula { cached_value, .. } => {
+            match cached_value.as_deref() {
+                Some(CellValue::Number(n)) => {
+                    assert!(
+                        (*n - 140.0).abs() < f64::EPSILON,
+                        "expected cached 140.0, got {n}"
+                    );
+                }
+                other => panic!("Expected cached Number(140.0), got {:?}", other),
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    cleanup_fixture(&path);
+}
+
 /// Phase 3: Shared formulas — when a column has the same formula pattern,
 /// Excel stores a single SHAREDFMLA record and each cell uses tExp + tRefN.
 /// LO does this automatically when adjacent cells have the same pattern.
