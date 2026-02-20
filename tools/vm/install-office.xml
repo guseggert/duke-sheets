@@ -1,0 +1,33 @@
+<!-- Office Deployment Tool (ODT) configuration for silent Office install.
+     
+     Usage inside the Windows VM:
+       1. Download ODT from https://www.microsoft.com/en-us/download/details.aspx?id=49117
+       2. Extract: setup.exe /extract:C:\ODT
+       3. Copy this file to C:\ODT\install-office.xml
+       4. Download: C:\ODT\setup.exe /download install-office.xml
+       5. Install:  C:\ODT\setup.exe /configure install-office.xml
+     
+     This installs only Excel (and shared Office components) to minimize disk usage.
+     All other apps are excluded.
+-->
+<Configuration>
+  <Add OfficeClientEdition="64" Channel="Current">
+    <Product ID="O365ProPlusRetail">
+      <Language ID="en-us" />
+      <!-- Only install Excel — exclude everything else -->
+      <ExcludeApp ID="Access" />
+      <ExcludeApp ID="Groove" />
+      <ExcludeApp ID="Lync" />
+      <ExcludeApp ID="OneDrive" />
+      <ExcludeApp ID="OneNote" />
+      <ExcludeApp ID="Outlook" />
+      <ExcludeApp ID="PowerPoint" />
+      <ExcludeApp ID="Publisher" />
+      <ExcludeApp ID="Teams" />
+      <ExcludeApp ID="Word" />
+    </Product>
+  </Add>
+  <Display Level="None" AcceptEULA="TRUE" />
+  <Property Name="AUTOACTIVATE" Value="0" />
+  <Updates Enabled="FALSE" />
+</Configuration>

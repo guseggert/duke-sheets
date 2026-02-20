@@ -37,6 +37,16 @@
 - [x] Number formats, conditional formatting, data validation
 - [x] On-demand E2E test fixtures via global LO connection singleton
 
+### Excel COM Bridge (`duke-sheets-excel-com` + C# bridge server)
+- [x] Generic COM proxy protocol (Get/Set/Invoke over NDJSON-over-TCP)
+- [x] C# bridge server for Windows VM (`tools/excel-bridge-server/`)
+- [x] Rust TCP client with typed Excel convenience methods
+- [x] QEMU/KVM VM management scripts (`tools/vm/`)
+- [x] Shared file access via QEMU SMB
+- [ ] Excel parity E2E test suite (mirror LibreOffice E2E tests)
+- [ ] Style operations (font, fill, border, alignment via generic COM proxy)
+- [ ] CI integration (self-hosted runner with KVM)
+
 ### CSV Support
 - [x] Read CSV files
 - [x] Write CSV files
@@ -199,15 +209,22 @@ Common functions needed:
 ### Crate Structure
 ```
 duke-sheets/
-├── duke-sheets-core      # Data model, cell storage
-├── duke-sheets-formula   # Parser, evaluator, functions
-├── duke-sheets-xlsx      # XLSX read/write
-├── duke-sheets-xls       # XLS reader (BIFF8, read-only)
-├── duke-sheets-csv       # CSV read/write
-├── duke-sheets-chart     # Chart support (stub)
-├── duke-sheets-ffi       # C FFI bindings
-├── duke-sheets-cli       # CLI tool
-└── duke-sheets           # Main crate, re-exports
+├── duke-sheets-core        # Data model, cell storage
+├── duke-sheets-formula     # Parser, evaluator, functions
+├── duke-sheets-xlsx        # XLSX read/write
+├── duke-sheets-xls         # XLS reader (BIFF8, read-only)
+├── duke-sheets-csv         # CSV read/write
+├── duke-sheets-chart       # Chart support (stub)
+├── duke-sheets-ffi         # C FFI bindings
+├── duke-sheets-cli         # CLI tool
+├── duke-sheets-libreoffice # LibreOffice URP bridge (E2E testing)
+├── libreoffice-urp         # URP protocol implementation
+├── excel-com-protocol      # Generic COM proxy protocol types
+├── duke-sheets-excel-com   # Excel COM client (TCP to Windows VM)
+├── duke-sheets             # Main crate, re-exports
+└── tools/
+    ├── excel-bridge-server # C# bridge server (runs in Windows VM)
+    └── vm/                 # QEMU/KVM VM management scripts
 ```
 
 ### Key Types

@@ -7,10 +7,9 @@
 //! 4. Compare with duke-sheets' own formula engine
 //!
 //! Prerequisites:
-//!   - WINE installed and in PATH
-//!   - Microsoft Excel installed in the WINE prefix
-//!   - excel-com-bridge.exe built:
-//!     cargo build --target x86_64-pc-windows-gnu -p excel-com-bridge --release
+//!   - Windows VM running with Excel installed (see tools/vm/README.md)
+//!   - Bridge server running in the VM: ExcelBridgeServer.exe --port 9876
+//!   - Port 9876 forwarded from host to VM
 //!
 //! Run:
 //!   cargo run --example parity_test -p duke-sheets-excel-com
@@ -20,9 +19,9 @@ use duke_sheets_excel_com::{ExcelBridge, ExcelBridgeConfig};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Excel COM Bridge Parity Test ===\n");
 
-    // Start the bridge (this launches wine excel-com-bridge.exe)
-    println!("Starting Excel COM bridge...");
-    let bridge = ExcelBridge::start(ExcelBridgeConfig::default())?;
+    // Connect to the bridge server (default: localhost:9876)
+    println!("Connecting to bridge server...");
+    let bridge = ExcelBridge::connect(ExcelBridgeConfig::default())?;
 
     // Create a new workbook
     println!("Creating workbook...");
@@ -113,10 +112,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {label:20} ({cell}): {value:>12}  formula: {formula}");
     }
 
-    // --- Save the workbook ---
+    // --- Save the workbook via shared SMB mount ---
     println!("\nSaving workbook...");
-    wb.save("/tmp/parity_test.xlsx")?;
-    println!("Saved to /tmp/parity_test.xlsx");
+    wb.save(r"\\10.0.2.4\qemu\parity_test.xlsx")?;
+    println!("Saved to shared folder (host: /tmp/duke-sheets-excel/parity_test.xlsx)");
 
     // --- Clean up ---
     println!("\nShutting down...");

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Publish as single self-contained exe (no .NET install needed on target) -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+    <!-- Trim unused code to reduce file size -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+
+    <!-- COM interop requires this for dynamic dispatch -->
+    <EnableComHosting>true</EnableComHosting>
+  </PropertyGroup>
+
+  <!-- Suppress trim warnings for COM interop (dynamic dispatch is inherently reflection-based) -->
+  <ItemGroup>
+    <TrimmerRootAssembly Include="Microsoft.CSharp" />
+  </ItemGroup>
+
+</Project>
