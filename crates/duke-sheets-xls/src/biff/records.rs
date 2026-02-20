@@ -39,6 +39,7 @@ pub const FORMULA: u16 = 0x0006; // Formula cell with cached result
 pub const STRING: u16 = 0x0207; // Cached string result for preceding FORMULA
 pub const RSTRING: u16 = 0x00D6; // Rich-text inline string (rare)
 pub const ARRAY: u16 = 0x0221; // Array formula
+pub const SHAREDFMLA: u16 = 0x04BC; // Shared formula (ShrFmla)
 
 // ── Sheet structure ─────────────────────────────────────────────────────
 pub const ROW: u16 = 0x0208; // Row height, visibility, default format

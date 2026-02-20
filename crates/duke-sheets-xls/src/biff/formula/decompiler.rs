@@ -280,6 +280,45 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                     *last_col_rel,
                 )));
             }
+            // ---- Shared formula relative references ----
+            ParsedToken::RefN {
+                row_offset,
+                col_offset,
+                row_relative,
+                col_relative,
+            } => {
+                let (row, col) = resolve_refn_offset(ctx, *row_offset, *col_offset);
+                stack.push(StackEntry::atom(format_ref(
+                    row,
+                    col,
+                    *row_relative,
+                    *col_relative,
+                )));
+            }
+            ParsedToken::AreaN {
+                first_row_offset,
+                last_row_offset,
+                first_col_offset,
+                last_col_offset,
+                first_row_rel,
+                first_col_rel,
+                last_row_rel,
+                last_col_rel,
+            } => {
+                let (fr, fc) = resolve_refn_offset(ctx, *first_row_offset, *first_col_offset);
+                let (lr, lc) = resolve_refn_offset(ctx, *last_row_offset, *last_col_offset);
+                stack.push(StackEntry::atom(format_area(
+                    fr,
+                    lr,
+                    fc,
+                    lc,
+                    *first_row_rel,
+                    *first_col_rel,
+                    *last_row_rel,
+                    *last_col_rel,
+                )));
+            }
+
             ParsedToken::RefErr | ParsedToken::AreaErr => {
                 stack.push(StackEntry::atom("#REF!".to_string()));
             }
@@ -583,6 +622,25 @@ fn resolve_namex(ctx: &FormulaContext, extern_sheet_idx: u16, name_idx: u16) -> 
     format!("_namex{}", name_idx)
 }
 
+/// Resolve a tRefN/tAreaN signed offset to an absolute (row, col).
+///
+/// If the context has a `base_cell`, the offset is added to it (mod 65536/256).
+/// Without a base cell (shouldn't happen for valid shared formulas), the offset
+/// is interpreted as an unsigned value (best effort).
+fn resolve_refn_offset(ctx: &FormulaContext, row_off: i16, col_off: i16) -> (u16, u16) {
+    match ctx.base_cell {
+        Some((base_row, base_col)) => {
+            let row = ((base_row as i32) + (row_off as i32)) as u16; // wraps mod 65536
+            let col = ((base_col as i32) + (col_off as i32)) as u16 & 0xFF; // wraps mod 256
+            (row, col)
+        }
+        None => {
+            // No base cell — treat offsets as unsigned (best effort for non-shared context)
+            (row_off as u16, col_off as u16)
+        }
+    }
+}
+
 /// Check if a sheet name needs to be quoted in a formula.
 fn needs_quoting(name: &str) -> bool {
     if name.is_empty() {
@@ -632,6 +690,7 @@ mod tests {
             extern_sheet,
             supbooks,
             names: Vec::new(),
+            base_cell: None,
         }
     }
 
@@ -1065,6 +1124,7 @@ mod tests {
                 last_sheet: 2,
             }],
             names: Vec::new(),
+            base_cell: None,
         };
         let tokens = vec![ParsedToken::Area3d {
             extern_sheet_idx: 0,
@@ -1091,6 +1151,7 @@ mod tests {
                 sheet_idx: 0,
                 is_builtin: false,
             }],
+            base_cell: None,
         };
         // tName with name_idx=1 (1-based) → "MyRange"
         let tokens = vec![ParsedToken::Name { name_idx: 1 }];
@@ -1172,11 +1233,86 @@ mod tests {
                 sheet_idx: 0,
                 is_builtin: false,
             }],
+            base_cell: None,
         };
         let tokens = vec![ParsedToken::NameX {
             extern_sheet_idx: 0,
             name_idx: 1,
         }];
         assert_eq!(decompile(&tokens, &ctx), "TaxRate");
+    }
+
+    #[test]
+    fn test_refn_with_base_cell() {
+        // Base cell at B5 (row=4, col=1). RefN offset (0, -1) → A5.
+        let mut ctx = empty_ctx();
+        ctx.base_cell = Some((4, 1));
+        let tokens = vec![ParsedToken::RefN {
+            row_offset: 0,
+            col_offset: -1,
+            row_relative: true,
+            col_relative: true,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "A5");
+    }
+
+    #[test]
+    fn test_refn_positive_offset() {
+        // Base cell at A1 (row=0, col=0). RefN offset (2, 3) → D3.
+        let mut ctx = empty_ctx();
+        ctx.base_cell = Some((0, 0));
+        let tokens = vec![ParsedToken::RefN {
+            row_offset: 2,
+            col_offset: 3,
+            row_relative: true,
+            col_relative: true,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "D3");
+    }
+
+    #[test]
+    fn test_refn_mixed_absolute() {
+        // Base cell at C3 (row=2, col=2). RefN offset (-2, 0) with absolute col.
+        // Row: 2 + (-2) = 0, Col: 2 + 0 = 2 → $C1
+        let mut ctx = empty_ctx();
+        ctx.base_cell = Some((2, 2));
+        let tokens = vec![ParsedToken::RefN {
+            row_offset: -2,
+            col_offset: 0,
+            row_relative: true,
+            col_relative: false,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "$C1");
+    }
+
+    #[test]
+    fn test_arean_with_base_cell() {
+        // Base cell at B2 (row=1, col=1). AreaN offsets: first(-1,-1) last(8,-1) → A1:A10
+        let mut ctx = empty_ctx();
+        ctx.base_cell = Some((1, 1));
+        let tokens = vec![ParsedToken::AreaN {
+            first_row_offset: -1,
+            last_row_offset: 8,
+            first_col_offset: -1,
+            last_col_offset: -1,
+            first_row_rel: true,
+            first_col_rel: true,
+            last_row_rel: true,
+            last_col_rel: true,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "A1:A10");
+    }
+
+    #[test]
+    fn test_refn_without_base_cell() {
+        // No base cell — offsets treated as raw unsigned (best effort)
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::RefN {
+            row_offset: 5,
+            col_offset: 2,
+            row_relative: true,
+            col_relative: true,
+        }];
+        assert_eq!(decompile(&tokens, &ctx), "C6");
     }
 }
