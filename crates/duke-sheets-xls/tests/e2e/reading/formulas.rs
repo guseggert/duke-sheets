@@ -487,3 +487,63 @@ fn test_xls_formula_named_range_in_expression() {
 
     cleanup_fixture(&path);
 }
+
+/// Phase 3: Shared formulas — when a column has the same formula pattern,
+/// Excel stores a single SHAREDFMLA record and each cell uses tExp + tRefN.
+/// LO does this automatically when adjacent cells have the same pattern.
+#[test]
+fn test_xls_formula_shared_formula() {
+    skip_if_no_lo!();
+    let path = temp_fixture_path();
+
+    runtime().block_on(async {
+        let lo = lo_bridge().await.unwrap();
+        let mut b = lo.lock().await;
+        let mut wb = b.create_workbook().await.unwrap();
+        // Set up A1:A5 with values
+        for i in 1..=5 {
+            wb.set_cell_value(&format!("A{i}"), i as f64 * 10.0)
+                .await
+                .unwrap();
+        }
+        // B1:B5 = A1*2, A2*2, ... — LO will generate a shared formula
+        for i in 1..=5 {
+            wb.set_cell_formula(&format!("B{i}"), &format!("=A{i}*2"))
+                .await
+                .unwrap();
+        }
+        wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
+        wb.close().await.unwrap();
+    });
+
+    let wb = XlsReader::read_file(&path).unwrap();
+    let ws = wb.worksheet(0).unwrap();
+
+    // All 5 cells should have correct formula text with adjusted refs
+    for i in 1u32..=5 {
+        let val = ws.get_value_at(i - 1, 1);
+        let text = formula_text(&val);
+        let expected = format!("=A{}*2", i);
+        assert_eq!(text, expected, "shared formula at B{}", i);
+
+        // Cached value should be i*10*2
+        match &val {
+            CellValue::Formula { cached_value, .. } => {
+                let expected_val = i as f64 * 10.0 * 2.0;
+                match cached_value.as_deref() {
+                    Some(CellValue::Number(n)) => {
+                        assert!(
+                            (*n - expected_val).abs() < f64::EPSILON,
+                            "B{}: expected cached {expected_val}, got {n}",
+                            i
+                        );
+                    }
+                    other => panic!("B{}: expected cached Number, got {:?}", i, other),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    cleanup_fixture(&path);
+}

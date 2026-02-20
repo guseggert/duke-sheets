@@ -129,6 +129,28 @@ pub enum ParsedToken {
     AreaErr3d {
         extern_sheet_idx: u16,
     },
+    /// Relative cell reference for shared formulas (tRefN).
+    /// Offsets are signed when used with a base cell.
+    RefN {
+        /// Signed row offset (relative to shared formula origin).
+        row_offset: i16,
+        /// Signed column offset (relative to shared formula origin).
+        col_offset: i16,
+        row_relative: bool,
+        col_relative: bool,
+    },
+    /// Relative area reference for shared formulas (tAreaN).
+    AreaN {
+        first_row_offset: i16,
+        last_row_offset: i16,
+        first_col_offset: i16,
+        last_col_offset: i16,
+        first_row_rel: bool,
+        first_col_rel: bool,
+        last_row_rel: bool,
+        last_col_rel: bool,
+    },
+
     /// Array/shared formula indicator (tExp).
     Exp {
         row: u16,
@@ -492,32 +514,32 @@ pub fn parse_tokens(data: &[u8]) -> Vec<ParsedToken> {
 
             // ---- Phase 3 stubs: relative refs, array, table ----
             ptg::PTG_REF_N => {
-                // Same shape as tRef (4 bytes) but offsets are signed.
-                // For now treat exactly like tRef — works for non-shared formulas.
+                // tRefN: 4 bytes with signed offsets for shared formulas.
                 if pos + 4 > data.len() {
                     break;
                 }
-                let (row, col, row_rel, col_rel) = parse_ref_fields(&data[pos..]);
+                let (row_off, col_off, row_rel, col_rel) = parse_refn_fields(&data[pos..]);
                 pos += 4;
-                tokens.push(ParsedToken::Ref {
-                    row,
-                    col,
+                tokens.push(ParsedToken::RefN {
+                    row_offset: row_off,
+                    col_offset: col_off,
                     row_relative: row_rel,
                     col_relative: col_rel,
                 });
             }
 
             ptg::PTG_AREA_N => {
+                // tAreaN: 8 bytes with signed offsets for shared formulas.
                 if pos + 8 > data.len() {
                     break;
                 }
-                let (fr, lr, fc, lc, frr, fcr, lrr, lcr) = parse_area_fields(&data[pos..]);
+                let (fro, lro, fco, lco, frr, fcr, lrr, lcr) = parse_arean_fields(&data[pos..]);
                 pos += 8;
-                tokens.push(ParsedToken::Area {
-                    first_row: fr,
-                    last_row: lr,
-                    first_col: fc,
-                    last_col: lc,
+                tokens.push(ParsedToken::AreaN {
+                    first_row_offset: fro,
+                    last_row_offset: lro,
+                    first_col_offset: fco,
+                    last_col_offset: lco,
                     first_row_rel: frr,
                     first_col_rel: fcr,
                     last_row_rel: lrr,
@@ -563,6 +585,52 @@ fn parse_ref_fields(data: &[u8]) -> (u16, u16, bool, bool) {
     let row_rel = (col_rw & 0x4000) != 0; // bit 14
     let col_rel = (col_rw & 0x8000) != 0; // bit 15
     (row, col, row_rel, col_rel)
+}
+
+/// Parse a tRefN (shared formula relative ref) from 4 bytes.
+///
+/// Row field is a signed 16-bit offset. Column field is in bits 0-7
+/// of the col_rw word, sign-extended from 8 bits to i16.
+///
+/// Returns (row_offset, col_offset, row_relative, col_relative).
+fn parse_refn_fields(data: &[u8]) -> (i16, i16, bool, bool) {
+    let row_off = i16::from_le_bytes([data[0], data[1]]);
+    let col_rw = u16::from_le_bytes([data[2], data[3]]);
+    // Column offset is an 8-bit signed value in bits 0-7
+    let col_off = (col_rw & 0x00FF) as u8 as i8 as i16;
+    let row_rel = (col_rw & 0x4000) != 0;
+    let col_rel = (col_rw & 0x8000) != 0;
+    (row_off, col_off, row_rel, col_rel)
+}
+
+/// Parse a tAreaN (shared formula relative area) from 8 bytes.
+///
+/// Row fields are signed 16-bit offsets. Column fields are 8-bit
+/// signed offsets in bits 0-7 of the col_rw words.
+fn parse_arean_fields(data: &[u8]) -> (i16, i16, i16, i16, bool, bool, bool, bool) {
+    let first_row_off = i16::from_le_bytes([data[0], data[1]]);
+    let last_row_off = i16::from_le_bytes([data[2], data[3]]);
+    let first_col_rw = u16::from_le_bytes([data[4], data[5]]);
+    let last_col_rw = u16::from_le_bytes([data[6], data[7]]);
+
+    let first_col_off = (first_col_rw & 0x00FF) as u8 as i8 as i16;
+    let first_row_rel = (first_col_rw & 0x4000) != 0;
+    let first_col_rel = (first_col_rw & 0x8000) != 0;
+
+    let last_col_off = (last_col_rw & 0x00FF) as u8 as i8 as i16;
+    let last_row_rel = (last_col_rw & 0x4000) != 0;
+    let last_col_rel = (last_col_rw & 0x8000) != 0;
+
+    (
+        first_row_off,
+        last_row_off,
+        first_col_off,
+        last_col_off,
+        first_row_rel,
+        first_col_rel,
+        last_row_rel,
+        last_col_rel,
+    )
 }
 
 /// Parse a BIFF8 area reference from 8 bytes.
@@ -786,5 +854,66 @@ mod tests {
                 ptg_byte
             );
         }
+    }
+
+    #[test]
+    fn test_parse_refn_signed_offsets() {
+        // tRefNV (0x4C = 0x2C + 0x20): row_off=-1 (0xFFFF), col_off=-2 (0xFE), both relative
+        // col_rw = 0xFE | 0x4000 | 0x8000 = 0xC0FE
+        let data = [0x4C, 0xFF, 0xFF, 0xFE, 0xC0];
+        let tokens = parse_tokens(&data);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::RefN {
+                row_offset: -1,
+                col_offset: -2,
+                row_relative: true,
+                col_relative: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_refn_positive_offsets() {
+        // tRefNV: row_off=3, col_off=5, row absolute, col relative
+        // col_rw = 5 | 0x8000 = 0x8005
+        let data = [0x4C, 0x03, 0x00, 0x05, 0x80];
+        let tokens = parse_tokens(&data);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::RefN {
+                row_offset: 3,
+                col_offset: 5,
+                row_relative: false,
+                col_relative: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_arean_signed_offsets() {
+        // tAreaNV (0x4D = 0x2D + 0x20):
+        // first_row_off=0, last_row_off=9, first_col_off=-1, last_col_off=-1
+        // first_col_rw = 0xFF | 0xC000 = 0xC0FF, last_col_rw = 0xFF | 0xC000 = 0xC0FF
+        let data = [
+            0x4D, 0x00, 0x00, // first_row_off = 0
+            0x09, 0x00, // last_row_off = 9
+            0xFF, 0xC0, // first_col: off=-1, both rel
+            0xFF, 0xC0, // last_col: off=-1, both rel
+        ];
+        let tokens = parse_tokens(&data);
+        assert_eq!(
+            tokens,
+            vec![ParsedToken::AreaN {
+                first_row_offset: 0,
+                last_row_offset: 9,
+                first_col_offset: -1,
+                last_col_offset: -1,
+                first_row_rel: true,
+                first_col_rel: true,
+                last_row_rel: true,
+                last_col_rel: true,
+            }]
+        );
     }
 }

@@ -10,6 +10,7 @@ use duke_sheets_core::cell::SharedString;
 use duke_sheets_core::worksheet::SheetProtection;
 use duke_sheets_core::{CellError, CellValue, Style, Workbook};
 
+use crate::biff::formula::token_parser::ParsedToken;
 use crate::biff::formula::{ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES};
 use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32};
 use crate::biff::records;
@@ -35,6 +36,22 @@ struct SheetInfo {
     sheet_type: u8,
     /// Sheet name.
     name: String,
+}
+
+/// Result from parsing a FORMULA record.
+enum FormulaResult {
+    /// Normal formula parsed. Contains string-pending (row, col) if the
+    /// cached result is a string (meaning a STRING record should follow).
+    Done(Option<(u32, u16)>),
+    /// This cell uses a shared formula whose SHAREDFMLA record hasn't been
+    /// seen yet. The cell is written with empty formula text; the caller
+    /// must backfill the text when the SHAREDFMLA record arrives.
+    SharedPending {
+        cell_row: u32,
+        cell_col: u16,
+        master_row: u16,
+        master_col: u16,
+    },
 }
 
 impl XlsReader {
@@ -196,6 +213,7 @@ impl XlsReader {
             extern_sheet,
             supbooks,
             names,
+            base_cell: None,
         };
 
         // Phase 2: Parse each worksheet substream
@@ -308,6 +326,13 @@ impl XlsReader {
         let mut sheet_protected = false;
         let mut sheet_password_hash: Option<u16> = None;
 
+        // Shared formula support: stores (master_row, master_col) → token bytes
+        let mut shared_formulas: std::collections::HashMap<(u16, u16), Vec<u8>> =
+            std::collections::HashMap::new();
+        // Master cell that appeared before its SHAREDFMLA record.
+        // (cell_row, cell_col, master_row, master_col)
+        let mut pending_shared: Option<(u32, u16, u16, u16)> = None;
+
         for rec in records {
             match rec.record_type {
                 records::LABELSST => {
@@ -343,12 +368,49 @@ impl XlsReader {
                     pending_formula_cell = None;
                 }
                 records::FORMULA => {
-                    pending_formula_cell = Self::parse_formula(&rec.data, ws, styles, formula_ctx)?;
+                    let result =
+                        Self::parse_formula(&rec.data, ws, styles, formula_ctx, &shared_formulas)?;
+                    match result {
+                        FormulaResult::Done(string_pending) => {
+                            pending_formula_cell = string_pending;
+                        }
+                        FormulaResult::SharedPending {
+                            cell_row,
+                            cell_col,
+                            master_row,
+                            master_col,
+                        } => {
+                            pending_shared = Some((cell_row, cell_col, master_row, master_col));
+                            pending_formula_cell = None;
+                        }
+                    }
                 }
                 records::STRING => {
                     // Cached string value for the preceding FORMULA
                     if let Some((row, col)) = pending_formula_cell.take() {
                         Self::parse_formula_string(&rec.data, ws, row, col)?;
+                    }
+                }
+                records::SHAREDFMLA => {
+                    // Parse shared formula and store for later tExp resolution
+                    if let Some((master_row, master_col, token_data)) =
+                        Self::parse_sharedfmla(&rec.data)
+                    {
+                        shared_formulas.insert((master_row, master_col), token_data.clone());
+
+                        // Backfill the pending master cell if it was waiting
+                        if let Some((cell_row, cell_col, exp_row, exp_col)) = pending_shared.take()
+                        {
+                            if exp_row == master_row && exp_col == master_col {
+                                Self::backfill_shared_formula(
+                                    ws,
+                                    cell_row,
+                                    cell_col,
+                                    &token_data,
+                                    formula_ctx,
+                                )?;
+                            }
+                        }
                     }
                 }
                 records::MERGECELLS => {
@@ -596,15 +658,13 @@ impl XlsReader {
 
     /// FORMULA: row(2) + col(2) + xf(2) + result(8) + options(2) + reserved(4)
     ///        + cce(2) + formula_tokens(cce bytes)
-    ///
-    /// Returns the (row, col) if the cached result is a string (meaning a
-    /// STRING record should follow).
     fn parse_formula(
         data: &[u8],
         ws: &mut duke_sheets_core::Worksheet,
         styles: &[Style],
         formula_ctx: &FormulaContext,
-    ) -> XlsResult<Option<(u32, u16)>> {
+        shared_formulas: &std::collections::HashMap<(u16, u16), Vec<u8>>,
+    ) -> XlsResult<FormulaResult> {
         if data.len() < 20 {
             return Err(XlsError::Parse("FORMULA record too short".into()));
         }
@@ -618,20 +678,81 @@ impl XlsReader {
         let result_bytes = &data[off..off + 8];
         off += 8;
 
-        let _options = read_u16(data, &mut off)?;
+        let options = read_u16(data, &mut off)?;
         let _reserved = read_u32(data, &mut off)?;
         // off is now 20
 
-        // Decompile formula token bytes into text
+        let f_shared = (options & 0x0008) != 0;
+
+        // Parse the token bytes to check for tExp (shared/array formula indicator)
         let formula_text = if off + 2 <= data.len() {
             let cce = read_u16(data, &mut off)? as usize;
             if cce > 0 && off + cce <= data.len() {
                 let token_bytes = &data[off..off + cce];
-                let text = crate::biff::formula::decompile(token_bytes, formula_ctx);
-                if text.is_empty() {
-                    String::new()
+
+                // Check if this is a shared formula (tExp + fShared flag)
+                let tokens = crate::biff::formula::token_parser::parse_tokens(token_bytes);
+                if f_shared {
+                    if let Some(ParsedToken::Exp {
+                        row: master_row,
+                        col: master_col,
+                    }) = tokens.first()
+                    {
+                        // Try to resolve the shared formula
+                        if let Some(shared_tokens) =
+                            shared_formulas.get(&(*master_row, *master_col))
+                        {
+                            // Shared formula found — decompile with base cell
+                            let shared_ctx = FormulaContext {
+                                sheet_names: formula_ctx.sheet_names.clone(),
+                                extern_sheet: formula_ctx.extern_sheet.clone(),
+                                supbooks: formula_ctx.supbooks.clone(),
+                                names: formula_ctx.names.clone(),
+                                base_cell: Some((row as u16, col)),
+                            };
+                            let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
+                            if text.is_empty() {
+                                String::new()
+                            } else {
+                                format!("={}", text)
+                            }
+                        } else {
+                            // SHAREDFMLA not seen yet — write cell now with
+                            // empty text; caller will backfill later.
+                            Self::write_formula_cell(
+                                ws,
+                                row,
+                                col,
+                                xf_idx,
+                                result_bytes,
+                                String::new(),
+                                styles,
+                            )?;
+                            return Ok(FormulaResult::SharedPending {
+                                cell_row: row,
+                                cell_col: col,
+                                master_row: *master_row,
+                                master_col: *master_col,
+                            });
+                        }
+                    } else {
+                        // fShared set but no tExp — decompile normally
+                        let text =
+                            crate::biff::formula::decompiler::decompile(&tokens, formula_ctx);
+                        if text.is_empty() {
+                            String::new()
+                        } else {
+                            format!("={}", text)
+                        }
+                    }
                 } else {
-                    format!("={}", text)
+                    // Normal formula — decompile from already-parsed tokens
+                    let text = crate::biff::formula::decompiler::decompile(&tokens, formula_ctx);
+                    if text.is_empty() {
+                        String::new()
+                    } else {
+                        format!("={}", text)
+                    }
                 }
             } else {
                 String::new()
@@ -640,13 +761,33 @@ impl XlsReader {
             String::new()
         };
 
-        // Check if result is a special type (bytes 6-7 == 0xFFFF)
-        let mut return_pending = false;
+        Self::write_formula_cell(ws, row, col, xf_idx, result_bytes, formula_text, styles)?;
+
+        // Check if cached result is a string (STRING record follows)
+        let string_pending =
+            result_bytes[6] == 0xFF && result_bytes[7] == 0xFF && result_bytes[0] == 0x00;
+        if string_pending {
+            Ok(FormulaResult::Done(Some((row, col))))
+        } else {
+            Ok(FormulaResult::Done(None))
+        }
+    }
+
+    /// Write a formula cell with its cached value and formula text.
+    fn write_formula_cell(
+        ws: &mut duke_sheets_core::Worksheet,
+        row: u32,
+        col: u16,
+        xf_idx: u16,
+        result_bytes: &[u8],
+        formula_text: String,
+        styles: &[Style],
+    ) -> XlsResult<()> {
         if result_bytes[6] == 0xFF && result_bytes[7] == 0xFF {
             let result_type = result_bytes[0];
             match result_type {
                 0x00 => {
-                    // String — the actual string follows in a STRING record.
+                    // String — actual value comes in following STRING record
                     ws.set_cell_value_at(
                         row,
                         col,
@@ -656,7 +797,6 @@ impl XlsReader {
                             array_result: None,
                         },
                     )?;
-                    return_pending = true;
                 }
                 0x01 => {
                     let bool_val = result_bytes[2] != 0;
@@ -692,7 +832,6 @@ impl XlsReader {
                     )?;
                 }
                 _ => {
-                    // Empty or unknown cached result
                     ws.set_cell_value_at(
                         row,
                         col,
@@ -705,7 +844,6 @@ impl XlsReader {
                 }
             }
         } else {
-            // IEEE 754 double
             let value = f64::from_le_bytes(result_bytes.try_into().unwrap());
             ws.set_cell_value_at(
                 row,
@@ -717,14 +855,8 @@ impl XlsReader {
                 },
             )?;
         }
-
         Self::apply_style(ws, row, col, xf_idx, styles)?;
-
-        if return_pending {
-            Ok(Some((row, col)))
-        } else {
-            Ok(None)
-        }
+        Ok(())
     }
 
     /// STRING record: cached string value for a preceding FORMULA.
@@ -754,6 +886,73 @@ impl XlsReader {
                 text: existing_text,
                 cached_value: Some(Box::new(CellValue::String(SharedString::new(&string_val)))),
                 array_result: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// SHAREDFMLA (ShrFmla): Ref8U(6) + reserved(1) + cUse(1) + cce(2) + rgce(cce)
+    ///
+    /// Ref8U: rwFirst(2) + rwLast(2) + colFirst(1) + colLast(1) = 6 bytes.
+    /// Returns (master_row, master_col, token_data) or None if too short.
+    fn parse_sharedfmla(data: &[u8]) -> Option<(u16, u16, Vec<u8>)> {
+        // Minimum: 6 (Ref8U) + 1 (reserved) + 1 (cUse) + 2 (cce) = 10
+        if data.len() < 10 {
+            return None;
+        }
+        let first_row = u16::from_le_bytes([data[0], data[1]]);
+        let _last_row = u16::from_le_bytes([data[2], data[3]]);
+        let first_col = data[4] as u16;
+        let _last_col = data[5];
+        // data[6] = reserved
+        // data[7] = cUse (number of existing FORMULA records for this shared formula)
+        let cce = u16::from_le_bytes([data[8], data[9]]) as usize;
+        if data.len() < 10 + cce {
+            return None;
+        }
+        let token_data = data[10..10 + cce].to_vec();
+        Some((first_row, first_col, token_data))
+    }
+
+    /// Backfill a cell's formula text after its SHAREDFMLA record is found.
+    fn backfill_shared_formula(
+        ws: &mut duke_sheets_core::Worksheet,
+        cell_row: u32,
+        cell_col: u16,
+        shared_tokens: &[u8],
+        formula_ctx: &FormulaContext,
+    ) -> XlsResult<()> {
+        // Build a temporary context with the base cell for offset resolution
+        let shared_ctx = FormulaContext {
+            sheet_names: formula_ctx.sheet_names.clone(),
+            extern_sheet: formula_ctx.extern_sheet.clone(),
+            supbooks: formula_ctx.supbooks.clone(),
+            names: formula_ctx.names.clone(),
+            base_cell: Some((cell_row as u16, cell_col)),
+        };
+        let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
+        let formula_text = if text.is_empty() {
+            String::new()
+        } else {
+            format!("={}", text)
+        };
+
+        // Get the existing cached value and replace the formula text
+        let (cached, array) = match ws.get_value_at(cell_row, cell_col) {
+            CellValue::Formula {
+                cached_value,
+                array_result,
+                ..
+            } => (cached_value.clone(), array_result.clone()),
+            _ => (None, None),
+        };
+        ws.set_cell_value_at(
+            cell_row,
+            cell_col,
+            CellValue::Formula {
+                text: formula_text,
+                cached_value: cached,
+                array_result: array,
             },
         )?;
         Ok(())

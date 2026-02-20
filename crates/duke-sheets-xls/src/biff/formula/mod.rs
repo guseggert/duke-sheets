@@ -95,6 +95,9 @@ pub struct FormulaContext {
     pub supbooks: Vec<SupBook>,
     /// Defined name records.
     pub names: Vec<NameRecord>,
+    /// Base cell position for shared formula offset resolution.
+    /// When set, tRefN/tAreaN offsets are adjusted relative to this cell.
+    pub base_cell: Option<(u16, u16)>,
 }
 
 impl FormulaContext {
@@ -105,7 +108,18 @@ impl FormulaContext {
             extern_sheet: Vec::new(),
             supbooks: Vec::new(),
             names: Vec::new(),
+            base_cell: None,
         }
+    }
+
+    /// Set the base cell for shared formula offset resolution.
+    pub fn set_base_cell(&mut self, row: u16, col: u16) {
+        self.base_cell = Some((row, col));
+    }
+
+    /// Clear the base cell.
+    pub fn clear_base_cell(&mut self) {
+        self.base_cell = None;
     }
 }
 
