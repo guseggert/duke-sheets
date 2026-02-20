@@ -2,11 +2,11 @@
 
 use excel_com_protocol::{CellValue, SheetRef};
 
-use crate::bridge::{linux_to_wine_path, BridgeError, ExcelBridge};
+use crate::bridge::{BridgeError, ExcelBridge};
 
 /// A handle to an open workbook in the Excel COM bridge.
 ///
-/// Operations on this workbook are forwarded to the bridge process.
+/// Operations on this workbook are forwarded to the bridge server.
 /// By default, operations target the first worksheet (index 0).
 pub struct Workbook<'a> {
     bridge: &'a ExcelBridge,
@@ -43,7 +43,7 @@ impl<'a> Workbook<'a> {
 
     /// Set a cell's value on the active sheet.
     ///
-    /// Accepts anything that converts to CellValue:
+    /// Accepts anything that converts to `CellValue`:
     /// - `&str` / `String` -> String value
     /// - `f64`, `i32`, etc. -> Number value
     /// - `bool` -> Boolean value
@@ -76,7 +76,7 @@ impl<'a> Workbook<'a> {
 
     // -- Sheet-specific methods --
 
-    /// Set a cell value on a specific sheet (by index).
+    /// Set a cell value on a specific sheet.
     pub fn set_cell_value_on_sheet(
         &self,
         sheet: SheetRef,
@@ -98,18 +98,20 @@ impl<'a> Workbook<'a> {
 
     // -- File operations --
 
-    /// Save the workbook to a file path.
+    /// Save the workbook to a Windows file path.
     ///
-    /// Accepts a Linux path — it will be automatically converted to a WINE path.
-    /// Format is inferred from the extension (.xlsx, .xls, .csv).
-    pub fn save(&self, path: &str) -> Result<(), BridgeError> {
-        let wine_path = linux_to_wine_path(std::path::Path::new(path));
-        self.bridge.save_workbook(self.handle, &wine_path)
+    /// The path must be a Windows path visible to the VM. For files shared
+    /// via QEMU SMB, use a UNC path like `\\10.0.2.4\qemu\output.xlsx`.
+    ///
+    /// Format is inferred from extension: `.xlsx` = 51, `.xls` = -4143, `.csv` = 6.
+    pub fn save(&self, windows_path: &str) -> Result<(), BridgeError> {
+        let format = infer_save_format(windows_path);
+        self.bridge.save_workbook(self.handle, windows_path, format)
     }
 
-    /// Save the workbook using a raw Windows/WINE path (no conversion).
-    pub fn save_raw_path(&self, wine_path: &str) -> Result<(), BridgeError> {
-        self.bridge.save_workbook(self.handle, wine_path)
+    /// Save the workbook with an explicit Excel file format constant.
+    pub fn save_as(&self, windows_path: &str, format: i32) -> Result<(), BridgeError> {
+        self.bridge.save_workbook(self.handle, windows_path, format)
     }
 
     /// Close the workbook without saving.
@@ -118,4 +120,21 @@ impl<'a> Workbook<'a> {
     }
 }
 
-// From<T> for CellValue impls live in excel-com-protocol crate
+/// Infer the Excel file format constant from a file extension.
+///
+/// - `.xlsx` -> 51 (xlOpenXMLWorkbook)
+/// - `.xls`  -> -4143 (xlWorkbookNormal)
+/// - `.csv`  -> 6 (xlCSV)
+/// - other   -> 51 (default to xlsx)
+fn infer_save_format(path: &str) -> i32 {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".xlsx") {
+        51
+    } else if lower.ends_with(".xls") {
+        -4143
+    } else if lower.ends_with(".csv") {
+        6
+    } else {
+        51
+    }
+}

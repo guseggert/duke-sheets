@@ -32,6 +32,10 @@ excel_samples.zip
 # Agent instructions (local only)
 AGENTS.md
 
+# C# / .NET build artifacts (Excel bridge server)
+tools/excel-bridge-server/bin/
+tools/excel-bridge-server/obj/
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

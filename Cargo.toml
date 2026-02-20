@@ -15,12 +15,10 @@ members = [
     "crates/libreoffice-urp",
     "crates/duke-sheets-libreoffice",
 ]
-# Bindings and cross-compiled crates are excluded from the default workspace build
+# Bindings are excluded from the default workspace build
 exclude = [
     "bindings/python",
     "bindings/wasm",
-    # excel-com-bridge must be cross-compiled for Windows (--target x86_64-pc-windows-gnu)
-    "crates/excel-com-bridge",
 ]
 
 [workspace.package]

@@ -1,15 +1,16 @@
-//! Subprocess management and JSON IPC for the WINE bridge process.
+//! TCP client for the Excel COM bridge server.
+//!
+//! Connects to a C# bridge server running inside a Windows VM (QEMU/KVM)
+//! that provides generic COM proxy operations over NDJSON-over-TCP.
 
-use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use excel_com_protocol::{
-    self, CellValue, Command as BridgeCommand, Request, Response, ResponseData, ResponseResult,
-    SheetRef,
+    CellValue, ChainStep, Command, Request, Response, ResponseData, ResponseResult, SheetRef,
 };
 
 use crate::workbook::Workbook;
@@ -17,146 +18,145 @@ use crate::workbook::Workbook;
 /// Errors from the Excel COM bridge.
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeError {
-    #[error("Failed to spawn WINE bridge process: {0}")]
-    SpawnFailed(#[from] std::io::Error),
+    #[error("Failed to connect to bridge server at {0}: {1}")]
+    ConnectFailed(SocketAddr, std::io::Error),
 
-    #[error("Bridge process not running")]
-    NotRunning,
+    #[error("Connection lost")]
+    ConnectionLost,
 
-    #[error("Failed to send command to bridge: {0}")]
+    #[error("Failed to send command: {0}")]
     SendFailed(String),
 
-    #[error("Failed to read response from bridge: {0}")]
+    #[error("Failed to read response: {0}")]
     ReadFailed(String),
 
-    #[error("JSON serialization error: {0}")]
+    #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
 
     #[error("Bridge returned error: {0}")]
     BridgeError(String),
 
-    #[error("Unexpected response data")]
-    UnexpectedResponse,
+    #[error("Expected a handle in response")]
+    ExpectedHandle,
 
-    #[error("WINE not found. Install WINE and ensure 'wine' is in PATH.")]
-    WineNotFound,
-
-    #[error("Bridge executable not found at: {0}")]
-    BridgeExeNotFound(String),
+    #[error("Expected a value in response")]
+    ExpectedValue,
 }
 
-/// Configuration for the Excel COM bridge.
+/// Configuration for connecting to the Excel COM bridge server.
 pub struct ExcelBridgeConfig {
-    /// Path to the `excel-com-bridge.exe` Windows executable.
-    /// If None, will search in common locations relative to the current binary.
-    pub bridge_exe_path: Option<PathBuf>,
+    /// Address of the bridge server. Default: `127.0.0.1:9876`.
+    pub addr: SocketAddr,
 
-    /// Path to the WINE executable. Defaults to "wine".
-    pub wine_path: PathBuf,
+    /// Connection timeout.
+    pub connect_timeout: Duration,
 
-    /// Optional WINEPREFIX to use (for isolating the WINE environment).
-    pub wine_prefix: Option<PathBuf>,
-
-    /// Timeout for waiting for bridge responses.
-    pub timeout: Duration,
+    /// Read timeout for waiting for responses.
+    pub read_timeout: Duration,
 }
 
 impl Default for ExcelBridgeConfig {
     fn default() -> Self {
         Self {
-            bridge_exe_path: None,
-            wine_path: PathBuf::from("wine"),
-            wine_prefix: None,
-            timeout: Duration::from_secs(30),
+            addr: "127.0.0.1:9876".parse().unwrap(),
+            connect_timeout: Duration::from_secs(10),
+            read_timeout: Duration::from_secs(30),
         }
     }
 }
 
-/// The main handle for communicating with the Excel COM bridge.
+/// TCP connection to the Excel COM bridge server.
 ///
-/// This manages the WINE subprocess lifecycle and provides methods
-/// for Excel automation operations.
+/// Provides both low-level generic COM proxy methods (`get`, `set`, `invoke`)
+/// and high-level Excel-specific convenience methods (`create_workbook`,
+/// `set_cell_value`, etc.).
 pub struct ExcelBridge {
-    child: Mutex<Child>,
-    stdin: Mutex<std::process::ChildStdin>,
-    stdout: Mutex<BufReader<std::process::ChildStdout>>,
+    reader: Mutex<BufReader<TcpStream>>,
+    writer: Mutex<BufWriter<TcpStream>>,
     next_id: AtomicU64,
 }
 
 impl ExcelBridge {
-    /// Start the bridge process and initialize Excel.
-    pub fn start(config: ExcelBridgeConfig) -> Result<Self, BridgeError> {
-        let exe_path = config.bridge_exe_path.unwrap_or_else(|| find_bridge_exe());
+    /// Connect to a running bridge server and initialize Excel.
+    pub fn connect(config: ExcelBridgeConfig) -> Result<Self, BridgeError> {
+        let stream = TcpStream::connect_timeout(&config.addr, config.connect_timeout)
+            .map_err(|e| BridgeError::ConnectFailed(config.addr, e))?;
 
-        if !exe_path.exists() {
-            return Err(BridgeError::BridgeExeNotFound(
-                exe_path.display().to_string(),
-            ));
-        }
+        stream
+            .set_read_timeout(Some(config.read_timeout))
+            .map_err(|e| BridgeError::ReadFailed(e.to_string()))?;
 
-        let mut cmd = std::process::Command::new(&config.wine_path);
+        stream
+            .set_nodelay(true)
+            .map_err(|e| BridgeError::SendFailed(e.to_string()))?;
 
-        if let Some(prefix) = &config.wine_prefix {
-            cmd.env("WINEPREFIX", prefix);
-        }
-
-        cmd.arg(&exe_path);
-        cmd.stdin(Stdio::piped());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::inherit()); // Bridge diagnostics go to our stderr
-
-        let mut child = cmd.spawn().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                BridgeError::WineNotFound
-            } else {
-                BridgeError::SpawnFailed(e)
-            }
-        })?;
-
-        let stdin = child.stdin.take().expect("stdin was piped");
-        let stdout = child.stdout.take().expect("stdout was piped");
+        let reader = stream
+            .try_clone()
+            .map_err(|e| BridgeError::ReadFailed(e.to_string()))?;
 
         let bridge = Self {
-            child: Mutex::new(child),
-            stdin: Mutex::new(stdin),
-            stdout: Mutex::new(BufReader::new(stdout)),
+            reader: Mutex::new(BufReader::new(reader)),
+            writer: Mutex::new(BufWriter::new(stream)),
             next_id: AtomicU64::new(1),
         };
 
         // Initialize COM and Excel
-        bridge.send_command(BridgeCommand::Init)?;
+        bridge.send_command(Command::Init)?;
 
         Ok(bridge)
     }
 
-    /// Send a command to the bridge and wait for the response.
-    fn send_command(&self, command: BridgeCommand) -> Result<Option<ResponseData>, BridgeError> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+    /// Connect to localhost on a specific port.
+    pub fn connect_local(port: u16) -> Result<Self, BridgeError> {
+        Self::connect(ExcelBridgeConfig {
+            addr: format!("127.0.0.1:{port}").parse().unwrap(),
+            ..Default::default()
+        })
+    }
 
+    /// Connect using a hostname:port string.
+    pub fn connect_addr(addr: impl ToSocketAddrs) -> Result<Self, BridgeError> {
+        let socket_addr = addr
+            .to_socket_addrs()
+            .map_err(|e| BridgeError::SendFailed(format!("Invalid address: {e}")))?
+            .next()
+            .ok_or_else(|| BridgeError::SendFailed("No address resolved".into()))?;
+
+        Self::connect(ExcelBridgeConfig {
+            addr: socket_addr,
+            ..Default::default()
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // Low-level generic COM proxy operations
+    // -----------------------------------------------------------------------
+
+    /// Send a command and wait for the response.
+    fn send_command(&self, command: Command) -> Result<Option<ResponseData>, BridgeError> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let request = Request { id, command };
         let json = serde_json::to_string(&request)?;
 
-        // Send the request
+        // Send
         {
-            let mut stdin = self.stdin.lock().unwrap();
-            writeln!(stdin, "{json}").map_err(|e| BridgeError::SendFailed(e.to_string()))?;
-            stdin
+            let mut writer = self.writer.lock().unwrap();
+            writeln!(writer, "{json}").map_err(|e| BridgeError::SendFailed(e.to_string()))?;
+            writer
                 .flush()
                 .map_err(|e| BridgeError::SendFailed(e.to_string()))?;
         }
 
-        // Read the response
+        // Read
         let response: Response = {
-            let mut stdout = self.stdout.lock().unwrap();
+            let mut reader = self.reader.lock().unwrap();
             let mut line = String::new();
-            stdout
+            reader
                 .read_line(&mut line)
                 .map_err(|e| BridgeError::ReadFailed(e.to_string()))?;
-
             if line.is_empty() {
-                return Err(BridgeError::NotRunning);
+                return Err(BridgeError::ConnectionLost);
             }
-
             serde_json::from_str(&line)?
         };
 
@@ -166,47 +166,106 @@ impl ExcelBridge {
         }
     }
 
-    /// Create a new empty workbook.
-    pub fn create_workbook(&self) -> Result<Workbook<'_>, BridgeError> {
-        let data = self.send_command(BridgeCommand::CreateWorkbook)?;
-        match data {
-            Some(ResponseData::WorkbookHandle { workbook }) => Ok(Workbook::new(self, workbook)),
-            _ => Err(BridgeError::UnexpectedResponse),
-        }
-    }
-
-    /// Open an existing workbook from a file path.
+    /// Get a property from a COM object, navigating a chain from a handle.
     ///
-    /// The path should be a Windows-style path as seen by WINE.
-    /// Use `linux_to_wine_path` to convert if needed.
-    pub fn open_workbook(&self, path: &str) -> Result<Workbook<'_>, BridgeError> {
-        let data = self.send_command(BridgeCommand::OpenWorkbook {
-            path: path.to_string(),
+    /// Returns `Ok(Value)` for primitives, `Ok(Handle)` for COM objects.
+    pub fn get(
+        &self,
+        handle: u64,
+        chain: Vec<ChainStep>,
+        property: &str,
+    ) -> Result<Option<ResponseData>, BridgeError> {
+        self.send_command(Command::Get {
+            handle,
+            chain,
+            property: property.to_string(),
+        })
+    }
+
+    /// Set a property on a COM object, navigating a chain from a handle.
+    pub fn set(
+        &self,
+        handle: u64,
+        chain: Vec<ChainStep>,
+        property: &str,
+        value: serde_json::Value,
+    ) -> Result<(), BridgeError> {
+        self.send_command(Command::Set {
+            handle,
+            chain,
+            property: property.to_string(),
+            value,
         })?;
-        match data {
-            Some(ResponseData::WorkbookHandle { workbook }) => Ok(Workbook::new(self, workbook)),
-            _ => Err(BridgeError::UnexpectedResponse),
-        }
+        Ok(())
     }
 
-    /// Force Excel to recalculate all open workbooks.
+    /// Invoke a method on a COM object, navigating a chain from a handle.
+    ///
+    /// Returns `Ok(Value)` for primitives, `Ok(Handle)` for COM objects.
+    pub fn invoke(
+        &self,
+        handle: u64,
+        chain: Vec<ChainStep>,
+        method: &str,
+        args: Vec<serde_json::Value>,
+    ) -> Result<Option<ResponseData>, BridgeError> {
+        self.send_command(Command::Invoke {
+            handle,
+            chain,
+            method: method.to_string(),
+            args,
+        })
+    }
+
+    /// Release a stored COM object handle on the server.
+    pub fn release(&self, handle: u64) -> Result<(), BridgeError> {
+        self.send_command(Command::Release { handle })?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // High-level Excel convenience methods
+    // -----------------------------------------------------------------------
+
+    /// Create a new empty workbook. Returns a `Workbook` handle.
+    ///
+    /// Equivalent to `Excel.Application.Workbooks.Add()`.
+    pub fn create_workbook(&self) -> Result<Workbook<'_>, BridgeError> {
+        let data = self.invoke(0, vec![cs_prop("Workbooks")], "Add", vec![])?;
+        let handle = extract_handle(data)?;
+        Ok(Workbook::new(self, handle))
+    }
+
+    /// Open a workbook from a Windows file path. Returns a `Workbook` handle.
+    ///
+    /// The path must be a Windows path as seen inside the VM
+    /// (e.g., `C:\Users\...` or a UNC path like `\\10.0.2.4\qemu\file.xlsx`).
+    pub fn open_workbook(&self, windows_path: &str) -> Result<Workbook<'_>, BridgeError> {
+        let data = self.invoke(
+            0,
+            vec![cs_prop("Workbooks")],
+            "Open",
+            vec![serde_json::Value::from(windows_path)],
+        )?;
+        let handle = extract_handle(data)?;
+        Ok(Workbook::new(self, handle))
+    }
+
+    /// Force a full recalculation of all open workbooks.
+    ///
+    /// Equivalent to `Excel.Application.Calculate()`.
     pub fn recalculate(&self) -> Result<(), BridgeError> {
-        self.send_command(BridgeCommand::Recalculate)?;
+        self.invoke(0, vec![], "Calculate", vec![])?;
         Ok(())
     }
 
-    /// Shut down the bridge: close all workbooks, quit Excel, and terminate the process.
+    /// Shut down: close all workbooks, quit Excel, end the session.
     pub fn shutdown(self) -> Result<(), BridgeError> {
-        let _ = self.send_command(BridgeCommand::Shutdown);
-
-        // Wait for the child process to exit
-        let mut child = self.child.lock().unwrap();
-        let _ = child.wait();
-
+        let _ = self.send_command(Command::Shutdown);
         Ok(())
     }
 
-    // -- Internal methods used by Workbook --
+    // -- Cell operations (used by Workbook) --
 
     pub(crate) fn set_cell_value(
         &self,
@@ -215,13 +274,8 @@ impl ExcelBridge {
         cell: &str,
         value: CellValue,
     ) -> Result<(), BridgeError> {
-        self.send_command(BridgeCommand::SetCellValue {
-            workbook,
-            sheet,
-            cell: cell.to_string(),
-            value,
-        })?;
-        Ok(())
+        let chain = vec![sheet.to_chain_step(), cs_idx("Range", cell)];
+        self.set(workbook, chain, "Value", value.to_json())
     }
 
     pub(crate) fn set_cell_formula(
@@ -231,13 +285,8 @@ impl ExcelBridge {
         cell: &str,
         formula: &str,
     ) -> Result<(), BridgeError> {
-        self.send_command(BridgeCommand::SetCellFormula {
-            workbook,
-            sheet,
-            cell: cell.to_string(),
-            formula: formula.to_string(),
-        })?;
-        Ok(())
+        let chain = vec![sheet.to_chain_step(), cs_idx("Range", cell)];
+        self.set(workbook, chain, "Formula", serde_json::Value::from(formula))
     }
 
     pub(crate) fn get_cell_value(
@@ -246,14 +295,12 @@ impl ExcelBridge {
         sheet: SheetRef,
         cell: &str,
     ) -> Result<CellValue, BridgeError> {
-        let data = self.send_command(BridgeCommand::GetCellValue {
-            workbook,
-            sheet,
-            cell: cell.to_string(),
-        })?;
+        let chain = vec![sheet.to_chain_step(), cs_idx("Range", cell)];
+        let data = self.get(workbook, chain, "Value")?;
         match data {
-            Some(ResponseData::Value { value }) => Ok(value),
-            _ => Err(BridgeError::UnexpectedResponse),
+            Some(ResponseData::Value { value }) => Ok(CellValue::from_json(&value)),
+            None => Ok(CellValue::Null),
+            _ => Ok(CellValue::Null),
         }
     }
 
@@ -263,68 +310,64 @@ impl ExcelBridge {
         sheet: SheetRef,
         cell: &str,
     ) -> Result<String, BridgeError> {
-        let data = self.send_command(BridgeCommand::GetCellFormula {
-            workbook,
-            sheet,
-            cell: cell.to_string(),
-        })?;
+        let chain = vec![sheet.to_chain_step(), cs_idx("Range", cell)];
+        let data = self.get(workbook, chain, "Formula")?;
         match data {
-            Some(ResponseData::Formula { formula }) => Ok(formula),
-            _ => Err(BridgeError::UnexpectedResponse),
+            Some(ResponseData::Value { value }) => {
+                Ok(value.as_str().unwrap_or_default().to_string())
+            }
+            _ => Ok(String::new()),
         }
     }
 
-    pub(crate) fn save_workbook(&self, workbook: u64, path: &str) -> Result<(), BridgeError> {
-        self.send_command(BridgeCommand::SaveWorkbook {
+    pub(crate) fn save_workbook(
+        &self,
+        workbook: u64,
+        path: &str,
+        format: i32,
+    ) -> Result<(), BridgeError> {
+        self.invoke(
             workbook,
-            path: path.to_string(),
-        })?;
+            vec![],
+            "SaveAs",
+            vec![
+                serde_json::Value::from(path),
+                serde_json::Value::from(format),
+            ],
+        )?;
         Ok(())
     }
 
     pub(crate) fn close_workbook(&self, workbook: u64) -> Result<(), BridgeError> {
-        self.send_command(BridgeCommand::CloseWorkbook { workbook })?;
+        self.invoke(
+            workbook,
+            vec![],
+            "Close",
+            vec![serde_json::Value::from(false)],
+        )?;
+        self.release(workbook)?;
         Ok(())
     }
 }
 
-/// Convert a Linux filesystem path to a WINE (Windows) path.
-///
-/// WINE maps `/` to `Z:\`, so `/home/user/file.xlsx` becomes `Z:\home\user\file.xlsx`.
-/// The WINE prefix's `drive_c` maps to `C:\`.
-pub fn linux_to_wine_path(linux_path: &Path) -> String {
-    let abs = if linux_path.is_absolute() {
-        linux_path.to_path_buf()
-    } else {
-        std::env::current_dir().unwrap_or_default().join(linux_path)
-    };
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-    // WINE maps the root filesystem to Z:
-    format!("Z:{}", abs.display()).replace('/', "\\")
+/// Create a `ChainStep::Property`.
+fn cs_prop(name: &str) -> ChainStep {
+    ChainStep::Property(name.to_string())
 }
 
-/// Attempt to locate the bridge exe relative to the current executable or in common paths.
-fn find_bridge_exe() -> PathBuf {
-    // Check next to the current executable
-    if let Ok(mut exe) = std::env::current_exe() {
-        exe.pop();
-        let candidate = exe.join("excel-com-bridge.exe");
-        if candidate.exists() {
-            return candidate;
-        }
-    }
+/// Create a `ChainStep::Indexed` with a string index.
+fn cs_idx(name: &str, index: &str) -> ChainStep {
+    ChainStep::Indexed(name.to_string(), serde_json::Value::from(index))
+}
 
-    // Check in the target directory (for development)
-    let target_path = PathBuf::from("target/x86_64-pc-windows-gnu/release/excel-com-bridge.exe");
-    if target_path.exists() {
-        return target_path;
+/// Extract a handle from a response.
+fn extract_handle(data: Option<ResponseData>) -> Result<u64, BridgeError> {
+    match data {
+        Some(ResponseData::Handle { handle }) => Ok(handle),
+        _ => Err(BridgeError::ExpectedHandle),
     }
-
-    let target_path = PathBuf::from("target/x86_64-pc-windows-gnu/debug/excel-com-bridge.exe");
-    if target_path.exists() {
-        return target_path;
-    }
-
-    // Default: assume it's in the current directory
-    PathBuf::from("excel-com-bridge.exe")
 }
