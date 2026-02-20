@@ -413,6 +413,11 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 stack.push(StackEntry::atom("#REF!".to_string()));
             }
 
+            // tArray — array constant with pre-formatted text
+            ParsedToken::Array { text } => {
+                stack.push(StackEntry::atom(text.clone()));
+            }
+
             // tExp — array/shared formula indicator
             ParsedToken::Exp { .. } => {
                 // This means the cell's formula is stored elsewhere

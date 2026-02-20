@@ -132,9 +132,17 @@ impl FormulaContext {
 /// Returns the formula text **without** a leading `=` sign. Returns an empty
 /// string if the token stream is empty or decompilation fails.
 pub fn decompile(data: &[u8], ctx: &FormulaContext) -> String {
+    decompile_with_extra(data, &[], ctx)
+}
+
+/// Decompile formula tokens with an extra-data section for tArray constants.
+///
+/// The `extra_data` slice contains array constant data that follows the
+/// main token stream in FORMULA records.
+pub fn decompile_with_extra(data: &[u8], extra_data: &[u8], ctx: &FormulaContext) -> String {
     if data.is_empty() {
         return String::new();
     }
-    let tokens = token_parser::parse_tokens(data);
+    let tokens = token_parser::parse_tokens_with_extra(data, extra_data);
     decompiler::decompile(&tokens, ctx)
 }
