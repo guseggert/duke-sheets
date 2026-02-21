@@ -327,3 +327,153 @@ fn simple_uuid() -> String {
         t as u64 & 0xffffffffffff
     )
 }
+
+// ---------------------------------------------------------------------------
+// Assertion helpers for tests
+// ---------------------------------------------------------------------------
+
+/// Assert a cell contains a number (or formula with cached number).
+pub fn assert_number(
+    sheet: &duke_sheets_core::Worksheet,
+    row: u32,
+    col: u16,
+    expected: f64,
+    label: &str,
+) {
+    let cell = sheet
+        .cell_at(row, col)
+        .unwrap_or_else(|| panic!("{label} should exist"));
+    match &cell.value {
+        duke_sheets_core::CellValue::Number(n) => {
+            assert!(
+                (*n - expected).abs() < 0.001,
+                "{label}: expected {expected}, got {n}"
+            );
+        }
+        duke_sheets_core::CellValue::Formula { cached_value, .. } => {
+            if let Some(cached) = cached_value {
+                match cached.as_ref() {
+                    duke_sheets_core::CellValue::Number(n) => {
+                        assert!(
+                            (*n - expected).abs() < 0.001,
+                            "{label}: expected {expected}, got {n} (cached)"
+                        );
+                    }
+                    other => panic!("{label}: expected Number in formula cache, got {other:?}"),
+                }
+            } else {
+                panic!("{label}: formula has no cached value");
+            }
+        }
+        other => panic!("{label}: expected Number, got {other:?}"),
+    }
+}
+
+/// Assert a cell contains a string.
+pub fn assert_string(
+    sheet: &duke_sheets_core::Worksheet,
+    row: u32,
+    col: u16,
+    expected: &str,
+    label: &str,
+) {
+    let cell = sheet
+        .cell_at(row, col)
+        .unwrap_or_else(|| panic!("{label} should exist"));
+    match &cell.value {
+        duke_sheets_core::CellValue::String(s) => {
+            assert_eq!(s.as_ref(), expected, "{label}");
+        }
+        other => panic!("{label}: expected String, got {other:?}"),
+    }
+}
+
+/// Assert a cell contains a string (case-insensitive substring match).
+pub fn assert_string_contains(
+    sheet: &duke_sheets_core::Worksheet,
+    row: u32,
+    col: u16,
+    substring: &str,
+    label: &str,
+) {
+    let cell = sheet
+        .cell_at(row, col)
+        .unwrap_or_else(|| panic!("{label} should exist"));
+    match &cell.value {
+        duke_sheets_core::CellValue::String(s) => {
+            assert!(
+                s.as_ref().contains(substring),
+                "{label}: expected to contain '{substring}', got '{}'",
+                s.as_ref()
+            );
+        }
+        other => panic!("{label}: expected String, got {other:?}"),
+    }
+}
+
+/// Assert a cell contains a boolean.
+pub fn assert_bool(
+    sheet: &duke_sheets_core::Worksheet,
+    row: u32,
+    col: u16,
+    expected: bool,
+    label: &str,
+) {
+    let cell = sheet
+        .cell_at(row, col)
+        .unwrap_or_else(|| panic!("{label} should exist"));
+    match &cell.value {
+        duke_sheets_core::CellValue::Boolean(b) => {
+            assert_eq!(*b, expected, "{label}");
+        }
+        other => panic!("{label}: expected Boolean, got {other:?}"),
+    }
+}
+
+/// Assert a cell has a formula (text preserved).
+pub fn assert_has_formula(sheet: &duke_sheets_core::Worksheet, row: u32, col: u16, label: &str) {
+    let formula = sheet.get_formula_at(row, col);
+    assert!(formula.is_some(), "{label} should have a formula");
+}
+
+/// Assert a cell is an error value (via effective_value).
+pub fn assert_is_error(sheet: &duke_sheets_core::Worksheet, row: u32, col: u16, label: &str) {
+    let cell = sheet
+        .cell_at(row, col)
+        .unwrap_or_else(|| panic!("{label} should exist"));
+    match cell.value.effective_value() {
+        duke_sheets_core::CellValue::Error(_) => {}
+        other => panic!("{label}: expected Error, got {other:?}"),
+    }
+}
+
+/// Assert a formula cell has a cached string value.
+pub fn assert_formula_string(
+    sheet: &duke_sheets_core::Worksheet,
+    row: u32,
+    col: u16,
+    expected: &str,
+    label: &str,
+) {
+    let cell = sheet
+        .cell_at(row, col)
+        .unwrap_or_else(|| panic!("{label} should exist"));
+    match &cell.value {
+        duke_sheets_core::CellValue::Formula { cached_value, .. } => {
+            if let Some(cached) = cached_value {
+                match cached.as_ref() {
+                    duke_sheets_core::CellValue::String(s) => {
+                        assert_eq!(s.as_ref(), expected, "{label}");
+                    }
+                    other => panic!("{label}: expected String in formula cache, got {other:?}"),
+                }
+            } else {
+                panic!("{label}: formula has no cached value");
+            }
+        }
+        duke_sheets_core::CellValue::String(s) => {
+            assert_eq!(s.as_ref(), expected, "{label}");
+        }
+        other => panic!("{label}: expected Formula or String, got {other:?}"),
+    }
+}
