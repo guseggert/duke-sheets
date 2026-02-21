@@ -121,6 +121,20 @@ Common functions needed:
 - [x] Add support for implicit intersection (`@`)
 - [x] Add support for spill operator (`#`)
 
+#### Robustness & Compatibility
+- [ ] **Real-world file corpus** — collect XLSX/XLS files from Excel 2007–2024, LibreOffice, Google Sheets, Apple Numbers, WPS Office; validate `Workbook::open()` succeeds and basic properties (sheet count, dimensions) are sane
+- [ ] **Roundtrip fidelity tests** — open → save → reopen, assert cells/styles/merges/formulas survive; open saved file in real Excel via COM bridge and verify no repair warnings
+- [ ] **Cross-app write compatibility** — open duke-sheets-written XLSX in real Excel, check `Workbook.ReadOnly` / filename unchanged (repair detection), no missing data
+- [ ] **OOXML spec validation** — run Open XML SDK validator on files duke-sheets produces, catch missing required attributes / wrong element ordering / invalid content types
+- [ ] **Property-based testing** (proptest) — CellAddress round-trips through `to_string()`/`parse()`, Style survives XLSX write/read, formula `parse(e).to_string()` re-parses to same AST
+- [ ] **Graceful error recovery** — return workbook with `warnings: Vec<ReadWarning>` instead of hard-failing on every malformed element (corrupt style index, bad shared string ref, etc.)
+
+#### CI
+- [ ] `cargo test` on every push (GitHub Actions)
+- [ ] Excel COM E2E on self-hosted runner with KVM
+- [ ] Nightly job for slow tasks: fuzz corpus, full benchmark suite, real-world file corpus
+- [ ] Clippy + `cargo fmt --check` gate
+
 ### Medium Priority
 
 #### XLS Reader (Legacy Excel) — Remaining Items
