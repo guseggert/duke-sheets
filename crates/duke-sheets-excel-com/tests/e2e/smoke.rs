@@ -4,7 +4,10 @@
 //! and formulas, saves as XLSX inside the VM, pulls the file to the host
 //! via WinRM, reads it back with duke-sheets, and asserts everything matches.
 
-use crate::{cleanup_fixture, excel_bridge, pull_file_from_vm, temp_fixture};
+use crate::{
+    assert_bool, assert_formula_string, assert_number, assert_string, cleanup_fixture,
+    ensure_vm_temp_dir, excel_bridge, pull_file_from_vm, temp_fixture,
+};
 use duke_sheets_xlsx::XlsxReader;
 
 /// Full round-trip smoke test: numbers, strings, booleans, formulas.
@@ -26,7 +29,7 @@ fn smoke_test_round_trip() {
         let excel = bridge.lock().unwrap();
 
         // Ensure C:\temp exists inside the VM
-        crate::ensure_vm_temp_dir();
+        ensure_vm_temp_dir();
 
         let wb = excel.create_workbook().expect("create workbook");
 
@@ -124,110 +127,4 @@ fn smoke_test_round_trip() {
     assert_formula_string(&sheet, 3, 3, "yes", "D4");
 
     cleanup_fixture(&fixture);
-}
-
-// ---- Assertion helpers ----
-
-fn assert_number(
-    sheet: &duke_sheets_core::Worksheet,
-    row: u32,
-    col: u16,
-    expected: f64,
-    label: &str,
-) {
-    let cell = sheet
-        .cell_at(row, col)
-        .unwrap_or_else(|| panic!("{label} should exist"));
-    match &cell.value {
-        duke_sheets_core::CellValue::Number(n) => {
-            assert!(
-                (*n - expected).abs() < 0.001,
-                "{label}: expected {expected}, got {n}"
-            );
-        }
-        // Formulas store their cached value — could be Formula variant with cached Number
-        duke_sheets_core::CellValue::Formula { cached_value, .. } => {
-            if let Some(cached) = cached_value {
-                match cached.as_ref() {
-                    duke_sheets_core::CellValue::Number(n) => {
-                        assert!(
-                            (*n - expected).abs() < 0.001,
-                            "{label}: expected {expected}, got {n} (cached)"
-                        );
-                    }
-                    other => panic!("{label}: expected Number in formula cache, got {other:?}"),
-                }
-            } else {
-                panic!("{label}: formula has no cached value");
-            }
-        }
-        other => panic!("{label}: expected Number, got {other:?}"),
-    }
-}
-
-fn assert_string(
-    sheet: &duke_sheets_core::Worksheet,
-    row: u32,
-    col: u16,
-    expected: &str,
-    label: &str,
-) {
-    let cell = sheet
-        .cell_at(row, col)
-        .unwrap_or_else(|| panic!("{label} should exist"));
-    match &cell.value {
-        duke_sheets_core::CellValue::String(s) => {
-            assert_eq!(s.as_ref(), expected, "{label}");
-        }
-        other => panic!("{label}: expected String, got {other:?}"),
-    }
-}
-
-fn assert_bool(
-    sheet: &duke_sheets_core::Worksheet,
-    row: u32,
-    col: u16,
-    expected: bool,
-    label: &str,
-) {
-    let cell = sheet
-        .cell_at(row, col)
-        .unwrap_or_else(|| panic!("{label} should exist"));
-    match &cell.value {
-        duke_sheets_core::CellValue::Boolean(b) => {
-            assert_eq!(*b, expected, "{label}");
-        }
-        other => panic!("{label}: expected Boolean, got {other:?}"),
-    }
-}
-
-fn assert_formula_string(
-    sheet: &duke_sheets_core::Worksheet,
-    row: u32,
-    col: u16,
-    expected: &str,
-    label: &str,
-) {
-    let cell = sheet
-        .cell_at(row, col)
-        .unwrap_or_else(|| panic!("{label} should exist"));
-    match &cell.value {
-        duke_sheets_core::CellValue::Formula { cached_value, .. } => {
-            if let Some(cached) = cached_value {
-                match cached.as_ref() {
-                    duke_sheets_core::CellValue::String(s) => {
-                        assert_eq!(s.as_ref(), expected, "{label}");
-                    }
-                    other => panic!("{label}: expected String in formula cache, got {other:?}"),
-                }
-            } else {
-                panic!("{label}: formula has no cached value");
-            }
-        }
-        duke_sheets_core::CellValue::String(s) => {
-            // Some formulas may be inlined as strings
-            assert_eq!(s.as_ref(), expected, "{label}");
-        }
-        other => panic!("{label}: expected Formula or String, got {other:?}"),
-    }
 }
