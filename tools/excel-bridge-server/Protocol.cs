@@ -101,11 +101,6 @@ public static class ProtocolHelpers
     /// </summary>
     public static string Serialize(Response resp)
     {
-        return JsonSerializer.Serialize(resp, JsonCtx.Default.Response);
+        return JsonSerializer.Serialize(resp);
     }
 }
-
-[JsonSerializable(typeof(Response))]
-[JsonSerializable(typeof(HandleData))]
-[JsonSerializable(typeof(ValueData))]
-internal partial class JsonCtx : JsonSerializerContext { }

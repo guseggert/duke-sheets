@@ -11,12 +11,13 @@
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
 
-    <!-- Trim unused code to reduce file size -->
-    <PublishTrimmed>true</PublishTrimmed>
-    <TrimMode>partial</TrimMode>
+    <!-- DO NOT trim — COM interop relies on reflection/dynamic dispatch
+         that is fundamentally incompatible with IL trimming -->
+    <PublishTrimmed>false</PublishTrimmed>
 
     <!-- COM interop requires this for dynamic dispatch -->
     <EnableComHosting>true</EnableComHosting>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
   </PropertyGroup>
 
   <!-- Suppress trim warnings for COM interop (dynamic dispatch is inherently reflection-based) -->
