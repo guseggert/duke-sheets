@@ -168,6 +168,20 @@ Common functions needed:
 - [ ] Images
 - [ ] Print settings
 
+#### Performance Benchmarks
+- [ ] Criterion benchmarks for XLSX read (small, medium, large files)
+- [ ] Criterion benchmarks for XLSX write
+- [ ] Criterion benchmarks for XLS read
+- [ ] Formula parser benchmarks (throughput, complex expressions)
+- [ ] Calculation engine benchmarks (large dependency graphs)
+- [ ] Memory usage profiling / tracking for large workbooks
+
+#### Fuzz Testing
+- [ ] Fuzz XLSX reader (`cargo-fuzz` / `libFuzzer`) — malformed ZIP, corrupt XML, truncated streams
+- [ ] Fuzz XLS reader — malformed BIFF8 records, bad CONTINUE boundaries, corrupt SST
+- [ ] Fuzz formula parser — arbitrary expression strings
+- [ ] Fuzz CSV reader — malformed delimiters, encoding edge cases
+
 #### C FFI
 - [ ] Complete FFI bindings
 - [ ] Python bindings via FFI
