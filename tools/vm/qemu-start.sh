@@ -84,19 +84,19 @@ echo "Waiting for WinRM on port 5985 (VM boot)..."
 # Wait for WinRM to be reachable — this means Windows has finished booting
 # and the network stack is up. Note: nc -z gives false positives with QEMU
 # user-net (the host-side port is always open), so we send a real HTTP request.
-for i in $(seq 1 120); do
+for i in $(seq 1 180); do
     if curl -s -o /dev/null -w '%{http_code}' --max-time 2 \
          http://localhost:5985/wsman 2>/dev/null | grep -q '40[0-9]'; then
         echo "WinRM reachable (took ${i}s)"
         echo ""
         echo "Bridge should be running on port 9876."
         echo "Test with:"
-        echo "  echo '{\"id\":1,\"command\":\"Init\",\"data\":{\"prog_id\":\"Excel.Application\"}}' | nc -q1 localhost 9876"
+        echo "  echo '{\"id\":1,\"cmd\":\"Init\"}' | ncat -w5 localhost 9876"
         exit 0
     fi
     sleep 1
 done
 
-echo "WARNING: WinRM not responding after 120s."
+echo "WARNING: WinRM not responding after 180s."
 echo "The VM may still be booting. Try:"
 echo "  curl -v http://localhost:5985/wsman"
