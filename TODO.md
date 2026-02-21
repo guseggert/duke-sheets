@@ -175,6 +175,13 @@ Common functions needed:
 - [ ] Formula parser benchmarks (throughput, complex expressions)
 - [ ] Calculation engine benchmarks (large dependency graphs)
 - [ ] Memory usage profiling / tracking for large workbooks
+- [ ] Comparative benchmarks vs other libraries:
+  - [ ] **calamine** (Rust, read-only) — XLSX/XLS read speed, memory usage
+  - [ ] **umya-spreadsheet** (Rust, read/write) — XLSX read/write speed, style handling
+  - [ ] **rust_xlsxwriter** (Rust, write-only) — XLSX write speed
+  - [ ] **excelize** (Go) — XLSX read/write via CLI or FFI wrapper
+  - [ ] **openpyxl** (Python) — XLSX read/write as baseline reference
+  - [ ] Generate comparison tables/charts for README
 
 #### Fuzz Testing
 - [ ] Fuzz XLSX reader (`cargo-fuzz` / `libFuzzer`) — malformed ZIP, corrupt XML, truncated streams
