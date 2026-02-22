@@ -44,8 +44,8 @@
 - [x] QEMU/KVM VM management scripts (`tools/vm/`)
 - [x] Shared file access via QEMU SMB
 - [x] Excel E2E smoke test (round-trip: numbers, strings, booleans, formulas)
-- [ ] Excel parity E2E test suite (mirror remaining LibreOffice E2E tests)
-- [ ] Style operations (font, fill, border, alignment via generic COM proxy)
+- [x] Style operations (font, fill, border, alignment via generic COM proxy)
+- [ ] Excel parity E2E test suite — Phase 1-4 complete (58/58 tests passing), Phase 5 pending (roundtrip fidelity)
 - [ ] CI integration (self-hosted runner with KVM)
 
 ### CSV Support
@@ -226,9 +226,9 @@ Common functions needed:
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E via LibreOffice URP (XLSX) | 56 | ✅ |
-| E2E via Excel COM (XLSX) | 1 | ✅ |
+| E2E via Excel COM (XLSX) | 58 | ✅ |
 | Other (unit, doc, integration) | 279 | ✅ |
-| **Total** | **480** | ✅ |
+| **Total** | **537** | ✅ |
 
 ---
 
