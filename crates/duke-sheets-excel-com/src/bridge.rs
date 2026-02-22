@@ -348,6 +348,230 @@ impl ExcelBridge {
         self.release(workbook)?;
         Ok(())
     }
+
+    // -- Style operations (used by Workbook) --
+
+    /// Set a property on Range.Font (e.g., "Bold", "Italic", "Size", etc.)
+    pub(crate) fn set_font_property(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        cell: &str,
+        property: &str,
+        value: serde_json::Value,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![
+            sheet.to_chain_step(),
+            cs_idx("Range", cell),
+            cs_prop("Font"),
+        ];
+        self.set(workbook, chain, property, value)
+    }
+
+    /// Set Range.Interior.Color (fill color)
+    pub(crate) fn set_interior_color(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        cell: &str,
+        color: u32,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![
+            sheet.to_chain_step(),
+            cs_idx("Range", cell),
+            cs_prop("Interior"),
+        ];
+        self.set(workbook, chain, "Color", serde_json::Value::from(color))
+    }
+
+    /// Set a property on Range.Borders[edge] (e.g., LineStyle, Color, Weight)
+    /// edge is an xlBordersIndex constant:
+    ///   xlEdgeLeft=7, xlEdgeTop=8, xlEdgeBottom=9, xlEdgeRight=10,
+    ///   xlDiagonalDown=5, xlDiagonalUp=6
+    pub(crate) fn set_border_property(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        cell: &str,
+        edge: i32,
+        property: &str,
+        value: serde_json::Value,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![
+            sheet.to_chain_step(),
+            cs_idx("Range", cell),
+            ChainStep::Indexed("Borders".to_string(), serde_json::Value::from(edge)),
+        ];
+        self.set(workbook, chain, property, value)
+    }
+
+    /// Set a direct property on Range (HorizontalAlignment, VerticalAlignment, etc.)
+    pub(crate) fn set_range_property(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        cell: &str,
+        property: &str,
+        value: serde_json::Value,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![sheet.to_chain_step(), cs_idx("Range", cell)];
+        self.set(workbook, chain, property, value)
+    }
+
+    /// Set row height (in points)
+    pub(crate) fn set_row_height(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        row: u32, // 1-based
+        height: f64,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![
+            sheet.to_chain_step(),
+            ChainStep::Indexed("Rows".to_string(), serde_json::Value::from(row)),
+        ];
+        self.set(
+            workbook,
+            chain,
+            "RowHeight",
+            serde_json::Value::from(height),
+        )
+    }
+
+    /// Set row hidden
+    pub(crate) fn set_row_hidden(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        row: u32, // 1-based
+        hidden: bool,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![
+            sheet.to_chain_step(),
+            ChainStep::Indexed("Rows".to_string(), serde_json::Value::from(row)),
+        ];
+        self.set(workbook, chain, "Hidden", serde_json::Value::from(hidden))
+    }
+
+    /// Set column width (in character widths)
+    pub(crate) fn set_column_width(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        col: u32, // 1-based
+        width: f64,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![
+            sheet.to_chain_step(),
+            ChainStep::Indexed("Columns".to_string(), serde_json::Value::from(col)),
+        ];
+        self.set(
+            workbook,
+            chain,
+            "ColumnWidth",
+            serde_json::Value::from(width),
+        )
+    }
+
+    /// Merge a range of cells
+    pub(crate) fn merge_range(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        range: &str,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![sheet.to_chain_step(), cs_idx("Range", range)];
+        self.invoke(workbook, chain, "Merge", vec![])?;
+        Ok(())
+    }
+
+    // -- Comments --
+
+    /// Add a comment to a cell: Range(cell).AddComment(text)
+    pub(crate) fn add_comment(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        cell: &str,
+        text: &str,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![sheet.to_chain_step(), cs_idx("Range", cell)];
+        self.invoke(
+            workbook,
+            chain,
+            "AddComment",
+            vec![serde_json::Value::from(text)],
+        )?;
+        Ok(())
+    }
+
+    // -- Conditional formatting --
+
+    /// Add a FormatCondition: Range(range).FormatConditions.Add(type, op, formula1)
+    /// Returns the handle to the new FormatCondition COM object.
+    pub(crate) fn add_format_condition(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        range: &str,
+        cf_type: i32,
+        operator: i32,
+        formula1: &str,
+    ) -> Result<u64, BridgeError> {
+        let chain = vec![
+            sheet.to_chain_step(),
+            cs_idx("Range", range),
+            cs_prop("FormatConditions"),
+        ];
+        let result = self.invoke(
+            workbook,
+            chain,
+            "Add",
+            vec![
+                serde_json::Value::from(cf_type),
+                serde_json::Value::from(operator),
+                serde_json::Value::from(formula1),
+            ],
+        )?;
+        extract_handle(result)
+    }
+
+    // -- Data validation --
+
+    /// Add data validation: Range(range).Validation.Add(type, alertStyle, operator, formula1, formula2)
+    /// Pass `serde_json::Value::Null` for optional params (bridge converts to Missing.Value).
+    pub(crate) fn add_validation(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        range: &str,
+        args: Vec<serde_json::Value>,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![
+            sheet.to_chain_step(),
+            cs_idx("Range", range),
+            cs_prop("Validation"),
+        ];
+        self.invoke(workbook, chain, "Add", args)?;
+        Ok(())
+    }
+
+    /// Set a property on Range(range).Validation
+    pub(crate) fn set_validation_property(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        range: &str,
+        property: &str,
+        value: serde_json::Value,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![
+            sheet.to_chain_step(),
+            cs_idx("Range", range),
+            cs_prop("Validation"),
+        ];
+        self.set(workbook, chain, property, value)
+    }
 }
 
 // ---------------------------------------------------------------------------

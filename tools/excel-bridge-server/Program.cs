@@ -141,6 +141,7 @@ class Program
                     {
                         invokeArgs = argsEl.EnumerateArray()
                             .Select(ProtocolHelpers.JsonToComValue)
+                            .Select(a => a ?? System.Reflection.Missing.Value)
                             .ToArray();
                     }
 

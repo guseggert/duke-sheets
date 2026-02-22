@@ -6,6 +6,7 @@ uv = "0.9"
 rust = "1.92"
 node = "20"
 "cargo:wasm-pack" = "latest"
+dotnet = "8"
 
 # =============================================================================
 # Setup Tasks
@@ -162,8 +163,8 @@ description = "Run E2E tests for XLSX reader (requires LibreOffice via urp:start
 run = "cargo test -p duke-sheets-xlsx --test e2e -- --test-threads=1 --nocapture"
 
 [tasks."test:excel"]
-description = "Run Excel COM parity test (requires vm:start)"
-run = "cargo run --example parity_test -p duke-sheets-excel-com"
+description = "Run Excel COM E2E tests (requires vm:start + vm:deploy-bridge)"
+run = "cargo test -p duke-sheets-excel-com --test e2e -- --test-threads=1"
 
 # =============================================================================
 # Windows VM Tasks (Excel COM bridge via QEMU/KVM)
@@ -184,12 +185,34 @@ run = """
 #!/bin/bash
 set -e
 echo "Building ExcelBridgeServer.exe for Windows..."
-dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
-echo ""
-echo "Output: tools/excel-bridge-server/bin/Release/net8.0/win-x64/publish/ExcelBridgeServer.exe"
-echo ""
-echo "To deploy to VM, copy to shared folder:"
-echo "  cp bin/Release/net8.0/win-x64/publish/ExcelBridgeServer.exe /tmp/duke-sheets-excel/"
+dotnet publish -c Release -r win-x64 --self-contained \
+    -p:PublishSingleFile=true -o /tmp/duke-sheets-excel/
+echo "Published to /tmp/duke-sheets-excel/ExcelBridgeServer.exe"
+"""
+
+[tasks."vm:deploy-bridge"]
+description = "Build bridge, copy to VM, restart (requires vm:start)"
+depends = ["vm:build-bridge"]
+run = """
+#!/bin/bash
+set -e
+WINRM="python3 tools/vm/winrm-exec.py"
+
+echo "Stopping bridge on VM..."
+$WINRM -ps 'Stop-ScheduledTask -TaskName "ExcelBridgeServer" -ErrorAction SilentlyContinue; Start-Sleep 2'
+
+echo "Copying new exe from SMB share..."
+$WINRM -ps 'Copy-Item "\\\\10.0.2.4\\qemu\\ExcelBridgeServer.exe" "C:\\tools\\ExcelBridgeServer.exe" -Force'
+
+echo "Starting bridge..."
+$WINRM -ps 'Start-ScheduledTask -TaskName "ExcelBridgeServer"; Start-Sleep 2; (Get-ScheduledTask -TaskName "ExcelBridgeServer").State'
+
+echo "Verifying bridge is reachable..."
+if echo '{"id":1,"cmd":"Init","params":{}}' | nc -q1 localhost 9876 2>/dev/null | grep -q '"ok"'; then
+    echo "Bridge is up and responding!"
+else
+    echo "WARNING: Bridge may not be ready yet (Init check failed)"
+fi
 """
 
 # =============================================================================

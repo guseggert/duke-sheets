@@ -456,16 +456,16 @@ bash tools/vm/qemu-stop.sh    # graceful shutdown
 
 ## WinRM from the Host
 
-A Python helper at `/tmp/winrm-exec.py` (created during setup) sends
-commands to the VM via WinRM Basic auth. It uses SOAP/WS-Man directly
-(no dependencies beyond Python stdlib):
+A Python helper at `tools/vm/winrm-exec.py` sends commands to the VM
+via WinRM Basic auth. It uses SOAP/WS-Man directly (no dependencies
+beyond Python stdlib):
 
 ```bash
 # Run a cmd command
-python3 /tmp/winrm-exec.py "hostname"
+python3 tools/vm/winrm-exec.py "hostname"
 
 # Run a PowerShell command (handles pipes, quotes, special chars)
-python3 /tmp/winrm-exec.py -ps 'Get-Process | Select-Object -First 5'
+python3 tools/vm/winrm-exec.py -ps 'Get-Process | Select-Object -First 5'
 ```
 
 The `-ps` flag encodes the command as base64 UTF-16LE and passes it

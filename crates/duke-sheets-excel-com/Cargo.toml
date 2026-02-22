@@ -14,3 +14,4 @@ thiserror = "1.0"
 base64 = "0.22.1"
 duke-sheets-core = { path = "../duke-sheets-core" }
 duke-sheets-xlsx = { path = "../duke-sheets-xlsx" }
+zip.workspace = true
