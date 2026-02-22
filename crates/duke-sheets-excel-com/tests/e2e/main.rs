@@ -14,8 +14,18 @@
 //!
 //! Tests will fail if the bridge is not available.
 
+mod alignment;
+mod border_styles;
+mod comments;
 mod common;
+mod conditional_format;
 mod data_types;
+mod data_validation;
+mod dimensions;
+mod fill_styles;
+mod font_styles;
+mod merged_cells;
+mod number_formats;
 mod smoke;
 
 pub use common::*;
