@@ -23,7 +23,30 @@ RAM="${DUKE_SHEETS_VM_RAM:-4G}"
 CPUS="${DUKE_SHEETS_VM_CPUS:-2}"
 PID_FILE="/tmp/duke-sheets-vm.pid"
 SHARE_DIR="/tmp/duke-sheets-excel"
-QEMU="${DUKE_DIR}/qemu/qemu-system-x86_64"
+
+# Find the repo root (where this script lives is tools/vm/)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Search order: .qemu/ in repo, ~/.duke-sheets/qemu/, PATH, /tmp build
+QEMU=""
+for candidate in \
+    "$REPO_DIR/.qemu/qemu-system-x86_64" \
+    "$DUKE_DIR/qemu/qemu-system-x86_64" \
+; do
+    if [ -x "$candidate" ]; then
+        QEMU="$candidate"
+        break
+    fi
+done
+if [ -z "$QEMU" ]; then
+    if command -v qemu-system-x86_64 &>/dev/null; then
+        QEMU="qemu-system-x86_64"
+    else
+        echo "ERROR: QEMU not found. Run: mise run vm:build-qemu"
+        exit 1
+    fi
+fi
 
 if [ ! -f "$DISK" ]; then
     echo "ERROR: VM disk not found at $DISK"
@@ -31,18 +54,6 @@ if [ ! -f "$DISK" ]; then
     echo "To set up the VM, run: bash tools/vm/setup.sh"
     echo "Or set DUKE_SHEETS_VM_DISK to point to your Windows qcow2 image."
     exit 1
-fi
-
-if [ ! -x "$QEMU" ]; then
-    # Fall back to QEMU in PATH or /tmp build location
-    if command -v qemu-system-x86_64 &>/dev/null; then
-        QEMU="qemu-system-x86_64"
-    elif [ -x "/tmp/qemu-9.2.3/build/qemu-system-x86_64" ]; then
-        QEMU="/tmp/qemu-9.2.3/build/qemu-system-x86_64"
-    else
-        echo "ERROR: QEMU not found. Run: bash tools/vm/setup.sh"
-        exit 1
-    fi
 fi
 
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
@@ -62,7 +73,22 @@ echo "  Ports:  9876 (bridge), 5985 (WinRM), 2222 (SSH)"
 
 export LD_LIBRARY_PATH="/usr/local/lib64:/usr/local/lib:${LD_LIBRARY_PATH:-}"
 
+# Resolve BIOS/firmware data dir from the QEMU binary location.
+# For repo-local builds (.qemu/), the pc-bios files are in the build tree.
+QEMU_DIR="$(dirname "$QEMU")"
+QEMU_DATA_DIR=""
+if [ -d "$QEMU_DIR/build" ]; then
+    # Repo-local build: find pc-bios in the source tree
+    for d in "$QEMU_DIR"/build/qemu-*/pc-bios; do
+        if [ -f "$d/bios-256k.bin" ]; then
+            QEMU_DATA_DIR="$d"
+            break
+        fi
+    done
+fi
+
 "$QEMU" \
+    ${QEMU_DATA_DIR:+-L "$QEMU_DATA_DIR"} \
     -M q35,usb=on,acpi=on,hpet=off \
     -accel kvm \
     -cpu host,hv_relaxed,hv_frequencies,hv_vpindex,hv_ipi,hv_tlbflush,hv_spinlocks=0x1fff,hv_synic,hv_runtime,hv_time,hv_stimer,hv_vapic \

@@ -170,8 +170,65 @@ run = "cargo test -p duke-sheets-excel-com --test e2e -- --test-threads=1"
 # Windows VM Tasks (Excel COM bridge via QEMU/KVM)
 # =============================================================================
 
+[tasks."vm:build-qemu"]
+description = "Build QEMU 9.2.3 into .qemu/ (survives reboots)"
+run = """
+#!/bin/bash
+set -euo pipefail
+
+QEMU_VERSION="9.2.3"
+REPO_DIR="$(pwd)"
+INSTALL_DIR="$REPO_DIR/.qemu"
+BUILD_DIR="$INSTALL_DIR/build"
+
+# Skip if already built
+if [ -x "$INSTALL_DIR/qemu-system-x86_64" ]; then
+    existing_ver=$("$INSTALL_DIR/qemu-system-x86_64" --version 2>/dev/null | head -1 | grep -oP '\\d+\\.\\d+\\.\\d+' || true)
+    if [ "$existing_ver" = "$QEMU_VERSION" ]; then
+        echo "QEMU $QEMU_VERSION already built at $INSTALL_DIR, skipping."
+        exit 0
+    fi
+fi
+
+mkdir -p "$BUILD_DIR"
+
+TARBALL="$BUILD_DIR/qemu-${QEMU_VERSION}.tar.xz"
+SRC="$BUILD_DIR/qemu-${QEMU_VERSION}"
+
+if [ ! -f "$TARBALL" ]; then
+    echo "Downloading QEMU ${QEMU_VERSION}..."
+    curl -L -o "$TARBALL" "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz"
+fi
+
+if [ ! -d "$SRC" ]; then
+    echo "Extracting..."
+    tar xf "$TARBALL" -C "$BUILD_DIR"
+fi
+
+cd "$SRC"
+rm -rf build
+
+export PKG_CONFIG_PATH="/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+echo "Configuring (x86_64 system emulator only)..."
+./configure \
+    --target-list=x86_64-softmmu \
+    --disable-gtk --disable-sdl --disable-opengl --disable-virglrenderer \
+    --enable-vnc --enable-slirp \
+    --disable-docs \
+    2>&1 | grep -E "^(slirp|Build dir)" || true
+
+echo "Building with $(nproc) cores..."
+ninja -C build -j"$(nproc)" qemu-system-x86_64 qemu-img 2>&1 | tail -5
+
+cp build/qemu-system-x86_64 build/qemu-img "$INSTALL_DIR/"
+echo "Installed to $INSTALL_DIR/"
+"$INSTALL_DIR/qemu-system-x86_64" --version | head -1
+"""
+
 [tasks."vm:start"]
-description = "Start the Windows Excel VM (requires QEMU/KVM)"
+description = "Start the Windows Excel VM (requires vm:build-qemu)"
+depends = ["vm:build-qemu"]
 run = "bash tools/vm/qemu-start.sh"
 
 [tasks."vm:stop"]
@@ -184,10 +241,12 @@ dir = "tools/excel-bridge-server"
 run = """
 #!/bin/bash
 set -e
+SHARE_DIR="/tmp/duke-sheets-excel"
+mkdir -p "$SHARE_DIR"
 echo "Building ExcelBridgeServer.exe for Windows..."
 dotnet publish -c Release -r win-x64 --self-contained \
-    -p:PublishSingleFile=true -o /tmp/duke-sheets-excel/
-echo "Published to /tmp/duke-sheets-excel/ExcelBridgeServer.exe"
+    -p:PublishSingleFile=true -o "$SHARE_DIR/"
+echo "Published to $SHARE_DIR/ExcelBridgeServer.exe"
 """
 
 [tasks."vm:deploy-bridge"]
