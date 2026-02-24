@@ -121,13 +121,18 @@ Common functions needed:
 - [x] Add support for implicit intersection (`@`)
 - [x] Add support for spill operator (`#`)
 
-#### Robustness & Compatibility
-- [ ] **Real-world file corpus** — collect XLSX/XLS files from Excel 2007–2024, LibreOffice, Google Sheets, Apple Numbers, WPS Office; validate `Workbook::open()` succeeds and basic properties (sheet count, dimensions) are sane
+#### Reader Robustness
+- [ ] **Fix XML namespace handling** — replace `name().as_ref()` with `local_name().as_ref()` in reader (~140 call sites across `reader/mod.rs` and `styles.rs`); handle `r:id` attribute prefix specially; prevents silent data loss on files with prefixed namespaces
+- [ ] **Real-world file corpus + differential testing** — generate XLSX from multiple tools (openpyxl, xlsxwriter, Apache POI, LibreOffice), manually export from Google Sheets and Apple Numbers, collect a few wild public files; open each with duke-sheets and compare cell counts/values against calamine to catch silent data loss
+- [ ] **Graceful error recovery** — return workbook with `warnings: Vec<ReadWarning>` instead of hard-failing on every malformed element (corrupt style index, bad shared string ref, etc.)
+
+#### Writer Correctness
 - [x] **Roundtrip fidelity tests** — write with duke-sheets, open in real Excel via COM bridge, verify no repair warnings and cell data integrity (Phase 5 E2E test)
 - [x] **Cross-app write compatibility** — duke-sheets-written XLSX opens in real Excel with no repair; `Workbook.ReadOnly` and filename checked
 - [ ] **OOXML spec validation** — run Open XML SDK validator on files duke-sheets produces, catch missing required attributes / wrong element ordering / invalid content types
+
+#### General Quality
 - [ ] **Property-based testing** (proptest) — CellAddress round-trips through `to_string()`/`parse()`, Style survives XLSX write/read, formula `parse(e).to_string()` re-parses to same AST
-- [ ] **Graceful error recovery** — return workbook with `warnings: Vec<ReadWarning>` instead of hard-failing on every malformed element (corrupt style index, bad shared string ref, etc.)
 
 #### CI
 - [ ] `cargo test` on every push (GitHub Actions)
