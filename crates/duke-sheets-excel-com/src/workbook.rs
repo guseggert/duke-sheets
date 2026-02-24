@@ -1,6 +1,6 @@
 //! Workbook handle — ergonomic API for working with an Excel workbook via the bridge.
 
-use excel_com_protocol::{CellValue, ChainStep, SheetRef};
+use excel_com_protocol::{CellValue, ChainStep, ResponseData, SheetRef};
 
 use crate::bridge::{BridgeError, ExcelBridge};
 
@@ -570,6 +570,35 @@ impl<'a> Workbook<'a> {
     /// Save the workbook with an explicit Excel file format constant.
     pub fn save_as(&self, windows_path: &str, format: i32) -> Result<(), BridgeError> {
         self.bridge.save_workbook(self.handle, windows_path, format)
+    }
+
+    // -------------------------------------------------------------------------
+    // Workbook properties (read)
+    // -------------------------------------------------------------------------
+
+    /// Get the workbook's name (e.g., "Book1.xlsx").
+    ///
+    /// When Excel repairs a file on open, the name may change
+    /// (e.g., "file [Repaired].xlsx"), so this can detect repairs.
+    pub fn name(&self) -> Result<String, BridgeError> {
+        let data = self.bridge.get(self.handle, vec![], "Name")?;
+        match data {
+            Some(ResponseData::Value { value }) => {
+                Ok(value.as_str().unwrap_or_default().to_string())
+            }
+            _ => Ok(String::new()),
+        }
+    }
+
+    /// Check if the workbook was opened as read-only.
+    ///
+    /// Excel sometimes opens repaired files in read-only mode.
+    pub fn is_read_only(&self) -> Result<bool, BridgeError> {
+        let data = self.bridge.get(self.handle, vec![], "ReadOnly")?;
+        match data {
+            Some(ResponseData::Value { value }) => Ok(value.as_bool().unwrap_or(false)),
+            _ => Ok(false),
+        }
     }
 
     /// Close the workbook without saving.

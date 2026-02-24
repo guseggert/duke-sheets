@@ -26,6 +26,7 @@ mod fill_styles;
 mod font_styles;
 mod merged_cells;
 mod number_formats;
+mod roundtrip;
 mod smoke;
 
 pub use common::*;

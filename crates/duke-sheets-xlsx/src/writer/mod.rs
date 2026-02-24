@@ -248,7 +248,37 @@ impl XlsxWriter {
 
         content.push_str("\n    <sheetData>");
 
-        // Write cell data (sparse, row-major)
+        // Collect metadata-only rows (custom height / hidden, no cells) so
+        // they can be interleaved with data rows in ascending order.  OOXML
+        // requires <row> elements to appear in strictly ascending r= order.
+        let custom_heights = sheet.custom_row_heights();
+        let hidden_rows_map = sheet.hidden_rows();
+        let mut meta_only_rows: std::collections::BTreeSet<u32> = Default::default();
+        for &r in custom_heights.keys() {
+            meta_only_rows.insert(r);
+        }
+        for &r in hidden_rows_map.keys() {
+            meta_only_rows.insert(r);
+        }
+
+        // Helper: emit a self-closing row element with metadata only.
+        let emit_meta_row = |content: &mut String, row: u32| {
+            let mut tag = format!("\n        <row r=\"{}\"", row + 1);
+            if let Some(&ht) = custom_heights.get(&row) {
+                tag.push_str(&format!(" ht=\"{:.2}\" customHeight=\"1\"", ht));
+            }
+            if hidden_rows_map.get(&row).copied().unwrap_or(false) {
+                tag.push_str(" hidden=\"1\"");
+            }
+            tag.push_str("/>");
+            content.push_str(&tag);
+        };
+
+        // Peekable iterator over metadata-only rows.
+        let mut meta_iter = meta_only_rows.iter().copied().peekable();
+
+        // Write cell data (sparse, row-major), interleaving metadata-only
+        // rows before each data row to maintain ascending order.
         let mut current_row: Option<u32> = None;
         let mut written_rows: std::collections::HashSet<u32> = Default::default();
         for (row, col, cell) in sheet.iter_cells() {
@@ -257,9 +287,21 @@ impl XlsxWriter {
                 if current_row.is_some() {
                     content.push_str("\n        </row>");
                 }
+
+                // Emit any metadata-only rows that come before this data row
+                while let Some(&mr) = meta_iter.peek() {
+                    if mr >= row {
+                        break;
+                    }
+                    if !written_rows.contains(&mr) {
+                        emit_meta_row(&mut content, mr);
+                        written_rows.insert(mr);
+                    }
+                    meta_iter.next();
+                }
+
                 // Open new row with optional dimension attributes
                 let mut row_tag = format!("\n        <row r=\"{}\"", row + 1);
-                let custom_heights = sheet.custom_row_heights();
                 if let Some(&ht) = custom_heights.get(&row) {
                     row_tag.push_str(&format!(" ht=\"{:.2}\" customHeight=\"1\"", ht));
                 }
@@ -371,30 +413,10 @@ impl XlsxWriter {
             content.push_str("\n        </row>");
         }
 
-        // Write empty rows that have custom heights or are hidden but had no cells
-        {
-            let custom_heights = sheet.custom_row_heights();
-            let hidden_rows = sheet.hidden_rows();
-            let mut empty_dim_rows: std::collections::BTreeSet<u32> = Default::default();
-            for &row in custom_heights.keys() {
-                empty_dim_rows.insert(row);
-            }
-            for &row in hidden_rows.keys() {
-                empty_dim_rows.insert(row);
-            }
-            for row in empty_dim_rows {
-                if written_rows.contains(&row) {
-                    continue;
-                }
-                let mut row_tag = format!("\n        <row r=\"{}\"", row + 1);
-                if let Some(&ht) = custom_heights.get(&row) {
-                    row_tag.push_str(&format!(" ht=\"{:.2}\" customHeight=\"1\"", ht));
-                }
-                if hidden_rows.get(&row).copied().unwrap_or(false) {
-                    row_tag.push_str(" hidden=\"1\"");
-                }
-                row_tag.push_str("/>");
-                content.push_str(&row_tag);
+        // Emit remaining metadata-only rows that come after all data rows
+        for mr in meta_iter {
+            if !written_rows.contains(&mr) {
+                emit_meta_row(&mut content, mr);
             }
         }
 

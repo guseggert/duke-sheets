@@ -99,6 +99,42 @@ pub fn pull_file_from_vm(fixture: &TempFixture) {
         .unwrap_or_else(|e| panic!("write {}: {e}", fixture.host_path.display()));
 }
 
+/// Push a file from the host to the VM via WinRM.
+///
+/// Reads the host file, base64-encodes it, and writes it inside the VM
+/// in chunks (WinRM has a command-line length limit).  Each chunk is
+/// appended to a temp .b64 file, then the whole thing is decoded to
+/// the final binary path.
+pub fn push_file_to_vm(fixture: &TempFixture) {
+    let bytes = std::fs::read(&fixture.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
+    let b64 = BASE64_STANDARD.encode(&bytes);
+
+    let b64_path = format!("{}.b64", fixture.vm_path);
+
+    // Clear any previous temp file
+    let _ = run_winrm_ps(&format!(
+        "Remove-Item -Force -ErrorAction SilentlyContinue '{b64_path}'"
+    ));
+
+    // Write base64 in chunks (~2000 chars each to stay under cmd line limits
+    // after UTF-16LE encoding for -EncodedCommand)
+    const CHUNK: usize = 2000;
+    for chunk in b64.as_bytes().chunks(CHUNK) {
+        let chunk_str = std::str::from_utf8(chunk).unwrap();
+        let ps = format!("Add-Content -NoNewline -Path '{b64_path}' -Value '{chunk_str}'");
+        run_winrm_ps(&ps).unwrap_or_else(|e| panic!("push chunk failed: {e}"));
+    }
+
+    // Decode base64 file to final binary
+    let ps = format!(
+        "[IO.File]::WriteAllBytes('{path}', [Convert]::FromBase64String([IO.File]::ReadAllText('{b64_path}'))); Remove-Item '{b64_path}'",
+        path = fixture.vm_path,
+        b64_path = b64_path,
+    );
+    run_winrm_ps(&ps).expect("WinRM base64 decode failed");
+}
+
 /// Clean up fixture files on both host and VM. Ignores errors.
 pub fn cleanup_fixture(fixture: &TempFixture) {
     let _ = std::fs::remove_file(&fixture.host_path);
