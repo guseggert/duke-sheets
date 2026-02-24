@@ -171,7 +171,7 @@ impl XlsxReader {
 
         loop {
             match xml_reader.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) => match e.name().as_ref() {
+                Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
                     b"si" => {
                         in_si = true;
                         current_string.clear();
@@ -181,7 +181,7 @@ impl XlsxReader {
                     }
                     _ => {}
                 },
-                Ok(Event::End(e)) => match e.name().as_ref() {
+                Ok(Event::End(e)) => match e.name().local_name().as_ref() {
                     b"si" => {
                         // Decode Excel's _xHHHH_ escape sequences
                         let decoded = decode_excel_escapes(&current_string);
@@ -239,16 +239,18 @@ impl XlsxReader {
 
         loop {
             match xml_reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(e)) | Ok(Event::Start(e)) if e.name().as_ref() == b"sheet" => {
+                Ok(Event::Empty(e)) | Ok(Event::Start(e))
+                    if e.name().local_name().as_ref() == b"sheet" =>
+                {
                     let mut name = None;
                     let mut r_id = None;
 
                     for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
+                        match attr.key.local_name().as_ref() {
                             b"name" => {
                                 name = attr.unescape_value().ok().map(|s| s.to_string());
                             }
-                            b"r:id" => {
+                            b"id" => {
                                 r_id = attr.unescape_value().ok().map(|s| s.to_string());
                             }
                             _ => {}
@@ -287,14 +289,14 @@ impl XlsxReader {
         loop {
             match xml_reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(e)) | Ok(Event::Start(e))
-                    if e.name().as_ref() == b"Relationship" =>
+                    if e.name().local_name().as_ref() == b"Relationship" =>
                 {
                     let mut id = None;
                     let mut target = None;
                     let mut rel_type = None;
 
                     for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
+                        match attr.key.local_name().as_ref() {
                             b"Id" => {
                                 id = attr.unescape_value().ok().map(|s| s.to_string());
                             }
@@ -392,7 +394,7 @@ impl XlsxReader {
 
         loop {
             match xml_reader.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) => match e.name().as_ref() {
+                Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
                     b"row" => {
                         // Parse row dimensions: ht, customHeight, hidden
                         let mut row_num: Option<u32> = None;
@@ -400,7 +402,7 @@ impl XlsxReader {
                         let mut custom_height = false;
                         let mut hidden = false;
                         for attr in e.attributes().flatten() {
-                            match attr.key.as_ref() {
+                            match attr.key.local_name().as_ref() {
                                 b"r" => {
                                     row_num = attr
                                         .unescape_value()
@@ -447,7 +449,7 @@ impl XlsxReader {
                         current_formula = None;
 
                         for attr in e.attributes().flatten() {
-                            match attr.key.as_ref() {
+                            match attr.key.local_name().as_ref() {
                                 b"r" => {
                                     current_cell_ref =
                                         attr.unescape_value().ok().map(|s| s.to_string());
@@ -496,7 +498,7 @@ impl XlsxReader {
                         in_cond_formatting = true;
                         cf_sqref = None;
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"sqref" {
+                            if attr.key.local_name().as_ref() == b"sqref" {
                                 cf_sqref = attr.unescape_value().ok().map(|s| s.to_string());
                             }
                         }
@@ -523,7 +525,7 @@ impl XlsxReader {
                         in_data_bar = true;
                         // Parse dataBar attributes
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"showValue" {
+                            if attr.key.local_name().as_ref() == b"showValue" {
                                 data_bar_show_value =
                                     attr.unescape_value().ok().map_or(true, |s| s != "0");
                             }
@@ -533,7 +535,7 @@ impl XlsxReader {
                         in_icon_set = true;
                         // Parse iconSet attributes
                         for attr in e.attributes().flatten() {
-                            match attr.key.as_ref() {
+                            match attr.key.local_name().as_ref() {
                                 b"iconSet" => {
                                     icon_set_style = attr
                                         .unescape_value()
@@ -555,7 +557,7 @@ impl XlsxReader {
                     _ => {}
                 },
                 Ok(Event::End(e)) => {
-                    match e.name().as_ref() {
+                    match e.name().local_name().as_ref() {
                         b"c" => {
                             // Process the cell
                             if let Some(ref cell_ref) = current_cell_ref {
@@ -712,7 +714,7 @@ impl XlsxReader {
                     }
                 }
                 Ok(Event::Empty(e)) => {
-                    match e.name().as_ref() {
+                    match e.name().local_name().as_ref() {
                         b"row" => {
                             // Self-closing <row .../> with no cells — may have dimensions
                             let mut row_num: Option<u32> = None;
@@ -720,7 +722,7 @@ impl XlsxReader {
                             let mut custom_height = false;
                             let mut hidden = false;
                             for attr in e.attributes().flatten() {
-                                match attr.key.as_ref() {
+                                match attr.key.local_name().as_ref() {
                                     b"r" => {
                                         row_num = attr
                                             .unescape_value()
@@ -767,7 +769,7 @@ impl XlsxReader {
                             let mut custom_width = false;
                             let mut hidden = false;
                             for attr in e.attributes().flatten() {
-                                match attr.key.as_ref() {
+                                match attr.key.local_name().as_ref() {
                                     b"min" => {
                                         col_min = attr
                                             .unescape_value()
@@ -822,7 +824,7 @@ impl XlsxReader {
                             let mut cell_style: Option<u32> = None;
 
                             for attr in e.attributes().flatten() {
-                                match attr.key.as_ref() {
+                                match attr.key.local_name().as_ref() {
                                     b"r" => {
                                         cell_ref =
                                             attr.unescape_value().ok().map(|s| s.to_string());
@@ -860,7 +862,7 @@ impl XlsxReader {
                             let mut value: Option<String> = None;
 
                             for attr in e.attributes().flatten() {
-                                match attr.key.as_ref() {
+                                match attr.key.local_name().as_ref() {
                                     b"type" => {
                                         if let Some(t) = attr
                                             .unescape_value()
@@ -891,7 +893,7 @@ impl XlsxReader {
                         // Merged cells
                         b"mergeCell" => {
                             for attr in e.attributes().flatten() {
-                                if attr.key.as_ref() == b"ref" {
+                                if attr.key.local_name().as_ref() == b"ref" {
                                     let ref_str = String::from_utf8_lossy(&attr.value);
                                     if let Ok(range) = CellRange::parse(&ref_str) {
                                         let _ = worksheet.merge_cells(&range);
@@ -1023,7 +1025,7 @@ impl XlsxReader {
         let mut operator: Option<String> = None;
 
         for attr in e.attributes().flatten() {
-            match attr.key.as_ref() {
+            match attr.key.local_name().as_ref() {
                 b"type" => {
                     dv_type = attr.unescape_value().ok().map(|s| s.to_string());
                 }
@@ -1157,7 +1159,7 @@ impl XlsxReader {
         let mut rgb: Option<String> = None;
 
         for attr in e.attributes().flatten() {
-            if attr.key.as_ref() == b"rgb" {
+            if attr.key.local_name().as_ref() == b"rgb" {
                 rgb = attr.unescape_value().ok().map(|s| s.to_string());
             }
             // TODO: Handle theme colors and tint
@@ -1204,7 +1206,7 @@ impl XlsxReader {
         let mut time_period: Option<String> = None;
 
         for attr in e.attributes().flatten() {
-            match attr.key.as_ref() {
+            match attr.key.local_name().as_ref() {
                 b"type" => {
                     rule_type = attr.unescape_value().ok().map(|s| s.to_string());
                 }
@@ -1369,7 +1371,7 @@ impl XlsxReader {
 
         loop {
             match xml_reader.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) => match e.name().as_ref() {
+                Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
                     b"author" => {
                         in_author = true;
                     }
@@ -1380,7 +1382,7 @@ impl XlsxReader {
                         current_text.clear();
 
                         for attr in e.attributes().flatten() {
-                            match attr.key.as_ref() {
+                            match attr.key.local_name().as_ref() {
                                 b"ref" => {
                                     current_ref = attr.unescape_value().ok().map(|s| s.to_string());
                                 }
@@ -1402,7 +1404,7 @@ impl XlsxReader {
                     b"r" if in_text => {}
                     _ => {}
                 },
-                Ok(Event::End(e)) => match e.name().as_ref() {
+                Ok(Event::End(e)) => match e.name().local_name().as_ref() {
                     b"author" => {
                         in_author = false;
                     }
@@ -1447,7 +1449,7 @@ impl XlsxReader {
                 }
                 Ok(Event::Empty(e)) => {
                     // Handle self-closing elements
-                    if e.name().as_ref() == b"author" {
+                    if e.name().local_name().as_ref() == b"author" {
                         // Empty author element
                         authors.push(String::new());
                     }
