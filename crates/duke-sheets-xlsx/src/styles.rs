@@ -780,7 +780,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => match e.name().as_ref() {
+            Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
                 b"numFmts" | b"fonts" | b"fills" | b"borders" => {}
 
                 b"cellXfs" => {
@@ -816,7 +816,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
                 b"patternFill" if in_dxf_fill => {
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"patternType" {
+                        if attr.key.local_name().as_ref() == b"patternType" {
                             if let Ok(v) = attr.unescape_value() {
                                 dxf_fill_pattern = str_to_pattern_type(&v);
                             }
@@ -830,7 +830,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     dxf_gradient_angle = 0.0;
                     dxf_gradient_stops.clear();
                     for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
+                        match attr.key.local_name().as_ref() {
                             b"type" => {
                                 if let Ok(v) = attr.unescape_value() {
                                     dxf_gradient_type = match v.as_ref() {
@@ -853,7 +853,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     dxf_in_gradient_stop = true;
                     dxf_current_stop_position = 0.0;
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"position" {
+                        if attr.key.local_name().as_ref() == b"position" {
                             if let Ok(v) = attr.unescape_value() {
                                 dxf_current_stop_position = v.parse::<f64>().unwrap_or(0.0);
                             }
@@ -864,7 +864,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                 b"border" if in_dxf => {
                     let mut b = BorderStyle::default();
                     for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
+                        match attr.key.local_name().as_ref() {
                             b"diagonalUp" => {
                                 if attr.unescape_value().ok().as_deref() == Some("1") {
                                     b.diagonal_direction =
@@ -896,7 +896,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
                 b"patternFill" if in_fill => {
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"patternType" {
+                        if attr.key.local_name().as_ref() == b"patternType" {
                             if let Ok(v) = attr.unescape_value() {
                                 current_fill_pattern = str_to_pattern_type(&v);
                             }
@@ -910,7 +910,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     gradient_angle = 0.0;
                     gradient_stops.clear();
                     for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
+                        match attr.key.local_name().as_ref() {
                             b"type" => {
                                 if let Ok(v) = attr.unescape_value() {
                                     gradient_type = match v.as_ref() {
@@ -933,7 +933,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     in_gradient_stop = true;
                     current_stop_position = 0.0;
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"position" {
+                        if attr.key.local_name().as_ref() == b"position" {
                             if let Ok(v) = attr.unescape_value() {
                                 current_stop_position = v.parse::<f64>().unwrap_or(0.0);
                             }
@@ -944,7 +944,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                 b"border" => {
                     let mut b = BorderStyle::default();
                     for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
+                        match attr.key.local_name().as_ref() {
                             b"diagonalUp" => {
                                 if attr.unescape_value().ok().as_deref() == Some("1") {
                                     b.diagonal_direction =
@@ -965,7 +965,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
                 // Border edges
                 b"left" | b"right" | b"top" | b"bottom" | b"diagonal" => {
-                    let edge_name: &'static str = match e.name().as_ref() {
+                    let edge_name: &'static str = match e.name().local_name().as_ref() {
                         b"left" => "left",
                         b"right" => "right",
                         b"top" => "top",
@@ -976,7 +976,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     // Parse style attribute
                     let mut style: Option<BorderLineStyle> = None;
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"style" {
+                        if attr.key.local_name().as_ref() == b"style" {
                             if let Ok(v) = attr.unescape_value() {
                                 style = str_to_border_style(&v);
                             }
@@ -1023,7 +1023,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     let mut fill_id = 0u32;
                     let mut border_id = 0u32;
                     for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
+                        match attr.key.local_name().as_ref() {
                             b"numFmtId" => {
                                 num_fmt_id = attr
                                     .unescape_value()
@@ -1083,7 +1083,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                                 Ok(v) => v,
                                 Err(_) => continue,
                             };
-                            match attr.key.as_ref() {
+                            match attr.key.local_name().as_ref() {
                                 b"locked" => prot.locked = val.as_ref() == "1",
                                 b"hidden" => prot.hidden = val.as_ref() == "1",
                                 _ => {}
@@ -1097,7 +1097,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     let font = dxf_font.as_mut().or(current_font.as_mut());
                     if let Some(font) = font {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"val" {
+                            if attr.key.local_name().as_ref() == b"val" {
                                 if let Ok(v) = attr.unescape_value() {
                                     font.size = v.parse::<f64>().unwrap_or(font.size);
                                 }
@@ -1109,7 +1109,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     let font = dxf_font.as_mut().or(current_font.as_mut());
                     if let Some(font) = font {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"val" {
+                            if attr.key.local_name().as_ref() == b"val" {
                                 if let Ok(v) = attr.unescape_value() {
                                     font.name = v.to_string();
                                 }
@@ -1140,7 +1140,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     if let Some(font) = font {
                         let mut underline = Underline::Single;
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"val" {
+                            if attr.key.local_name().as_ref() == b"val" {
                                 if let Ok(v) = attr.unescape_value() {
                                     underline = str_to_underline(&v);
                                 }
@@ -1154,7 +1154,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     let font = dxf_font.as_mut().or(current_font.as_mut());
                     if let Some(font) = font {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"val" {
+                            if attr.key.local_name().as_ref() == b"val" {
                                 if let Ok(v) = attr.unescape_value() {
                                     font.vertical_align = match v.as_ref() {
                                         "superscript" => FontVerticalAlign::Superscript,
@@ -1218,12 +1218,12 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                 _ => {}
             },
 
-            Ok(Event::Empty(e)) => match e.name().as_ref() {
+            Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
                 b"numFmt" => {
                     let mut id: Option<u32> = None;
                     let mut code: Option<String> = None;
                     for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
+                        match attr.key.local_name().as_ref() {
                             b"numFmtId" => {
                                 id = attr.unescape_value().ok().and_then(|s| s.parse().ok())
                             }
@@ -1272,7 +1272,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     if let Some(font) = font {
                         let mut underline = Underline::Single;
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"val" {
+                            if attr.key.local_name().as_ref() == b"val" {
                                 if let Ok(v) = attr.unescape_value() {
                                     underline = str_to_underline(&v);
                                 }
@@ -1285,7 +1285,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     let font = dxf_font.as_mut().or(current_font.as_mut());
                     if let Some(font) = font {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"val" {
+                            if attr.key.local_name().as_ref() == b"val" {
                                 if let Ok(v) = attr.unescape_value() {
                                     font.vertical_align = match v.as_ref() {
                                         "superscript" => FontVerticalAlign::Superscript,
@@ -1301,7 +1301,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     let font = dxf_font.as_mut().or(current_font.as_mut());
                     if let Some(font) = font {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"val" {
+                            if attr.key.local_name().as_ref() == b"val" {
                                 if let Ok(v) = attr.unescape_value() {
                                     font.size = v.parse::<f64>().unwrap_or(font.size);
                                 }
@@ -1313,7 +1313,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     let font = dxf_font.as_mut().or(current_font.as_mut());
                     if let Some(font) = font {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"val" {
+                            if attr.key.local_name().as_ref() == b"val" {
                                 if let Ok(v) = attr.unescape_value() {
                                     font.name = v.to_string();
                                 }
@@ -1388,7 +1388,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                                 Ok(v) => v,
                                 Err(_) => continue,
                             };
-                            match attr.key.as_ref() {
+                            match attr.key.local_name().as_ref() {
                                 b"locked" => prot.locked = val.as_ref() == "1",
                                 b"hidden" => prot.hidden = val.as_ref() == "1",
                                 _ => {}
@@ -1399,7 +1399,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
                 // Border edges can be self-closing (e.g. <left style="dotted"/>)
                 b"left" | b"right" | b"top" | b"bottom" | b"diagonal" => {
-                    let edge_name: &'static str = match e.name().as_ref() {
+                    let edge_name: &'static str = match e.name().local_name().as_ref() {
                         b"left" => "left",
                         b"right" => "right",
                         b"top" => "top",
@@ -1410,7 +1410,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     // Parse style attribute
                     let mut style: Option<BorderLineStyle> = None;
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"style" {
+                        if attr.key.local_name().as_ref() == b"style" {
                             if let Ok(v) = attr.unescape_value() {
                                 style = str_to_border_style(&v);
                             }
@@ -1450,7 +1450,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                 b"patternFill" => {
                     if in_dxf_fill {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"patternType" {
+                            if attr.key.local_name().as_ref() == b"patternType" {
                                 if let Ok(v) = attr.unescape_value() {
                                     dxf_fill_pattern = str_to_pattern_type(&v);
                                 }
@@ -1458,7 +1458,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                         }
                     } else if in_fill {
                         for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"patternType" {
+                            if attr.key.local_name().as_ref() == b"patternType" {
                                 if let Ok(v) = attr.unescape_value() {
                                     current_fill_pattern = str_to_pattern_type(&v);
                                 }
@@ -1486,7 +1486,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     let mut fill_id = 0u32;
                     let mut border_id = 0u32;
                     for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
+                        match attr.key.local_name().as_ref() {
                             b"numFmtId" => {
                                 num_fmt_id = attr
                                     .unescape_value()
@@ -1537,7 +1537,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                 _ => {}
             },
 
-            Ok(Event::End(e)) => match e.name().as_ref() {
+            Ok(Event::End(e)) => match e.name().local_name().as_ref() {
                 b"font" => {
                     if in_dxf {
                         // DXF font - apply to current DXF style
@@ -1725,7 +1725,7 @@ fn parse_color_attrs(e: &quick_xml::events::BytesStart<'_>) -> Color {
     let mut auto = false;
 
     for attr in e.attributes().flatten() {
-        match attr.key.as_ref() {
+        match attr.key.local_name().as_ref() {
             b"rgb" => {
                 rgb = attr.unescape_value().ok().map(|s| s.to_string());
             }
@@ -1901,7 +1901,7 @@ fn parse_alignment_attrs(e: &quick_xml::events::BytesStart<'_>, align: &mut Alig
             Ok(v) => v,
             Err(_) => continue,
         };
-        match attr.key.as_ref() {
+        match attr.key.local_name().as_ref() {
             b"horizontal" => {
                 if let Some(h) = str_to_horizontal(&val) {
                     align.horizontal = h;
