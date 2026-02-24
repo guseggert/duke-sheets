@@ -122,7 +122,7 @@ Common functions needed:
 - [x] Add support for spill operator (`#`)
 
 #### Reader Robustness
-- [ ] **Fix XML namespace handling** — replace `name().as_ref()` with `local_name().as_ref()` in reader (~140 call sites across `reader/mod.rs` and `styles.rs`); handle `r:id` attribute prefix specially; prevents silent data loss on files with prefixed namespaces
+- [x] **Fix XML namespace handling** — replaced `name().as_ref()` with `local_name().as_ref()` in reader (58 call sites across `reader/mod.rs` and `styles.rs`); `r:id` attribute now matches on local name; prevents silent data loss on files with prefixed namespaces
 - [ ] **Real-world file corpus + differential testing** — generate XLSX from multiple tools (openpyxl, xlsxwriter, Apache POI, LibreOffice), manually export from Google Sheets and Apple Numbers, collect a few wild public files; open each with duke-sheets and compare cell counts/values against calamine to catch silent data loss
 - [ ] **Graceful error recovery** — return workbook with `warnings: Vec<ReadWarning>` instead of hard-failing on every malformed element (corrupt style index, bad shared string ref, etc.)
 
