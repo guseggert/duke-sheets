@@ -117,9 +117,10 @@ Common functions needed:
 - [ ] **Financial**: PMT, FV, PV, NPV, IRR, RATE, NPER, SLN, DB, DDB
 
 #### Cell Display Formatting
-- [ ] **Number format rendering engine** — apply `NumberFormat` to `CellValue::Number` to produce display strings (e.g., `0.75` + `"0.00%"` → `"75.00%"`); currently numbers display as raw f64
-- [ ] **Date serial number formatting** — convert Excel serial numbers to human-readable dates when the cell's number format is a date/time format (e.g., `45678.0` → `"1/15/2025"`)
-- [ ] **`CellValue::to_display_string(&self, format: &NumberFormat)` method** or equivalent on Worksheet that resolves the cell's style
+- [x] **Number format rendering engine** — `CellView::formatted()` applies `NumberFormat` to cell values via ssfmt crate (percentages, currencies, scientific, accounting, General format)
+- [x] **Date serial number formatting** — serial numbers rendered as dates/times when cell has date/time format; supports both 1900 and 1904 date systems
+- [x] **`format_cell_value()` + `Worksheet::formatted_value_at()`** — standalone function and worksheet convenience methods; `CellView<'a>` borrow wrapper provides value/style/formatted access
+- [x] **CLI `--formatted` flag** — `duke to-csv -f` applies Excel number formats to output
 - [ ] **Conditional format style resolution** — evaluate CF rules against cell values to determine effective display style (rules are read/stored but never evaluated)
 - [ ] **Rich text runs in cells** — cell strings are currently plain text; preserve bold/italic/color formatting runs within a single cell value (comments already flatten rich text)
 
