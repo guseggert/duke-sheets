@@ -126,25 +126,49 @@ impl XlsxWriter {
 
         let mut content = String::from(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-    <sheets>"#,
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
         );
 
-        for (i, sheet) in workbook.worksheets().enumerate() {
+        // Write workbookPr (date system, etc.)
+        let settings = workbook.settings();
+        if settings.date_1904 {
+            content.push_str("\n    <workbookPr date1904=\"1\"/>");
+        }
+
+        // Write bookViews (active sheet)
+        let active = workbook.active_sheet();
+        if active > 0 {
             content.push_str(&format!(
-                r#"
-        <sheet name="{}" sheetId="{}" r:id="rId{}"/>"#,
-                sheet.name(),
+                "\n    <bookViews><workbookView activeTab=\"{}\"/></bookViews>",
+                active
+            ));
+        }
+
+        content.push_str("\n    <sheets>");
+
+        for (i, sheet) in workbook.worksheets().enumerate() {
+            let state_attr = if !sheet.is_visible() {
+                " state=\"hidden\""
+            } else {
+                ""
+            };
+            content.push_str(&format!(
+                "\n        <sheet name=\"{}\" sheetId=\"{}\"{}  r:id=\"rId{}\"/>",
+                Self::escape_xml(sheet.name()),
                 i + 1,
+                state_attr,
                 i + 1
             ));
         }
 
-        content.push_str(
-            r#"
-    </sheets>
-</workbook>"#,
-        );
+        content.push_str("\n    </sheets>");
+
+        // Write calcPr (tells Excel to recalculate formulas on open)
+        if settings.calc_on_open {
+            content.push_str("\n    <calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/>");
+        }
+
+        content.push_str("\n</workbook>");
 
         zip.write_all(content.as_bytes())?;
         Ok(())
