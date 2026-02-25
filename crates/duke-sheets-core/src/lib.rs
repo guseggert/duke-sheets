@@ -53,7 +53,7 @@ pub use error::{Error, Result};
 pub use locale::Locale;
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
 pub use workbook::{Workbook, WorkbookSettings};
-pub use worksheet::Worksheet;
+pub use worksheet::{FreezePanes, PageOrientation, PageSetup, SheetProtection, Worksheet};
 
 // Re-export all style types for convenience
 pub use style::{
