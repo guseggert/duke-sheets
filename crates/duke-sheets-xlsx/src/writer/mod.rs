@@ -1,5 +1,6 @@
 //! XLSX writer
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Seek, Write};
 use std::path::Path;
@@ -7,6 +8,45 @@ use std::path::Path;
 use crate::error::{XlsxError, XlsxResult};
 use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{CellAddress, Workbook};
+
+/// Shared string table — maps string content to SST index.
+struct SharedStringTable {
+    strings: Vec<String>,
+    index: HashMap<String, u32>,
+}
+
+impl SharedStringTable {
+    /// Build the SST by scanning all string cells in the workbook.
+    fn build(workbook: &Workbook) -> Self {
+        let mut strings = Vec::new();
+        let mut index = HashMap::new();
+
+        for sheet in workbook.worksheets() {
+            for (_row, _col, cell) in sheet.iter_cells() {
+                let s = match &cell.value {
+                    duke_sheets_core::CellValue::String(s) => s.as_str(),
+                    _ => continue,
+                };
+                if !index.contains_key(s) {
+                    let idx = strings.len() as u32;
+                    index.insert(s.to_owned(), idx);
+                    strings.push(s.to_owned());
+                }
+            }
+        }
+
+        Self { strings, index }
+    }
+
+    /// Look up the SST index for a string.
+    fn get(&self, s: &str) -> Option<u32> {
+        self.index.get(s).copied()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.strings.is_empty()
+    }
+}
 
 /// XLSX file writer
 pub struct XlsxWriter;
@@ -25,6 +65,9 @@ impl XlsxWriter {
         // Build a workbook-wide style table.
         let style_table = XlsxStyleTable::build(workbook);
 
+        // Build shared string table (deduplicated across all sheets).
+        let sst = SharedStringTable::build(workbook);
+
         // Determine which sheets have comments
         let sheets_with_comments: Vec<usize> = workbook
             .worksheets()
@@ -34,7 +77,7 @@ impl XlsxWriter {
             .collect();
 
         // Write [Content_Types].xml
-        Self::write_content_types(&mut zip, workbook, &sheets_with_comments)?;
+        Self::write_content_types(&mut zip, workbook, &sheets_with_comments, &sst)?;
 
         // Write _rels/.rels
         Self::write_root_rels(&mut zip)?;
@@ -43,14 +86,19 @@ impl XlsxWriter {
         Self::write_workbook_xml(&mut zip, workbook)?;
 
         // Write xl/_rels/workbook.xml.rels
-        Self::write_workbook_rels(&mut zip, workbook)?;
+        Self::write_workbook_rels(&mut zip, workbook, &sst)?;
 
         // Write xl/styles.xml
         Self::write_styles_xml(&mut zip, &style_table)?;
 
+        // Write shared string table
+        if !sst.is_empty() {
+            Self::write_shared_strings(&mut zip, &sst)?;
+        }
+
         // Write worksheets and their relationships
         for (i, sheet) in workbook.worksheets().enumerate() {
-            Self::write_worksheet(&mut zip, workbook, i, &style_table)?;
+            Self::write_worksheet(&mut zip, workbook, i, &style_table, &sst)?;
 
             // Write worksheet relationships if sheet has comments
             if sheet.comment_count() > 0 {
@@ -67,6 +115,7 @@ impl XlsxWriter {
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
         sheets_with_comments: &[usize],
+        sst: &SharedStringTable,
     ) -> XlsxResult<()> {
         let options = zip::write::SimpleFileOptions::default();
         zip.start_file("[Content_Types].xml", options)?;
@@ -79,6 +128,12 @@ impl XlsxWriter {
     <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
     <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>"#,
         );
+
+        if !sst.is_empty() {
+            content.push_str(
+                "\n    <Override PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>"
+            );
+        }
 
         // Add an override for each worksheet
         for i in 0..workbook.sheet_count() {
@@ -177,6 +232,7 @@ impl XlsxWriter {
     fn write_workbook_rels<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
+        sst: &SharedStringTable,
     ) -> XlsxResult<()> {
         let options = zip::write::SimpleFileOptions::default();
         zip.start_file("xl/_rels/workbook.xml.rels", options)?;
@@ -188,26 +244,63 @@ impl XlsxWriter {
 
         for i in 0..workbook.sheet_count() {
             content.push_str(&format!(
-                r#"
-    <Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{}.xml"/>"#,
+                "\n    <Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{}.xml\"/>",
                 i + 1,
                 i + 1
             ));
         }
 
         // Styles relationship
-        let styles_rid = workbook.sheet_count() + 1;
+        let mut next_rid = workbook.sheet_count() + 1;
         content.push_str(&format!(
-            r#"
-    <Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#,
-            styles_rid
+            "\n    <Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>",
+            next_rid
         ));
+        next_rid += 1;
 
-        content.push_str(
-            r#"
- </Relationships>"#,
+        // Shared strings relationship
+        if !sst.is_empty() {
+            content.push_str(&format!(
+                "\n    <Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>",
+                next_rid
+            ));
+        }
+
+        content.push_str("\n</Relationships>");
+
+        zip.write_all(content.as_bytes())?;
+        Ok(())
+    }
+
+    fn write_shared_strings<W: Write + Seek>(
+        zip: &mut zip::ZipWriter<W>,
+        sst: &SharedStringTable,
+    ) -> XlsxResult<()> {
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("xl/sharedStrings.xml", options)?;
+
+        let count = sst.strings.len();
+        let mut content = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+             <sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"{}\" uniqueCount=\"{}\">",
+            count, count
         );
 
+        for s in &sst.strings {
+            // Use xml:space="preserve" for strings with leading/trailing whitespace
+            let needs_preserve = s.starts_with(|c: char| c.is_ascii_whitespace())
+                || s.ends_with(|c: char| c.is_ascii_whitespace());
+            if needs_preserve {
+                content.push_str(&format!(
+                    "\n    <si><t xml:space=\"preserve\">{}</t></si>",
+                    Self::escape_xml(s)
+                ));
+            } else {
+                content.push_str(&format!("\n    <si><t>{}</t></si>", Self::escape_xml(s)));
+            }
+        }
+
+        content.push_str("\n</sst>");
         zip.write_all(content.as_bytes())?;
         Ok(())
     }
@@ -228,6 +321,7 @@ impl XlsxWriter {
         workbook: &Workbook,
         index: usize,
         style_table: &XlsxStyleTable,
+        sst: &SharedStringTable,
     ) -> XlsxResult<()> {
         let options = zip::write::SimpleFileOptions::default();
         zip.start_file(&format!("xl/worksheets/sheet{}.xml", index + 1), options)?;
@@ -367,12 +461,20 @@ impl XlsxWriter {
                     ));
                 }
                 duke_sheets_core::CellValue::String(s) => {
-                    content.push_str(&format!(
-                        "\n            <c r=\"{}\"{} t=\"inlineStr\"><is><t>{}</t></is></c>",
-                        cell_ref,
-                        style_attr,
-                        Self::escape_xml(s.as_str())
-                    ));
+                    if let Some(sst_idx) = sst.get(s.as_str()) {
+                        content.push_str(&format!(
+                            "\n            <c r=\"{}\"{} t=\"s\"><v>{}</v></c>",
+                            cell_ref, style_attr, sst_idx
+                        ));
+                    } else {
+                        // Fallback to inline string (shouldn't happen)
+                        content.push_str(&format!(
+                            "\n            <c r=\"{}\"{} t=\"inlineStr\"><is><t>{}</t></is></c>",
+                            cell_ref,
+                            style_attr,
+                            Self::escape_xml(s.as_str())
+                        ));
+                    }
                 }
                 duke_sheets_core::CellValue::Boolean(b) => {
                     content.push_str(&format!(
