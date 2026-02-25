@@ -84,6 +84,13 @@ fn decode_excel_escapes(s: &str) -> String {
 /// XLSX file reader
 pub struct XlsxReader;
 
+/// Parsed workbook properties from workbook.xml
+struct WorkbookProps {
+    sheets: Vec<(String, String)>,
+    date_1904: bool,
+    named_ranges: Vec<duke_sheets_core::named_range::NamedRange>,
+}
+
 impl XlsxReader {
     /// Read a workbook from a file path
     pub fn read_file<P: AsRef<Path>>(path: P) -> XlsxResult<Workbook> {
@@ -110,15 +117,23 @@ impl XlsxReader {
         let cell_styles = parsed_styles.cell_styles;
         let dxf_styles = parsed_styles.dxf_styles;
 
-        // Read workbook.xml to get sheet info and properties
-        let (sheet_info, date_1904) = Self::read_workbook_xml(&mut archive)?;
+        // Read workbook.xml to get sheet info, properties, and defined names
+        let wb_props = Self::read_workbook_xml(&mut archive)?;
 
         // Read workbook.xml.rels to get sheet paths
         let sheet_paths = Self::read_workbook_rels(&mut archive)?;
 
         // Create workbook
         let mut workbook = Workbook::empty();
-        workbook.settings_mut().date_1904 = date_1904;
+        workbook.settings_mut().date_1904 = wb_props.date_1904;
+
+        // Add named ranges
+        for nr in wb_props.named_ranges {
+            workbook.named_ranges_mut().define_or_update(nr);
+        }
+
+        let sheet_info = &wb_props.sheets;
+        let date_1904 = wb_props.date_1904;
 
         // Read each worksheet
         for (idx, (name, r_id)) in sheet_info.iter().enumerate() {
@@ -230,11 +245,13 @@ impl XlsxReader {
         read_styles_xml(file)
     }
 
-    /// Read workbook.xml to get sheet names, rIds, and workbook properties.
-    /// Returns (sheets: Vec<(name, rId)>, date_1904: bool).
+    /// Read workbook.xml to get sheet names, rIds, workbook properties,
+    /// and defined names.
     fn read_workbook_xml<R: Read + Seek>(
         archive: &mut zip::ZipArchive<R>,
-    ) -> XlsxResult<(Vec<(String, String)>, bool)> {
+    ) -> XlsxResult<WorkbookProps> {
+        use duke_sheets_core::named_range::{NameScope, NamedRange};
+
         let file = archive
             .by_name("xl/workbook.xml")
             .map_err(|_| XlsxError::MissingPart("xl/workbook.xml".into()))?;
@@ -246,38 +263,70 @@ impl XlsxReader {
         let mut buf = Vec::new();
         let mut sheets = Vec::new();
         let mut date_1904 = false;
+        let mut named_ranges = Vec::new();
 
         loop {
             match xml_reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(e)) | Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
+                Ok(Event::Empty(ref e)) => match e.name().local_name().as_ref() {
                     b"sheet" => {
-                        let mut name = None;
-                        let mut r_id = None;
+                        Self::parse_sheet_element(e, &mut sheets);
+                    }
+                    b"workbookPr" => {
+                        Self::parse_workbook_pr(e, &mut date_1904);
+                    }
+                    _ => {}
+                },
+                Ok(Event::Start(ref e)) => match e.name().local_name().as_ref() {
+                    b"sheet" => {
+                        Self::parse_sheet_element(e, &mut sheets);
+                    }
+                    b"workbookPr" => {
+                        Self::parse_workbook_pr(e, &mut date_1904);
+                    }
+                    b"definedName" => {
+                        // Parse attributes
+                        let mut dn_name = None;
+                        let mut local_sheet_id: Option<usize> = None;
+                        let mut comment = None;
+                        let mut hidden = false;
 
                         for attr in e.attributes().flatten() {
                             match attr.key.local_name().as_ref() {
                                 b"name" => {
-                                    name = attr.unescape_value().ok().map(|s| s.to_string());
+                                    dn_name = attr.unescape_value().ok().map(|s| s.to_string());
                                 }
-                                b"id" => {
-                                    r_id = attr.unescape_value().ok().map(|s| s.to_string());
+                                b"localSheetId" => {
+                                    local_sheet_id =
+                                        attr.unescape_value().ok().and_then(|s| s.parse().ok());
+                                }
+                                b"comment" => {
+                                    comment = attr.unescape_value().ok().map(|s| s.to_string());
+                                }
+                                b"hidden" => {
+                                    hidden = attr.unescape_value().ok().map_or(false, |v| {
+                                        v.as_ref() == "1" || v.eq_ignore_ascii_case("true")
+                                    });
                                 }
                                 _ => {}
                             }
                         }
 
-                        if let (Some(name), Some(r_id)) = (name, r_id) {
-                            sheets.push((name, r_id));
-                        }
-                    }
-                    b"workbookPr" => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"date1904" {
-                                if let Ok(val) = attr.unescape_value() {
-                                    date_1904 =
-                                        val.as_ref() == "1" || val.eq_ignore_ascii_case("true");
-                                }
-                            }
+                        // Read the text content (the refers_to expression)
+                        let mut text_buf = Vec::new();
+                        let refers_to = match xml_reader.read_event_into(&mut text_buf) {
+                            Ok(Event::Text(t)) => t.unescape().ok().map(|s| s.to_string()),
+                            _ => None,
+                        };
+
+                        if let (Some(name), Some(refers_to)) = (dn_name, refers_to) {
+                            let scope = match local_sheet_id {
+                                Some(idx) => NameScope::Sheet(idx),
+                                None => NameScope::Workbook,
+                            };
+                            let mut nr = NamedRange::new(name, refers_to, scope);
+                            nr.comment = comment;
+                            nr.hidden = hidden;
+                            named_ranges.push(nr);
                         }
                     }
                     _ => {}
@@ -289,7 +338,45 @@ impl XlsxReader {
             buf.clear();
         }
 
-        Ok((sheets, date_1904))
+        Ok(WorkbookProps {
+            sheets,
+            date_1904,
+            named_ranges,
+        })
+    }
+
+    fn parse_sheet_element(
+        e: &quick_xml::events::BytesStart<'_>,
+        sheets: &mut Vec<(String, String)>,
+    ) {
+        let mut name = None;
+        let mut r_id = None;
+
+        for attr in e.attributes().flatten() {
+            match attr.key.local_name().as_ref() {
+                b"name" => {
+                    name = attr.unescape_value().ok().map(|s| s.to_string());
+                }
+                b"id" => {
+                    r_id = attr.unescape_value().ok().map(|s| s.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        if let (Some(name), Some(r_id)) = (name, r_id) {
+            sheets.push((name, r_id));
+        }
+    }
+
+    fn parse_workbook_pr(e: &quick_xml::events::BytesStart<'_>, date_1904: &mut bool) {
+        for attr in e.attributes().flatten() {
+            if attr.key.local_name().as_ref() == b"date1904" {
+                if let Ok(val) = attr.unescape_value() {
+                    *date_1904 = val.as_ref() == "1" || val.eq_ignore_ascii_case("true");
+                }
+            }
+        }
     }
 
     /// Read workbook.xml.rels to get sheet file paths

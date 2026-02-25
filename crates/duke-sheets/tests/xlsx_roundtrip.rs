@@ -547,3 +547,53 @@ fn test_roundtrip_formula_no_cached_value() {
         _ => panic!("Expected Formula variant"),
     }
 }
+
+/// Test roundtrip of named ranges (definedNames)
+#[test]
+fn test_roundtrip_named_ranges() {
+    use duke_sheets::named_range::{NameScope, NamedRange};
+
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_cell_value("A1", 100.0)
+        .unwrap();
+
+    // Add workbook-scoped named range
+    wb.named_ranges_mut()
+        .define_or_update(NamedRange::workbook_scope("TaxRate", "Sheet1!$A$1"));
+
+    // Add sheet-scoped named range
+    wb.named_ranges_mut()
+        .define_or_update(NamedRange::sheet_scope("LocalName", "Sheet1!$B$1:$B$10", 0));
+
+    // Add hidden named range with comment
+    let mut hidden_nr = NamedRange::workbook_scope("_xlnm.Print_Area", "Sheet1!$A$1:$D$20");
+    hidden_nr.hidden = true;
+    hidden_nr.comment = Some("Print area".to_string());
+    wb.named_ranges_mut().define_or_update(hidden_nr);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    // Verify named ranges survive roundtrip
+    let nr = wb2.named_ranges();
+    assert_eq!(nr.len(), 3);
+
+    let tax = nr.get("TaxRate", 0).unwrap();
+    assert_eq!(tax.refers_to, "Sheet1!$A$1");
+    assert_eq!(tax.scope, NameScope::Workbook);
+
+    let local = nr.get("LocalName", 0).unwrap();
+    assert_eq!(local.refers_to, "Sheet1!$B$1:$B$10");
+    assert!(matches!(local.scope, NameScope::Sheet(0)));
+
+    let print = nr.get("_xlnm.Print_Area", 0).unwrap();
+    assert_eq!(print.refers_to, "Sheet1!$A$1:$D$20");
+    assert!(print.hidden);
+    assert_eq!(print.comment.as_deref(), Some("Print area"));
+}
