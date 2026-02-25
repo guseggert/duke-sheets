@@ -74,6 +74,8 @@ pub use duke_sheets_core::{
     Error,
     FillStyle,
     FontStyle,
+    // Sheet-level types
+    FreezePanes,
     HorizontalAlignment,
     IconSetStyle,
     // Locale for cell formatting
@@ -81,7 +83,11 @@ pub use duke_sheets_core::{
 
     NumberFormat,
 
+    PageOrientation,
+    PageSetup,
     Result,
+
+    SheetProtection,
 
     // Style types
     Style,
@@ -101,6 +107,9 @@ pub use duke_sheets_core::{
     MAX_ROWS,
     MAX_SHEET_NAME_LEN,
 };
+
+// Re-export named range module (contains NamedRange, NameScope, NamedRangeCollection)
+pub use duke_sheets_core::named_range;
 
 // Re-export formula types
 pub use duke_sheets_formula::{

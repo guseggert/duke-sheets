@@ -218,6 +218,30 @@ impl XlsxWriter {
 
         content.push_str("\n    </sheets>");
 
+        // Write definedNames (named ranges)
+        let named = workbook.named_ranges();
+        if named.len() > 0 {
+            content.push_str("\n    <definedNames>");
+            for nr in named.iter() {
+                let mut attrs = format!(" name=\"{}\"", Self::escape_xml(&nr.name));
+                if let duke_sheets_core::named_range::NameScope::Sheet(idx) = nr.scope {
+                    attrs.push_str(&format!(" localSheetId=\"{}\"", idx));
+                }
+                if nr.hidden {
+                    attrs.push_str(" hidden=\"1\"");
+                }
+                if let Some(ref comment) = nr.comment {
+                    attrs.push_str(&format!(" comment=\"{}\"", Self::escape_xml(comment)));
+                }
+                content.push_str(&format!(
+                    "\n        <definedName{}>{}</definedName>",
+                    attrs,
+                    Self::escape_xml(&nr.refers_to)
+                ));
+            }
+            content.push_str("\n    </definedNames>");
+        }
+
         // Write calcPr (tells Excel to recalculate formulas on open)
         if settings.calc_on_open {
             content.push_str("\n    <calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/>");
