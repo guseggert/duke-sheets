@@ -194,11 +194,14 @@ impl XlsxReader {
                     }
                     _ => {}
                 },
-                Ok(Event::Text(e)) if in_t => {
-                    if let Ok(text) = e.unescape() {
-                        current_string.push_str(&text);
-                    }
-                }
+                Ok(Event::Text(e)) if in_t => match e.unescape() {
+                    Ok(text) => current_string.push_str(&text),
+                    Err(err) => log::warn!(
+                        "Shared string {}: XML unescape failed: {}",
+                        strings.len(),
+                        err
+                    ),
+                },
                 Ok(Event::Eof) => break,
                 Err(e) => return Err(XlsxError::Xml(e)),
                 _ => {}
@@ -686,30 +689,56 @@ impl XlsxReader {
                 }
                 Ok(Event::Text(e)) => {
                     if in_value {
-                        if let Ok(text) = e.unescape() {
-                            current_value = Some(text.to_string());
+                        match e.unescape() {
+                            Ok(text) => current_value = Some(text.to_string()),
+                            Err(err) => log::warn!(
+                                "Cell {:?}: value unescape failed: {}",
+                                current_cell_ref,
+                                err
+                            ),
                         }
                     } else if in_formula {
-                        if let Ok(text) = e.unescape() {
-                            current_formula = Some(text.to_string());
+                        match e.unescape() {
+                            Ok(text) => current_formula = Some(text.to_string()),
+                            Err(err) => log::warn!(
+                                "Cell {:?}: formula unescape failed: {}",
+                                current_cell_ref,
+                                err
+                            ),
                         }
                     } else if in_inline_text {
-                        if let Ok(text) = e.unescape() {
-                            // Inline string - store directly as value
-                            current_value = Some(text.to_string());
-                            current_cell_type = Some("inlineStr".to_string());
+                        match e.unescape() {
+                            Ok(text) => {
+                                // Inline string - store directly as value
+                                current_value = Some(text.to_string());
+                                current_cell_type = Some("inlineStr".to_string());
+                            }
+                            Err(err) => log::warn!(
+                                "Cell {:?}: inline string unescape failed: {}",
+                                current_cell_ref,
+                                err
+                            ),
                         }
                     } else if in_dv_formula1 {
-                        if let Ok(text) = e.unescape() {
-                            dv_formula1 = Some(text.to_string());
+                        match e.unescape() {
+                            Ok(text) => dv_formula1 = Some(text.to_string()),
+                            Err(err) => {
+                                log::warn!("Data validation formula1 unescape failed: {}", err)
+                            }
                         }
                     } else if in_dv_formula2 {
-                        if let Ok(text) = e.unescape() {
-                            dv_formula2 = Some(text.to_string());
+                        match e.unescape() {
+                            Ok(text) => dv_formula2 = Some(text.to_string()),
+                            Err(err) => {
+                                log::warn!("Data validation formula2 unescape failed: {}", err)
+                            }
                         }
                     } else if in_cf_formula {
-                        if let Ok(text) = e.unescape() {
-                            cf_formulas.push(text.to_string());
+                        match e.unescape() {
+                            Ok(text) => cf_formulas.push(text.to_string()),
+                            Err(err) => {
+                                log::warn!("Conditional format formula unescape failed: {}", err)
+                            }
                         }
                     }
                 }
@@ -895,8 +924,15 @@ impl XlsxReader {
                             for attr in e.attributes().flatten() {
                                 if attr.key.local_name().as_ref() == b"ref" {
                                     let ref_str = String::from_utf8_lossy(&attr.value);
-                                    if let Ok(range) = CellRange::parse(&ref_str) {
-                                        let _ = worksheet.merge_cells(&range);
+                                    match CellRange::parse(&ref_str) {
+                                        Ok(range) => {
+                                            if let Err(e) = worksheet.merge_cells(&range) {
+                                                log::warn!("Skipping merge '{}': {}", ref_str, e);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            log::warn!("Invalid merge ref '{}': {}", ref_str, e)
+                                        }
                                     }
                                 }
                             }
@@ -925,9 +961,13 @@ impl XlsxReader {
         shared_strings: &[String],
         styles: &[Style],
     ) -> XlsxResult<()> {
-        let addr = CellAddress::parse(cell_ref).map_err(|e| {
-            XlsxError::Parse(format!("Invalid cell reference '{}': {}", cell_ref, e))
-        })?;
+        let addr = match CellAddress::parse(cell_ref) {
+            Ok(a) => a,
+            Err(e) => {
+                log::warn!("Skipping cell with invalid reference '{}': {}", cell_ref, e);
+                return Ok(());
+            }
+        };
 
         // Apply formula or value
         if let Some(f) = formula {
@@ -955,7 +995,7 @@ impl XlsxReader {
                 format!("={}", f)
             };
 
-            worksheet.set_cell_value_at(
+            if let Err(e) = worksheet.set_cell_value_at(
                 addr.row,
                 addr.col,
                 CellValue::Formula {
@@ -963,20 +1003,34 @@ impl XlsxReader {
                     cached_value: cached.map(Box::new),
                     array_result: None,
                 },
-            )?;
+            ) {
+                log::warn!("Skipping cell {}: {}", cell_ref, e);
+                return Ok(());
+            }
         } else if let Some(value) = value {
             // Process value based on type
             let cell_value = match cell_type {
                 // Shared string
-                Some("s") => {
-                    let idx: usize = value.parse().map_err(|_| {
-                        XlsxError::Parse(format!("Invalid shared string index: {}", value))
-                    })?;
-                    let s = shared_strings.get(idx).ok_or_else(|| {
-                        XlsxError::Parse(format!("Shared string index {} out of bounds", idx))
-                    })?;
-                    CellValue::String(s.clone().into())
-                }
+                Some("s") => match value.parse::<usize>() {
+                    Ok(idx) => match shared_strings.get(idx) {
+                        Some(s) => CellValue::String(s.clone().into()),
+                        None => {
+                            log::warn!(
+                                "Cell {}: shared string index {} out of bounds (max {}), using #REF!",
+                                cell_ref, idx, shared_strings.len()
+                            );
+                            CellValue::Error(CellError::Ref)
+                        }
+                    },
+                    Err(_) => {
+                        log::warn!(
+                            "Cell {}: invalid shared string index '{}', using #REF!",
+                            cell_ref,
+                            value
+                        );
+                        CellValue::Error(CellError::Ref)
+                    }
+                },
 
                 // Boolean
                 Some("b") => CellValue::Boolean(value == "1" || value.eq_ignore_ascii_case("true")),
@@ -1002,16 +1056,30 @@ impl XlsxReader {
                 Some(_) => CellValue::String(value.to_string().into()),
             };
 
-            worksheet.set_cell_value_at(addr.row, addr.col, cell_value)?;
+            if let Err(e) = worksheet.set_cell_value_at(addr.row, addr.col, cell_value) {
+                log::warn!("Skipping cell {}: {}", cell_ref, e);
+                return Ok(());
+            }
         }
 
         // Apply style (if any)
         if let Some(s) = style_idx {
             if s != 0 {
-                let style = styles
-                    .get(s as usize)
-                    .ok_or_else(|| XlsxError::Parse(format!("Style index {} out of bounds", s)))?;
-                worksheet.set_cell_style_at(addr.row, addr.col, style)?;
+                match styles.get(s as usize) {
+                    Some(style) => {
+                        if let Err(e) = worksheet.set_cell_style_at(addr.row, addr.col, style) {
+                            log::warn!("Cell {}: failed to apply style: {}", cell_ref, e);
+                        }
+                    }
+                    None => {
+                        log::warn!(
+                            "Cell {}: style index {} out of bounds (max {}), using default",
+                            cell_ref,
+                            s,
+                            styles.len()
+                        );
+                    }
+                }
             }
         }
 
@@ -1411,14 +1479,17 @@ impl XlsxReader {
                     b"comment" => {
                         // Add the comment to the worksheet
                         if let Some(ref cell_ref) = current_ref {
-                            if let Ok(addr) = CellAddress::parse(cell_ref) {
-                                let author = current_author_id
-                                    .and_then(|id| authors.get(id))
-                                    .cloned()
-                                    .unwrap_or_default();
+                            match CellAddress::parse(cell_ref) {
+                                Ok(addr) => {
+                                    let author = current_author_id
+                                        .and_then(|id| authors.get(id))
+                                        .cloned()
+                                        .unwrap_or_default();
 
-                                let comment = CellComment::new(author, current_text.trim());
-                                worksheet.set_comment_at(addr.row, addr.col, comment);
+                                    let comment = CellComment::new(author, current_text.trim());
+                                    worksheet.set_comment_at(addr.row, addr.col, comment);
+                                }
+                                Err(e) => log::warn!("Skipping comment at '{}': {}", cell_ref, e),
                             }
                         }
                         in_comment = false;

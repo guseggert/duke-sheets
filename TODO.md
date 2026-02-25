@@ -116,6 +116,13 @@ Common functions needed:
 - [ ] **Statistical**: STDEV, STDEVP, VAR, VARP, MEDIAN, MODE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE
 - [ ] **Financial**: PMT, FV, PV, NPV, IRR, RATE, NPER, SLN, DB, DDB
 
+#### Cell Display Formatting
+- [ ] **Number format rendering engine** — apply `NumberFormat` to `CellValue::Number` to produce display strings (e.g., `0.75` + `"0.00%"` → `"75.00%"`); currently numbers display as raw f64
+- [ ] **Date serial number formatting** — convert Excel serial numbers to human-readable dates when the cell's number format is a date/time format (e.g., `45678.0` → `"1/15/2025"`)
+- [ ] **`CellValue::to_display_string(&self, format: &NumberFormat)` method** or equivalent on Worksheet that resolves the cell's style
+- [ ] **Conditional format style resolution** — evaluate CF rules against cell values to determine effective display style (rules are read/stored but never evaluated)
+- [ ] **Rich text runs in cells** — cell strings are currently plain text; preserve bold/italic/color formatting runs within a single cell value (comments already flatten rich text)
+
 #### Formula Parser Fixes
 - [x] Investigate parse failures on real-world files (quoted sheet refs were the #1 cause)
 - [x] Add support for implicit intersection (`@`)
@@ -124,7 +131,7 @@ Common functions needed:
 #### Reader Robustness
 - [x] **Fix XML namespace handling** — replaced `name().as_ref()` with `local_name().as_ref()` in reader (58 call sites across `reader/mod.rs` and `styles.rs`); `r:id` attribute now matches on local name; prevents silent data loss on files with prefixed namespaces
 - [ ] **Real-world file corpus + differential testing** — generate XLSX from multiple tools (openpyxl, xlsxwriter, Apache POI, LibreOffice), manually export from Google Sheets and Apple Numbers, collect a few wild public files; open each with duke-sheets and compare cell counts/values against calamine to catch silent data loss
-- [ ] **Graceful error recovery** — return workbook with `warnings: Vec<ReadWarning>` instead of hard-failing on every malformed element (corrupt style index, bad shared string ref, etc.)
+- [x] **Graceful error recovery** — XLSX reader recovers from per-cell errors (bad style index → default, bad SST ref → `#REF!`, bad cell ref → skip, OOB position → skip) with `log::warn!` instead of aborting the entire read; previously-silent sites (unescape failures, bad merge/comment refs) also log warnings
 
 #### Writer Correctness
 - [x] **Roundtrip fidelity tests** — write with duke-sheets, open in real Excel via COM bridge, verify no repair warnings and cell data integrity (Phase 5 E2E test)
