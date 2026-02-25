@@ -122,6 +122,7 @@ Common functions needed:
 - [x] **`format_cell_value()` + `Worksheet::formatted_value_at()`** — standalone function and worksheet convenience methods; `CellView<'a>` borrow wrapper provides value/style/formatted access
 - [x] **CLI `--formatted` flag** — `duke to-csv -f` applies Excel number formats to output
 - [x] **Locale support** — `Locale` type on `Worksheet` (defaults to en-US) controls decimal separators, month names, currency; built-in locales: en_us, de_de, fr_fr, en_gb, ja_jp; ssfmt types not exposed in public API
+- [ ] **Broader locale coverage** — add more built-in `Locale` constructors (es_es, pt_br, it_it, zh_cn, ko_kr, etc.); CLI `--locale` flag to override worksheet default; consider auto-detecting system locale for CLI output
 - [ ] **Conditional format style resolution** — evaluate CF rules against cell values to determine effective display style (rules are read/stored but never evaluated)
 - [ ] **Rich text runs in cells** — cell strings are currently plain text; preserve bold/italic/color formatting runs within a single cell value (comments already flatten rich text)
 
