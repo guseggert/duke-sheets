@@ -11,24 +11,54 @@
 - [x] Number formatting
 - [x] Merged cells support
 
-### XLSX Support
-- [x] Read XLSX files
-- [x] Write XLSX files
-- [x] Shared strings table
+### XLSX Reader
+- [x] Read XLSX files (cell data, styles, shared strings)
+- [x] Shared strings table (read)
 - [x] Style preservation on roundtrip
 - [x] Excel `_xHHHH_` escape sequence decoding
-- [x] Formula cached value preservation in reader (error, boolean, string, number)
-- [x] Formula cached value preservation in writer (`<v>` element + `t` attribute)
+- [x] Formula cached value preservation (error, boolean, string, number)
 - [x] Data validation reading (list, whole, decimal, date, time, textLength, custom)
 - [x] Conditional formatting reading (cellIs, expression, colorScale, dataBar, iconSet, etc.)
 - [x] DXF (differential format) style reading for conditional formatting
 - [x] Cell comment reading (text, author, rich text flattening)
-- [x] Merged cells read/write
-- [x] Font vertical align (superscript/subscript) read/write
-- [x] Row heights / column widths / hidden rows & columns read/write
-- [x] Gradient fills read/write (`<gradientFill>` with stops, linear & path types)
+- [x] Merged cells
+- [x] Font vertical align (superscript/subscript)
+- [x] Row heights / column widths / hidden rows & columns
+- [x] Gradient fills (`<gradientFill>` with stops, linear & path types)
+- [x] `workbookPr` date1904 reading
+- [x] XML namespace handling (`local_name()` across 58 call sites)
+- [x] Graceful error recovery (bad SST ref → `#REF!`, bad style → default, bad cell ref → skip)
 
-### LibreOffice URP Bridge (`duke-sheets-libreoffice`)
+### XLSX Writer
+- [x] Write XLSX files (cell data, styles)
+- [x] Formula cached value preservation (`<v>` element + `t` attribute)
+- [x] Merged cells
+- [x] Font vertical align (superscript/subscript)
+- [x] Row heights / column widths / hidden rows & columns
+- [x] Gradient fills
+
+### XLS Reader (Legacy BIFF8)
+- [x] Compound File Binary (CFB) reader (via `cfb` crate)
+- [x] BIFF8 record parsing with CONTINUE record merging and boundary tracking
+- [x] Cell data: LABELSST, LABEL, NUMBER, RK, MULRK, BLANK, MULBLANK, BOOLERR, FORMULA, STRING
+- [x] Shared String Table with CONTINUE encoding-change handling (Latin-1 ↔ UTF-16LE)
+- [x] Styles: FONT, FORMAT, XF, PALETTE → full Style resolution
+- [x] Structure: MERGECELLS, ROW, COLINFO, BOUNDSHEET, DATEMODE
+- [x] Integrated into `WorkbookExt::open()` via `xls` feature gate
+- [x] Formula token parsing Phase 1 — RPN tokens to infix (~90% coverage)
+- [x] Formula token parsing Phase 2 — 3D refs, defined names, EXTERNSHEET/SUPBOOK/NAME (~98%)
+- [x] Formula token parsing Phase 3 — shared formulas (tRefN/tAreaN/SHAREDFMLA), array formulas (tArray/ARRAY), memory tokens (tMemFunc/tMemArea/tMemErr/tMemNoMem), tExp resolution
+- [x] Sheet-level properties: hidden sheets, active sheet (WINDOW1), sheet protection (PROTECT/PASSWORD)
+- [x] Style E2E tests: strikethrough, underline, text rotation, shrink-to-fit, indent, diagonal borders, cell protection, reading order
+
+### Cell Display Formatting
+- [x] Number format rendering engine (`CellView::formatted()` via ssfmt)
+- [x] Date serial number formatting (1900 and 1904 date systems)
+- [x] `format_cell_value()` + `Worksheet::formatted_value_at()` convenience methods
+- [x] CLI `--formatted` flag (`duke to-csv -f`)
+- [x] Locale support (`Locale` type on Worksheet, built-in: en_us, de_de, fr_fr, en_gb, ja_jp)
+
+### LibreOffice URP Bridge
 - [x] UNO Remote Protocol client over TCP
 - [x] Binary protocol negotiation, type/OID/TID caches
 - [x] Workbook create/open/save/close
@@ -37,16 +67,13 @@
 - [x] Number formats, conditional formatting, data validation
 - [x] On-demand E2E test fixtures via global LO connection singleton
 
-### Excel COM Bridge (`duke-sheets-excel-com` + C# bridge server)
+### Excel COM Bridge
 - [x] Generic COM proxy protocol (Get/Set/Invoke over NDJSON-over-TCP)
 - [x] C# bridge server for Windows VM (`tools/excel-bridge-server/`)
 - [x] Rust TCP client with typed Excel convenience methods
 - [x] QEMU/KVM VM management scripts (`tools/vm/`)
 - [x] Shared file access via QEMU SMB
-- [x] Excel E2E smoke test (round-trip: numbers, strings, booleans, formulas)
-- [x] Style operations (font, fill, border, alignment via generic COM proxy)
-- [x] Excel parity E2E test suite — Phase 1-5 complete (59/59 tests passing), including roundtrip fidelity
-- [ ] CI integration (self-hosted runner with KVM)
+- [x] Excel parity E2E test suite — Phase 1-5 complete (59/59 tests)
 
 ### CSV Support
 - [x] Read CSV files
@@ -57,28 +84,29 @@
 - [x] Formula parser (text → AST)
 - [x] Expression evaluator
 - [x] Dependency graph
-- [x] **Calculation chain** (`workbook.calculate()`)
-- [x] **Circular reference detection**
-- [x] **Iterative calculation** for circular refs
-- [x] **Volatile function support** (NOW, TODAY, RAND, RANDBETWEEN)
+- [x] Calculation chain (`workbook.calculate()`)
+- [x] Circular reference detection
+- [x] Iterative calculation for circular refs
+- [x] Volatile function support (NOW, TODAY, RAND, RANDBETWEEN)
 - [x] Cell reference resolution (single cells, ranges)
 - [x] Cross-sheet references (`Sheet2!A1`)
 
-### Implemented Functions (35 total)
+### Implemented Functions (108 of ~506)
 
-| Category | Functions |
-|----------|-----------|
-| Math | SUM, AVERAGE, MIN, MAX, COUNT, RAND, RANDBETWEEN |
-| Logical | IF, AND, OR, NOT |
-| Text | LEN, LEFT, RIGHT, MID, LOWER, UPPER, TRIM, CONCAT, CONCATENATE |
-| Date | DATE, YEAR, MONTH, DAY, NOW, TODAY |
-| Lookup | INDEX, MATCH, VLOOKUP |
-| Info | ISBLANK, ISNUMBER, ISTEXT, ISERROR, ISNA, NA |
+| Category | Count | Functions (highlights) |
+|----------|-------|----------------------|
+| Math & Trig | 35 | SUM, SUMIF, SUMIFS, AVERAGE, MIN, MAX, COUNT, COUNTIF, COUNTIFS, ROUND, ABS, MOD, INT, CEILING, FLOOR, POWER, SQRT, RAND, LOG, LN, PI, ... |
+| Text | 29 | LEN, LEFT, RIGHT, MID, LOWER, UPPER, TRIM, CONCAT, CONCATENATE, FIND, SEARCH, SUBSTITUTE, REPLACE, REPT, EXACT, CLEAN, CHAR, CODE, T, N, VALUE, ... |
+| Statistical | 13 | AVERAGEIF, AVERAGEIFS, COUNTBLANK, LARGE, SMALL, ... |
+| Logical | 11 | IF, AND, OR, NOT, IFERROR, IFNA, IFS, SWITCH, XOR, TRUE, FALSE |
+| Lookup | 8 | INDEX, MATCH, VLOOKUP, CHOOSE, ROW, COLUMN, ROWS, COLUMNS |
+| Date | 6 | DATE, YEAR, MONTH, DAY, NOW, TODAY |
+| Information | 6 | ISBLANK, ISNUMBER, ISTEXT, ISERROR, ISNA, NA |
 
 ### CLI Tool (`duke`)
-- [x] `duke to-csv` - Convert spreadsheet to CSV
-- [x] `duke info` - Show file information
-- [x] `duke sheets` - List sheets in workbook
+- [x] `duke to-csv` — convert spreadsheet to CSV (with `-f` for formatted output)
+- [x] `duke info` — show file information
+- [x] `duke sheets` — list sheets in workbook
 - [x] Formula calculation flag (`-c`)
 - [x] Custom delimiter support
 
@@ -92,13 +120,13 @@
 - [x] External workbook references (`[Book1.xlsx]Sheet1!A1`)
 - [x] Implicit intersection operator (`@`)
 - [x] Spill range operator (`#`)
-- [x] Better error messages for unknown characters (no more "Unexpected token: Eof")
+- [x] Better error messages for unknown characters
 - [ ] Some complex formulas may still fail to parse (edge cases)
 
 ### Array Formulas
 - [x] Array literals (`{1,2,3}`)
-- [ ] Array formula entry (`Ctrl+Shift+Enter` style)
-- [ ] Dynamic array spilling
+- [ ] Array formula entry (`Ctrl+Shift+Enter` style) in XLSX reader
+- [ ] Dynamic array spilling in evaluator
 
 ---
 
@@ -106,68 +134,111 @@
 
 ### High Priority
 
-#### More Excel Functions (~415 remaining)
-Common functions needed:
-- [ ] **Math**: ROUND, ROUNDUP, ROUNDDOWN, ABS, SQRT, POWER, MOD, INT, CEILING, FLOOR, SUMIF, SUMIFS, COUNTIF, COUNTIFS, AVERAGEIF, AVERAGEIFS
-- [ ] **Logical**: IFERROR, IFNA, IFS, SWITCH, XOR
-- [ ] **Text**: FIND, SEARCH, SUBSTITUTE, REPLACE, REPT, TEXT, VALUE, EXACT, CLEAN, CHAR, CODE, T, N
-- [ ] **Lookup**: HLOOKUP, XLOOKUP, LOOKUP, CHOOSE, OFFSET, INDIRECT, ROW, COLUMN, ROWS, COLUMNS
-- [ ] **Date/Time**: TIME, HOUR, MINUTE, SECOND, WEEKDAY, WEEKNUM, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY
-- [ ] **Statistical**: STDEV, STDEVP, VAR, VARP, MEDIAN, MODE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE
-- [ ] **Financial**: PMT, FV, PV, NPV, IRR, RATE, NPER, SLN, DB, DDB
+#### XLSX Writer Gaps (data loss on roundtrip)
+These features are modeled in core but NOT written by the XLSX writer:
+- [ ] **Shared string table** — writer uses inline strings (`t="inlineStr"`) instead of SST; produces larger files and has compatibility risk with some tools
+- [ ] **`workbookPr`** — `date_1904` setting is lost on roundtrip (reader reads it, writer doesn't write it)
+- [ ] **`calcPr`** — no calculation properties element; Excel may not recalculate formulas on open
+- [ ] **Freeze panes** — `FreezePanes` model exists, writer doesn't emit `<sheetViews>/<pane>`
+- [ ] **Sheet protection** — `SheetProtection` model exists, writer doesn't emit `<sheetProtection>`
+- [ ] **Tab color** — model exists, writer doesn't emit `<sheetPr>/<tabColor>`
+- [ ] **Page setup** — `PageSetup` model exists, writer doesn't emit `<pageSetup>/<pageMargins>/<headerFooter>`
+- [ ] **Named ranges** — `NamedRange`/`NamedRangeCollection` model exists, no `<definedNames>` read or write
+- [ ] **Data validation writing** — reader loads them, writer doesn't emit `<dataValidations>`
+- [ ] **Conditional formatting writing** — reader loads them, writer doesn't emit `<conditionalFormatting>`
+- [ ] **Comment VML drawings** — comments written to `comments{N}.xml` but without VML positioning; Excel may not display them
 
-#### Cell Display Formatting
-- [x] **Number format rendering engine** — `CellView::formatted()` applies `NumberFormat` to cell values via ssfmt crate (percentages, currencies, scientific, accounting, General format)
-- [x] **Date serial number formatting** — serial numbers rendered as dates/times when cell has date/time format; supports both 1900 and 1904 date systems
-- [x] **`format_cell_value()` + `Worksheet::formatted_value_at()`** — standalone function and worksheet convenience methods; `CellView<'a>` borrow wrapper provides value/style/formatted access
-- [x] **CLI `--formatted` flag** — `duke to-csv -f` applies Excel number formats to output
-- [x] **Locale support** — `Locale` type on `Worksheet` (defaults to en-US) controls decimal separators, month names, currency; built-in locales: en_us, de_de, fr_fr, en_gb, ja_jp; ssfmt types not exposed in public API
-- [ ] **Broader locale coverage** — add more built-in `Locale` constructors (es_es, pt_br, it_it, zh_cn, ko_kr, etc.); CLI `--locale` flag to override worksheet default; consider auto-detecting system locale for CLI output
-- [ ] **Conditional format style resolution** — evaluate CF rules against cell values to determine effective display style (rules are read/stored but never evaluated)
-- [ ] **Rich text runs in cells** — cell strings are currently plain text; preserve bold/italic/color formatting runs within a single cell value (comments already flatten rich text)
+#### XLSX Reader Gaps
+- [ ] **Theme colors** — `xl/theme/theme1.xml` not read; theme color references in styles resolve incorrectly (hardcoded defaults)
+- [ ] **Named ranges** — `<definedNames>` in `workbook.xml` never read (model exists but empty after load)
+- [ ] **Shared/array formulas** — only simple `<f>` parsed; `<f t="shared">`, `<f t="array">`, `<f t="dataTable">` silently skipped
+- [ ] **Theme/indexed colors in CF** — `parse_color_element()` only handles `rgb`, not `theme`/`indexed`/`tint` (has TODO comment)
+- [ ] **`cellStyleXfs` / named cell styles** — reader skips `cellStyleXfs` (only reads `cellXfs`); writer hardcodes one entry + "Normal"
+- [ ] **Font scheme/family/charset** — not modeled or read
+- [ ] **Outline/grouping levels** — Row/Column models have `outline_level`/`collapsed` fields but not read from XLSX
+- [ ] **Sheet views** — zoom, selection, split panes not read
+- [ ] **Comment visibility** — model has `visible` field, reader doesn't parse VML drawings
+- [ ] **Rich text in shared strings** — reader flattens `<rPr>` formatting runs to plain text
 
-#### Formula Parser Fixes
-- [x] Investigate parse failures on real-world files (quoted sheet refs were the #1 cause)
-- [x] Add support for implicit intersection (`@`)
-- [x] Add support for spill operator (`#`)
+#### More Excel Functions (~398 remaining)
+See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
+
+| Category | Implemented | Total | Key missing functions |
+|----------|------------|-------|----------------------|
+| Financial | 0 | 55 | PMT, FV, PV, NPV, IRR, RATE, NPER, SLN |
+| Engineering | 0 | 54 | BIN2DEC, DEC2BIN, HEX2DEC, CONVERT, COMPLEX |
+| Database | 0 | 12 | DSUM, DCOUNT, DAVERAGE, DGET |
+| Compatibility | 0 | 40 | STDEV, VAR, MODE, PERCENTILE, RANK, CEILING, FLOOR |
+| Statistical | 13 / 110 | 12% | STDEV.S, STDEV.P, VAR.S, VAR.P, MEDIAN, MODE.SNGL, MAXIFS, MINIFS, RANK.EQ, PERCENTILE.INC |
+| Date & Time | 6 / 25 | 24% | TIME, HOUR, MINUTE, SECOND, WEEKDAY, EDATE, EOMONTH, DATEDIF, NETWORKDAYS |
+| Lookup | 8 / 34 | 24% | HLOOKUP, XLOOKUP, XMATCH, INDIRECT, OFFSET, FILTER, SORT, UNIQUE |
+| Text | 29 / 42 | 69% | TEXT, TEXTJOIN, FIXED, DOLLAR |
+| Logical | 11 / 19 | 58% | LET, LAMBDA |
 
 #### Reader Robustness
-- [x] **Fix XML namespace handling** — replaced `name().as_ref()` with `local_name().as_ref()` in reader (58 call sites across `reader/mod.rs` and `styles.rs`); `r:id` attribute now matches on local name; prevents silent data loss on files with prefixed namespaces
-- [ ] **Real-world file corpus + differential testing** — generate XLSX from multiple tools (openpyxl, xlsxwriter, Apache POI, LibreOffice), manually export from Google Sheets and Apple Numbers, collect a few wild public files; open each with duke-sheets and compare cell counts/values against calamine to catch silent data loss
-- [x] **Graceful error recovery** — XLSX reader recovers from per-cell errors (bad style index → default, bad SST ref → `#REF!`, bad cell ref → skip, OOB position → skip) with `log::warn!` instead of aborting the entire read; previously-silent sites (unescape failures, bad merge/comment refs) also log warnings
+- [x] Fix XML namespace handling (58 call sites)
+- [x] Graceful error recovery (8 hard-fail sites converted)
+- [ ] **Real-world file corpus + differential testing** — generate XLSX from multiple tools (openpyxl, xlsxwriter, Apache POI, LibreOffice), export from Google Sheets and Apple Numbers; compare against calamine
 
 #### Writer Correctness
-- [x] **Roundtrip fidelity tests** — write with duke-sheets, open in real Excel via COM bridge, verify no repair warnings and cell data integrity (Phase 5 E2E test)
-- [x] **Cross-app write compatibility** — duke-sheets-written XLSX opens in real Excel with no repair; `Workbook.ReadOnly` and filename checked
-- [ ] **OOXML spec validation** — run Open XML SDK validator on files duke-sheets produces, catch missing required attributes / wrong element ordering / invalid content types
+- [x] Roundtrip fidelity tests via Excel COM bridge
+- [x] Cross-app write compatibility (no Excel repair warnings)
+- [ ] **OOXML spec validation** — run Open XML SDK validator on duke-sheets output
 
 #### General Quality
-- [ ] **Property-based testing** (proptest) — CellAddress round-trips through `to_string()`/`parse()`, Style survives XLSX write/read, formula `parse(e).to_string()` re-parses to same AST
+- [ ] **Property-based testing** (proptest) — CellAddress roundtrip, Style write/read, formula parse/print
+- [ ] **Broader locale coverage** — more built-in `Locale` constructors; CLI `--locale` flag; consider system locale auto-detection
 
 #### CI
 - [ ] `cargo test` on every push (GitHub Actions)
 - [ ] Excel COM E2E on self-hosted runner with KVM
-- [ ] Nightly job for slow tasks: fuzz corpus, full benchmark suite, real-world file corpus
+- [ ] Nightly job for slow tasks: fuzz corpus, benchmarks, real-world file corpus
 - [ ] Clippy + `cargo fmt --check` gate
 
 ### Medium Priority
 
-#### XLS Reader (Legacy Excel) — Remaining Items
-- [x] Compound File Binary (CFB) reader (via `cfb` crate)
-- [x] BIFF8 record parsing with CONTINUE record merging and boundary tracking
-- [x] Cell data: LABELSST, LABEL, NUMBER, RK, MULRK, BLANK, MULBLANK, BOOLERR, FORMULA
-- [x] Shared String Table with CONTINUE encoding-change handling (Latin-1 ↔ UTF-16LE)
-- [x] Styles: FONT, FORMAT, XF, PALETTE → full Style resolution (font, fill, border, alignment, number format, protection)
-- [x] Structure: MERGECELLS, ROW, COLINFO, BOUNDSHEET, DATEMODE
-- [x] Integrated into `WorkbookExt::open()` via `xls` feature gate
-- [x] Formula token parsing Phase 1 — decompiles RPN tokens to infix text (~90% coverage: operators, constants, refs, functions)
-- [x] Formula token parsing Phase 2 — 3D references (tRef3d/tArea3d), defined names (tName/tNameX), EXTERNSHEET/SUPBOOK/NAME record parsing (~98% coverage)
-- [ ] Formula token parsing Phase 3 — shared formulas (tRefN/tAreaN), array constants (tArray), memory tokens
-- [x] Style E2E tests: strikethrough, underline (single + double), text rotation, shrink-to-fit
-- [x] Style E2E test: indent level
-- [x] Sheet-level properties: hidden sheets (BOUNDSHEET visibility), active sheet (WINDOW1), sheet protection (PROTECT/PASSWORD)
-- [x] Style E2E tests + LO bridge extension: diagonal borders, cell protection, reading order
-- [ ] Pattern fills (non-solid) E2E — LO Calc cells don't support Excel-style pattern fills; reader + unit test coverage only
+#### Hyperlinks
+- [ ] **Data model** — `Hyperlink` struct (URL, display text, tooltip, location)
+- [ ] **XLSX reader** — read `<hyperlinks>` + relationship targets
+- [ ] **XLSX writer** — write hyperlinks
+- [ ] **XLS reader** — parse `HLINK` record (0x01B8, constant already defined)
+
+#### Rich Text Runs
+- [ ] **Data model** — `RichTextRun` (text segment + font override) in `CellValue::String`
+- [ ] **XLSX reader** — preserve `<rPr>` runs in shared strings and inline strings
+- [ ] **XLSX writer** — write `<r>/<rPr>/<t>` runs for rich-text cells
+
+#### Tables / ListObjects
+- [ ] **Data model** — `Table` struct (name, range, columns, totals row, style)
+- [ ] **XLSX reader** — read `<tableParts>` + `xl/tables/table{N}.xml`
+- [ ] **XLSX writer** — write table definitions
+- [ ] **Structured reference evaluation** — resolve `Table1[Column]` refs in formula evaluator
+
+#### Auto-Filters
+- [ ] **Data model** — `AutoFilter` struct (range, column filters, sort state)
+- [ ] **XLSX reader** — read `<autoFilter>` from sheet XML
+- [ ] **XLSX writer** — write `<autoFilter>`
+- [ ] **XLS reader** — parse `AUTOFILTER` record (0x009E)
+
+#### XLS Reader — Remaining Items
+- [x] Formula Phase 3 (shared formulas, array formulas, memory tokens) — **done**
+- [ ] **tTbl** (data table formula indicator) — parsed but emits `Unknown`
+- [ ] **Future function mapping** — index >= 0x8000 not mapped to `_xlfn.NAME` format
+- [ ] **Cell comments** — `NOTE` record (0x001C) not parsed
+- [ ] **Conditional formatting** — `CONDFMT`/`CF` records not parsed (XLSX reader supports this)
+- [ ] **Data validation** — `DVAL`/`DV` records not parsed (XLSX reader supports this)
+- [ ] **Hyperlinks** — `HLINK` record defined but not handled
+- [ ] **Freeze panes** — `WINDOW2`/`PANE` records defined but not parsed
+- [ ] **Default row/column dimensions** — `DEFCOLWIDTH`/`DEFAULTROWHEIGHT` not parsed
+- [ ] **Outline/grouping** — outline levels from ROW/COLINFO not extracted
+- [ ] **Sheet tab colors** — `SHEETLAYOUT` record not parsed
+- [ ] **Pattern fills (non-solid) E2E** — LO Calc doesn't support pattern fills; unit test only
+
+#### Named Ranges I/O
+- [ ] **XLSX reader** — read `<definedNames>` from `workbook.xml`
+- [ ] **XLSX writer** — write `<definedNames>`
+- [ ] **XLS reader** — parse `NAME` record formula bodies (names parsed but definitions not stored)
+- [ ] **Print areas / titles** — read `_xlnm.Print_Area` and `_xlnm.Print_Titles` defined names
 
 #### Large File Support
 - [ ] Streaming XLSX reader (SAX-style, low memory)
@@ -177,25 +248,47 @@ Common functions needed:
 
 ### Low Priority
 
+#### Theme Support
+- [ ] **Read `xl/theme/theme1.xml`** — parse theme colors, fonts, format schemes
+- [ ] **Theme color resolution** — resolve `theme` + `tint` color references in styles to RGB
+- [ ] **Write theme** — preserve or generate theme on roundtrip
+
+#### Print Settings
+- [ ] **Data model** — expand `PageSetup` (paper size, orientation, margins, header/footer, print area, page breaks)
+- [ ] **XLSX reader** — read `<pageSetup>`, `<pageMargins>`, `<headerFooter>`, `<rowBreaks>`, `<colBreaks>`
+- [ ] **XLSX writer** — write print settings
+- [ ] **XLS reader** — parse `SETUP`, `HEADER`, `FOOTER`, margin records, page break records
+
+#### Sheet Views
+- [ ] **Data model** — zoom level, selected cell, pane state, gridline visibility
+- [ ] **XLSX reader** — read `<sheetViews>/<sheetView>`
+- [ ] **XLSX writer** — write `<sheetViews>`
+- [ ] **XLS reader** — parse `WINDOW2`, `PANE`, `SELECTION`
+
 #### Charts
 - [ ] Chart data model
 - [ ] Read charts from XLSX
 - [ ] Write charts to XLSX
 - [ ] Basic chart types (bar, line, pie, scatter)
 
-#### XLSX Reader Gaps
-- [x] ~~**Read merged cells**~~ — done
-- [x] ~~**Read row heights / column widths**~~ — done
-- [x] ~~**Gradient fills**~~ — done (linear & path types with stops)
-- [x] ~~**Font vertical align**~~ — done (superscript/subscript)
-- [ ] **Theme/indexed colors in CF** — conditional format color elements only handle `rgb`, not `theme`/`indexed`/`tint`
-- [ ] **Comment visibility** — model has `visible` field, reader doesn't parse VML drawings (large effort)
+#### Images / Drawings
+- [ ] Data model for embedded images
+- [ ] Read `<drawing>` relationships + `xl/drawings/`
+- [ ] Write images
+- [ ] Two-cell anchor positioning
 
-#### Advanced Features
-- [ ] Pivot tables (read-only)
-- [ ] Hyperlinks
-- [ ] Images
-- [ ] Print settings
+#### Sparklines
+- [ ] Data model
+- [ ] XLSX reader (SparklineGroups extension)
+
+#### Pivot Tables
+- [ ] Read-only data model
+- [ ] XLSX reader
+
+#### Advanced Style Features
+- [ ] **Strikethrough type** — model only has boolean; Excel has single/double
+- [ ] **Font condense/extend** — not modeled
+- [ ] **Gradient fill path attributes** — `left`/`right`/`top`/`bottom` for path gradients not read
 
 #### Performance Benchmarks
 - [ ] Criterion benchmarks for XLSX read (small, medium, large files)
@@ -204,13 +297,7 @@ Common functions needed:
 - [ ] Formula parser benchmarks (throughput, complex expressions)
 - [ ] Calculation engine benchmarks (large dependency graphs)
 - [ ] Memory usage profiling / tracking for large workbooks
-- [ ] Comparative benchmarks vs other libraries:
-  - [ ] **calamine** (Rust, read-only) — XLSX/XLS read speed, memory usage
-  - [ ] **umya-spreadsheet** (Rust, read/write) — XLSX read/write speed, style handling
-  - [ ] **rust_xlsxwriter** (Rust, write-only) — XLSX write speed
-  - [ ] **excelize** (Go) — XLSX read/write via CLI or FFI wrapper
-  - [ ] **openpyxl** (Python) — XLSX read/write as baseline reference
-  - [ ] Generate comparison tables/charts for README
+- [ ] Comparative benchmarks vs calamine, umya-spreadsheet, rust_xlsxwriter, excelize, openpyxl
 
 #### Fuzz Testing
 - [ ] Fuzz XLSX reader (`cargo-fuzz` / `libFuzzer`) — malformed ZIP, corrupt XML, truncated streams
@@ -251,10 +338,11 @@ Common functions needed:
 
 ## Known Issues
 
-1. ~~**Formula parsing failures**~~ — Fixed. Quoted sheet refs, structured refs, external refs, @/# operators now parsed. Unknown chars give clear error messages.
-2. **XLS formula text partial** - Phases 1+2 decompile ~98% of formulas (operators, constants, refs, functions, 3D refs, defined names); Phase 3 (shared formulas, arrays) pending
-3. **Limited function coverage** - Only 35 of ~450 Excel functions implemented
-4. **Structured refs / external refs not evaluated** — Parser handles them, but evaluator returns #NAME? / #REF! (tables and external workbooks not implemented)
+1. ~~**Formula parsing failures**~~ — Fixed. Quoted sheet refs, structured refs, external refs, @/# operators now parsed.
+2. **Structured refs / external refs not evaluated** — Parser handles them, but evaluator returns #NAME? / #REF! (tables and external workbooks not implemented)
+3. **XLSX writer uses inline strings** — no shared string table; larger files, potential compatibility issues
+4. **Theme colors not resolved** — styles with theme color references display wrong colors (hardcoded defaults used)
+5. **XLS reader drops comments, hyperlinks, CF, DV** — these features are supported by the XLSX reader but silently skipped in XLS
 
 ---
 
@@ -263,8 +351,8 @@ Common functions needed:
 ### Crate Structure
 ```
 duke-sheets/
-├── duke-sheets-core        # Data model, cell storage
-├── duke-sheets-formula     # Parser, evaluator, functions
+├── duke-sheets-core        # Data model, cell storage, locale
+├── duke-sheets-formula     # Parser, evaluator, 108 functions
 ├── duke-sheets-xlsx        # XLSX read/write
 ├── duke-sheets-xls         # XLS reader (BIFF8, read-only)
 ├── duke-sheets-csv         # CSV read/write
@@ -284,7 +372,7 @@ duke-sheets/
 ### Key Types
 - `Workbook` - Container for worksheets
 - `Worksheet` - Grid of cells with metadata, locale, date system
-- `CellValue` - Number, String, Boolean, Error, Formula
+- `CellValue` - Number, String, Boolean, Error, Formula, SpillTarget, Empty
 - `CellView` - Lightweight borrow wrapper with `formatted()` display
 - `Locale` - Formatting locale (decimal separators, month names, currency)
 - `FormulaExpr` - AST for parsed formulas
