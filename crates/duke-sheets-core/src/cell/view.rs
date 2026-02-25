@@ -2,6 +2,7 @@
 //! a cell's value, style, and formatted display string.
 
 use crate::cell::value::CellValue;
+use crate::locale::Locale;
 use crate::style::{NumberFormat, Style};
 
 /// A read-only view of a cell, providing access to its value, style,
@@ -21,15 +22,22 @@ pub struct CellView<'a> {
     value: &'a CellValue,
     style: Option<&'a Style>,
     date_1904: bool,
+    locale: &'a ssfmt::Locale,
 }
 
 impl<'a> CellView<'a> {
     /// Create a new cell view.
-    pub(crate) fn new(value: &'a CellValue, style: Option<&'a Style>, date_1904: bool) -> Self {
+    pub(crate) fn new(
+        value: &'a CellValue,
+        style: Option<&'a Style>,
+        date_1904: bool,
+        locale: &'a ssfmt::Locale,
+    ) -> Self {
         Self {
             value,
             style,
             date_1904,
+            locale,
         }
     }
 
@@ -60,19 +68,41 @@ impl<'a> CellView<'a> {
     /// - Formulas display their cached value (or the formula text if no cache)
     /// - Empty cells return an empty string
     pub fn formatted(&self) -> String {
-        format_cell_value(self.value, self.number_format(), self.date_1904)
+        format_cell_value_inner(
+            self.value,
+            self.number_format(),
+            self.date_1904,
+            self.locale,
+        )
     }
 }
 
-/// Format a cell value using the given number format and date system.
+/// Format a cell value using the given number format, date system, and locale.
 ///
 /// This is the standalone version of [`CellView::formatted`], useful when
 /// you have the value and format separately.
-pub fn format_cell_value(value: &CellValue, format: &NumberFormat, date_1904: bool) -> String {
+pub fn format_cell_value(
+    value: &CellValue,
+    format: &NumberFormat,
+    date_1904: bool,
+    locale: &Locale,
+) -> String {
+    let ssfmt_locale = locale.to_ssfmt();
+    format_cell_value_inner(value, format, date_1904, &ssfmt_locale)
+}
+
+/// Inner implementation shared by [`CellView::formatted`] (which has a
+/// pre-cached `ssfmt::Locale`) and the public [`format_cell_value`].
+fn format_cell_value_inner(
+    value: &CellValue,
+    format: &NumberFormat,
+    date_1904: bool,
+    locale: &ssfmt::Locale,
+) -> String {
     let effective = value.effective_value();
 
     match effective {
-        CellValue::Number(n) => format_number(*n, format, date_1904),
+        CellValue::Number(n) => format_number(*n, format, date_1904, locale),
         CellValue::String(s) => {
             // Apply text section of format if it has one (the @ placeholder)
             let code = format.format_string();
@@ -100,14 +130,19 @@ pub fn format_cell_value(value: &CellValue, format: &NumberFormat, date_1904: bo
 }
 
 /// Format a numeric value using an Excel number format code.
-fn format_number(value: f64, format: &NumberFormat, date_1904: bool) -> String {
+fn format_number(
+    value: f64,
+    format: &NumberFormat,
+    date_1904: bool,
+    locale: &ssfmt::Locale,
+) -> String {
     let opts = ssfmt::FormatOptions {
         date_system: if date_1904 {
             ssfmt::DateSystem::Date1904
         } else {
             ssfmt::DateSystem::Date1900
         },
-        ..Default::default()
+        locale: locale.clone(),
     };
 
     match format {
@@ -164,7 +199,7 @@ mod tests {
     // Helper
     // ---------------------------------------------------------------
     fn fmt(value: &CellValue, format: &NumberFormat, date_1904: bool) -> String {
-        format_cell_value(value, format, date_1904)
+        format_cell_value(value, format, date_1904, &Locale::en_us())
     }
 
     // ---------------------------------------------------------------
@@ -592,17 +627,25 @@ mod tests {
     // CellView API
     // ---------------------------------------------------------------
 
+    // Cached ssfmt locale for CellView tests (CellView takes &ssfmt::Locale
+    // internally since the worksheet caches the conversion).
+    fn ssfmt_en_us() -> ssfmt::Locale {
+        ssfmt::Locale::en_us()
+    }
+
     #[test]
     fn cell_view_value_accessor() {
         let val = CellValue::Number(3.14);
-        let view = CellView::new(&val, None, false);
+        let locale = ssfmt_en_us();
+        let view = CellView::new(&val, None, false, &locale);
         assert_eq!(view.value(), &CellValue::Number(3.14));
     }
 
     #[test]
     fn cell_view_default_format() {
         let val = CellValue::Number(3.14);
-        let view = CellView::new(&val, None, false);
+        let locale = ssfmt_en_us();
+        let view = CellView::new(&val, None, false, &locale);
         assert_eq!(view.number_format(), &NumberFormat::General);
     }
 
@@ -613,7 +656,8 @@ mod tests {
             number_format: NumberFormat::BuiltIn(9), // "0%"
             ..Default::default()
         };
-        let view = CellView::new(&val, Some(&style), false);
+        let locale = ssfmt_en_us();
+        let view = CellView::new(&val, Some(&style), false, &locale);
         assert_eq!(view.formatted(), "75%");
     }
 
@@ -624,10 +668,11 @@ mod tests {
             number_format: NumberFormat::BuiltIn(2),
             ..Default::default()
         };
-        let view = CellView::new(&val, Some(&style), false);
+        let locale = ssfmt_en_us();
+        let view = CellView::new(&val, Some(&style), false, &locale);
         assert!(view.style().is_some());
 
-        let view_no_style = CellView::new(&val, None, false);
+        let view_no_style = CellView::new(&val, None, false, &locale);
         assert!(view_no_style.style().is_none());
     }
 

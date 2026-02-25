@@ -7,6 +7,7 @@ use crate::cell::{CellAddress, CellData, CellRange, CellStorage, CellValue};
 use crate::comment::CellComment;
 use crate::conditional_format::ConditionalFormatRule;
 use crate::error::{Error, Result};
+use crate::locale::Locale;
 use crate::style::Style;
 use crate::validation::DataValidation;
 use crate::{MAX_COLS, MAX_ROWS};
@@ -42,6 +43,12 @@ pub struct Worksheet {
     /// Date system: false = 1900 (Windows default), true = 1904 (Mac legacy).
     /// Copied from WorkbookSettings during reading so cells can format dates.
     date_1904: bool,
+    /// Locale for formatting (decimal separators, month names, currency, etc.).
+    /// Defaults to en-US. Affects how built-in format IDs render; custom format
+    /// strings with `[$-XXXX]` locale prefixes override this per-cell.
+    locale: Locale,
+    /// Cached ssfmt locale (rebuilt on set_locale).
+    ssfmt_locale: ssfmt::Locale,
 }
 
 impl Worksheet {
@@ -61,6 +68,8 @@ impl Worksheet {
             data_validations: Vec::new(),
             conditional_formats: Vec::new(),
             date_1904: false,
+            locale: Locale::en_us(),
+            ssfmt_locale: ssfmt::Locale::en_us(),
         }
     }
 
@@ -122,6 +131,17 @@ impl Worksheet {
     /// Set the date system (called by readers to propagate from WorkbookSettings).
     pub fn set_date_1904(&mut self, date_1904: bool) {
         self.date_1904 = date_1904;
+    }
+
+    /// Get the locale used for cell formatting.
+    pub fn locale(&self) -> &Locale {
+        &self.locale
+    }
+
+    /// Set the locale used for cell formatting.
+    pub fn set_locale(&mut self, locale: Locale) {
+        self.ssfmt_locale = locale.to_ssfmt();
+        self.locale = locale;
     }
 
     // === Cell Access ===
@@ -217,7 +237,7 @@ impl Worksheet {
             }
             None => (&CellValue::Empty, None),
         };
-        CellView::new(value, style, self.date_1904)
+        CellView::new(value, style, self.date_1904, &self.ssfmt_locale)
     }
 
     /// Get a [`CellView`] for the cell at the given address string (e.g., "A1").

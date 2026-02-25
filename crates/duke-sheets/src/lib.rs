@@ -59,6 +59,7 @@ pub use duke_sheets_core::{
     CellRange,
     // Cell types
     CellValue,
+    CellView,
     // Conditional formatting types
     CfColorValue,
     CfOperator,
@@ -75,6 +76,9 @@ pub use duke_sheets_core::{
     FontStyle,
     HorizontalAlignment,
     IconSetStyle,
+    // Locale for cell formatting
+    Locale,
+
     NumberFormat,
 
     Result,
