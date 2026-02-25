@@ -143,6 +143,9 @@ impl NumberFormat {
     }
 
     /// Get built-in format string by ID
+    ///
+    /// Reference: ECMA-376 Section 18.8.30 (numFmt), plus the implicit
+    /// built-in formats defined by the spec and Microsoft documentation.
     fn builtin_format_string(id: u32) -> &'static str {
         match id {
             0 => "General",
@@ -150,6 +153,10 @@ impl NumberFormat {
             2 => "0.00",
             3 => "#,##0",
             4 => "#,##0.00",
+            5 => "$#,##0_);($#,##0)",
+            6 => "$#,##0_);[Red]($#,##0)",
+            7 => "$#,##0.00_);($#,##0.00)",
+            8 => "$#,##0.00_);[Red]($#,##0.00)",
             9 => "0%",
             10 => "0.00%",
             11 => "0.00E+00",
@@ -164,30 +171,98 @@ impl NumberFormat {
             20 => "h:mm",
             21 => "h:mm:ss",
             22 => "m/d/yy h:mm",
-            37 => "#,##0 ;(#,##0)",
-            38 => "#,##0 ;[Red](#,##0)",
-            39 => "#,##0.00;(#,##0.00)",
-            40 => "#,##0.00;[Red](#,##0.00)",
+            37 => "#,##0_);(#,##0)",
+            38 => "#,##0_);[Red](#,##0)",
+            39 => "#,##0.00_);(#,##0.00)",
+            40 => "#,##0.00_);[Red](#,##0.00)",
+            45 => "mm:ss",
+            46 => "[h]:mm:ss",
+            47 => "mm:ss.0",
+            48 => "##0.0E+0",
             49 => "@",
             _ => "General",
         }
     }
 
     /// Check if this is a date/time format
+    ///
+    /// For built-in formats, checks the known ID ranges.
+    /// For custom formats, uses token-aware parsing that skips quoted
+    /// literal text and escaped characters to avoid false positives.
     pub fn is_date_format(&self) -> bool {
         match self {
-            NumberFormat::BuiltIn(id) => matches!(id, 14..=22),
-            NumberFormat::Custom(s) => {
-                // Simple heuristic: contains date/time placeholders but not literal text
-                let lower = s.to_lowercase();
-                (lower.contains('y')
-                    || lower.contains('m')
-                    || lower.contains('d')
-                    || lower.contains('h')
-                    || lower.contains('s'))
-                    && !lower.contains('"')
-            }
+            NumberFormat::BuiltIn(id) => matches!(id, 14..=22 | 45..=47),
+            NumberFormat::Custom(s) => Self::custom_is_date_format(s),
             NumberFormat::General => false,
         }
+    }
+
+    /// Token-aware check for date/time format codes in a custom format string.
+    /// Skips quoted literals ("..."), escaped characters (\x), and bracketed
+    /// sections ([...]) to avoid false positives on strings like `0 "items"`.
+    fn custom_is_date_format(s: &str) -> bool {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                // Skip quoted literal text
+                b'"' => {
+                    i += 1;
+                    while i < bytes.len() && bytes[i] != b'"' {
+                        i += 1;
+                    }
+                    i += 1; // skip closing quote
+                }
+                // Skip escaped character
+                b'\\' => {
+                    i += 2;
+                }
+                // Skip bracketed sections (colors, conditions, locale, elapsed time)
+                // but check for [h], [m], [s] which ARE date/time tokens
+                b'[' => {
+                    let start = i + 1;
+                    i += 1;
+                    while i < bytes.len() && bytes[i] != b']' {
+                        i += 1;
+                    }
+                    let bracket_len = i - start;
+                    if bracket_len == 1 {
+                        let ch = bytes[start];
+                        if ch == b'h' || ch == b'm' || ch == b's' {
+                            return true;
+                        }
+                    }
+                    i += 1; // skip closing bracket
+                }
+                // Skip underscore + next char (alignment spacer)
+                b'_' => {
+                    i += 2;
+                }
+                // Skip asterisk + next char (fill repeat)
+                b'*' => {
+                    i += 2;
+                }
+                // Date/time tokens
+                b'y' | b'Y' | b'd' | b'D' => return true,
+                // m/M is date (month) — could be minutes after h, but either way it's date/time
+                b'm' | b'M' => return true,
+                // h/H and s/S are time tokens
+                b'h' | b'H' | b's' | b'S' => return true,
+                // AM/PM indicator
+                b'A' | b'a' => {
+                    // Check for AM/PM or A/P
+                    let remaining = &s[i..];
+                    let lower = remaining.to_ascii_lowercase();
+                    if lower.starts_with("am/pm") || lower.starts_with("a/p") {
+                        return true;
+                    }
+                    i += 1;
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        }
+        false
     }
 }
