@@ -39,6 +39,11 @@ enum Commands {
         #[arg(short, long)]
         calculate: bool,
 
+        /// Apply Excel number formats (dates, percentages, currencies, etc.)
+        /// By default, raw values are emitted (better for data processing).
+        #[arg(short, long)]
+        formatted: bool,
+
         /// Field delimiter (default: comma)
         #[arg(short, long, default_value = ",")]
         delimiter: char,
@@ -66,8 +71,16 @@ fn main() -> Result<()> {
             output,
             sheet,
             calculate,
+            formatted,
             delimiter,
-        } => to_csv(&input, output.as_deref(), sheet, calculate, delimiter),
+        } => to_csv(
+            &input,
+            output.as_deref(),
+            sheet,
+            calculate,
+            formatted,
+            delimiter,
+        ),
         Commands::Info { input } => show_info(&input),
         Commands::Sheets { input } => list_sheets(&input),
     }
@@ -78,6 +91,7 @@ fn to_csv(
     output: Option<&std::path::Path>,
     sheet_idx: usize,
     calculate: bool,
+    formatted: bool,
     delimiter: char,
 ) -> Result<()> {
     // Load the workbook
@@ -127,17 +141,22 @@ fn to_csv(
             }
             first = false;
 
-            // Get cell value (use calculated value if available)
-            let value = if calculate {
-                sheet.get_calculated_value_at(row, col)
+            let text = if formatted {
+                // Apply Excel number formats (dates, percentages, etc.)
+                csv_escape(&sheet.formatted_value_at(row, col), delimiter)
             } else {
-                Some(&sheet.get_value_at(row, col))
+                // Raw value (better for data pipelines)
+                let value = if calculate {
+                    sheet.get_calculated_value_at(row, col)
+                } else {
+                    Some(&sheet.get_value_at(row, col))
+                };
+                match value {
+                    Some(val) => cell_value_to_csv_string(val, delimiter),
+                    None => String::new(),
+                }
             };
-
-            if let Some(val) = value {
-                let text = cell_value_to_csv_string(val, delimiter);
-                csv_output.push_str(&text);
-            }
+            csv_output.push_str(&text);
         }
         csv_output.push('\n');
     }
@@ -154,6 +173,16 @@ fn to_csv(
     }
 
     Ok(())
+}
+
+/// Quote a string for CSV if it contains the delimiter, quotes, or newlines.
+fn csv_escape(text: &str, delimiter: char) -> String {
+    if text.contains(delimiter) || text.contains('"') || text.contains('\n') || text.contains('\r')
+    {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text.to_string()
+    }
 }
 
 /// Convert a CellValue to a CSV-safe string
