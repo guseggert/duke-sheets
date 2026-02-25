@@ -11,6 +11,7 @@ description = "Core data structures for duke-sheets spreadsheet library"
 thiserror.workspace = true
 ahash.workspace = true
 chrono.workspace = true
+ssfmt.workspace = true
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]

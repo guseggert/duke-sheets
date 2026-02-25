@@ -235,6 +235,7 @@ impl XlsReader {
                 .map_err(|e| XlsError::Core(e))?;
 
             let ws = workbook.worksheet_mut(wb_sheet_idx).unwrap();
+            ws.set_date_1904(date_mode_1904);
 
             // Apply sheet visibility (0 = visible, 1 = hidden, 2 = very hidden)
             if info.visibility != 0 {
