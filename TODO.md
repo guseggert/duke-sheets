@@ -121,6 +121,7 @@ Common functions needed:
 - [x] **Date serial number formatting** — serial numbers rendered as dates/times when cell has date/time format; supports both 1900 and 1904 date systems
 - [x] **`format_cell_value()` + `Worksheet::formatted_value_at()`** — standalone function and worksheet convenience methods; `CellView<'a>` borrow wrapper provides value/style/formatted access
 - [x] **CLI `--formatted` flag** — `duke to-csv -f` applies Excel number formats to output
+- [x] **Locale support** — `Locale` type on `Worksheet` (defaults to en-US) controls decimal separators, month names, currency; built-in locales: en_us, de_de, fr_fr, en_gb, ja_jp; ssfmt types not exposed in public API
 - [ ] **Conditional format style resolution** — evaluate CF rules against cell values to determine effective display style (rules are read/stored but never evaluated)
 - [ ] **Rich text runs in cells** — cell strings are currently plain text; preserve bold/italic/color formatting runs within a single cell value (comments already flatten rich text)
 
@@ -228,6 +229,7 @@ Common functions needed:
 | Test Suite | Count | Status |
 |------------|-------|--------|
 | Core (cell, workbook, worksheet) | 36 | ✅ |
+| Cell display formatting (CellView) | 51 | ✅ |
 | Formula parser | 37 | ✅ |
 | Formula evaluator + functions | 74 | ✅ |
 | Calculation engine | 8 | ✅ |
@@ -242,7 +244,7 @@ Common functions needed:
 | E2E via Excel COM (XLSX) | 59 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
 | Other (unit, doc, integration) | 263 | ✅ |
-| **Total** | **538** | ✅ |
+| **Total** | **650** | ✅ |
 
 ---
 
@@ -280,8 +282,10 @@ duke-sheets/
 
 ### Key Types
 - `Workbook` - Container for worksheets
-- `Worksheet` - Grid of cells with metadata
+- `Worksheet` - Grid of cells with metadata, locale, date system
 - `CellValue` - Number, String, Boolean, Error, Formula
+- `CellView` - Lightweight borrow wrapper with `formatted()` display
+- `Locale` - Formatting locale (decimal separators, month names, currency)
 - `FormulaExpr` - AST for parsed formulas
 - `DependencyGraph` - Tracks cell dependencies
 - `CalculationEngine` - Evaluates formulas in order
@@ -299,7 +303,8 @@ cargo build -p duke-sheets-cli # Build CLI only
 
 ### CLI Usage
 ```bash
-duke to-csv input.xlsx              # Convert to CSV (stdout)
+duke to-csv input.xlsx              # Convert to CSV (stdout, raw values)
+duke to-csv -f input.xlsx           # Apply Excel number formats
 duke to-csv -c input.xlsx           # Calculate formulas first
 duke to-csv -o out.csv input.xlsx   # Output to file
 duke info input.xlsx                # Show file info
