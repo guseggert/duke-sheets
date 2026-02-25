@@ -26,6 +26,7 @@
 - [x] Row heights / column widths / hidden rows & columns
 - [x] Gradient fills (`<gradientFill>` with stops, linear & path types)
 - [x] `workbookPr` date1904 reading
+- [x] Named ranges (`definedNames` from `workbook.xml`)
 - [x] XML namespace handling (`local_name()` across 58 call sites)
 - [x] Graceful error recovery (bad SST ref → `#REF!`, bad style → default, bad cell ref → skip)
 
@@ -36,6 +37,18 @@
 - [x] Font vertical align (superscript/subscript)
 - [x] Row heights / column widths / hidden rows & columns
 - [x] Gradient fills
+- [x] Shared string table (SST) — deduplicated across all sheets
+- [x] `workbookPr` (date_1904 preservation on roundtrip)
+- [x] `calcPr` (tells Excel to recalculate formulas on open)
+- [x] `bookViews` (active sheet index)
+- [x] Sheet visibility (`state="hidden"`)
+- [x] Tab color (`sheetPr/tabColor`)
+- [x] Freeze panes (`sheetViews/pane`)
+- [x] Sheet protection (`sheetProtection` with password hash and permissions)
+- [x] Page setup (`pageSetup` + `pageMargins`)
+- [x] Named ranges (`definedNames` read + write, workbook and sheet scope)
+- [x] Conditional formatting writing (all rule types with DXF styles)
+- [x] Data validation writing (all types)
 
 ### XLS Reader (Legacy BIFF8)
 - [x] Compound File Binary (CFB) reader (via `cfb` crate)
@@ -134,23 +147,12 @@
 
 ### High Priority
 
-#### XLSX Writer Gaps (data loss on roundtrip)
-These features are modeled in core but NOT written by the XLSX writer:
-- [ ] **Shared string table** — writer uses inline strings (`t="inlineStr"`) instead of SST; produces larger files and has compatibility risk with some tools
-- [ ] **`workbookPr`** — `date_1904` setting is lost on roundtrip (reader reads it, writer doesn't write it)
-- [ ] **`calcPr`** — no calculation properties element; Excel may not recalculate formulas on open
-- [ ] **Freeze panes** — `FreezePanes` model exists, writer doesn't emit `<sheetViews>/<pane>`
-- [ ] **Sheet protection** — `SheetProtection` model exists, writer doesn't emit `<sheetProtection>`
-- [ ] **Tab color** — model exists, writer doesn't emit `<sheetPr>/<tabColor>`
-- [ ] **Page setup** — `PageSetup` model exists, writer doesn't emit `<pageSetup>/<pageMargins>/<headerFooter>`
-- [ ] **Named ranges** — `NamedRange`/`NamedRangeCollection` model exists, no `<definedNames>` read or write
-- [ ] **Data validation writing** — reader loads them, writer doesn't emit `<dataValidations>`
-- [ ] **Conditional formatting writing** — reader loads them, writer doesn't emit `<conditionalFormatting>`
+#### XLSX Writer Gaps (remaining)
 - [ ] **Comment VML drawings** — comments written to `comments{N}.xml` but without VML positioning; Excel may not display them
+- [ ] **`headerFooter`** — `PageSetup` model doesn't include header/footer strings yet
 
 #### XLSX Reader Gaps
 - [ ] **Theme colors** — `xl/theme/theme1.xml` not read; theme color references in styles resolve incorrectly (hardcoded defaults)
-- [ ] **Named ranges** — `<definedNames>` in `workbook.xml` never read (model exists but empty after load)
 - [ ] **Shared/array formulas** — only simple `<f>` parsed; `<f t="shared">`, `<f t="array">`, `<f t="dataTable">` silently skipped
 - [ ] **Theme/indexed colors in CF** — `parse_color_element()` only handles `rgb`, not `theme`/`indexed`/`tint` (has TODO comment)
 - [ ] **`cellStyleXfs` / named cell styles** — reader skips `cellStyleXfs` (only reads `cellXfs`); writer hardcodes one entry + "Normal"
@@ -235,8 +237,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [ ] **Pattern fills (non-solid) E2E** — LO Calc doesn't support pattern fills; unit test only
 
 #### Named Ranges I/O
-- [ ] **XLSX reader** — read `<definedNames>` from `workbook.xml`
-- [ ] **XLSX writer** — write `<definedNames>`
+- [x] **XLSX reader** — read `<definedNames>` from `workbook.xml`
+- [x] **XLSX writer** — write `<definedNames>`
 - [ ] **XLS reader** — parse `NAME` record formula bodies (names parsed but definitions not stored)
 - [ ] **Print areas / titles** — read `_xlnm.Print_Area` and `_xlnm.Print_Titles` defined names
 
@@ -321,7 +323,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Formula parser | 37 | ✅ |
 | Formula evaluator + functions | 74 | ✅ |
 | Calculation engine | 8 | ✅ |
-| XLSX roundtrip | 17 | ✅ |
+| XLSX roundtrip | 18 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
@@ -332,7 +334,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM (XLSX) | 59 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
 | Other (unit, doc, integration) | 263 | ✅ |
-| **Total** | **650** | ✅ |
+| **Total** | **651** | ✅ |
 
 ---
 
@@ -340,9 +342,10 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 
 1. ~~**Formula parsing failures**~~ — Fixed. Quoted sheet refs, structured refs, external refs, @/# operators now parsed.
 2. **Structured refs / external refs not evaluated** — Parser handles them, but evaluator returns #NAME? / #REF! (tables and external workbooks not implemented)
-3. **XLSX writer uses inline strings** — no shared string table; larger files, potential compatibility issues
+3. ~~**XLSX writer uses inline strings**~~ — Fixed. Now uses shared string table (SST).
 4. **Theme colors not resolved** — styles with theme color references display wrong colors (hardcoded defaults used)
 5. **XLS reader drops comments, hyperlinks, CF, DV** — these features are supported by the XLSX reader but silently skipped in XLS
+6. **Comment VML not written** — comments XML is written but VML positioning shapes are not; some Excel builds may not display them
 
 ---
 
