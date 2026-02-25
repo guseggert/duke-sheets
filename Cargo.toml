@@ -63,6 +63,9 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # Decimal precision for financial calculations
 rust_decimal = "1.35"
 
+# Number format rendering (Excel-compatible ECMA-376 format codes)
+ssfmt = "0.1"
+
 # Regex (for formulas, number formats)
 regex = "1.10"
 lazy-regex = "3.1"

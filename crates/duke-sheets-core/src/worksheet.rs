@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::cell::view::CellView;
 use crate::cell::{CellAddress, CellData, CellRange, CellStorage, CellValue};
 use crate::comment::CellComment;
 use crate::conditional_format::ConditionalFormatRule;
@@ -38,6 +39,9 @@ pub struct Worksheet {
     data_validations: Vec<DataValidation>,
     /// Conditional formatting rules
     conditional_formats: Vec<ConditionalFormatRule>,
+    /// Date system: false = 1900 (Windows default), true = 1904 (Mac legacy).
+    /// Copied from WorkbookSettings during reading so cells can format dates.
+    date_1904: bool,
 }
 
 impl Worksheet {
@@ -56,6 +60,7 @@ impl Worksheet {
             comment_authors: Vec::new(),
             data_validations: Vec::new(),
             conditional_formats: Vec::new(),
+            date_1904: false,
         }
     }
 
@@ -107,6 +112,16 @@ impl Worksheet {
     /// Set sheet protection settings
     pub fn set_protection(&mut self, protection: Option<SheetProtection>) {
         self.protection = protection;
+    }
+
+    /// Get the date system (false = 1900, true = 1904).
+    pub fn date_1904(&self) -> bool {
+        self.date_1904
+    }
+
+    /// Set the date system (called by readers to propagate from WorkbookSettings).
+    pub fn set_date_1904(&mut self, date_1904: bool) {
+        self.date_1904 = date_1904;
     }
 
     // === Cell Access ===
@@ -179,6 +194,53 @@ impl Worksheet {
     pub fn cell_style(&self, address: &str) -> Result<Option<&Style>> {
         let addr = CellAddress::parse(address)?;
         Ok(self.cell_style_at(addr.row, addr.col))
+    }
+
+    // === Cell View & Formatting ===
+
+    /// Get a [`CellView`] for the cell at the given row and column.
+    ///
+    /// The view provides access to the cell's value, style, and a
+    /// [`formatted()`](CellView::formatted) method that applies the cell's
+    /// number format to produce a display string.
+    ///
+    /// Returns a view with `CellValue::Empty` for cells that don't exist.
+    pub fn cell_view_at(&self, row: u32, col: u16) -> CellView<'_> {
+        let (value, style) = match self.cells.get(row, col) {
+            Some(data) => {
+                let style = if data.style_index != 0 {
+                    self.cells.style_pool().get(data.style_index)
+                } else {
+                    None
+                };
+                (&data.value, style)
+            }
+            None => (&CellValue::Empty, None),
+        };
+        CellView::new(value, style, self.date_1904)
+    }
+
+    /// Get a [`CellView`] for the cell at the given address string (e.g., "A1").
+    pub fn cell_view(&self, address: &str) -> Result<CellView<'_>> {
+        let addr = CellAddress::parse(address)?;
+        Ok(self.cell_view_at(addr.row, addr.col))
+    }
+
+    /// Get the formatted display string for a cell at the given row and column.
+    ///
+    /// This is a convenience method equivalent to
+    /// `self.cell_view_at(row, col).formatted()`.
+    ///
+    /// Numbers are formatted according to the cell's number format (percentages,
+    /// dates, currencies, etc.). Strings, booleans, and errors display as-is.
+    pub fn formatted_value_at(&self, row: u32, col: u16) -> String {
+        self.cell_view_at(row, col).formatted()
+    }
+
+    /// Get the formatted display string for a cell at the given address string.
+    pub fn formatted_value(&self, address: &str) -> Result<String> {
+        let addr = CellAddress::parse(address)?;
+        Ok(self.formatted_value_at(addr.row, addr.col))
     }
 
     // === Cell Modification ===

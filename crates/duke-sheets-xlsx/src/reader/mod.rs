@@ -110,19 +110,24 @@ impl XlsxReader {
         let cell_styles = parsed_styles.cell_styles;
         let dxf_styles = parsed_styles.dxf_styles;
 
-        // Read workbook.xml to get sheet info
-        let sheet_info = Self::read_workbook_xml(&mut archive)?;
+        // Read workbook.xml to get sheet info and properties
+        let (sheet_info, date_1904) = Self::read_workbook_xml(&mut archive)?;
 
         // Read workbook.xml.rels to get sheet paths
         let sheet_paths = Self::read_workbook_rels(&mut archive)?;
 
         // Create workbook
         let mut workbook = Workbook::empty();
+        workbook.settings_mut().date_1904 = date_1904;
 
         // Read each worksheet
         for (idx, (name, r_id)) in sheet_info.iter().enumerate() {
             if let Some(path) = sheet_paths.get(r_id) {
                 let sheet_idx = workbook.add_worksheet_with_name(name)?;
+                workbook
+                    .worksheet_mut(sheet_idx)
+                    .unwrap()
+                    .set_date_1904(date_1904);
                 Self::read_worksheet(
                     &mut archive,
                     path,
@@ -225,10 +230,11 @@ impl XlsxReader {
         read_styles_xml(file)
     }
 
-    /// Read workbook.xml to get sheet names and rIds
+    /// Read workbook.xml to get sheet names, rIds, and workbook properties.
+    /// Returns (sheets: Vec<(name, rId)>, date_1904: bool).
     fn read_workbook_xml<R: Read + Seek>(
         archive: &mut zip::ZipArchive<R>,
-    ) -> XlsxResult<Vec<(String, String)>> {
+    ) -> XlsxResult<(Vec<(String, String)>, bool)> {
         let file = archive
             .by_name("xl/workbook.xml")
             .map_err(|_| XlsxError::MissingPart("xl/workbook.xml".into()))?;
@@ -239,31 +245,43 @@ impl XlsxReader {
 
         let mut buf = Vec::new();
         let mut sheets = Vec::new();
+        let mut date_1904 = false;
 
         loop {
             match xml_reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(e)) | Ok(Event::Start(e))
-                    if e.name().local_name().as_ref() == b"sheet" =>
-                {
-                    let mut name = None;
-                    let mut r_id = None;
+                Ok(Event::Empty(e)) | Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
+                    b"sheet" => {
+                        let mut name = None;
+                        let mut r_id = None;
 
-                    for attr in e.attributes().flatten() {
-                        match attr.key.local_name().as_ref() {
-                            b"name" => {
-                                name = attr.unescape_value().ok().map(|s| s.to_string());
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"name" => {
+                                    name = attr.unescape_value().ok().map(|s| s.to_string());
+                                }
+                                b"id" => {
+                                    r_id = attr.unescape_value().ok().map(|s| s.to_string());
+                                }
+                                _ => {}
                             }
-                            b"id" => {
-                                r_id = attr.unescape_value().ok().map(|s| s.to_string());
-                            }
-                            _ => {}
+                        }
+
+                        if let (Some(name), Some(r_id)) = (name, r_id) {
+                            sheets.push((name, r_id));
                         }
                     }
-
-                    if let (Some(name), Some(r_id)) = (name, r_id) {
-                        sheets.push((name, r_id));
+                    b"workbookPr" => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"date1904" {
+                                if let Ok(val) = attr.unescape_value() {
+                                    date_1904 =
+                                        val.as_ref() == "1" || val.eq_ignore_ascii_case("true");
+                                }
+                            }
+                        }
                     }
-                }
+                    _ => {}
+                },
                 Ok(Event::Eof) => break,
                 Err(e) => return Err(XlsxError::Xml(e)),
                 _ => {}
@@ -271,7 +289,7 @@ impl XlsxReader {
             buf.clear();
         }
 
-        Ok(sheets)
+        Ok((sheets, date_1904))
     }
 
     /// Read workbook.xml.rels to get sheet file paths

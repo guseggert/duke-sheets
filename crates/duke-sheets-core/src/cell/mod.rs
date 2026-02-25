@@ -5,11 +5,14 @@
 //! - [`CellAddress`] - A cell's location (e.g., "A1")
 //! - [`CellRange`] - A range of cells (e.g., "A1:B10")
 //! - [`CellData`] - Complete cell data including value and style
+//! - [`CellView`] - Lightweight borrow wrapper with formatted display
 
 mod address;
 mod storage;
 mod value;
+pub(crate) mod view;
 
 pub use address::{CellAddress, CellRange};
 pub use storage::{CellData, CellStorage, SpillInfo, StorageMode};
 pub use value::{CellError, CellValue, SharedString, StringPool};
+pub use view::{format_cell_value, CellView};

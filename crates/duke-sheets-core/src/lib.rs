@@ -39,7 +39,9 @@ pub mod workbook;
 pub mod worksheet;
 
 // Re-exports for convenience
-pub use cell::{CellAddress, CellData, CellError, CellRange, CellValue};
+pub use cell::{
+    format_cell_value, CellAddress, CellData, CellError, CellRange, CellValue, CellView,
+};
 pub use column::{Column, ColumnData};
 pub use comment::CellComment;
 pub use conditional_format::{
