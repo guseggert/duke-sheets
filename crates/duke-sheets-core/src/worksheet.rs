@@ -28,7 +28,6 @@ pub struct Worksheet {
     /// Freeze pane settings
     freeze_panes: Option<FreezePanes>,
     /// Print settings
-    #[allow(dead_code)]
     page_setup: PageSetup,
     /// Tab color
     tab_color: Option<crate::style::Color>,
@@ -121,6 +120,16 @@ impl Worksheet {
     /// Set sheet protection settings
     pub fn set_protection(&mut self, protection: Option<SheetProtection>) {
         self.protection = protection;
+    }
+
+    /// Get the page setup / print settings
+    pub fn page_setup(&self) -> &PageSetup {
+        &self.page_setup
+    }
+
+    /// Set the page setup / print settings
+    pub fn set_page_setup(&mut self, page_setup: PageSetup) {
+        self.page_setup = page_setup;
     }
 
     /// Get the date system (false = 1900, true = 1904).

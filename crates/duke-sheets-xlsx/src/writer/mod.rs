@@ -241,6 +241,17 @@ impl XlsxWriter {
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
         );
 
+        // Write sheetPr (tab color)
+        if let Some(color) = sheet.tab_color() {
+            content.push_str(&format!(
+                "\n    <sheetPr><tabColor rgb=\"{}\"/></sheetPr>",
+                color.to_argb_hex()
+            ));
+        }
+
+        // Write sheetViews (freeze panes, tab selection)
+        Self::write_sheet_views(&mut content, sheet);
+
         // Write column definitions (if any custom widths or hidden columns)
         let col_widths = sheet.custom_column_widths();
         let col_hidden = sheet.hidden_columns();
@@ -446,6 +457,9 @@ impl XlsxWriter {
 
         content.push_str("\n    </sheetData>");
 
+        // Write sheet protection (before mergeCells per OOXML order)
+        Self::write_sheet_protection(&mut content, sheet);
+
         // Write merged cells (if any)
         let merged_regions = sheet.merged_regions();
         if !merged_regions.is_empty() {
@@ -465,10 +479,155 @@ impl XlsxWriter {
         // Write data validations (if any)
         Self::write_data_validations(&mut content, sheet);
 
+        // Write page margins and page setup
+        Self::write_page_setup(&mut content, sheet);
+
         content.push_str("\n</worksheet>");
 
         zip.write_all(content.as_bytes())?;
         Ok(())
+    }
+
+    fn write_sheet_views(content: &mut String, sheet: &duke_sheets_core::Worksheet) {
+        let freeze = sheet.freeze_panes();
+        let selected = sheet.is_selected();
+
+        // Only emit sheetViews if there's something to write
+        if freeze.is_none() && !selected {
+            return;
+        }
+
+        content.push_str("\n    <sheetViews>\n        <sheetView workbookViewId=\"0\"");
+        if selected {
+            content.push_str(" tabSelected=\"1\"");
+        }
+        content.push('>');
+
+        if let Some(fp) = freeze {
+            // Determine active pane based on what's frozen
+            let active_pane = match (fp.col > 0, fp.row > 0) {
+                (true, true) => "bottomRight",
+                (false, true) => "bottomLeft",
+                (true, false) => "topRight",
+                (false, false) => "bottomLeft", // shouldn't happen, but safe default
+            };
+
+            let top_left = CellAddress::new(fp.row, fp.col).to_a1_string();
+
+            let mut pane_attrs = String::new();
+            if fp.col > 0 {
+                pane_attrs.push_str(&format!(" xSplit=\"{}\"", fp.col));
+            }
+            if fp.row > 0 {
+                pane_attrs.push_str(&format!(" ySplit=\"{}\"", fp.row));
+            }
+            content.push_str(&format!(
+                "\n            <pane{} topLeftCell=\"{}\" activePane=\"{}\" state=\"frozen\"/>",
+                pane_attrs, top_left, active_pane
+            ));
+            content.push_str(&format!(
+                "\n            <selection pane=\"{}\" activeCell=\"{}\" sqref=\"{}\"/>",
+                active_pane, top_left, top_left
+            ));
+        }
+
+        content.push_str("\n        </sheetView>\n    </sheetViews>");
+    }
+
+    fn write_sheet_protection(content: &mut String, sheet: &duke_sheets_core::Worksheet) {
+        let prot = match sheet.protection() {
+            Some(p) if p.protected => p,
+            _ => return,
+        };
+
+        content.push_str("\n    <sheetProtection sheet=\"1\"");
+
+        if let Some(hash) = prot.password_hash {
+            content.push_str(&format!(" password=\"{:04X}\"", hash));
+        }
+
+        // ECMA-376 §18.3.1.85 sheetProtection attributes:
+        //   - "sheet" = sheet is protected (already emitted above)
+        //   - Other attributes: absent or "true"/"1" means NOT allowed.
+        //     We emit "0" when our model says the action IS allowed.
+        macro_rules! prot_allow {
+            ($field:expr, $attr:literal) => {
+                if $field {
+                    content.push_str(concat!(" ", $attr, "=\"0\""));
+                }
+            };
+        }
+
+        prot_allow!(prot.format_cells, "formatCells");
+        prot_allow!(prot.format_columns, "formatColumns");
+        prot_allow!(prot.format_rows, "formatRows");
+        prot_allow!(prot.insert_columns, "insertColumns");
+        prot_allow!(prot.insert_rows, "insertRows");
+        prot_allow!(prot.insert_hyperlinks, "insertHyperlinks");
+        prot_allow!(prot.delete_columns, "deleteColumns");
+        prot_allow!(prot.delete_rows, "deleteRows");
+        prot_allow!(prot.sort, "sort");
+        prot_allow!(prot.auto_filter, "autoFilter");
+        prot_allow!(prot.pivot_tables, "pivotTables");
+
+        // selectLockedCells/selectUnlockedCells: absent = allowed (inverted)
+        // So emit "1" when NOT allowed
+        if !prot.select_locked_cells {
+            content.push_str(" selectLockedCells=\"1\"");
+        }
+        if !prot.select_unlocked_cells {
+            content.push_str(" selectUnlockedCells=\"1\"");
+        }
+
+        content.push_str("/>");
+    }
+
+    fn write_page_setup(content: &mut String, sheet: &duke_sheets_core::Worksheet) {
+        let ps = sheet.page_setup();
+        let def = duke_sheets_core::PageSetup::default();
+
+        // Only emit if something differs from defaults
+        let margins_differ = (ps.left_margin - def.left_margin).abs() > 1e-9
+            || (ps.right_margin - def.right_margin).abs() > 1e-9
+            || (ps.top_margin - def.top_margin).abs() > 1e-9
+            || (ps.bottom_margin - def.bottom_margin).abs() > 1e-9
+            || (ps.header_margin - def.header_margin).abs() > 1e-9
+            || (ps.footer_margin - def.footer_margin).abs() > 1e-9;
+
+        let setup_differs = ps.paper_size != def.paper_size
+            || ps.orientation != def.orientation
+            || ps.scale != def.scale
+            || ps.fit_to_width.is_some()
+            || ps.fit_to_height.is_some();
+
+        if margins_differ {
+            content.push_str(&format!(
+                "\n    <pageMargins left=\"{}\" right=\"{}\" top=\"{}\" bottom=\"{}\" header=\"{}\" footer=\"{}\"/>",
+                ps.left_margin, ps.right_margin, ps.top_margin, ps.bottom_margin,
+                ps.header_margin, ps.footer_margin
+            ));
+        }
+
+        if setup_differs {
+            let orientation = match ps.orientation {
+                duke_sheets_core::PageOrientation::Portrait => "portrait",
+                duke_sheets_core::PageOrientation::Landscape => "landscape",
+            };
+            let mut attrs = format!(
+                " paperSize=\"{}\" orientation=\"{}\"",
+                ps.paper_size, orientation
+            );
+            if ps.scale != 100 {
+                attrs.push_str(&format!(" scale=\"{}\"", ps.scale));
+            }
+            if let Some(w) = ps.fit_to_width {
+                attrs.push_str(&format!(" fitToWidth=\"{}\"", w));
+            }
+            if let Some(h) = ps.fit_to_height {
+                attrs.push_str(&format!(" fitToHeight=\"{}\"", h));
+            }
+            content.push_str(&format!("\n    <pageSetup{}/>", attrs));
+        }
     }
 
     fn write_conditional_formatting(
