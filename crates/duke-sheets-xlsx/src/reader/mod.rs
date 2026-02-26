@@ -102,6 +102,27 @@ struct ThemePalette {
     colors: [(u8, u8, u8); 12],
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+enum CellFormulaKind {
+    #[default]
+    Normal,
+    Shared,
+    Array,
+    DataTable,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CellFormulaState {
+    kind: CellFormulaKind,
+    shared_index: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct SharedFormulaMaster {
+    base_cell_ref: String,
+    formula: String,
+}
+
 impl Default for ThemePalette {
     fn default() -> Self {
         Self {
@@ -722,11 +743,13 @@ impl XlsxReader {
         let mut current_cell_style: Option<u32> = None;
         let mut current_value: Option<String> = None;
         let mut current_formula: Option<String> = None;
+        let mut current_formula_state = CellFormulaState::default();
         let mut in_cell = false;
         let mut in_value = false;
         let mut in_formula = false;
         let mut in_inline_str = false;
         let mut in_inline_text = false;
+        let mut shared_formula_masters: HashMap<u32, SharedFormulaMaster> = HashMap::new();
 
         // Data validation state
         let mut in_data_validation = false;
@@ -811,6 +834,7 @@ impl XlsxReader {
                         current_cell_style = None;
                         current_value = None;
                         current_formula = None;
+                        current_formula_state = CellFormulaState::default();
 
                         for attr in e.attributes().flatten() {
                             match attr.key.local_name().as_ref() {
@@ -836,6 +860,7 @@ impl XlsxReader {
                         in_value = true;
                     }
                     b"f" if in_cell => {
+                        current_formula_state = Self::parse_cell_formula_state(&e);
                         in_formula = true;
                     }
                     b"is" if in_cell => {
@@ -925,12 +950,18 @@ impl XlsxReader {
                         b"c" => {
                             // Process the cell
                             if let Some(ref cell_ref) = current_cell_ref {
+                                let resolved_formula = Self::resolve_cell_formula(
+                                    cell_ref,
+                                    current_formula.as_deref(),
+                                    &current_formula_state,
+                                    &mut shared_formula_masters,
+                                );
                                 Self::process_cell(
                                     worksheet,
                                     cell_ref,
                                     current_cell_type.as_deref(),
                                     current_value.as_deref(),
-                                    current_formula.as_deref(),
+                                    resolved_formula.as_deref(),
                                     current_cell_style,
                                     shared_strings,
                                     cell_styles,
@@ -1105,6 +1136,12 @@ impl XlsxReader {
                 }
                 Ok(Event::Empty(e)) => {
                     match e.name().local_name().as_ref() {
+                        b"f" if in_cell => {
+                            // Self-closing formula elements appear for shared formula
+                            // follower cells: <f t="shared" si="0"/>
+                            current_formula_state = Self::parse_cell_formula_state(&e);
+                            in_formula = false;
+                        }
                         b"row" => {
                             // Self-closing <row .../> with no cells — may have dimensions
                             let mut row_num: Option<u32> = None;
@@ -1309,6 +1346,235 @@ impl XlsxReader {
         }
 
         Ok(())
+    }
+
+    fn parse_cell_formula_state(e: &quick_xml::events::BytesStart<'_>) -> CellFormulaState {
+        let mut state = CellFormulaState::default();
+
+        for attr in e.attributes().flatten() {
+            match attr.key.local_name().as_ref() {
+                b"t" => {
+                    if let Ok(v) = attr.unescape_value() {
+                        state.kind = match v.as_ref() {
+                            "shared" => CellFormulaKind::Shared,
+                            "array" => CellFormulaKind::Array,
+                            "dataTable" => CellFormulaKind::DataTable,
+                            _ => CellFormulaKind::Normal,
+                        };
+                    }
+                }
+                b"si" => {
+                    state.shared_index = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<u32>().ok());
+                }
+                _ => {}
+            }
+        }
+
+        state
+    }
+
+    fn resolve_cell_formula(
+        cell_ref: &str,
+        formula: Option<&str>,
+        formula_state: &CellFormulaState,
+        shared_formula_masters: &mut HashMap<u32, SharedFormulaMaster>,
+    ) -> Option<String> {
+        match formula_state.kind {
+            CellFormulaKind::Normal | CellFormulaKind::Array | CellFormulaKind::DataTable => {
+                formula.map(|f| f.to_string())
+            }
+            CellFormulaKind::Shared => {
+                let si = formula_state.shared_index?;
+                if let Some(f) = formula {
+                    // Shared formula master cell
+                    shared_formula_masters.insert(
+                        si,
+                        SharedFormulaMaster {
+                            base_cell_ref: cell_ref.to_string(),
+                            formula: f.to_string(),
+                        },
+                    );
+                    Some(f.to_string())
+                } else {
+                    // Shared formula follower cell
+                    let master = shared_formula_masters.get(&si)?;
+                    Some(Self::translate_shared_formula(
+                        &master.formula,
+                        &master.base_cell_ref,
+                        cell_ref,
+                    ))
+                }
+            }
+        }
+    }
+
+    fn translate_shared_formula(formula: &str, base_cell_ref: &str, cell_ref: &str) -> String {
+        let base = match CellAddress::parse(base_cell_ref) {
+            Ok(v) => v,
+            Err(_) => return formula.to_string(),
+        };
+        let target = match CellAddress::parse(cell_ref) {
+            Ok(v) => v,
+            Err(_) => return formula.to_string(),
+        };
+
+        let row_delta = target.row as i32 - base.row as i32;
+        let col_delta = target.col as i32 - base.col as i32;
+
+        Self::shift_a1_references(formula, row_delta, col_delta)
+    }
+
+    fn shift_a1_references(formula: &str, row_delta: i32, col_delta: i32) -> String {
+        let bytes = formula.as_bytes();
+        let mut out = String::with_capacity(formula.len());
+        let mut i = 0usize;
+        let mut in_string = false;
+
+        while i < bytes.len() {
+            let ch = bytes[i] as char;
+
+            if ch == '"' {
+                in_string = !in_string;
+                out.push(ch);
+                i += 1;
+                continue;
+            }
+
+            if !in_string {
+                if i > 0 {
+                    let prev = bytes[i - 1] as char;
+                    if prev.is_ascii_alphanumeric() || prev == '_' || prev == '.' {
+                        out.push(ch);
+                        i += 1;
+                        continue;
+                    }
+                }
+                if let Some((consumed, shifted)) =
+                    Self::try_shift_cell_ref(&formula[i..], row_delta, col_delta)
+                {
+                    out.push_str(&shifted);
+                    i += consumed;
+                    continue;
+                }
+            }
+
+            out.push(ch);
+            i += 1;
+        }
+
+        out
+    }
+
+    fn try_shift_cell_ref(s: &str, row_delta: i32, col_delta: i32) -> Option<(usize, String)> {
+        let b = s.as_bytes();
+        let mut i = 0usize;
+
+        let col_abs = if b.get(i) == Some(&b'$') {
+            i += 1;
+            true
+        } else {
+            false
+        };
+
+        let col_start = i;
+        while let Some(&c) = b.get(i) {
+            if (c as char).is_ascii_uppercase() {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i == col_start {
+            return None;
+        }
+
+        let col_letters = &s[col_start..i];
+        let mut col = Self::a1_col_to_index(col_letters)? as i32;
+
+        let row_abs = if b.get(i) == Some(&b'$') {
+            i += 1;
+            true
+        } else {
+            false
+        };
+
+        let row_start = i;
+        while let Some(&c) = b.get(i) {
+            if (c as char).is_ascii_digit() {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i == row_start {
+            return None;
+        }
+
+        let mut row: i32 = s[row_start..i].parse::<i32>().ok()?.saturating_sub(1);
+
+        // Must be token boundary (avoid matching inside names)
+        if let Some(&next) = b.get(i) {
+            let next = next as char;
+            if next.is_ascii_alphanumeric() || next == '_' || next == '.' {
+                return None;
+            }
+        }
+
+        if !col_abs {
+            col += col_delta;
+        }
+        if !row_abs {
+            row += row_delta;
+        }
+
+        if col < 0 || row < 0 {
+            return Some((i, "#REF!".to_string()));
+        }
+
+        let mut shifted = String::new();
+        if col_abs {
+            shifted.push('$');
+        }
+        shifted.push_str(&Self::a1_index_to_col(col as u16));
+        if row_abs {
+            shifted.push('$');
+        }
+        shifted.push_str(&(row as u32 + 1).to_string());
+
+        Some((i, shifted))
+    }
+
+    fn a1_col_to_index(col: &str) -> Option<u16> {
+        let mut value: u32 = 0;
+        for ch in col.chars() {
+            if !ch.is_ascii_uppercase() {
+                return None;
+            }
+            value = value
+                .saturating_mul(26)
+                .saturating_add((ch as u8 - b'A' + 1) as u32);
+        }
+        if value == 0 {
+            None
+        } else {
+            u16::try_from(value - 1).ok()
+        }
+    }
+
+    fn a1_index_to_col(mut index: u16) -> String {
+        let mut col = String::new();
+        loop {
+            let rem = (index % 26) as u8;
+            col.insert(0, (b'A' + rem) as char);
+            if index < 26 {
+                break;
+            }
+            index = index / 26 - 1;
+        }
+        col
     }
 
     /// Process a cell and add it to the worksheet
@@ -1959,6 +2225,34 @@ mod tests {
     use quick_xml::events::BytesStart;
     use std::io::{Cursor, Write};
 
+    fn build_single_sheet_xlsx(sheet_xml: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+
+            zip.start_file("[Content_Types].xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#).unwrap();
+
+            zip.start_file("_rels/.rels", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#).unwrap();
+
+            zip.start_file("xl/workbook.xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#).unwrap();
+
+            zip.start_file("xl/_rels/workbook.xml.rels", options)
+                .unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#).unwrap();
+
+            zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+            zip.write_all(sheet_xml.as_bytes()).unwrap();
+
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
     #[test]
     fn test_parse_color_element_theme_and_tint() {
         let mut e = BytesStart::new("color");
@@ -2027,6 +2321,61 @@ mod tests {
         let palette = XlsxReader::parse_theme_palette(Cursor::new(xml.as_bytes())).unwrap();
         assert_eq!(palette.colors[4], (0x11, 0x22, 0x33));
         assert_eq!(palette.resolve_theme_color(4, 0), (0x11, 0x22, 0x33));
+    }
+
+    #[test]
+    fn test_read_shared_formula_master_and_follower() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="n"><v>1</v></c>
+      <c r="B1" t="n"><v>2</v></c>
+      <c r="C1"><f t="shared" si="0">A1+B1</f><v>3</v></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="n"><v>4</v></c>
+      <c r="B2" t="n"><v>5</v></c>
+      <c r="C2"><f t="shared" si="0"/><v>9</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_value("C1").unwrap().formula_text(),
+            Some("=A1+B1")
+        );
+        assert_eq!(
+            sheet.get_value("C2").unwrap().formula_text(),
+            Some("=A2+B2")
+        );
+    }
+
+    #[test]
+    fn test_read_array_formula_anchor() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1"><f t="array" ref="A1:A3">ROW(A1:A3)</f><v>1</v></c>
+    </row>
+    <row r="2"><c r="A2"><v>2</v></c></row>
+    <row r="3"><c r="A3"><v>3</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_value("A1").unwrap().formula_text(),
+            Some("=ROW(A1:A3)")
+        );
     }
 
     #[test]
