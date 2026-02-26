@@ -154,9 +154,9 @@
 - [ ] **`headerFooter`** — `PageSetup` model doesn't include header/footer strings yet
 
 #### XLSX Reader Gaps
-- [ ] **Theme colors** — `xl/theme/theme1.xml` not read; theme color references in styles resolve incorrectly (hardcoded defaults)
+- [x] **Theme colors** — reader now parses `xl/theme/theme1.xml` (`clrScheme`) and resolves theme+tint colors in styles/CF
 - [ ] **Shared/array formulas** — only simple `<f>` parsed; `<f t="shared">`, `<f t="array">`, `<f t="dataTable">` silently skipped
-- [ ] **Theme/indexed colors in CF** — `parse_color_element()` only handles `rgb`, not `theme`/`indexed`/`tint` (has TODO comment)
+- [x] **Theme/indexed colors in CF** — `parse_color_element()` now handles `rgb`/`theme`/`indexed`/`tint`/`auto` and resolves with workbook theme palette
 - [ ] **`cellStyleXfs` / named cell styles** — reader skips `cellStyleXfs` (only reads `cellXfs`); writer hardcodes one entry + "Normal"
 - [ ] **Font scheme/family/charset** — not modeled or read
 - [ ] **Outline/grouping levels** — Row/Column models have `outline_level`/`collapsed` fields but not read from XLSX
@@ -187,6 +187,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 #### Writer Correctness
 - [x] Roundtrip fidelity tests via Excel COM bridge (31 writer E2E tests)
 - [x] Cross-app write compatibility (no Excel repair warnings)
+- [x] Preserve theme/indexed color attributes in sheet XML (`tabColor`, CF `colorScale`, `dataBar`)
+- [x] Emit `xl/theme/theme1.xml` + workbook theme relationship on write (default Office theme)
 - [ ] **OOXML spec validation** — run Open XML SDK validator on duke-sheets output
 
 #### General Quality
@@ -253,8 +255,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 ### Low Priority
 
 #### Theme Support
-- [ ] **Read `xl/theme/theme1.xml`** — parse theme colors, fonts, format schemes
-- [ ] **Theme color resolution** — resolve `theme` + `tint` color references in styles to RGB
+- [x] **Read `xl/theme/theme1.xml`** — parse `clrScheme` theme colors (slots used by style/CF color refs)
+- [x] **Theme color resolution** — resolve `theme` + `tint` color references in styles/CF to RGB using workbook theme palette
 - [ ] **Write theme** — preserve or generate theme on roundtrip
 
 #### Print Settings
@@ -336,8 +338,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 263 | ✅ |
-| **Total** | **682** | ✅ |
+| Other (unit, doc, integration) | 271 | ✅ |
+| **Total** | **690** | ✅ |
 
 ---
 
@@ -346,7 +348,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 1. ~~**Formula parsing failures**~~ — Fixed. Quoted sheet refs, structured refs, external refs, @/# operators now parsed.
 2. **Structured refs / external refs not evaluated** — Parser handles them, but evaluator returns #NAME? / #REF! (tables and external workbooks not implemented)
 3. ~~**XLSX writer uses inline strings**~~ — Fixed. Now uses shared string table (SST).
-4. **Theme colors not resolved** — styles with theme color references display wrong colors (hardcoded defaults used)
+4. ~~**Theme colors not resolved**~~ — Fixed. XLSX reader parses `xl/theme/theme1.xml` and resolves theme+tint colors in styles and conditional formatting.
 5. **XLS reader drops comments, hyperlinks, CF, DV** — these features are supported by the XLSX reader but silently skipped in XLS
 6. **Comment VML not written** — comments XML is written but VML positioning shapes are not; some Excel builds may not display them
 
