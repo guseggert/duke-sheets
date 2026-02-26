@@ -729,7 +729,7 @@ pub(crate) struct ParsedStyles {
 
 pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     let mut xml_reader = Reader::from_reader(BufReader::new(reader));
-    xml_reader.trim_text(true);
+    xml_reader.config_mut().trim_text(true);
 
     let mut buf = Vec::new();
 
