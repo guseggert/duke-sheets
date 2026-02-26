@@ -91,6 +91,76 @@ struct WorkbookProps {
     named_ranges: Vec<duke_sheets_core::named_range::NamedRange>,
 }
 
+struct WorkbookRels {
+    sheet_paths: HashMap<String, String>,
+    theme_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ThemePalette {
+    /// [lt1, dk1, lt2, dk2, accent1..accent6, hlink, fol_hlink]
+    colors: [(u8, u8, u8); 12],
+}
+
+impl Default for ThemePalette {
+    fn default() -> Self {
+        Self {
+            colors: [
+                (255, 255, 255),
+                (0, 0, 0),
+                (238, 236, 225),
+                (31, 73, 125),
+                (79, 129, 189),
+                (192, 80, 77),
+                (155, 187, 89),
+                (128, 100, 162),
+                (75, 172, 198),
+                (247, 150, 70),
+                (0, 0, 255),
+                (128, 0, 128),
+            ],
+        }
+    }
+}
+
+impl ThemePalette {
+    fn resolve_theme_color(&self, index: u8, tint: i8) -> (u8, u8, u8) {
+        let base = match index {
+            0..=9 => self.colors[index as usize],
+            _ => (0, 0, 0),
+        };
+        Self::apply_tint(base, tint)
+    }
+
+    fn apply_tint(color: (u8, u8, u8), tint: i8) -> (u8, u8, u8) {
+        let tint_float = tint as f64 / 100.0;
+
+        let apply = |c: u8| -> u8 {
+            let c = c as f64;
+            let result = if tint_float < 0.0 {
+                c * (1.0 + tint_float)
+            } else {
+                c + (255.0 - c) * tint_float
+            };
+            result.clamp(0.0, 255.0) as u8
+        };
+
+        (apply(color.0), apply(color.1), apply(color.2))
+    }
+
+    fn parse_ooxml_hex(hex: &str) -> Option<(u8, u8, u8)> {
+        let hex = hex.trim_start_matches('#');
+        if hex.len() < 6 {
+            return None;
+        }
+        let hex = if hex.len() == 8 { &hex[2..] } else { hex };
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        Some((r, g, b))
+    }
+}
+
 impl XlsxReader {
     /// Read a workbook from a file path
     pub fn read_file<P: AsRef<Path>>(path: P) -> XlsxResult<Workbook> {
@@ -113,15 +183,27 @@ impl XlsxReader {
         let shared_strings = Self::read_shared_strings(&mut archive)?;
 
         // Read styles (if present)
-        let parsed_styles = Self::read_styles(&mut archive)?;
+        let mut parsed_styles = Self::read_styles(&mut archive)?;
+        // Read workbook.xml.rels to get sheet/theme paths
+        let workbook_rels = Self::read_workbook_rels(&mut archive)?;
+        // Read workbook theme (if present) and resolve theme colors in styles
+        let theme_palette =
+            Self::read_theme_palette(&mut archive, workbook_rels.theme_path.as_deref())?;
+        if let Some(theme) = theme_palette {
+            for style in &mut parsed_styles.cell_styles {
+                Self::resolve_style_theme_colors(style, &theme);
+            }
+            for style in &mut parsed_styles.dxf_styles {
+                Self::resolve_style_theme_colors(style, &theme);
+            }
+        }
         let cell_styles = parsed_styles.cell_styles;
         let dxf_styles = parsed_styles.dxf_styles;
 
         // Read workbook.xml to get sheet info, properties, and defined names
         let wb_props = Self::read_workbook_xml(&mut archive)?;
 
-        // Read workbook.xml.rels to get sheet paths
-        let sheet_paths = Self::read_workbook_rels(&mut archive)?;
+        let sheet_paths = workbook_rels.sheet_paths;
 
         // Create workbook
         let mut workbook = Workbook::empty();
@@ -150,6 +232,7 @@ impl XlsxReader {
                     &shared_strings,
                     &cell_styles,
                     &dxf_styles,
+                    theme_palette.as_ref(),
                 )?;
 
                 // Read comments for this worksheet (if present)
@@ -382,7 +465,7 @@ impl XlsxReader {
     /// Read workbook.xml.rels to get sheet file paths
     fn read_workbook_rels<R: Read + Seek>(
         archive: &mut zip::ZipArchive<R>,
-    ) -> XlsxResult<HashMap<String, String>> {
+    ) -> XlsxResult<WorkbookRels> {
         let file = archive
             .by_name("xl/_rels/workbook.xml.rels")
             .map_err(|_| XlsxError::MissingPart("xl/_rels/workbook.xml.rels".into()))?;
@@ -393,6 +476,7 @@ impl XlsxReader {
 
         let mut buf = Vec::new();
         let mut rels = HashMap::new();
+        let mut theme_path: Option<String> = None;
 
         loop {
             match xml_reader.read_event_into(&mut buf) {
@@ -418,7 +502,7 @@ impl XlsxReader {
                         }
                     }
 
-                    // Only include worksheet relationships
+                    // Include worksheet relationships and theme relationship
                     if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type) {
                         if rel_type.ends_with("/worksheet") {
                             // Target is relative to xl/ folder
@@ -428,6 +512,13 @@ impl XlsxReader {
                                 format!("xl/{}", target)
                             };
                             rels.insert(id, full_path);
+                        } else if rel_type.ends_with("/theme") {
+                            let full_path = if target.starts_with('/') {
+                                target[1..].to_string()
+                            } else {
+                                format!("xl/{}", target)
+                            };
+                            theme_path = Some(full_path);
                         }
                     }
                 }
@@ -438,7 +529,171 @@ impl XlsxReader {
             buf.clear();
         }
 
-        Ok(rels)
+        Ok(WorkbookRels {
+            sheet_paths: rels,
+            theme_path,
+        })
+    }
+
+    fn read_theme_palette<R: Read + Seek>(
+        archive: &mut zip::ZipArchive<R>,
+        theme_path: Option<&str>,
+    ) -> XlsxResult<Option<ThemePalette>> {
+        let mut try_paths: Vec<String> = Vec::new();
+        if let Some(path) = theme_path {
+            try_paths.push(path.to_string());
+        }
+        if !try_paths.iter().any(|p| p == "xl/theme/theme1.xml") {
+            try_paths.push("xl/theme/theme1.xml".to_string());
+        }
+
+        for path in try_paths {
+            let file = match archive.by_name(&path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let reader = BufReader::new(file);
+            let palette = Self::parse_theme_palette(reader)?;
+            return Ok(Some(palette));
+        }
+
+        Ok(None)
+    }
+
+    fn parse_theme_palette<R: Read>(reader: R) -> XlsxResult<ThemePalette> {
+        let mut xml_reader = Reader::from_reader(BufReader::new(reader));
+        xml_reader.config_mut().trim_text(true);
+
+        let mut palette = ThemePalette::default();
+        let mut buf = Vec::new();
+        let mut in_clr_scheme = false;
+        let mut current_slot: Option<usize> = None;
+
+        loop {
+            match xml_reader.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
+                    b"clrScheme" => in_clr_scheme = true,
+                    b"lt1" if in_clr_scheme => current_slot = Some(0),
+                    b"dk1" if in_clr_scheme => current_slot = Some(1),
+                    b"lt2" if in_clr_scheme => current_slot = Some(2),
+                    b"dk2" if in_clr_scheme => current_slot = Some(3),
+                    b"accent1" if in_clr_scheme => current_slot = Some(4),
+                    b"accent2" if in_clr_scheme => current_slot = Some(5),
+                    b"accent3" if in_clr_scheme => current_slot = Some(6),
+                    b"accent4" if in_clr_scheme => current_slot = Some(7),
+                    b"accent5" if in_clr_scheme => current_slot = Some(8),
+                    b"accent6" if in_clr_scheme => current_slot = Some(9),
+                    b"hlink" if in_clr_scheme => current_slot = Some(10),
+                    b"folHlink" if in_clr_scheme => current_slot = Some(11),
+                    b"srgbClr" | b"sysClr" if in_clr_scheme => {
+                        if let Some(slot) = current_slot {
+                            if let Some(rgb) = Self::extract_theme_rgb_from_attrs(&e) {
+                                palette.colors[slot] = rgb;
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
+                    b"srgbClr" | b"sysClr" if in_clr_scheme => {
+                        if let Some(slot) = current_slot {
+                            if let Some(rgb) = Self::extract_theme_rgb_from_attrs(&e) {
+                                palette.colors[slot] = rgb;
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                Ok(Event::End(e)) => match e.name().local_name().as_ref() {
+                    b"clrScheme" => {
+                        in_clr_scheme = false;
+                        current_slot = None;
+                    }
+                    b"lt1" | b"dk1" | b"lt2" | b"dk2" | b"accent1" | b"accent2" | b"accent3"
+                    | b"accent4" | b"accent5" | b"accent6" | b"hlink" | b"folHlink" => {
+                        current_slot = None;
+                    }
+                    _ => {}
+                },
+                Ok(Event::Eof) => break,
+                Err(e) => return Err(XlsxError::Xml(e)),
+                _ => {}
+            }
+            buf.clear();
+        }
+
+        Ok(palette)
+    }
+
+    fn extract_theme_rgb_from_attrs(e: &quick_xml::events::BytesStart<'_>) -> Option<(u8, u8, u8)> {
+        let mut val: Option<String> = None;
+        let mut last_clr: Option<String> = None;
+
+        for attr in e.attributes().flatten() {
+            match attr.key.local_name().as_ref() {
+                b"val" => val = attr.unescape_value().ok().map(|s| s.to_string()),
+                b"lastClr" => last_clr = attr.unescape_value().ok().map(|s| s.to_string()),
+                _ => {}
+            }
+        }
+
+        if let Some(v) = val {
+            if let Some(rgb) = ThemePalette::parse_ooxml_hex(&v) {
+                return Some(rgb);
+            }
+        }
+        if let Some(v) = last_clr {
+            if let Some(rgb) = ThemePalette::parse_ooxml_hex(&v) {
+                return Some(rgb);
+            }
+        }
+        None
+    }
+
+    fn resolve_style_theme_colors(style: &mut Style, theme: &ThemePalette) {
+        style.font.color = Self::resolve_color_theme(style.font.color, theme);
+
+        match &mut style.fill {
+            duke_sheets_core::style::FillStyle::None => {}
+            duke_sheets_core::style::FillStyle::Solid { color } => {
+                *color = Self::resolve_color_theme(*color, theme);
+            }
+            duke_sheets_core::style::FillStyle::Pattern {
+                foreground,
+                background,
+                ..
+            } => {
+                *foreground = Self::resolve_color_theme(*foreground, theme);
+                *background = Self::resolve_color_theme(*background, theme);
+            }
+            duke_sheets_core::style::FillStyle::Gradient { stops, .. } => {
+                for stop in stops {
+                    stop.color = Self::resolve_color_theme(stop.color, theme);
+                }
+            }
+        }
+
+        for edge in [
+            &mut style.border.left,
+            &mut style.border.right,
+            &mut style.border.top,
+            &mut style.border.bottom,
+            &mut style.border.diagonal,
+        ] {
+            if let Some(edge) = edge {
+                edge.color = Self::resolve_color_theme(edge.color, theme);
+            }
+        }
+    }
+
+    fn resolve_color_theme(color: Color, theme: &ThemePalette) -> Color {
+        match color {
+            Color::Theme { index, tint } => {
+                let (r, g, b) = theme.resolve_theme_color(index, tint);
+                Color::Rgb { r, g, b }
+            }
+            other => other,
+        }
     }
 
     /// Read a worksheet from the archive
@@ -449,6 +704,7 @@ impl XlsxReader {
         shared_strings: &[String],
         cell_styles: &[Style],
         dxf_styles: &[Style],
+        theme_palette: Option<&ThemePalette>,
     ) -> XlsxResult<()> {
         let file = archive
             .by_name(path)
@@ -1017,7 +1273,7 @@ impl XlsxReader {
                         }
                         // Parse color elements for colorScale and dataBar
                         b"color" if in_color_scale || in_data_bar => {
-                            let color = Self::parse_color_element(&e);
+                            let color = Self::parse_color_element(&e, theme_palette);
                             if in_color_scale {
                                 cf_colors.push(color);
                             } else if in_data_bar {
@@ -1328,37 +1584,93 @@ impl XlsxReader {
     }
 
     /// Parse a color element from attributes (rgb, theme, tint, etc.)
-    fn parse_color_element(e: &quick_xml::events::BytesStart) -> Color {
+    fn parse_color_element(
+        e: &quick_xml::events::BytesStart,
+        theme_palette: Option<&ThemePalette>,
+    ) -> Color {
+        // Priority: rgb > theme > indexed > auto
         let mut rgb: Option<String> = None;
+        let mut theme: Option<u8> = None;
+        let mut tint: Option<f64> = None;
+        let mut indexed: Option<u8> = None;
+        let mut auto = false;
 
         for attr in e.attributes().flatten() {
-            if attr.key.local_name().as_ref() == b"rgb" {
-                rgb = attr.unescape_value().ok().map(|s| s.to_string());
+            match attr.key.local_name().as_ref() {
+                b"rgb" => {
+                    rgb = attr.unescape_value().ok().map(|s| s.to_string());
+                }
+                b"theme" => {
+                    theme = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<u8>().ok());
+                }
+                b"tint" => {
+                    tint = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<f64>().ok());
+                }
+                b"indexed" => {
+                    indexed = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<u8>().ok());
+                }
+                b"auto" => {
+                    auto = attr.unescape_value().ok().as_deref() == Some("1");
+                }
+                _ => {}
             }
-            // TODO: Handle theme colors and tint
         }
 
         if let Some(rgb_str) = rgb {
-            // Parse ARGB hex string (e.g., "FF638EC6")
-            if rgb_str.len() >= 6 {
-                // Skip alpha if present
-                let hex = if rgb_str.len() == 8 {
-                    &rgb_str[2..]
-                } else {
-                    &rgb_str
-                };
+            let hex = rgb_str.trim_start_matches('#');
+
+            if hex.len() == 8 {
+                if let (Ok(_a), Ok(r), Ok(g), Ok(b)) = (
+                    u8::from_str_radix(&hex[0..2], 16),
+                    u8::from_str_radix(&hex[2..4], 16),
+                    u8::from_str_radix(&hex[4..6], 16),
+                    u8::from_str_radix(&hex[6..8], 16),
+                ) {
+                    // Keep worksheet-level CF/data bar color behavior consistent
+                    // with existing tests by treating ARGB as RGB and ignoring alpha.
+                    return Color::Rgb { r, g, b };
+                }
+            } else if hex.len() == 6 {
                 if let (Ok(r), Ok(g), Ok(b)) = (
                     u8::from_str_radix(&hex[0..2], 16),
                     u8::from_str_radix(&hex[2..4], 16),
                     u8::from_str_radix(&hex[4..6], 16),
                 ) {
-                    return Color::rgb(r, g, b);
+                    return Color::Rgb { r, g, b };
                 }
             }
         }
 
-        // Default color if parsing fails
-        Color::rgb(0, 0, 0)
+        if let Some(index) = theme {
+            let tint_i8 = tint.map(|t| (t * 100.0).round() as i8).unwrap_or(0);
+            if let Some(theme) = theme_palette {
+                let (r, g, b) = theme.resolve_theme_color(index, tint_i8);
+                return Color::Rgb { r, g, b };
+            }
+            return Color::Theme {
+                index,
+                tint: tint_i8,
+            };
+        }
+
+        if let Some(i) = indexed {
+            return Color::Indexed(i);
+        }
+
+        if auto {
+            return Color::Auto;
+        }
+
+        Color::Auto
     }
 
     /// Parse a conditional formatting rule from element attributes
@@ -1644,7 +1956,78 @@ impl XlsxReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quick_xml::events::BytesStart;
     use std::io::{Cursor, Write};
+
+    #[test]
+    fn test_parse_color_element_theme_and_tint() {
+        let mut e = BytesStart::new("color");
+        e.push_attribute(("theme", "4"));
+        e.push_attribute(("tint", "0.5"));
+
+        assert_eq!(
+            XlsxReader::parse_color_element(&e, None),
+            Color::Theme { index: 4, tint: 50 }
+        );
+    }
+
+    #[test]
+    fn test_parse_color_element_indexed_and_auto() {
+        let mut indexed = BytesStart::new("color");
+        indexed.push_attribute(("indexed", "12"));
+        assert_eq!(
+            XlsxReader::parse_color_element(&indexed, None),
+            Color::Indexed(12)
+        );
+
+        let mut auto = BytesStart::new("color");
+        auto.push_attribute(("auto", "1"));
+        assert_eq!(XlsxReader::parse_color_element(&auto, None), Color::Auto);
+    }
+
+    #[test]
+    fn test_parse_color_element_theme_with_palette_resolves_to_rgb() {
+        let mut e = BytesStart::new("color");
+        e.push_attribute(("theme", "4"));
+        e.push_attribute(("tint", "0.5"));
+
+        let palette = ThemePalette::default();
+        assert_eq!(
+            XlsxReader::parse_color_element(&e, Some(&palette)),
+            Color::Rgb {
+                r: 167,
+                g: 192,
+                b: 222
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_theme_palette_custom_accent() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Custom">
+  <a:themeElements>
+    <a:clrScheme name="Custom">
+      <a:dk1><a:srgbClr val="101010"/></a:dk1>
+      <a:lt1><a:srgbClr val="F0F0F0"/></a:lt1>
+      <a:dk2><a:srgbClr val="202020"/></a:dk2>
+      <a:lt2><a:srgbClr val="E0E0E0"/></a:lt2>
+      <a:accent1><a:srgbClr val="112233"/></a:accent1>
+      <a:accent2><a:srgbClr val="445566"/></a:accent2>
+      <a:accent3><a:srgbClr val="778899"/></a:accent3>
+      <a:accent4><a:srgbClr val="AABBCC"/></a:accent4>
+      <a:accent5><a:srgbClr val="DDEEFF"/></a:accent5>
+      <a:accent6><a:srgbClr val="334455"/></a:accent6>
+      <a:hlink><a:srgbClr val="0000FF"/></a:hlink>
+      <a:folHlink><a:srgbClr val="800080"/></a:folHlink>
+    </a:clrScheme>
+  </a:themeElements>
+</a:theme>"#;
+
+        let palette = XlsxReader::parse_theme_palette(Cursor::new(xml.as_bytes())).unwrap();
+        assert_eq!(palette.colors[4], (0x11, 0x22, 0x33));
+        assert_eq!(palette.resolve_theme_color(4, 0), (0x11, 0x22, 0x33));
+    }
 
     #[test]
     fn test_decode_excel_escapes_carriage_return() {

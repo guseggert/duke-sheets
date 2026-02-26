@@ -80,9 +80,9 @@ impl Color {
             Color::Auto => "000000".to_string(),
             Color::Rgb { r, g, b } => format!("{:02X}{:02X}{:02X}", r, g, b),
             Color::Argb { a, r, g, b } => format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b),
-            Color::Theme { index, .. } => {
-                // Return a placeholder for theme colors
-                format!("theme{}", index)
+            Color::Theme { .. } => {
+                let (r, g, b) = self.to_rgb();
+                format!("{:02X}{:02X}{:02X}", r, g, b)
             }
             Color::Indexed(i) => {
                 // Return indexed color from standard palette
@@ -100,9 +100,8 @@ impl Color {
             Color::Auto => "FF000000".to_string(),
             Color::Rgb { r, g, b } => format!("FF{:02X}{:02X}{:02X}", r, g, b),
             Color::Argb { a, r, g, b } => format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b),
-            Color::Theme { index, .. } => {
-                // Convert theme to RGB first, then format
-                let (r, g, b) = Self::theme_to_rgb(*index);
+            Color::Theme { .. } => {
+                let (r, g, b) = self.to_rgb();
                 format!("FF{:02X}{:02X}{:02X}", r, g, b)
             }
             Color::Indexed(i) => {
@@ -327,6 +326,15 @@ mod tests {
             .to_hex(),
             "80FFFFFF"
         );
+        assert_eq!(Color::theme(4, 0).to_hex(), "4F81BD");
+        assert_eq!(Color::theme(4, 50).to_hex(), "A7C0DE");
+    }
+
+    #[test]
+    fn test_to_argb_hex() {
+        assert_eq!(Color::Rgb { r: 255, g: 0, b: 0 }.to_argb_hex(), "FFFF0000");
+        assert_eq!(Color::theme(4, 0).to_argb_hex(), "FF4F81BD");
+        assert_eq!(Color::theme(4, 50).to_argb_hex(), "FFA7C0DE");
     }
 
     #[test]
