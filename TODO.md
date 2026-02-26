@@ -155,7 +155,7 @@
 
 #### XLSX Reader Gaps
 - [x] **Theme colors** — reader now parses `xl/theme/theme1.xml` (`clrScheme`) and resolves theme+tint colors in styles/CF
-- [ ] **Shared/array formulas** — only simple `<f>` parsed; `<f t="shared">`, `<f t="array">`, `<f t="dataTable">` silently skipped
+- [ ] **Shared/array/dataTable formulas** — shared (`<f t="shared">`) + array anchor formulas now parsed; `dataTable` formulas still not supported
 - [x] **Theme/indexed colors in CF** — `parse_color_element()` now handles `rgb`/`theme`/`indexed`/`tint`/`auto` and resolves with workbook theme palette
 - [ ] **`cellStyleXfs` / named cell styles** — reader skips `cellStyleXfs` (only reads `cellXfs`); writer hardcodes one entry + "Normal"
 - [ ] **Font scheme/family/charset** — not modeled or read
@@ -338,8 +338,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 271 | ✅ |
-| **Total** | **690** | ✅ |
+| Other (unit, doc, integration) | 273 | ✅ |
+| **Total** | **692** | ✅ |
 
 ---
 
