@@ -166,6 +166,62 @@ run = "cargo test -p duke-sheets-xlsx --test e2e -- --test-threads=1 --nocapture
 description = "Run Excel COM E2E tests (requires vm:start + vm:deploy-bridge)"
 run = "cargo test -p duke-sheets-excel-com --test e2e -- --test-threads=1"
 
+[tasks."test:all"]
+alias = "ta"
+description = "Run all tests: cargo test, Excel COM E2E, LibreOffice URP + XLSX E2E"
+depends = ["docker:build"]
+run = """
+#!/bin/bash
+set -e
+
+echo "=== Phase 1: cargo test (unit + integration) ==="
+cargo test
+
+echo ""
+echo "=== Phase 2: Excel COM E2E tests ==="
+if nc -z localhost 9876 2>/dev/null; then
+    cargo test -p duke-sheets-excel-com --test e2e -- --test-threads=1
+else
+    echo "SKIP: Excel COM bridge not available on localhost:9876"
+    echo "Start with: mise run vm:start && mise run vm:deploy-bridge"
+fi
+
+echo ""
+echo "=== Phase 3: LibreOffice URP + XLSX E2E tests ==="
+STARTED_LO=false
+if ! nc -z localhost 2002 2>/dev/null; then
+    echo "Starting LibreOffice in Docker..."
+    mkdir -p /tmp/duke-sheets-urp
+    CONTAINER_ID=$(docker run -d --rm -p 2002:2002 \
+        -v /tmp/duke-sheets-urp:/tmp/duke-sheets-urp duke-sheets-pyuno \
+        bash -c 'soffice --headless --accept="socket,host=0.0.0.0,port=2002;urp;StarOffice.ComponentContext" & sleep 999999')
+    STARTED_LO=true
+    for i in $(seq 1 30); do
+        if nc -z localhost 2002 2>/dev/null; then
+            echo "LibreOffice ready (took ${i}s)"
+            break
+        fi
+        if [ "$i" -eq 30 ]; then
+            echo "ERROR: Timeout waiting for LibreOffice"
+            docker stop "$CONTAINER_ID" 2>/dev/null || true
+            exit 1
+        fi
+        sleep 1
+    done
+fi
+
+cargo test -p duke-sheets-libreoffice --test integration -- --nocapture
+cargo test -p duke-sheets-xlsx --test e2e -- --test-threads=1 --nocapture
+
+if [ "$STARTED_LO" = true ]; then
+    echo "Stopping LibreOffice..."
+    docker stop "$CONTAINER_ID" 2>/dev/null || true
+fi
+
+echo ""
+echo "=== All tests passed ==="
+"""
+
 # =============================================================================
 # Windows VM Tasks (Excel COM bridge via QEMU/KVM)
 # =============================================================================
