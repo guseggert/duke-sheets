@@ -1,10 +1,12 @@
 //! XLSX styles (styles.xml) read/write helpers
 
 use std::collections::HashMap;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Cursor, Read};
 
-use quick_xml::events::Event;
+use quick_xml::escape::escape;
+use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::reader::Reader;
+use quick_xml::Writer;
 
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::style::{
@@ -13,6 +15,11 @@ use duke_sheets_core::style::{
     Protection, ReadingOrder, Style, Underline, VerticalAlignment,
 };
 use duke_sheets_core::Workbook;
+
+/// Alias for the in-memory XML writer (matches writer/mod.rs).
+pub(crate) type XmlWriter = Writer<Cursor<Vec<u8>>>;
+
+const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
 // === Writing ===
 
@@ -127,7 +134,7 @@ impl XlsxStyleTable {
         &self.dxf_styles
     }
 
-    pub(crate) fn to_styles_xml(&self) -> String {
+    pub(crate) fn write_styles_xml(&self, w: &mut XmlWriter) -> XlsxResult<()> {
         // Build component tables
         let mut font_ids: HashMap<FontStyle, u32> = HashMap::new();
         let mut fonts: Vec<FontStyle> = Vec::new();
@@ -162,7 +169,6 @@ impl XlsxStyleTable {
         let mut resolved: Vec<ResolvedXfIds> = Vec::with_capacity(self.styles.len());
 
         for style in &self.styles {
-            // Font
             let font_id = match font_ids.get(&style.font) {
                 Some(&id) => id,
                 None => {
@@ -173,7 +179,6 @@ impl XlsxStyleTable {
                 }
             };
 
-            // Fill
             let fill_id = match &style.fill {
                 FillStyle::None => 0,
                 other => {
@@ -188,7 +193,6 @@ impl XlsxStyleTable {
                 }
             };
 
-            // Border
             let border_id = match border_ids.get(&style.border) {
                 Some(&id) => id,
                 None => {
@@ -199,7 +203,6 @@ impl XlsxStyleTable {
                 }
             };
 
-            // Number format
             let num_fmt_id = match &style.number_format {
                 NumberFormat::General => 0,
                 NumberFormat::BuiltIn(id) => *id,
@@ -225,178 +228,212 @@ impl XlsxStyleTable {
         }
 
         // Write XML
-        let mut xml = String::new();
-        xml.push_str(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
-        );
+        let mut root = BytesStart::new("styleSheet");
+        root.push_attribute(("xmlns", NS_SPREADSHEET));
+        w.write_event(Event::Start(root))?;
 
+        // numFmts
         if !numfmts.is_empty() {
-            xml.push_str(&format!("\n  <numFmts count=\"{}\">", numfmts.len()));
+            let count = numfmts.len().to_string();
+            let mut tag = BytesStart::new("numFmts");
+            tag.push_attribute(("count", count.as_str()));
+            w.write_event(Event::Start(tag))?;
             for (id, code) in &numfmts {
-                xml.push_str(&format!(
-                    "\n    <numFmt numFmtId=\"{}\" formatCode=\"{}\"/>",
-                    id,
-                    escape_xml_attr(code)
-                ));
+                let id_s = id.to_string();
+                let code_esc = escape(code.as_str());
+                w.create_element("numFmt")
+                    .with_attribute(("numFmtId", id_s.as_str()))
+                    .with_attribute(("formatCode", &*code_esc))
+                    .write_empty()?;
             }
-            xml.push_str("\n  </numFmts>");
+            w.write_event(Event::End(BytesEnd::new("numFmts")))?;
         }
 
-        // Fonts
-        xml.push_str(&format!("\n  <fonts count=\"{}\">", fonts.len()));
+        // fonts
+        let count = fonts.len().to_string();
+        let mut tag = BytesStart::new("fonts");
+        tag.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(tag))?;
         for font in &fonts {
-            xml.push_str("\n    ");
-            xml.push_str(&write_font(font));
+            write_font_xml(w, font)?;
         }
-        xml.push_str("\n  </fonts>");
+        w.write_event(Event::End(BytesEnd::new("fonts")))?;
 
-        // Fills
-        xml.push_str(&format!("\n  <fills count=\"{}\">", fills.len()));
+        // fills
+        let count = fills.len().to_string();
+        let mut tag = BytesStart::new("fills");
+        tag.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(tag))?;
         for fill in &fills {
-            xml.push_str("\n    ");
-            xml.push_str(&write_fill(fill));
+            write_fill_xml(w, fill)?;
         }
-        xml.push_str("\n  </fills>");
+        w.write_event(Event::End(BytesEnd::new("fills")))?;
 
-        // Borders
-        xml.push_str(&format!("\n  <borders count=\"{}\">", borders.len()));
+        // borders
+        let count = borders.len().to_string();
+        let mut tag = BytesStart::new("borders");
+        tag.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(tag))?;
         for border in &borders {
-            xml.push_str("\n    ");
-            xml.push_str(&write_border(border));
+            write_border_xml(w, border)?;
         }
-        xml.push_str("\n  </borders>");
+        w.write_event(Event::End(BytesEnd::new("borders")))?;
 
         // cellStyleXfs (required)
-        xml.push_str(
-            r#"
-  <cellStyleXfs count="1">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
-  </cellStyleXfs>"#,
-        );
+        w.write_event(Event::Start(
+            BytesStart::new("cellStyleXfs").with_attributes([("count", "1")].into_iter()),
+        ))?;
+        w.create_element("xf")
+            .with_attribute(("numFmtId", "0"))
+            .with_attribute(("fontId", "0"))
+            .with_attribute(("fillId", "0"))
+            .with_attribute(("borderId", "0"))
+            .write_empty()?;
+        w.write_event(Event::End(BytesEnd::new("cellStyleXfs")))?;
 
         // cellXfs
-        xml.push_str(&format!("\n  <cellXfs count=\"{}\">", self.styles.len()));
+        let count = self.styles.len().to_string();
+        let mut tag = BytesStart::new("cellXfs");
+        tag.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(tag))?;
         for (i, ids) in resolved.iter().enumerate() {
-            let style = &self.styles[i];
-            xml.push_str("\n    ");
-            xml.push_str(&write_xf(style, *ids));
+            write_xf_xml(w, &self.styles[i], *ids)?;
         }
-        xml.push_str("\n  </cellXfs>");
+        w.write_event(Event::End(BytesEnd::new("cellXfs")))?;
 
         // cellStyles (required)
-        xml.push_str(
-            r#"
-  <cellStyles count="1">
-    <cellStyle name="Normal" xfId="0" builtinId="0"/>
-  </cellStyles>"#,
-        );
+        w.write_event(Event::Start(
+            BytesStart::new("cellStyles").with_attributes([("count", "1")].into_iter()),
+        ))?;
+        w.create_element("cellStyle")
+            .with_attribute(("name", "Normal"))
+            .with_attribute(("xfId", "0"))
+            .with_attribute(("builtinId", "0"))
+            .write_empty()?;
+        w.write_event(Event::End(BytesEnd::new("cellStyles")))?;
 
-        // DXFs (differential formats for conditional formatting)
+        // DXFs
         if self.dxf_styles.is_empty() {
-            xml.push_str("\n  <dxfs count=\"0\"/>");
+            w.create_element("dxfs")
+                .with_attribute(("count", "0"))
+                .write_empty()?;
         } else {
-            xml.push_str(&format!("\n  <dxfs count=\"{}\">", self.dxf_styles.len()));
+            let count = self.dxf_styles.len().to_string();
+            let mut tag = BytesStart::new("dxfs");
+            tag.push_attribute(("count", count.as_str()));
+            w.write_event(Event::Start(tag))?;
             for dxf_style in &self.dxf_styles {
-                xml.push_str("\n    ");
-                xml.push_str(&write_dxf(dxf_style));
+                write_dxf_xml(w, dxf_style)?;
             }
-            xml.push_str("\n  </dxfs>");
+            w.write_event(Event::End(BytesEnd::new("dxfs")))?;
         }
 
-        xml.push_str(
-            r#"
-  <tableStyles count="0" defaultTableStyle="TableStyleMedium9" defaultPivotStyle="PivotStyleLight16"/>"#,
-        );
+        // tableStyles
+        w.create_element("tableStyles")
+            .with_attribute(("count", "0"))
+            .with_attribute(("defaultTableStyle", "TableStyleMedium9"))
+            .with_attribute(("defaultPivotStyle", "PivotStyleLight16"))
+            .write_empty()?;
 
-        xml.push_str("\n</styleSheet>");
-        xml
+        w.write_event(Event::End(BytesEnd::new("styleSheet")))?;
+        Ok(())
     }
 }
 
-fn escape_xml_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
-fn write_color(tag: &str, color: &Color) -> String {
+/// Write a color element (e.g. `<fgColor>`, `<color>`, `<bgColor>`) to the writer.
+fn write_color_xml(w: &mut XmlWriter, tag: &str, color: &Color) -> std::io::Result<()> {
+    let mut el = BytesStart::new(tag);
     match color {
-        Color::Auto => format!("<{tag} indexed=\"64\"/>"),
-        Color::Rgb { r, g, b } => format!("<{tag} rgb=\"FF{:02X}{:02X}{:02X}\"/>", r, g, b),
-        Color::Argb { a, r, g, b } => {
-            format!("<{tag} rgb=\"{:02X}{:02X}{:02X}{:02X}\"/>", a, r, g, b)
+        Color::Auto => {
+            el.push_attribute(("indexed", "64"));
         }
-        Color::Indexed(i) => format!("<{tag} indexed=\"{}\"/>", i),
+        Color::Rgb { r, g, b } => {
+            let v = format!("FF{:02X}{:02X}{:02X}", r, g, b);
+            el.push_attribute(("rgb", v.as_str()));
+        }
+        Color::Argb { a, r, g, b } => {
+            let v = format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b);
+            el.push_attribute(("rgb", v.as_str()));
+        }
+        Color::Indexed(i) => {
+            let v = i.to_string();
+            el.push_attribute(("indexed", v.as_str()));
+        }
         Color::Theme { index, tint } => {
-            let tint_f = (*tint as f64) / 100.0;
-            if *tint == 0 {
-                format!("<{tag} theme=\"{}\"/>", index)
-            } else {
-                format!("<{tag} theme=\"{}\" tint=\"{}\"/>", index, tint_f)
+            let v = index.to_string();
+            el.push_attribute(("theme", v.as_str()));
+            if *tint != 0 {
+                let t = ((*tint as f64) / 100.0).to_string();
+                el.push_attribute(("tint", t.as_str()));
             }
         }
     }
+    w.write_event(Event::Empty(el))
 }
 
-fn write_font(font: &FontStyle) -> String {
-    let mut s = String::from("<font>");
+fn write_font_xml(w: &mut XmlWriter, font: &FontStyle) -> std::io::Result<()> {
+    w.write_event(Event::Start(BytesStart::new("font")))?;
+
     if font.bold {
-        s.push_str("<b/>");
+        w.write_event(Event::Empty(BytesStart::new("b")))?;
     }
     if font.italic {
-        s.push_str("<i/>");
+        w.write_event(Event::Empty(BytesStart::new("i")))?;
     }
     if font.strikethrough {
-        s.push_str("<strike/>");
+        w.write_event(Event::Empty(BytesStart::new("strike")))?;
     }
     match font.underline {
         Underline::None => {}
-        Underline::Single => s.push_str("<u/>"),
-        Underline::Double => s.push_str("<u val=\"double\"/>"),
-        Underline::SingleAccounting => s.push_str("<u val=\"singleAccounting\"/>"),
-        Underline::DoubleAccounting => s.push_str("<u val=\"doubleAccounting\"/>"),
+        Underline::Single => {
+            w.write_event(Event::Empty(BytesStart::new("u")))?;
+        }
+        Underline::Double => {
+            w.create_element("u")
+                .with_attribute(("val", "double"))
+                .write_empty()?;
+        }
+        Underline::SingleAccounting => {
+            w.create_element("u")
+                .with_attribute(("val", "singleAccounting"))
+                .write_empty()?;
+        }
+        Underline::DoubleAccounting => {
+            w.create_element("u")
+                .with_attribute(("val", "doubleAccounting"))
+                .write_empty()?;
+        }
     }
     match font.vertical_align {
         FontVerticalAlign::Baseline => {}
-        FontVerticalAlign::Superscript => s.push_str("<vertAlign val=\"superscript\"/>"),
-        FontVerticalAlign::Subscript => s.push_str("<vertAlign val=\"subscript\"/>"),
+        FontVerticalAlign::Superscript => {
+            w.create_element("vertAlign")
+                .with_attribute(("val", "superscript"))
+                .write_empty()?;
+        }
+        FontVerticalAlign::Subscript => {
+            w.create_element("vertAlign")
+                .with_attribute(("val", "subscript"))
+                .write_empty()?;
+        }
     }
-    s.push_str(&format!("<sz val=\"{}\"/>", font.size));
+
+    let size = font.size.to_string();
+    w.create_element("sz")
+        .with_attribute(("val", size.as_str()))
+        .write_empty()?;
 
     if !matches!(font.color, Color::Auto) {
-        // Use <color .../>
-        // The OOXML tag name is always "color" in <font>
-        let mut color = String::from("<color");
-        match &font.color {
-            Color::Auto => {
-                color.push_str(" indexed=\"64\"");
-            }
-            Color::Rgb { r, g, b } => {
-                color.push_str(&format!(" rgb=\"FF{:02X}{:02X}{:02X}\"", r, g, b));
-            }
-            Color::Argb { a, r, g, b } => {
-                color.push_str(&format!(" rgb=\"{:02X}{:02X}{:02X}{:02X}\"", a, r, g, b));
-            }
-            Color::Indexed(i) => {
-                color.push_str(&format!(" indexed=\"{}\"", i));
-            }
-            Color::Theme { index, tint } => {
-                color.push_str(&format!(" theme=\"{}\"", index));
-                if *tint != 0 {
-                    color.push_str(&format!(" tint=\"{}\"", (*tint as f64) / 100.0));
-                }
-            }
-        }
-        color.push_str("/>");
-        s.push_str(&color);
+        write_color_xml(w, "color", &font.color)?;
     }
 
-    s.push_str(&format!("<name val=\"{}\"/>", escape_xml_attr(&font.name)));
-    s.push_str("</font>");
-    s
+    let name_esc = escape(&font.name);
+    w.create_element("name")
+        .with_attribute(("val", &*name_esc))
+        .write_empty()?;
+
+    w.write_event(Event::End(BytesEnd::new("font")))?;
+    Ok(())
 }
 
 fn pattern_type_to_str(p: PatternType) -> &'static str {
@@ -423,58 +460,75 @@ fn pattern_type_to_str(p: PatternType) -> &'static str {
     }
 }
 
-fn write_fill(fill: &FillStyle) -> String {
+fn write_fill_xml(w: &mut XmlWriter, fill: &FillStyle) -> std::io::Result<()> {
+    w.write_event(Event::Start(BytesStart::new("fill")))?;
     match fill {
-        FillStyle::None => "<fill><patternFill patternType=\"none\"/></fill>".to_string(),
+        FillStyle::None => {
+            w.create_element("patternFill")
+                .with_attribute(("patternType", "none"))
+                .write_empty()?;
+        }
         FillStyle::Solid { color } => {
-            format!(
-                "<fill><patternFill patternType=\"solid\">{}<bgColor indexed=\"64\"/></patternFill></fill>",
-                write_color("fgColor", color)
-            )
+            w.write_event(Event::Start(
+                BytesStart::new("patternFill")
+                    .with_attributes([("patternType", "solid")].into_iter()),
+            ))?;
+            write_color_xml(w, "fgColor", color)?;
+            w.create_element("bgColor")
+                .with_attribute(("indexed", "64"))
+                .write_empty()?;
+            w.write_event(Event::End(BytesEnd::new("patternFill")))?;
         }
         FillStyle::Pattern {
             pattern,
             foreground,
             background,
         } => {
-            format!(
-                "<fill><patternFill patternType=\"{}\">{}{}{}</patternFill></fill>",
-                pattern_type_to_str(*pattern),
-                write_color("fgColor", foreground),
-                "",
-                write_color("bgColor", background)
-            )
+            w.write_event(Event::Start(
+                BytesStart::new("patternFill")
+                    .with_attributes([("patternType", pattern_type_to_str(*pattern))].into_iter()),
+            ))?;
+            write_color_xml(w, "fgColor", foreground)?;
+            write_color_xml(w, "bgColor", background)?;
+            w.write_event(Event::End(BytesEnd::new("patternFill")))?;
         }
         FillStyle::Gradient {
             gradient_type,
             angle,
             stops,
         } => {
-            let mut s = String::from("<fill><gradientFill");
+            let mut tag = BytesStart::new("gradientFill");
+            let angle_s;
             match gradient_type {
                 GradientType::Linear => {
                     if *angle != 0.0 {
-                        s.push_str(&format!(" degree=\"{}\"", angle));
+                        angle_s = angle.to_string();
+                        tag.push_attribute(("degree", angle_s.as_str()));
                     }
                 }
                 GradientType::Path => {
-                    s.push_str(" type=\"path\"");
+                    tag.push_attribute(("type", "path"));
                 }
             }
             if stops.is_empty() {
-                s.push_str("/></fill>");
+                w.write_event(Event::Empty(tag))?;
             } else {
-                s.push('>');
+                w.write_event(Event::Start(tag))?;
                 for stop in stops {
-                    s.push_str(&format!("<stop position=\"{}\">", stop.position));
-                    s.push_str(&write_color("color", &stop.color));
-                    s.push_str("</stop>");
+                    let pos = stop.position.to_string();
+                    w.write_event(Event::Start(
+                        BytesStart::new("stop")
+                            .with_attributes([("position", pos.as_str())].into_iter()),
+                    ))?;
+                    write_color_xml(w, "color", &stop.color)?;
+                    w.write_event(Event::End(BytesEnd::new("stop")))?;
                 }
-                s.push_str("</gradientFill></fill>");
+                w.write_event(Event::End(BytesEnd::new("gradientFill")))?;
             }
-            s
         }
     }
+    w.write_event(Event::End(BytesEnd::new("fill")))?;
+    Ok(())
 }
 
 fn border_style_to_str(s: BorderLineStyle) -> Option<&'static str> {
@@ -496,64 +550,56 @@ fn border_style_to_str(s: BorderLineStyle) -> Option<&'static str> {
     }
 }
 
-fn write_border_edge(tag: &str, edge: &Option<BorderEdge>) -> String {
+fn write_border_edge_xml(
+    w: &mut XmlWriter,
+    tag: &str,
+    edge: &Option<BorderEdge>,
+) -> std::io::Result<()> {
     match edge {
-        None => format!("<{tag}/>"),
+        None => {
+            w.write_event(Event::Empty(BytesStart::new(tag)))?;
+        }
         Some(e) => {
             let style_attr = border_style_to_str(e.style);
             if style_attr.is_none() {
-                return format!("<{tag}/>");
+                w.write_event(Event::Empty(BytesStart::new(tag)))?;
+                return Ok(());
             }
-            let mut s = format!("<{tag} style=\"{}\">", style_attr.unwrap());
-            // <color .../>
-            let mut color = String::from("<color");
-            match &e.color {
-                Color::Auto => {
-                    color.push_str(" indexed=\"64\"");
-                }
-                Color::Rgb { r, g, b } => {
-                    color.push_str(&format!(" rgb=\"FF{:02X}{:02X}{:02X}\"", r, g, b));
-                }
-                Color::Argb { a, r, g, b } => {
-                    color.push_str(&format!(" rgb=\"{:02X}{:02X}{:02X}{:02X}\"", a, r, g, b));
-                }
-                Color::Indexed(i) => {
-                    color.push_str(&format!(" indexed=\"{}\"", i));
-                }
-                Color::Theme { index, tint } => {
-                    color.push_str(&format!(" theme=\"{}\"", index));
-                    if *tint != 0 {
-                        color.push_str(&format!(" tint=\"{}\"", (*tint as f64) / 100.0));
-                    }
-                }
-            }
-            color.push_str("/>");
-            s.push_str(&color);
-            s.push_str(&format!("</{tag}>",));
-            s
+            let mut el = BytesStart::new(tag);
+            el.push_attribute(("style", style_attr.unwrap()));
+            w.write_event(Event::Start(el))?;
+            write_color_xml(w, "color", &e.color)?;
+            w.write_event(Event::End(BytesEnd::new(tag)))?;
         }
     }
+    Ok(())
 }
 
-fn write_border(border: &BorderStyle) -> String {
-    let mut attrs = String::new();
+fn write_border_xml(w: &mut XmlWriter, border: &BorderStyle) -> std::io::Result<()> {
+    use duke_sheets_core::style::DiagonalDirection;
+
+    let mut tag = BytesStart::new("border");
     match border.diagonal_direction {
-        duke_sheets_core::style::DiagonalDirection::None => {}
-        duke_sheets_core::style::DiagonalDirection::Down => attrs.push_str(" diagonalDown=\"1\""),
-        duke_sheets_core::style::DiagonalDirection::Up => attrs.push_str(" diagonalUp=\"1\""),
-        duke_sheets_core::style::DiagonalDirection::Both => {
-            attrs.push_str(" diagonalDown=\"1\" diagonalUp=\"1\"")
+        DiagonalDirection::None => {}
+        DiagonalDirection::Down => {
+            tag.push_attribute(("diagonalDown", "1"));
+        }
+        DiagonalDirection::Up => {
+            tag.push_attribute(("diagonalUp", "1"));
+        }
+        DiagonalDirection::Both => {
+            tag.push_attribute(("diagonalDown", "1"));
+            tag.push_attribute(("diagonalUp", "1"));
         }
     }
-
-    let mut s = format!("<border{}>", attrs);
-    s.push_str(&write_border_edge("left", &border.left));
-    s.push_str(&write_border_edge("right", &border.right));
-    s.push_str(&write_border_edge("top", &border.top));
-    s.push_str(&write_border_edge("bottom", &border.bottom));
-    s.push_str(&write_border_edge("diagonal", &border.diagonal));
-    s.push_str("</border>");
-    s
+    w.write_event(Event::Start(tag))?;
+    write_border_edge_xml(w, "left", &border.left)?;
+    write_border_edge_xml(w, "right", &border.right)?;
+    write_border_edge_xml(w, "top", &border.top)?;
+    write_border_edge_xml(w, "bottom", &border.bottom)?;
+    write_border_edge_xml(w, "diagonal", &border.diagonal)?;
+    w.write_event(Event::End(BytesEnd::new("border")))?;
+    Ok(())
 }
 
 fn horiz_to_str(h: HorizontalAlignment) -> &'static str {
@@ -579,109 +625,120 @@ fn vert_to_str(v: VerticalAlignment) -> &'static str {
     }
 }
 
-fn write_alignment(al: &Alignment) -> String {
-    // Only write if any non-default property is set
+/// Returns `true` if alignment was written (i.e. non-default).
+fn write_alignment_xml(w: &mut XmlWriter, al: &Alignment) -> std::io::Result<bool> {
     let default = Alignment::default();
     if al == &default {
-        return String::new();
+        return Ok(false);
     }
 
-    let mut s = String::from("<alignment");
+    let mut el = BytesStart::new("alignment");
     if al.horizontal != default.horizontal {
-        s.push_str(&format!(" horizontal=\"{}\"", horiz_to_str(al.horizontal)));
+        el.push_attribute(("horizontal", horiz_to_str(al.horizontal)));
     }
     if al.vertical != default.vertical {
-        s.push_str(&format!(" vertical=\"{}\"", vert_to_str(al.vertical)));
+        el.push_attribute(("vertical", vert_to_str(al.vertical)));
     }
     if al.wrap_text {
-        s.push_str(" wrapText=\"1\"");
+        el.push_attribute(("wrapText", "1"));
     }
     if al.shrink_to_fit {
-        s.push_str(" shrinkToFit=\"1\"");
+        el.push_attribute(("shrinkToFit", "1"));
     }
     if al.indent != 0 {
-        s.push_str(&format!(" indent=\"{}\"", al.indent));
+        let v = al.indent.to_string();
+        el.push_attribute(("indent", v.as_str()));
     }
     if al.rotation != 0 {
-        s.push_str(&format!(" textRotation=\"{}\"", al.rotation));
+        let v = al.rotation.to_string();
+        el.push_attribute(("textRotation", v.as_str()));
     }
     match al.reading_order {
         ReadingOrder::ContextDependent => {}
-        ReadingOrder::LeftToRight => s.push_str(" readingOrder=\"1\""),
-        ReadingOrder::RightToLeft => s.push_str(" readingOrder=\"2\""),
+        ReadingOrder::LeftToRight => {
+            el.push_attribute(("readingOrder", "1"));
+        }
+        ReadingOrder::RightToLeft => {
+            el.push_attribute(("readingOrder", "2"));
+        }
     }
-    s.push_str("/>");
-    s
+    w.write_event(Event::Empty(el))?;
+    Ok(true)
 }
 
-fn write_protection(p: &Protection) -> String {
+/// Returns `true` if protection was written (i.e. non-default).
+fn write_protection_xml(w: &mut XmlWriter, p: &Protection) -> std::io::Result<bool> {
     let default = Protection::default();
     if p == &default {
-        return String::new();
+        return Ok(false);
     }
-    let mut s = String::from("<protection");
+    let mut el = BytesStart::new("protection");
     if p.locked != default.locked {
-        s.push_str(&format!(" locked=\"{}\"", if p.locked { 1 } else { 0 }));
+        el.push_attribute(("locked", if p.locked { "1" } else { "0" }));
     }
     if p.hidden != default.hidden {
-        s.push_str(&format!(" hidden=\"{}\"", if p.hidden { 1 } else { 0 }));
+        el.push_attribute(("hidden", if p.hidden { "1" } else { "0" }));
     }
-    s.push_str("/>");
-    s
+    w.write_event(Event::Empty(el))?;
+    Ok(true)
 }
 
-fn write_xf(style: &Style, ids: ResolvedXfIds) -> String {
-    // apply flags
-    let mut attrs = String::new();
+fn write_xf_xml(w: &mut XmlWriter, style: &Style, ids: ResolvedXfIds) -> std::io::Result<()> {
+    let num_fmt_s = ids.num_fmt_id.to_string();
+    let font_s = ids.font_id.to_string();
+    let fill_s = ids.fill_id.to_string();
+    let border_s = ids.border_id.to_string();
+
+    let mut el = BytesStart::new("xf");
+    el.push_attribute(("numFmtId", num_fmt_s.as_str()));
+    el.push_attribute(("fontId", font_s.as_str()));
+    el.push_attribute(("fillId", fill_s.as_str()));
+    el.push_attribute(("borderId", border_s.as_str()));
+    el.push_attribute(("xfId", "0"));
+
     if ids.num_fmt_id != 0 {
-        attrs.push_str(" applyNumberFormat=\"1\"");
+        el.push_attribute(("applyNumberFormat", "1"));
     }
     if style.font != FontStyle::default() {
-        attrs.push_str(" applyFont=\"1\"");
+        el.push_attribute(("applyFont", "1"));
     }
     if style.fill != FillStyle::None {
-        attrs.push_str(" applyFill=\"1\"");
+        el.push_attribute(("applyFill", "1"));
     }
     if style.border != BorderStyle::default() {
-        attrs.push_str(" applyBorder=\"1\"");
+        el.push_attribute(("applyBorder", "1"));
     }
     if style.alignment != Alignment::default() {
-        attrs.push_str(" applyAlignment=\"1\"");
+        el.push_attribute(("applyAlignment", "1"));
     }
     if style.protection != Protection::default() {
-        attrs.push_str(" applyProtection=\"1\"");
+        el.push_attribute(("applyProtection", "1"));
     }
 
-    let mut s = format!(
-        "<xf numFmtId=\"{}\" fontId=\"{}\" fillId=\"{}\" borderId=\"{}\" xfId=\"0\"{}",
-        ids.num_fmt_id, ids.font_id, ids.fill_id, ids.border_id, attrs
-    );
-
-    let alignment_xml = write_alignment(&style.alignment);
-    let protection_xml = write_protection(&style.protection);
-    if alignment_xml.is_empty() && protection_xml.is_empty() {
-        s.push_str("/>");
-        return s;
+    let has_alignment = style.alignment != Alignment::default();
+    let has_protection = style.protection != Protection::default();
+    if !has_alignment && !has_protection {
+        w.write_event(Event::Empty(el))?;
+    } else {
+        w.write_event(Event::Start(el))?;
+        if has_alignment {
+            write_alignment_xml(w, &style.alignment)?;
+        }
+        if has_protection {
+            write_protection_xml(w, &style.protection)?;
+        }
+        w.write_event(Event::End(BytesEnd::new("xf")))?;
     }
-
-    s.push('>');
-    if !alignment_xml.is_empty() {
-        s.push_str(&alignment_xml);
-    }
-    if !protection_xml.is_empty() {
-        s.push_str(&protection_xml);
-    }
-    s.push_str("</xf>");
-    s
+    Ok(())
 }
 
-/// Write a DXF (differential format) element for conditional formatting
-fn write_dxf(style: &Style) -> String {
-    let mut s = String::from("<dxf>");
+/// Write a DXF (differential format) element for conditional formatting.
+fn write_dxf_xml(w: &mut XmlWriter, style: &Style) -> std::io::Result<()> {
+    w.write_event(Event::Start(BytesStart::new("dxf")))?;
 
     // Font (only if non-default)
     if style.font != FontStyle::default() {
-        s.push_str(&write_font(&style.font));
+        write_font_xml(w, &style.font)?;
     }
 
     // Number format (inline in DXF with both numFmtId and formatCode)
@@ -691,31 +748,29 @@ fn write_dxf(style: &Style) -> String {
             NumberFormat::BuiltIn(id) => (*id, style.number_format.format_string().to_string()),
             NumberFormat::Custom(code) => (164, code.clone()),
         };
-        s.push_str(&format!(
-            "<numFmt numFmtId=\"{}\" formatCode=\"{}\"/>",
-            id,
-            escape_xml_attr(&code)
-        ));
+        let id_s = id.to_string();
+        let code_esc = escape(&code);
+        w.create_element("numFmt")
+            .with_attribute(("numFmtId", id_s.as_str()))
+            .with_attribute(("formatCode", &*code_esc))
+            .write_empty()?;
     }
 
     // Fill (only if non-default)
     if style.fill != FillStyle::None {
-        s.push_str(&write_fill(&style.fill));
+        write_fill_xml(w, &style.fill)?;
     }
 
     // Alignment (only if non-default)
-    let alignment_xml = write_alignment(&style.alignment);
-    if !alignment_xml.is_empty() {
-        s.push_str(&alignment_xml);
-    }
+    write_alignment_xml(w, &style.alignment)?;
 
     // Border (only if non-default)
     if style.border != BorderStyle::default() {
-        s.push_str(&write_border(&style.border));
+        write_border_xml(w, &style.border)?;
     }
 
-    s.push_str("</dxf>");
-    s
+    w.write_event(Event::End(BytesEnd::new("dxf")))?;
+    Ok(())
 }
 
 // === Reading ===

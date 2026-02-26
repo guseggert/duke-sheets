@@ -49,6 +49,7 @@
 - [x] Named ranges (`definedNames` read + write, workbook and sheet scope)
 - [x] Conditional formatting writing (all rule types with DXF styles)
 - [x] Data validation writing (all types)
+- [x] Refactored from string munging to `quick-xml` Writer API (writer/mod.rs + styles.rs)
 
 ### XLS Reader (Legacy BIFF8)
 - [x] Compound File Binary (CFB) reader (via `cfb` crate)

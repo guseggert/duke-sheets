@@ -442,19 +442,14 @@ impl XlsxWriter {
     }
 
     // -----------------------------------------------------------------------
-    // xl/styles.xml  (delegates to XlsxStyleTable which still uses strings
-    // for now — will be converted in a follow-up commit)
+    // xl/styles.xml
     // -----------------------------------------------------------------------
 
     fn write_styles_xml<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         style_table: &XlsxStyleTable,
     ) -> XlsxResult<()> {
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("xl/styles.xml", options)?;
-        let xml = style_table.to_styles_xml();
-        zip.write_all(xml.as_bytes())?;
-        Ok(())
+        Self::write_xml_part(zip, "xl/styles.xml", |w| style_table.write_styles_xml(w))
     }
 
     // -----------------------------------------------------------------------
