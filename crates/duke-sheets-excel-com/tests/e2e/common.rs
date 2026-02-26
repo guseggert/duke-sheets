@@ -146,6 +146,67 @@ pub fn cleanup_fixture(fixture: &TempFixture) {
 }
 
 // ---------------------------------------------------------------------------
+// Writer E2E helper: duke-sheets write → Excel open+re-save → duke-sheets read
+// ---------------------------------------------------------------------------
+
+/// Write a workbook with duke-sheets, push to the VM, open in real Excel
+/// (asserting no repair), re-save to a second file, pull back, and read
+/// with `XlsxReader`.  Returns the re-read `Workbook`.
+///
+/// This is the "double roundtrip" pattern: our writer produces the XLSX,
+/// Excel normalises it by opening and re-saving, and we read the result
+/// back.  If Excel rejects or misinterprets anything in our output the
+/// assertions in the calling test will catch the difference.
+pub fn roundtrip_through_excel(wb: &duke_sheets_core::Workbook) -> duke_sheets_core::Workbook {
+    use duke_sheets_xlsx::{XlsxReader, XlsxWriter};
+    use std::io::Cursor;
+
+    let input = temp_fixture();
+    let output = temp_fixture();
+
+    // Write XLSX bytes with duke-sheets
+    let mut buf = Vec::new();
+    XlsxWriter::write(wb, Cursor::new(&mut buf)).expect("XlsxWriter::write");
+    std::fs::write(&input.host_path, &buf)
+        .unwrap_or_else(|e| panic!("write {}: {e}", input.host_path.display()));
+
+    // Push to VM and open in Excel
+    ensure_vm_temp_dir();
+    push_file_to_vm(&input);
+
+    let bridge = excel_bridge();
+    let excel = bridge.lock().unwrap();
+    let opened = excel
+        .open_workbook(&input.vm_path)
+        .expect("Excel should open our file without error");
+
+    // Assert no repair
+    let wb_name = opened.name().expect("get workbook name");
+    assert!(
+        !wb_name.contains("Repaired"),
+        "Excel repaired the file! Workbook name: {wb_name}"
+    );
+    let read_only = opened.is_read_only().expect("get ReadOnly");
+    assert!(
+        !read_only,
+        "Excel opened the file as read-only (possible repair)"
+    );
+
+    // Re-save to a second path (Excel normalises the XML)
+    opened.save(&output.vm_path).expect("Excel save");
+    opened.close().expect("close workbook");
+
+    // Pull the re-saved file back and read with duke-sheets
+    pull_file_from_vm(&output);
+    let result = XlsxReader::read_file(&output.host_path).expect("XlsxReader::read_file");
+
+    cleanup_fixture(&input);
+    cleanup_fixture(&output);
+
+    result
+}
+
+// ---------------------------------------------------------------------------
 // WinRM helper (raw SOAP/WS-Man over HTTP, Basic auth)
 // ---------------------------------------------------------------------------
 
