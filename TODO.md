@@ -87,7 +87,8 @@
 - [x] Rust TCP client with typed Excel convenience methods
 - [x] QEMU/KVM VM management scripts (`tools/vm/`)
 - [x] Shared file access via QEMU SMB
-- [x] Excel parity E2E test suite — Phase 1-5 complete (59/59 tests)
+- [x] Excel parity E2E test suite — Phase 1-5 complete (59 reader tests)
+- [x] Writer E2E tests — 31 double-roundtrip tests (fonts, fills, borders, alignment, number formats, dimensions, merged cells, conditional formatting, data validation)
 
 ### CSV Support
 - [x] Read CSV files
@@ -184,7 +185,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [ ] **Real-world file corpus + differential testing** — generate XLSX from multiple tools (openpyxl, xlsxwriter, Apache POI, LibreOffice), export from Google Sheets and Apple Numbers; compare against calamine
 
 #### Writer Correctness
-- [x] Roundtrip fidelity tests via Excel COM bridge
+- [x] Roundtrip fidelity tests via Excel COM bridge (31 writer E2E tests)
 - [x] Cross-app write compatibility (no Excel repair warnings)
 - [ ] **OOXML spec validation** — run Open XML SDK validator on duke-sheets output
 
@@ -332,10 +333,11 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E via LibreOffice URP (XLSX) | 56 | ✅ |
-| E2E via Excel COM (XLSX) | 59 | ✅ |
+| E2E via Excel COM — reader (XLSX) | 59 | ✅ |
+| E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
 | Other (unit, doc, integration) | 263 | ✅ |
-| **Total** | **651** | ✅ |
+| **Total** | **682** | ✅ |
 
 ---
 
