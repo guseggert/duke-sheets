@@ -1,13 +1,56 @@
-//! XLSX writer
+//! XLSX writer — generates OOXML SpreadsheetML using quick-xml Writer API.
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Seek, Write};
+use std::io::{Cursor, Seek, Write};
 use std::path::Path;
+
+use quick_xml::escape::escape;
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::Writer;
 
 use crate::error::{XlsxError, XlsxResult};
 use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{CellAddress, Workbook};
+
+// ---------------------------------------------------------------------------
+// OOXML namespace URIs
+// ---------------------------------------------------------------------------
+const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const NS_RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+const NS_DOC_RELS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const NS_CONTENT_TYPES: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
+
+// Relationship types
+const RT_OFFICE_DOC: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
+const RT_WORKSHEET: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+const RT_STYLES: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
+const RT_SHARED_STRINGS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings";
+const RT_COMMENTS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+
+// Content types
+const CT_WORKBOOK: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+const CT_STYLES: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
+const CT_SST: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
+const CT_WORKSHEET: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+const CT_COMMENTS: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+const CT_RELS: &str = "application/vnd.openxmlformats-package.relationships+xml";
+
+/// Alias for the XML writer backed by an in-memory buffer.
+type XmlWriter = Writer<Cursor<Vec<u8>>>;
+
+// ---------------------------------------------------------------------------
+// Shared string table
+// ---------------------------------------------------------------------------
 
 /// Shared string table — maps string content to SST index.
 struct SharedStringTable {
@@ -47,6 +90,10 @@ impl SharedStringTable {
         self.strings.is_empty()
     }
 }
+
+// ---------------------------------------------------------------------------
+// XLSX file writer
+// ---------------------------------------------------------------------------
 
 /// XLSX file writer
 pub struct XlsxWriter;
@@ -111,223 +158,293 @@ impl XlsxWriter {
         Ok(())
     }
 
+    // -----------------------------------------------------------------------
+    // Helper: write an XML part to the zip archive
+    // -----------------------------------------------------------------------
+
+    /// Write an XML part to the zip archive.  Creates a `Writer` backed by an
+    /// in-memory buffer, writes the XML declaration, calls `build` to produce
+    /// the element tree, and flushes the result into the zip entry at `path`.
+    fn write_xml_part<W: Write + Seek>(
+        zip: &mut zip::ZipWriter<W>,
+        path: &str,
+        build: impl FnOnce(&mut XmlWriter) -> XlsxResult<()>,
+    ) -> XlsxResult<()> {
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file(path, options)?;
+        let mut w = Writer::new(Cursor::new(Vec::new()));
+        w.write_event(Event::Decl(BytesDecl::new(
+            "1.0",
+            Some("UTF-8"),
+            Some("yes"),
+        )))?;
+        build(&mut w)?;
+        zip.write_all(&w.into_inner().into_inner())?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // [Content_Types].xml
+    // -----------------------------------------------------------------------
+
     fn write_content_types<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
         sheets_with_comments: &[usize],
         sst: &SharedStringTable,
     ) -> XlsxResult<()> {
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("[Content_Types].xml", options)?;
+        Self::write_xml_part(zip, "[Content_Types].xml", |w| {
+            let mut tag = BytesStart::new("Types");
+            tag.push_attribute(("xmlns", NS_CONTENT_TYPES));
+            w.write_event(Event::Start(tag))?;
 
-        let mut content = String::from(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-    <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-    <Default Extension="xml" ContentType="application/xml"/>
-    <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-    <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>"#,
-        );
+            w.create_element("Default")
+                .with_attribute(("Extension", "rels"))
+                .with_attribute(("ContentType", CT_RELS))
+                .write_empty()?;
+            w.create_element("Default")
+                .with_attribute(("Extension", "xml"))
+                .with_attribute(("ContentType", "application/xml"))
+                .write_empty()?;
+            w.create_element("Override")
+                .with_attribute(("PartName", "/xl/workbook.xml"))
+                .with_attribute(("ContentType", CT_WORKBOOK))
+                .write_empty()?;
+            w.create_element("Override")
+                .with_attribute(("PartName", "/xl/styles.xml"))
+                .with_attribute(("ContentType", CT_STYLES))
+                .write_empty()?;
 
-        if !sst.is_empty() {
-            content.push_str(
-                "\n    <Override PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>"
-            );
-        }
+            if !sst.is_empty() {
+                w.create_element("Override")
+                    .with_attribute(("PartName", "/xl/sharedStrings.xml"))
+                    .with_attribute(("ContentType", CT_SST))
+                    .write_empty()?;
+            }
 
-        // Add an override for each worksheet
-        for i in 0..workbook.sheet_count() {
-            content.push_str(&format!(
-                r#"
-    <Override PartName="/xl/worksheets/sheet{}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#,
-                i + 1
-            ));
-        }
+            for i in 0..workbook.sheet_count() {
+                let part = format!("/xl/worksheets/sheet{}.xml", i + 1);
+                w.create_element("Override")
+                    .with_attribute(("PartName", part.as_str()))
+                    .with_attribute(("ContentType", CT_WORKSHEET))
+                    .write_empty()?;
+            }
 
-        // Add content type for comments files
-        for &i in sheets_with_comments {
-            content.push_str(&format!(
-                r#"
-    <Override PartName="/xl/comments{}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>"#,
-                i + 1
-            ));
-        }
+            for &i in sheets_with_comments {
+                let part = format!("/xl/comments{}.xml", i + 1);
+                w.create_element("Override")
+                    .with_attribute(("PartName", part.as_str()))
+                    .with_attribute(("ContentType", CT_COMMENTS))
+                    .write_empty()?;
+            }
 
-        content.push_str("\n</Types>");
-
-        zip.write_all(content.as_bytes())?;
-        Ok(())
+            w.write_event(Event::End(BytesEnd::new("Types")))?;
+            Ok(())
+        })
     }
+
+    // -----------------------------------------------------------------------
+    // _rels/.rels
+    // -----------------------------------------------------------------------
 
     fn write_root_rels<W: Write + Seek>(zip: &mut zip::ZipWriter<W>) -> XlsxResult<()> {
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("_rels/.rels", options)?;
+        Self::write_xml_part(zip, "_rels/.rels", |w| {
+            let mut tag = BytesStart::new("Relationships");
+            tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
+            w.write_event(Event::Start(tag))?;
 
-        let content = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>"#;
+            w.create_element("Relationship")
+                .with_attribute(("Id", "rId1"))
+                .with_attribute(("Type", RT_OFFICE_DOC))
+                .with_attribute(("Target", "xl/workbook.xml"))
+                .write_empty()?;
 
-        zip.write_all(content.as_bytes())?;
-        Ok(())
+            w.write_event(Event::End(BytesEnd::new("Relationships")))?;
+            Ok(())
+        })
     }
+
+    // -----------------------------------------------------------------------
+    // xl/workbook.xml
+    // -----------------------------------------------------------------------
 
     fn write_workbook_xml<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
     ) -> XlsxResult<()> {
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("xl/workbook.xml", options)?;
+        Self::write_xml_part(zip, "xl/workbook.xml", |w| {
+            let mut tag = BytesStart::new("workbook");
+            tag.push_attribute(("xmlns", NS_SPREADSHEET));
+            tag.push_attribute(("xmlns:r", NS_DOC_RELS));
+            w.write_event(Event::Start(tag))?;
 
-        let mut content = String::from(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
-        );
-
-        // Write workbookPr (date system, etc.)
-        let settings = workbook.settings();
-        if settings.date_1904 {
-            content.push_str("\n    <workbookPr date1904=\"1\"/>");
-        }
-
-        // Write bookViews (active sheet)
-        let active = workbook.active_sheet();
-        if active > 0 {
-            content.push_str(&format!(
-                "\n    <bookViews><workbookView activeTab=\"{}\"/></bookViews>",
-                active
-            ));
-        }
-
-        content.push_str("\n    <sheets>");
-
-        for (i, sheet) in workbook.worksheets().enumerate() {
-            let state_attr = if !sheet.is_visible() {
-                " state=\"hidden\""
-            } else {
-                ""
-            };
-            content.push_str(&format!(
-                "\n        <sheet name=\"{}\" sheetId=\"{}\"{}  r:id=\"rId{}\"/>",
-                Self::escape_xml(sheet.name()),
-                i + 1,
-                state_attr,
-                i + 1
-            ));
-        }
-
-        content.push_str("\n    </sheets>");
-
-        // Write definedNames (named ranges)
-        let named = workbook.named_ranges();
-        if named.len() > 0 {
-            content.push_str("\n    <definedNames>");
-            for nr in named.iter() {
-                let mut attrs = format!(" name=\"{}\"", Self::escape_xml(&nr.name));
-                if let duke_sheets_core::named_range::NameScope::Sheet(idx) = nr.scope {
-                    attrs.push_str(&format!(" localSheetId=\"{}\"", idx));
-                }
-                if nr.hidden {
-                    attrs.push_str(" hidden=\"1\"");
-                }
-                if let Some(ref comment) = nr.comment {
-                    attrs.push_str(&format!(" comment=\"{}\"", Self::escape_xml(comment)));
-                }
-                content.push_str(&format!(
-                    "\n        <definedName{}>{}</definedName>",
-                    attrs,
-                    Self::escape_xml(&nr.refers_to)
-                ));
+            // workbookPr
+            let settings = workbook.settings();
+            if settings.date_1904 {
+                w.create_element("workbookPr")
+                    .with_attribute(("date1904", "1"))
+                    .write_empty()?;
             }
-            content.push_str("\n    </definedNames>");
-        }
 
-        // Write calcPr (tells Excel to recalculate formulas on open)
-        if settings.calc_on_open {
-            content.push_str("\n    <calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/>");
-        }
+            // bookViews
+            let active = workbook.active_sheet();
+            if active > 0 {
+                let tab = active.to_string();
+                w.write_event(Event::Start(BytesStart::new("bookViews")))?;
+                w.create_element("workbookView")
+                    .with_attribute(("activeTab", tab.as_str()))
+                    .write_empty()?;
+                w.write_event(Event::End(BytesEnd::new("bookViews")))?;
+            }
 
-        content.push_str("\n</workbook>");
+            // sheets
+            w.write_event(Event::Start(BytesStart::new("sheets")))?;
+            for (i, sheet) in workbook.worksheets().enumerate() {
+                let sheet_id = (i + 1).to_string();
+                let rid = format!("rId{}", i + 1);
+                let name = escape(sheet.name());
+                let mut el = w
+                    .create_element("sheet")
+                    .with_attribute(("name", &*name))
+                    .with_attribute(("sheetId", sheet_id.as_str()));
+                if !sheet.is_visible() {
+                    el = el.with_attribute(("state", "hidden"));
+                }
+                el.with_attribute(("r:id", rid.as_str())).write_empty()?;
+            }
+            w.write_event(Event::End(BytesEnd::new("sheets")))?;
 
-        zip.write_all(content.as_bytes())?;
-        Ok(())
+            // definedNames
+            let named = workbook.named_ranges();
+            if named.len() > 0 {
+                w.write_event(Event::Start(BytesStart::new("definedNames")))?;
+                for nr in named.iter() {
+                    let name_esc = escape(&nr.name);
+                    let mut el = w
+                        .create_element("definedName")
+                        .with_attribute(("name", &*name_esc));
+                    let scope_str;
+                    if let duke_sheets_core::named_range::NameScope::Sheet(idx) = nr.scope {
+                        scope_str = idx.to_string();
+                        el = el.with_attribute(("localSheetId", scope_str.as_str()));
+                    }
+                    if nr.hidden {
+                        el = el.with_attribute(("hidden", "1"));
+                    }
+                    if let Some(ref comment) = nr.comment {
+                        let c = escape(comment.as_str());
+                        el = el.with_attribute(("comment", &*c));
+                    }
+                    el.write_text_content(BytesText::new(&nr.refers_to))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("definedNames")))?;
+            }
+
+            // calcPr
+            if settings.calc_on_open {
+                w.create_element("calcPr")
+                    .with_attribute(("calcId", "191029"))
+                    .with_attribute(("fullCalcOnLoad", "1"))
+                    .write_empty()?;
+            }
+
+            w.write_event(Event::End(BytesEnd::new("workbook")))?;
+            Ok(())
+        })
     }
+
+    // -----------------------------------------------------------------------
+    // xl/_rels/workbook.xml.rels
+    // -----------------------------------------------------------------------
 
     fn write_workbook_rels<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
         sst: &SharedStringTable,
     ) -> XlsxResult<()> {
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("xl/_rels/workbook.xml.rels", options)?;
+        Self::write_xml_part(zip, "xl/_rels/workbook.xml.rels", |w| {
+            let mut tag = BytesStart::new("Relationships");
+            tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
+            w.write_event(Event::Start(tag))?;
 
-        let mut content = String::from(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
-        );
+            for i in 0..workbook.sheet_count() {
+                let rid = format!("rId{}", i + 1);
+                let target = format!("worksheets/sheet{}.xml", i + 1);
+                w.create_element("Relationship")
+                    .with_attribute(("Id", rid.as_str()))
+                    .with_attribute(("Type", RT_WORKSHEET))
+                    .with_attribute(("Target", target.as_str()))
+                    .write_empty()?;
+            }
 
-        for i in 0..workbook.sheet_count() {
-            content.push_str(&format!(
-                "\n    <Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{}.xml\"/>",
-                i + 1,
-                i + 1
-            ));
-        }
+            // Styles
+            let mut next_rid = workbook.sheet_count() + 1;
+            let rid = format!("rId{}", next_rid);
+            w.create_element("Relationship")
+                .with_attribute(("Id", rid.as_str()))
+                .with_attribute(("Type", RT_STYLES))
+                .with_attribute(("Target", "styles.xml"))
+                .write_empty()?;
+            next_rid += 1;
 
-        // Styles relationship
-        let mut next_rid = workbook.sheet_count() + 1;
-        content.push_str(&format!(
-            "\n    <Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>",
-            next_rid
-        ));
-        next_rid += 1;
+            // Shared strings
+            if !sst.is_empty() {
+                let rid = format!("rId{}", next_rid);
+                w.create_element("Relationship")
+                    .with_attribute(("Id", rid.as_str()))
+                    .with_attribute(("Type", RT_SHARED_STRINGS))
+                    .with_attribute(("Target", "sharedStrings.xml"))
+                    .write_empty()?;
+            }
 
-        // Shared strings relationship
-        if !sst.is_empty() {
-            content.push_str(&format!(
-                "\n    <Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>",
-                next_rid
-            ));
-        }
-
-        content.push_str("\n</Relationships>");
-
-        zip.write_all(content.as_bytes())?;
-        Ok(())
+            w.write_event(Event::End(BytesEnd::new("Relationships")))?;
+            Ok(())
+        })
     }
+
+    // -----------------------------------------------------------------------
+    // xl/sharedStrings.xml
+    // -----------------------------------------------------------------------
 
     fn write_shared_strings<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         sst: &SharedStringTable,
     ) -> XlsxResult<()> {
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("xl/sharedStrings.xml", options)?;
+        Self::write_xml_part(zip, "xl/sharedStrings.xml", |w| {
+            let count = sst.strings.len().to_string();
+            let mut tag = BytesStart::new("sst");
+            tag.push_attribute(("xmlns", NS_SPREADSHEET));
+            tag.push_attribute(("count", count.as_str()));
+            tag.push_attribute(("uniqueCount", count.as_str()));
+            w.write_event(Event::Start(tag))?;
 
-        let count = sst.strings.len();
-        let mut content = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
-             <sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"{}\" uniqueCount=\"{}\">",
-            count, count
-        );
+            for s in &sst.strings {
+                w.write_event(Event::Start(BytesStart::new("si")))?;
 
-        for s in &sst.strings {
-            // Use xml:space="preserve" for strings with leading/trailing whitespace
-            let needs_preserve = s.starts_with(|c: char| c.is_ascii_whitespace())
-                || s.ends_with(|c: char| c.is_ascii_whitespace());
-            if needs_preserve {
-                content.push_str(&format!(
-                    "\n    <si><t xml:space=\"preserve\">{}</t></si>",
-                    Self::escape_xml(s)
-                ));
-            } else {
-                content.push_str(&format!("\n    <si><t>{}</t></si>", Self::escape_xml(s)));
+                let needs_preserve = s.starts_with(|c: char| c.is_ascii_whitespace())
+                    || s.ends_with(|c: char| c.is_ascii_whitespace());
+                if needs_preserve {
+                    let mut t = BytesStart::new("t");
+                    t.push_attribute(("xml:space", "preserve"));
+                    w.write_event(Event::Start(t))?;
+                } else {
+                    w.write_event(Event::Start(BytesStart::new("t")))?;
+                }
+                w.write_event(Event::Text(BytesText::new(s)))?;
+                w.write_event(Event::End(BytesEnd::new("t")))?;
+
+                w.write_event(Event::End(BytesEnd::new("si")))?;
             }
-        }
 
-        content.push_str("\n</sst>");
-        zip.write_all(content.as_bytes())?;
-        Ok(())
+            w.write_event(Event::End(BytesEnd::new("sst")))?;
+            Ok(())
+        })
     }
+
+    // -----------------------------------------------------------------------
+    // xl/styles.xml  (delegates to XlsxStyleTable which still uses strings
+    // for now — will be converted in a follow-up commit)
+    // -----------------------------------------------------------------------
 
     fn write_styles_xml<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
@@ -340,6 +457,10 @@ impl XlsxWriter {
         Ok(())
     }
 
+    // -----------------------------------------------------------------------
+    // xl/worksheets/sheet{N}.xml
+    // -----------------------------------------------------------------------
+
     fn write_worksheet<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
@@ -347,63 +468,162 @@ impl XlsxWriter {
         style_table: &XlsxStyleTable,
         sst: &SharedStringTable,
     ) -> XlsxResult<()> {
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file(&format!("xl/worksheets/sheet{}.xml", index + 1), options)?;
+        let path = format!("xl/worksheets/sheet{}.xml", index + 1);
+        Self::write_xml_part(zip, &path, |w| {
+            let sheet = workbook
+                .worksheet(index)
+                .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
 
-        let sheet = workbook
-            .worksheet(index)
-            .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
+            let mut tag = BytesStart::new("worksheet");
+            tag.push_attribute(("xmlns", NS_SPREADSHEET));
+            w.write_event(Event::Start(tag))?;
 
-        let mut content = String::from(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
-        );
+            // sheetPr (tab color)
+            Self::write_sheet_pr(w, sheet)?;
 
-        // Write sheetPr (tab color)
+            // sheetViews (freeze panes, tab selection)
+            Self::write_sheet_views(w, sheet)?;
+
+            // cols (column widths / hidden columns)
+            Self::write_cols(w, sheet)?;
+
+            // sheetData (cell data)
+            Self::write_sheet_data(w, sheet, index, style_table, sst)?;
+
+            // sheetProtection
+            Self::write_sheet_protection(w, sheet)?;
+
+            // mergeCells
+            Self::write_merge_cells(w, sheet)?;
+
+            // conditionalFormatting
+            Self::write_conditional_formatting(w, sheet, index, style_table)?;
+
+            // dataValidations
+            Self::write_data_validations(w, sheet)?;
+
+            // pageMargins + pageSetup
+            Self::write_page_setup(w, sheet)?;
+
+            w.write_event(Event::End(BytesEnd::new("worksheet")))?;
+            Ok(())
+        })
+    }
+
+    // -- worksheet sub-sections ---------------------------------------------
+
+    fn write_sheet_pr(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
         if let Some(color) = sheet.tab_color() {
-            content.push_str(&format!(
-                "\n    <sheetPr><tabColor rgb=\"{}\"/></sheetPr>",
-                color.to_argb_hex()
-            ));
+            w.write_event(Event::Start(BytesStart::new("sheetPr")))?;
+            let argb = color.to_argb_hex();
+            w.create_element("tabColor")
+                .with_attribute(("rgb", argb.as_str()))
+                .write_empty()?;
+            w.write_event(Event::End(BytesEnd::new("sheetPr")))?;
+        }
+        Ok(())
+    }
+
+    fn write_sheet_views(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
+        let freeze = sheet.freeze_panes();
+        let selected = sheet.is_selected();
+
+        if freeze.is_none() && !selected {
+            return Ok(());
         }
 
-        // Write sheetViews (freeze panes, tab selection)
-        Self::write_sheet_views(&mut content, sheet);
+        w.write_event(Event::Start(BytesStart::new("sheetViews")))?;
 
-        // Write column definitions (if any custom widths or hidden columns)
+        let mut sv = BytesStart::new("sheetView");
+        sv.push_attribute(("workbookViewId", "0"));
+        if selected {
+            sv.push_attribute(("tabSelected", "1"));
+        }
+        w.write_event(Event::Start(sv))?;
+
+        if let Some(fp) = freeze {
+            let active_pane = match (fp.col > 0, fp.row > 0) {
+                (true, true) => "bottomRight",
+                (false, true) => "bottomLeft",
+                (true, false) => "topRight",
+                (false, false) => "bottomLeft",
+            };
+            let top_left = CellAddress::new(fp.row, fp.col).to_a1_string();
+
+            let mut pane = BytesStart::new("pane");
+            if fp.col > 0 {
+                let v = fp.col.to_string();
+                pane.push_attribute(("xSplit", v.as_str()));
+            }
+            if fp.row > 0 {
+                let v = fp.row.to_string();
+                pane.push_attribute(("ySplit", v.as_str()));
+            }
+            pane.push_attribute(("topLeftCell", top_left.as_str()));
+            pane.push_attribute(("activePane", active_pane));
+            pane.push_attribute(("state", "frozen"));
+            w.write_event(Event::Empty(pane))?;
+
+            w.create_element("selection")
+                .with_attribute(("pane", active_pane))
+                .with_attribute(("activeCell", top_left.as_str()))
+                .with_attribute(("sqref", top_left.as_str()))
+                .write_empty()?;
+        }
+
+        w.write_event(Event::End(BytesEnd::new("sheetView")))?;
+        w.write_event(Event::End(BytesEnd::new("sheetViews")))?;
+        Ok(())
+    }
+
+    fn write_cols(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
         let col_widths = sheet.custom_column_widths();
         let col_hidden = sheet.hidden_columns();
-        if !col_widths.is_empty() || !col_hidden.is_empty() {
-            content.push_str("\n    <cols>");
-            // Collect all columns that need a <col> element
-            let mut cols_to_write: std::collections::BTreeSet<u16> = Default::default();
-            for &col in col_widths.keys() {
-                cols_to_write.insert(col);
-            }
-            for &col in col_hidden.keys() {
-                cols_to_write.insert(col);
-            }
-            for col in cols_to_write {
-                let col1 = col as u32 + 1; // 0-based to 1-based
-                let width = col_widths.get(&col).copied().unwrap_or(8.43);
-                let hidden = col_hidden.get(&col).copied().unwrap_or(false);
-                let mut attrs = format!(
-                    " min=\"{}\" max=\"{}\" width=\"{:.2}\" customWidth=\"1\"",
-                    col1, col1, width
-                );
-                if hidden {
-                    attrs.push_str(" hidden=\"1\"");
-                }
-                content.push_str(&format!("\n        <col{}/>", attrs));
-            }
-            content.push_str("\n    </cols>");
+        if col_widths.is_empty() && col_hidden.is_empty() {
+            return Ok(());
         }
 
-        content.push_str("\n    <sheetData>");
+        w.write_event(Event::Start(BytesStart::new("cols")))?;
 
-        // Collect metadata-only rows (custom height / hidden, no cells) so
-        // they can be interleaved with data rows in ascending order.  OOXML
-        // requires <row> elements to appear in strictly ascending r= order.
+        let mut cols_to_write: std::collections::BTreeSet<u16> = Default::default();
+        for &col in col_widths.keys() {
+            cols_to_write.insert(col);
+        }
+        for &col in col_hidden.keys() {
+            cols_to_write.insert(col);
+        }
+
+        for col in cols_to_write {
+            let col1 = (col as u32 + 1).to_string();
+            let width = col_widths.get(&col).copied().unwrap_or(8.43);
+            let width_s = format!("{:.2}", width);
+            let hidden = col_hidden.get(&col).copied().unwrap_or(false);
+
+            let mut el = BytesStart::new("col");
+            el.push_attribute(("min", col1.as_str()));
+            el.push_attribute(("max", col1.as_str()));
+            el.push_attribute(("width", width_s.as_str()));
+            el.push_attribute(("customWidth", "1"));
+            if hidden {
+                el.push_attribute(("hidden", "1"));
+            }
+            w.write_event(Event::Empty(el))?;
+        }
+
+        w.write_event(Event::End(BytesEnd::new("cols")))?;
+        Ok(())
+    }
+
+    fn write_sheet_data(
+        w: &mut XmlWriter,
+        sheet: &duke_sheets_core::Worksheet,
+        sheet_index: usize,
+        style_table: &XlsxStyleTable,
+        sst: &SharedStringTable,
+    ) -> XlsxResult<()> {
+        w.write_event(Event::Start(BytesStart::new("sheetData")))?;
+
+        // Metadata-only rows (custom height / hidden, no cells).
         let custom_heights = sheet.custom_row_heights();
         let hidden_rows_map = sheet.hidden_rows();
         let mut meta_only_rows: std::collections::BTreeSet<u32> = Default::default();
@@ -414,272 +634,263 @@ impl XlsxWriter {
             meta_only_rows.insert(r);
         }
 
-        // Helper: emit a self-closing row element with metadata only.
-        let emit_meta_row = |content: &mut String, row: u32| {
-            let mut tag = format!("\n        <row r=\"{}\"", row + 1);
-            if let Some(&ht) = custom_heights.get(&row) {
-                tag.push_str(&format!(" ht=\"{:.2}\" customHeight=\"1\"", ht));
-            }
-            if hidden_rows_map.get(&row).copied().unwrap_or(false) {
-                tag.push_str(" hidden=\"1\"");
-            }
-            tag.push_str("/>");
-            content.push_str(&tag);
-        };
-
-        // Peekable iterator over metadata-only rows.
         let mut meta_iter = meta_only_rows.iter().copied().peekable();
-
-        // Write cell data (sparse, row-major), interleaving metadata-only
-        // rows before each data row to maintain ascending order.
         let mut current_row: Option<u32> = None;
         let mut written_rows: std::collections::HashSet<u32> = Default::default();
+
         for (row, col, cell) in sheet.iter_cells() {
             if current_row != Some(row) {
                 // Close previous row
                 if current_row.is_some() {
-                    content.push_str("\n        </row>");
+                    w.write_event(Event::End(BytesEnd::new("row")))?;
                 }
 
-                // Emit any metadata-only rows that come before this data row
+                // Emit metadata-only rows that come before this data row
                 while let Some(&mr) = meta_iter.peek() {
                     if mr >= row {
                         break;
                     }
                     if !written_rows.contains(&mr) {
-                        emit_meta_row(&mut content, mr);
+                        Self::write_meta_row(
+                            w,
+                            mr,
+                            custom_heights.get(&mr).copied(),
+                            hidden_rows_map.get(&mr).copied().unwrap_or(false),
+                        )?;
                         written_rows.insert(mr);
                     }
                     meta_iter.next();
                 }
 
-                // Open new row with optional dimension attributes
-                let mut row_tag = format!("\n        <row r=\"{}\"", row + 1);
+                // Open new row
+                let r = (row + 1).to_string();
+                let mut row_tag = BytesStart::new("row");
+                row_tag.push_attribute(("r", r.as_str()));
                 if let Some(&ht) = custom_heights.get(&row) {
-                    row_tag.push_str(&format!(" ht=\"{:.2}\" customHeight=\"1\"", ht));
+                    let ht_s = format!("{:.2}", ht);
+                    row_tag.push_attribute(("ht", ht_s.as_str()));
+                    row_tag.push_attribute(("customHeight", "1"));
                 }
                 if sheet.is_row_hidden(row) {
-                    row_tag.push_str(" hidden=\"1\"");
+                    row_tag.push_attribute(("hidden", "1"));
                 }
-                row_tag.push('>');
-                content.push_str(&row_tag);
+                w.write_event(Event::Start(row_tag))?;
                 current_row = Some(row);
                 written_rows.insert(row);
             }
 
-            let addr = duke_sheets_core::CellAddress::new(row, col);
-            let cell_ref = addr.to_a1_string();
-
-            let xf_id = style_table.xf_id_for(index, cell.style_index);
-            let style_attr = if xf_id != 0 {
-                format!(" s=\"{}\"", xf_id)
-            } else {
-                String::new()
-            };
-
-            match &cell.value {
-                duke_sheets_core::CellValue::Number(n) => {
-                    content.push_str(&format!(
-                        "\n            <c r=\"{}\"{}><v>{}</v></c>",
-                        cell_ref, style_attr, n
-                    ));
-                }
-                duke_sheets_core::CellValue::String(s) => {
-                    if let Some(sst_idx) = sst.get(s.as_str()) {
-                        content.push_str(&format!(
-                            "\n            <c r=\"{}\"{} t=\"s\"><v>{}</v></c>",
-                            cell_ref, style_attr, sst_idx
-                        ));
-                    } else {
-                        // Fallback to inline string (shouldn't happen)
-                        content.push_str(&format!(
-                            "\n            <c r=\"{}\"{} t=\"inlineStr\"><is><t>{}</t></is></c>",
-                            cell_ref,
-                            style_attr,
-                            Self::escape_xml(s.as_str())
-                        ));
-                    }
-                }
-                duke_sheets_core::CellValue::Boolean(b) => {
-                    content.push_str(&format!(
-                        "\n            <c r=\"{}\"{} t=\"b\"><v>{}</v></c>",
-                        cell_ref,
-                        style_attr,
-                        if *b { 1 } else { 0 }
-                    ));
-                }
-                duke_sheets_core::CellValue::Formula {
-                    text, cached_value, ..
-                } => {
-                    let formula_text = if text.starts_with('=') {
-                        &text[1..]
-                    } else {
-                        text.as_str()
-                    };
-                    // Determine type attribute and <v> element from cached value
-                    let (type_attr, value_elem) = match cached_value.as_deref() {
-                        Some(duke_sheets_core::CellValue::Number(n)) => {
-                            (String::new(), format!("<v>{}</v>", n))
-                        }
-                        Some(duke_sheets_core::CellValue::String(s)) => (
-                            " t=\"str\"".to_string(),
-                            format!("<v>{}</v>", Self::escape_xml(s.as_str())),
-                        ),
-                        Some(duke_sheets_core::CellValue::Boolean(b)) => (
-                            " t=\"b\"".to_string(),
-                            format!("<v>{}</v>", if *b { 1 } else { 0 }),
-                        ),
-                        Some(duke_sheets_core::CellValue::Error(e)) => (
-                            " t=\"e\"".to_string(),
-                            format!("<v>{}</v>", Self::escape_xml(e.as_str())),
-                        ),
-                        _ => (String::new(), String::new()),
-                    };
-                    content.push_str(&format!(
-                        "\n            <c r=\"{}\"{}{}><f>{}</f>{}</c>",
-                        cell_ref,
-                        style_attr,
-                        type_attr,
-                        Self::escape_xml(formula_text),
-                        value_elem,
-                    ));
-                }
-                duke_sheets_core::CellValue::Error(e) => {
-                    content.push_str(&format!(
-                        "\n            <c r=\"{}\"{} t=\"e\"><v>{}</v></c>",
-                        cell_ref,
-                        style_attr,
-                        Self::escape_xml(e.as_str())
-                    ));
-                }
-                duke_sheets_core::CellValue::Empty => {
-                    // Preserve style-only cells
-                    if xf_id != 0 {
-                        content.push_str(&format!(
-                            "\n            <c r=\"{}\"{} />",
-                            cell_ref, style_attr
-                        ));
-                    }
-                }
-                duke_sheets_core::CellValue::SpillTarget { .. } => {
-                    // SpillTarget cells are not written to the file - they are computed
-                    // at runtime from the source formula's array result.
-                    // In Excel's file format, dynamic array formulas use a special
-                    // mechanism, but for simplicity we skip spill targets during write.
-                }
-            }
+            // Write cell
+            Self::write_cell(w, row, col, cell, sheet_index, style_table, sst)?;
         }
 
         if current_row.is_some() {
-            content.push_str("\n        </row>");
+            w.write_event(Event::End(BytesEnd::new("row")))?;
         }
 
-        // Emit remaining metadata-only rows that come after all data rows
+        // Emit remaining metadata-only rows after all data rows
         for mr in meta_iter {
             if !written_rows.contains(&mr) {
-                emit_meta_row(&mut content, mr);
+                Self::write_meta_row(
+                    w,
+                    mr,
+                    custom_heights.get(&mr).copied(),
+                    hidden_rows_map.get(&mr).copied().unwrap_or(false),
+                )?;
             }
         }
 
-        content.push_str("\n    </sheetData>");
-
-        // Write sheet protection (before mergeCells per OOXML order)
-        Self::write_sheet_protection(&mut content, sheet);
-
-        // Write merged cells (if any)
-        let merged_regions = sheet.merged_regions();
-        if !merged_regions.is_empty() {
-            content.push_str(&format!(
-                "\n    <mergeCells count=\"{}\">",
-                merged_regions.len()
-            ));
-            for range in merged_regions {
-                content.push_str(&format!("\n        <mergeCell ref=\"{}\"/>", range));
-            }
-            content.push_str("\n    </mergeCells>");
-        }
-
-        // Write conditional formatting (if any)
-        Self::write_conditional_formatting(&mut content, sheet, index, style_table);
-
-        // Write data validations (if any)
-        Self::write_data_validations(&mut content, sheet);
-
-        // Write page margins and page setup
-        Self::write_page_setup(&mut content, sheet);
-
-        content.push_str("\n</worksheet>");
-
-        zip.write_all(content.as_bytes())?;
+        w.write_event(Event::End(BytesEnd::new("sheetData")))?;
         Ok(())
     }
 
-    fn write_sheet_views(content: &mut String, sheet: &duke_sheets_core::Worksheet) {
-        let freeze = sheet.freeze_panes();
-        let selected = sheet.is_selected();
-
-        // Only emit sheetViews if there's something to write
-        if freeze.is_none() && !selected {
-            return;
+    /// Write a self-closing `<row>` element with metadata only (height/hidden).
+    fn write_meta_row(
+        w: &mut XmlWriter,
+        row: u32,
+        custom_height: Option<f64>,
+        hidden: bool,
+    ) -> XlsxResult<()> {
+        let r = (row + 1).to_string();
+        let mut tag = BytesStart::new("row");
+        tag.push_attribute(("r", r.as_str()));
+        if let Some(ht) = custom_height {
+            let ht_s = format!("{:.2}", ht);
+            tag.push_attribute(("ht", ht_s.as_str()));
+            tag.push_attribute(("customHeight", "1"));
         }
-
-        content.push_str("\n    <sheetViews>\n        <sheetView workbookViewId=\"0\"");
-        if selected {
-            content.push_str(" tabSelected=\"1\"");
+        if hidden {
+            tag.push_attribute(("hidden", "1"));
         }
-        content.push('>');
-
-        if let Some(fp) = freeze {
-            // Determine active pane based on what's frozen
-            let active_pane = match (fp.col > 0, fp.row > 0) {
-                (true, true) => "bottomRight",
-                (false, true) => "bottomLeft",
-                (true, false) => "topRight",
-                (false, false) => "bottomLeft", // shouldn't happen, but safe default
-            };
-
-            let top_left = CellAddress::new(fp.row, fp.col).to_a1_string();
-
-            let mut pane_attrs = String::new();
-            if fp.col > 0 {
-                pane_attrs.push_str(&format!(" xSplit=\"{}\"", fp.col));
-            }
-            if fp.row > 0 {
-                pane_attrs.push_str(&format!(" ySplit=\"{}\"", fp.row));
-            }
-            content.push_str(&format!(
-                "\n            <pane{} topLeftCell=\"{}\" activePane=\"{}\" state=\"frozen\"/>",
-                pane_attrs, top_left, active_pane
-            ));
-            content.push_str(&format!(
-                "\n            <selection pane=\"{}\" activeCell=\"{}\" sqref=\"{}\"/>",
-                active_pane, top_left, top_left
-            ));
-        }
-
-        content.push_str("\n        </sheetView>\n    </sheetViews>");
+        w.write_event(Event::Empty(tag))?;
+        Ok(())
     }
 
-    fn write_sheet_protection(content: &mut String, sheet: &duke_sheets_core::Worksheet) {
+    /// Write a single `<c>` cell element.
+    fn write_cell(
+        w: &mut XmlWriter,
+        row: u32,
+        col: u16,
+        cell: &duke_sheets_core::CellData,
+        sheet_index: usize,
+        style_table: &XlsxStyleTable,
+        sst: &SharedStringTable,
+    ) -> XlsxResult<()> {
+        let addr = CellAddress::new(row, col);
+        let cell_ref = addr.to_a1_string();
+        let xf_id = style_table.xf_id_for(sheet_index, cell.style_index);
+        let xf_str = xf_id.to_string();
+
+        match &cell.value {
+            duke_sheets_core::CellValue::Number(n) => {
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                if xf_id != 0 {
+                    c.push_attribute(("s", xf_str.as_str()));
+                }
+                w.write_event(Event::Start(c))?;
+                let v = n.to_string();
+                w.create_element("v")
+                    .write_text_content(BytesText::new(&v))?;
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            }
+            duke_sheets_core::CellValue::String(s) => {
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                if xf_id != 0 {
+                    c.push_attribute(("s", xf_str.as_str()));
+                }
+                if let Some(sst_idx) = sst.get(s.as_str()) {
+                    c.push_attribute(("t", "s"));
+                    w.write_event(Event::Start(c))?;
+                    let v = sst_idx.to_string();
+                    w.create_element("v")
+                        .write_text_content(BytesText::new(&v))?;
+                } else {
+                    // Fallback to inline string (shouldn't happen)
+                    c.push_attribute(("t", "inlineStr"));
+                    w.write_event(Event::Start(c))?;
+                    w.write_event(Event::Start(BytesStart::new("is")))?;
+                    w.create_element("t")
+                        .write_text_content(BytesText::new(s.as_str()))?;
+                    w.write_event(Event::End(BytesEnd::new("is")))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            }
+            duke_sheets_core::CellValue::Boolean(b) => {
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                if xf_id != 0 {
+                    c.push_attribute(("s", xf_str.as_str()));
+                }
+                c.push_attribute(("t", "b"));
+                w.write_event(Event::Start(c))?;
+                w.create_element("v")
+                    .write_text_content(BytesText::new(if *b { "1" } else { "0" }))?;
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            }
+            duke_sheets_core::CellValue::Formula {
+                text, cached_value, ..
+            } => {
+                let formula_text = if text.starts_with('=') {
+                    &text[1..]
+                } else {
+                    text.as_str()
+                };
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                if xf_id != 0 {
+                    c.push_attribute(("s", xf_str.as_str()));
+                }
+                // Determine type attribute from cached value
+                match cached_value.as_deref() {
+                    Some(duke_sheets_core::CellValue::String(_)) => {
+                        c.push_attribute(("t", "str"));
+                    }
+                    Some(duke_sheets_core::CellValue::Boolean(_)) => {
+                        c.push_attribute(("t", "b"));
+                    }
+                    Some(duke_sheets_core::CellValue::Error(_)) => {
+                        c.push_attribute(("t", "e"));
+                    }
+                    _ => {}
+                }
+                w.write_event(Event::Start(c))?;
+                w.create_element("f")
+                    .write_text_content(BytesText::new(formula_text))?;
+                // Write cached value
+                match cached_value.as_deref() {
+                    Some(duke_sheets_core::CellValue::Number(n)) => {
+                        let v = n.to_string();
+                        w.create_element("v")
+                            .write_text_content(BytesText::new(&v))?;
+                    }
+                    Some(duke_sheets_core::CellValue::String(s)) => {
+                        w.create_element("v")
+                            .write_text_content(BytesText::new(s.as_str()))?;
+                    }
+                    Some(duke_sheets_core::CellValue::Boolean(b)) => {
+                        w.create_element("v")
+                            .write_text_content(BytesText::new(if *b { "1" } else { "0" }))?;
+                    }
+                    Some(duke_sheets_core::CellValue::Error(e)) => {
+                        w.create_element("v")
+                            .write_text_content(BytesText::new(e.as_str()))?;
+                    }
+                    _ => {}
+                }
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            }
+            duke_sheets_core::CellValue::Error(e) => {
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                if xf_id != 0 {
+                    c.push_attribute(("s", xf_str.as_str()));
+                }
+                c.push_attribute(("t", "e"));
+                w.write_event(Event::Start(c))?;
+                w.create_element("v")
+                    .write_text_content(BytesText::new(e.as_str()))?;
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            }
+            duke_sheets_core::CellValue::Empty => {
+                // Preserve style-only cells
+                if xf_id != 0 {
+                    let mut c = BytesStart::new("c");
+                    c.push_attribute(("r", cell_ref.as_str()));
+                    c.push_attribute(("s", xf_str.as_str()));
+                    w.write_event(Event::Empty(c))?;
+                }
+            }
+            duke_sheets_core::CellValue::SpillTarget { .. } => {
+                // SpillTarget cells are not written — computed at runtime.
+            }
+        }
+        Ok(())
+    }
+
+    fn write_sheet_protection(
+        w: &mut XmlWriter,
+        sheet: &duke_sheets_core::Worksheet,
+    ) -> XlsxResult<()> {
         let prot = match sheet.protection() {
             Some(p) if p.protected => p,
-            _ => return,
+            _ => return Ok(()),
         };
 
-        content.push_str("\n    <sheetProtection sheet=\"1\"");
+        let mut tag = BytesStart::new("sheetProtection");
+        tag.push_attribute(("sheet", "1"));
 
         if let Some(hash) = prot.password_hash {
-            content.push_str(&format!(" password=\"{:04X}\"", hash));
+            let h = format!("{:04X}", hash);
+            tag.push_attribute(("password", h.as_str()));
         }
 
-        // ECMA-376 §18.3.1.85 sheetProtection attributes:
-        //   - "sheet" = sheet is protected (already emitted above)
-        //   - Other attributes: absent or "true"/"1" means NOT allowed.
-        //     We emit "0" when our model says the action IS allowed.
+        // ECMA-376 §18.3.1.85: absent or "1" = NOT allowed.
+        // We emit "0" when our model says the action IS allowed.
         macro_rules! prot_allow {
             ($field:expr, $attr:literal) => {
                 if $field {
-                    content.push_str(concat!(" ", $attr, "=\"0\""));
+                    tag.push_attribute(($attr, "0"));
                 }
             };
         }
@@ -697,22 +908,43 @@ impl XlsxWriter {
         prot_allow!(prot.pivot_tables, "pivotTables");
 
         // selectLockedCells/selectUnlockedCells: absent = allowed (inverted)
-        // So emit "1" when NOT allowed
         if !prot.select_locked_cells {
-            content.push_str(" selectLockedCells=\"1\"");
+            tag.push_attribute(("selectLockedCells", "1"));
         }
         if !prot.select_unlocked_cells {
-            content.push_str(" selectUnlockedCells=\"1\"");
+            tag.push_attribute(("selectUnlockedCells", "1"));
         }
 
-        content.push_str("/>");
+        w.write_event(Event::Empty(tag))?;
+        Ok(())
     }
 
-    fn write_page_setup(content: &mut String, sheet: &duke_sheets_core::Worksheet) {
+    fn write_merge_cells(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
+        let merged_regions = sheet.merged_regions();
+        if merged_regions.is_empty() {
+            return Ok(());
+        }
+
+        let count = merged_regions.len().to_string();
+        let mut tag = BytesStart::new("mergeCells");
+        tag.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(tag))?;
+
+        for range in merged_regions {
+            let r = range.to_string();
+            w.create_element("mergeCell")
+                .with_attribute(("ref", r.as_str()))
+                .write_empty()?;
+        }
+
+        w.write_event(Event::End(BytesEnd::new("mergeCells")))?;
+        Ok(())
+    }
+
+    fn write_page_setup(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
         let ps = sheet.page_setup();
         let def = duke_sheets_core::PageSetup::default();
 
-        // Only emit if something differs from defaults
         let margins_differ = (ps.left_margin - def.left_margin).abs() > 1e-9
             || (ps.right_margin - def.right_margin).abs() > 1e-9
             || (ps.top_margin - def.top_margin).abs() > 1e-9
@@ -727,11 +959,20 @@ impl XlsxWriter {
             || ps.fit_to_height.is_some();
 
         if margins_differ {
-            content.push_str(&format!(
-                "\n    <pageMargins left=\"{}\" right=\"{}\" top=\"{}\" bottom=\"{}\" header=\"{}\" footer=\"{}\"/>",
-                ps.left_margin, ps.right_margin, ps.top_margin, ps.bottom_margin,
-                ps.header_margin, ps.footer_margin
-            ));
+            let left = ps.left_margin.to_string();
+            let right = ps.right_margin.to_string();
+            let top = ps.top_margin.to_string();
+            let bottom = ps.bottom_margin.to_string();
+            let header = ps.header_margin.to_string();
+            let footer = ps.footer_margin.to_string();
+            w.create_element("pageMargins")
+                .with_attribute(("left", left.as_str()))
+                .with_attribute(("right", right.as_str()))
+                .with_attribute(("top", top.as_str()))
+                .with_attribute(("bottom", bottom.as_str()))
+                .with_attribute(("header", header.as_str()))
+                .with_attribute(("footer", footer.as_str()))
+                .write_empty()?;
         }
 
         if setup_differs {
@@ -739,44 +980,53 @@ impl XlsxWriter {
                 duke_sheets_core::PageOrientation::Portrait => "portrait",
                 duke_sheets_core::PageOrientation::Landscape => "landscape",
             };
-            let mut attrs = format!(
-                " paperSize=\"{}\" orientation=\"{}\"",
-                ps.paper_size, orientation
-            );
+            let paper = ps.paper_size.to_string();
+            let mut el = w
+                .create_element("pageSetup")
+                .with_attribute(("paperSize", paper.as_str()))
+                .with_attribute(("orientation", orientation));
+
             if ps.scale != 100 {
-                attrs.push_str(&format!(" scale=\"{}\"", ps.scale));
+                let s = ps.scale.to_string();
+                // Need to bind so the string lives long enough
+                el = el.with_attribute(("scale", s.as_str()));
             }
-            if let Some(w) = ps.fit_to_width {
-                attrs.push_str(&format!(" fitToWidth=\"{}\"", w));
+            if let Some(fw) = ps.fit_to_width {
+                let s = fw.to_string();
+                el = el.with_attribute(("fitToWidth", s.as_str()));
             }
-            if let Some(h) = ps.fit_to_height {
-                attrs.push_str(&format!(" fitToHeight=\"{}\"", h));
+            if let Some(fh) = ps.fit_to_height {
+                let s = fh.to_string();
+                el = el.with_attribute(("fitToHeight", s.as_str()));
             }
-            content.push_str(&format!("\n    <pageSetup{}/>", attrs));
+            el.write_empty()?;
         }
+
+        Ok(())
     }
 
+    // -----------------------------------------------------------------------
+    // Conditional formatting
+    // -----------------------------------------------------------------------
+
     fn write_conditional_formatting(
-        content: &mut String,
+        w: &mut XmlWriter,
         sheet: &duke_sheets_core::Worksheet,
         sheet_index: usize,
         style_table: &XlsxStyleTable,
-    ) {
+    ) -> XlsxResult<()> {
         use duke_sheets_core::conditional_format::CfRuleType;
 
         let rules = sheet.conditional_formats();
         if rules.is_empty() {
-            return;
+            return Ok(());
         }
 
-        // Group rules by their range sets for the <conditionalFormatting> element
-        // For simplicity, we output one <conditionalFormatting> per rule
         for (rule_idx, rule) in rules.iter().enumerate() {
             if rule.ranges.is_empty() {
                 continue;
             }
 
-            // Build sqref from ranges
             let sqref: String = rule
                 .ranges
                 .iter()
@@ -784,24 +1034,17 @@ impl XlsxWriter {
                 .collect::<Vec<_>>()
                 .join(" ");
 
-            content.push_str(&format!(
-                "\n    <conditionalFormatting sqref=\"{}\">",
-                sqref
-            ));
+            let mut cf_tag = BytesStart::new("conditionalFormatting");
+            cf_tag.push_attribute(("sqref", sqref.as_str()));
+            w.write_event(Event::Start(cf_tag))?;
 
-            // Build the cfRule element
+            // Build cfRule attributes
             let rule_type = rule.rule_type.xlsx_type();
-            // Get dxf_id from style table (if rule has format) or from rule itself (if loaded from file)
             let dxf_id = style_table
                 .dxf_id_for(sheet_index, rule_idx)
                 .or(rule.dxf_id);
-            let dxf_attr = dxf_id.map_or(String::new(), |id| format!(" dxfId=\"{}\"", id));
             let priority_val = rule.priority.max(1);
-            let stop_if_true = if rule.stop_if_true {
-                " stopIfTrue=\"1\""
-            } else {
-                ""
-            };
+            let priority_s = priority_val.to_string();
 
             match &rule.rule_type {
                 CfRuleType::CellIs {
@@ -809,58 +1052,60 @@ impl XlsxWriter {
                     formula1,
                     formula2,
                 } => {
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" operator=\"{}\" priority=\"{}\"{}{}>\n            <formula>{}</formula>",
-                        rule_type,
-                        operator.xlsx_operator(),
-                        priority_val,
-                        dxf_attr,
-                        stop_if_true,
-                        Self::escape_xml(formula1)
-                    ));
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("operator", operator.xlsx_operator()));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
+                    w.write_event(Event::Start(tag))?;
+
+                    w.create_element("formula")
+                        .write_text_content(BytesText::new(formula1))?;
                     if let Some(f2) = formula2 {
-                        content.push_str(&format!(
-                            "\n            <formula>{}</formula>",
-                            Self::escape_xml(f2)
-                        ));
+                        w.create_element("formula")
+                            .write_text_content(BytesText::new(f2))?;
                     }
-                    content.push_str("\n        </cfRule>");
+                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
                 }
 
                 CfRuleType::Expression { formula } => {
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\"{}{}>\n            <formula>{}</formula>\n        </cfRule>",
-                        rule_type,
-                        priority_val,
-                        dxf_attr,
-                        stop_if_true,
-                        Self::escape_xml(formula)
-                    ));
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
+                    w.write_event(Event::Start(tag))?;
+
+                    w.create_element("formula")
+                        .write_text_content(BytesText::new(formula))?;
+                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
                 }
 
                 CfRuleType::ColorScale { colors } => {
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\"{}>\n            <colorScale>",
-                        rule_type, priority_val, stop_if_true
-                    ));
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    if rule.stop_if_true {
+                        tag.push_attribute(("stopIfTrue", "1"));
+                    }
+                    w.write_event(Event::Start(tag))?;
+
+                    w.write_event(Event::Start(BytesStart::new("colorScale")))?;
                     for cv in colors {
-                        let val_attr = cv
-                            .value
-                            .as_ref()
-                            .map_or(String::new(), |v| format!(" val=\"{}\"", v));
-                        content.push_str(&format!(
-                            "\n                <cfvo type=\"{}\"{} />",
-                            cv.value_type.xlsx_type(),
-                            val_attr
-                        ));
+                        let mut cfvo = BytesStart::new("cfvo");
+                        cfvo.push_attribute(("type", cv.value_type.xlsx_type()));
+                        if let Some(ref v) = cv.value {
+                            cfvo.push_attribute(("val", v.as_str()));
+                        }
+                        w.write_event(Event::Empty(cfvo))?;
                     }
                     for cv in colors {
-                        content.push_str(&format!(
-                            "\n                <color rgb=\"{}\" />",
-                            cv.color.to_argb_hex()
-                        ));
+                        let argb = cv.color.to_argb_hex();
+                        w.create_element("color")
+                            .with_attribute(("rgb", argb.as_str()))
+                            .write_empty()?;
                     }
-                    content.push_str("\n            </colorScale>\n        </cfRule>");
+                    w.write_event(Event::End(BytesEnd::new("colorScale")))?;
+                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
                 }
 
                 CfRuleType::DataBar {
@@ -870,39 +1115,43 @@ impl XlsxWriter {
                     show_value,
                     ..
                 } => {
-                    let show_val_attr = if *show_value { "" } else { " showValue=\"0\"" };
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\"{}>\n            <dataBar{}>",
-                        rule_type, priority_val, stop_if_true, show_val_attr
-                    ));
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    if rule.stop_if_true {
+                        tag.push_attribute(("stopIfTrue", "1"));
+                    }
+                    w.write_event(Event::Start(tag))?;
+
+                    let mut db = BytesStart::new("dataBar");
+                    if !*show_value {
+                        db.push_attribute(("showValue", "0"));
+                    }
+                    w.write_event(Event::Start(db))?;
 
                     // cfvo for min
-                    let min_val_attr = min_value
-                        .value
-                        .as_ref()
-                        .map_or(String::new(), |v| format!(" val=\"{}\"", v));
-                    content.push_str(&format!(
-                        "\n                <cfvo type=\"{}\"{} />",
-                        min_value.value_type.xlsx_type(),
-                        min_val_attr
-                    ));
+                    let mut cfvo_min = BytesStart::new("cfvo");
+                    cfvo_min.push_attribute(("type", min_value.value_type.xlsx_type()));
+                    if let Some(ref v) = min_value.value {
+                        cfvo_min.push_attribute(("val", v.as_str()));
+                    }
+                    w.write_event(Event::Empty(cfvo_min))?;
 
                     // cfvo for max
-                    let max_val_attr = max_value
-                        .value
-                        .as_ref()
-                        .map_or(String::new(), |v| format!(" val=\"{}\"", v));
-                    content.push_str(&format!(
-                        "\n                <cfvo type=\"{}\"{} />",
-                        max_value.value_type.xlsx_type(),
-                        max_val_attr
-                    ));
+                    let mut cfvo_max = BytesStart::new("cfvo");
+                    cfvo_max.push_attribute(("type", max_value.value_type.xlsx_type()));
+                    if let Some(ref v) = max_value.value {
+                        cfvo_max.push_attribute(("val", v.as_str()));
+                    }
+                    w.write_event(Event::Empty(cfvo_max))?;
 
-                    content.push_str(&format!(
-                        "\n                <color rgb=\"{}\" />",
-                        color.to_argb_hex()
-                    ));
-                    content.push_str("\n            </dataBar>\n        </cfRule>");
+                    let argb = color.to_argb_hex();
+                    w.create_element("color")
+                        .with_attribute(("rgb", argb.as_str()))
+                        .write_empty()?;
+
+                    w.write_event(Event::End(BytesEnd::new("dataBar")))?;
+                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
                 }
 
                 CfRuleType::IconSet {
@@ -911,24 +1160,35 @@ impl XlsxWriter {
                     reverse,
                     show_value,
                 } => {
-                    let reverse_attr = if *reverse { " reverse=\"1\"" } else { "" };
-                    let show_val_attr = if *show_value { "" } else { " showValue=\"0\"" };
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\"{}>\n            <iconSet iconSet=\"{}\"{}{}>\n",
-                        rule_type, priority_val, stop_if_true, icon_style.xlsx_name(), reverse_attr, show_val_attr
-                    ));
-                    for val in values {
-                        let val_attr = val
-                            .value
-                            .as_ref()
-                            .map_or(String::new(), |v| format!(" val=\"{}\"", v));
-                        content.push_str(&format!(
-                            "                <cfvo type=\"{}\"{} />\n",
-                            val.value_type.xlsx_type(),
-                            val_attr
-                        ));
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    if rule.stop_if_true {
+                        tag.push_attribute(("stopIfTrue", "1"));
                     }
-                    content.push_str("            </iconSet>\n        </cfRule>");
+                    w.write_event(Event::Start(tag))?;
+
+                    let mut is_tag = BytesStart::new("iconSet");
+                    is_tag.push_attribute(("iconSet", icon_style.xlsx_name()));
+                    if *reverse {
+                        is_tag.push_attribute(("reverse", "1"));
+                    }
+                    if !*show_value {
+                        is_tag.push_attribute(("showValue", "0"));
+                    }
+                    w.write_event(Event::Start(is_tag))?;
+
+                    for val in values {
+                        let mut cfvo = BytesStart::new("cfvo");
+                        cfvo.push_attribute(("type", val.value_type.xlsx_type()));
+                        if let Some(ref v) = val.value {
+                            cfvo.push_attribute(("val", v.as_str()));
+                        }
+                        w.write_event(Event::Empty(cfvo))?;
+                    }
+
+                    w.write_event(Event::End(BytesEnd::new("iconSet")))?;
+                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
                 }
 
                 CfRuleType::Top10 {
@@ -936,18 +1196,19 @@ impl XlsxWriter {
                     percent,
                     bottom,
                 } => {
-                    let percent_attr = if *percent { " percent=\"1\"" } else { "" };
-                    let bottom_attr = if *bottom { " bottom=\"1\"" } else { "" };
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\" rank=\"{}\"{}{}{}{}/>",
-                        rule_type,
-                        priority_val,
-                        rank,
-                        percent_attr,
-                        bottom_attr,
-                        dxf_attr,
-                        stop_if_true
-                    ));
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    let rank_s = rank.to_string();
+                    tag.push_attribute(("rank", rank_s.as_str()));
+                    if *percent {
+                        tag.push_attribute(("percent", "1"));
+                    }
+                    if *bottom {
+                        tag.push_attribute(("bottom", "1"));
+                    }
+                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
+                    w.write_event(Event::Empty(tag))?;
                 }
 
                 CfRuleType::AboveAverage {
@@ -955,35 +1216,52 @@ impl XlsxWriter {
                     equal_average,
                     std_dev,
                 } => {
-                    let above_attr = if !*above { " aboveAverage=\"0\"" } else { "" };
-                    let equal_attr = if *equal_average {
-                        " equalAverage=\"1\""
-                    } else {
-                        ""
-                    };
-                    let std_dev_attr =
-                        std_dev.map_or(String::new(), |s| format!(" stdDev=\"{}\"", s));
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\"{}{}{}{}{}/>",
-                        rule_type,
-                        priority_val,
-                        above_attr,
-                        equal_attr,
-                        std_dev_attr,
-                        dxf_attr,
-                        stop_if_true
-                    ));
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    if !*above {
+                        tag.push_attribute(("aboveAverage", "0"));
+                    }
+                    if *equal_average {
+                        tag.push_attribute(("equalAverage", "1"));
+                    }
+                    if let Some(s) = std_dev {
+                        let v = s.to_string();
+                        tag.push_attribute(("stdDev", v.as_str()));
+                    }
+                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
+                    w.write_event(Event::Empty(tag))?;
                 }
 
                 CfRuleType::ContainsText { text } => {
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\" text=\"{}\"{}{}>\n            <formula>NOT(ISERROR(SEARCH(\"{}\",{})))</formula>\n        </cfRule>",
-                        rule_type, priority_val, Self::escape_xml(text), dxf_attr, stop_if_true,
-                        Self::escape_xml(text), sqref.split(' ').next().unwrap_or("A1")
-                    ));
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    let text_esc = escape(text.as_str());
+                    tag.push_attribute(("text", &*text_esc));
+                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
+                    w.write_event(Event::Start(tag))?;
+
+                    let first_cell = sqref.split(' ').next().unwrap_or("A1");
+                    let formula = format!(
+                        "NOT(ISERROR(SEARCH(\"{}\",{})))",
+                        text.replace('"', "\"\""),
+                        first_cell
+                    );
+                    w.create_element("formula")
+                        .write_text_content(BytesText::new(&formula))?;
+                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
                 }
 
                 CfRuleType::BeginsWith { text } => {
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    let text_esc = escape(text.as_str());
+                    tag.push_attribute(("text", &*text_esc));
+                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
+                    w.write_event(Event::Start(tag))?;
+
                     let first_cell = sqref
                         .split(' ')
                         .next()
@@ -991,14 +1269,26 @@ impl XlsxWriter {
                         .split(':')
                         .next()
                         .unwrap_or("A1");
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\" text=\"{}\"{}{}>\n            <formula>LEFT({},{})=\"{}\"</formula>\n        </cfRule>",
-                        rule_type, priority_val, Self::escape_xml(text), dxf_attr, stop_if_true,
-                        first_cell, text.len(), Self::escape_xml(text)
-                    ));
+                    let formula = format!(
+                        "LEFT({},{})=\"{}\"",
+                        first_cell,
+                        text.len(),
+                        text.replace('"', "\"\"")
+                    );
+                    w.create_element("formula")
+                        .write_text_content(BytesText::new(&formula))?;
+                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
                 }
 
                 CfRuleType::EndsWith { text } => {
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    let text_esc = escape(text.as_str());
+                    tag.push_attribute(("text", &*text_esc));
+                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
+                    w.write_event(Event::Start(tag))?;
+
                     let first_cell = sqref
                         .split(' ')
                         .next()
@@ -1006,11 +1296,15 @@ impl XlsxWriter {
                         .split(':')
                         .next()
                         .unwrap_or("A1");
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\" text=\"{}\"{}{}>\n            <formula>RIGHT({},{})=\"{}\"</formula>\n        </cfRule>",
-                        rule_type, priority_val, Self::escape_xml(text), dxf_attr, stop_if_true,
-                        first_cell, text.len(), Self::escape_xml(text)
-                    ));
+                    let formula = format!(
+                        "RIGHT({},{})=\"{}\"",
+                        first_cell,
+                        text.len(),
+                        text.replace('"', "\"\"")
+                    );
+                    w.create_element("formula")
+                        .write_text_content(BytesText::new(&formula))?;
+                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
                 }
 
                 CfRuleType::DuplicateValues
@@ -1019,47 +1313,67 @@ impl XlsxWriter {
                 | CfRuleType::NotContainsBlanks
                 | CfRuleType::ContainsErrors
                 | CfRuleType::NotContainsErrors => {
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\"{}{}/>",
-                        rule_type, priority_val, dxf_attr, stop_if_true
-                    ));
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
+                    w.write_event(Event::Empty(tag))?;
                 }
 
                 CfRuleType::TimePeriod { period } => {
-                    content.push_str(&format!(
-                        "\n        <cfRule type=\"{}\" priority=\"{}\" timePeriod=\"{}\"{}{}/>",
-                        rule_type,
-                        priority_val,
-                        period.xlsx_period(),
-                        dxf_attr,
-                        stop_if_true
-                    ));
+                    let mut tag = BytesStart::new("cfRule");
+                    tag.push_attribute(("type", rule_type));
+                    tag.push_attribute(("priority", priority_s.as_str()));
+                    tag.push_attribute(("timePeriod", period.xlsx_period()));
+                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
+                    w.write_event(Event::Empty(tag))?;
                 }
             }
 
-            content.push_str("\n    </conditionalFormatting>");
+            w.write_event(Event::End(BytesEnd::new("conditionalFormatting")))?;
+        }
+
+        Ok(())
+    }
+
+    /// Push optional `dxfId` and `stopIfTrue` attributes onto a `BytesStart`.
+    fn push_dxf_and_stop(tag: &mut BytesStart, dxf_id: Option<u32>, stop_if_true: bool) {
+        if let Some(id) = dxf_id {
+            let s = id.to_string();
+            // push_attribute borrows the value, so we need an owned copy in
+            // the tag buffer.  BytesStart copies into its internal Vec<u8>.
+            tag.push_attribute(("dxfId", s.as_str()));
+        }
+        if stop_if_true {
+            tag.push_attribute(("stopIfTrue", "1"));
         }
     }
 
-    fn write_data_validations(content: &mut String, sheet: &duke_sheets_core::Worksheet) {
+    // -----------------------------------------------------------------------
+    // Data validations
+    // -----------------------------------------------------------------------
+
+    fn write_data_validations(
+        w: &mut XmlWriter,
+        sheet: &duke_sheets_core::Worksheet,
+    ) -> XlsxResult<()> {
         use duke_sheets_core::validation::ValidationType;
 
         let validations = sheet.data_validations();
         if validations.is_empty() {
-            return;
+            return Ok(());
         }
 
-        content.push_str(&format!(
-            "\n    <dataValidations count=\"{}\">",
-            validations.len()
-        ));
+        let count = validations.len().to_string();
+        let mut dv_tag = BytesStart::new("dataValidations");
+        dv_tag.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(dv_tag))?;
 
         for validation in validations {
             if validation.ranges.is_empty() {
                 continue;
             }
 
-            // Build sqref from ranges
             let sqref: String = validation
                 .ranges
                 .iter()
@@ -1067,90 +1381,73 @@ impl XlsxWriter {
                 .collect::<Vec<_>>()
                 .join(" ");
 
-            let type_attr = match &validation.validation_type {
-                ValidationType::None => String::new(),
-                _ => format!(" type=\"{}\"", validation.validation_type.xlsx_type()),
-            };
+            let mut tag = BytesStart::new("dataValidation");
 
-            let operator_attr = match &validation.validation_type {
+            match &validation.validation_type {
+                ValidationType::None => {}
+                _ => {
+                    tag.push_attribute(("type", validation.validation_type.xlsx_type()));
+                }
+            }
+
+            // Operator attribute
+            match &validation.validation_type {
                 ValidationType::Whole { operator, .. }
                 | ValidationType::Decimal { operator, .. }
                 | ValidationType::Date { operator, .. }
                 | ValidationType::Time { operator, .. }
                 | ValidationType::TextLength { operator, .. } => {
-                    format!(" operator=\"{}\"", operator.xlsx_operator())
+                    tag.push_attribute(("operator", operator.xlsx_operator()));
                 }
-                _ => String::new(),
-            };
+                _ => {}
+            }
 
-            let allow_blank = if validation.allow_blank {
-                " allowBlank=\"1\""
-            } else {
-                ""
-            };
-            let show_dropdown = if !validation.show_dropdown {
-                " showDropDown=\"1\""
-            } else {
-                ""
-            };
-            let show_input = if validation.show_input_message {
-                " showInputMessage=\"1\""
-            } else {
-                ""
-            };
-            let show_error = if validation.show_error_alert {
-                " showErrorMessage=\"1\""
-            } else {
-                ""
-            };
+            if validation.allow_blank {
+                tag.push_attribute(("allowBlank", "1"));
+            }
+            if !validation.show_dropdown {
+                tag.push_attribute(("showDropDown", "1"));
+            }
+            if validation.show_input_message {
+                tag.push_attribute(("showInputMessage", "1"));
+            }
+            if validation.show_error_alert {
+                tag.push_attribute(("showErrorMessage", "1"));
+            }
 
-            let error_style = match validation.error_style {
-                duke_sheets_core::ValidationErrorStyle::Stop => "",
-                duke_sheets_core::ValidationErrorStyle::Warning => " errorStyle=\"warning\"",
+            match validation.error_style {
+                duke_sheets_core::ValidationErrorStyle::Stop => {}
+                duke_sheets_core::ValidationErrorStyle::Warning => {
+                    tag.push_attribute(("errorStyle", "warning"));
+                }
                 duke_sheets_core::ValidationErrorStyle::Information => {
-                    " errorStyle=\"information\""
+                    tag.push_attribute(("errorStyle", "information"));
                 }
-            };
+            }
 
-            let error_title = validation.error_title.as_ref().map_or(String::new(), |t| {
-                format!(" errorTitle=\"{}\"", Self::escape_xml(t))
-            });
-            let error_msg = validation
-                .error_message
-                .as_ref()
-                .map_or(String::new(), |m| {
-                    format!(" error=\"{}\"", Self::escape_xml(m))
-                });
-            let prompt_title = validation.input_title.as_ref().map_or(String::new(), |t| {
-                format!(" promptTitle=\"{}\"", Self::escape_xml(t))
-            });
-            let prompt_msg = validation
-                .input_message
-                .as_ref()
-                .map_or(String::new(), |m| {
-                    format!(" prompt=\"{}\"", Self::escape_xml(m))
-                });
+            if let Some(ref t) = validation.error_title {
+                let v = escape(t.as_str());
+                tag.push_attribute(("errorTitle", &*v));
+            }
+            if let Some(ref m) = validation.error_message {
+                let v = escape(m.as_str());
+                tag.push_attribute(("error", &*v));
+            }
+            if let Some(ref t) = validation.input_title {
+                let v = escape(t.as_str());
+                tag.push_attribute(("promptTitle", &*v));
+            }
+            if let Some(ref m) = validation.input_message {
+                let v = escape(m.as_str());
+                tag.push_attribute(("prompt", &*v));
+            }
 
-            content.push_str(&format!(
-                "\n        <dataValidation{}{}{}{}{}{}{}{}{}{}{} sqref=\"{}\">",
-                type_attr,
-                operator_attr,
-                allow_blank,
-                show_dropdown,
-                show_input,
-                show_error,
-                error_style,
-                error_title,
-                error_msg,
-                prompt_title,
-                prompt_msg,
-                sqref
-            ));
+            tag.push_attribute(("sqref", sqref.as_str()));
+            w.write_event(Event::Start(tag))?;
 
             // Write formulas based on validation type
             match &validation.validation_type {
                 ValidationType::List { source } => {
-                    // List source: either a range or comma-separated values
                     let formula = if source.starts_with('=') {
                         source[1..].to_string()
                     } else if source.contains('!')
@@ -1160,82 +1457,72 @@ impl XlsxWriter {
                     {
                         source.clone()
                     } else {
-                        // Inline list - wrap in quotes
                         format!("\"{}\"", source)
                     };
-                    content.push_str(&format!(
-                        "\n            <formula1>{}</formula1>",
-                        Self::escape_xml(&formula)
-                    ));
+                    w.create_element("formula1")
+                        .write_text_content(BytesText::new(&formula))?;
                 }
                 ValidationType::Whole { value1, value2, .. }
                 | ValidationType::Decimal { value1, value2, .. }
                 | ValidationType::Date { value1, value2, .. }
                 | ValidationType::Time { value1, value2, .. }
                 | ValidationType::TextLength { value1, value2, .. } => {
-                    content.push_str(&format!(
-                        "\n            <formula1>{}</formula1>",
-                        Self::escape_xml(value1)
-                    ));
+                    w.create_element("formula1")
+                        .write_text_content(BytesText::new(value1))?;
                     if let Some(v2) = value2 {
-                        content.push_str(&format!(
-                            "\n            <formula2>{}</formula2>",
-                            Self::escape_xml(v2)
-                        ));
+                        w.create_element("formula2")
+                            .write_text_content(BytesText::new(v2))?;
                     }
                 }
                 ValidationType::Custom { formula } => {
-                    let formula = if formula.starts_with('=') {
+                    let f = if formula.starts_with('=') {
                         &formula[1..]
                     } else {
                         formula
                     };
-                    content.push_str(&format!(
-                        "\n            <formula1>{}</formula1>",
-                        Self::escape_xml(formula)
-                    ));
+                    w.create_element("formula1")
+                        .write_text_content(BytesText::new(f))?;
                 }
                 ValidationType::None => {}
             }
 
-            content.push_str("\n        </dataValidation>");
+            w.write_event(Event::End(BytesEnd::new("dataValidation")))?;
         }
 
-        content.push_str("\n    </dataValidations>");
+        w.write_event(Event::End(BytesEnd::new("dataValidations")))?;
+        Ok(())
     }
 
-    fn escape_xml(s: &str) -> String {
-        s.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&apos;")
-    }
+    // -----------------------------------------------------------------------
+    // Worksheet relationships
+    // -----------------------------------------------------------------------
 
-    /// Write worksheet relationships file (for comments, drawings, etc.)
     fn write_worksheet_rels<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         sheet_index: usize,
     ) -> XlsxResult<()> {
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file(
-            &format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_index + 1),
-            options,
-        )?;
+        let path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_index + 1);
+        Self::write_xml_part(zip, &path, |w| {
+            let mut tag = BytesStart::new("Relationships");
+            tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
+            w.write_event(Event::Start(tag))?;
 
-        let content = format!(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments{}.xml"/>
-</Relationships>"#,
-            sheet_index + 1
-        );
+            let target = format!("../comments{}.xml", sheet_index + 1);
+            w.create_element("Relationship")
+                .with_attribute(("Id", "rId1"))
+                .with_attribute(("Type", RT_COMMENTS))
+                .with_attribute(("Target", target.as_str()))
+                .write_empty()?;
 
-        zip.write_all(content.as_bytes())?;
-        Ok(())
+            w.write_event(Event::End(BytesEnd::new("Relationships")))?;
+            Ok(())
+        })
     }
 
-    /// Write comments file for a worksheet
+    // -----------------------------------------------------------------------
+    // Comments
+    // -----------------------------------------------------------------------
+
     fn write_comments<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
@@ -1249,83 +1536,68 @@ impl XlsxWriter {
             return Ok(());
         }
 
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file(&format!("xl/comments{}.xml", sheet_index + 1), options)?;
+        let path = format!("xl/comments{}.xml", sheet_index + 1);
+        Self::write_xml_part(zip, &path, |w| {
+            let mut tag = BytesStart::new("comments");
+            tag.push_attribute(("xmlns", NS_SPREADSHEET));
+            w.write_event(Event::Start(tag))?;
 
-        let mut content = String::from(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-    <authors>"#,
-        );
+            // Authors
+            w.write_event(Event::Start(BytesStart::new("authors")))?;
+            let authors = sheet.comment_authors();
+            for author in authors {
+                w.create_element("author")
+                    .write_text_content(BytesText::new(author))?;
+            }
+            if authors.is_empty() {
+                // Add empty author for comments without author
+                w.create_element("author")
+                    .write_text_content(BytesText::new(""))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("authors")))?;
 
-        // Write authors
-        let authors = sheet.comment_authors();
-        for author in authors {
-            content.push_str(&format!(
-                "\n        <author>{}</author>",
-                Self::escape_xml(author)
-            ));
-        }
-        // Add empty author if no authors defined (for comments without author)
-        if authors.is_empty() {
-            content.push_str("\n        <author></author>");
-        }
+            // Comment list
+            w.write_event(Event::Start(BytesStart::new("commentList")))?;
 
-        content.push_str(
-            r#"
-    </authors>
-    <commentList>"#,
-        );
+            let mut comments: Vec<_> = sheet.comments().collect();
+            comments.sort_by_key(|((row, col), _)| (*row, *col));
 
-        // Collect and sort comments by cell position for consistent output
-        let mut comments: Vec<_> = sheet.comments().collect();
-        comments.sort_by_key(|((row, col), _)| (*row, *col));
+            let author_index: std::collections::HashMap<&str, usize> = authors
+                .iter()
+                .enumerate()
+                .map(|(i, a)| (a.as_str(), i))
+                .collect();
 
-        // Build author index map
-        let author_index: std::collections::HashMap<&str, usize> = authors
-            .iter()
-            .enumerate()
-            .map(|(i, a)| (a.as_str(), i))
-            .collect();
-
-        // Write comments
-        for ((row, col), comment) in comments {
-            let cell_ref = CellAddress::new(row, col).to_a1_string();
-            let author_id = if comment.author.is_empty() {
-                if authors.is_empty() {
+            for ((row, col), comment) in comments {
+                let cell_ref = CellAddress::new(row, col).to_a1_string();
+                let author_id = if comment.author.is_empty() {
                     0
                 } else {
-                    0 // Fallback to first author
-                }
-            } else {
-                author_index
-                    .get(comment.author.as_str())
-                    .copied()
-                    .unwrap_or(0)
-            };
+                    author_index
+                        .get(comment.author.as_str())
+                        .copied()
+                        .unwrap_or(0)
+                };
+                let aid = author_id.to_string();
 
-            content.push_str(&format!(
-                r#"
-        <comment ref="{}" authorId="{}">
-            <text>
-                <r>
-                    <t>{}</t>
-                </r>
-            </text>
-        </comment>"#,
-                cell_ref,
-                author_id,
-                Self::escape_xml(&comment.text)
-            ));
-        }
+                let mut c_tag = BytesStart::new("comment");
+                c_tag.push_attribute(("ref", cell_ref.as_str()));
+                c_tag.push_attribute(("authorId", aid.as_str()));
+                w.write_event(Event::Start(c_tag))?;
 
-        content.push_str(
-            r#"
-    </commentList>
-</comments>"#,
-        );
+                w.write_event(Event::Start(BytesStart::new("text")))?;
+                w.write_event(Event::Start(BytesStart::new("r")))?;
+                w.create_element("t")
+                    .write_text_content(BytesText::new(&comment.text))?;
+                w.write_event(Event::End(BytesEnd::new("r")))?;
+                w.write_event(Event::End(BytesEnd::new("text")))?;
 
-        zip.write_all(content.as_bytes())?;
-        Ok(())
+                w.write_event(Event::End(BytesEnd::new("comment")))?;
+            }
+
+            w.write_event(Event::End(BytesEnd::new("commentList")))?;
+            w.write_event(Event::End(BytesEnd::new("comments")))?;
+            Ok(())
+        })
     }
 }

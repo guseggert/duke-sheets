@@ -46,7 +46,7 @@ log = "0.4"
 tracing = "0.1"
 
 # XML parsing (for XLSX)
-quick-xml = "0.31"
+quick-xml = "0.37"
 
 # ZIP handling (for XLSX) - only deflate needed; bzip2/lzma/zstd use C deps that break WASM
 zip = { version = "2.1", default-features = false, features = ["deflate", "time"] }

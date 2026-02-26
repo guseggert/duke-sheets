@@ -182,7 +182,7 @@ impl XlsxReader {
 
         let reader = BufReader::new(file);
         let mut xml_reader = Reader::from_reader(reader);
-        xml_reader.trim_text(true);
+        xml_reader.config_mut().trim_text(true);
 
         let mut buf = Vec::new();
         let mut current_string = String::new();
@@ -258,7 +258,7 @@ impl XlsxReader {
 
         let reader = BufReader::new(file);
         let mut xml_reader = Reader::from_reader(reader);
-        xml_reader.trim_text(true);
+        xml_reader.config_mut().trim_text(true);
 
         let mut buf = Vec::new();
         let mut sheets = Vec::new();
@@ -389,7 +389,7 @@ impl XlsxReader {
 
         let reader = BufReader::new(file);
         let mut xml_reader = Reader::from_reader(reader);
-        xml_reader.trim_text(true);
+        xml_reader.config_mut().trim_text(true);
 
         let mut buf = Vec::new();
         let mut rels = HashMap::new();
@@ -456,7 +456,7 @@ impl XlsxReader {
 
         let reader = BufReader::new(file);
         let mut xml_reader = Reader::from_reader(reader);
-        xml_reader.trim_text(true);
+        xml_reader.config_mut().trim_text(true);
 
         let mut buf = Vec::new();
 
@@ -1528,7 +1528,7 @@ impl XlsxReader {
 
         let reader = BufReader::new(file);
         let mut xml_reader = Reader::from_reader(reader);
-        xml_reader.trim_text(true);
+        xml_reader.config_mut().trim_text(true);
 
         let mut buf = Vec::new();
         let mut authors: Vec<String> = Vec::new();
