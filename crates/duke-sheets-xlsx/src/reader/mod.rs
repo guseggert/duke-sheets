@@ -2371,6 +2371,38 @@ mod tests {
     }
 
     #[test]
+    fn test_read_shared_formula_preserves_absolute_and_shifts_ranges() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="n"><v>1</v></c>
+      <c r="B1" t="n"><v>2</v></c>
+      <c r="D1"><f t="shared" si="1">SUM($A$1:B1)+LEN("A1")</f><v>3</v></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="n"><v>4</v></c>
+      <c r="B2" t="n"><v>5</v></c>
+      <c r="D2"><f t="shared" si="1"/><v>6</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_value("D1").unwrap().formula_text(),
+            Some("=SUM($A$1:B1)+LEN(\"A1\")")
+        );
+        assert_eq!(
+            sheet.get_value("D2").unwrap().formula_text(),
+            Some("=SUM($A$1:B2)+LEN(\"A1\")")
+        );
+    }
+
+    #[test]
     fn test_read_array_formula_anchor() {
         let sheet_xml = r#"<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
