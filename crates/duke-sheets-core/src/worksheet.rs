@@ -33,6 +33,8 @@ pub struct Worksheet {
     protection: Option<SheetProtection>,
     /// Freeze pane settings
     freeze_panes: Option<FreezePanes>,
+    /// Split pane settings
+    split_panes: Option<SplitPanes>,
     /// Print settings
     page_setup: PageSetup,
     /// Tab color
@@ -69,6 +71,7 @@ impl Worksheet {
             selection_range: None,
             protection: None,
             freeze_panes: None,
+            split_panes: None,
             page_setup: PageSetup::default(),
             tab_color: None,
             comments: HashMap::new(),
@@ -576,18 +579,37 @@ impl Worksheet {
         self.freeze_panes.as_ref()
     }
 
+    /// Get split pane settings
+    pub fn split_panes(&self) -> Option<&SplitPanes> {
+        self.split_panes.as_ref()
+    }
+
     /// Set freeze panes
     pub fn set_freeze_panes(&mut self, row: u32, col: u16) {
         if row == 0 && col == 0 {
             self.freeze_panes = None;
         } else {
             self.freeze_panes = Some(FreezePanes { row, col });
+            self.split_panes = None;
+        }
+    }
+
+    /// Set split panes
+    pub fn set_split_panes(&mut self, split_panes: Option<SplitPanes>) {
+        self.split_panes = split_panes;
+        if self.split_panes.is_some() {
+            self.freeze_panes = None;
         }
     }
 
     /// Remove freeze panes
     pub fn unfreeze_panes(&mut self) {
         self.freeze_panes = None;
+    }
+
+    /// Remove split panes
+    pub fn unsplit_panes(&mut self) {
+        self.split_panes = None;
     }
 
     // === Cell Comments ===
@@ -1038,6 +1060,19 @@ pub struct FreezePanes {
     pub row: u32,
     /// Freeze column (first unfrozen column)
     pub col: u16,
+}
+
+/// Split pane settings
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitPanes {
+    /// Horizontal split position
+    pub x_split: f64,
+    /// Vertical split position
+    pub y_split: f64,
+    /// Top-left visible cell after split
+    pub top_left: Option<(u32, u16)>,
+    /// Active pane identifier (`topLeft`, `topRight`, `bottomLeft`, `bottomRight`)
+    pub active_pane: Option<String>,
 }
 
 /// Sheet protection settings

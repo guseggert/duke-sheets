@@ -858,12 +858,14 @@ impl XlsxWriter {
 
     fn write_sheet_views(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
         let freeze = sheet.freeze_panes();
+        let split = sheet.split_panes();
         let selected = sheet.is_selected();
         let zoom = sheet.zoom_scale();
         let selection_active = sheet.selection_active_cell();
         let selection_range = sheet.selection_range();
 
         if freeze.is_none()
+            && split.is_none()
             && !selected
             && zoom.is_none()
             && selection_active.is_none()
@@ -920,6 +922,40 @@ impl XlsxWriter {
                 .with_attribute(("activeCell", active))
                 .with_attribute(("sqref", sqref_v))
                 .write_empty()?;
+        } else if let Some(sp) = split {
+            let mut pane = BytesStart::new("pane");
+            if sp.x_split != 0.0 {
+                let v = sp.x_split.to_string();
+                pane.push_attribute(("xSplit", v.as_str()));
+            }
+            if sp.y_split != 0.0 {
+                let v = sp.y_split.to_string();
+                pane.push_attribute(("ySplit", v.as_str()));
+            }
+            if let Some((r, c)) = sp.top_left {
+                let top_left = CellAddress::new(r, c).to_a1_string();
+                pane.push_attribute(("topLeftCell", top_left.as_str()));
+            }
+            if let Some(active_pane) = sp.active_pane.as_deref() {
+                pane.push_attribute(("activePane", active_pane));
+            }
+            pane.push_attribute(("state", "split"));
+            w.write_event(Event::Empty(pane))?;
+
+            let default_active = sp
+                .top_left
+                .map(|(r, c)| CellAddress::new(r, c).to_a1_string())
+                .unwrap_or_else(|| "A1".to_string());
+            let active = active_cell.as_deref().unwrap_or(default_active.as_str());
+            let sqref_v = sqref.as_deref().unwrap_or(active);
+
+            let mut sel = BytesStart::new("selection");
+            if let Some(active_pane) = sp.active_pane.as_deref() {
+                sel.push_attribute(("pane", active_pane));
+            }
+            sel.push_attribute(("activeCell", active));
+            sel.push_attribute(("sqref", sqref_v));
+            w.write_event(Event::Empty(sel))?;
         } else if active_cell.is_some() || sqref.is_some() {
             let active = active_cell.as_deref().unwrap_or("A1");
             let sqref_v = sqref.as_deref().unwrap_or(active);
@@ -2008,7 +2044,7 @@ impl XlsxWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use duke_sheets_core::{CellRange, ConditionalFormatRule};
+    use duke_sheets_core::{CellRange, ConditionalFormatRule, SplitPanes};
     use std::io::Read;
 
     fn read_zip_entry(bytes: Vec<u8>, path: &str) -> String {
@@ -2108,5 +2144,28 @@ mod tests {
 
         assert!(xml.contains("<sheetView workbookViewId=\"0\" tabSelected=\"1\" zoomScale=\"125\""));
         assert!(xml.contains("<selection activeCell=\"D5\" sqref=\"D5:E6\""));
+    }
+
+    #[test]
+    fn test_writer_emits_split_pane_sheet_view() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_split_panes(Some(SplitPanes {
+            x_split: 2000.0,
+            y_split: 3000.0,
+            top_left: Some((3, 2)), // C4
+            active_pane: Some("bottomRight".to_string()),
+        }));
+        sheet.set_selection_active_cell(4, 3); // D5
+        sheet.set_selection_range(Some(CellRange::parse("D5").unwrap()));
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let xml = read_zip_entry(out.into_inner(), "xl/worksheets/sheet1.xml");
+
+        assert!(xml.contains(
+            "<pane xSplit=\"2000\" ySplit=\"3000\" topLeftCell=\"C4\" activePane=\"bottomRight\" state=\"split\""
+        ));
+        assert!(xml.contains("<selection pane=\"bottomRight\" activeCell=\"D5\" sqref=\"D5\""));
     }
 }

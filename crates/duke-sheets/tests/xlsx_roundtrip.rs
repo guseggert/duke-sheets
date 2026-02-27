@@ -1,6 +1,7 @@
 //! End-to-end tests for XLSX roundtrip (create -> save -> read -> verify)
 
 use duke_sheets::prelude::*;
+use duke_sheets_core::SplitPanes;
 use std::io::Cursor;
 
 /// Test basic roundtrip with numeric values
@@ -410,6 +411,40 @@ fn test_roundtrip_outline_metadata() {
     assert!(sheet2.is_row_collapsed(1));
     assert_eq!(sheet2.column_outline_level(2), 3);
     assert!(sheet2.is_column_collapsed(2));
+}
+
+/// Test split pane + sheet selection metadata roundtrip
+#[test]
+fn test_roundtrip_split_panes_and_selection() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    sheet.set_split_panes(Some(SplitPanes {
+        x_split: 2000.0,
+        y_split: 3000.0,
+        top_left: Some((3, 2)),
+        active_pane: Some("bottomRight".to_string()),
+    }));
+    sheet.set_zoom_scale(Some(90));
+    sheet.set_selection_active_cell(4, 3); // D5
+    sheet.set_selection_range(Some(CellRange::parse("D5:E6").unwrap()));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let split = sheet2.split_panes().expect("split panes should roundtrip");
+    assert_eq!(split.x_split, 2000.0);
+    assert_eq!(split.y_split, 3000.0);
+    assert_eq!(split.top_left, Some((3, 2)));
+    assert_eq!(split.active_pane.as_deref(), Some("bottomRight"));
+    assert_eq!(sheet2.zoom_scale(), Some(90));
+    assert_eq!(sheet2.selection_active_cell(), Some((4, 3)));
+    assert_eq!(
+        sheet2.selection_range().map(|r| r.to_string()),
+        Some("D5:E6".to_string())
+    );
 }
 
 // --- Formula cached value roundtrip tests ---
