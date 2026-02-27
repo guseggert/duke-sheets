@@ -911,7 +911,14 @@ impl XlsxWriter {
     fn write_cols(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
         let col_widths = sheet.custom_column_widths();
         let col_hidden = sheet.hidden_columns();
-        if col_widths.is_empty() && col_hidden.is_empty() {
+        let col_outline = sheet.column_outline_levels();
+        let col_collapsed = sheet.collapsed_columns();
+
+        if col_widths.is_empty()
+            && col_hidden.is_empty()
+            && col_outline.is_empty()
+            && col_collapsed.is_empty()
+        {
             return Ok(());
         }
 
@@ -924,12 +931,20 @@ impl XlsxWriter {
         for &col in col_hidden.keys() {
             cols_to_write.insert(col);
         }
+        for &col in col_outline.keys() {
+            cols_to_write.insert(col);
+        }
+        for &col in col_collapsed.keys() {
+            cols_to_write.insert(col);
+        }
 
         for col in cols_to_write {
             let col1 = (col as u32 + 1).to_string();
             let width = col_widths.get(&col).copied().unwrap_or(8.43);
             let width_s = format!("{:.2}", width);
             let hidden = col_hidden.get(&col).copied().unwrap_or(false);
+            let outline_level = col_outline.get(&col).copied().unwrap_or(0);
+            let collapsed = col_collapsed.get(&col).copied().unwrap_or(false);
 
             let mut el = BytesStart::new("col");
             el.push_attribute(("min", col1.as_str()));
@@ -938,6 +953,13 @@ impl XlsxWriter {
             el.push_attribute(("customWidth", "1"));
             if hidden {
                 el.push_attribute(("hidden", "1"));
+            }
+            if outline_level > 0 {
+                let s = outline_level.to_string();
+                el.push_attribute(("outlineLevel", s.as_str()));
+            }
+            if collapsed {
+                el.push_attribute(("collapsed", "1"));
             }
             w.write_event(Event::Empty(el))?;
         }
@@ -958,11 +980,19 @@ impl XlsxWriter {
         // Metadata-only rows (custom height / hidden, no cells).
         let custom_heights = sheet.custom_row_heights();
         let hidden_rows_map = sheet.hidden_rows();
+        let row_outline = sheet.row_outline_levels();
+        let row_collapsed = sheet.collapsed_rows();
         let mut meta_only_rows: std::collections::BTreeSet<u32> = Default::default();
         for &r in custom_heights.keys() {
             meta_only_rows.insert(r);
         }
         for &r in hidden_rows_map.keys() {
+            meta_only_rows.insert(r);
+        }
+        for &r in row_outline.keys() {
+            meta_only_rows.insert(r);
+        }
+        for &r in row_collapsed.keys() {
             meta_only_rows.insert(r);
         }
 
@@ -988,6 +1018,8 @@ impl XlsxWriter {
                             mr,
                             custom_heights.get(&mr).copied(),
                             hidden_rows_map.get(&mr).copied().unwrap_or(false),
+                            row_outline.get(&mr).copied().unwrap_or(0),
+                            row_collapsed.get(&mr).copied().unwrap_or(false),
                         )?;
                         written_rows.insert(mr);
                     }
@@ -1005,6 +1037,14 @@ impl XlsxWriter {
                 }
                 if sheet.is_row_hidden(row) {
                     row_tag.push_attribute(("hidden", "1"));
+                }
+                let row_outline_level = row_outline.get(&row).copied().unwrap_or(0);
+                if row_outline_level > 0 {
+                    let s = row_outline_level.to_string();
+                    row_tag.push_attribute(("outlineLevel", s.as_str()));
+                }
+                if row_collapsed.get(&row).copied().unwrap_or(false) {
+                    row_tag.push_attribute(("collapsed", "1"));
                 }
                 w.write_event(Event::Start(row_tag))?;
                 current_row = Some(row);
@@ -1027,6 +1067,8 @@ impl XlsxWriter {
                     mr,
                     custom_heights.get(&mr).copied(),
                     hidden_rows_map.get(&mr).copied().unwrap_or(false),
+                    row_outline.get(&mr).copied().unwrap_or(0),
+                    row_collapsed.get(&mr).copied().unwrap_or(false),
                 )?;
             }
         }
@@ -1041,6 +1083,8 @@ impl XlsxWriter {
         row: u32,
         custom_height: Option<f64>,
         hidden: bool,
+        outline_level: u8,
+        collapsed: bool,
     ) -> XlsxResult<()> {
         let r = (row + 1).to_string();
         let mut tag = BytesStart::new("row");
@@ -1052,6 +1096,13 @@ impl XlsxWriter {
         }
         if hidden {
             tag.push_attribute(("hidden", "1"));
+        }
+        if outline_level > 0 {
+            let s = outline_level.to_string();
+            tag.push_attribute(("outlineLevel", s.as_str()));
+        }
+        if collapsed {
+            tag.push_attribute(("collapsed", "1"));
         }
         w.write_event(Event::Empty(tag))?;
         Ok(())
@@ -1995,5 +2046,24 @@ mod tests {
         let theme = read_zip_entry(bytes, "xl/theme/theme1.xml");
         assert!(theme.contains("<a:theme"));
         assert!(theme.contains("<a:clrScheme"));
+    }
+
+    #[test]
+    fn test_writer_emits_outline_and_collapsed_attrs() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_row_outline_level(1, 2);
+        sheet.set_row_collapsed(1, true);
+        sheet.set_column_outline_level(2, 3);
+        sheet.set_column_collapsed(2, true);
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let xml = read_zip_entry(out.into_inner(), "xl/worksheets/sheet1.xml");
+
+        assert!(xml.contains("<row r=\"2\" outlineLevel=\"2\" collapsed=\"1\""));
+        assert!(xml.contains("<col min=\"3\" max=\"3\""));
+        assert!(xml.contains("outlineLevel=\"3\""));
+        assert!(xml.contains("collapsed=\"1\""));
     }
 }

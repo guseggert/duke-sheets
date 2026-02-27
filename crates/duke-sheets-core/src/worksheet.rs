@@ -463,6 +463,16 @@ impl Worksheet {
         self.cells.hidden_rows()
     }
 
+    /// Get all row outline levels (row index → level).
+    pub fn row_outline_levels(&self) -> &std::collections::BTreeMap<u32, u8> {
+        self.cells.row_outline_levels()
+    }
+
+    /// Get all collapsed rows (row index → true).
+    pub fn collapsed_rows(&self) -> &std::collections::BTreeMap<u32, bool> {
+        self.cells.row_collapsed()
+    }
+
     /// Get all custom column widths (column index → width in characters).
     pub fn custom_column_widths(&self) -> &std::collections::BTreeMap<u16, f64> {
         self.cells.custom_column_widths()
@@ -471,6 +481,16 @@ impl Worksheet {
     /// Get all hidden columns (column index → true).
     pub fn hidden_columns(&self) -> &std::collections::BTreeMap<u16, bool> {
         self.cells.hidden_columns()
+    }
+
+    /// Get all column outline levels (column index → level).
+    pub fn column_outline_levels(&self) -> &std::collections::BTreeMap<u16, u8> {
+        self.cells.column_outline_levels()
+    }
+
+    /// Get all collapsed columns (column index → true).
+    pub fn collapsed_columns(&self) -> &std::collections::BTreeMap<u16, bool> {
+        self.cells.column_collapsed()
     }
 
     // === Merged Cells ===
