@@ -19,7 +19,7 @@ use duke_sheets_core::style::{Color, Style};
 use duke_sheets_core::validation::{
     DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType,
 };
-use duke_sheets_core::{CellAddress, CellError, CellRange, CellValue, Workbook};
+use duke_sheets_core::{CellAddress, CellError, CellRange, CellValue, SplitPanes, Workbook};
 
 /// Decode Excel's `_xHHHH_` escape sequences in strings.
 ///
@@ -1207,44 +1207,61 @@ impl XlsxReader {
                             Self::parse_sheet_selection_attrs(&e, worksheet);
                         }
                         b"pane" => {
-                            let mut state_frozen = false;
-                            let mut x_split: Option<u16> = None;
-                            let mut y_split: Option<u32> = None;
+                            let mut state: Option<String> = None;
+                            let mut x_split_raw: Option<f64> = None;
+                            let mut y_split_raw: Option<f64> = None;
+                            let mut top_left_cell: Option<(u32, u16)> = None;
+                            let mut active_pane: Option<String> = None;
 
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
                                     b"state" => {
-                                        state_frozen = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .map(|s| {
-                                                s.as_ref() == "frozen"
-                                                    || s.as_ref() == "frozenSplit"
-                                            })
-                                            .unwrap_or(false);
+                                        state = attr.unescape_value().ok().map(|s| s.to_string());
                                     }
                                     b"xSplit" => {
-                                        x_split = attr
+                                        x_split_raw = attr
                                             .unescape_value()
                                             .ok()
-                                            .and_then(|s| s.parse::<f64>().ok())
-                                            .map(|v| v.round().max(0.0) as u16);
+                                            .and_then(|s| s.parse::<f64>().ok());
                                     }
                                     b"ySplit" => {
-                                        y_split = attr
+                                        y_split_raw = attr
                                             .unescape_value()
                                             .ok()
-                                            .and_then(|s| s.parse::<f64>().ok())
-                                            .map(|v| v.round().max(0.0) as u32);
+                                            .and_then(|s| s.parse::<f64>().ok());
+                                    }
+                                    b"topLeftCell" => {
+                                        if let Some(a1) =
+                                            attr.unescape_value().ok().map(|s| s.to_string())
+                                        {
+                                            if let Ok(addr) = CellAddress::parse(&a1) {
+                                                top_left_cell = Some((addr.row, addr.col));
+                                            }
+                                        }
+                                    }
+                                    b"activePane" => {
+                                        active_pane =
+                                            attr.unescape_value().ok().map(|s| s.to_string());
                                     }
                                     _ => {}
                                 }
                             }
 
-                            if state_frozen {
-                                let row = y_split.unwrap_or(0);
-                                let col = x_split.unwrap_or(0);
-                                worksheet.set_freeze_panes(row, col);
+                            match state.as_deref() {
+                                Some("frozen") | Some("frozenSplit") => {
+                                    let row = y_split_raw.unwrap_or(0.0).round().max(0.0) as u32;
+                                    let col = x_split_raw.unwrap_or(0.0).round().max(0.0) as u16;
+                                    worksheet.set_freeze_panes(row, col);
+                                }
+                                Some("split") => {
+                                    worksheet.set_split_panes(Some(SplitPanes {
+                                        x_split: x_split_raw.unwrap_or(0.0),
+                                        y_split: y_split_raw.unwrap_or(0.0),
+                                        top_left: top_left_cell,
+                                        active_pane,
+                                    }));
+                                }
+                                _ => {}
                             }
                         }
                         b"f" if in_cell => {
@@ -2649,6 +2666,38 @@ mod tests {
         assert_eq!(
             sheet.selection_range().map(|r| r.to_string()),
             Some("D5:E6".to_string())
+        );
+    }
+
+    #[test]
+    fn test_read_sheet_view_split_panes() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews>
+    <sheetView workbookViewId="0" zoomScale="90">
+      <pane xSplit="2000" ySplit="3000" topLeftCell="C4" activePane="bottomRight" state="split"/>
+      <selection pane="bottomRight" activeCell="D5" sqref="D5"/>
+    </sheetView>
+  </sheetViews>
+  <sheetData>
+    <row r="1"><c r="A1" t="n"><v>1</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        let split = sheet.split_panes().expect("split panes should exist");
+        assert_eq!(split.x_split, 2000.0);
+        assert_eq!(split.y_split, 3000.0);
+        assert_eq!(split.top_left, Some((3, 2)));
+        assert_eq!(split.active_pane.as_deref(), Some("bottomRight"));
+        assert_eq!(sheet.zoom_scale(), Some(90));
+        assert_eq!(sheet.selection_active_cell(), Some((4, 3)));
+        assert_eq!(
+            sheet.selection_range().map(|r| r.to_string()),
+            Some("D5".to_string())
         );
     }
 
