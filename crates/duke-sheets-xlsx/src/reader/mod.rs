@@ -785,6 +785,15 @@ impl XlsxReader {
         loop {
             match xml_reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
+                    b"sheetView" => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"tabSelected" {
+                                if attr.unescape_value().ok().as_deref() == Some("1") {
+                                    worksheet.set_selected(true);
+                                }
+                            }
+                        }
+                    }
                     b"row" => {
                         // Parse row dimensions: ht, customHeight, hidden
                         let mut row_num: Option<u32> = None;
@@ -1139,6 +1148,56 @@ impl XlsxReader {
                 }
                 Ok(Event::Empty(e)) => {
                     match e.name().local_name().as_ref() {
+                        b"sheetView" => {
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"tabSelected" {
+                                    if attr.unescape_value().ok().as_deref() == Some("1") {
+                                        worksheet.set_selected(true);
+                                    }
+                                }
+                            }
+                        }
+                        b"pane" => {
+                            let mut state_frozen = false;
+                            let mut x_split: Option<u16> = None;
+                            let mut y_split: Option<u32> = None;
+
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"state" => {
+                                        state_frozen = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .map(|s| {
+                                                s.as_ref() == "frozen"
+                                                    || s.as_ref() == "frozenSplit"
+                                            })
+                                            .unwrap_or(false);
+                                    }
+                                    b"xSplit" => {
+                                        x_split = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                            .map(|v| v.round().max(0.0) as u16);
+                                    }
+                                    b"ySplit" => {
+                                        y_split = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                            .map(|v| v.round().max(0.0) as u32);
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if state_frozen {
+                                let row = y_split.unwrap_or(0);
+                                let col = x_split.unwrap_or(0);
+                                worksheet.set_freeze_panes(row, col);
+                            }
+                        }
                         b"f" if in_cell => {
                             // Self-closing formula elements appear for shared formula
                             // follower cells: <f t="shared" si="0"/>
@@ -2445,6 +2504,31 @@ mod tests {
             Some("=TABLE(C1,C2)")
         );
         assert_eq!(sheet.get_value("A1").unwrap().as_number(), Some(42.0));
+    }
+
+    #[test]
+    fn test_read_sheet_view_selected_and_freeze_panes() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews>
+    <sheetView workbookViewId="0" tabSelected="1">
+      <pane xSplit="2" ySplit="3" topLeftCell="C4" activePane="bottomRight" state="frozen"/>
+    </sheetView>
+  </sheetViews>
+  <sheetData>
+    <row r="1"><c r="A1" t="n"><v>1</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert!(sheet.is_selected());
+        assert_eq!(
+            sheet.freeze_panes().map(|fp| (fp.row, fp.col)),
+            Some((3, 2))
+        );
     }
 
     #[test]
