@@ -161,7 +161,7 @@
 - [x] **Font scheme/family/charset** — modeled in `FontStyle`, parsed from XLSX fonts, and emitted by writer when present
 - [x] **Outline/grouping levels** — row/column `outlineLevel` + `collapsed` now read from XLSX into worksheet metadata
 - [x] **Sheet views** — tab selection, zoom scale, active selection, frozen panes, and non-frozen split panes now roundtrip
-- [ ] **Comment visibility** — model has `visible` field, reader doesn't parse VML drawings
+- [x] **Comment visibility** — reader parses VML note shapes and sets `CellComment.visible` (via `vmlDrawing{N}.vml` lookup)
 - [ ] **Rich text in shared strings** — reader flattens `<rPr>` formatting runs to plain text
 
 #### More Excel Functions (~398 remaining)
@@ -339,8 +339,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 289 | ✅ |
-| **Total** | **711** | ✅ |
+| Other (unit, doc, integration) | 291 | ✅ |
+| **Total** | **713** | ✅ |
 
 ---
 

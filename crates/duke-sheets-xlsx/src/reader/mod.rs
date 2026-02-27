@@ -2592,6 +2592,8 @@ impl XlsxReader {
         sheet_index: usize,
         worksheet: &mut duke_sheets_core::Worksheet,
     ) -> XlsxResult<()> {
+        let visible_map = Self::read_comment_visibility_map(archive, sheet_index)?;
+
         // Try to read the comments file (may not exist)
         let comments_path = format!("xl/comments{}.xml", sheet_index + 1);
         let file = match archive.by_name(&comments_path) {
@@ -2664,7 +2666,12 @@ impl XlsxReader {
                                         .cloned()
                                         .unwrap_or_default();
 
-                                    let comment = CellComment::new(author, current_text.trim());
+                                    let visible = visible_map
+                                        .get(&(addr.row, addr.col))
+                                        .copied()
+                                        .unwrap_or(false);
+                                    let comment = CellComment::new(author, current_text.trim())
+                                        .with_visible(visible);
                                     worksheet.set_comment_at(addr.row, addr.col, comment);
                                 }
                                 Err(e) => log::warn!("Skipping comment at '{}': {}", cell_ref, e),
@@ -2711,6 +2718,112 @@ impl XlsxReader {
         }
 
         Ok(())
+    }
+
+    fn read_comment_visibility_map<R: Read + Seek>(
+        archive: &mut zip::ZipArchive<R>,
+        sheet_index: usize,
+    ) -> XlsxResult<HashMap<(u32, u16), bool>> {
+        let vml_path = format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1);
+        let file = match archive.by_name(&vml_path) {
+            Ok(f) => f,
+            Err(_) => return Ok(HashMap::new()),
+        };
+
+        let reader = BufReader::new(file);
+        let mut xml_reader = Reader::from_reader(reader);
+        xml_reader.config_mut().trim_text(true);
+
+        let mut buf = Vec::new();
+        let mut map: HashMap<(u32, u16), bool> = HashMap::new();
+
+        let mut in_shape = false;
+        let mut current_visible = false;
+        let mut in_client_data_note = false;
+        let mut in_row = false;
+        let mut in_col = false;
+        let mut current_row: Option<u32> = None;
+        let mut current_col: Option<u16> = None;
+
+        loop {
+            match xml_reader.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
+                    b"shape" => {
+                        in_shape = true;
+                        current_visible = false;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"style" {
+                                if let Some(style) =
+                                    attr.unescape_value().ok().map(|s| s.to_lowercase())
+                                {
+                                    current_visible = style.contains("visibility:visible");
+                                }
+                            }
+                        }
+                    }
+                    b"ClientData" if in_shape => {
+                        let mut is_note = false;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"ObjectType" {
+                                is_note = attr.unescape_value().ok().as_deref() == Some("Note");
+                            }
+                        }
+                        if is_note {
+                            in_client_data_note = true;
+                            current_row = None;
+                            current_col = None;
+                        }
+                    }
+                    b"Row" if in_client_data_note => {
+                        in_row = true;
+                    }
+                    b"Column" if in_client_data_note => {
+                        in_col = true;
+                    }
+                    _ => {}
+                },
+                Ok(Event::End(e)) => match e.name().local_name().as_ref() {
+                    b"shape" => {
+                        in_shape = false;
+                        in_client_data_note = false;
+                        in_row = false;
+                        in_col = false;
+                        current_row = None;
+                        current_col = None;
+                    }
+                    b"ClientData" if in_client_data_note => {
+                        if let (Some(r), Some(c)) = (current_row, current_col) {
+                            map.insert((r, c), current_visible);
+                        }
+                        in_client_data_note = false;
+                        in_row = false;
+                        in_col = false;
+                        current_row = None;
+                        current_col = None;
+                    }
+                    b"Row" => in_row = false,
+                    b"Column" => in_col = false,
+                    _ => {}
+                },
+                Ok(Event::Text(e)) => {
+                    if in_row {
+                        if let Some(v) = e.unescape().ok().and_then(|s| s.parse::<u32>().ok()) {
+                            current_row = Some(v);
+                        }
+                    } else if in_col {
+                        if let Some(v) = e.unescape().ok().and_then(|s| s.parse::<u16>().ok()) {
+                            current_col = Some(v);
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(e) => return Err(XlsxError::Xml(e)),
+                _ => {}
+            }
+            buf.clear();
+        }
+
+        Ok(map)
     }
 }
 
@@ -3052,6 +3165,99 @@ mod tests {
         assert!(ps.print_headings);
         assert_eq!(ps.odd_header.as_deref(), Some("&LLeft&CCenter"));
         assert_eq!(ps.odd_footer.as_deref(), Some("&RPage &P"));
+    }
+
+    #[test]
+    fn test_read_comment_visibility_map_from_vml() {
+        let mut bytes = Vec::new();
+        {
+            let cursor = Cursor::new(&mut bytes);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+
+            zip.start_file("xl/drawings/vmlDrawing1.vml", options)
+                .unwrap();
+            zip.write_all(
+                br##"<?xml version="1.0"?>
+<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:schemas-microsoft-com:office:excel">
+  <v:shape id="_x0000_s1025" type="#_x0000_t202" style="position:absolute;visibility:visible">
+    <x:ClientData ObjectType="Note">
+      <x:Row>1</x:Row>
+      <x:Column>2</x:Column>
+    </x:ClientData>
+  </v:shape>
+  <v:shape id="_x0000_s1026" type="#_x0000_t202" style="position:absolute;visibility:hidden">
+    <x:ClientData ObjectType="Note">
+      <x:Row>3</x:Row>
+      <x:Column>4</x:Column>
+    </x:ClientData>
+  </v:shape>
+</xml>"##,
+            )
+            .unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let cursor = Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let map = XlsxReader::read_comment_visibility_map(&mut archive, 0).unwrap();
+
+        assert_eq!(map.get(&(1, 2)).copied(), Some(true));
+        assert_eq!(map.get(&(3, 4)).copied(), Some(false));
+    }
+
+    #[test]
+    fn test_read_comments_applies_visibility_from_vml() {
+        let mut bytes = Vec::new();
+        {
+            let cursor = Cursor::new(&mut bytes);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+
+            zip.start_file("[Content_Types].xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/></Types>"#).unwrap();
+
+            zip.start_file("_rels/.rels", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#).unwrap();
+
+            zip.start_file("xl/workbook.xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#).unwrap();
+
+            zip.start_file("xl/_rels/workbook.xml.rels", options)
+                .unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#).unwrap();
+
+            zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="n"><v>1</v></c></row></sheetData></worksheet>"#).unwrap();
+
+            zip.start_file("xl/comments1.xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>John</author></authors><commentList><comment ref="C2" authorId="0"><text><r><t>Visible note</t></r></text></comment></commentList></comments>"#).unwrap();
+
+            zip.start_file("xl/drawings/vmlDrawing1.vml", options)
+                .unwrap();
+            zip.write_all(
+                br##"<?xml version="1.0"?>
+<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:schemas-microsoft-com:office:excel">
+  <v:shape id="_x0000_s1025" type="#_x0000_t202" style="position:absolute;visibility:visible">
+    <x:ClientData ObjectType="Note">
+      <x:Row>1</x:Row>
+      <x:Column>2</x:Column>
+    </x:ClientData>
+  </v:shape>
+</xml>"##,
+            )
+            .unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+        let comment = sheet.comment("C2").unwrap().expect("comment should exist");
+        assert_eq!(comment.author, "John");
+        assert_eq!(comment.text, "Visible note");
+        assert!(comment.visible);
     }
 
     #[test]
