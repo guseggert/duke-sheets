@@ -23,6 +23,12 @@ pub struct Worksheet {
     visible: bool,
     /// Sheet is selected
     selected: bool,
+    /// Sheet view zoom scale (percent)
+    zoom_scale: Option<u16>,
+    /// Active cell in sheet selection
+    selection_active_cell: Option<(u32, u16)>,
+    /// Selected range in sheet view
+    selection_range: Option<CellRange>,
     /// Sheet protection settings
     protection: Option<SheetProtection>,
     /// Freeze pane settings
@@ -58,6 +64,9 @@ impl Worksheet {
             cells: CellStorage::new(),
             visible: true,
             selected: false,
+            zoom_scale: None,
+            selection_active_cell: None,
+            selection_range: None,
             protection: None,
             freeze_panes: None,
             page_setup: PageSetup::default(),
@@ -100,6 +109,36 @@ impl Worksheet {
     /// Set sheet selected state
     pub fn set_selected(&mut self, selected: bool) {
         self.selected = selected;
+    }
+
+    /// Get sheet zoom scale in percent.
+    pub fn zoom_scale(&self) -> Option<u16> {
+        self.zoom_scale
+    }
+
+    /// Set sheet zoom scale in percent.
+    pub fn set_zoom_scale(&mut self, zoom_scale: Option<u16>) {
+        self.zoom_scale = zoom_scale;
+    }
+
+    /// Get selected active cell in row/column coordinates.
+    pub fn selection_active_cell(&self) -> Option<(u32, u16)> {
+        self.selection_active_cell
+    }
+
+    /// Set selected active cell in row/column coordinates.
+    pub fn set_selection_active_cell(&mut self, row: u32, col: u16) {
+        self.selection_active_cell = Some((row, col));
+    }
+
+    /// Get selected range in sheet view.
+    pub fn selection_range(&self) -> Option<CellRange> {
+        self.selection_range
+    }
+
+    /// Set selected range in sheet view.
+    pub fn set_selection_range(&mut self, range: Option<CellRange>) {
+        self.selection_range = range;
     }
 
     /// Get the tab color
