@@ -1,0 +1,133 @@
+use std::fs::File;
+use std::io::Write;
+
+use crate::{cleanup_fixture, temp_fixture_path};
+use duke_sheets_xlsx::XlsxReader;
+
+fn write_single_sheet_fixture(path: &std::path::Path, sheet_xml: &str) {
+    let file = File::create(path).expect("create fixture file");
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+
+    zip.start_file("[Content_Types].xml", options)
+        .expect("content types part");
+    zip.write_all(br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#)
+        .expect("write content types");
+
+    zip.start_file("_rels/.rels", options)
+        .expect("root rels part");
+    zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#)
+        .expect("write root rels");
+
+    zip.start_file("xl/workbook.xml", options)
+        .expect("workbook part");
+    zip.write_all(br#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#)
+        .expect("write workbook");
+
+    zip.start_file("xl/_rels/workbook.xml.rels", options)
+        .expect("workbook rels part");
+    zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#)
+        .expect("write workbook rels");
+
+    zip.start_file("xl/worksheets/sheet1.xml", options)
+        .expect("sheet part");
+    zip.write_all(sheet_xml.as_bytes())
+        .expect("write sheet xml");
+
+    zip.finish().expect("finish zip");
+}
+
+#[test]
+fn test_shared_formula_follower_materialized() {
+    let path = temp_fixture_path();
+    let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="n"><v>1</v></c>
+      <c r="B1" t="n"><v>2</v></c>
+      <c r="D1"><f t="shared" si="3">SUM($A$1:B1)+LEN("A1")</f><v>3</v></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="n"><v>4</v></c>
+      <c r="B2" t="n"><v>5</v></c>
+      <c r="D2"><f t="shared" si="3"/><v>9</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+    write_single_sheet_fixture(&path, sheet_xml);
+
+    let workbook = XlsxReader::read_file(&path).expect("read workbook");
+    let sheet = workbook.worksheet(0).expect("sheet exists");
+
+    assert_eq!(
+        sheet.get_value("D1").unwrap().formula_text(),
+        Some("=SUM($A$1:B1)+LEN(\"A1\")")
+    );
+    assert_eq!(
+        sheet.get_value("D2").unwrap().formula_text(),
+        Some("=SUM($A$1:B2)+LEN(\"A1\")")
+    );
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_datatable_formula_placeholder_and_cached_value() {
+    let path = temp_fixture_path();
+    let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1"><f t="dataTable" ref="A1:B2" r1="C1" r2="C2"/><v>42</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+    write_single_sheet_fixture(&path, sheet_xml);
+
+    let workbook = XlsxReader::read_file(&path).expect("read workbook");
+    let sheet = workbook.worksheet(0).expect("sheet exists");
+
+    assert_eq!(
+        sheet.get_value("A1").unwrap().formula_text(),
+        Some("=TABLE(C1,C2)")
+    );
+    assert_eq!(sheet.get_value("A1").unwrap().as_number(), Some(42.0));
+
+    cleanup_fixture(&path);
+}
+
+#[test]
+fn test_outline_and_sheet_view_metadata() {
+    let path = temp_fixture_path();
+    let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews>
+    <sheetView workbookViewId="0" tabSelected="1">
+      <pane xSplit="2" ySplit="3" topLeftCell="C4" activePane="bottomRight" state="frozen"/>
+    </sheetView>
+  </sheetViews>
+  <sheetData>
+    <row r="2" outlineLevel="2" collapsed="1"><c r="A2" t="n"><v>1</v></c></row>
+  </sheetData>
+  <cols>
+    <col min="3" max="3" outlineLevel="3" collapsed="1"/>
+  </cols>
+</worksheet>"#;
+    write_single_sheet_fixture(&path, sheet_xml);
+
+    let workbook = XlsxReader::read_file(&path).expect("read workbook");
+    let sheet = workbook.worksheet(0).expect("sheet exists");
+
+    assert!(sheet.is_selected());
+    assert_eq!(
+        sheet.freeze_panes().map(|fp| (fp.row, fp.col)),
+        Some((3, 2))
+    );
+    assert_eq!(sheet.row_outline_level(1), 2);
+    assert!(sheet.is_row_collapsed(1));
+    assert_eq!(sheet.column_outline_level(2), 3);
+    assert!(sheet.is_column_collapsed(2));
+
+    cleanup_fixture(&path);
+}
