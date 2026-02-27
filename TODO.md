@@ -158,7 +158,7 @@
 - [ ] **Shared/array/dataTable formulas** — shared + array anchor parsed; `dataTable` now mapped to `=TABLE(r1,r2)` placeholder using OOXML attrs, but full behavior remains incomplete
 - [x] **Theme/indexed colors in CF** — `parse_color_element()` now handles `rgb`/`theme`/`indexed`/`tint`/`auto` and resolves with workbook theme palette
 - [ ] **`cellStyleXfs` / named cell styles** — reader now parses `cellStyleXfs` inheritance (`xfId` + apply flags); writer still hardcodes one entry + "Normal"
-- [ ] **Font scheme/family/charset** — not modeled or read
+- [x] **Font scheme/family/charset** — modeled in `FontStyle`, parsed from XLSX fonts, and emitted by writer when present
 - [x] **Outline/grouping levels** — row/column `outlineLevel` + `collapsed` now read from XLSX into worksheet metadata
 - [ ] **Sheet views** — tab selection + frozen pane splits now read; zoom/selection coordinates/split panes still incomplete
 - [ ] **Comment visibility** — model has `visible` field, reader doesn't parse VML drawings
@@ -339,8 +339,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 281 | ✅ |
-| **Total** | **703** | ✅ |
+| Other (unit, doc, integration) | 282 | ✅ |
+| **Total** | **704** | ✅ |
 
 ---
 

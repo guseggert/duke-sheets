@@ -211,6 +211,9 @@ impl StyleContext {
                 2 => FontVerticalAlign::Subscript,
                 _ => FontVerticalAlign::Baseline,
             },
+            family: None,
+            charset: None,
+            scheme: None,
         }
     }
 
