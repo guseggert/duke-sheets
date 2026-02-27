@@ -339,8 +339,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 278 | ✅ |
-| **Total** | **700** | ✅ |
+| Other (unit, doc, integration) | 279 | ✅ |
+| **Total** | **701** | ✅ |
 
 ---
 

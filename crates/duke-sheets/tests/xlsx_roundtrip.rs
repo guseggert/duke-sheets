@@ -389,6 +389,29 @@ fn test_roundtrip_hidden_rows_columns() {
     assert!(sheet2.is_column_hidden(1), "Col B should be hidden");
 }
 
+/// Test row/column outline metadata roundtrip
+#[test]
+fn test_roundtrip_outline_metadata() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    sheet.set_cell_value("A2", "Grouped row").unwrap();
+    sheet.set_row_outline_level(1, 2);
+    sheet.set_row_collapsed(1, true);
+    sheet.set_column_outline_level(2, 3);
+    sheet.set_column_collapsed(2, true);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.row_outline_level(1), 2);
+    assert!(sheet2.is_row_collapsed(1));
+    assert_eq!(sheet2.column_outline_level(2), 3);
+    assert!(sheet2.is_column_collapsed(2));
+}
+
 // --- Formula cached value roundtrip tests ---
 
 /// Test roundtrip of formula with numeric cached value
