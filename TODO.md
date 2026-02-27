@@ -334,12 +334,12 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | XLS unit (BIFF parser, strings, styles, formula decompiler) | 87 | ✅ |
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
 | XLS real-file integration | 2 | ✅ |
-| E2E via LibreOffice URP (XLSX) | 56 | ✅ |
+| E2E XLSX reader integration (LO + handcrafted OOXML) | 59 | ✅ |
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
 | Other (unit, doc, integration) | 277 | ✅ |
-| **Total** | **696** | ✅ |
+| **Total** | **699** | ✅ |
 
 ---
 

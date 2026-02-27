@@ -10,5 +10,6 @@ mod data_validation;
 mod dimensions;
 mod fill_styles;
 mod font_styles;
+mod formula_metadata;
 mod merged_cells;
 mod number_formats;
