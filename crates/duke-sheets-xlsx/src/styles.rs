@@ -432,6 +432,26 @@ fn write_font_xml(w: &mut XmlWriter, font: &FontStyle) -> std::io::Result<()> {
         .with_attribute(("val", &*name_esc))
         .write_empty()?;
 
+    if let Some(family) = font.family {
+        let family_s = family.to_string();
+        w.create_element("family")
+            .with_attribute(("val", family_s.as_str()))
+            .write_empty()?;
+    }
+
+    if let Some(charset) = font.charset {
+        let charset_s = charset.to_string();
+        w.create_element("charset")
+            .with_attribute(("val", charset_s.as_str()))
+            .write_empty()?;
+    }
+
+    if let Some(scheme) = &font.scheme {
+        w.create_element("scheme")
+            .with_attribute(("val", scheme.as_str()))
+            .write_empty()?;
+    }
+
     w.write_event(Event::End(BytesEnd::new("font")))?;
     Ok(())
 }
@@ -1182,6 +1202,42 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                         }
                     }
                 }
+                b"family" => {
+                    let font = dxf_font.as_mut().or(current_font.as_mut());
+                    if let Some(font) = font {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    font.family = v.parse::<u8>().ok();
+                                }
+                            }
+                        }
+                    }
+                }
+                b"charset" => {
+                    let font = dxf_font.as_mut().or(current_font.as_mut());
+                    if let Some(font) = font {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    font.charset = v.parse::<u8>().ok();
+                                }
+                            }
+                        }
+                    }
+                }
+                b"scheme" => {
+                    let font = dxf_font.as_mut().or(current_font.as_mut());
+                    if let Some(font) = font {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    font.scheme = Some(v.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
                 b"b" => {
                     let font = dxf_font.as_mut().or(current_font.as_mut());
                     if let Some(font) = font {
@@ -1381,6 +1437,42 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                             if attr.key.local_name().as_ref() == b"val" {
                                 if let Ok(v) = attr.unescape_value() {
                                     font.name = v.to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+                b"family" => {
+                    let font = dxf_font.as_mut().or(current_font.as_mut());
+                    if let Some(font) = font {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    font.family = v.parse::<u8>().ok();
+                                }
+                            }
+                        }
+                    }
+                }
+                b"charset" => {
+                    let font = dxf_font.as_mut().or(current_font.as_mut());
+                    if let Some(font) = font {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    font.charset = v.parse::<u8>().ok();
+                                }
+                            }
+                        }
+                    }
+                }
+                b"scheme" => {
+                    let font = dxf_font.as_mut().or(current_font.as_mut());
+                    if let Some(font) = font {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    font.scheme = Some(v.to_string());
                                 }
                             }
                         }
@@ -1662,7 +1754,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     }
 
     let cell_style_bases: Vec<Style> = if cell_style_xf_defs.is_empty() {
-        vec![Style::default()]
+        Vec::new()
     } else {
         cell_style_xf_defs
             .iter()
@@ -1689,10 +1781,6 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
         cell_xf_defs
             .iter()
             .map(|xf| {
-                let base = cell_style_bases
-                    .get(xf.xf_id as usize)
-                    .cloned()
-                    .unwrap_or_default();
                 let resolved = resolve_style(
                     xf.num_fmt_id,
                     xf.font_id,
@@ -1705,7 +1793,11 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     &fills,
                     &borders,
                 );
-                merge_cell_xf_with_base(base, &resolved, xf)
+                if let Some(base) = cell_style_bases.get(xf.xf_id as usize).cloned() {
+                    merge_cell_xf_with_base(base, &resolved, xf)
+                } else {
+                    resolved
+                }
             })
             .collect()
     };
@@ -1968,6 +2060,36 @@ mod tests {
         let parsed = read_styles_xml(xml.as_bytes()).expect("parse styles");
         assert_eq!(parsed.cell_styles.len(), 1);
         assert!(!parsed.cell_styles[0].font.bold);
+    }
+
+    #[test]
+    fn test_read_styles_font_family_charset_scheme() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1">
+    <font>
+      <sz val="11"/>
+      <name val="Calibri"/>
+      <family val="2"/>
+      <charset val="1"/>
+      <scheme val="minor"/>
+    </font>
+  </fonts>
+  <fills count="2">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+  </fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellXfs>
+</styleSheet>"#;
+
+        let parsed = read_styles_xml(xml.as_bytes()).expect("parse styles");
+        let font = &parsed.cell_styles[0].font;
+        assert_eq!(font.family, Some(2));
+        assert_eq!(font.charset, Some(1));
+        assert_eq!(font.scheme.as_deref(), Some("minor"));
     }
 }
 

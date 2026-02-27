@@ -21,6 +21,12 @@ pub struct FontStyle {
     pub color: Color,
     /// Superscript/subscript
     pub vertical_align: FontVerticalAlign,
+    /// Font family classification (OOXML `family` value)
+    pub family: Option<u8>,
+    /// Font charset (OOXML `charset` value)
+    pub charset: Option<u8>,
+    /// Font scheme (`major`/`minor`)
+    pub scheme: Option<String>,
 }
 
 impl Default for FontStyle {
@@ -34,6 +40,9 @@ impl Default for FontStyle {
             strikethrough: false,
             color: Color::Auto,
             vertical_align: FontVerticalAlign::Baseline,
+            family: None,
+            charset: None,
+            scheme: None,
         }
     }
 }
@@ -85,6 +94,24 @@ impl FontStyle {
         self.color = color;
         self
     }
+
+    /// Set font family classification
+    pub fn with_family(mut self, family: Option<u8>) -> Self {
+        self.family = family;
+        self
+    }
+
+    /// Set font charset
+    pub fn with_charset(mut self, charset: Option<u8>) -> Self {
+        self.charset = charset;
+        self
+    }
+
+    /// Set font scheme
+    pub fn with_scheme<S: Into<String>>(mut self, scheme: Option<S>) -> Self {
+        self.scheme = scheme.map(Into::into);
+        self
+    }
 }
 
 impl std::hash::Hash for FontStyle {
@@ -97,6 +124,9 @@ impl std::hash::Hash for FontStyle {
         self.strikethrough.hash(state);
         self.color.hash(state);
         self.vertical_align.hash(state);
+        self.family.hash(state);
+        self.charset.hash(state);
+        self.scheme.hash(state);
     }
 }
 
