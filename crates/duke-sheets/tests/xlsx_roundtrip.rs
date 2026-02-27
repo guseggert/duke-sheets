@@ -1,7 +1,7 @@
 //! End-to-end tests for XLSX roundtrip (create -> save -> read -> verify)
 
 use duke_sheets::prelude::*;
-use duke_sheets_core::SplitPanes;
+use duke_sheets_core::{PageOrientation, SplitPanes};
 use std::io::Cursor;
 
 /// Test basic roundtrip with numeric values
@@ -445,6 +445,52 @@ fn test_roundtrip_split_panes_and_selection() {
         sheet2.selection_range().map(|r| r.to_string()),
         Some("D5:E6".to_string())
     );
+}
+
+/// Test page setup and header/footer roundtrip
+#[test]
+fn test_roundtrip_page_setup_and_header_footer() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut ps = sheet.page_setup().clone();
+    ps.paper_size = 9;
+    ps.orientation = PageOrientation::Landscape;
+    ps.scale = 85;
+    ps.fit_to_width = Some(1);
+    ps.fit_to_height = Some(2);
+    ps.left_margin = 0.5;
+    ps.right_margin = 0.6;
+    ps.top_margin = 0.7;
+    ps.bottom_margin = 0.8;
+    ps.header_margin = 0.2;
+    ps.footer_margin = 0.25;
+    ps.print_gridlines = true;
+    ps.print_headings = true;
+    ps.odd_header = Some("&LLeft&CCenter".to_string());
+    ps.odd_footer = Some("&RPage &P".to_string());
+    sheet.set_page_setup(ps);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+    let ps2 = sheet2.page_setup();
+
+    assert_eq!(ps2.paper_size, 9);
+    assert!(matches!(ps2.orientation, PageOrientation::Landscape));
+    assert_eq!(ps2.scale, 85);
+    assert_eq!(ps2.fit_to_width, Some(1));
+    assert_eq!(ps2.fit_to_height, Some(2));
+    assert!((ps2.left_margin - 0.5).abs() < 1e-9);
+    assert!((ps2.right_margin - 0.6).abs() < 1e-9);
+    assert!((ps2.top_margin - 0.7).abs() < 1e-9);
+    assert!((ps2.bottom_margin - 0.8).abs() < 1e-9);
+    assert!((ps2.header_margin - 0.2).abs() < 1e-9);
+    assert!((ps2.footer_margin - 0.25).abs() < 1e-9);
+    assert!(ps2.print_gridlines);
+    assert!(ps2.print_headings);
+    assert_eq!(ps2.odd_header.as_deref(), Some("&LLeft&CCenter"));
+    assert_eq!(ps2.odd_footer.as_deref(), Some("&RPage &P"));
 }
 
 // --- Formula cached value roundtrip tests ---

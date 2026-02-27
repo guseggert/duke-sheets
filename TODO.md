@@ -151,7 +151,7 @@
 
 #### XLSX Writer Gaps (remaining)
 - [ ] **Comment VML drawings** — comments written to `comments{N}.xml` but without VML positioning; Excel may not display them
-- [ ] **`headerFooter`** — `PageSetup` model doesn't include header/footer strings yet
+- [x] **`headerFooter`** — `PageSetup` now includes odd header/footer strings; XLSX reader/writer parse and emit `<headerFooter>`
 
 #### XLSX Reader Gaps
 - [x] **Theme colors** — reader now parses `xl/theme/theme1.xml` (`clrScheme`) and resolves theme+tint colors in styles/CF
@@ -339,8 +339,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 286 | ✅ |
-| **Total** | **708** | ✅ |
+| Other (unit, doc, integration) | 289 | ✅ |
+| **Total** | **711** | ✅ |
 
 ---
 

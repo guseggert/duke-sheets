@@ -769,6 +769,8 @@ impl XlsxReader {
         let mut current_cf_rule: Option<ConditionalFormatRule> = None;
         let mut in_cf_formula = false;
         let mut cf_formulas: Vec<String> = Vec::new();
+        let mut in_odd_header = false;
+        let mut in_odd_footer = false;
 
         // ColorScale/DataBar/IconSet state
         let mut in_color_scale = false;
@@ -808,6 +810,144 @@ impl XlsxReader {
                     }
                     b"selection" => {
                         Self::parse_sheet_selection_attrs(&e, worksheet);
+                    }
+                    b"pageMargins" => {
+                        let mut ps = worksheet.page_setup().clone();
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"left" => {
+                                    if let Some(v) = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<f64>().ok())
+                                    {
+                                        ps.left_margin = v;
+                                    }
+                                }
+                                b"right" => {
+                                    if let Some(v) = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<f64>().ok())
+                                    {
+                                        ps.right_margin = v;
+                                    }
+                                }
+                                b"top" => {
+                                    if let Some(v) = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<f64>().ok())
+                                    {
+                                        ps.top_margin = v;
+                                    }
+                                }
+                                b"bottom" => {
+                                    if let Some(v) = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<f64>().ok())
+                                    {
+                                        ps.bottom_margin = v;
+                                    }
+                                }
+                                b"header" => {
+                                    if let Some(v) = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<f64>().ok())
+                                    {
+                                        ps.header_margin = v;
+                                    }
+                                }
+                                b"footer" => {
+                                    if let Some(v) = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<f64>().ok())
+                                    {
+                                        ps.footer_margin = v;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        worksheet.set_page_setup(ps);
+                    }
+                    b"pageSetup" => {
+                        let mut ps = worksheet.page_setup().clone();
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"paperSize" => {
+                                    if let Some(v) = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<u8>().ok())
+                                    {
+                                        ps.paper_size = v;
+                                    }
+                                }
+                                b"orientation" => {
+                                    if let Some(v) = attr.unescape_value().ok() {
+                                        ps.orientation = if v.as_ref() == "landscape" {
+                                            duke_sheets_core::PageOrientation::Landscape
+                                        } else {
+                                            duke_sheets_core::PageOrientation::Portrait
+                                        };
+                                    }
+                                }
+                                b"scale" => {
+                                    if let Some(v) = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<u16>().ok())
+                                    {
+                                        ps.scale = v;
+                                    }
+                                }
+                                b"fitToWidth" => {
+                                    ps.fit_to_width = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<u16>().ok());
+                                }
+                                b"fitToHeight" => {
+                                    ps.fit_to_height = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<u16>().ok());
+                                }
+                                _ => {}
+                            }
+                        }
+                        worksheet.set_page_setup(ps);
+                    }
+                    b"printOptions" => {
+                        let mut ps = worksheet.page_setup().clone();
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"gridLines" => {
+                                    if let Some(v) = attr.unescape_value().ok() {
+                                        ps.print_gridlines =
+                                            v.as_ref() == "1" || v.as_ref() == "true";
+                                    }
+                                }
+                                b"headings" => {
+                                    if let Some(v) = attr.unescape_value().ok() {
+                                        ps.print_headings =
+                                            v.as_ref() == "1" || v.as_ref() == "true";
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        worksheet.set_page_setup(ps);
+                    }
+                    b"oddHeader" => {
+                        in_odd_header = true;
+                    }
+                    b"oddFooter" => {
+                        in_odd_footer = true;
                     }
                     b"row" => {
                         // Parse row dimensions: ht, customHeight, hidden
@@ -1122,6 +1262,12 @@ impl XlsxReader {
                         b"formula" if in_cf_rule => {
                             in_cf_formula = false;
                         }
+                        b"oddHeader" => {
+                            in_odd_header = false;
+                        }
+                        b"oddFooter" => {
+                            in_odd_footer = false;
+                        }
                         _ => {}
                     }
                 }
@@ -1178,10 +1324,154 @@ impl XlsxReader {
                                 log::warn!("Conditional format formula unescape failed: {}", err)
                             }
                         }
+                    } else if in_odd_header {
+                        if let Ok(text) = e.unescape() {
+                            let mut ps = worksheet.page_setup().clone();
+                            ps.odd_header = Some(text.to_string());
+                            worksheet.set_page_setup(ps);
+                        }
+                    } else if in_odd_footer {
+                        if let Ok(text) = e.unescape() {
+                            let mut ps = worksheet.page_setup().clone();
+                            ps.odd_footer = Some(text.to_string());
+                            worksheet.set_page_setup(ps);
+                        }
                     }
                 }
                 Ok(Event::Empty(e)) => {
                     match e.name().local_name().as_ref() {
+                        b"pageMargins" => {
+                            let mut ps = worksheet.page_setup().clone();
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"left" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.left_margin = v;
+                                        }
+                                    }
+                                    b"right" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.right_margin = v;
+                                        }
+                                    }
+                                    b"top" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.top_margin = v;
+                                        }
+                                    }
+                                    b"bottom" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.bottom_margin = v;
+                                        }
+                                    }
+                                    b"header" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.header_margin = v;
+                                        }
+                                    }
+                                    b"footer" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.footer_margin = v;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            worksheet.set_page_setup(ps);
+                        }
+                        b"pageSetup" => {
+                            let mut ps = worksheet.page_setup().clone();
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"paperSize" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u8>().ok())
+                                        {
+                                            ps.paper_size = v;
+                                        }
+                                    }
+                                    b"orientation" => {
+                                        if let Some(v) = attr.unescape_value().ok() {
+                                            ps.orientation = if v.as_ref() == "landscape" {
+                                                duke_sheets_core::PageOrientation::Landscape
+                                            } else {
+                                                duke_sheets_core::PageOrientation::Portrait
+                                            };
+                                        }
+                                    }
+                                    b"scale" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u16>().ok())
+                                        {
+                                            ps.scale = v;
+                                        }
+                                    }
+                                    b"fitToWidth" => {
+                                        ps.fit_to_width = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u16>().ok());
+                                    }
+                                    b"fitToHeight" => {
+                                        ps.fit_to_height = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u16>().ok());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            worksheet.set_page_setup(ps);
+                        }
+                        b"printOptions" => {
+                            let mut ps = worksheet.page_setup().clone();
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"gridLines" => {
+                                        if let Some(v) = attr.unescape_value().ok() {
+                                            ps.print_gridlines =
+                                                v.as_ref() == "1" || v.as_ref() == "true";
+                                        }
+                                    }
+                                    b"headings" => {
+                                        if let Some(v) = attr.unescape_value().ok() {
+                                            ps.print_headings =
+                                                v.as_ref() == "1" || v.as_ref() == "true";
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            worksheet.set_page_setup(ps);
+                        }
                         b"sheetView" => {
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
@@ -2721,6 +3011,47 @@ mod tests {
         assert!(sheet.is_row_collapsed(1));
         assert_eq!(sheet.column_outline_level(2), 3);
         assert!(sheet.is_column_collapsed(2));
+    }
+
+    #[test]
+    fn test_read_page_setup_margins_print_and_header_footer() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <pageMargins left="0.5" right="0.6" top="0.7" bottom="0.8" header="0.2" footer="0.25"/>
+  <pageSetup paperSize="9" orientation="landscape" scale="85" fitToWidth="1" fitToHeight="2"/>
+  <printOptions gridLines="1" headings="1"/>
+  <headerFooter>
+    <oddHeader>&amp;LLeft&amp;CCenter</oddHeader>
+    <oddFooter>&amp;RPage &amp;P</oddFooter>
+  </headerFooter>
+  <sheetData>
+    <row r="1"><c r="A1" t="n"><v>1</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+        let ps = sheet.page_setup();
+
+        assert!((ps.left_margin - 0.5).abs() < 1e-9);
+        assert!((ps.right_margin - 0.6).abs() < 1e-9);
+        assert!((ps.top_margin - 0.7).abs() < 1e-9);
+        assert!((ps.bottom_margin - 0.8).abs() < 1e-9);
+        assert!((ps.header_margin - 0.2).abs() < 1e-9);
+        assert!((ps.footer_margin - 0.25).abs() < 1e-9);
+        assert_eq!(ps.paper_size, 9);
+        assert!(matches!(
+            ps.orientation,
+            duke_sheets_core::PageOrientation::Landscape
+        ));
+        assert_eq!(ps.scale, 85);
+        assert_eq!(ps.fit_to_width, Some(1));
+        assert_eq!(ps.fit_to_height, Some(2));
+        assert!(ps.print_gridlines);
+        assert!(ps.print_headings);
+        assert_eq!(ps.odd_header.as_deref(), Some("&LLeft&CCenter"));
+        assert_eq!(ps.odd_footer.as_deref(), Some("&RPage &P"));
     }
 
     #[test]
