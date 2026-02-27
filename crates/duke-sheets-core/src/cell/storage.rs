@@ -121,8 +121,10 @@ pub struct CellStorage {
     hidden_rows: BTreeMap<u32, bool>,
 
     /// Row outline levels (for grouping)
-    #[allow(dead_code)]
     row_outline_levels: BTreeMap<u32, u8>,
+
+    /// Row collapsed flags
+    row_collapsed: BTreeMap<u32, bool>,
 
     /// Custom column widths
     column_widths: BTreeMap<u16, f64>,
@@ -131,8 +133,10 @@ pub struct CellStorage {
     hidden_columns: BTreeMap<u16, bool>,
 
     /// Column outline levels
-    #[allow(dead_code)]
     column_outline_levels: BTreeMap<u16, u8>,
+
+    /// Column collapsed flags
+    column_collapsed: BTreeMap<u16, bool>,
 
     /// Merged cell regions
     merged_regions: Vec<crate::CellRange>,
@@ -168,9 +172,11 @@ impl CellStorage {
             row_heights: BTreeMap::new(),
             hidden_rows: BTreeMap::new(),
             row_outline_levels: BTreeMap::new(),
+            row_collapsed: BTreeMap::new(),
             column_widths: BTreeMap::new(),
             hidden_columns: BTreeMap::new(),
             column_outline_levels: BTreeMap::new(),
+            column_collapsed: BTreeMap::new(),
             merged_regions: Vec::new(),
             mode: StorageMode::InMemory,
             cached_bounds: None,
@@ -378,6 +384,35 @@ impl CellStorage {
         }
     }
 
+    /// Get row outline level (0-7)
+    pub fn row_outline_level(&self, row: u32) -> u8 {
+        self.row_outline_levels.get(&row).copied().unwrap_or(0)
+    }
+
+    /// Set row outline level (clamped to 0-7)
+    pub fn set_row_outline_level(&mut self, row: u32, level: u8) {
+        let level = level.min(7);
+        if level == 0 {
+            self.row_outline_levels.remove(&row);
+        } else {
+            self.row_outline_levels.insert(row, level);
+        }
+    }
+
+    /// Check if row is collapsed
+    pub fn is_row_collapsed(&self, row: u32) -> bool {
+        self.row_collapsed.get(&row).copied().unwrap_or(false)
+    }
+
+    /// Set row collapsed state
+    pub fn set_row_collapsed(&mut self, row: u32, collapsed: bool) {
+        if collapsed {
+            self.row_collapsed.insert(row, true);
+        } else {
+            self.row_collapsed.remove(&row);
+        }
+    }
+
     /// Get default column width
     pub fn default_column_width(&self) -> f64 {
         self.default_column_width
@@ -416,6 +451,35 @@ impl CellStorage {
             self.hidden_columns.insert(col, true);
         } else {
             self.hidden_columns.remove(&col);
+        }
+    }
+
+    /// Get column outline level (0-7)
+    pub fn column_outline_level(&self, col: u16) -> u8 {
+        self.column_outline_levels.get(&col).copied().unwrap_or(0)
+    }
+
+    /// Set column outline level (clamped to 0-7)
+    pub fn set_column_outline_level(&mut self, col: u16, level: u8) {
+        let level = level.min(7);
+        if level == 0 {
+            self.column_outline_levels.remove(&col);
+        } else {
+            self.column_outline_levels.insert(col, level);
+        }
+    }
+
+    /// Check if column is collapsed
+    pub fn is_column_collapsed(&self, col: u16) -> bool {
+        self.column_collapsed.get(&col).copied().unwrap_or(false)
+    }
+
+    /// Set column collapsed state
+    pub fn set_column_collapsed(&mut self, col: u16, collapsed: bool) {
+        if collapsed {
+            self.column_collapsed.insert(col, true);
+        } else {
+            self.column_collapsed.remove(&col);
         }
     }
 

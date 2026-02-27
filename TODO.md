@@ -159,7 +159,7 @@
 - [x] **Theme/indexed colors in CF** — `parse_color_element()` now handles `rgb`/`theme`/`indexed`/`tint`/`auto` and resolves with workbook theme palette
 - [ ] **`cellStyleXfs` / named cell styles** — reader skips `cellStyleXfs` (only reads `cellXfs`); writer hardcodes one entry + "Normal"
 - [ ] **Font scheme/family/charset** — not modeled or read
-- [ ] **Outline/grouping levels** — Row/Column models have `outline_level`/`collapsed` fields but not read from XLSX
+- [x] **Outline/grouping levels** — row/column `outlineLevel` + `collapsed` now read from XLSX into worksheet metadata
 - [ ] **Sheet views** — tab selection + frozen pane splits now read; zoom/selection coordinates/split panes still incomplete
 - [ ] **Comment visibility** — model has `visible` field, reader doesn't parse VML drawings
 - [ ] **Rich text in shared strings** — reader flattens `<rPr>` formatting runs to plain text
@@ -338,8 +338,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 276 | ✅ |
-| **Total** | **695** | ✅ |
+| Other (unit, doc, integration) | 277 | ✅ |
+| **Total** | **696** | ✅ |
 
 ---
 

@@ -800,6 +800,8 @@ impl XlsxReader {
                         let mut ht: Option<f64> = None;
                         let mut custom_height = false;
                         let mut hidden = false;
+                        let mut outline_level: Option<u8> = None;
+                        let mut collapsed = false;
                         for attr in e.attributes().flatten() {
                             match attr.key.local_name().as_ref() {
                                 b"r" => {
@@ -824,6 +826,17 @@ impl XlsxReader {
                                         s.as_ref() == "1" || s.as_ref() == "true"
                                     });
                                 }
+                                b"outlineLevel" => {
+                                    outline_level = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<u8>().ok());
+                                }
+                                b"collapsed" => {
+                                    collapsed = attr.unescape_value().ok().map_or(false, |s| {
+                                        s.as_ref() == "1" || s.as_ref() == "true"
+                                    });
+                                }
                                 _ => {}
                             }
                         }
@@ -836,6 +849,12 @@ impl XlsxReader {
                             }
                             if hidden {
                                 worksheet.set_row_hidden(row_idx, true);
+                            }
+                            if let Some(level) = outline_level {
+                                worksheet.set_row_outline_level(row_idx, level);
+                            }
+                            if collapsed {
+                                worksheet.set_row_collapsed(row_idx, true);
                             }
                         }
                     }
@@ -1210,6 +1229,8 @@ impl XlsxReader {
                             let mut ht: Option<f64> = None;
                             let mut custom_height = false;
                             let mut hidden = false;
+                            let mut outline_level: Option<u8> = None;
+                            let mut collapsed = false;
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
                                     b"r" => {
@@ -1235,6 +1256,17 @@ impl XlsxReader {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
                                     }
+                                    b"outlineLevel" => {
+                                        outline_level = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u8>().ok());
+                                    }
+                                    b"collapsed" => {
+                                        collapsed = attr.unescape_value().ok().map_or(false, |s| {
+                                            s.as_ref() == "1" || s.as_ref() == "true"
+                                        });
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1248,6 +1280,12 @@ impl XlsxReader {
                                 if hidden {
                                     worksheet.set_row_hidden(row_idx, true);
                                 }
+                                if let Some(level) = outline_level {
+                                    worksheet.set_row_outline_level(row_idx, level);
+                                }
+                                if collapsed {
+                                    worksheet.set_row_collapsed(row_idx, true);
+                                }
                             }
                         }
                         b"col" => {
@@ -1257,6 +1295,8 @@ impl XlsxReader {
                             let mut width: Option<f64> = None;
                             let mut custom_width = false;
                             let mut hidden = false;
+                            let mut outline_level: Option<u8> = None;
+                            let mut collapsed = false;
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
                                     b"min" => {
@@ -1288,6 +1328,17 @@ impl XlsxReader {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
                                     }
+                                    b"outlineLevel" => {
+                                        outline_level = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u8>().ok());
+                                    }
+                                    b"collapsed" => {
+                                        collapsed = attr.unescape_value().ok().map_or(false, |s| {
+                                            s.as_ref() == "1" || s.as_ref() == "true"
+                                        });
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1302,6 +1353,12 @@ impl XlsxReader {
                                     }
                                     if hidden {
                                         worksheet.set_column_hidden(col_idx, true);
+                                    }
+                                    if let Some(level) = outline_level {
+                                        worksheet.set_column_outline_level(col_idx, level);
+                                    }
+                                    if collapsed {
+                                        worksheet.set_column_collapsed(col_idx, true);
                                     }
                                 }
                             }
@@ -2529,6 +2586,28 @@ mod tests {
             sheet.freeze_panes().map(|fp| (fp.row, fp.col)),
             Some((3, 2))
         );
+    }
+
+    #[test]
+    fn test_read_outline_and_collapsed_row_col_attrs() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="2" outlineLevel="2" collapsed="1"><c r="A2" t="n"><v>1</v></c></row>
+  </sheetData>
+  <cols>
+    <col min="3" max="3" outlineLevel="3" collapsed="1"/>
+  </cols>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(sheet.row_outline_level(1), 2);
+        assert!(sheet.is_row_collapsed(1));
+        assert_eq!(sheet.column_outline_level(2), 3);
+        assert!(sheet.is_column_collapsed(2));
     }
 
     #[test]

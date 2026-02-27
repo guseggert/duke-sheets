@@ -393,6 +393,26 @@ impl Worksheet {
         self.cells.set_row_hidden(row, hidden);
     }
 
+    /// Get row outline/grouping level (0-7)
+    pub fn row_outline_level(&self, row: u32) -> u8 {
+        self.cells.row_outline_level(row)
+    }
+
+    /// Set row outline/grouping level (clamped to 0-7)
+    pub fn set_row_outline_level(&mut self, row: u32, level: u8) {
+        self.cells.set_row_outline_level(row, level);
+    }
+
+    /// Check if row is collapsed in outline
+    pub fn is_row_collapsed(&self, row: u32) -> bool {
+        self.cells.is_row_collapsed(row)
+    }
+
+    /// Set row collapsed state in outline
+    pub fn set_row_collapsed(&mut self, row: u32, collapsed: bool) {
+        self.cells.set_row_collapsed(row, collapsed);
+    }
+
     /// Get column width
     pub fn column_width(&self, col: u16) -> f64 {
         self.cells.column_width(col)
@@ -411,6 +431,26 @@ impl Worksheet {
     /// Set column hidden state
     pub fn set_column_hidden(&mut self, col: u16, hidden: bool) {
         self.cells.set_column_hidden(col, hidden);
+    }
+
+    /// Get column outline/grouping level (0-7)
+    pub fn column_outline_level(&self, col: u16) -> u8 {
+        self.cells.column_outline_level(col)
+    }
+
+    /// Set column outline/grouping level (clamped to 0-7)
+    pub fn set_column_outline_level(&mut self, col: u16, level: u8) {
+        self.cells.set_column_outline_level(col, level);
+    }
+
+    /// Check if column is collapsed in outline
+    pub fn is_column_collapsed(&self, col: u16) -> bool {
+        self.cells.is_column_collapsed(col)
+    }
+
+    /// Set column collapsed state in outline
+    pub fn set_column_collapsed(&mut self, col: u16, collapsed: bool) {
+        self.cells.set_column_collapsed(col, collapsed);
     }
 
     /// Get all custom row heights (row index → height in points).
