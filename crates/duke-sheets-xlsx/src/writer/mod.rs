@@ -1403,6 +1403,11 @@ impl XlsxWriter {
             || ps.fit_to_width.is_some()
             || ps.fit_to_height.is_some();
 
+        let print_options_differ =
+            ps.print_gridlines != def.print_gridlines || ps.print_headings != def.print_headings;
+
+        let header_footer_differs = ps.odd_header.is_some() || ps.odd_footer.is_some();
+
         if margins_differ {
             let left = ps.left_margin.to_string();
             let right = ps.right_margin.to_string();
@@ -1445,6 +1450,30 @@ impl XlsxWriter {
                 el = el.with_attribute(("fitToHeight", s.as_str()));
             }
             el.write_empty()?;
+        }
+
+        if print_options_differ {
+            let mut el = BytesStart::new("printOptions");
+            if ps.print_gridlines {
+                el.push_attribute(("gridLines", "1"));
+            }
+            if ps.print_headings {
+                el.push_attribute(("headings", "1"));
+            }
+            w.write_event(Event::Empty(el))?;
+        }
+
+        if header_footer_differs {
+            w.write_event(Event::Start(BytesStart::new("headerFooter")))?;
+            if let Some(header) = &ps.odd_header {
+                w.create_element("oddHeader")
+                    .write_text_content(quick_xml::events::BytesText::new(header))?;
+            }
+            if let Some(footer) = &ps.odd_footer {
+                w.create_element("oddFooter")
+                    .write_text_content(quick_xml::events::BytesText::new(footer))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("headerFooter")))?;
         }
 
         Ok(())
@@ -2167,5 +2196,42 @@ mod tests {
             "<pane xSplit=\"2000\" ySplit=\"3000\" topLeftCell=\"C4\" activePane=\"bottomRight\" state=\"split\""
         ));
         assert!(xml.contains("<selection pane=\"bottomRight\" activeCell=\"D5\" sqref=\"D5\""));
+    }
+
+    #[test]
+    fn test_writer_emits_page_setup_print_options_and_header_footer() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        let mut ps = sheet.page_setup().clone();
+        ps.paper_size = 9;
+        ps.orientation = duke_sheets_core::PageOrientation::Landscape;
+        ps.scale = 85;
+        ps.fit_to_width = Some(1);
+        ps.fit_to_height = Some(2);
+        ps.left_margin = 0.5;
+        ps.right_margin = 0.6;
+        ps.top_margin = 0.7;
+        ps.bottom_margin = 0.8;
+        ps.header_margin = 0.2;
+        ps.footer_margin = 0.25;
+        ps.print_gridlines = true;
+        ps.print_headings = true;
+        ps.odd_header = Some("&LLeft&CCenter".to_string());
+        ps.odd_footer = Some("&RPage &P".to_string());
+        sheet.set_page_setup(ps);
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let xml = read_zip_entry(out.into_inner(), "xl/worksheets/sheet1.xml");
+
+        assert!(xml.contains("<pageMargins left=\"0.5\" right=\"0.6\" top=\"0.7\" bottom=\"0.8\" header=\"0.2\" footer=\"0.25\""));
+        assert!(xml.contains("<pageSetup paperSize=\"9\" orientation=\"landscape\""));
+        assert!(xml.contains("scale=\"85\""));
+        assert!(xml.contains("fitToWidth=\"1\""));
+        assert!(xml.contains("fitToHeight=\"2\""));
+        assert!(xml.contains("<printOptions gridLines=\"1\" headings=\"1\""));
+        assert!(xml.contains("<headerFooter>"));
+        assert!(xml.contains("<oddHeader>&amp;LLeft&amp;CCenter</oddHeader>"));
+        assert!(xml.contains("<oddFooter>&amp;RPage &amp;P</oddFooter>"));
     }
 }

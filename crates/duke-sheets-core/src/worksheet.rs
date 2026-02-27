@@ -1139,6 +1139,10 @@ pub struct PageSetup {
     pub print_gridlines: bool,
     /// Print headings (row/column headers)
     pub print_headings: bool,
+    /// Odd page header text
+    pub odd_header: Option<String>,
+    /// Odd page footer text
+    pub odd_footer: Option<String>,
 }
 
 impl Default for PageSetup {
@@ -1157,6 +1161,8 @@ impl Default for PageSetup {
             footer_margin: 0.3,
             print_gridlines: false,
             print_headings: false,
+            odd_header: None,
+            odd_footer: None,
         }
     }
 }
