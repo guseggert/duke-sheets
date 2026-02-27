@@ -189,6 +189,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [x] Cross-app write compatibility (no Excel repair warnings)
 - [x] Preserve theme/indexed color attributes in sheet XML (`tabColor`, CF `colorScale`, `dataBar`)
 - [x] Emit `xl/theme/theme1.xml` + workbook theme relationship on write (default Office theme)
+- [x] Emit row/column `outlineLevel` + `collapsed` attributes from worksheet metadata
 - [ ] **OOXML spec validation** — run Open XML SDK validator on duke-sheets output
 
 #### General Quality
@@ -338,8 +339,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 277 | ✅ |
-| **Total** | **699** | ✅ |
+| Other (unit, doc, integration) | 278 | ✅ |
+| **Total** | **700** | ✅ |
 
 ---
 

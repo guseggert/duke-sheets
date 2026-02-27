@@ -488,6 +488,16 @@ impl CellStorage {
         &self.row_heights
     }
 
+    /// Get all row outline levels (row index → level).
+    pub fn row_outline_levels(&self) -> &std::collections::BTreeMap<u32, u8> {
+        &self.row_outline_levels
+    }
+
+    /// Get all collapsed rows (row index → true).
+    pub fn row_collapsed(&self) -> &std::collections::BTreeMap<u32, bool> {
+        &self.row_collapsed
+    }
+
     /// Get all hidden rows (row index → true).
     pub fn hidden_rows(&self) -> &std::collections::BTreeMap<u32, bool> {
         &self.hidden_rows
@@ -496,6 +506,16 @@ impl CellStorage {
     /// Get all custom column widths (column index → width in characters).
     pub fn custom_column_widths(&self) -> &std::collections::BTreeMap<u16, f64> {
         &self.column_widths
+    }
+
+    /// Get all column outline levels (column index → level).
+    pub fn column_outline_levels(&self) -> &std::collections::BTreeMap<u16, u8> {
+        &self.column_outline_levels
+    }
+
+    /// Get all collapsed columns (column index → true).
+    pub fn column_collapsed(&self) -> &std::collections::BTreeMap<u16, bool> {
+        &self.column_collapsed
     }
 
     /// Get all hidden columns (column index → true).
