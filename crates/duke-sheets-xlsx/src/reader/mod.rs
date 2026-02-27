@@ -115,6 +115,9 @@ enum CellFormulaKind {
 struct CellFormulaState {
     kind: CellFormulaKind,
     shared_index: Option<u32>,
+    /// OOXML dataTable formula attrs: input cell refs (`r1` / `r2`).
+    data_table_input1_ref: Option<String>,
+    data_table_input2_ref: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1369,6 +1372,12 @@ impl XlsxReader {
                         .ok()
                         .and_then(|s| s.parse::<u32>().ok());
                 }
+                b"r1" => {
+                    state.data_table_input1_ref = attr.unescape_value().ok().map(|s| s.to_string());
+                }
+                b"r2" => {
+                    state.data_table_input2_ref = attr.unescape_value().ok().map(|s| s.to_string());
+                }
                 _ => {}
             }
         }
@@ -1383,9 +1392,15 @@ impl XlsxReader {
         shared_formula_masters: &mut HashMap<u32, SharedFormulaMaster>,
     ) -> Option<String> {
         match formula_state.kind {
-            CellFormulaKind::Normal | CellFormulaKind::Array | CellFormulaKind::DataTable => {
-                formula.map(|f| f.to_string())
-            }
+            CellFormulaKind::Normal | CellFormulaKind::Array => formula.map(|f| f.to_string()),
+            CellFormulaKind::DataTable => match formula {
+                Some(f) => Some(f.to_string()),
+                None => {
+                    let arg1 = formula_state.data_table_input1_ref.as_deref().unwrap_or("");
+                    let arg2 = formula_state.data_table_input2_ref.as_deref().unwrap_or("");
+                    Some(format!("TABLE({},{})", arg1, arg2))
+                }
+            },
             CellFormulaKind::Shared => {
                 let si = formula_state.shared_index?;
                 if let Some(f) = formula {
@@ -2376,6 +2391,28 @@ mod tests {
             sheet.get_value("A1").unwrap().formula_text(),
             Some("=ROW(A1:A3)")
         );
+    }
+
+    #[test]
+    fn test_read_datatable_formula_placeholder() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1"><f t="dataTable" ref="A1:B2" r1="C1" r2="C2"/><v>42</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_value("A1").unwrap().formula_text(),
+            Some("=TABLE(C1,C2)")
+        );
+        assert_eq!(sheet.get_value("A1").unwrap().as_number(), Some(42.0));
     }
 
     #[test]
