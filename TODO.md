@@ -157,7 +157,7 @@
 - [x] **Theme colors** — reader now parses `xl/theme/theme1.xml` (`clrScheme`) and resolves theme+tint colors in styles/CF
 - [ ] **Shared/array/dataTable formulas** — shared + array anchor parsed; `dataTable` now mapped to `=TABLE(r1,r2)` placeholder using OOXML attrs, but full behavior remains incomplete
 - [x] **Theme/indexed colors in CF** — `parse_color_element()` now handles `rgb`/`theme`/`indexed`/`tint`/`auto` and resolves with workbook theme palette
-- [ ] **`cellStyleXfs` / named cell styles** — reader skips `cellStyleXfs` (only reads `cellXfs`); writer hardcodes one entry + "Normal"
+- [ ] **`cellStyleXfs` / named cell styles** — reader now parses `cellStyleXfs` inheritance (`xfId` + apply flags); writer still hardcodes one entry + "Normal"
 - [ ] **Font scheme/family/charset** — not modeled or read
 - [x] **Outline/grouping levels** — row/column `outlineLevel` + `collapsed` now read from XLSX into worksheet metadata
 - [ ] **Sheet views** — tab selection + frozen pane splits now read; zoom/selection coordinates/split panes still incomplete
@@ -339,8 +339,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 279 | ✅ |
-| **Total** | **701** | ✅ |
+| Other (unit, doc, integration) | 281 | ✅ |
+| **Total** | **703** | ✅ |
 
 ---
 

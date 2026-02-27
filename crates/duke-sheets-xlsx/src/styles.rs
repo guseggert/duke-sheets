@@ -782,6 +782,49 @@ pub(crate) struct ParsedStyles {
     pub dxf_styles: Vec<Style>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XfTarget {
+    CellStyle,
+    Cell,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedXf {
+    num_fmt_id: u32,
+    font_id: u32,
+    fill_id: u32,
+    border_id: u32,
+    xf_id: u32,
+    apply_number_format: bool,
+    apply_font: bool,
+    apply_fill: bool,
+    apply_border: bool,
+    apply_alignment: bool,
+    apply_protection: bool,
+    alignment: Alignment,
+    protection: Protection,
+}
+
+impl Default for ParsedXf {
+    fn default() -> Self {
+        Self {
+            num_fmt_id: 0,
+            font_id: 0,
+            fill_id: 0,
+            border_id: 0,
+            xf_id: 0,
+            apply_number_format: false,
+            apply_font: false,
+            apply_fill: false,
+            apply_border: false,
+            apply_alignment: false,
+            apply_protection: false,
+            alignment: Alignment::default(),
+            protection: Protection::default(),
+        }
+    }
+}
+
 pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     let mut xml_reader = Reader::from_reader(BufReader::new(reader));
     xml_reader.config_mut().trim_text(true);
@@ -792,7 +835,8 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     let mut fonts: Vec<FontStyle> = Vec::new();
     let mut fills: Vec<FillStyle> = Vec::new();
     let mut borders: Vec<BorderStyle> = Vec::new();
-    let mut cell_xfs: Vec<Style> = Vec::new();
+    let mut cell_style_xf_defs: Vec<ParsedXf> = Vec::new();
+    let mut cell_xf_defs: Vec<ParsedXf> = Vec::new();
     let mut dxf_styles: Vec<Style> = Vec::new();
 
     // Current objects while parsing
@@ -812,8 +856,10 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     let mut current_border_edge: Option<&'static str> = None;
 
     // Current xf
-    let mut current_xf: Option<(u32, u32, u32, u32, Alignment, Protection)> = None;
+    let mut current_xf: Option<ParsedXf> = None;
+    let mut current_xf_target: Option<XfTarget> = None;
     let mut in_cell_xfs = false;
+    let mut in_cell_style_xfs = false;
 
     // DXF parsing state
     let mut in_dxfs = false;
@@ -840,6 +886,10 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
                 b"cellXfs" => {
                     in_cell_xfs = true;
+                }
+
+                b"cellStyleXfs" => {
+                    in_cell_style_xfs = true;
                 }
 
                 b"dxfs" => {
@@ -1071,53 +1121,13 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     }
                 }
 
-                b"xf" if in_cell_xfs => {
-                    // Parse ids
-                    let mut num_fmt_id = 0u32;
-                    let mut font_id = 0u32;
-                    let mut fill_id = 0u32;
-                    let mut border_id = 0u32;
-                    for attr in e.attributes().flatten() {
-                        match attr.key.local_name().as_ref() {
-                            b"numFmtId" => {
-                                num_fmt_id = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                            b"fontId" => {
-                                font_id = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                            b"fillId" => {
-                                fill_id = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                            b"borderId" => {
-                                border_id = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                            _ => {}
-                        }
-                    }
-                    current_xf = Some((
-                        num_fmt_id,
-                        font_id,
-                        fill_id,
-                        border_id,
-                        Alignment::default(),
-                        Protection::default(),
-                    ));
+                b"xf" if in_cell_xfs || in_cell_style_xfs => {
+                    current_xf = Some(parse_xf_attrs(&e));
+                    current_xf_target = Some(if in_cell_style_xfs {
+                        XfTarget::CellStyle
+                    } else {
+                        XfTarget::Cell
+                    });
                 }
 
                 b"alignment" => {
@@ -1126,21 +1136,21 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                         if let Some(dxf) = current_dxf.as_mut() {
                             parse_alignment_attrs(&e, &mut dxf.alignment);
                         }
-                    } else if let Some((_n, _f, _fi, _b, align, _p)) = current_xf.as_mut() {
-                        parse_alignment_attrs(&e, align);
+                    } else if let Some(xf) = current_xf.as_mut() {
+                        parse_alignment_attrs(&e, &mut xf.alignment);
                     }
                 }
 
                 b"protection" => {
-                    if let Some((_n, _f, _fi, _b, _a, prot)) = current_xf.as_mut() {
+                    if let Some(xf) = current_xf.as_mut() {
                         for attr in e.attributes().flatten() {
                             let val = match attr.unescape_value() {
                                 Ok(v) => v,
                                 Err(_) => continue,
                             };
                             match attr.key.local_name().as_ref() {
-                                b"locked" => prot.locked = val.as_ref() == "1",
-                                b"hidden" => prot.hidden = val.as_ref() == "1",
+                                b"locked" => xf.protection.locked = val.as_ref() == "1",
+                                b"hidden" => xf.protection.hidden = val.as_ref() == "1",
                                 _ => {}
                             }
                         }
@@ -1430,22 +1440,22 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                         if let Some(dxf) = current_dxf.as_mut() {
                             parse_alignment_attrs(&e, &mut dxf.alignment);
                         }
-                    } else if let Some((_n, _f, _fi, _b, align, _p)) = current_xf.as_mut() {
-                        parse_alignment_attrs(&e, align);
+                    } else if let Some(xf) = current_xf.as_mut() {
+                        parse_alignment_attrs(&e, &mut xf.alignment);
                     }
                 }
 
                 // protection can be self-closing
                 b"protection" => {
-                    if let Some((_n, _f, _fi, _b, _a, prot)) = current_xf.as_mut() {
+                    if let Some(xf) = current_xf.as_mut() {
                         for attr in e.attributes().flatten() {
                             let val = match attr.unescape_value() {
                                 Ok(v) => v,
                                 Err(_) => continue,
                             };
                             match attr.key.local_name().as_ref() {
-                                b"locked" => prot.locked = val.as_ref() == "1",
-                                b"hidden" => prot.hidden = val.as_ref() == "1",
+                                b"locked" => xf.protection.locked = val.as_ref() == "1",
+                                b"hidden" => xf.protection.hidden = val.as_ref() == "1",
                                 _ => {}
                             }
                         }
@@ -1534,59 +1544,13 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                 }
 
                 // xf can be empty (no child elements)
-                b"xf" if in_cell_xfs => {
-                    // Parse ids
-                    let mut num_fmt_id = 0u32;
-                    let mut font_id = 0u32;
-                    let mut fill_id = 0u32;
-                    let mut border_id = 0u32;
-                    for attr in e.attributes().flatten() {
-                        match attr.key.local_name().as_ref() {
-                            b"numFmtId" => {
-                                num_fmt_id = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                            b"fontId" => {
-                                font_id = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                            b"fillId" => {
-                                fill_id = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                            b"borderId" => {
-                                border_id = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                            _ => {}
-                        }
+                b"xf" if in_cell_xfs || in_cell_style_xfs => {
+                    let xf = parse_xf_attrs(&e);
+                    if in_cell_style_xfs {
+                        cell_style_xf_defs.push(xf);
+                    } else {
+                        cell_xf_defs.push(xf);
                     }
-                    // Resolve immediately
-                    let style = resolve_style(
-                        num_fmt_id,
-                        font_id,
-                        fill_id,
-                        border_id,
-                        Alignment::default(),
-                        Protection::default(),
-                        &numfmts,
-                        &fonts,
-                        &fills,
-                        &borders,
-                    );
-                    cell_xfs.push(style);
                 }
 
                 _ => {}
@@ -1672,18 +1636,19 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     in_dxfs = false;
                 }
                 b"xf" => {
-                    if let Some((num_fmt_id, font_id, fill_id, border_id, align, prot)) =
-                        current_xf.take()
-                    {
-                        let style = resolve_style(
-                            num_fmt_id, font_id, fill_id, border_id, align, prot, &numfmts, &fonts,
-                            &fills, &borders,
-                        );
-                        cell_xfs.push(style);
+                    if let Some(xf) = current_xf.take() {
+                        match current_xf_target.take() {
+                            Some(XfTarget::CellStyle) => cell_style_xf_defs.push(xf),
+                            Some(XfTarget::Cell) => cell_xf_defs.push(xf),
+                            None => {}
+                        }
                     }
                 }
                 b"cellXfs" => {
                     in_cell_xfs = false;
+                }
+                b"cellStyleXfs" => {
+                    in_cell_style_xfs = false;
                 }
                 _ => {}
             },
@@ -1696,10 +1661,53 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
         buf.clear();
     }
 
-    let cell_styles = if cell_xfs.is_empty() {
+    let cell_style_bases: Vec<Style> = if cell_style_xf_defs.is_empty() {
         vec![Style::default()]
     } else {
-        cell_xfs
+        cell_style_xf_defs
+            .iter()
+            .map(|xf| {
+                resolve_style(
+                    xf.num_fmt_id,
+                    xf.font_id,
+                    xf.fill_id,
+                    xf.border_id,
+                    xf.alignment.clone(),
+                    xf.protection.clone(),
+                    &numfmts,
+                    &fonts,
+                    &fills,
+                    &borders,
+                )
+            })
+            .collect()
+    };
+
+    let cell_styles = if cell_xf_defs.is_empty() {
+        vec![Style::default()]
+    } else {
+        cell_xf_defs
+            .iter()
+            .map(|xf| {
+                let base = cell_style_bases
+                    .get(xf.xf_id as usize)
+                    .cloned()
+                    .unwrap_or_default();
+                let resolved = resolve_style(
+                    xf.num_fmt_id,
+                    xf.font_id,
+                    xf.fill_id,
+                    xf.border_id,
+                    xf.alignment.clone(),
+                    xf.protection.clone(),
+                    &numfmts,
+                    &fonts,
+                    &fills,
+                    &borders,
+                );
+                merge_cell_xf_with_base(base, &resolved, xf)
+            })
+            .collect()
     };
 
     Ok(ParsedStyles {
@@ -1736,6 +1744,58 @@ fn resolve_style(
     };
 
     style
+}
+
+fn parse_xf_attrs(e: &quick_xml::events::BytesStart<'_>) -> ParsedXf {
+    let mut xf = ParsedXf::default();
+
+    for attr in e.attributes().flatten() {
+        let value = match attr.unescape_value() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match attr.key.local_name().as_ref() {
+            b"numFmtId" => xf.num_fmt_id = value.parse::<u32>().unwrap_or(0),
+            b"fontId" => xf.font_id = value.parse::<u32>().unwrap_or(0),
+            b"fillId" => xf.fill_id = value.parse::<u32>().unwrap_or(0),
+            b"borderId" => xf.border_id = value.parse::<u32>().unwrap_or(0),
+            b"xfId" => xf.xf_id = value.parse::<u32>().unwrap_or(0),
+            b"applyNumberFormat" => xf.apply_number_format = value.as_ref() == "1",
+            b"applyFont" => xf.apply_font = value.as_ref() == "1",
+            b"applyFill" => xf.apply_fill = value.as_ref() == "1",
+            b"applyBorder" => xf.apply_border = value.as_ref() == "1",
+            b"applyAlignment" => xf.apply_alignment = value.as_ref() == "1",
+            b"applyProtection" => xf.apply_protection = value.as_ref() == "1",
+            _ => {}
+        }
+    }
+
+    xf
+}
+
+fn merge_cell_xf_with_base(base: Style, resolved_xf: &Style, xf_meta: &ParsedXf) -> Style {
+    let mut out = base;
+
+    if xf_meta.apply_number_format || xf_meta.num_fmt_id != 0 {
+        out.number_format = resolved_xf.number_format.clone();
+    }
+    if xf_meta.apply_font || xf_meta.font_id != 0 {
+        out.font = resolved_xf.font.clone();
+    }
+    if xf_meta.apply_fill || xf_meta.fill_id != 0 {
+        out.fill = resolved_xf.fill.clone();
+    }
+    if xf_meta.apply_border || xf_meta.border_id != 0 {
+        out.border = resolved_xf.border.clone();
+    }
+    if xf_meta.apply_alignment || xf_meta.alignment != Alignment::default() {
+        out.alignment = resolved_xf.alignment.clone();
+    }
+    if xf_meta.apply_protection || xf_meta.protection != Protection::default() {
+        out.protection = resolved_xf.protection.clone();
+    }
+
+    out
 }
 
 fn finalize_fill(pattern: Option<PatternType>, fg: Color, bg: Color) -> FillStyle {
@@ -1848,6 +1908,67 @@ fn parse_color_attrs(e: &quick_xml::events::BytesStart<'_>) -> Color {
     }
 
     Color::Auto
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_styles_cell_xf_inherits_from_cell_style_xf() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><name val="Calibri"/></font>
+  </fonts>
+  <fills count="2">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+  </fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyFont="1"/>
+  </cellStyleXfs>
+  <cellXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="1"/>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"#;
+
+        let parsed = read_styles_xml(xml.as_bytes()).expect("parse styles");
+        assert_eq!(parsed.cell_styles.len(), 1);
+        assert!(parsed.cell_styles[0].font.bold);
+    }
+
+    #[test]
+    fn test_read_styles_cell_xf_can_override_base_with_apply_flag() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><name val="Calibri"/></font>
+  </fonts>
+  <fills count="2">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+  </fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyFont="1"/>
+  </cellStyleXfs>
+  <cellXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="1" applyFont="1"/>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"#;
+
+        let parsed = read_styles_xml(xml.as_bytes()).expect("parse styles");
+        assert_eq!(parsed.cell_styles.len(), 1);
+        assert!(!parsed.cell_styles[0].font.bold);
+    }
 }
 
 fn str_to_pattern_type(s: &str) -> Option<PatternType> {
