@@ -859,8 +859,16 @@ impl XlsxWriter {
     fn write_sheet_views(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
         let freeze = sheet.freeze_panes();
         let selected = sheet.is_selected();
+        let zoom = sheet.zoom_scale();
+        let selection_active = sheet.selection_active_cell();
+        let selection_range = sheet.selection_range();
 
-        if freeze.is_none() && !selected {
+        if freeze.is_none()
+            && !selected
+            && zoom.is_none()
+            && selection_active.is_none()
+            && selection_range.is_none()
+        {
             return Ok(());
         }
 
@@ -871,7 +879,14 @@ impl XlsxWriter {
         if selected {
             sv.push_attribute(("tabSelected", "1"));
         }
+        if let Some(z) = zoom {
+            let z_s = z.to_string();
+            sv.push_attribute(("zoomScale", z_s.as_str()));
+        }
         w.write_event(Event::Start(sv))?;
+
+        let active_cell = selection_active.map(|(r, c)| CellAddress::new(r, c).to_a1_string());
+        let sqref = selection_range.map(|r| r.to_string());
 
         if let Some(fp) = freeze {
             let active_pane = match (fp.col > 0, fp.row > 0) {
@@ -896,10 +911,21 @@ impl XlsxWriter {
             pane.push_attribute(("state", "frozen"));
             w.write_event(Event::Empty(pane))?;
 
+            let default_top_left = CellAddress::new(fp.row, fp.col).to_a1_string();
+            let active = active_cell.as_deref().unwrap_or(default_top_left.as_str());
+            let sqref_v = sqref.as_deref().unwrap_or(active);
+
             w.create_element("selection")
                 .with_attribute(("pane", active_pane))
-                .with_attribute(("activeCell", top_left.as_str()))
-                .with_attribute(("sqref", top_left.as_str()))
+                .with_attribute(("activeCell", active))
+                .with_attribute(("sqref", sqref_v))
+                .write_empty()?;
+        } else if active_cell.is_some() || sqref.is_some() {
+            let active = active_cell.as_deref().unwrap_or("A1");
+            let sqref_v = sqref.as_deref().unwrap_or(active);
+            w.create_element("selection")
+                .with_attribute(("activeCell", active))
+                .with_attribute(("sqref", sqref_v))
                 .write_empty()?;
         }
 
@@ -2065,5 +2091,22 @@ mod tests {
         assert!(xml.contains("<col min=\"3\" max=\"3\""));
         assert!(xml.contains("outlineLevel=\"3\""));
         assert!(xml.contains("collapsed=\"1\""));
+    }
+
+    #[test]
+    fn test_writer_emits_sheet_view_zoom_and_selection() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_selected(true);
+        sheet.set_zoom_scale(Some(125));
+        sheet.set_selection_active_cell(4, 3); // D5
+        sheet.set_selection_range(Some(CellRange::parse("D5:E6").unwrap()));
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let xml = read_zip_entry(out.into_inner(), "xl/worksheets/sheet1.xml");
+
+        assert!(xml.contains("<sheetView workbookViewId=\"0\" tabSelected=\"1\" zoomScale=\"125\""));
+        assert!(xml.contains("<selection activeCell=\"D5\" sqref=\"D5:E6\""));
     }
 }

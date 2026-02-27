@@ -160,7 +160,7 @@
 - [ ] **`cellStyleXfs` / named cell styles** — reader now parses `cellStyleXfs` inheritance (`xfId` + apply flags); writer still hardcodes one entry + "Normal"
 - [x] **Font scheme/family/charset** — modeled in `FontStyle`, parsed from XLSX fonts, and emitted by writer when present
 - [x] **Outline/grouping levels** — row/column `outlineLevel` + `collapsed` now read from XLSX into worksheet metadata
-- [ ] **Sheet views** — tab selection + frozen pane splits now read; zoom/selection coordinates/split panes still incomplete
+- [ ] **Sheet views** — tab selection, zoom scale, active selection, and frozen pane splits now read; non-frozen split panes still incomplete
 - [ ] **Comment visibility** — model has `visible` field, reader doesn't parse VML drawings
 - [ ] **Rich text in shared strings** — reader flattens `<rPr>` formatting runs to plain text
 
@@ -339,8 +339,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 282 | ✅ |
-| **Total** | **704** | ✅ |
+| Other (unit, doc, integration) | 283 | ✅ |
+| **Total** | **705** | ✅ |
 
 ---
 

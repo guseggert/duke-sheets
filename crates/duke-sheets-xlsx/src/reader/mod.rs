@@ -787,12 +787,27 @@ impl XlsxReader {
                 Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
                     b"sheetView" => {
                         for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"tabSelected" {
-                                if attr.unescape_value().ok().as_deref() == Some("1") {
-                                    worksheet.set_selected(true);
+                            match attr.key.local_name().as_ref() {
+                                b"tabSelected" => {
+                                    if attr.unescape_value().ok().as_deref() == Some("1") {
+                                        worksheet.set_selected(true);
+                                    }
                                 }
+                                b"zoomScale" => {
+                                    if let Some(z) = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<u16>().ok())
+                                    {
+                                        worksheet.set_zoom_scale(Some(z));
+                                    }
+                                }
+                                _ => {}
                             }
                         }
+                    }
+                    b"selection" => {
+                        Self::parse_sheet_selection_attrs(&e, worksheet);
                     }
                     b"row" => {
                         // Parse row dimensions: ht, customHeight, hidden
@@ -1169,12 +1184,27 @@ impl XlsxReader {
                     match e.name().local_name().as_ref() {
                         b"sheetView" => {
                             for attr in e.attributes().flatten() {
-                                if attr.key.local_name().as_ref() == b"tabSelected" {
-                                    if attr.unescape_value().ok().as_deref() == Some("1") {
-                                        worksheet.set_selected(true);
+                                match attr.key.local_name().as_ref() {
+                                    b"tabSelected" => {
+                                        if attr.unescape_value().ok().as_deref() == Some("1") {
+                                            worksheet.set_selected(true);
+                                        }
                                     }
+                                    b"zoomScale" => {
+                                        if let Some(z) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u16>().ok())
+                                        {
+                                            worksheet.set_zoom_scale(Some(z));
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
+                        }
+                        b"selection" => {
+                            Self::parse_sheet_selection_attrs(&e, worksheet);
                         }
                         b"pane" => {
                             let mut state_frozen = false;
@@ -1499,6 +1529,33 @@ impl XlsxReader {
         }
 
         state
+    }
+
+    fn parse_sheet_selection_attrs(
+        e: &quick_xml::events::BytesStart<'_>,
+        worksheet: &mut duke_sheets_core::Worksheet,
+    ) {
+        for attr in e.attributes().flatten() {
+            match attr.key.local_name().as_ref() {
+                b"activeCell" => {
+                    if let Some(cell) = attr.unescape_value().ok().map(|s| s.to_string()) {
+                        if let Ok(addr) = CellAddress::parse(&cell) {
+                            worksheet.set_selection_active_cell(addr.row, addr.col);
+                        }
+                    }
+                }
+                b"sqref" => {
+                    if let Some(sqref) = attr.unescape_value().ok().map(|s| s.to_string()) {
+                        if let Some(first) = sqref.split_whitespace().next() {
+                            if let Ok(range) = CellRange::parse(first) {
+                                worksheet.set_selection_range(Some(range));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn resolve_cell_formula(
@@ -2568,8 +2625,9 @@ mod tests {
         let sheet_xml = r#"<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetViews>
-    <sheetView workbookViewId="0" tabSelected="1">
+    <sheetView workbookViewId="0" tabSelected="1" zoomScale="125">
       <pane xSplit="2" ySplit="3" topLeftCell="C4" activePane="bottomRight" state="frozen"/>
+      <selection pane="bottomRight" activeCell="D5" sqref="D5:E6"/>
     </sheetView>
   </sheetViews>
   <sheetData>
@@ -2585,6 +2643,12 @@ mod tests {
         assert_eq!(
             sheet.freeze_panes().map(|fp| (fp.row, fp.col)),
             Some((3, 2))
+        );
+        assert_eq!(sheet.zoom_scale(), Some(125));
+        assert_eq!(sheet.selection_active_cell(), Some((4, 3)));
+        assert_eq!(
+            sheet.selection_range().map(|r| r.to_string()),
+            Some("D5:E6".to_string())
         );
     }
 
