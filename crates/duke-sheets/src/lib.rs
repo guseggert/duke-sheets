@@ -77,6 +77,7 @@ pub use duke_sheets_core::{
     // Sheet-level types
     FreezePanes,
     HorizontalAlignment,
+    Hyperlink,
     IconSetStyle,
     // Locale for cell formatting
     Locale,
