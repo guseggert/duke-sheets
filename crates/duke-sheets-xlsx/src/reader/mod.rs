@@ -20,7 +20,9 @@ use duke_sheets_core::conditional_format::{
 };
 use duke_sheets_core::style::{Color, Style};
 use duke_sheets_core::validation::DataValidation;
-use duke_sheets_core::{CellAddress, CellError, CellRange, CellValue, SplitPanes, Workbook};
+use duke_sheets_core::{
+    CellAddress, CellError, CellRange, CellValue, Hyperlink, SplitPanes, Workbook,
+};
 use formulas::{parse_cell_formula_state, resolve_cell_formula, SharedFormulaMaster};
 use theme::{read_theme_palette, resolve_style_theme_colors};
 
@@ -108,6 +110,12 @@ struct WorkbookRels {
     theme_path: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct SheetRelationship {
+    rel_type: String,
+    target: String,
+}
+
 impl XlsxReader {
     /// Read a workbook from a file path
     pub fn read_file<P: AsRef<Path>>(path: P) -> XlsxResult<Workbook> {
@@ -172,6 +180,7 @@ impl XlsxReader {
                     .worksheet_mut(sheet_idx)
                     .unwrap()
                     .set_date_1904(date_1904);
+                let sheet_rels = Self::read_sheet_rels(&mut archive, path)?;
                 Self::read_worksheet(
                     &mut archive,
                     path,
@@ -180,6 +189,7 @@ impl XlsxReader {
                     &cell_styles,
                     &dxf_styles,
                     theme_palette.as_ref(),
+                    &sheet_rels,
                 )?;
 
                 // Read comments for this worksheet (if present)
@@ -490,6 +500,86 @@ impl XlsxReader {
         })
     }
 
+    fn read_sheet_rels<R: Read + Seek>(
+        archive: &mut zip::ZipArchive<R>,
+        sheet_path: &str,
+    ) -> XlsxResult<HashMap<String, SheetRelationship>> {
+        let (base_dir, file_name) = match sheet_path.rsplit_once('/') {
+            Some((dir, file)) => (dir, file),
+            None => return Ok(HashMap::new()),
+        };
+        let rels_path = format!("{}/_rels/{}.rels", base_dir, file_name);
+
+        let file = match archive.by_name(&rels_path) {
+            Ok(f) => f,
+            Err(_) => return Ok(HashMap::new()),
+        };
+
+        let reader = BufReader::new(file);
+        let mut xml_reader = Reader::from_reader(reader);
+        xml_reader.config_mut().trim_text(true);
+
+        let mut buf = Vec::new();
+        let mut rels = HashMap::new();
+
+        loop {
+            match xml_reader.read_event_into(&mut buf) {
+                Ok(Event::Empty(e)) | Ok(Event::Start(e))
+                    if e.name().local_name().as_ref() == b"Relationship" =>
+                {
+                    let mut id = None;
+                    let mut target = None;
+                    let mut rel_type = None;
+                    let mut target_mode = None;
+
+                    for attr in e.attributes().flatten() {
+                        match attr.key.local_name().as_ref() {
+                            b"Id" => id = attr.unescape_value().ok().map(|s| s.to_string()),
+                            b"Target" => target = attr.unescape_value().ok().map(|s| s.to_string()),
+                            b"Type" => rel_type = attr.unescape_value().ok().map(|s| s.to_string()),
+                            b"TargetMode" => {
+                                target_mode = attr.unescape_value().ok().map(|s| s.to_string())
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type) {
+                        let resolved_target = if target.starts_with('/')
+                            || target_mode.as_deref() == Some("External")
+                        {
+                            target
+                        } else {
+                            let mut parts: Vec<&str> = base_dir.split('/').collect();
+                            for part in target.split('/') {
+                                if part == ".." {
+                                    parts.pop();
+                                } else if part != "." && !part.is_empty() {
+                                    parts.push(part);
+                                }
+                            }
+                            parts.join("/")
+                        };
+
+                        rels.insert(
+                            id,
+                            SheetRelationship {
+                                rel_type,
+                                target: resolved_target,
+                            },
+                        );
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(e) => return Err(XlsxError::Xml(e)),
+                _ => {}
+            }
+            buf.clear();
+        }
+
+        Ok(rels)
+    }
+
     /// Read a worksheet from the archive
     fn read_worksheet<R: Read + Seek>(
         archive: &mut zip::ZipArchive<R>,
@@ -499,6 +589,7 @@ impl XlsxReader {
         cell_styles: &[Style],
         dxf_styles: &[Style],
         theme_palette: Option<&ThemePalette>,
+        sheet_rels: &HashMap<String, SheetRelationship>,
     ) -> XlsxResult<()> {
         let file = archive
             .by_name(path)
@@ -580,6 +671,9 @@ impl XlsxReader {
                     }
                     b"selection" => {
                         Self::parse_sheet_selection_attrs(&e, worksheet);
+                    }
+                    b"hyperlink" => {
+                        Self::parse_hyperlink_element(worksheet, &e, sheet_rels);
                     }
                     b"pageMargins" => {
                         let mut ps = worksheet.page_setup().clone();
@@ -1266,6 +1360,9 @@ impl XlsxReader {
                         b"selection" => {
                             Self::parse_sheet_selection_attrs(&e, worksheet);
                         }
+                        b"hyperlink" => {
+                            Self::parse_hyperlink_element(worksheet, &e, sheet_rels);
+                        }
                         b"pane" => {
                             let mut state: Option<String> = None;
                             let mut x_split_raw: Option<f64> = None;
@@ -1601,6 +1698,71 @@ impl XlsxReader {
         }
     }
 
+    fn parse_hyperlink_element(
+        worksheet: &mut duke_sheets_core::Worksheet,
+        e: &quick_xml::events::BytesStart<'_>,
+        sheet_rels: &HashMap<String, SheetRelationship>,
+    ) {
+        let mut cell_ref = None;
+        let mut rel_id = None;
+        let mut display = None;
+        let mut tooltip = None;
+        let mut location = None;
+
+        for attr in e.attributes().flatten() {
+            match attr.key.local_name().as_ref() {
+                b"ref" => cell_ref = attr.unescape_value().ok().map(|s| s.to_string()),
+                b"id" => rel_id = attr.unescape_value().ok().map(|s| s.to_string()),
+                b"display" => display = attr.unescape_value().ok().map(|s| s.to_string()),
+                b"tooltip" => tooltip = attr.unescape_value().ok().map(|s| s.to_string()),
+                b"location" => location = attr.unescape_value().ok().map(|s| s.to_string()),
+                _ => {}
+            }
+        }
+
+        let cell_ref = match cell_ref {
+            Some(v) => v,
+            None => return,
+        };
+
+        let cell_a1 = match CellAddress::parse(&cell_ref) {
+            Ok(addr) => addr.to_a1_string(),
+            Err(_) => match CellRange::parse(&cell_ref) {
+                Ok(range) => range.start.to_a1_string(),
+                Err(_) => {
+                    log::warn!("Invalid hyperlink ref '{}', skipping", cell_ref);
+                    return;
+                }
+            },
+        };
+
+        let mut target = String::new();
+        if let Some(rel_id) = rel_id {
+            if let Some(rel) = sheet_rels.get(&rel_id) {
+                if rel.rel_type.ends_with("/hyperlink") {
+                    target = rel.target.clone();
+                }
+            }
+        }
+
+        if target.is_empty() {
+            if let Some(loc) = &location {
+                target = format!("#{}", loc);
+            }
+        }
+
+        let hyperlink = Hyperlink {
+            target,
+            display,
+            tooltip,
+            location,
+        };
+
+        if let Err(err) = worksheet.set_hyperlink(&cell_a1, hyperlink) {
+            log::warn!("Failed to set hyperlink for {}: {}", cell_a1, err);
+        }
+    }
+
     /// Process a cell and add it to the worksheet
     fn process_cell(
         worksheet: &mut duke_sheets_core::Worksheet,
@@ -1744,6 +1906,13 @@ mod tests {
     use std::io::{Cursor, Write};
 
     fn build_single_sheet_xlsx(sheet_xml: &str) -> Vec<u8> {
+        build_single_sheet_xlsx_with_sheet_rels(sheet_xml, None)
+    }
+
+    fn build_single_sheet_xlsx_with_sheet_rels(
+        sheet_xml: &str,
+        sheet_rels_xml: Option<&str>,
+    ) -> Vec<u8> {
         let mut buf = Vec::new();
         {
             let cursor = Cursor::new(&mut buf);
@@ -1766,9 +1935,56 @@ mod tests {
             zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
             zip.write_all(sheet_xml.as_bytes()).unwrap();
 
+            if let Some(sheet_rels_xml) = sheet_rels_xml {
+                zip.start_file("xl/worksheets/_rels/sheet1.xml.rels", options)
+                    .unwrap();
+                zip.write_all(sheet_rels_xml.as_bytes()).unwrap();
+            }
+
             zip.finish().unwrap();
         }
         buf
+    }
+
+    #[test]
+    fn test_read_hyperlinks_external_internal_and_tooltip() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c></row>
+    <row r="2"><c r="B2" t="s"><v>1</v></c></row>
+    <row r="3"><c r="C3" t="s"><v>2</v></c></row>
+  </sheetData>
+  <hyperlinks>
+    <hyperlink ref="A1" r:id="rId1" display="Example"/>
+    <hyperlink ref="B2" location="Sheet2!A1" display="Go to Sheet2"/>
+    <hyperlink ref="C3" r:id="rId2" tooltip="Tooltip here"/>
+  </hyperlinks>
+</worksheet>"#;
+
+        let sheet_rels_xml = r#"<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="External"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.org/path" TargetMode="External"/>
+</Relationships>"#;
+
+        let bytes = build_single_sheet_xlsx_with_sheet_rels(sheet_xml, Some(sheet_rels_xml));
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        let a1 = sheet.hyperlink("A1").expect("A1 hyperlink");
+        assert_eq!(a1.target, "https://example.com");
+        assert_eq!(a1.display.as_deref(), Some("Example"));
+        assert_eq!(a1.tooltip, None);
+
+        let b2 = sheet.hyperlink("B2").expect("B2 hyperlink");
+        assert_eq!(b2.target, "#Sheet2!A1");
+        assert_eq!(b2.location.as_deref(), Some("Sheet2!A1"));
+        assert_eq!(b2.display.as_deref(), Some("Go to Sheet2"));
+
+        let c3 = sheet.hyperlink("C3").expect("C3 hyperlink");
+        assert_eq!(c3.target, "https://example.org/path");
+        assert_eq!(c3.tooltip.as_deref(), Some("Tooltip here"));
     }
 
     #[test]
