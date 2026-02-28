@@ -126,6 +126,7 @@ fn format_cell_value_inner(
         // Formula without cached value — show formula text
         CellValue::Formula { text, .. } => text.clone(),
         CellValue::SpillTarget { .. } => String::new(),
+        CellValue::RichText(runs) => crate::rich_text::rich_text_to_plain(runs),
     }
 }
 

@@ -78,6 +78,10 @@ pub use duke_sheets_core::{
     FreezePanes,
     HorizontalAlignment,
     Hyperlink,
+    // Rich text types
+    RichTextRun,
+    RunFont,
+    rich_text_to_plain,
     IconSetStyle,
     // Locale for cell formatting
     Locale,

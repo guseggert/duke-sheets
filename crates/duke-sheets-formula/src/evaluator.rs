@@ -113,6 +113,7 @@ impl From<CellValue> for FormulaValue {
             // In this simple conversion, we return Empty - proper resolution
             // happens in the worksheet's get_value methods
             CellValue::SpillTarget { .. } => FormulaValue::Empty,
+            CellValue::RichText(runs) => FormulaValue::String(duke_sheets_core::rich_text_to_plain(&runs)),
         }
     }
 }
