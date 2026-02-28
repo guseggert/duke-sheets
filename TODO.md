@@ -162,7 +162,7 @@
 - [x] **Font scheme/family/charset** — modeled in `FontStyle`, parsed from XLSX fonts, and emitted by writer when present
 - [x] **Outline/grouping levels** — row/column `outlineLevel` + `collapsed` now read from XLSX into worksheet metadata
 - [x] **Sheet views** — tab selection, zoom scale, active selection, frozen panes, and non-frozen split panes now roundtrip (single selection only)
-- [ ] **Sheet views (multi-selection)** — preserve multiple `<selection>` entries and multi-range `sqref` values
+- [x] **Sheet views (multi-selection)** — preserve multiple `<selection>` entries and multi-range `sqref` values; `Selection` struct with pane/active_cell/sqref, `Vec<Selection>` on Worksheet, backward-compatible convenience API
 - [ ] **Sheet views (pane edge cases)** — handle non-empty `<pane>` start/end tags (not just self-closing)
 - [x] **Comment visibility** — reader parses VML note shapes and sets `CellComment.visible` (currently uses style `visibility:visible`)
 - [ ] **Comments/VML relationships** — resolve `comments*.xml` and `vmlDrawing*.vml` via `sheet*.xml.rels` + `legacyDrawing` r:id (don’t assume index-based filenames)
@@ -278,9 +278,9 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [ ] **XLS reader** — parse `SETUP`, `HEADER`, `FOOTER`, margin records, page break records
 
 #### Sheet Views
-- [x] **Data model (partial)** — zoom level, selection, freeze/split panes; still missing gridline visibility + multiple selections
-- [x] **XLSX reader (partial)** — reads `<sheetViews>/<sheetView>` for zoom/selection/panes; still missing multi-selection nuances
-- [x] **XLSX writer (partial)** — writes `<sheetViews>` for zoom/selection/panes
+- [x] **Data model** — zoom level, selection (single + multi via `Vec<Selection>`), freeze/split panes; still missing gridline visibility
+- [x] **XLSX reader** — reads `<sheetViews>/<sheetView>` for zoom/selection/panes; multi-selection + multi-range sqref preserved
+- [x] **XLSX writer** — writes `<sheetViews>` for zoom/selection/panes; emits all selections with pane inference
 - [ ] **XLS reader** — parse `WINDOW2`, `PANE`, `SELECTION`
 
 #### Charts
@@ -339,7 +339,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Formula parser | 37 | ✅ |
 | Formula evaluator + functions | 74 | ✅ |
 | Calculation engine | 8 | ✅ |
-| XLSX roundtrip | 25 | ✅ |
+| XLSX roundtrip | 27 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
@@ -352,8 +352,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
-| Other (unit, doc, integration) | 282 | ✅ |
-| **Total** | **743** | ✅ |
+| Other (unit, doc, integration) | 285 | ✅ |
+| **Total** | **748** | ✅ |
 
 ---
 
