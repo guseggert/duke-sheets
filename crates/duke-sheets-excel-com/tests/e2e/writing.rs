@@ -639,3 +639,109 @@ fn test_write_data_validation_number() {
     let dvs = s.data_validations();
     assert!(!dvs.is_empty(), "Should have at least one data validation");
 }
+
+// =========================================================================
+// Page setup / header-footer tests
+// =========================================================================
+
+#[test]
+fn test_write_header_footer_even_first_and_flags() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Page setup test").unwrap();
+
+    let mut ps = sheet.page_setup().clone();
+    ps.odd_header = Some("&COdd Header".to_string());
+    ps.odd_footer = Some("&COdd Footer".to_string());
+    ps.even_header = Some("&CEven Header".to_string());
+    ps.even_footer = Some("&CEven Footer".to_string());
+    ps.first_header = Some("&CFirst Page".to_string());
+    ps.first_footer = Some("&CFirst Footer".to_string());
+    ps.different_odd_even = true;
+    ps.different_first = true;
+    ps.scale_with_doc = false;
+    ps.align_with_margins = false;
+    sheet.set_page_setup(ps);
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    let ps2 = s.page_setup();
+
+    // Verify all header/footer strings survived Excel roundtrip
+    assert_eq!(ps2.odd_header.as_deref(), Some("&COdd Header"), "odd_header");
+    assert_eq!(ps2.odd_footer.as_deref(), Some("&COdd Footer"), "odd_footer");
+    assert_eq!(ps2.even_header.as_deref(), Some("&CEven Header"), "even_header");
+    assert_eq!(ps2.even_footer.as_deref(), Some("&CEven Footer"), "even_footer");
+    assert_eq!(ps2.first_header.as_deref(), Some("&CFirst Page"), "first_header");
+    assert_eq!(ps2.first_footer.as_deref(), Some("&CFirst Footer"), "first_footer");
+
+    // Verify flags
+    assert!(ps2.different_odd_even, "different_odd_even");
+    assert!(ps2.different_first, "different_first");
+    assert!(!ps2.scale_with_doc, "scale_with_doc should be false");
+    assert!(!ps2.align_with_margins, "align_with_margins should be false");
+}
+
+#[test]
+fn test_read_header_footer_from_excel() {
+    let bridge = crate::excel_bridge();
+    let fixture = crate::temp_fixture();
+
+    {
+        let excel = bridge.lock().unwrap();
+        crate::ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+
+        // Set headers/footers via PageSetup properties (left/center/right)
+        wb.set_page_setup_property("CenterHeader", serde_json::Value::from("Center Header"))
+            .expect("set CenterHeader");
+        wb.set_page_setup_property("LeftFooter", serde_json::Value::from("Left Footer"))
+            .expect("set LeftFooter");
+        wb.set_page_setup_property("RightFooter", serde_json::Value::from("Right Footer"))
+            .expect("set RightFooter");
+
+        // Enable different first page flag
+        wb.set_page_setup_property(
+            "DifferentFirstPageHeaderFooter",
+            serde_json::Value::from(true),
+        )
+        .expect("set DifferentFirstPageHeaderFooter");
+
+        // Disable scale with doc
+        wb.set_page_setup_property("ScaleWithDocHeaderFooter", serde_json::Value::from(false))
+            .expect("set ScaleWithDocHeaderFooter");
+
+        wb.save(&fixture.vm_path).expect("save");
+        wb.close().expect("close");
+    }
+
+    crate::pull_file_from_vm(&fixture);
+    let workbook =
+        duke_sheets_xlsx::XlsxReader::read_file(&fixture.host_path).expect("read");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+    let ps = sheet.page_setup();
+
+    // Odd header: Excel wraps CenterHeader in &C code
+    let odd_header = ps.odd_header.as_deref().unwrap_or("");
+    assert!(
+        odd_header.contains("Center Header"),
+        "odd_header should contain 'Center Header', got: {odd_header:?}"
+    );
+
+    // Odd footer: left and right sections combined
+    let odd_footer = ps.odd_footer.as_deref().unwrap_or("");
+    assert!(
+        odd_footer.contains("Left Footer"),
+        "odd_footer should contain 'Left Footer', got: {odd_footer:?}"
+    );
+    assert!(
+        odd_footer.contains("Right Footer"),
+        "odd_footer should contain 'Right Footer', got: {odd_footer:?}"
+    );
+
+    // Flags
+    assert!(ps.different_first, "different_first should be true");
+    assert!(!ps.scale_with_doc, "scale_with_doc should be false");
+
+    crate::cleanup_fixture(&fixture);
+}

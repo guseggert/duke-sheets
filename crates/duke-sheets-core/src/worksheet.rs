@@ -1169,10 +1169,26 @@ pub struct PageSetup {
     pub print_gridlines: bool,
     /// Print headings (row/column headers)
     pub print_headings: bool,
-    /// Odd page header text
+    /// Odd page header text (used for all pages when differentOddEven is false)
     pub odd_header: Option<String>,
-    /// Odd page footer text
+    /// Odd page footer text (used for all pages when differentOddEven is false)
     pub odd_footer: Option<String>,
+    /// Even page header text (only used when different_odd_even is true)
+    pub even_header: Option<String>,
+    /// Even page footer text (only used when different_odd_even is true)
+    pub even_footer: Option<String>,
+    /// First page header text (only used when different_first is true)
+    pub first_header: Option<String>,
+    /// First page footer text (only used when different_first is true)
+    pub first_footer: Option<String>,
+    /// Use different headers/footers for odd and even pages
+    pub different_odd_even: bool,
+    /// Use a different header/footer for the first page
+    pub different_first: bool,
+    /// Scale header/footer with document scaling (default: true)
+    pub scale_with_doc: bool,
+    /// Align header/footer margins with page margins (default: true)
+    pub align_with_margins: bool,
 }
 
 impl Default for PageSetup {
@@ -1193,6 +1209,14 @@ impl Default for PageSetup {
             print_headings: false,
             odd_header: None,
             odd_footer: None,
+            even_header: None,
+            even_footer: None,
+            first_header: None,
+            first_footer: None,
+            different_odd_even: false,
+            different_first: false,
+            scale_with_doc: true,
+            align_with_margins: true,
         }
     }
 }
