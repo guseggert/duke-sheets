@@ -26,10 +26,8 @@ pub struct Worksheet {
     selected: bool,
     /// Sheet view zoom scale (percent)
     zoom_scale: Option<u16>,
-    /// Active cell in sheet selection
-    selection_active_cell: Option<(u32, u16)>,
-    /// Selected range in sheet view
-    selection_range: Option<CellRange>,
+    /// Sheet view selections (one per pane, up to 4 for split views)
+    selections: Vec<Selection>,
     /// Sheet protection settings
     protection: Option<SheetProtection>,
     /// Freeze pane settings
@@ -70,8 +68,7 @@ impl Worksheet {
             visible: true,
             selected: false,
             zoom_scale: None,
-            selection_active_cell: None,
-            selection_range: None,
+            selections: Vec::new(),
             protection: None,
             freeze_panes: None,
             split_panes: None,
@@ -129,23 +126,74 @@ impl Worksheet {
     }
 
     /// Get selected active cell in row/column coordinates.
+    ///
+    /// Returns the active cell from the primary (last) selection.
     pub fn selection_active_cell(&self) -> Option<(u32, u16)> {
-        self.selection_active_cell
+        self.selections.last().and_then(|s| {
+            s.active_cell.as_ref().and_then(|ac| {
+                CellAddress::parse(ac).ok().map(|addr| (addr.row, addr.col))
+            })
+        })
     }
 
     /// Set selected active cell in row/column coordinates.
+    ///
+    /// Updates the primary selection or creates one if none exist.
     pub fn set_selection_active_cell(&mut self, row: u32, col: u16) {
-        self.selection_active_cell = Some((row, col));
+        let ac = CellAddress::new(row, col).to_a1_string();
+        if let Some(sel) = self.selections.last_mut() {
+            sel.active_cell = Some(ac);
+        } else {
+            self.selections.push(Selection {
+                pane: None,
+                active_cell: Some(ac),
+                sqref: None,
+            });
+        }
     }
 
     /// Get selected range in sheet view.
+    ///
+    /// Returns the first range from the primary (last) selection's sqref.
     pub fn selection_range(&self) -> Option<CellRange> {
-        self.selection_range
+        self.selections.last().and_then(|s| {
+            s.sqref.as_ref().and_then(|sq| {
+                sq.split_whitespace()
+                    .next()
+                    .and_then(|first| CellRange::parse(first).ok())
+            })
+        })
     }
 
     /// Set selected range in sheet view.
+    ///
+    /// Updates the primary selection or creates one if none exist.
     pub fn set_selection_range(&mut self, range: Option<CellRange>) {
-        self.selection_range = range;
+        let sqref = range.map(|r| r.to_string());
+        if let Some(sel) = self.selections.last_mut() {
+            sel.sqref = sqref;
+        } else if sqref.is_some() {
+            self.selections.push(Selection {
+                pane: None,
+                active_cell: None,
+                sqref,
+            });
+        }
+    }
+
+    /// Get all sheet view selections.
+    pub fn selections(&self) -> &[Selection] {
+        &self.selections
+    }
+
+    /// Set all sheet view selections (replaces existing).
+    pub fn set_selections(&mut self, selections: Vec<Selection>) {
+        self.selections = selections;
+    }
+
+    /// Add a selection to the sheet view.
+    pub fn add_selection(&mut self, selection: Selection) {
+        self.selections.push(selection);
     }
 
     /// Get the tab color
@@ -1103,6 +1151,23 @@ pub struct SplitPanes {
     pub top_left: Option<(u32, u16)>,
     /// Active pane identifier (`topLeft`, `topRight`, `bottomLeft`, `bottomRight`)
     pub active_pane: Option<String>,
+}
+
+/// A selection within a sheet view.
+///
+/// Each `<selection>` element in OOXML represents a selected range in one pane.
+/// A sheet view can have up to 4 selections (one per pane: topLeft, topRight,
+/// bottomLeft, bottomRight). The `sqref` may contain multiple space-separated
+/// ranges for non-contiguous selections.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Selection {
+    /// Which pane this selection belongs to (e.g., "bottomRight").
+    /// `None` for the default pane (when no pane split exists).
+    pub pane: Option<String>,
+    /// The active cell (cursor position) within this selection.
+    pub active_cell: Option<String>,
+    /// Space-separated range references (e.g., "A1:B2 D4:E5").
+    pub sqref: Option<String>,
 }
 
 /// Sheet protection settings

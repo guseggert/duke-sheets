@@ -1814,27 +1814,30 @@ impl XlsxReader {
         e: &quick_xml::events::BytesStart<'_>,
         worksheet: &mut duke_sheets_core::Worksheet,
     ) {
+        let mut pane: Option<String> = None;
+        let mut active_cell: Option<String> = None;
+        let mut sqref: Option<String> = None;
+
         for attr in e.attributes().flatten() {
             match attr.key.local_name().as_ref() {
+                b"pane" => {
+                    pane = attr.unescape_value().ok().map(|s| s.to_string());
+                }
                 b"activeCell" => {
-                    if let Some(cell) = attr.unescape_value().ok().map(|s| s.to_string()) {
-                        if let Ok(addr) = CellAddress::parse(&cell) {
-                            worksheet.set_selection_active_cell(addr.row, addr.col);
-                        }
-                    }
+                    active_cell = attr.unescape_value().ok().map(|s| s.to_string());
                 }
                 b"sqref" => {
-                    if let Some(sqref) = attr.unescape_value().ok().map(|s| s.to_string()) {
-                        if let Some(first) = sqref.split_whitespace().next() {
-                            if let Ok(range) = CellRange::parse(first) {
-                                worksheet.set_selection_range(Some(range));
-                            }
-                        }
-                    }
+                    sqref = attr.unescape_value().ok().map(|s| s.to_string());
                 }
                 _ => {}
             }
         }
+
+        worksheet.add_selection(duke_sheets_core::worksheet::Selection {
+            pane,
+            active_cell,
+            sqref,
+        });
     }
 
     fn parse_hyperlink_element(
@@ -2318,6 +2321,50 @@ mod tests {
         assert!(!ps.different_first);
         assert!(ps.scale_with_doc);
         assert!(ps.align_with_margins);
+    }
+
+    #[test]
+    fn test_read_multiple_selections_with_frozen_panes() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews>
+    <sheetView workbookViewId="0">
+      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+      <selection pane="topLeft" activeCell="A1" sqref="A1"/>
+      <selection pane="bottomLeft" activeCell="B5" sqref="B5:C6 E2:F3"/>
+    </sheetView>
+  </sheetViews>
+  <sheetData>
+    <row r="1"><c r="A1" t="n"><v>1</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        // Should have 2 selections
+        let sels = sheet.selections();
+        assert_eq!(sels.len(), 2, "should have 2 selections, got: {sels:#?}");
+
+        // First selection: topLeft pane
+        assert_eq!(sels[0].pane.as_deref(), Some("topLeft"));
+        assert_eq!(sels[0].active_cell.as_deref(), Some("A1"));
+        assert_eq!(sels[0].sqref.as_deref(), Some("A1"));
+
+        // Second selection: bottomLeft pane with multi-range sqref
+        assert_eq!(sels[1].pane.as_deref(), Some("bottomLeft"));
+        assert_eq!(sels[1].active_cell.as_deref(), Some("B5"));
+        assert_eq!(sels[1].sqref.as_deref(), Some("B5:C6 E2:F3"));
+
+        // Convenience API should return the last selection's active cell
+        assert_eq!(sheet.selection_active_cell(), Some((4, 1))); // B5
+
+        // Convenience API: first range from the last selection's sqref
+        assert_eq!(
+            sheet.selection_range().map(|r| r.to_string()),
+            Some("B5:C6".to_string())
+        );
     }
 
     #[test]

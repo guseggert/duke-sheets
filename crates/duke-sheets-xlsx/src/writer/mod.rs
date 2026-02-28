@@ -943,15 +943,13 @@ impl XlsxWriter {
         let split = sheet.split_panes();
         let selected = sheet.is_selected();
         let zoom = sheet.zoom_scale();
-        let selection_active = sheet.selection_active_cell();
-        let selection_range = sheet.selection_range();
+        let selections = sheet.selections();
 
         if freeze.is_none()
             && split.is_none()
             && !selected
             && zoom.is_none()
-            && selection_active.is_none()
-            && selection_range.is_none()
+            && selections.is_empty()
         {
             return Ok(());
         }
@@ -968,9 +966,6 @@ impl XlsxWriter {
             sv.push_attribute(("zoomScale", z_s.as_str()));
         }
         w.write_event(Event::Start(sv))?;
-
-        let active_cell = selection_active.map(|(r, c)| CellAddress::new(r, c).to_a1_string());
-        let sqref = selection_range.map(|r| r.to_string());
 
         if let Some(fp) = freeze {
             let active_pane = match (fp.col > 0, fp.row > 0) {
@@ -995,15 +990,15 @@ impl XlsxWriter {
             pane.push_attribute(("state", "frozen"));
             w.write_event(Event::Empty(pane))?;
 
-            let default_top_left = CellAddress::new(fp.row, fp.col).to_a1_string();
-            let active = active_cell.as_deref().unwrap_or(default_top_left.as_str());
-            let sqref_v = sqref.as_deref().unwrap_or(active);
-
-            w.create_element("selection")
-                .with_attribute(("pane", active_pane))
-                .with_attribute(("activeCell", active))
-                .with_attribute(("sqref", sqref_v))
-                .write_empty()?;
+            if selections.is_empty() {
+                // Synthesize a default selection for the active pane
+                let default_cell = CellAddress::new(fp.row, fp.col).to_a1_string();
+                w.create_element("selection")
+                    .with_attribute(("pane", active_pane))
+                    .with_attribute(("activeCell", default_cell.as_str()))
+                    .with_attribute(("sqref", default_cell.as_str()))
+                    .write_empty()?;
+            }
         } else if let Some(sp) = split {
             let mut pane = BytesStart::new("pane");
             if sp.x_split != 0.0 {
@@ -1024,27 +1019,51 @@ impl XlsxWriter {
             pane.push_attribute(("state", "split"));
             w.write_event(Event::Empty(pane))?;
 
-            let default_active = sp
-                .top_left
-                .map(|(r, c)| CellAddress::new(r, c).to_a1_string())
-                .unwrap_or_else(|| "A1".to_string());
-            let active = active_cell.as_deref().unwrap_or(default_active.as_str());
-            let sqref_v = sqref.as_deref().unwrap_or(active);
-
-            let mut sel = BytesStart::new("selection");
-            if let Some(active_pane) = sp.active_pane.as_deref() {
-                sel.push_attribute(("pane", active_pane));
+            if selections.is_empty() {
+                // Synthesize a default selection for the active pane
+                let default_active = sp
+                    .top_left
+                    .map(|(r, c)| CellAddress::new(r, c).to_a1_string())
+                    .unwrap_or_else(|| "A1".to_string());
+                let mut sel = BytesStart::new("selection");
+                if let Some(active_pane) = sp.active_pane.as_deref() {
+                    sel.push_attribute(("pane", active_pane));
+                }
+                sel.push_attribute(("activeCell", default_active.as_str()));
+                sel.push_attribute(("sqref", default_active.as_str()));
+                w.write_event(Event::Empty(sel))?;
             }
-            sel.push_attribute(("activeCell", active));
-            sel.push_attribute(("sqref", sqref_v));
-            w.write_event(Event::Empty(sel))?;
-        } else if active_cell.is_some() || sqref.is_some() {
-            let active = active_cell.as_deref().unwrap_or("A1");
-            let sqref_v = sqref.as_deref().unwrap_or(active);
-            w.create_element("selection")
-                .with_attribute(("activeCell", active))
-                .with_attribute(("sqref", sqref_v))
-                .write_empty()?;
+        }
+
+        // Emit all stored selections.
+        // If a selection has no pane set but the sheet has freeze/split panes,
+        // infer the pane from the active pane of the freeze/split.
+        let default_pane: Option<&str> = if freeze.is_some() {
+            Some(match (freeze.unwrap().col > 0, freeze.unwrap().row > 0) {
+                (true, true) => "bottomRight",
+                (false, true) => "bottomLeft",
+                (true, false) => "topRight",
+                (false, false) => "bottomLeft",
+            })
+        } else if let Some(sp) = split {
+            sp.active_pane.as_deref()
+        } else {
+            None
+        };
+
+        for sel in selections {
+            let mut el = BytesStart::new("selection");
+            let pane_val = sel.pane.as_deref().or(default_pane);
+            if let Some(pane) = pane_val {
+                el.push_attribute(("pane", pane));
+            }
+            if let Some(ac) = &sel.active_cell {
+                el.push_attribute(("activeCell", ac.as_str()));
+            }
+            if let Some(sq) = &sel.sqref {
+                el.push_attribute(("sqref", sq.as_str()));
+            }
+            w.write_event(Event::Empty(el))?;
         }
 
         w.write_event(Event::End(BytesEnd::new("sheetView")))?;
@@ -2659,6 +2678,63 @@ mod tests {
             "<pane xSplit=\"2000\" ySplit=\"3000\" topLeftCell=\"C4\" activePane=\"bottomRight\" state=\"split\""
         ));
         assert!(xml.contains("<selection pane=\"bottomRight\" activeCell=\"D5\" sqref=\"D5\""));
+    }
+
+    #[test]
+    fn test_writer_emits_multiple_selections() {
+        use duke_sheets_core::worksheet::Selection;
+
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_freeze_panes(1, 0); // Freeze top row
+        sheet.set_selections(vec![
+            Selection {
+                pane: Some("topLeft".to_string()),
+                active_cell: Some("A1".to_string()),
+                sqref: Some("A1".to_string()),
+            },
+            Selection {
+                pane: Some("bottomLeft".to_string()),
+                active_cell: Some("C5".to_string()),
+                sqref: Some("C5:D8 F2:G3".to_string()),
+            },
+        ]);
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let xml = read_zip_entry(out.into_inner(), "xl/worksheets/sheet1.xml");
+
+        // Both selections should be present
+        assert!(
+            xml.contains(r#"<selection pane="topLeft" activeCell="A1" sqref="A1""#),
+            "missing topLeft selection in: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<selection pane="bottomLeft" activeCell="C5" sqref="C5:D8 F2:G3""#),
+            "missing bottomLeft selection in: {xml}"
+        );
+    }
+
+    #[test]
+    fn test_writer_emits_multi_range_sqref() {
+        use duke_sheets_core::worksheet::Selection;
+
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.add_selection(Selection {
+            pane: None,
+            active_cell: Some("A1".to_string()),
+            sqref: Some("A1:B2 D4:E5 G7".to_string()),
+        });
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let xml = read_zip_entry(out.into_inner(), "xl/worksheets/sheet1.xml");
+
+        assert!(
+            xml.contains(r#"sqref="A1:B2 D4:E5 G7""#),
+            "multi-range sqref not found in: {xml}"
+        );
     }
 
     #[test]
