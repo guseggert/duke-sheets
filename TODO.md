@@ -224,6 +224,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [x] **XLSX reader (inline)** — parse `<r>/<rPr>/<t>` inside `<is>` elements with whitespace preservation
 - [x] **XLSX writer** — write `<is><r><rPr>...</rPr><t>text</t></r></is>` for rich text cells (inline strings)
 - [x] **Roundtrip test** — mixed formatting (bold, italic, color), plain runs, multi-property runs
+- [x] **Excel COM E2E tests** — writer roundtrip (bold/italic/color survives Excel re-save) + reader test (Characters API formatting parsed from SST)
 
 #### Tables / ListObjects
 - [ ] **Data model** — `Table` struct (name, range, columns, totals row, style)
@@ -346,13 +347,13 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 60 | ✅ |
-| E2E via Excel COM — reader (XLSX) | 59 | ✅ |
-| E2E via Excel COM — writer (XLSX) | 31 | ✅ |
+| E2E via Excel COM — reader (XLSX) | 60 | ✅ |
+| E2E via Excel COM — writer (XLSX) | 32 | ✅ |
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 278 | ✅ |
-| **Total** | **733** | ✅ |
+| **Total** | **735** | ✅ |
 
 ---
 
