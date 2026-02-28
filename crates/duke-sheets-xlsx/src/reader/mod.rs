@@ -9,7 +9,7 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
 use crate::error::{XlsxError, XlsxResult};
-use crate::styles::{read_styles_xml, ParsedStyles};
+use crate::styles::{read_styles_xml, register_roundtrip_style_data, ParsedStyles};
 use duke_sheets_core::comment::CellComment;
 use duke_sheets_core::conditional_format::{
     CfColorValue, CfOperator, CfRuleType, CfValue, CfValueType, ConditionalFormatRule,
@@ -208,6 +208,7 @@ impl XlsxReader {
 
         // Read styles (if present)
         let mut parsed_styles = Self::read_styles(&mut archive)?;
+        let roundtrip_style_data = parsed_styles.roundtrip_data();
         // Read workbook.xml.rels to get sheet/theme paths
         let workbook_rels = Self::read_workbook_rels(&mut archive)?;
         // Read workbook theme (if present) and resolve theme colors in styles
@@ -272,6 +273,8 @@ impl XlsxReader {
         if workbook.is_empty() {
             workbook.add_worksheet()?;
         }
+
+        register_roundtrip_style_data(&workbook, roundtrip_style_data);
 
         Ok(workbook)
     }
@@ -345,6 +348,9 @@ impl XlsxReader {
             Err(_) => {
                 return Ok(ParsedStyles {
                     cell_styles: vec![Style::default()],
+                    cell_style_xfs: vec![Style::default()],
+                    named_styles: Vec::new(),
+                    cell_xf_xf_ids: vec![0],
                     dxf_styles: Vec::new(),
                 })
             }

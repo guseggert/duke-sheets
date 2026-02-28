@@ -12,4 +12,5 @@ mod fill_styles;
 mod font_styles;
 mod formula_metadata;
 mod merged_cells;
+mod named_cell_styles_roundtrip;
 mod number_formats;
