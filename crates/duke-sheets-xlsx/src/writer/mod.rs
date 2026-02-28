@@ -34,6 +34,10 @@ const RT_SHARED_STRINGS: &str =
 const RT_THEME: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme";
 const RT_COMMENTS: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+const RT_VML_DRAWING: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
+const RT_HYPERLINK: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
 
 // Content types
 const CT_WORKBOOK: &str =
@@ -344,6 +348,14 @@ struct SharedStringTable {
     index: HashMap<String, u32>,
 }
 
+#[derive(Debug, Clone)]
+struct WorksheetRelationship {
+    id: String,
+    rel_type: &'static str,
+    target: String,
+    target_mode: Option<&'static str>,
+}
+
 impl SharedStringTable {
     /// Build the SST by scanning all string cells in the workbook.
     fn build(workbook: &Workbook) -> Self {
@@ -434,11 +446,14 @@ impl XlsxWriter {
 
         // Write worksheets and their relationships
         for (i, sheet) in workbook.worksheets().enumerate() {
-            Self::write_worksheet(&mut zip, workbook, i, &style_table, &sst)?;
+            let rels = Self::write_worksheet(&mut zip, workbook, i, &style_table, &sst)?;
 
-            // Write worksheet relationships if sheet has comments
+            if !rels.is_empty() {
+                Self::write_worksheet_rels(&mut zip, i, &rels)?;
+            }
+
             if sheet.comment_count() > 0 {
-                Self::write_worksheet_rels(&mut zip, i)?;
+                Self::write_vml_drawing(&mut zip, workbook, i)?;
                 Self::write_comments(&mut zip, workbook, i)?;
             }
         }
@@ -495,6 +510,15 @@ impl XlsxWriter {
                 .with_attribute(("Extension", "xml"))
                 .with_attribute(("ContentType", "application/xml"))
                 .write_empty()?;
+            if !sheets_with_comments.is_empty() {
+                w.create_element("Default")
+                    .with_attribute(("Extension", "vml"))
+                    .with_attribute((
+                        "ContentType",
+                        "application/vnd.openxmlformats-officedocument.vmlDrawing",
+                    ))
+                    .write_empty()?;
+            }
             w.create_element("Override")
                 .with_attribute(("PartName", "/xl/workbook.xml"))
                 .with_attribute(("ContentType", CT_WORKBOOK))
@@ -771,15 +795,34 @@ impl XlsxWriter {
         index: usize,
         style_table: &XlsxStyleTable,
         sst: &SharedStringTable,
-    ) -> XlsxResult<()> {
+    ) -> XlsxResult<Vec<WorksheetRelationship>> {
         let path = format!("xl/worksheets/sheet{}.xml", index + 1);
+        let mut rels = Vec::new();
         Self::write_xml_part(zip, &path, |w| {
             let sheet = workbook
                 .worksheet(index)
                 .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
 
+            if sheet.comment_count() > 0 {
+                let comments_target = format!("../comments{}.xml", index + 1);
+                let vml_target = format!("../drawings/vmlDrawing{}.vml", index + 1);
+                rels.push(WorksheetRelationship {
+                    id: "rId1".to_string(),
+                    rel_type: RT_VML_DRAWING,
+                    target: vml_target,
+                    target_mode: None,
+                });
+                rels.push(WorksheetRelationship {
+                    id: "rId2".to_string(),
+                    rel_type: RT_COMMENTS,
+                    target: comments_target,
+                    target_mode: None,
+                });
+            }
+
             let mut tag = BytesStart::new("worksheet");
             tag.push_attribute(("xmlns", NS_SPREADSHEET));
+            tag.push_attribute(("xmlns:r", NS_DOC_RELS));
             w.write_event(Event::Start(tag))?;
 
             // sheetPr (tab color)
@@ -811,13 +854,22 @@ impl XlsxWriter {
 
             // dataValidations
             Self::write_data_validations(w, sheet)?;
+            Self::write_hyperlinks(w, sheet, &mut rels)?;
 
             // pageMargins + pageSetup
             Self::write_page_setup(w, sheet)?;
 
+            if sheet.comment_count() > 0 {
+                let mut legacy_drawing = BytesStart::new("legacyDrawing");
+                legacy_drawing.push_attribute(("r:id", "rId1"));
+                w.write_event(Event::Empty(legacy_drawing))?;
+            }
+
             w.write_event(Event::End(BytesEnd::new("worksheet")))?;
             Ok(())
-        })
+        })?;
+
+        Ok(rels)
     }
 
     // -- worksheet sub-sections ---------------------------------------------
@@ -874,7 +926,10 @@ impl XlsxWriter {
         Ok(())
     }
 
-    fn write_sheet_format_pr(w: &mut XmlWriter, _sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
+    fn write_sheet_format_pr(
+        w: &mut XmlWriter,
+        _sheet: &duke_sheets_core::Worksheet,
+    ) -> XlsxResult<()> {
         // Emit sheetFormatPr with default row height (Excel default is 15)
         w.create_element("sheetFormatPr")
             .with_attribute(("defaultRowHeight", "15"))
@@ -1986,6 +2041,95 @@ impl XlsxWriter {
         Ok(())
     }
 
+    fn write_hyperlinks(
+        w: &mut XmlWriter,
+        sheet: &duke_sheets_core::Worksheet,
+        rels: &mut Vec<WorksheetRelationship>,
+    ) -> XlsxResult<()> {
+        let mut hyperlinks: Vec<_> = sheet.hyperlinks().iter().collect();
+        hyperlinks.sort_by_key(|(addr, _)| (addr.row, addr.col));
+
+        if hyperlinks.is_empty() {
+            return Ok(());
+        }
+
+        w.write_event(Event::Start(BytesStart::new("hyperlinks")))?;
+
+        let mut next_rid = Self::next_worksheet_rel_id(rels);
+
+        for (addr, hyperlink) in hyperlinks {
+            let cell_ref = addr.to_a1_string();
+            let mut tag = BytesStart::new("hyperlink");
+            tag.push_attribute(("ref", cell_ref.as_str()));
+
+            let target = hyperlink.target.trim();
+            let has_location = hyperlink
+                .location
+                .as_ref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            let is_internal = has_location
+                && (target.is_empty()
+                    || target.starts_with('#')
+                    || !Self::is_external_target(target));
+
+            if is_internal {
+                let location = hyperlink
+                    .location
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| target.strip_prefix('#'));
+                if let Some(location) = location {
+                    tag.push_attribute(("location", location));
+                }
+            } else if !target.is_empty() {
+                let rid = format!("rId{}", next_rid);
+                next_rid += 1;
+                tag.push_attribute(("r:id", rid.as_str()));
+                if let Some(location) = hyperlink.location.as_deref().filter(|s| !s.is_empty()) {
+                    tag.push_attribute(("location", location));
+                }
+                rels.push(WorksheetRelationship {
+                    id: rid,
+                    rel_type: RT_HYPERLINK,
+                    target: target.to_string(),
+                    target_mode: Some("External"),
+                });
+            }
+
+            if let Some(display) = hyperlink.display.as_deref() {
+                if !display.is_empty() {
+                    tag.push_attribute(("display", display));
+                }
+            }
+            if let Some(tooltip) = hyperlink.tooltip.as_deref() {
+                if !tooltip.is_empty() {
+                    tag.push_attribute(("tooltip", tooltip));
+                }
+            }
+
+            w.write_event(Event::Empty(tag))?;
+        }
+
+        w.write_event(Event::End(BytesEnd::new("hyperlinks")))?;
+        Ok(())
+    }
+
+    fn next_worksheet_rel_id(rels: &[WorksheetRelationship]) -> usize {
+        rels.iter()
+            .filter_map(|rel| {
+                rel.id
+                    .strip_prefix("rId")
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
+            .max()
+            .map_or(1, |max_id| max_id + 1)
+    }
+
+    fn is_external_target(target: &str) -> bool {
+        target.contains("://") || target.starts_with("mailto:") || target.starts_with("file:")
+    }
+
     // -----------------------------------------------------------------------
     // Worksheet relationships
     // -----------------------------------------------------------------------
@@ -1993,6 +2137,7 @@ impl XlsxWriter {
     fn write_worksheet_rels<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         sheet_index: usize,
+        rels: &[WorksheetRelationship],
     ) -> XlsxResult<()> {
         let path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_index + 1);
         Self::write_xml_part(zip, &path, |w| {
@@ -2000,16 +2145,105 @@ impl XlsxWriter {
             tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
             w.write_event(Event::Start(tag))?;
 
-            let target = format!("../comments{}.xml", sheet_index + 1);
-            w.create_element("Relationship")
-                .with_attribute(("Id", "rId1"))
-                .with_attribute(("Type", RT_COMMENTS))
-                .with_attribute(("Target", target.as_str()))
-                .write_empty()?;
+            for rel in rels {
+                let mut relationship = w
+                    .create_element("Relationship")
+                    .with_attribute(("Id", rel.id.as_str()))
+                    .with_attribute(("Type", rel.rel_type))
+                    .with_attribute(("Target", rel.target.as_str()));
+                if let Some(target_mode) = rel.target_mode {
+                    relationship = relationship.with_attribute(("TargetMode", target_mode));
+                }
+                relationship.write_empty()?;
+            }
 
             w.write_event(Event::End(BytesEnd::new("Relationships")))?;
             Ok(())
         })
+    }
+
+    fn write_vml_drawing<W: Write + Seek>(
+        zip: &mut zip::ZipWriter<W>,
+        workbook: &Workbook,
+        sheet_index: usize,
+    ) -> XlsxResult<()> {
+        let sheet = workbook
+            .worksheet(sheet_index)
+            .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
+
+        if sheet.comment_count() == 0 {
+            return Ok(());
+        }
+
+        let path = format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file(path, options)?;
+
+        let sheet_idx = sheet_index + 1;
+        let mut comments: Vec<_> = sheet.comments().collect();
+        comments.sort_by_key(|((row, col), _)| (*row, *col));
+
+        let mut xml = String::new();
+        xml.push_str("<xml xmlns:v=\"urn:schemas-microsoft-com:vml\"\n");
+        xml.push_str(" xmlns:o=\"urn:schemas-microsoft-com:office:office\"\n");
+        xml.push_str(" xmlns:x=\"urn:schemas-microsoft-com:office:excel\">\n");
+        xml.push_str(" <o:shapelayout v:ext=\"edit\">\n");
+        xml.push_str(&format!(
+            "  <o:idmap v:ext=\"edit\" data=\"{}\"/>\n",
+            sheet_idx
+        ));
+        xml.push_str(" </o:shapelayout>\n");
+        xml.push_str(" <v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\"\n");
+        xml.push_str("  path=\"m,l,21600r21600,l21600,xe\">\n");
+        xml.push_str("  <v:stroke joinstyle=\"miter\"/>\n");
+        xml.push_str("  <v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/>\n");
+        xml.push_str(" </v:shapetype>\n");
+
+        for (shape_index, ((row, col), comment)) in comments.iter().enumerate() {
+            let row = *row;
+            let col = *col;
+            let row_above = row.saturating_sub(1);
+            let shape_id = sheet_idx * 1024 + 1 + shape_index;
+            let z_index = shape_index + 1;
+            let left = (u32::from(col) + 1) * 64;
+            let top = row * 15;
+            let visibility = if comment.visible { "visible" } else { "hidden" };
+
+            xml.push_str(&format!(
+                " <v:shape id=\"_x0000_s{}\" type=\"#_x0000_t202\"\n",
+                shape_id
+            ));
+            xml.push_str(&format!(
+                "  style='position:absolute;margin-left:{}pt;margin-top:{}pt;width:96pt;height:55.5pt;z-index:{};visibility:{}'\n",
+                left, top, z_index, visibility
+            ));
+            xml.push_str("  fillcolor=\"#ffffe1\" o:insetmode=\"auto\">\n");
+            xml.push_str("  <v:fill color2=\"#ffffe1\"/>\n");
+            xml.push_str("  <v:shadow on=\"t\" color=\"black\" obscured=\"t\"/>\n");
+            xml.push_str("  <v:path o:connecttype=\"none\"/>\n");
+            xml.push_str("  <v:textbox style='mso-direction-alt:auto'>\n");
+            xml.push_str("   <div style='text-align:left'></div>\n");
+            xml.push_str("  </v:textbox>\n");
+            xml.push_str("  <x:ClientData ObjectType=\"Note\">\n");
+            xml.push_str("   <x:MoveWithCells/>\n");
+            xml.push_str("   <x:SizeWithCells/>\n");
+            xml.push_str(&format!(
+                "   <x:Anchor>{}, 15, {}, 10, {}, 15, {}, 4</x:Anchor>\n",
+                col + 1,
+                row_above,
+                col + 3,
+                row + 3
+            ));
+            xml.push_str("   <x:AutoFill>False</x:AutoFill>\n");
+            xml.push_str(&format!("   <x:Row>{}</x:Row>\n", row));
+            xml.push_str(&format!("   <x:Column>{}</x:Column>\n", col));
+            xml.push_str("  </x:ClientData>\n");
+            xml.push_str(" </v:shape>\n");
+        }
+
+        xml.push_str("</xml>");
+        zip.write_all(xml.as_bytes())?;
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -2098,7 +2332,8 @@ impl XlsxWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use duke_sheets_core::{CellRange, ConditionalFormatRule, SplitPanes};
+    use crate::reader::XlsxReader;
+    use duke_sheets_core::{CellRange, ConditionalFormatRule, Hyperlink, SplitPanes};
     use std::io::Read;
 
     fn read_zip_entry(bytes: Vec<u8>, path: &str) -> String {
@@ -2258,5 +2493,75 @@ mod tests {
         assert!(xml.contains("<headerFooter>"));
         assert!(xml.contains("<oddHeader>&amp;LLeft&amp;CCenter</oddHeader>"));
         assert!(xml.contains("<oddFooter>&amp;RPage &amp;P</oddFooter>"));
+    }
+
+    #[test]
+    fn test_hyperlinks_double_roundtrip_preserved() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+
+        sheet.set_cell_value("A1", "External").unwrap();
+        sheet
+            .set_hyperlink(
+                "A1",
+                Hyperlink {
+                    target: "https://example.com".to_string(),
+                    display: Some("Example".to_string()),
+                    tooltip: Some("Visit site".to_string()),
+                    location: None,
+                },
+            )
+            .unwrap();
+
+        sheet.set_cell_value("B2", "Internal").unwrap();
+        sheet
+            .set_hyperlink(
+                "B2",
+                Hyperlink {
+                    target: "#Sheet1!A1".to_string(),
+                    display: Some("Go to A1".to_string()),
+                    tooltip: None,
+                    location: Some("Sheet1!A1".to_string()),
+                },
+            )
+            .unwrap();
+
+        let mut first_write = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut first_write).unwrap();
+        let first_bytes = first_write.into_inner();
+
+        let sheet_rels = read_zip_entry(first_bytes.clone(), "xl/worksheets/_rels/sheet1.xml.rels");
+        assert!(sheet_rels.contains(RT_HYPERLINK));
+        assert!(sheet_rels.contains("Target=\"https://example.com\""));
+
+        let wb2 = XlsxReader::read(Cursor::new(first_bytes)).unwrap();
+        let sheet2 = wb2.worksheet(0).unwrap();
+        assert_eq!(sheet2.hyperlink_count(), 2);
+        assert_eq!(
+            sheet2.hyperlink("A1").unwrap().target,
+            "https://example.com".to_string()
+        );
+        assert_eq!(
+            sheet2.hyperlink("B2").unwrap().location.as_deref(),
+            Some("Sheet1!A1")
+        );
+
+        let mut second_write = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb2, &mut second_write).unwrap();
+        let second_bytes = second_write.into_inner();
+
+        let wb3 = XlsxReader::read(Cursor::new(second_bytes)).unwrap();
+        let sheet3 = wb3.worksheet(0).unwrap();
+        assert_eq!(sheet3.hyperlink_count(), 2);
+
+        let a1 = sheet3.hyperlink("A1").unwrap();
+        assert_eq!(a1.target, "https://example.com");
+        assert_eq!(a1.display.as_deref(), Some("Example"));
+        assert_eq!(a1.tooltip.as_deref(), Some("Visit site"));
+
+        let b2 = sheet3.hyperlink("B2").unwrap();
+        assert_eq!(b2.target, "#Sheet1!A1");
+        assert_eq!(b2.location.as_deref(), Some("Sheet1!A1"));
+        assert_eq!(b2.display.as_deref(), Some("Go to A1"));
     }
 }
