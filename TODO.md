@@ -150,7 +150,7 @@
 ### High Priority
 
 #### XLSX Writer Gaps (remaining)
-- [ ] **Comment VML drawings** — comments written to `comments{N}.xml` but without VML positioning; Excel may not display them
+- [x] **Comment VML drawings** — writer now emits `vmlDrawing{N}.vml` note shapes + `legacyDrawing`/rels/content-types wiring so Excel displays comments
 - [x] **`headerFooter` (odd only)** — `PageSetup` includes odd header/footer strings; XLSX reader/writer parse and emit `<headerFooter>`
 - [ ] **`headerFooter` (even/first + flags)** — support even/first header/footer strings and flags (`differentOddEven`, `differentFirst`, `alignWithMargins`, `scaleWithDoc`)
 
@@ -158,7 +158,7 @@
 - [x] **Theme colors** — reader now parses `xl/theme/theme1.xml` (`clrScheme`) and resolves theme+tint colors in styles/CF
 - [ ] **Shared/array/dataTable formulas** — shared + array anchor parsed; `dataTable` now mapped to `=TABLE(r1,r2)` placeholder using OOXML attrs, but full behavior remains incomplete
 - [x] **Theme/indexed colors in CF** — `parse_color_element()` now handles `rgb`/`theme`/`indexed`/`tint`/`auto` and resolves with workbook theme palette
-- [ ] **`cellStyleXfs` / named cell styles** — reader now parses `cellStyleXfs` inheritance (`xfId` + apply flags); writer still hardcodes one entry + "Normal"
+- [x] **`cellStyleXfs` / named cell styles** — reader parses `cellStyleXfs` inheritance and `cellStyles`; writer preserves parsed `cellStyleXfs` + named styles on roundtrip (via roundtrip data registry)
 - [x] **Font scheme/family/charset** — modeled in `FontStyle`, parsed from XLSX fonts, and emitted by writer when present
 - [x] **Outline/grouping levels** — row/column `outlineLevel` + `collapsed` now read from XLSX into worksheet metadata
 - [x] **Sheet views** — tab selection, zoom scale, active selection, frozen panes, and non-frozen split panes now roundtrip (single selection only)
@@ -195,11 +195,12 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [x] Preserve theme/indexed color attributes in sheet XML (`tabColor`, CF `colorScale`, `dataBar`)
 - [x] Emit `xl/theme/theme1.xml` + workbook theme relationship on write (default Office theme)
 - [x] Emit row/column `outlineLevel` + `collapsed` attributes from worksheet metadata
-- [ ] **Worksheet XML element ordering** — emit children in spec order (helps Open XML SDK validation; e.g. `printOptions` before `pageMargins/pageSetup/headerFooter`)
+- [x] **Worksheet XML element ordering** — emit children in spec order (dimension, sheetFormatPr, printOptions before pageMargins); verified via positional assertions on raw XML
 - [ ] **OOXML spec validation** — run Open XML SDK validator on duke-sheets output
 
 #### General Quality
 - [ ] **Refactor XLSX reader/writer modules** — break `crates/duke-sheets-xlsx/src/reader/mod.rs` and `crates/duke-sheets-xlsx/src/writer/mod.rs` into section parsers (sheet views, page setup, comments, CF/DV, etc.) + relationship-based part resolver
+- [x] **XLSX reader modular split (phase 1)** — extracted `reader/theme.rs`, `reader/formulas.rs`, `reader/data_validation.rs`, `reader/conditional_format.rs`, `reader/comments.rs`; `reader/mod.rs` now keeps orchestration/workbook/sheet loop/cell processing
 - [ ] **Property-based testing** (proptest) — CellAddress roundtrip, Style write/read, formula parse/print
 - [ ] **Broader locale coverage** — more built-in `Locale` constructors; CLI `--locale` flag; consider system locale auto-detection
 
@@ -212,9 +213,9 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 ### Medium Priority
 
 #### Hyperlinks
-- [ ] **Data model** — `Hyperlink` struct (URL, display text, tooltip, location)
-- [ ] **XLSX reader** — read `<hyperlinks>` + relationship targets
-- [ ] **XLSX writer** — write hyperlinks
+- [x] **Data model** — `Hyperlink` struct (URL, display text, tooltip, location)
+- [x] **XLSX reader** — read `<hyperlinks>` + relationship targets
+- [x] **XLSX writer** — write hyperlinks
 - [ ] **XLS reader** — parse `HLINK` record (0x01B8, constant already defined)
 
 #### Rich Text Runs
@@ -330,24 +331,24 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 
 | Test Suite | Count | Status |
 |------------|-------|--------|
-| Core (cell, workbook, worksheet) | 36 | ✅ |
+| Core (cell, workbook, worksheet) | 37 | ✅ |
 | Cell display formatting (CellView) | 51 | ✅ |
 | Formula parser | 37 | ✅ |
 | Formula evaluator + functions | 74 | ✅ |
 | Calculation engine | 8 | ✅ |
-| XLSX roundtrip | 18 | ✅ |
+| XLSX roundtrip | 22 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
 | XLS unit (BIFF parser, strings, styles, formula decompiler) | 87 | ✅ |
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
 | XLS real-file integration | 2 | ✅ |
-| E2E XLSX reader integration (LO + handcrafted OOXML) | 59 | ✅ |
+| E2E XLSX reader integration (LO + handcrafted OOXML) | 60 | ✅ |
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
-| XLSX formatting roundtrip | 16 | ✅ |
-| Other (unit, doc, integration) | 291 | ✅ |
-| **Total** | **713** | ✅ |
+| XLSX formatting roundtrip | 17 | ✅ |
+| Other (unit, doc, integration) | 290 | ✅ |
+| **Total** | **719** | ✅ |
 
 ---
 
@@ -358,7 +359,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 3. ~~**XLSX writer uses inline strings**~~ — Fixed. Now uses shared string table (SST).
 4. ~~**Theme colors not resolved**~~ — Fixed. XLSX reader parses `xl/theme/theme1.xml` and resolves theme+tint colors in styles and conditional formatting.
 5. **XLS reader drops comments, hyperlinks, CF, DV** — these features are supported by the XLSX reader but silently skipped in XLS
-6. **Comment VML not written** — comments XML is written but VML positioning shapes are not; some Excel builds may not display them
+6. ~~**Comment VML not written**~~ — Fixed. Writer now emits VML note shapes, worksheet `legacyDrawing`, and VML/comment relationships.
 
 ---
 
