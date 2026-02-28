@@ -1,6 +1,7 @@
 //! End-to-end tests for XLSX roundtrip (create -> save -> read -> verify)
 
 use duke_sheets::prelude::*;
+use duke_sheets_core::style::Underline;
 use duke_sheets_core::{PageOrientation, SplitPanes};
 use std::io::Cursor;
 
@@ -802,4 +803,103 @@ fn test_worksheet_element_ordering() {
     assert!(ps2.print_gridlines, "Print gridlines should be preserved");
     assert!((ps2.left_margin - 1.0).abs() < 1e-9, "Left margin should be preserved");
     assert!(ps2.odd_header.is_some(), "Header should be preserved");
+}
+
+/// Test roundtrip of rich text (inline string with per-run formatting)
+#[test]
+fn test_roundtrip_rich_text() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Cell with mixed formatting: plain + bold + italic+colored
+    let runs = vec![
+        RichTextRun::plain("Hello "),
+        RichTextRun::with_font("bold", RunFont {
+            bold: Some(true),
+            ..Default::default()
+        }),
+        RichTextRun::with_font(" world", RunFont {
+            italic: Some(true),
+            color: Some(Color::rgb(255, 0, 0)),
+            ..Default::default()
+        }),
+    ];
+    sheet
+        .set_cell_value_at(0, 0, CellValue::RichText(runs.clone()))
+        .unwrap();
+
+    // Cell with a single plain run (no formatting)
+    let plain_runs = vec![RichTextRun::plain("Just plain text")];
+    sheet
+        .set_cell_value_at(1, 0, CellValue::RichText(plain_runs.clone()))
+        .unwrap();
+
+    // Cell with many font properties
+    let fancy_runs = vec![
+        RichTextRun::with_font("fancy", RunFont {
+            bold: Some(true),
+            italic: Some(true),
+            size: Some(14.0),
+            name: Some("Arial".to_string()),
+            underline: Some(Underline::Single),
+            strikethrough: Some(true),
+            color: Some(Color::rgb(0, 128, 255)),
+            ..Default::default()
+        }),
+    ];
+    sheet
+        .set_cell_value_at(2, 0, CellValue::RichText(fancy_runs.clone()))
+        .unwrap();
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    // Verify cell A1: mixed formatting
+    match sheet2.get_value_at(0, 0) {
+        CellValue::RichText(read_runs) => {
+            assert_eq!(read_runs.len(), 3, "expected 3 runs");
+            assert_eq!(read_runs[0].text, "Hello ");
+            assert!(read_runs[0].font.is_none(), "first run should have no font");
+            assert_eq!(read_runs[1].text, "bold");
+            assert_eq!(read_runs[1].font.as_ref().unwrap().bold, Some(true));
+            assert_eq!(read_runs[2].text, " world");
+            let f2 = read_runs[2].font.as_ref().unwrap();
+            assert_eq!(f2.italic, Some(true));
+            // Color roundtrips as Rgb (parse_color_element drops alpha from ARGB)
+            assert_eq!(f2.color, Some(Color::rgb(255, 0, 0)));
+        }
+        other => panic!("expected RichText, got {:?}", other),
+    }
+
+    // Verify cell A2: plain run
+    match sheet2.get_value_at(1, 0) {
+        CellValue::RichText(read_runs) => {
+            assert_eq!(read_runs.len(), 1);
+            assert_eq!(read_runs[0].text, "Just plain text");
+            assert!(read_runs[0].font.is_none());
+        }
+        other => panic!("expected RichText, got {:?}", other),
+    }
+
+    // Verify cell A3: fancy run
+    match sheet2.get_value_at(2, 0) {
+        CellValue::RichText(read_runs) => {
+            assert_eq!(read_runs.len(), 1);
+            assert_eq!(read_runs[0].text, "fancy");
+            let f = read_runs[0].font.as_ref().unwrap();
+            assert_eq!(f.bold, Some(true));
+            assert_eq!(f.italic, Some(true));
+            assert_eq!(f.size, Some(14.0));
+            assert_eq!(f.name.as_deref(), Some("Arial"));
+            assert_eq!(f.underline, Some(Underline::Single));
+            assert_eq!(f.strikethrough, Some(true));
+            assert_eq!(f.color, Some(Color::rgb(0, 128, 255)));
+        }
+        other => panic!("expected RichText, got {:?}", other),
+    }
 }

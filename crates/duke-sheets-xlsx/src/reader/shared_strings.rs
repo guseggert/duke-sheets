@@ -168,7 +168,7 @@ pub(crate) fn read_shared_strings<R: Read + Seek>(
 }
 
 /// Parse a single `<rPr>` child element and update the run font.
-fn parse_rpr_element(name: &[u8], e: &BytesStart, font: &mut Option<RunFont>) {
+pub(crate) fn parse_rpr_element(name: &[u8], e: &BytesStart, font: &mut Option<RunFont>) {
     let f = match font.as_mut() {
         Some(f) => f,
         None => return,

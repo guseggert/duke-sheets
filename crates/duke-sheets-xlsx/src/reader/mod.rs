@@ -553,6 +553,14 @@ impl XlsxReader {
         let mut in_formula = false;
         let mut in_inline_str = false;
         let mut in_inline_text = false;
+        // Inline rich text state
+        let mut in_inline_r = false;
+        let mut in_inline_rpr = false;
+        let mut in_inline_run_t = false;
+        let mut has_inline_runs = false;
+        let mut inline_runs: Vec<duke_sheets_core::RichTextRun> = Vec::new();
+        let mut inline_run_text = String::new();
+        let mut inline_run_font: Option<duke_sheets_core::RunFont> = None;
         let mut shared_formula_masters: HashMap<u32, SharedFormulaMaster> = HashMap::new();
 
         // Data validation state
@@ -855,9 +863,34 @@ impl XlsxReader {
                     }
                     b"is" if in_cell => {
                         in_inline_str = true;
+                        has_inline_runs = false;
+                        inline_runs.clear();
                     }
-                    b"t" if in_inline_str => {
+                    b"r" if in_inline_str => {
+                        in_inline_r = true;
+                        has_inline_runs = true;
+                        inline_run_text.clear();
+                        inline_run_font = None;
+                    }
+                    b"rPr" if in_inline_r => {
+                        in_inline_rpr = true;
+                        inline_run_font = Some(duke_sheets_core::RunFont::default());
+                    }
+                    b"t" if in_inline_r && !in_inline_rpr => {
+                        in_inline_run_t = true;
+                        // Disable trim to preserve significant whitespace
+                        xml_reader.config_mut().trim_text(false);
+                    }
+                    b"t" if in_inline_str && !in_inline_r => {
                         in_inline_text = true;
+                    }
+                    // rPr children that use Start+End (rare, but handle defensively)
+                    name if in_inline_rpr => {
+                        shared_strings::parse_rpr_element(
+                            name,
+                            &e,
+                            &mut inline_run_font,
+                        );
                     }
                     // Data validation parsing
                     b"dataValidation" => {
@@ -940,22 +973,65 @@ impl XlsxReader {
                         b"c" => {
                             // Process the cell
                             if let Some(ref cell_ref) = current_cell_ref {
-                                let resolved_formula = resolve_cell_formula(
-                                    cell_ref,
-                                    current_formula.as_deref(),
-                                    &current_formula_state,
-                                    &mut shared_formula_masters,
-                                );
-                                Self::process_cell(
-                                    worksheet,
-                                    cell_ref,
-                                    current_cell_type.as_deref(),
-                                    current_value.as_deref(),
-                                    resolved_formula.as_deref(),
-                                    current_cell_style,
-                                    shared_strings,
-                                    cell_styles,
-                                )?;
+                                if has_inline_runs {
+                                    // Inline rich text — set directly, bypassing process_cell
+                                    if let Ok(addr) = CellAddress::parse(cell_ref) {
+                                        let runs = std::mem::take(&mut inline_runs);
+                                        let resolved_formula = resolve_cell_formula(
+                                            cell_ref,
+                                            current_formula.as_deref(),
+                                            &current_formula_state,
+                                            &mut shared_formula_masters,
+                                        );
+                                        let cell_value = if let Some(f) = resolved_formula {
+                                            let formula_text = if f.starts_with('=') {
+                                                f
+                                            } else {
+                                                format!("={}", f)
+                                            };
+                                            CellValue::Formula {
+                                                text: formula_text,
+                                                cached_value: Some(Box::new(CellValue::RichText(runs))),
+                                                array_result: None,
+                                            }
+                                        } else {
+                                            CellValue::RichText(runs)
+                                        };
+                                        if let Err(e) = worksheet.set_cell_value_at(
+                                            addr.row, addr.col, cell_value,
+                                        ) {
+                                            log::warn!("Skipping rich text cell {}: {}", cell_ref, e);
+                                        }
+                                        // Apply style
+                                        if let Some(s) = current_cell_style {
+                                            if s != 0 {
+                                                if let Some(style) = cell_styles.get(s as usize) {
+                                                    if let Err(e) = worksheet.set_cell_style_at(addr.row, addr.col, style) {
+                                                        log::warn!("Cell {}: failed to apply style: {}", cell_ref, e);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    has_inline_runs = false;
+                                } else {
+                                    let resolved_formula = resolve_cell_formula(
+                                        cell_ref,
+                                        current_formula.as_deref(),
+                                        &current_formula_state,
+                                        &mut shared_formula_masters,
+                                    );
+                                    Self::process_cell(
+                                        worksheet,
+                                        cell_ref,
+                                        current_cell_type.as_deref(),
+                                        current_value.as_deref(),
+                                        resolved_formula.as_deref(),
+                                        current_cell_style,
+                                        shared_strings,
+                                        cell_styles,
+                                    )?;
+                                }
                             }
                             in_cell = false;
                         }
@@ -964,6 +1040,24 @@ impl XlsxReader {
                         }
                         b"f" => {
                             in_formula = false;
+                        }
+                        b"rPr" if in_inline_rpr => {
+                            in_inline_rpr = false;
+                        }
+                        b"t" if in_inline_run_t => {
+                            in_inline_run_t = false;
+                            xml_reader.config_mut().trim_text(true);
+                        }
+                        b"r" if in_inline_r => {
+                            // Finish current run — mirrors SST parser
+                            let font = inline_run_font.take().and_then(|f| {
+                                if f.is_empty() { None } else { Some(f) }
+                            });
+                            inline_runs.push(duke_sheets_core::RichTextRun {
+                                text: decode_excel_escapes(&std::mem::take(&mut inline_run_text)),
+                                font,
+                            });
+                            in_inline_r = false;
                         }
                         b"is" => {
                             in_inline_str = false;
@@ -1094,6 +1188,15 @@ impl XlsxReader {
                                 err
                             ),
                         }
+                    } else if in_inline_run_t {
+                        match e.unescape() {
+                            Ok(text) => inline_run_text.push_str(&text),
+                            Err(err) => log::warn!(
+                                "Cell {:?}: inline run text unescape failed: {}",
+                                current_cell_ref,
+                                err
+                            ),
+                        }
                     } else if in_inline_text {
                         match e.unescape() {
                             Ok(text) => {
@@ -1143,6 +1246,16 @@ impl XlsxReader {
                     }
                 }
                 Ok(Event::Empty(e)) => {
+                    // Handle rPr children for inline rich text
+                    if in_inline_rpr {
+                        shared_strings::parse_rpr_element(
+                            e.name().local_name().as_ref(),
+                            &e,
+                            &mut inline_run_font,
+                        );
+                        buf.clear();
+                        continue;
+                    }
                     match e.name().local_name().as_ref() {
                         b"pageMargins" => {
                             let mut ps = worksheet.page_setup().clone();
