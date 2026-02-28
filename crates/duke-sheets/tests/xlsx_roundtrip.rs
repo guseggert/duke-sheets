@@ -2,7 +2,7 @@
 
 use duke_sheets::prelude::*;
 use duke_sheets_core::style::Underline;
-use duke_sheets_core::{PageOrientation, SplitPanes};
+use duke_sheets_core::{FreezePanes, PageOrientation, Selection, SplitPanes};
 use std::io::Cursor;
 
 /// Test basic roundtrip with numeric values
@@ -446,6 +446,78 @@ fn test_roundtrip_split_panes_and_selection() {
         sheet2.selection_range().map(|r| r.to_string()),
         Some("D5:E6".to_string())
     );
+}
+
+/// Test multi-selection roundtrip with freeze panes (multiple <selection> elements)
+#[test]
+fn test_roundtrip_multi_selection_with_freeze_panes() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Freeze row 2, col B
+    sheet.set_freeze_panes(2, 1);
+
+    // Set two selections: one for the top-left pane, one for the bottom-right pane
+    sheet.set_selections(vec![
+        Selection {
+            pane: Some("topLeft".to_string()),
+            active_cell: Some("A1".to_string()),
+            sqref: Some("A1".to_string()),
+        },
+        Selection {
+            pane: Some("bottomRight".to_string()),
+            active_cell: Some("C5".to_string()),
+            sqref: Some("C5:D8".to_string()),
+        },
+    ]);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    // Freeze panes should survive
+    let freeze = sheet2.freeze_panes().expect("freeze panes should roundtrip");
+    assert_eq!(freeze.row, 2);
+    assert_eq!(freeze.col, 1);
+
+    // Both selections should survive
+    let sels = sheet2.selections();
+    assert_eq!(sels.len(), 2, "expected 2 selections, got {:?}", sels);
+
+    assert_eq!(sels[0].pane.as_deref(), Some("topLeft"));
+    assert_eq!(sels[0].active_cell.as_deref(), Some("A1"));
+    assert_eq!(sels[0].sqref.as_deref(), Some("A1"));
+
+    assert_eq!(sels[1].pane.as_deref(), Some("bottomRight"));
+    assert_eq!(sels[1].active_cell.as_deref(), Some("C5"));
+    assert_eq!(sels[1].sqref.as_deref(), Some("C5:D8"));
+}
+
+/// Test multi-range sqref (non-contiguous selection) roundtrips correctly
+#[test]
+fn test_roundtrip_multi_range_sqref() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // A single selection with a multi-range sqref (space-separated)
+    sheet.set_selections(vec![
+        Selection {
+            pane: None,
+            active_cell: Some("B5".to_string()),
+            sqref: Some("B5:C6 E2:F3".to_string()),
+        },
+    ]);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let sels = sheet2.selections();
+    assert_eq!(sels.len(), 1);
+    assert_eq!(sels[0].active_cell.as_deref(), Some("B5"));
+    assert_eq!(sels[0].sqref.as_deref(), Some("B5:C6 E2:F3"));
 }
 
 /// Test page setup and header/footer roundtrip

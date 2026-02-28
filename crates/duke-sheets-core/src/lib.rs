@@ -58,7 +58,7 @@ pub use locale::Locale;
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
 pub use workbook::{Workbook, WorkbookSettings};
 pub use worksheet::{
-    FreezePanes, PageOrientation, PageSetup, SheetProtection, SplitPanes, Worksheet,
+    FreezePanes, PageOrientation, PageSetup, Selection, SheetProtection, SplitPanes, Worksheet,
 };
 
 // Re-export all style types for convenience
