@@ -439,6 +439,46 @@ impl<'a> Workbook<'a> {
     }
 
     // -------------------------------------------------------------------------
+    // Rich text (per-character formatting via Characters API)
+    // -------------------------------------------------------------------------
+
+    /// Set a font property on a substring of a cell's text.
+    ///
+    /// Uses Excel's `Range.Characters(start, length).Font.{property}` API.
+    /// `start` is 1-based (Excel convention). `length` is the character count.
+    pub fn set_character_font_property(
+        &self,
+        cell: &str,
+        start: i32,
+        length: i32,
+        property: &str,
+        value: serde_json::Value,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![
+            self.active_sheet.clone().to_chain_step(),
+            ChainStep::Indexed("Range".to_string(), serde_json::Value::from(cell)),
+        ];
+        let data = self.bridge.invoke(
+            self.handle,
+            chain,
+            "Characters",
+            vec![serde_json::Value::from(start), serde_json::Value::from(length)],
+        )?;
+        let char_handle = match data {
+            Some(ResponseData::Handle { handle }) => handle,
+            _ => return Err(BridgeError::ExpectedHandle),
+        };
+        let result = self.bridge.set(
+            char_handle,
+            vec![ChainStep::Property("Font".to_string())],
+            property,
+            value,
+        );
+        let _ = self.bridge.release(char_handle);
+        result
+    }
+
+    // -------------------------------------------------------------------------
     // Conditional formatting
     // -------------------------------------------------------------------------
 

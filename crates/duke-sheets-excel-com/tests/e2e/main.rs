@@ -26,6 +26,7 @@ mod fill_styles;
 mod font_styles;
 mod merged_cells;
 mod number_formats;
+mod rich_text;
 mod roundtrip;
 mod smoke;
 mod writing;
