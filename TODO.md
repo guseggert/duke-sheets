@@ -152,7 +152,7 @@
 #### XLSX Writer Gaps (remaining)
 - [x] **Comment VML drawings** — writer now emits `vmlDrawing{N}.vml` note shapes + `legacyDrawing`/rels/content-types wiring so Excel displays comments
 - [x] **`headerFooter` (odd only)** — `PageSetup` includes odd header/footer strings; XLSX reader/writer parse and emit `<headerFooter>`
-- [ ] **`headerFooter` (even/first + flags)** — support even/first header/footer strings and flags (`differentOddEven`, `differentFirst`, `alignWithMargins`, `scaleWithDoc`)
+- [x] **`headerFooter` (even/first + flags)** — even/first header/footer strings and flags (`differentOddEven`, `differentFirst`, `alignWithMargins`, `scaleWithDoc`) fully supported in data model, XLSX reader, and writer
 
 #### XLSX Reader Gaps
 - [x] **Theme colors** — reader now parses `xl/theme/theme1.xml` (`clrScheme`) and resolves theme+tint colors in styles/CF
@@ -339,7 +339,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Formula parser | 37 | ✅ |
 | Formula evaluator + functions | 74 | ✅ |
 | Calculation engine | 8 | ✅ |
-| XLSX roundtrip | 23 | ✅ |
+| XLSX roundtrip | 25 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
@@ -347,13 +347,13 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 60 | ✅ |
-| E2E via Excel COM — reader (XLSX) | 60 | ✅ |
-| E2E via Excel COM — writer (XLSX) | 32 | ✅ |
+| E2E via Excel COM — reader (XLSX) | 61 | ✅ |
+| E2E via Excel COM — writer (XLSX) | 33 | ✅ |
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
-| Other (unit, doc, integration) | 278 | ✅ |
-| **Total** | **735** | ✅ |
+| Other (unit, doc, integration) | 282 | ✅ |
+| **Total** | **743** | ✅ |
 
 ---
 
