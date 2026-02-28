@@ -151,7 +151,8 @@
 
 #### XLSX Writer Gaps (remaining)
 - [ ] **Comment VML drawings** — comments written to `comments{N}.xml` but without VML positioning; Excel may not display them
-- [x] **`headerFooter`** — `PageSetup` now includes odd header/footer strings; XLSX reader/writer parse and emit `<headerFooter>`
+- [x] **`headerFooter` (odd only)** — `PageSetup` includes odd header/footer strings; XLSX reader/writer parse and emit `<headerFooter>`
+- [ ] **`headerFooter` (even/first + flags)** — support even/first header/footer strings and flags (`differentOddEven`, `differentFirst`, `alignWithMargins`, `scaleWithDoc`)
 
 #### XLSX Reader Gaps
 - [x] **Theme colors** — reader now parses `xl/theme/theme1.xml` (`clrScheme`) and resolves theme+tint colors in styles/CF
@@ -160,8 +161,12 @@
 - [ ] **`cellStyleXfs` / named cell styles** — reader now parses `cellStyleXfs` inheritance (`xfId` + apply flags); writer still hardcodes one entry + "Normal"
 - [x] **Font scheme/family/charset** — modeled in `FontStyle`, parsed from XLSX fonts, and emitted by writer when present
 - [x] **Outline/grouping levels** — row/column `outlineLevel` + `collapsed` now read from XLSX into worksheet metadata
-- [x] **Sheet views** — tab selection, zoom scale, active selection, frozen panes, and non-frozen split panes now roundtrip
-- [x] **Comment visibility** — reader parses VML note shapes and sets `CellComment.visible` (via `vmlDrawing{N}.vml` lookup)
+- [x] **Sheet views** — tab selection, zoom scale, active selection, frozen panes, and non-frozen split panes now roundtrip (single selection only)
+- [ ] **Sheet views (multi-selection)** — preserve multiple `<selection>` entries and multi-range `sqref` values
+- [ ] **Sheet views (pane edge cases)** — handle non-empty `<pane>` start/end tags (not just self-closing)
+- [x] **Comment visibility** — reader parses VML note shapes and sets `CellComment.visible` (currently uses style `visibility:visible`)
+- [ ] **Comments/VML relationships** — resolve `comments*.xml` and `vmlDrawing*.vml` via `sheet*.xml.rels` + `legacyDrawing` r:id (don’t assume index-based filenames)
+- [ ] **Comment visibility (robust)** — parse VML `<x:Visible/>` and tolerate style variations (`visibility: visible`, casing)
 - [ ] **Rich text in shared strings** — reader flattens `<rPr>` formatting runs to plain text
 
 #### More Excel Functions (~398 remaining)
@@ -190,9 +195,11 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [x] Preserve theme/indexed color attributes in sheet XML (`tabColor`, CF `colorScale`, `dataBar`)
 - [x] Emit `xl/theme/theme1.xml` + workbook theme relationship on write (default Office theme)
 - [x] Emit row/column `outlineLevel` + `collapsed` attributes from worksheet metadata
+- [ ] **Worksheet XML element ordering** — emit children in spec order (helps Open XML SDK validation; e.g. `printOptions` before `pageMargins/pageSetup/headerFooter`)
 - [ ] **OOXML spec validation** — run Open XML SDK validator on duke-sheets output
 
 #### General Quality
+- [ ] **Refactor XLSX reader/writer modules** — break `crates/duke-sheets-xlsx/src/reader/mod.rs` and `crates/duke-sheets-xlsx/src/writer/mod.rs` into section parsers (sheet views, page setup, comments, CF/DV, etc.) + relationship-based part resolver
 - [ ] **Property-based testing** (proptest) — CellAddress roundtrip, Style write/read, formula parse/print
 - [ ] **Broader locale coverage** — more built-in `Locale` constructors; CLI `--locale` flag; consider system locale auto-detection
 
@@ -261,15 +268,15 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [ ] **Write theme** — preserve or generate theme on roundtrip
 
 #### Print Settings
-- [ ] **Data model** — expand `PageSetup` (paper size, orientation, margins, header/footer, print area, page breaks)
-- [ ] **XLSX reader** — read `<pageSetup>`, `<pageMargins>`, `<headerFooter>`, `<rowBreaks>`, `<colBreaks>`
-- [ ] **XLSX writer** — write print settings
+- [x] **Data model (partial)** — `PageSetup` supports paper/orientation/scale/fit, margins, print options, odd header/footer; still missing print area + page breaks
+- [x] **XLSX reader (partial)** — reads `<pageSetup>`, `<pageMargins>`, `<printOptions>`, `<headerFooter>` (odd); still missing row/col breaks + even/first headers
+- [x] **XLSX writer (partial)** — writes the same; still missing row/col breaks + even/first headers
 - [ ] **XLS reader** — parse `SETUP`, `HEADER`, `FOOTER`, margin records, page break records
 
 #### Sheet Views
-- [ ] **Data model** — zoom level, selected cell, pane state, gridline visibility
-- [ ] **XLSX reader** — read `<sheetViews>/<sheetView>`
-- [ ] **XLSX writer** — write `<sheetViews>`
+- [x] **Data model (partial)** — zoom level, selection, freeze/split panes; still missing gridline visibility + multiple selections
+- [x] **XLSX reader (partial)** — reads `<sheetViews>/<sheetView>` for zoom/selection/panes; still missing multi-selection nuances
+- [x] **XLSX writer (partial)** — writes `<sheetViews>` for zoom/selection/panes
 - [ ] **XLS reader** — parse `WINDOW2`, `PANE`, `SELECTION`
 
 #### Charts
