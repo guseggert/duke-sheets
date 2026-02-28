@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::rich_text::{RichTextRun, rich_text_to_plain};
+
 /// Represents the value stored in a cell
 #[derive(Debug, Clone, PartialEq)]
 pub enum CellValue {
@@ -46,12 +48,20 @@ pub enum CellValue {
         /// Column offset from source (0 for first column of spill)
         offset_col: u16,
     },
+
+    /// Rich text with per-run character formatting
+    RichText(Vec<RichTextRun>),
 }
 
 impl CellValue {
     /// Create a new string value
     pub fn string<S: Into<String>>(s: S) -> Self {
         CellValue::String(SharedString::new(s.into()))
+    }
+
+    /// Create a new rich text value from runs.
+    pub fn rich_text(runs: Vec<RichTextRun>) -> Self {
+        CellValue::RichText(runs)
     }
 
     /// Create a new formula value
@@ -71,6 +81,11 @@ impl CellValue {
     /// Check if the cell contains a formula
     pub fn is_formula(&self) -> bool {
         matches!(self, CellValue::Formula { .. })
+    }
+
+    /// Check if the cell contains rich text
+    pub fn is_rich_text(&self) -> bool {
+        matches!(self, CellValue::RichText(_))
     }
 
     /// Check if the cell contains an error
@@ -137,6 +152,7 @@ impl CellValue {
     pub fn as_string(&self) -> Option<&str> {
         match self {
             CellValue::String(s) => Some(s.as_str()),
+            CellValue::RichText(_) => None,
             CellValue::Formula {
                 cached_value: Some(v),
                 ..
@@ -171,6 +187,7 @@ impl CellValue {
             CellValue::Boolean(_) => "boolean",
             CellValue::Number(_) => "number",
             CellValue::String(_) => "string",
+            CellValue::RichText(_) => "rich_text",
             CellValue::Error(_) => "error",
             CellValue::Formula { .. } => "formula",
             CellValue::SpillTarget { .. } => "spill_target",
@@ -191,6 +208,7 @@ impl fmt::Display for CellValue {
             CellValue::Boolean(b) => write!(f, "{}", if *b { "TRUE" } else { "FALSE" }),
             CellValue::Number(n) => write!(f, "{}", n),
             CellValue::String(s) => write!(f, "{}", s.as_str()),
+            CellValue::RichText(runs) => write!(f, "{}", rich_text_to_plain(runs)),
             CellValue::Error(e) => write!(f, "{}", e),
             CellValue::Formula {
                 cached_value: Some(v),

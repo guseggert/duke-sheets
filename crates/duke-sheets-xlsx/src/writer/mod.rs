@@ -365,13 +365,14 @@ impl SharedStringTable {
         for sheet in workbook.worksheets() {
             for (_row, _col, cell) in sheet.iter_cells() {
                 let s = match &cell.value {
-                    duke_sheets_core::CellValue::String(s) => s.as_str(),
+                    duke_sheets_core::CellValue::String(s) => std::borrow::Cow::Borrowed(s.as_str()),
+                    duke_sheets_core::CellValue::RichText(runs) => std::borrow::Cow::Owned(duke_sheets_core::rich_text_to_plain(runs)),
                     _ => continue,
                 };
-                if !index.contains_key(s) {
+                if !index.contains_key(s.as_ref()) {
                     let idx = strings.len() as u32;
-                    index.insert(s.to_owned(), idx);
-                    strings.push(s.to_owned());
+                    index.insert(s.as_ref().to_owned(), idx);
+                    strings.push(s.as_ref().to_owned());
                 }
             }
         }
@@ -1389,6 +1390,30 @@ impl XlsxWriter {
             }
             duke_sheets_core::CellValue::SpillTarget { .. } => {
                 // SpillTarget cells are not written — computed at runtime.
+            }
+            duke_sheets_core::CellValue::RichText(runs) => {
+                // Temporary: write as plain text via SST (rich text writing added later)
+                let plain = duke_sheets_core::rich_text_to_plain(runs);
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                if xf_id != 0 {
+                    c.push_attribute(("s", xf_str.as_str()));
+                }
+                if let Some(sst_idx) = sst.get(&plain) {
+                    c.push_attribute(("t", "s"));
+                    w.write_event(Event::Start(c))?;
+                    let v = sst_idx.to_string();
+                    w.create_element("v")
+                        .write_text_content(BytesText::new(&v))?;
+                } else {
+                    c.push_attribute(("t", "inlineStr"));
+                    w.write_event(Event::Start(c))?;
+                    w.write_event(Event::Start(BytesStart::new("is")))?;
+                    w.create_element("t")
+                        .write_text_content(BytesText::new(&plain))?;
+                    w.write_event(Event::End(BytesEnd::new("is")))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("c")))?;
             }
         }
         Ok(())

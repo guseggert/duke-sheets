@@ -197,6 +197,7 @@ fn cell_value_to_csv_string(value: &CellValue, delimiter: char) -> String {
             }
         }
         CellValue::String(s) => s.to_string(),
+        CellValue::RichText(runs) => duke_sheets::rich_text_to_plain(runs),
         CellValue::Boolean(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
         CellValue::Error(e) => e.to_string(),
         CellValue::Formula { cached_value, .. } => {
