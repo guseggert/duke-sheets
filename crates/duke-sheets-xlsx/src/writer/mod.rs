@@ -365,14 +365,14 @@ impl SharedStringTable {
         for sheet in workbook.worksheets() {
             for (_row, _col, cell) in sheet.iter_cells() {
                 let s = match &cell.value {
-                    duke_sheets_core::CellValue::String(s) => std::borrow::Cow::Borrowed(s.as_str()),
-                    duke_sheets_core::CellValue::RichText(runs) => std::borrow::Cow::Owned(duke_sheets_core::rich_text_to_plain(runs)),
+                    duke_sheets_core::CellValue::String(s) => s.as_str(),
+                    // Rich text uses inline strings, not SST
                     _ => continue,
                 };
-                if !index.contains_key(s.as_ref()) {
+                if !index.contains_key(s) {
                     let idx = strings.len() as u32;
-                    index.insert(s.as_ref().to_owned(), idx);
-                    strings.push(s.as_ref().to_owned());
+                    index.insert(s.to_owned(), idx);
+                    strings.push(s.to_owned());
                 }
             }
         }
@@ -1392,30 +1392,168 @@ impl XlsxWriter {
                 // SpillTarget cells are not written — computed at runtime.
             }
             duke_sheets_core::CellValue::RichText(runs) => {
-                // Temporary: write as plain text via SST (rich text writing added later)
-                let plain = duke_sheets_core::rich_text_to_plain(runs);
                 let mut c = BytesStart::new("c");
                 c.push_attribute(("r", cell_ref.as_str()));
                 if xf_id != 0 {
                     c.push_attribute(("s", xf_str.as_str()));
                 }
-                if let Some(sst_idx) = sst.get(&plain) {
-                    c.push_attribute(("t", "s"));
-                    w.write_event(Event::Start(c))?;
-                    let v = sst_idx.to_string();
-                    w.create_element("v")
-                        .write_text_content(BytesText::new(&v))?;
-                } else {
-                    c.push_attribute(("t", "inlineStr"));
-                    w.write_event(Event::Start(c))?;
-                    w.write_event(Event::Start(BytesStart::new("is")))?;
-                    w.create_element("t")
-                        .write_text_content(BytesText::new(&plain))?;
-                    w.write_event(Event::End(BytesEnd::new("is")))?;
-                }
+                c.push_attribute(("t", "inlineStr"));
+                w.write_event(Event::Start(c))?;
+                w.write_event(Event::Start(BytesStart::new("is")))?;
+                Self::write_rich_text_runs(w, runs)?;
+                w.write_event(Event::End(BytesEnd::new("is")))?;
                 w.write_event(Event::End(BytesEnd::new("c")))?;
             }
         }
+        Ok(())
+    }
+
+    /// Write a sequence of rich text runs as `<r>` elements.
+    fn write_rich_text_runs(
+        w: &mut XmlWriter,
+        runs: &[duke_sheets_core::RichTextRun],
+    ) -> XlsxResult<()> {
+        for run in runs {
+            w.write_event(Event::Start(BytesStart::new("r")))?;
+
+            // Write run properties if present
+            if let Some(font) = &run.font {
+                Self::write_run_properties(w, font)?;
+            }
+
+            // Write text with xml:space="preserve" for whitespace
+            let needs_preserve = run.text.starts_with(|c: char| c.is_ascii_whitespace())
+                || run.text.ends_with(|c: char| c.is_ascii_whitespace());
+            if needs_preserve {
+                let mut t = BytesStart::new("t");
+                t.push_attribute(("xml:space", "preserve"));
+                w.write_event(Event::Start(t))?;
+            } else {
+                w.write_event(Event::Start(BytesStart::new("t")))?;
+            }
+            w.write_event(Event::Text(BytesText::new(&run.text)))?;
+            w.write_event(Event::End(BytesEnd::new("t")))?;
+
+            w.write_event(Event::End(BytesEnd::new("r")))?;
+        }
+        Ok(())
+    }
+
+    /// Write `<rPr>` (run properties) element for a rich text run.
+    fn write_run_properties(
+        w: &mut XmlWriter,
+        font: &duke_sheets_core::RunFont,
+    ) -> XlsxResult<()> {
+        w.write_event(Event::Start(BytesStart::new("rPr")))?;
+
+        if let Some(bold) = font.bold {
+            if bold {
+                w.write_event(Event::Empty(BytesStart::new("b")))?;
+            } else {
+                let mut tag = BytesStart::new("b");
+                tag.push_attribute(("val", "0"));
+                w.write_event(Event::Empty(tag))?;
+            }
+        }
+        if let Some(italic) = font.italic {
+            if italic {
+                w.write_event(Event::Empty(BytesStart::new("i")))?;
+            } else {
+                let mut tag = BytesStart::new("i");
+                tag.push_attribute(("val", "0"));
+                w.write_event(Event::Empty(tag))?;
+            }
+        }
+        if let Some(true) = font.strikethrough {
+            w.write_event(Event::Empty(BytesStart::new("strike")))?;
+        }
+        if let Some(underline) = font.underline {
+            match underline {
+                duke_sheets_core::style::Underline::None => {}
+                duke_sheets_core::style::Underline::Single => {
+                    w.write_event(Event::Empty(BytesStart::new("u")))?;
+                }
+                _ => {
+                    let val = match underline {
+                        duke_sheets_core::style::Underline::Double => "double",
+                        duke_sheets_core::style::Underline::SingleAccounting => "singleAccounting",
+                        duke_sheets_core::style::Underline::DoubleAccounting => "doubleAccounting",
+                        _ => unreachable!(),
+                    };
+                    let mut tag = BytesStart::new("u");
+                    tag.push_attribute(("val", val));
+                    w.write_event(Event::Empty(tag))?;
+                }
+            }
+        }
+        if let Some(va) = font.vertical_align {
+            let val = match va {
+                duke_sheets_core::style::FontVerticalAlign::Superscript => "superscript",
+                duke_sheets_core::style::FontVerticalAlign::Subscript => "subscript",
+                duke_sheets_core::style::FontVerticalAlign::Baseline => "baseline",
+            };
+            let mut tag = BytesStart::new("vertAlign");
+            tag.push_attribute(("val", val));
+            w.write_event(Event::Empty(tag))?;
+        }
+        if let Some(size) = font.size {
+            let mut tag = BytesStart::new("sz");
+            tag.push_attribute(("val", size.to_string().as_str()));
+            w.write_event(Event::Empty(tag))?;
+        }
+        if let Some(color) = &font.color {
+            Self::write_run_color(w, color)?;
+        }
+        if let Some(name) = &font.name {
+            let mut tag = BytesStart::new("rFont");
+            tag.push_attribute(("val", name.as_str()));
+            w.write_event(Event::Empty(tag))?;
+        }
+        if let Some(family) = font.family {
+            let mut tag = BytesStart::new("family");
+            tag.push_attribute(("val", family.to_string().as_str()));
+            w.write_event(Event::Empty(tag))?;
+        }
+        if let Some(charset) = font.charset {
+            let mut tag = BytesStart::new("charset");
+            tag.push_attribute(("val", charset.to_string().as_str()));
+            w.write_event(Event::Empty(tag))?;
+        }
+        if let Some(scheme) = &font.scheme {
+            let mut tag = BytesStart::new("scheme");
+            tag.push_attribute(("val", scheme.as_str()));
+            w.write_event(Event::Empty(tag))?;
+        }
+
+        w.write_event(Event::End(BytesEnd::new("rPr")))?;
+        Ok(())
+    }
+
+    /// Write a `<color>` element for a run property.
+    fn write_run_color(w: &mut XmlWriter, color: &duke_sheets_core::Color) -> XlsxResult<()> {
+        let mut tag = BytesStart::new("color");
+        match color {
+            duke_sheets_core::Color::Rgb { r, g, b } => {
+                tag.push_attribute(("rgb", format!("FF{:02X}{:02X}{:02X}", r, g, b).as_str()));
+            }
+            duke_sheets_core::Color::Argb { a, r, g, b } => {
+                tag.push_attribute(("rgb", format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b).as_str()));
+            }
+            duke_sheets_core::Color::Theme { index, tint } => {
+                tag.push_attribute(("theme", index.to_string().as_str()));
+                if *tint != 0 {
+                    let tint_f = *tint as f64 / 100.0;
+                    tag.push_attribute(("tint", tint_f.to_string().as_str()));
+                }
+            }
+            duke_sheets_core::Color::Indexed(idx) => {
+                tag.push_attribute(("indexed", idx.to_string().as_str()));
+            }
+            duke_sheets_core::Color::Auto => {
+                tag.push_attribute(("auto", "1"));
+            }
+        }
+        w.write_event(Event::Empty(tag))?;
         Ok(())
     }
 
