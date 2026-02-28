@@ -1,7 +1,7 @@
 //! End-to-end tests for XLSX data validation, conditional formatting, and comments roundtrip
 
 use duke_sheets::prelude::*;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
 /// Test data validation list roundtrip
 #[test]
@@ -258,6 +258,40 @@ fn test_roundtrip_cell_comments() {
         assert_eq!(c.author, "Jane Smith");
         assert_eq!(c.text, "Review this value");
     }
+}
+
+#[test]
+fn test_comments_emit_vml_and_legacy_drawing() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet
+        .set_comment("B2", CellComment::new("Jane Smith", "VML-backed comment"))
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+
+    let mut vml = String::new();
+    zip.by_name("xl/drawings/vmlDrawing1.vml")
+        .unwrap()
+        .read_to_string(&mut vml)
+        .unwrap();
+    assert!(vml.contains("<x:Row>1</x:Row>"));
+    assert!(vml.contains("<x:Column>1</x:Column>"));
+
+    let mut sheet_xml = String::new();
+    zip.by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut sheet_xml)
+        .unwrap();
+    assert!(sheet_xml.contains("<legacyDrawing"));
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+    let comment = sheet2.comment("B2").unwrap().unwrap();
+    assert_eq!(comment.text, "VML-backed comment");
 }
 
 /// Test cell comments without author
