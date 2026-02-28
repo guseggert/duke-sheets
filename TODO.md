@@ -167,7 +167,7 @@
 - [x] **Comment visibility** — reader parses VML note shapes and sets `CellComment.visible` (currently uses style `visibility:visible`)
 - [ ] **Comments/VML relationships** — resolve `comments*.xml` and `vmlDrawing*.vml` via `sheet*.xml.rels` + `legacyDrawing` r:id (don’t assume index-based filenames)
 - [ ] **Comment visibility (robust)** — parse VML `<x:Visible/>` and tolerate style variations (`visibility: visible`, casing)
-- [ ] **Rich text in shared strings** — reader flattens `<rPr>` formatting runs to plain text
+- [x] **Rich text in shared strings** — reader preserves `<rPr>` formatting runs as `CellValue::RichText`
 
 #### More Excel Functions (~398 remaining)
 See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
@@ -219,9 +219,11 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [ ] **XLS reader** — parse `HLINK` record (0x01B8, constant already defined)
 
 #### Rich Text Runs
-- [ ] **Data model** — `RichTextRun` (text segment + font override) in `CellValue::String`
-- [ ] **XLSX reader** — preserve `<rPr>` runs in shared strings and inline strings
-- [ ] **XLSX writer** — write `<r>/<rPr>/<t>` runs for rich-text cells
+- [x] **Data model** — `RichTextRun` (text + `RunFont` override), `CellValue::RichText` variant with 25+ match-site updates
+- [x] **XLSX reader (SST)** — preserve `<rPr>` runs in shared strings via `SharedStringEntry::Rich`
+- [x] **XLSX reader (inline)** — parse `<r>/<rPr>/<t>` inside `<is>` elements with whitespace preservation
+- [x] **XLSX writer** — write `<is><r><rPr>...</rPr><t>text</t></r></is>` for rich text cells (inline strings)
+- [x] **Roundtrip test** — mixed formatting (bold, italic, color), plain runs, multi-property runs
 
 #### Tables / ListObjects
 - [ ] **Data model** — `Table` struct (name, range, columns, totals row, style)
@@ -336,7 +338,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Formula parser | 37 | ✅ |
 | Formula evaluator + functions | 74 | ✅ |
 | Calculation engine | 8 | ✅ |
-| XLSX roundtrip | 22 | ✅ |
+| XLSX roundtrip | 23 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
@@ -347,8 +349,10 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | E2E via Excel COM — reader (XLSX) | 59 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 31 | ✅ |
 | XLSX formatting roundtrip | 17 | ✅ |
-| Other (unit, doc, integration) | 290 | ✅ |
-| **Total** | **719** | ✅ |
+| Shared string reader | 9 | ✅ |
+| Rich text unit tests | 4 | ✅ |
+| Other (unit, doc, integration) | 278 | ✅ |
+| **Total** | **733** | ✅ |
 
 ---
 
@@ -389,7 +393,7 @@ duke-sheets/
 ### Key Types
 - `Workbook` - Container for worksheets
 - `Worksheet` - Grid of cells with metadata, locale, date system
-- `CellValue` - Number, String, Boolean, Error, Formula, SpillTarget, Empty
+- `CellValue` - Number, String, Boolean, Error, Formula, RichText, SpillTarget, Empty
 - `CellView` - Lightweight borrow wrapper with `formatted()` display
 - `Locale` - Formatting locale (decimal separators, month names, currency)
 - `FormulaExpr` - AST for parsed formulas
