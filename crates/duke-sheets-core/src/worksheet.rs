@@ -7,6 +7,7 @@ use crate::cell::{CellAddress, CellData, CellRange, CellStorage, CellValue};
 use crate::comment::CellComment;
 use crate::conditional_format::ConditionalFormatRule;
 use crate::error::{Error, Result};
+use crate::hyperlink::Hyperlink;
 use crate::locale::Locale;
 use crate::style::Style;
 use crate::validation::DataValidation;
@@ -41,6 +42,8 @@ pub struct Worksheet {
     tab_color: Option<crate::style::Color>,
     /// Cell comments (keyed by (row, col))
     comments: HashMap<(u32, u16), CellComment>,
+    /// Cell hyperlinks (keyed by cell address)
+    hyperlinks: HashMap<CellAddress, Hyperlink>,
     /// Unique comment authors
     comment_authors: Vec<String>,
     /// Data validations
@@ -75,6 +78,7 @@ impl Worksheet {
             page_setup: PageSetup::default(),
             tab_color: None,
             comments: HashMap::new(),
+            hyperlinks: HashMap::new(),
             comment_authors: Vec::new(),
             data_validations: Vec::new(),
             conditional_formats: Vec::new(),
@@ -610,6 +614,32 @@ impl Worksheet {
     /// Remove split panes
     pub fn unsplit_panes(&mut self) {
         self.split_panes = None;
+    }
+
+    // === Hyperlinks ===
+
+    /// Set a hyperlink on a cell by address string.
+    pub fn set_hyperlink(&mut self, cell: &str, hyperlink: Hyperlink) -> Result<()> {
+        let addr = CellAddress::parse(cell)?;
+        self.hyperlinks.insert(addr, hyperlink);
+        Ok(())
+    }
+
+    /// Get a hyperlink from a cell by address string.
+    pub fn hyperlink(&self, cell: &str) -> Option<&Hyperlink> {
+        CellAddress::parse(cell)
+            .ok()
+            .and_then(|addr| self.hyperlinks.get(&addr))
+    }
+
+    /// Get all hyperlinks in this worksheet.
+    pub fn hyperlinks(&self) -> &HashMap<CellAddress, Hyperlink> {
+        &self.hyperlinks
+    }
+
+    /// Get the number of hyperlinks in this worksheet.
+    pub fn hyperlink_count(&self) -> usize {
+        self.hyperlinks.len()
     }
 
     // === Cell Comments ===
@@ -1299,6 +1329,25 @@ mod tests {
         ws.clear_comments();
         assert_eq!(ws.comment_count(), 0);
         assert!(ws.comment_authors().is_empty());
+    }
+
+    #[test]
+    fn test_hyperlinks() {
+        use crate::Hyperlink;
+
+        let mut ws = Worksheet::new("Test");
+        let link = Hyperlink {
+            target: "https://example.com".to_string(),
+            display: Some("Example".to_string()),
+            tooltip: Some("Visit site".to_string()),
+            location: None,
+        };
+
+        ws.set_hyperlink("A1", link.clone()).unwrap();
+        assert_eq!(ws.hyperlink_count(), 1);
+        assert_eq!(ws.hyperlink("A1"), Some(&link));
+        assert!(ws.hyperlink("B2").is_none());
+        assert!(ws.set_hyperlink("", link).is_err());
     }
 
     #[test]

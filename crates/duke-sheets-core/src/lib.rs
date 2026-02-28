@@ -30,6 +30,7 @@ pub mod column;
 pub mod comment;
 pub mod conditional_format;
 pub mod error;
+pub mod hyperlink;
 pub mod locale;
 pub mod named_range;
 pub mod range;
@@ -50,6 +51,7 @@ pub use conditional_format::{
     IconSetStyle, TimePeriod,
 };
 pub use error::{Error, Result};
+pub use hyperlink::Hyperlink;
 pub use locale::Locale;
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
 pub use workbook::{Workbook, WorkbookSettings};

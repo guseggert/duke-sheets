@@ -42,6 +42,7 @@ pub use crate::{
     FillStyle,
     FontStyle,
     HorizontalAlignment,
+    Hyperlink,
     IconSetStyle,
     NumberFormat,
     Result,
