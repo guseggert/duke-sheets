@@ -31,9 +31,11 @@ mod conditional_format;
 mod data_validation;
 mod formulas;
 mod theme;
+mod shared_strings;
 
 pub(crate) use formulas::CellFormulaState;
 pub(crate) use theme::ThemePalette;
+use shared_strings::SharedStringEntry;
 
 /// Decode Excel's `_xHHHH_` escape sequences in strings.
 ///
@@ -135,7 +137,7 @@ impl XlsxReader {
         }
 
         // Read shared strings (if present)
-        let shared_strings = Self::read_shared_strings(&mut archive)?;
+        let shared_strings = shared_strings::read_shared_strings(&mut archive)?;
 
         // Read styles (if present)
         let mut parsed_styles = Self::read_styles(&mut archive)?;
@@ -214,68 +216,6 @@ impl XlsxReader {
         Ok(workbook)
     }
 
-    /// Read the shared strings table
-    fn read_shared_strings<R: Read + Seek>(
-        archive: &mut zip::ZipArchive<R>,
-    ) -> XlsxResult<Vec<String>> {
-        let mut strings = Vec::new();
-
-        let file = match archive.by_name("xl/sharedStrings.xml") {
-            Ok(f) => f,
-            Err(_) => return Ok(strings), // No shared strings is valid
-        };
-
-        let reader = BufReader::new(file);
-        let mut xml_reader = Reader::from_reader(reader);
-        xml_reader.config_mut().trim_text(true);
-
-        let mut buf = Vec::new();
-        let mut current_string = String::new();
-        let mut in_si = false;
-        let mut in_t = false;
-
-        loop {
-            match xml_reader.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
-                    b"si" => {
-                        in_si = true;
-                        current_string.clear();
-                    }
-                    b"t" if in_si => {
-                        in_t = true;
-                    }
-                    _ => {}
-                },
-                Ok(Event::End(e)) => match e.name().local_name().as_ref() {
-                    b"si" => {
-                        // Decode Excel's _xHHHH_ escape sequences
-                        let decoded = decode_excel_escapes(&current_string);
-                        strings.push(decoded);
-                        current_string.clear();
-                        in_si = false;
-                    }
-                    b"t" => {
-                        in_t = false;
-                    }
-                    _ => {}
-                },
-                Ok(Event::Text(e)) if in_t => match e.unescape() {
-                    Ok(text) => current_string.push_str(&text),
-                    Err(err) => log::warn!(
-                        "Shared string {}: XML unescape failed: {}",
-                        strings.len(),
-                        err
-                    ),
-                },
-                Ok(Event::Eof) => break,
-                Err(e) => return Err(XlsxError::Xml(e)),
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        Ok(strings)
-    }
 
     fn read_styles<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> XlsxResult<ParsedStyles> {
         let file = match archive.by_name("xl/styles.xml") {
@@ -585,7 +525,7 @@ impl XlsxReader {
         archive: &mut zip::ZipArchive<R>,
         path: &str,
         worksheet: &mut duke_sheets_core::Worksheet,
-        shared_strings: &[String],
+        shared_strings: &[SharedStringEntry],
         cell_styles: &[Style],
         dxf_styles: &[Style],
         theme_palette: Option<&ThemePalette>,
@@ -1771,7 +1711,7 @@ impl XlsxReader {
         value: Option<&str>,
         formula: Option<&str>,
         style_idx: Option<u32>,
-        shared_strings: &[String],
+        shared_strings: &[SharedStringEntry],
         styles: &[Style],
     ) -> XlsxResult<()> {
         let addr = match CellAddress::parse(cell_ref) {
@@ -1792,9 +1732,10 @@ impl XlsxReader {
                 Some("e") => CellError::from_str(v).map(CellValue::Error),
                 Some("s") => {
                     let idx: usize = v.parse().ok()?;
-                    shared_strings
-                        .get(idx)
-                        .map(|s| CellValue::String(s.clone().into()))
+                    shared_strings.get(idx).map(|entry| match entry {
+                        SharedStringEntry::Plain(s) => CellValue::String(s.clone().into()),
+                        SharedStringEntry::Rich(runs) => CellValue::RichText(runs.clone()),
+                    })
                 }
                 Some("str") | Some("inlineStr") => Some(CellValue::String(v.to_string().into())),
                 None | Some("n") => v.parse::<f64>().ok().map(CellValue::Number),
@@ -1826,7 +1767,8 @@ impl XlsxReader {
                 // Shared string
                 Some("s") => match value.parse::<usize>() {
                     Ok(idx) => match shared_strings.get(idx) {
-                        Some(s) => CellValue::String(s.clone().into()),
+                        Some(SharedStringEntry::Plain(s)) => CellValue::String(s.clone().into()),
+                        Some(SharedStringEntry::Rich(runs)) => CellValue::RichText(runs.clone()),
                         None => {
                             log::warn!(
                                 "Cell {}: shared string index {} out of bounds (max {}), using #REF!",
