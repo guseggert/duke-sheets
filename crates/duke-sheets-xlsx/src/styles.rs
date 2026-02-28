@@ -1,7 +1,10 @@
 //! XLSX styles (styles.xml) read/write helpers
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Cursor, Read};
+use std::sync::{Mutex, OnceLock};
 
 use quick_xml::escape::escape;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
@@ -34,6 +37,59 @@ pub(crate) struct XlsxStyleTable {
     dxf_styles: Vec<Style>,
     /// Mapping from (sheet_index, cf_rule_index) to dxf_id
     dxf_map: HashMap<(usize, usize), u32>,
+    cell_style_xfs: Vec<Style>,
+    named_styles: Vec<NamedCellStyle>,
+    cell_xf_ids: Vec<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NamedCellStyle {
+    pub name: String,
+    pub xf_id: u32,
+    pub builtin_id: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RoundtripStyleData {
+    pub cell_styles: Vec<Style>,
+    pub cell_style_xfs: Vec<Style>,
+    pub named_styles: Vec<NamedCellStyle>,
+    pub cell_xf_xf_ids: Vec<u32>,
+}
+
+static ROUNDTRIP_STYLE_DATA: OnceLock<Mutex<HashMap<u64, RoundtripStyleData>>> = OnceLock::new();
+
+fn style_data_store() -> &'static Mutex<HashMap<u64, RoundtripStyleData>> {
+    ROUNDTRIP_STYLE_DATA.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn workbook_style_fingerprint(workbook: &Workbook) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    workbook.sheet_count().hash(&mut hasher);
+    for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
+        sheet_idx.hash(&mut hasher);
+        for (row, col, cell) in sheet.iter_cells() {
+            row.hash(&mut hasher);
+            col.hash(&mut hasher);
+            cell.style_index.hash(&mut hasher);
+            if let Some(style) = sheet.style_by_index(cell.style_index) {
+                style.hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
+pub(crate) fn register_roundtrip_style_data(workbook: &Workbook, data: RoundtripStyleData) {
+    let key = workbook_style_fingerprint(workbook);
+    if let Ok(mut store) = style_data_store().lock() {
+        store.insert(key, data);
+    }
+}
+
+fn roundtrip_style_data_for(workbook: &Workbook) -> Option<RoundtripStyleData> {
+    let key = workbook_style_fingerprint(workbook);
+    style_data_store().lock().ok()?.get(&key).cloned()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -46,13 +102,28 @@ struct ResolvedXfIds {
 
 impl XlsxStyleTable {
     pub(crate) fn build(workbook: &Workbook) -> Self {
+        let roundtrip_data = roundtrip_style_data_for(workbook);
+        let mut cell_xf_id_by_style: HashMap<Style, u32> = HashMap::new();
+        if let Some(data) = &roundtrip_data {
+            for (style, xf_id) in data
+                .cell_styles
+                .iter()
+                .cloned()
+                .zip(data.cell_xf_xf_ids.iter().copied())
+            {
+                cell_xf_id_by_style.entry(style).or_insert(xf_id);
+            }
+        }
+
         let mut styles: Vec<Style> = Vec::new();
         let mut style_to_xf: HashMap<Style, u32> = HashMap::new();
+        let mut cell_xf_ids: Vec<u32> = Vec::new();
 
         // Index 0 is always default style
         let default = Style::default();
         styles.push(default.clone());
         style_to_xf.insert(default, 0);
+        cell_xf_ids.push(0);
 
         let mut sheet_maps: Vec<HashMap<u32, u32>> = Vec::with_capacity(workbook.sheet_count());
 
@@ -81,6 +152,7 @@ impl XlsxStyleTable {
                     None => {
                         let id = styles.len() as u32;
                         styles.push(style.clone());
+                        cell_xf_ids.push(cell_xf_id_by_style.get(&style).copied().unwrap_or(0));
                         style_to_xf.insert(style, id);
                         id
                     }
@@ -109,11 +181,34 @@ impl XlsxStyleTable {
             }
         }
 
+        let mut cell_style_xfs = roundtrip_data
+            .as_ref()
+            .map(|d| d.cell_style_xfs.clone())
+            .unwrap_or_else(|| vec![Style::default()]);
+        if cell_style_xfs.is_empty() {
+            cell_style_xfs.push(Style::default());
+        }
+
+        let mut named_styles = roundtrip_data
+            .as_ref()
+            .map(|d| d.named_styles.clone())
+            .unwrap_or_default();
+        if named_styles.is_empty() {
+            named_styles.push(NamedCellStyle {
+                name: "Normal".to_string(),
+                xf_id: 0,
+                builtin_id: Some(0),
+            });
+        }
+
         Self {
             styles,
             sheet_maps,
             dxf_styles,
             dxf_map,
+            cell_style_xfs,
+            named_styles,
+            cell_xf_ids,
         }
     }
 
@@ -129,10 +224,6 @@ impl XlsxStyleTable {
         self.dxf_map.get(&(sheet_index, rule_index)).copied()
     }
 
-    /// Get the DXF styles
-    pub(crate) fn dxf_styles(&self) -> &[Style] {
-        &self.dxf_styles
-    }
 
     pub(crate) fn write_styles_xml(&self, w: &mut XmlWriter) -> XlsxResult<()> {
         // Build component tables
@@ -167,8 +258,10 @@ impl XlsxStyleTable {
 
         // Resolve component IDs for each style
         let mut resolved: Vec<ResolvedXfIds> = Vec::with_capacity(self.styles.len());
+        let mut resolved_cell_style_xfs: Vec<ResolvedXfIds> =
+            Vec::with_capacity(self.cell_style_xfs.len());
 
-        for style in &self.styles {
+        let mut resolve_ids_for_style = |style: &Style| -> ResolvedXfIds {
             let font_id = match font_ids.get(&style.font) {
                 Some(&id) => id,
                 None => {
@@ -219,12 +312,19 @@ impl XlsxStyleTable {
                 }
             };
 
-            resolved.push(ResolvedXfIds {
+            ResolvedXfIds {
                 font_id,
                 fill_id,
                 border_id,
                 num_fmt_id,
-            });
+            }
+        };
+
+        for style in &self.styles {
+            resolved.push(resolve_ids_for_style(style));
+        }
+        for style in &self.cell_style_xfs {
+            resolved_cell_style_xfs.push(resolve_ids_for_style(style));
         }
 
         // Write XML
@@ -280,15 +380,13 @@ impl XlsxStyleTable {
         w.write_event(Event::End(BytesEnd::new("borders")))?;
 
         // cellStyleXfs (required)
-        w.write_event(Event::Start(
-            BytesStart::new("cellStyleXfs").with_attributes([("count", "1")].into_iter()),
-        ))?;
-        w.create_element("xf")
-            .with_attribute(("numFmtId", "0"))
-            .with_attribute(("fontId", "0"))
-            .with_attribute(("fillId", "0"))
-            .with_attribute(("borderId", "0"))
-            .write_empty()?;
+        let count = self.cell_style_xfs.len().to_string();
+        let mut tag = BytesStart::new("cellStyleXfs");
+        tag.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(tag))?;
+        for (i, ids) in resolved_cell_style_xfs.iter().enumerate() {
+            write_cell_style_xf_xml(w, &self.cell_style_xfs[i], *ids)?;
+        }
         w.write_event(Event::End(BytesEnd::new("cellStyleXfs")))?;
 
         // cellXfs
@@ -297,19 +395,33 @@ impl XlsxStyleTable {
         tag.push_attribute(("count", count.as_str()));
         w.write_event(Event::Start(tag))?;
         for (i, ids) in resolved.iter().enumerate() {
-            write_xf_xml(w, &self.styles[i], *ids)?;
+            let xf_id = self
+                .cell_xf_ids
+                .get(i)
+                .copied()
+                .filter(|xf_id| (*xf_id as usize) < self.cell_style_xfs.len())
+                .unwrap_or(0);
+            write_xf_xml(w, &self.styles[i], *ids, xf_id)?;
         }
         w.write_event(Event::End(BytesEnd::new("cellXfs")))?;
 
         // cellStyles (required)
-        w.write_event(Event::Start(
-            BytesStart::new("cellStyles").with_attributes([("count", "1")].into_iter()),
-        ))?;
-        w.create_element("cellStyle")
-            .with_attribute(("name", "Normal"))
-            .with_attribute(("xfId", "0"))
-            .with_attribute(("builtinId", "0"))
-            .write_empty()?;
+        let count = self.named_styles.len().to_string();
+        let mut tag = BytesStart::new("cellStyles");
+        tag.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(tag))?;
+        for named_style in &self.named_styles {
+            let name_esc = escape(named_style.name.as_str());
+            let xf_id = named_style.xf_id.to_string();
+            let mut cell_style = BytesStart::new("cellStyle");
+            cell_style.push_attribute(("name", &*name_esc));
+            cell_style.push_attribute(("xfId", xf_id.as_str()));
+            let builtin_id = named_style.builtin_id.map(|v| v.to_string());
+            if let Some(builtin_id) = builtin_id.as_deref() {
+                cell_style.push_attribute(("builtinId", builtin_id));
+            }
+            w.write_event(Event::Empty(cell_style))?;
+        }
         w.write_event(Event::End(BytesEnd::new("cellStyles")))?;
 
         // DXFs
@@ -703,7 +815,30 @@ fn write_protection_xml(w: &mut XmlWriter, p: &Protection) -> std::io::Result<bo
     Ok(true)
 }
 
-fn write_xf_xml(w: &mut XmlWriter, style: &Style, ids: ResolvedXfIds) -> std::io::Result<()> {
+fn write_cell_style_xf_xml(
+    w: &mut XmlWriter,
+    style: &Style,
+    ids: ResolvedXfIds,
+) -> std::io::Result<()> {
+    write_xf_xml_with_options(w, style, ids, None, false)
+}
+
+fn write_xf_xml(
+    w: &mut XmlWriter,
+    style: &Style,
+    ids: ResolvedXfIds,
+    xf_id: u32,
+) -> std::io::Result<()> {
+    write_xf_xml_with_options(w, style, ids, Some(xf_id), true)
+}
+
+fn write_xf_xml_with_options(
+    w: &mut XmlWriter,
+    style: &Style,
+    ids: ResolvedXfIds,
+    xf_id: Option<u32>,
+    include_apply_flags: bool,
+) -> std::io::Result<()> {
     let num_fmt_s = ids.num_fmt_id.to_string();
     let font_s = ids.font_id.to_string();
     let fill_s = ids.fill_id.to_string();
@@ -714,24 +849,27 @@ fn write_xf_xml(w: &mut XmlWriter, style: &Style, ids: ResolvedXfIds) -> std::io
     el.push_attribute(("fontId", font_s.as_str()));
     el.push_attribute(("fillId", fill_s.as_str()));
     el.push_attribute(("borderId", border_s.as_str()));
-    el.push_attribute(("xfId", "0"));
+    let xf_id_s = xf_id.map(|v| v.to_string());
+    if let Some(xf_id_s) = xf_id_s.as_deref() {
+        el.push_attribute(("xfId", xf_id_s));
+    }
 
-    if ids.num_fmt_id != 0 {
+    if include_apply_flags && ids.num_fmt_id != 0 {
         el.push_attribute(("applyNumberFormat", "1"));
     }
-    if style.font != FontStyle::default() {
+    if include_apply_flags && style.font != FontStyle::default() {
         el.push_attribute(("applyFont", "1"));
     }
-    if style.fill != FillStyle::None {
+    if include_apply_flags && style.fill != FillStyle::None {
         el.push_attribute(("applyFill", "1"));
     }
-    if style.border != BorderStyle::default() {
+    if include_apply_flags && style.border != BorderStyle::default() {
         el.push_attribute(("applyBorder", "1"));
     }
-    if style.alignment != Alignment::default() {
+    if include_apply_flags && style.alignment != Alignment::default() {
         el.push_attribute(("applyAlignment", "1"));
     }
-    if style.protection != Protection::default() {
+    if include_apply_flags && style.protection != Protection::default() {
         el.push_attribute(("applyProtection", "1"));
     }
 
@@ -799,7 +937,21 @@ fn write_dxf_xml(w: &mut XmlWriter, style: &Style) -> std::io::Result<()> {
 #[derive(Debug)]
 pub(crate) struct ParsedStyles {
     pub cell_styles: Vec<Style>,
+    pub cell_style_xfs: Vec<Style>,
+    pub named_styles: Vec<NamedCellStyle>,
+    pub cell_xf_xf_ids: Vec<u32>,
     pub dxf_styles: Vec<Style>,
+}
+
+impl ParsedStyles {
+    pub(crate) fn roundtrip_data(&self) -> RoundtripStyleData {
+        RoundtripStyleData {
+            cell_styles: self.cell_styles.clone(),
+            cell_style_xfs: self.cell_style_xfs.clone(),
+            named_styles: self.named_styles.clone(),
+            cell_xf_xf_ids: self.cell_xf_xf_ids.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -857,6 +1009,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     let mut borders: Vec<BorderStyle> = Vec::new();
     let mut cell_style_xf_defs: Vec<ParsedXf> = Vec::new();
     let mut cell_xf_defs: Vec<ParsedXf> = Vec::new();
+    let mut named_styles: Vec<NamedCellStyle> = Vec::new();
     let mut dxf_styles: Vec<Style> = Vec::new();
 
     // Current objects while parsing
@@ -880,6 +1033,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     let mut current_xf_target: Option<XfTarget> = None;
     let mut in_cell_xfs = false;
     let mut in_cell_style_xfs = false;
+    let mut in_cell_styles = false;
 
     // DXF parsing state
     let mut in_dxfs = false;
@@ -910,6 +1064,14 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
                 b"cellStyleXfs" => {
                     in_cell_style_xfs = true;
+                }
+
+                b"cellStyles" => {
+                    in_cell_styles = true;
+                }
+
+                b"cellStyle" if in_cell_styles => {
+                    named_styles.push(parse_named_cell_style_attrs(&e));
                 }
 
                 b"dxfs" => {
@@ -1645,6 +1807,10 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     }
                 }
 
+                b"cellStyle" if in_cell_styles => {
+                    named_styles.push(parse_named_cell_style_attrs(&e));
+                }
+
                 _ => {}
             },
 
@@ -1742,6 +1908,9 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                 b"cellStyleXfs" => {
                     in_cell_style_xfs = false;
                 }
+                b"cellStyles" => {
+                    in_cell_styles = false;
+                }
                 _ => {}
             },
 
@@ -1775,6 +1944,12 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
             .collect()
     };
 
+    let cell_xf_xf_ids: Vec<u32> = if cell_xf_defs.is_empty() {
+        vec![0]
+    } else {
+        cell_xf_defs.iter().map(|xf| xf.xf_id).collect()
+    };
+
     let cell_styles = if cell_xf_defs.is_empty() {
         vec![Style::default()]
     } else {
@@ -1804,8 +1979,36 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
     Ok(ParsedStyles {
         cell_styles,
+        cell_style_xfs: cell_style_bases,
+        named_styles,
+        cell_xf_xf_ids,
         dxf_styles,
     })
+}
+
+fn parse_named_cell_style_attrs(e: &quick_xml::events::BytesStart<'_>) -> NamedCellStyle {
+    let mut name = String::from("Normal");
+    let mut xf_id = 0;
+    let mut builtin_id = None;
+
+    for attr in e.attributes().flatten() {
+        let value = match attr.unescape_value() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match attr.key.local_name().as_ref() {
+            b"name" => name = value.to_string(),
+            b"xfId" => xf_id = value.parse::<u32>().unwrap_or(0),
+            b"builtinId" => builtin_id = value.parse::<u32>().ok(),
+            _ => {}
+        }
+    }
+
+    NamedCellStyle {
+        name,
+        xf_id,
+        builtin_id,
+    }
 }
 
 fn resolve_style(
