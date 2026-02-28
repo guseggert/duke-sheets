@@ -419,6 +419,25 @@ impl<'a> Workbook<'a> {
     }
 
     // -------------------------------------------------------------------------
+    // Page setup
+    // -------------------------------------------------------------------------
+
+    /// Set a property on the active sheet's PageSetup object.
+    ///
+    /// Uses `Worksheet.PageSetup.{property} = value`.
+    pub fn set_page_setup_property(
+        &self,
+        property: &str,
+        value: serde_json::Value,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![
+            self.active_sheet.clone().to_chain_step(),
+            ChainStep::Property("PageSetup".to_string()),
+        ];
+        self.bridge.set(self.handle, chain, property, value)
+    }
+
+    // -------------------------------------------------------------------------
     // Merged cells
     // -------------------------------------------------------------------------
 

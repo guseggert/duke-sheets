@@ -1650,7 +1650,16 @@ impl XlsxWriter {
         let print_options_differ =
             ps.print_gridlines != def.print_gridlines || ps.print_headings != def.print_headings;
 
-        let header_footer_differs = ps.odd_header.is_some() || ps.odd_footer.is_some();
+        let header_footer_differs = ps.odd_header.is_some()
+            || ps.odd_footer.is_some()
+            || ps.even_header.is_some()
+            || ps.even_footer.is_some()
+            || ps.first_header.is_some()
+            || ps.first_footer.is_some()
+            || ps.different_odd_even
+            || ps.different_first
+            || !ps.scale_with_doc
+            || !ps.align_with_margins;
 
         if print_options_differ {
             let mut el = BytesStart::new("printOptions");
@@ -1707,13 +1716,44 @@ impl XlsxWriter {
             el.write_empty()?;
         }
         if header_footer_differs {
-            w.write_event(Event::Start(BytesStart::new("headerFooter")))?;
+            let mut el = BytesStart::new("headerFooter");
+            // Only write non-default attribute values
+            if ps.different_odd_even {
+                el.push_attribute(("differentOddEven", "1"));
+            }
+            if ps.different_first {
+                el.push_attribute(("differentFirst", "1"));
+            }
+            if !ps.scale_with_doc {
+                el.push_attribute(("scaleWithDoc", "0"));
+            }
+            if !ps.align_with_margins {
+                el.push_attribute(("alignWithMargins", "0"));
+            }
+            w.write_event(Event::Start(el))?;
+            // Children in spec order: oddHeader, oddFooter, evenHeader, evenFooter, firstHeader, firstFooter
             if let Some(header) = &ps.odd_header {
                 w.create_element("oddHeader")
                     .write_text_content(quick_xml::events::BytesText::new(header))?;
             }
             if let Some(footer) = &ps.odd_footer {
                 w.create_element("oddFooter")
+                    .write_text_content(quick_xml::events::BytesText::new(footer))?;
+            }
+            if let Some(header) = &ps.even_header {
+                w.create_element("evenHeader")
+                    .write_text_content(quick_xml::events::BytesText::new(header))?;
+            }
+            if let Some(footer) = &ps.even_footer {
+                w.create_element("evenFooter")
+                    .write_text_content(quick_xml::events::BytesText::new(footer))?;
+            }
+            if let Some(header) = &ps.first_header {
+                w.create_element("firstHeader")
+                    .write_text_content(quick_xml::events::BytesText::new(header))?;
+            }
+            if let Some(footer) = &ps.first_footer {
+                w.create_element("firstFooter")
                     .write_text_content(quick_xml::events::BytesText::new(footer))?;
             }
             w.write_event(Event::End(BytesEnd::new("headerFooter")))?;
@@ -2656,6 +2696,70 @@ mod tests {
         assert!(xml.contains("<headerFooter>"));
         assert!(xml.contains("<oddHeader>&amp;LLeft&amp;CCenter</oddHeader>"));
         assert!(xml.contains("<oddFooter>&amp;RPage &amp;P</oddFooter>"));
+    }
+
+    #[test]
+    fn test_writer_emits_even_first_header_footer_and_flags() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        let mut ps = sheet.page_setup().clone();
+        ps.odd_header = Some("&COdd".to_string());
+        ps.odd_footer = Some("&COdd Footer".to_string());
+        ps.even_header = Some("&CEven".to_string());
+        ps.even_footer = Some("&CEven Footer".to_string());
+        ps.first_header = Some("&CFirst".to_string());
+        ps.first_footer = Some("&CFirst Footer".to_string());
+        ps.different_odd_even = true;
+        ps.different_first = true;
+        ps.scale_with_doc = false;
+        ps.align_with_margins = false;
+        sheet.set_page_setup(ps);
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let xml = read_zip_entry(out.into_inner(), "xl/worksheets/sheet1.xml");
+
+        // Attributes on headerFooter element
+        assert!(xml.contains("differentOddEven=\"1\""), "missing differentOddEven");
+        assert!(xml.contains("differentFirst=\"1\""), "missing differentFirst");
+        assert!(xml.contains("scaleWithDoc=\"0\""), "missing scaleWithDoc");
+        assert!(xml.contains("alignWithMargins=\"0\""), "missing alignWithMargins");
+
+        // All six child elements in spec order
+        assert!(xml.contains("<oddHeader>&amp;COdd</oddHeader>"));
+        assert!(xml.contains("<oddFooter>&amp;COdd Footer</oddFooter>"));
+        assert!(xml.contains("<evenHeader>&amp;CEven</evenHeader>"));
+        assert!(xml.contains("<evenFooter>&amp;CEven Footer</evenFooter>"));
+        assert!(xml.contains("<firstHeader>&amp;CFirst</firstHeader>"));
+        assert!(xml.contains("<firstFooter>&amp;CFirst Footer</firstFooter>"));
+
+        // Verify element order: oddHeader before evenHeader before firstHeader
+        let odd_pos = xml.find("<oddHeader>").unwrap();
+        let even_pos = xml.find("<evenHeader>").unwrap();
+        let first_pos = xml.find("<firstHeader>").unwrap();
+        assert!(odd_pos < even_pos, "oddHeader must come before evenHeader");
+        assert!(even_pos < first_pos, "evenHeader must come before firstHeader");
+    }
+
+    #[test]
+    fn test_writer_omits_default_header_footer_flags() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        let mut ps = sheet.page_setup().clone();
+        ps.odd_header = Some("&CTest".to_string());
+        // Leave all flags at defaults
+        sheet.set_page_setup(ps);
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let xml = read_zip_entry(out.into_inner(), "xl/worksheets/sheet1.xml");
+
+        // headerFooter element should have no attributes
+        assert!(xml.contains("<headerFooter>"), "should have plain headerFooter tag");
+        assert!(!xml.contains("differentOddEven"), "should not emit default differentOddEven");
+        assert!(!xml.contains("differentFirst"), "should not emit default differentFirst");
+        assert!(!xml.contains("scaleWithDoc"), "should not emit default scaleWithDoc");
+        assert!(!xml.contains("alignWithMargins"), "should not emit default alignWithMargins");
     }
 
     #[test]

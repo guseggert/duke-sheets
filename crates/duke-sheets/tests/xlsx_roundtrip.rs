@@ -494,6 +494,82 @@ fn test_roundtrip_page_setup_and_header_footer() {
     assert_eq!(ps2.odd_footer.as_deref(), Some("&RPage &P"));
 }
 
+/// Test even/first page headers and headerFooter flags roundtrip
+#[test]
+fn test_roundtrip_header_footer_even_first_and_flags() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut ps = sheet.page_setup().clone();
+
+    // Set all six header/footer strings
+    ps.odd_header = Some("&COdd Header".to_string());
+    ps.odd_footer = Some("&COdd Footer".to_string());
+    ps.even_header = Some("&CEven Header".to_string());
+    ps.even_footer = Some("&CEven Footer".to_string());
+    ps.first_header = Some("&CFirst Page".to_string());
+    ps.first_footer = Some("&CFirst Footer".to_string());
+
+    // Set all four flags to non-default values
+    ps.different_odd_even = true;
+    ps.different_first = true;
+    ps.scale_with_doc = false;
+    ps.align_with_margins = false;
+
+    sheet.set_page_setup(ps);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+    let ps2 = sheet2.page_setup();
+
+    // Verify all header/footer strings
+    assert_eq!(ps2.odd_header.as_deref(), Some("&COdd Header"));
+    assert_eq!(ps2.odd_footer.as_deref(), Some("&COdd Footer"));
+    assert_eq!(ps2.even_header.as_deref(), Some("&CEven Header"));
+    assert_eq!(ps2.even_footer.as_deref(), Some("&CEven Footer"));
+    assert_eq!(ps2.first_header.as_deref(), Some("&CFirst Page"));
+    assert_eq!(ps2.first_footer.as_deref(), Some("&CFirst Footer"));
+
+    // Verify flags
+    assert!(ps2.different_odd_even);
+    assert!(ps2.different_first);
+    assert!(!ps2.scale_with_doc);
+    assert!(!ps2.align_with_margins);
+}
+
+/// Test headerFooter with only odd headers and default flags roundtrips correctly
+#[test]
+fn test_roundtrip_header_footer_odd_only_defaults() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut ps = sheet.page_setup().clone();
+
+    ps.odd_header = Some("&LLeft&RRight".to_string());
+    // Leave all flags at defaults
+
+    sheet.set_page_setup(ps);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+    let ps2 = sheet2.page_setup();
+
+    assert_eq!(ps2.odd_header.as_deref(), Some("&LLeft&RRight"));
+    assert_eq!(ps2.odd_footer.as_deref(), None);
+    assert_eq!(ps2.even_header.as_deref(), None);
+    assert_eq!(ps2.even_footer.as_deref(), None);
+    assert_eq!(ps2.first_header.as_deref(), None);
+    assert_eq!(ps2.first_footer.as_deref(), None);
+
+    // Default flags preserved
+    assert!(!ps2.different_odd_even);
+    assert!(!ps2.different_first);
+    assert!(ps2.scale_with_doc);
+    assert!(ps2.align_with_margins);
+}
+
 // --- Formula cached value roundtrip tests ---
 
 /// Test roundtrip of formula with numeric cached value

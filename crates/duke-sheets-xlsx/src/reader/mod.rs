@@ -580,6 +580,10 @@ impl XlsxReader {
         let mut cf_formulas: Vec<String> = Vec::new();
         let mut in_odd_header = false;
         let mut in_odd_footer = false;
+        let mut in_even_header = false;
+        let mut in_even_footer = false;
+        let mut in_first_header = false;
+        let mut in_first_footer = false;
 
         // ColorScale/DataBar/IconSet state
         let mut in_color_scale = false;
@@ -755,11 +759,57 @@ impl XlsxReader {
                         }
                         worksheet.set_page_setup(ps);
                     }
+                    b"headerFooter" => {
+                        // Parse headerFooter attributes
+                        let mut ps = worksheet.page_setup().clone();
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"differentOddEven" => {
+                                    if let Ok(v) = attr.unescape_value() {
+                                        ps.different_odd_even =
+                                            v.as_ref() == "1" || v.as_ref() == "true";
+                                    }
+                                }
+                                b"differentFirst" => {
+                                    if let Ok(v) = attr.unescape_value() {
+                                        ps.different_first =
+                                            v.as_ref() == "1" || v.as_ref() == "true";
+                                    }
+                                }
+                                b"scaleWithDoc" => {
+                                    if let Ok(v) = attr.unescape_value() {
+                                        ps.scale_with_doc =
+                                            v.as_ref() == "1" || v.as_ref() == "true";
+                                    }
+                                }
+                                b"alignWithMargins" => {
+                                    if let Ok(v) = attr.unescape_value() {
+                                        ps.align_with_margins =
+                                            v.as_ref() == "1" || v.as_ref() == "true";
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        worksheet.set_page_setup(ps);
+                    }
                     b"oddHeader" => {
                         in_odd_header = true;
                     }
                     b"oddFooter" => {
                         in_odd_footer = true;
+                    }
+                    b"evenHeader" => {
+                        in_even_header = true;
+                    }
+                    b"evenFooter" => {
+                        in_even_footer = true;
+                    }
+                    b"firstHeader" => {
+                        in_first_header = true;
+                    }
+                    b"firstFooter" => {
+                        in_first_footer = true;
                     }
                     b"row" => {
                         // Parse row dimensions: ht, customHeight, hidden
@@ -1166,6 +1216,18 @@ impl XlsxReader {
                         b"oddFooter" => {
                             in_odd_footer = false;
                         }
+                        b"evenHeader" => {
+                            in_even_header = false;
+                        }
+                        b"evenFooter" => {
+                            in_even_footer = false;
+                        }
+                        b"firstHeader" => {
+                            in_first_header = false;
+                        }
+                        b"firstFooter" => {
+                            in_first_footer = false;
+                        }
                         _ => {}
                     }
                 }
@@ -1241,6 +1303,30 @@ impl XlsxReader {
                         if let Ok(text) = e.unescape() {
                             let mut ps = worksheet.page_setup().clone();
                             ps.odd_footer = Some(text.to_string());
+                            worksheet.set_page_setup(ps);
+                        }
+                    } else if in_even_header {
+                        if let Ok(text) = e.unescape() {
+                            let mut ps = worksheet.page_setup().clone();
+                            ps.even_header = Some(text.to_string());
+                            worksheet.set_page_setup(ps);
+                        }
+                    } else if in_even_footer {
+                        if let Ok(text) = e.unescape() {
+                            let mut ps = worksheet.page_setup().clone();
+                            ps.even_footer = Some(text.to_string());
+                            worksheet.set_page_setup(ps);
+                        }
+                    } else if in_first_header {
+                        if let Ok(text) = e.unescape() {
+                            let mut ps = worksheet.page_setup().clone();
+                            ps.first_header = Some(text.to_string());
+                            worksheet.set_page_setup(ps);
+                        }
+                    } else if in_first_footer {
+                        if let Ok(text) = e.unescape() {
+                            let mut ps = worksheet.page_setup().clone();
+                            ps.first_footer = Some(text.to_string());
                             worksheet.set_page_setup(ps);
                         }
                     }
@@ -2167,6 +2253,71 @@ mod tests {
         assert!(ps.print_headings);
         assert_eq!(ps.odd_header.as_deref(), Some("&LLeft&CCenter"));
         assert_eq!(ps.odd_footer.as_deref(), Some("&RPage &P"));
+    }
+
+    #[test]
+    fn test_read_header_footer_even_first_and_flags() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <headerFooter differentOddEven="1" differentFirst="1" scaleWithDoc="0" alignWithMargins="0">
+    <oddHeader>&amp;COdd</oddHeader>
+    <oddFooter>&amp;COdd Footer</oddFooter>
+    <evenHeader>&amp;CEven</evenHeader>
+    <evenFooter>&amp;CEven Footer</evenFooter>
+    <firstHeader>&amp;CFirst</firstHeader>
+    <firstFooter>&amp;CFirst Footer</firstFooter>
+  </headerFooter>
+  <sheetData>
+    <row r="1"><c r="A1" t="n"><v>1</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+        let ps = sheet.page_setup();
+
+        // Verify all six header/footer strings
+        assert_eq!(ps.odd_header.as_deref(), Some("&COdd"));
+        assert_eq!(ps.odd_footer.as_deref(), Some("&COdd Footer"));
+        assert_eq!(ps.even_header.as_deref(), Some("&CEven"));
+        assert_eq!(ps.even_footer.as_deref(), Some("&CEven Footer"));
+        assert_eq!(ps.first_header.as_deref(), Some("&CFirst"));
+        assert_eq!(ps.first_footer.as_deref(), Some("&CFirst Footer"));
+
+        // Verify flags
+        assert!(ps.different_odd_even);
+        assert!(ps.different_first);
+        assert!(!ps.scale_with_doc);
+        assert!(!ps.align_with_margins);
+    }
+
+    #[test]
+    fn test_read_header_footer_default_flags_when_absent() {
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <headerFooter>
+    <oddHeader>&amp;CTest</oddHeader>
+  </headerFooter>
+  <sheetData>
+    <row r="1"><c r="A1" t="n"><v>1</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+        let ps = sheet.page_setup();
+
+        assert_eq!(ps.odd_header.as_deref(), Some("&CTest"));
+        assert_eq!(ps.even_header.as_deref(), None);
+        assert_eq!(ps.first_header.as_deref(), None);
+
+        // Defaults: differentOddEven=false, differentFirst=false, scaleWithDoc=true, alignWithMargins=true
+        assert!(!ps.different_odd_even);
+        assert!(!ps.different_first);
+        assert!(ps.scale_with_doc);
+        assert!(ps.align_with_margins);
     }
 
     #[test]
