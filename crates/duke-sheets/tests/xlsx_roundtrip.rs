@@ -701,3 +701,105 @@ fn test_roundtrip_named_ranges() {
     assert!(print.hidden);
     assert_eq!(print.comment.as_deref(), Some("Print area"));
 }
+
+/// Test that worksheet XML elements are in spec-canonical order (ISO 29500-1 §18.3.1.99)
+#[test]
+fn test_worksheet_element_ordering() {
+    use std::io::{Cursor, Read};
+    use std::str::FromStr;
+
+    // Create a workbook with various features to ensure all elements are present
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    // Add cell data
+    sheet.set_cell_value("A1", "Header").unwrap();
+    sheet.set_cell_value("A2", 42.0).unwrap();
+    sheet.set_cell_value("B1", "Value").unwrap();
+    sheet.set_cell_value("B2", 3.14).unwrap();
+
+    // Add merged cells
+    let range = CellRange::from_str("C1:D1").unwrap();
+    sheet.merge_cells(&range).unwrap();
+
+    // Set print options
+    let mut ps = sheet.page_setup().clone();
+    ps.print_gridlines = true;
+    sheet.set_page_setup(ps);
+
+    // Set custom margins
+    let mut ps = sheet.page_setup().clone();
+    ps.left_margin = 1.0;
+    ps.right_margin = 1.0;
+    ps.top_margin = 1.0;
+    ps.bottom_margin = 1.0;
+    sheet.set_page_setup(ps);
+
+    // Set zoom to ensure sheetViews is emitted
+    sheet.set_zoom_scale(Some(110));
+
+    // Set header
+    let mut ps = sheet.page_setup().clone();
+    ps.odd_header = Some("Test Header".to_string());
+    sheet.set_page_setup(ps);
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Extract raw sheet XML from ZIP and verify element ordering
+    let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+    let mut sheet_xml = String::new();
+    zip.by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut sheet_xml)
+        .unwrap();
+
+    // Verify spec-canonical element ordering: elements that appear must be
+    // in this order relative to each other (some may be absent).
+    let canonical_order = [
+        "<dimension",
+        "<sheetViews",
+        "<sheetFormatPr",
+        "<sheetData",
+        "<mergeCells",
+        "<printOptions",
+        "<pageMargins",
+        "<pageSetup",
+        "<headerFooter",
+    ];
+    let positions: Vec<(&str, usize)> = canonical_order
+        .iter()
+        .filter_map(|tag| sheet_xml.find(tag).map(|pos| (*tag, pos)))
+        .collect();
+    // At least dimension, sheetViews, sheetFormatPr, sheetData, mergeCells,
+    // printOptions, pageMargins, headerFooter should be present
+    assert!(
+        positions.len() >= 7,
+        "expected at least 7 elements, found {}: {:?}",
+        positions.len(),
+        positions,
+    );
+    for window in positions.windows(2) {
+        assert!(
+            window[0].1 < window[1].1,
+            "element {} (pos {}) should appear before {} (pos {})",
+            window[0].0,
+            window[0].1,
+            window[1].0,
+            window[1].1,
+        );
+    }
+
+    // Also verify roundtrip data preservation
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+    assert_eq!(sheet2.get_value("A1").unwrap().as_string(), Some("Header"));
+    assert_eq!(sheet2.get_value("A2").unwrap().as_number(), Some(42.0));
+    let merged = sheet2.merged_regions();
+    assert!(!merged.is_empty(), "Merged cells should be preserved");
+    let ps2 = sheet2.page_setup();
+    assert!(ps2.print_gridlines, "Print gridlines should be preserved");
+    assert!((ps2.left_margin - 1.0).abs() < 1e-9, "Left margin should be preserved");
+    assert!(ps2.odd_header.is_some(), "Header should be preserved");
+}

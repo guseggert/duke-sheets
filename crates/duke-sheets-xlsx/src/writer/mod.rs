@@ -785,8 +785,14 @@ impl XlsxWriter {
             // sheetPr (tab color)
             Self::write_sheet_pr(w, sheet)?;
 
+            // dimension (used range)
+            Self::write_dimension(w, sheet)?;
+
             // sheetViews (freeze panes, tab selection)
             Self::write_sheet_views(w, sheet)?;
+
+            // sheetFormatPr (default row height)
+            Self::write_sheet_format_pr(w, sheet)?;
 
             // cols (column widths / hidden columns)
             Self::write_cols(w, sheet)?;
@@ -825,6 +831,18 @@ impl XlsxWriter {
         Ok(())
     }
 
+    fn write_dimension(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
+        let ref_str = if let Some(range) = sheet.used_range() {
+            range.to_string()
+        } else {
+            "A1".to_string()
+        };
+        w.create_element("dimension")
+            .with_attribute(("ref", ref_str.as_str()))
+            .write_empty()?;
+        Ok(())
+    }
+
     fn write_color_element(w: &mut XmlWriter, tag: &str, color: &Color) -> XlsxResult<()> {
         let mut el = BytesStart::new(tag);
         match color {
@@ -853,6 +871,14 @@ impl XlsxWriter {
             }
         }
         w.write_event(Event::Empty(el))?;
+        Ok(())
+    }
+
+    fn write_sheet_format_pr(w: &mut XmlWriter, _sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
+        // Emit sheetFormatPr with default row height (Excel default is 15)
+        w.create_element("sheetFormatPr")
+            .with_attribute(("defaultRowHeight", "15"))
+            .write_empty()?;
         Ok(())
     }
 
@@ -1408,6 +1434,17 @@ impl XlsxWriter {
 
         let header_footer_differs = ps.odd_header.is_some() || ps.odd_footer.is_some();
 
+        if print_options_differ {
+            let mut el = BytesStart::new("printOptions");
+            if ps.print_gridlines {
+                el.push_attribute(("gridLines", "1"));
+            }
+            if ps.print_headings {
+                el.push_attribute(("headings", "1"));
+            }
+            w.write_event(Event::Empty(el))?;
+        }
+
         if margins_differ {
             let left = ps.left_margin.to_string();
             let right = ps.right_margin.to_string();
@@ -1451,18 +1488,6 @@ impl XlsxWriter {
             }
             el.write_empty()?;
         }
-
-        if print_options_differ {
-            let mut el = BytesStart::new("printOptions");
-            if ps.print_gridlines {
-                el.push_attribute(("gridLines", "1"));
-            }
-            if ps.print_headings {
-                el.push_attribute(("headings", "1"));
-            }
-            w.write_event(Event::Empty(el))?;
-        }
-
         if header_footer_differs {
             w.write_event(Event::Start(BytesStart::new("headerFooter")))?;
             if let Some(header) = &ps.odd_header {
