@@ -21,6 +21,7 @@ thiserror.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 pretty_assertions.workspace = true
+zip.workspace = true
 
 [features]
 default = ["xlsx", "csv"]
