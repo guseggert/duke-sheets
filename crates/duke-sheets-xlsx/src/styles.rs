@@ -92,6 +92,28 @@ fn roundtrip_style_data_for(workbook: &Workbook) -> Option<RoundtripStyleData> {
     style_data_store().lock().ok()?.get(&key).cloned()
 }
 
+// ---------------------------------------------------------------------------
+// Theme XML roundtrip store
+// ---------------------------------------------------------------------------
+
+static ROUNDTRIP_THEME_DATA: OnceLock<Mutex<HashMap<u64, Vec<u8>>>> = OnceLock::new();
+
+fn theme_data_store() -> &'static Mutex<HashMap<u64, Vec<u8>>> {
+    ROUNDTRIP_THEME_DATA.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn register_roundtrip_theme_data(workbook: &Workbook, theme_xml: Vec<u8>) {
+    let key = workbook_style_fingerprint(workbook);
+    if let Ok(mut store) = theme_data_store().lock() {
+        store.insert(key, theme_xml);
+    }
+}
+
+pub(crate) fn roundtrip_theme_data_for(workbook: &Workbook) -> Option<Vec<u8>> {
+    let key = workbook_style_fingerprint(workbook);
+    theme_data_store().lock().ok()?.get(&key).cloned()
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ResolvedXfIds {
     font_id: u32,

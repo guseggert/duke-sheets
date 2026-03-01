@@ -10,7 +10,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::error::{XlsxError, XlsxResult};
-use crate::styles::XlsxStyleTable;
+use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
 use duke_sheets_core::style::Color;
 use duke_sheets_core::{CellAddress, CellRange, Workbook};
 
@@ -511,7 +511,7 @@ impl XlsxWriter {
         Self::write_styles_xml(&mut zip, &style_table)?;
 
         // Write xl/theme/theme1.xml
-        Self::write_theme_xml(&mut zip)?;
+        Self::write_theme_xml(&mut zip, workbook)?;
 
         // Write shared string table
         if !sst.is_empty() {
@@ -969,10 +969,17 @@ impl XlsxWriter {
         write_xml_part(zip, "xl/styles.xml", |w| style_table.write_styles_xml(w))
     }
 
-    fn write_theme_xml<W: Write + Seek>(zip: &mut zip::ZipWriter<W>) -> XlsxResult<()> {
+    fn write_theme_xml<W: Write + Seek>(
+        zip: &mut zip::ZipWriter<W>,
+        workbook: &Workbook,
+    ) -> XlsxResult<()> {
         let options = zip::write::SimpleFileOptions::default();
         zip.start_file("xl/theme/theme1.xml", options)?;
-        zip.write_all(DEFAULT_THEME_XML.as_bytes())?;
+        if let Some(theme_bytes) = roundtrip_theme_data_for(workbook) {
+            zip.write_all(&theme_bytes)?;
+        } else {
+            zip.write_all(DEFAULT_THEME_XML.as_bytes())?;
+        }
         Ok(())
     }
 
@@ -2761,6 +2768,89 @@ mod tests {
         assert!(
             table_xml.contains(r#"<autoFilter ref="A1:B3""#),
             "autoFilter should exclude totals"
+        );
+    }
+
+    #[test]
+    fn test_roundtrip_preserves_custom_theme() {
+        // Build a minimal XLSX with a custom theme in memory.
+        let custom_theme = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="CustomTest">
+  <a:themeElements>
+    <a:clrScheme name="CustomColors">
+      <a:dk1><a:srgbClr val="111111"/></a:dk1>
+      <a:lt1><a:srgbClr val="FEFEFE"/></a:lt1>
+      <a:dk2><a:srgbClr val="222222"/></a:dk2>
+      <a:lt2><a:srgbClr val="EEEEEE"/></a:lt2>
+      <a:accent1><a:srgbClr val="AA0000"/></a:accent1>
+      <a:accent2><a:srgbClr val="00BB00"/></a:accent2>
+      <a:accent3><a:srgbClr val="0000CC"/></a:accent3>
+      <a:accent4><a:srgbClr val="DD00DD"/></a:accent4>
+      <a:accent5><a:srgbClr val="00EEDD"/></a:accent5>
+      <a:accent6><a:srgbClr val="FFAA00"/></a:accent6>
+      <a:hlink><a:srgbClr val="0000FF"/></a:hlink>
+      <a:folHlink><a:srgbClr val="FF00FF"/></a:folHlink>
+    </a:clrScheme>
+    <a:fontScheme name="Test"><a:majorFont><a:latin typeface="Calibri"/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/></a:minorFont></a:fontScheme>
+    <a:fmtScheme name="Test"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme>
+  </a:themeElements>
+</a:theme>"#;
+
+        // Create a minimal valid XLSX with the custom theme.
+        let mut xlsx_buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut xlsx_buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let opts = zip::write::SimpleFileOptions::default();
+
+            // [Content_Types].xml
+            zip.start_file("[Content_Types].xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>"#).unwrap();
+
+            // _rels/.rels
+            zip.start_file("_rels/.rels", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#).unwrap();
+
+            // xl/workbook.xml
+            zip.start_file("xl/workbook.xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#).unwrap();
+
+            // xl/_rels/workbook.xml.rels
+            zip.start_file("xl/_rels/workbook.xml.rels", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/></Relationships>"#).unwrap();
+
+            // xl/worksheets/sheet1.xml
+            zip.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#).unwrap();
+
+            // xl/theme/theme1.xml — the custom theme
+            zip.start_file("xl/theme/theme1.xml", opts).unwrap();
+            zip.write_all(custom_theme.as_bytes()).unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        // Read the handcrafted XLSX.
+        let wb = XlsxReader::read(Cursor::new(&xlsx_buf)).unwrap();
+
+        // Write it back out.
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).unwrap();
+        let out_bytes = out.into_inner();
+
+        // The re-written theme should be our custom theme, not the default.
+        let theme_out = read_zip_entry(out_bytes, "xl/theme/theme1.xml");
+        assert!(
+            theme_out.contains("CustomTest"),
+            "theme name 'CustomTest' should survive roundtrip"
+        );
+        assert!(
+            theme_out.contains("AA0000"),
+            "custom accent1 color should survive roundtrip"
+        );
+        assert!(
+            !theme_out.contains("Office"),
+            "default Office theme should NOT appear"
         );
     }
 }

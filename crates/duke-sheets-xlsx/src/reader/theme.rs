@@ -73,7 +73,7 @@ impl ThemePalette {
 pub(super) fn read_theme_palette<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     theme_path: Option<&str>,
-) -> XlsxResult<Option<ThemePalette>> {
+) -> XlsxResult<(Option<ThemePalette>, Option<Vec<u8>>)> {
     let mut try_paths: Vec<String> = Vec::new();
     if let Some(path) = theme_path {
         try_paths.push(path.to_string());
@@ -83,16 +83,18 @@ pub(super) fn read_theme_palette<R: Read + Seek>(
     }
 
     for path in try_paths {
-        let file = match archive.by_name(&path) {
+        let mut file = match archive.by_name(&path) {
             Ok(f) => f,
             Err(_) => continue,
         };
-        let reader = BufReader::new(file);
-        let palette = parse_theme_palette(reader)?;
-        return Ok(Some(palette));
+        // Read raw bytes for roundtrip preservation, then parse palette from them.
+        let mut raw_bytes = Vec::new();
+        file.read_to_end(&mut raw_bytes)?;
+        let palette = parse_theme_palette(std::io::Cursor::new(&raw_bytes))?;
+        return Ok((Some(palette), Some(raw_bytes)));
     }
 
-    Ok(None)
+    Ok((None, None))
 }
 
 pub(super) fn parse_theme_palette<R: Read>(reader: R) -> XlsxResult<ThemePalette> {
