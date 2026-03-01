@@ -270,7 +270,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 #### Theme Support
 - [x] **Read `xl/theme/theme1.xml`** — parse `clrScheme` theme colors (slots used by style/CF color refs)
 - [x] **Theme color resolution** — resolve `theme` + `tint` color references in styles/CF to RGB using workbook theme palette
-- [ ] **Write theme** — preserve or generate theme on roundtrip
+- [x] **Write theme** — roundtrip preserves original `xl/theme/theme1.xml` bytes; new workbooks get default Office theme
 
 #### Print Settings
 - [x] **Data model** — `PageSetup` supports paper/orientation/scale/fit, margins, print options, print area, repeat rows/cols titles, odd/even/first header/footer strings, and `headerFooter` flags
@@ -353,8 +353,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
-| Other (unit, doc, integration) | 298 | ✅ |
-| **Total** | **788** | ✅ |
+| Other (unit, doc, integration) | 299 | ✅ |
+| **Total** | **789** | ✅ |
 
 ---
 
