@@ -649,6 +649,113 @@ fn test_roundtrip_header_footer_odd_only_defaults() {
 }
 
 #[test]
+fn test_roundtrip_print_area() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_print_area(CellRange::parse("B2:F20").unwrap());
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(
+        sheet2.print_area(),
+        Some(&CellRange::parse("B2:F20").unwrap())
+    );
+}
+
+#[test]
+fn test_roundtrip_repeat_rows() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_repeat_rows(0, 2);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.repeat_rows(), Some((0, 2)));
+}
+
+#[test]
+fn test_roundtrip_repeat_cols() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_repeat_cols(0, 1);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.repeat_cols(), Some((0, 1)));
+}
+
+#[test]
+fn test_roundtrip_repeat_rows_and_cols() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_repeat_rows(0, 1);
+    sheet.set_repeat_cols(0, 0);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.repeat_rows(), Some((0, 1)));
+    assert_eq!(sheet2.repeat_cols(), Some((0, 0)));
+}
+
+#[test]
+fn test_roundtrip_print_area_and_titles() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_print_area(CellRange::parse("B2:F20").unwrap());
+    sheet.set_repeat_rows(0, 2);
+    sheet.set_repeat_cols(0, 1);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(
+        sheet2.print_area(),
+        Some(&CellRange::parse("B2:F20").unwrap())
+    );
+    assert_eq!(sheet2.repeat_rows(), Some((0, 2)));
+    assert_eq!(sheet2.repeat_cols(), Some((0, 1)));
+}
+
+#[test]
+fn test_roundtrip_print_area_quoted_sheet_name() {
+    use duke_sheets::named_range::NameScope;
+
+    let mut wb = Workbook::empty();
+    wb.add_worksheet_with_name("My Sheet").unwrap();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_print_area(CellRange::parse("B2:F20").unwrap());
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(
+        sheet2.print_area(),
+        Some(&CellRange::parse("B2:F20").unwrap())
+    );
+    let nr = wb2
+        .named_ranges()
+        .get_exact("_xlnm.Print_Area", &NameScope::Sheet(0))
+        .unwrap();
+    assert_eq!(nr.refers_to, "'My Sheet'!$B$2:$F$20");
+}
+
+#[test]
 fn test_auto_filter_range_only() {
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();

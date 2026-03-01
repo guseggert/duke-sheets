@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::auto_filter::AutoFilter;
 use crate::cell::view::CellView;
 use crate::cell::{CellAddress, CellData, CellRange, CellStorage, CellValue};
 use crate::comment::CellComment;
@@ -10,9 +11,8 @@ use crate::error::{Error, Result};
 use crate::hyperlink::Hyperlink;
 use crate::locale::Locale;
 use crate::style::Style;
-use crate::validation::DataValidation;
-use crate::auto_filter::AutoFilter;
 use crate::table::Table;
+use crate::validation::DataValidation;
 use crate::{MAX_COLS, MAX_ROWS};
 
 /// A worksheet (single sheet in a workbook)
@@ -138,9 +138,9 @@ impl Worksheet {
     /// Returns the active cell from the primary (last) selection.
     pub fn selection_active_cell(&self) -> Option<(u32, u16)> {
         self.selections.last().and_then(|s| {
-            s.active_cell.as_ref().and_then(|ac| {
-                CellAddress::parse(ac).ok().map(|addr| (addr.row, addr.col))
-            })
+            s.active_cell
+                .as_ref()
+                .and_then(|ac| CellAddress::parse(ac).ok().map(|addr| (addr.row, addr.col)))
         })
     }
 
@@ -232,6 +232,42 @@ impl Worksheet {
     /// Set the page setup / print settings
     pub fn set_page_setup(&mut self, page_setup: PageSetup) {
         self.page_setup = page_setup;
+    }
+
+    /// Set the print area for this worksheet.
+    pub fn set_print_area(&mut self, range: CellRange) {
+        let mut ps = self.page_setup.clone();
+        ps.print_area = Some(range);
+        self.page_setup = ps;
+    }
+
+    /// Get the print area for this worksheet.
+    pub fn print_area(&self) -> Option<&CellRange> {
+        self.page_setup.print_area.as_ref()
+    }
+
+    /// Set rows to repeat at top of each printed page (0-based row indices).
+    pub fn set_repeat_rows(&mut self, start_row: u32, end_row: u32) {
+        let mut ps = self.page_setup.clone();
+        ps.repeat_rows = Some((start_row, end_row));
+        self.page_setup = ps;
+    }
+
+    /// Get rows to repeat at top of each printed page.
+    pub fn repeat_rows(&self) -> Option<(u32, u32)> {
+        self.page_setup.repeat_rows
+    }
+
+    /// Set columns to repeat at left of each printed page (0-based column indices).
+    pub fn set_repeat_cols(&mut self, start_col: u16, end_col: u16) {
+        let mut ps = self.page_setup.clone();
+        ps.repeat_cols = Some((start_col, end_col));
+        self.page_setup = ps;
+    }
+
+    /// Get columns to repeat at left of each printed page.
+    pub fn repeat_cols(&self) -> Option<(u16, u16)> {
+        self.page_setup.repeat_cols
     }
 
     /// Get the date system (false = 1900, true = 1904).
@@ -1306,6 +1342,12 @@ pub struct PageSetup {
     pub scale_with_doc: bool,
     /// Align header/footer margins with page margins (default: true)
     pub align_with_margins: bool,
+    /// Print area (the range that will be printed)
+    pub print_area: Option<CellRange>,
+    /// Repeat rows at top of each printed page (start_row, end_row), 0-based
+    pub repeat_rows: Option<(u32, u32)>,
+    /// Repeat columns at left of each printed page (start_col, end_col), 0-based
+    pub repeat_cols: Option<(u16, u16)>,
 }
 
 impl Default for PageSetup {
@@ -1334,6 +1376,9 @@ impl Default for PageSetup {
             different_first: false,
             scale_with_doc: true,
             align_with_margins: true,
+            print_area: None,
+            repeat_rows: None,
+            repeat_cols: None,
         }
     }
 }
