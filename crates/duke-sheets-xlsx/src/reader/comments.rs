@@ -173,7 +173,11 @@ pub(crate) fn read_comment_visibility_map<R: Read + Seek>(
                             if let Some(style) =
                                 attr.unescape_value().ok().map(|s| s.to_lowercase())
                             {
-                                current_visible = style.contains("visibility:visible");
+                                // Tolerate whitespace variations:
+                                // "visibility:visible", "visibility: visible", etc.
+                                let normalized: String =
+                                    style.chars().filter(|c| !c.is_whitespace()).collect();
+                                current_visible = normalized.contains("visibility:visible");
                             }
                         }
                     }
@@ -196,6 +200,10 @@ pub(crate) fn read_comment_visibility_map<R: Read + Seek>(
                 }
                 b"Column" if in_client_data_note => {
                     in_col = true;
+                }
+                b"Visible" if in_client_data_note => {
+                    // <x:Visible/> element explicitly marks the note as visible
+                    current_visible = true;
                 }
                 _ => {}
             },
@@ -235,6 +243,13 @@ pub(crate) fn read_comment_visibility_map<R: Read + Seek>(
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(XlsxError::Xml(e)),
+            Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
+                b"Visible" if in_client_data_note => {
+                    // <x:Visible/> (self-closing) explicitly marks the note as visible
+                    current_visible = true;
+                }
+                _ => {}
+            },
             _ => {}
         }
         buf.clear();
@@ -343,5 +358,86 @@ mod tests {
         assert_eq!(comment.author, "John");
         assert_eq!(comment.text, "Visible note");
         assert!(comment.visible);
+    }
+
+    #[test]
+    fn test_vml_visible_element_marks_comment_visible() {
+        // Test that <x:Visible/> element (not just style attribute) marks visibility
+        let mut bytes = Vec::new();
+        {
+            let cursor = Cursor::new(&mut bytes);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+
+            zip.start_file("xl/drawings/vmlDrawing1.vml", options)
+                .unwrap();
+            zip.write_all(
+                br##"<?xml version="1.0"?>
+<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:schemas-microsoft-com:office:excel">
+  <v:shape id="_x0000_s1025" type="#_x0000_t202" style="position:absolute">
+    <x:ClientData ObjectType="Note">
+      <x:Visible/>
+      <x:Row>0</x:Row>
+      <x:Column>0</x:Column>
+    </x:ClientData>
+  </v:shape>
+  <v:shape id="_x0000_s1026" type="#_x0000_t202" style="position:absolute">
+    <x:ClientData ObjectType="Note">
+      <x:Row>1</x:Row>
+      <x:Column>0</x:Column>
+    </x:ClientData>
+  </v:shape>
+</xml>"##,
+            )
+            .unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let cursor = Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let map =
+            read_comment_visibility_map(&mut archive, Some("xl/drawings/vmlDrawing1.vml")).unwrap();
+
+        // Shape with <x:Visible/> should be visible
+        assert_eq!(map.get(&(0, 0)).copied(), Some(true));
+        // Shape without <x:Visible/> or style should default to hidden
+        assert_eq!(map.get(&(1, 0)).copied(), Some(false));
+    }
+
+    #[test]
+    fn test_vml_style_visibility_with_whitespace() {
+        // Test that "visibility: visible" (with space) is tolerated
+        let mut bytes = Vec::new();
+        {
+            let cursor = Cursor::new(&mut bytes);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+
+            zip.start_file("xl/drawings/vmlDrawing1.vml", options)
+                .unwrap();
+            zip.write_all(
+                br##"<?xml version="1.0"?>
+<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:schemas-microsoft-com:office:excel">
+  <v:shape id="_x0000_s1025" type="#_x0000_t202" style="position:absolute; visibility: visible">
+    <x:ClientData ObjectType="Note">
+      <x:Row>0</x:Row>
+      <x:Column>0</x:Column>
+    </x:ClientData>
+  </v:shape>
+</xml>"##,
+            )
+            .unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let cursor = Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let map =
+            read_comment_visibility_map(&mut archive, Some("xl/drawings/vmlDrawing1.vml")).unwrap();
+
+        // Space between visibility: and visible should still be recognized
+        assert_eq!(map.get(&(0, 0)).copied(), Some(true));
     }
 }
