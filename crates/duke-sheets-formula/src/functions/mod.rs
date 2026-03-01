@@ -719,6 +719,46 @@ impl FunctionRegistry {
             volatile: false,
         });
 
+        self.register(FunctionDef {
+            name: "TEXT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: text::fn_text,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "TEXTJOIN",
+            min_args: 3,
+            max_args: None,
+            implementation: text::fn_textjoin,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "FIXED",
+            min_args: 1,
+            max_args: Some(3),
+            implementation: text::fn_fixed,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "DOLLAR",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: text::fn_dollar,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "NUMBERVALUE",
+            min_args: 1,
+            max_args: Some(3),
+            implementation: text::fn_numbervalue,
+            volatile: false,
+        });
+
         // LENB (same as LEN for non-DBCS)
         self.register(FunctionDef {
             name: "LENB",
@@ -849,6 +889,142 @@ impl FunctionRegistry {
             volatile: false,
         });
 
+        self.register(FunctionDef {
+            name: "TIME",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: date::fn_time,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "HOUR",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: date::fn_hour,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "MINUTE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: date::fn_minute,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "SECOND",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: date::fn_second,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "WEEKDAY",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: date::fn_weekday,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "WEEKNUM",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: date::fn_weeknum,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "ISOWEEKNUM",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: date::fn_isoweeknum,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "EDATE",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: date::fn_edate,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "EOMONTH",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: date::fn_eomonth,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "DAYS",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: date::fn_days,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "DAYS360",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: date::fn_days360,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "DATEDIF",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: date::fn_datedif,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "YEARFRAC",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: date::fn_yearfrac,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "DATEVALUE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: date::fn_datevalue,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "TIMEVALUE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: date::fn_timevalue,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "NETWORKDAYS",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: date::fn_networkdays,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "WORKDAY",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: date::fn_workday,
+            volatile: false,
+        });
+
         // NOW (volatile)
         self.register(FunctionDef {
             name: "NOW",
@@ -949,6 +1125,46 @@ impl FunctionRegistry {
             implementation: lookup::fn_sequence,
             volatile: false,
         });
+
+        self.register(FunctionDef {
+            name: "HLOOKUP",
+            min_args: 3,
+            max_args: Some(4),
+            implementation: lookup::fn_hlookup,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "XLOOKUP",
+            min_args: 3,
+            max_args: Some(6),
+            implementation: lookup::fn_xlookup,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "XMATCH",
+            min_args: 2,
+            max_args: Some(4),
+            implementation: lookup::fn_xmatch,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "INDIRECT",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: lookup::fn_indirect,
+            volatile: true,
+        });
+
+        self.register(FunctionDef {
+            name: "OFFSET",
+            min_args: 3,
+            max_args: Some(5),
+            implementation: lookup::fn_offset,
+            volatile: true,
+        });
     }
 
     fn register_statistical_functions(&mut self) {
@@ -985,6 +1201,198 @@ impl FunctionRegistry {
             min_args: 2,
             max_args: Some(3),
             implementation: statistical::fn_averageif,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "STDEV.S",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_stdev_s,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "STDEV.P",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_stdev_p,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "VAR.S",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_var_s,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "VAR.P",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_var_p,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "MODE.SNGL",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_mode_sngl,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "MAXIFS",
+            min_args: 3,
+            max_args: None,
+            implementation: statistical::fn_maxifs,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "MINIFS",
+            min_args: 3,
+            max_args: None,
+            implementation: statistical::fn_minifs,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "RANK.EQ",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: statistical::fn_rank_eq,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "RANK.AVG",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: statistical::fn_rank_avg,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "PERCENTILE.INC",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_percentile_inc,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "PERCENTILE.EXC",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_percentile_exc,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "QUARTILE.INC",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_quartile_inc,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "QUARTILE.EXC",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_quartile_exc,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "PERCENTRANK.INC",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: statistical::fn_percentrank_inc,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "PERCENTRANK.EXC",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: statistical::fn_percentrank_exc,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "STDEV",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_stdev,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "STDEVP",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_stdevp,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "VAR",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_var,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "VARP",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_varp,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "MODE",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_mode,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "PERCENTILE",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_percentile,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "QUARTILE",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_quartile,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "RANK",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: statistical::fn_rank,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "PERCENTRANK",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: statistical::fn_percentrank,
             volatile: false,
         });
 
