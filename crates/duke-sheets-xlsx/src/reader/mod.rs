@@ -21,7 +21,7 @@ use duke_sheets_core::conditional_format::{
 use duke_sheets_core::style::{Color, Style};
 use duke_sheets_core::validation::DataValidation;
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue, Hyperlink, SplitPanes, Workbook,
+    CellAddress, CellError, CellRange, CellValue, Hyperlink, PageBreak, SplitPanes, Workbook,
 };
 use formulas::{parse_cell_formula_state, resolve_cell_formula, SharedFormulaMaster};
 use theme::{read_theme_palette, resolve_style_theme_colors};
@@ -38,7 +38,7 @@ mod workbook;
 pub(crate) use formulas::CellFormulaState;
 use shared_strings::SharedStringEntry;
 pub(crate) use theme::ThemePalette;
-use workbook::{read_workbook_rels, read_workbook_xml, read_sheet_rels, SheetRelationship};
+use workbook::{read_sheet_rels, read_workbook_rels, read_workbook_xml, SheetRelationship};
 
 /// Decode Excel's `_xHHHH_` escape sequences in strings.
 ///
@@ -348,6 +348,8 @@ impl XlsxReader {
         let mut in_even_footer = false;
         let mut in_first_header = false;
         let mut in_first_footer = false;
+        let mut in_row_breaks = false;
+        let mut in_col_breaks = false;
 
         // ColorScale/DataBar/IconSet state
         let mut in_color_scale = false;
@@ -656,6 +658,25 @@ impl XlsxReader {
                             }
                         }
                         worksheet.set_page_setup(ps);
+                    }
+                    b"rowBreaks" => {
+                        in_row_breaks = true;
+                    }
+                    b"colBreaks" => {
+                        in_col_breaks = true;
+                    }
+                    b"brk" if in_row_breaks || in_col_breaks => {
+                        if let Some(brk) = Self::parse_page_break_attrs(&e) {
+                            if in_row_breaks {
+                                let mut breaks = worksheet.row_breaks().to_vec();
+                                breaks.push(brk);
+                                worksheet.set_row_breaks(breaks);
+                            } else {
+                                let mut breaks = worksheet.col_breaks().to_vec();
+                                breaks.push(brk);
+                                worksheet.set_col_breaks(breaks);
+                            }
+                        }
                     }
                     b"oddHeader" => {
                         in_odd_header = true;
@@ -1104,6 +1125,12 @@ impl XlsxReader {
                         b"firstFooter" => {
                             in_first_footer = false;
                         }
+                        b"rowBreaks" => {
+                            in_row_breaks = false;
+                        }
+                        b"colBreaks" => {
+                            in_col_breaks = false;
+                        }
                         b"filters" if in_auto_filter => {
                             in_af_filters = false;
                             current_af_column_filter =
@@ -1414,6 +1441,19 @@ impl XlsxReader {
                                 }
                             }
                             worksheet.set_page_setup(ps);
+                        }
+                        b"brk" if in_row_breaks || in_col_breaks => {
+                            if let Some(brk) = Self::parse_page_break_attrs(&e) {
+                                if in_row_breaks {
+                                    let mut breaks = worksheet.row_breaks().to_vec();
+                                    breaks.push(brk);
+                                    worksheet.set_row_breaks(breaks);
+                                } else {
+                                    let mut breaks = worksheet.col_breaks().to_vec();
+                                    breaks.push(brk);
+                                    worksheet.set_col_breaks(breaks);
+                                }
+                            }
                         }
                         b"sheetView" => {
                             for attr in e.attributes().flatten() {
@@ -2056,6 +2096,58 @@ impl XlsxReader {
             }
             _ => {}
         }
+    }
+
+    fn parse_page_break_attrs(e: &quick_xml::events::BytesStart<'_>) -> Option<PageBreak> {
+        let mut id = None;
+        let mut min = 0u32;
+        let mut max = 0u32;
+        let mut man = false;
+        let mut pt = false;
+
+        for attr in e.attributes().flatten() {
+            match attr.key.local_name().as_ref() {
+                b"id" => {
+                    id = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<u32>().ok());
+                }
+                b"min" => {
+                    min = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0);
+                }
+                b"max" => {
+                    max = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0);
+                }
+                b"man" => {
+                    man = attr.unescape_value().ok().is_some_and(|v| {
+                        v.as_ref() == "1" || v.as_ref().eq_ignore_ascii_case("true")
+                    });
+                }
+                b"pt" => {
+                    pt = attr.unescape_value().ok().is_some_and(|v| {
+                        v.as_ref() == "1" || v.as_ref().eq_ignore_ascii_case("true")
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        id.map(|id| PageBreak {
+            id,
+            min,
+            max,
+            man,
+            pt,
+        })
     }
 
     fn parse_hyperlink_element(

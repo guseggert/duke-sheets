@@ -1554,3 +1554,61 @@ fn test_roundtrip_multiple_tables() {
     assert_eq!(s2.table_count(), 1);
     assert_eq!(s2.tables()[0].name, "Table3");
 }
+
+#[test]
+fn roundtrip_row_breaks() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_row_break(9);
+    ws.add_row_break(19);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let ws2 = wb2.worksheet(0).unwrap();
+
+    let breaks = ws2.row_breaks();
+    assert_eq!(breaks.len(), 2);
+    assert_eq!(breaks[0].id, 9);
+    assert_eq!(breaks[0].max, 16383);
+    assert!(breaks[0].man);
+    assert_eq!(breaks[1].id, 19);
+}
+
+#[test]
+fn roundtrip_col_breaks() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_col_break(3);
+    ws.add_col_break(7);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let ws2 = wb2.worksheet(0).unwrap();
+
+    let breaks = ws2.col_breaks();
+    assert_eq!(breaks.len(), 2);
+    assert_eq!(breaks[0].id, 3);
+    assert_eq!(breaks[0].max, 1048575);
+    assert!(breaks[0].man);
+    assert_eq!(breaks[1].id, 7);
+}
+
+#[test]
+fn roundtrip_mixed_breaks() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_row_break(4);
+    ws.add_col_break(2);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let ws2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(ws2.row_breaks().len(), 1);
+    assert_eq!(ws2.row_breaks()[0].id, 4);
+    assert_eq!(ws2.col_breaks().len(), 1);
+    assert_eq!(ws2.col_breaks()[0].id, 2);
+}

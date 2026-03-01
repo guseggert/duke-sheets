@@ -32,10 +32,10 @@ pub mod comment;
 pub mod conditional_format;
 pub mod error;
 pub mod hyperlink;
-pub mod rich_text;
 pub mod locale;
 pub mod named_range;
 pub mod range;
+pub mod rich_text;
 pub mod row;
 pub mod style;
 pub mod table;
@@ -44,10 +44,13 @@ pub mod workbook;
 pub mod worksheet;
 
 // Re-exports for convenience
+pub use auto_filter::{
+    AutoFilter, ColumnFilter, CustomFilterCondition, CustomFilters, FilterColumn, FilterOperator,
+    Top10Filter, ValueFilter,
+};
 pub use cell::{
     format_cell_value, CellAddress, CellData, CellError, CellRange, CellValue, CellView,
 };
-pub use auto_filter::{AutoFilter, ColumnFilter, CustomFilterCondition, CustomFilters, FilterColumn, FilterOperator, Top10Filter, ValueFilter};
 pub use column::{Column, ColumnData};
 pub use comment::CellComment;
 pub use conditional_format::{
@@ -56,13 +59,14 @@ pub use conditional_format::{
 };
 pub use error::{Error, Result};
 pub use hyperlink::Hyperlink;
-pub use rich_text::{RichTextRun, RunFont, rich_text_to_plain};
 pub use locale::Locale;
+pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
 pub use workbook::{Workbook, WorkbookSettings};
 pub use worksheet::{
-    FreezePanes, PageOrientation, PageSetup, Selection, SheetProtection, SplitPanes, Worksheet,
+    FreezePanes, PageBreak, PageOrientation, PageSetup, Selection, SheetProtection, SplitPanes,
+    Worksheet,
 };
 
 // Re-export all style types for convenience
