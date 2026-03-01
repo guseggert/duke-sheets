@@ -201,6 +201,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 #### General Quality
 - [ ] **Refactor XLSX reader/writer modules** — break `crates/duke-sheets-xlsx/src/reader/mod.rs` and `crates/duke-sheets-xlsx/src/writer/mod.rs` into section parsers (sheet views, page setup, comments, CF/DV, etc.) + relationship-based part resolver
 - [x] **XLSX reader modular split (phase 1)** — extracted `reader/theme.rs`, `reader/formulas.rs`, `reader/data_validation.rs`, `reader/conditional_format.rs`, `reader/comments.rs`; `reader/mod.rs` now keeps orchestration/workbook/sheet loop/cell processing
+- [x] **XLSX reader/writer modular split (phase 2)** — extracted `writer/conditional_format.rs`, `writer/data_validation.rs`, `writer/comments.rs`, `writer/tables.rs`, and `reader/workbook.rs`; converted call sites to module-level free functions
 - [ ] **Property-based testing** (proptest) — CellAddress roundtrip, Style write/read, formula parse/print
 - [ ] **Broader locale coverage** — more built-in `Locale` constructors; CLI `--locale` flag; consider system locale auto-detection
 
