@@ -95,6 +95,18 @@ alias = "tb"
 description = "Alias for 'mise run test'"
 depends = ["test"]
 
+
+[tasks."test:cargo"]
+alias = "tc"
+description = "Run Rust tests (creates required temp dirs)"
+run = """
+#!/bin/bash
+set -e
+mkdir -p /tmp/duke-sheets-urp /tmp/duke-sheets-excel
+cargo test "$@"
+"""
+
+
 # =============================================================================
 # Clean Tasks
 # =============================================================================
@@ -174,6 +186,7 @@ run = """
 #!/bin/bash
 set -e
 
+mkdir -p /tmp/duke-sheets-urp /tmp/duke-sheets-excel
 echo "=== Phase 1: cargo test (unit + integration) ==="
 cargo test
 
