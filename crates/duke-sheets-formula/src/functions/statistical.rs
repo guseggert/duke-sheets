@@ -324,6 +324,760 @@ pub fn fn_small(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     Ok(FormulaValue::Number(numbers[k - 1]))
 }
 
+pub fn fn_stdev_s(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let mut numbers = Vec::new();
+    for arg in args {
+        if let Some(err) = collect_numbers(arg, &mut numbers) {
+            return Ok(FormulaValue::Error(err));
+        }
+    }
+
+    if numbers.len() < 2 {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    let variance = calculate_variance(&numbers, true);
+    Ok(FormulaValue::Number(variance.sqrt()))
+}
+
+pub fn fn_stdev_p(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let mut numbers = Vec::new();
+    for arg in args {
+        if let Some(err) = collect_numbers(arg, &mut numbers) {
+            return Ok(FormulaValue::Error(err));
+        }
+    }
+
+    if numbers.is_empty() {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    let variance = calculate_variance(&numbers, false);
+    Ok(FormulaValue::Number(variance.sqrt()))
+}
+
+pub fn fn_var_s(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let mut numbers = Vec::new();
+    for arg in args {
+        if let Some(err) = collect_numbers(arg, &mut numbers) {
+            return Ok(FormulaValue::Error(err));
+        }
+    }
+
+    if numbers.len() < 2 {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    Ok(FormulaValue::Number(calculate_variance(&numbers, true)))
+}
+
+pub fn fn_var_p(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let mut numbers = Vec::new();
+    for arg in args {
+        if let Some(err) = collect_numbers(arg, &mut numbers) {
+            return Ok(FormulaValue::Error(err));
+        }
+    }
+
+    if numbers.is_empty() {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    Ok(FormulaValue::Number(calculate_variance(&numbers, false)))
+}
+
+pub fn fn_mode_sngl(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let mut numbers = Vec::new();
+    for arg in args {
+        if let Some(err) = collect_numbers(arg, &mut numbers) {
+            return Ok(FormulaValue::Error(err));
+        }
+    }
+
+    if numbers.is_empty() {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    let mut best_value = numbers[0];
+    let mut best_count = 0usize;
+
+    for (idx, value) in numbers.iter().enumerate() {
+        let mut count = 0usize;
+        for candidate in &numbers {
+            if candidate == value {
+                count += 1;
+            }
+        }
+
+        if count > best_count {
+            best_count = count;
+            best_value = numbers[idx];
+        }
+    }
+
+    Ok(FormulaValue::Number(best_value))
+}
+
+pub fn fn_maxifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    if args.len() < 3 || args.len() % 2 != 1 {
+        return Ok(FormulaValue::Error(CellError::Value));
+    }
+
+    let max_range = match &args[0] {
+        FormulaValue::Array(arr) => arr,
+        FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+        v => return fn_maxifs_single(v, &args[1..]),
+    };
+
+    let (rows, cols) = array_dims(max_range);
+    if rows == 0 || cols == 0 {
+        return Ok(FormulaValue::Number(0.0));
+    }
+
+    let num_pairs = (args.len() - 1) / 2;
+    let mut criteria_ranges: Vec<&Vec<Vec<FormulaValue>>> = Vec::with_capacity(num_pairs);
+    let mut matchers: Vec<CriteriaMatcher> = Vec::with_capacity(num_pairs);
+
+    for i in 0..num_pairs {
+        let range_idx = 1 + i * 2;
+        let criteria_idx = range_idx + 1;
+
+        let range = match &args[range_idx] {
+            FormulaValue::Array(arr) => arr,
+            FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+            _ => return Ok(FormulaValue::Error(CellError::Value)),
+        };
+
+        let (r, c) = array_dims(range);
+        if r != rows || c != cols {
+            return Ok(FormulaValue::Error(CellError::Value));
+        }
+
+        criteria_ranges.push(range);
+
+        let criteria = &args[criteria_idx];
+        if let FormulaValue::Error(e) = criteria {
+            return Ok(FormulaValue::Error(*e));
+        }
+        matchers.push(CriteriaMatcher::new(criteria));
+    }
+
+    let mut current_max: Option<f64> = None;
+
+    for row_idx in 0..rows {
+        for col_idx in 0..cols {
+            let mut all_match = true;
+            for (range, matcher) in criteria_ranges.iter().zip(matchers.iter()) {
+                if !matcher.matches(&range[row_idx][col_idx]) {
+                    all_match = false;
+                    break;
+                }
+            }
+
+            if all_match {
+                match &max_range[row_idx][col_idx] {
+                    FormulaValue::Number(n) => {
+                        current_max = Some(match current_max {
+                            Some(m) => m.max(*n),
+                            None => *n,
+                        });
+                    }
+                    FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(FormulaValue::Number(current_max.unwrap_or(0.0)))
+}
+
+pub fn fn_minifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    if args.len() < 3 || args.len() % 2 != 1 {
+        return Ok(FormulaValue::Error(CellError::Value));
+    }
+
+    let min_range = match &args[0] {
+        FormulaValue::Array(arr) => arr,
+        FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+        v => return fn_minifs_single(v, &args[1..]),
+    };
+
+    let (rows, cols) = array_dims(min_range);
+    if rows == 0 || cols == 0 {
+        return Ok(FormulaValue::Number(0.0));
+    }
+
+    let num_pairs = (args.len() - 1) / 2;
+    let mut criteria_ranges: Vec<&Vec<Vec<FormulaValue>>> = Vec::with_capacity(num_pairs);
+    let mut matchers: Vec<CriteriaMatcher> = Vec::with_capacity(num_pairs);
+
+    for i in 0..num_pairs {
+        let range_idx = 1 + i * 2;
+        let criteria_idx = range_idx + 1;
+
+        let range = match &args[range_idx] {
+            FormulaValue::Array(arr) => arr,
+            FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+            _ => return Ok(FormulaValue::Error(CellError::Value)),
+        };
+
+        let (r, c) = array_dims(range);
+        if r != rows || c != cols {
+            return Ok(FormulaValue::Error(CellError::Value));
+        }
+
+        criteria_ranges.push(range);
+
+        let criteria = &args[criteria_idx];
+        if let FormulaValue::Error(e) = criteria {
+            return Ok(FormulaValue::Error(*e));
+        }
+        matchers.push(CriteriaMatcher::new(criteria));
+    }
+
+    let mut current_min: Option<f64> = None;
+
+    for row_idx in 0..rows {
+        for col_idx in 0..cols {
+            let mut all_match = true;
+            for (range, matcher) in criteria_ranges.iter().zip(matchers.iter()) {
+                if !matcher.matches(&range[row_idx][col_idx]) {
+                    all_match = false;
+                    break;
+                }
+            }
+
+            if all_match {
+                match &min_range[row_idx][col_idx] {
+                    FormulaValue::Number(n) => {
+                        current_min = Some(match current_min {
+                            Some(m) => m.min(*n),
+                            None => *n,
+                        });
+                    }
+                    FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(FormulaValue::Number(current_min.unwrap_or(0.0)))
+}
+
+pub fn fn_rank_eq(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let number = match args.first() {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) => n,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    let mut numbers = Vec::new();
+    match args.get(1) {
+        Some(v) => {
+            if let Some(err) = collect_numbers(v, &mut numbers) {
+                return Ok(FormulaValue::Error(err));
+            }
+        }
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    }
+
+    if numbers.is_empty() {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    let ascending = match args.get(2) {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) => n != 0.0,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => false,
+    };
+
+    let count = if ascending {
+        numbers.iter().filter(|&&n| n < number).count()
+    } else {
+        numbers.iter().filter(|&&n| n > number).count()
+    };
+
+    Ok(FormulaValue::Number((count + 1) as f64))
+}
+
+pub fn fn_rank_avg(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let number = match args.first() {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) => n,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    let mut numbers = Vec::new();
+    match args.get(1) {
+        Some(v) => {
+            if let Some(err) = collect_numbers(v, &mut numbers) {
+                return Ok(FormulaValue::Error(err));
+            }
+        }
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    }
+
+    if numbers.is_empty() {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    let ascending = match args.get(2) {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) => n != 0.0,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => false,
+    };
+
+    let greater_or_less = if ascending {
+        numbers.iter().filter(|&&n| n < number).count()
+    } else {
+        numbers.iter().filter(|&&n| n > number).count()
+    };
+    let equal = numbers.iter().filter(|&&n| n == number).count();
+
+    if equal == 0 {
+        return Ok(FormulaValue::Number((greater_or_less + 1) as f64));
+    }
+
+    let start = (greater_or_less + 1) as f64;
+    let end = (greater_or_less + equal) as f64;
+    Ok(FormulaValue::Number((start + end) / 2.0))
+}
+
+pub fn fn_percentile_inc(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let mut numbers = Vec::new();
+    match args.first() {
+        Some(v) => {
+            if let Some(err) = collect_numbers(v, &mut numbers) {
+                return Ok(FormulaValue::Error(err));
+            }
+        }
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    }
+
+    if numbers.is_empty() {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    numbers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let k = match args.get(1) {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) => n,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    if !(0.0..=1.0).contains(&k) {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    Ok(FormulaValue::Number(calculate_percentile_inc(&numbers, k)))
+}
+
+pub fn fn_percentile_exc(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let mut numbers = Vec::new();
+    match args.first() {
+        Some(v) => {
+            if let Some(err) = collect_numbers(v, &mut numbers) {
+                return Ok(FormulaValue::Error(err));
+            }
+        }
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    }
+
+    if numbers.is_empty() {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    numbers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let k = match args.get(1) {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) => n,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    let n = numbers.len() as f64;
+    let lower_bound = 1.0 / (n + 1.0);
+    let upper_bound = n / (n + 1.0);
+    if k <= lower_bound || k >= upper_bound {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    Ok(FormulaValue::Number(calculate_percentile_exc(&numbers, k)))
+}
+
+pub fn fn_quartile_inc(
+    args: &[FormulaValue],
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let quart = match args.get(1) {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) => n.floor() as i32,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    if !(0..=4).contains(&quart) {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    let k = quart as f64 / 4.0;
+    fn_percentile_inc(&[args[0].clone(), FormulaValue::Number(k)], ctx)
+}
+
+pub fn fn_quartile_exc(
+    args: &[FormulaValue],
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let quart = match args.get(1) {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) => n.floor() as i32,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    if !(1..=3).contains(&quart) {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    let k = quart as f64 / 4.0;
+    fn_percentile_exc(&[args[0].clone(), FormulaValue::Number(k)], ctx)
+}
+
+pub fn fn_percentrank_inc(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let mut numbers = Vec::new();
+    match args.first() {
+        Some(v) => {
+            if let Some(err) = collect_numbers(v, &mut numbers) {
+                return Ok(FormulaValue::Error(err));
+            }
+        }
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    }
+
+    if numbers.len() < 2 {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    numbers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let x = match args.get(1) {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) => n,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    let significance = match args.get(2) {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) if n > 0.0 => n.floor() as i32,
+            Some(_) => return Ok(FormulaValue::Error(CellError::Num)),
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => 3,
+    };
+
+    let rank = match calculate_percentrank(&numbers, x, false) {
+        Ok(v) => v,
+        Err(e) => return Ok(FormulaValue::Error(e)),
+    };
+    Ok(FormulaValue::Number(truncate_significance(
+        rank,
+        significance,
+    )))
+}
+
+pub fn fn_percentrank_exc(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let mut numbers = Vec::new();
+    match args.first() {
+        Some(v) => {
+            if let Some(err) = collect_numbers(v, &mut numbers) {
+                return Ok(FormulaValue::Error(err));
+            }
+        }
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    }
+
+    if numbers.len() < 2 {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    numbers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let x = match args.get(1) {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) => n,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    let significance = match args.get(2) {
+        Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
+        Some(v) => match v.as_number() {
+            Some(n) if n > 0.0 => n.floor() as i32,
+            Some(_) => return Ok(FormulaValue::Error(CellError::Num)),
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+        None => 3,
+    };
+
+    let rank = match calculate_percentrank(&numbers, x, true) {
+        Ok(v) => v,
+        Err(e) => return Ok(FormulaValue::Error(e)),
+    };
+    Ok(FormulaValue::Number(truncate_significance(
+        rank,
+        significance,
+    )))
+}
+
+pub fn fn_stdev(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    fn_stdev_s(args, ctx)
+}
+
+pub fn fn_stdevp(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    fn_stdev_p(args, ctx)
+}
+
+pub fn fn_var(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    fn_var_s(args, ctx)
+}
+
+pub fn fn_varp(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    fn_var_p(args, ctx)
+}
+
+pub fn fn_mode(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    fn_mode_sngl(args, ctx)
+}
+
+pub fn fn_percentile(
+    args: &[FormulaValue],
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    fn_percentile_inc(args, ctx)
+}
+
+pub fn fn_quartile(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    fn_quartile_inc(args, ctx)
+}
+
+pub fn fn_rank(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    fn_rank_eq(args, ctx)
+}
+
+pub fn fn_percentrank(
+    args: &[FormulaValue],
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    fn_percentrank_inc(args, ctx)
+}
+
+fn fn_maxifs_single(
+    max_value: &FormulaValue,
+    criteria_args: &[FormulaValue],
+) -> FormulaResult<FormulaValue> {
+    let num_pairs = criteria_args.len() / 2;
+
+    for i in 0..num_pairs {
+        let range_idx = i * 2;
+        let criteria_idx = range_idx + 1;
+
+        let range_value = &criteria_args[range_idx];
+        let criteria = &criteria_args[criteria_idx];
+
+        if let FormulaValue::Error(e) = range_value {
+            return Ok(FormulaValue::Error(*e));
+        }
+        if let FormulaValue::Error(e) = criteria {
+            return Ok(FormulaValue::Error(*e));
+        }
+
+        let matcher = CriteriaMatcher::new(criteria);
+        if !matcher.matches(range_value) {
+            return Ok(FormulaValue::Number(0.0));
+        }
+    }
+
+    match max_value {
+        FormulaValue::Number(n) => Ok(FormulaValue::Number(*n)),
+        FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
+        _ => Ok(FormulaValue::Number(0.0)),
+    }
+}
+
+fn fn_minifs_single(
+    min_value: &FormulaValue,
+    criteria_args: &[FormulaValue],
+) -> FormulaResult<FormulaValue> {
+    let num_pairs = criteria_args.len() / 2;
+
+    for i in 0..num_pairs {
+        let range_idx = i * 2;
+        let criteria_idx = range_idx + 1;
+
+        let range_value = &criteria_args[range_idx];
+        let criteria = &criteria_args[criteria_idx];
+
+        if let FormulaValue::Error(e) = range_value {
+            return Ok(FormulaValue::Error(*e));
+        }
+        if let FormulaValue::Error(e) = criteria {
+            return Ok(FormulaValue::Error(*e));
+        }
+
+        let matcher = CriteriaMatcher::new(criteria);
+        if !matcher.matches(range_value) {
+            return Ok(FormulaValue::Number(0.0));
+        }
+    }
+
+    match min_value {
+        FormulaValue::Number(n) => Ok(FormulaValue::Number(*n)),
+        FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
+        _ => Ok(FormulaValue::Number(0.0)),
+    }
+}
+
+fn calculate_variance(numbers: &[f64], sample: bool) -> f64 {
+    let n = numbers.len() as f64;
+    let mean = numbers.iter().sum::<f64>() / n;
+    let sum_sq = numbers.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>();
+    if sample {
+        sum_sq / (n - 1.0)
+    } else {
+        sum_sq / n
+    }
+}
+
+fn calculate_percentile_inc(sorted_numbers: &[f64], k: f64) -> f64 {
+    let n = sorted_numbers.len();
+    if n == 1 {
+        return sorted_numbers[0];
+    }
+
+    let position = k * (n as f64 - 1.0);
+    let lower_idx = position.floor() as usize;
+    let upper_idx = position.ceil() as usize;
+
+    if lower_idx == upper_idx {
+        return sorted_numbers[lower_idx];
+    }
+
+    let fraction = position - lower_idx as f64;
+    sorted_numbers[lower_idx] + (sorted_numbers[upper_idx] - sorted_numbers[lower_idx]) * fraction
+}
+
+fn calculate_percentile_exc(sorted_numbers: &[f64], k: f64) -> f64 {
+    let position = k * (sorted_numbers.len() as f64 + 1.0) - 1.0;
+    let lower_idx = position.floor() as usize;
+    let upper_idx = position.ceil() as usize;
+
+    if lower_idx == upper_idx {
+        return sorted_numbers[lower_idx];
+    }
+
+    let fraction = position - lower_idx as f64;
+    sorted_numbers[lower_idx] + (sorted_numbers[upper_idx] - sorted_numbers[lower_idx]) * fraction
+}
+
+fn calculate_percentrank(
+    sorted_numbers: &[f64],
+    x: f64,
+    exclusive: bool,
+) -> Result<f64, CellError> {
+    let n = sorted_numbers.len();
+
+    if x < sorted_numbers[0] {
+        return if exclusive {
+            Err(CellError::Num)
+        } else {
+            Ok(0.0)
+        };
+    }
+    if x > sorted_numbers[n - 1] {
+        return if exclusive {
+            Err(CellError::Num)
+        } else {
+            Ok(1.0)
+        };
+    }
+
+    for i in 0..n {
+        if sorted_numbers[i] == x {
+            if exclusive {
+                return Ok((i as f64 + 1.0) / (n as f64 + 1.0));
+            }
+            return Ok(i as f64 / (n as f64 - 1.0));
+        }
+
+        if i + 1 < n && sorted_numbers[i] < x && x < sorted_numbers[i + 1] {
+            let interval = sorted_numbers[i + 1] - sorted_numbers[i];
+            let fraction = if interval == 0.0 {
+                0.0
+            } else {
+                (x - sorted_numbers[i]) / interval
+            };
+
+            if exclusive {
+                return Ok((i as f64 + 1.0 + fraction) / (n as f64 + 1.0));
+            }
+            return Ok((i as f64 + fraction) / (n as f64 - 1.0));
+        }
+    }
+
+    Err(CellError::Num)
+}
+
+fn truncate_significance(value: f64, significance: i32) -> f64 {
+    let factor = 10_f64.powi(significance);
+    (value * factor).floor() / factor
+}
+
 /// Helper function to collect numbers from a FormulaValue into a vector
 /// Returns Some(CellError) if an error is encountered, None otherwise
 fn collect_numbers(value: &FormulaValue, numbers: &mut Vec<f64>) -> Option<CellError> {
@@ -623,4 +1377,290 @@ fn array_dims(arr: &[Vec<FormulaValue>]) -> (usize, usize) {
     let rows = arr.len();
     let cols = arr.first().map(|r| r.len()).unwrap_or(0);
     (rows, cols)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn eval(formula: &str) -> FormulaResult<FormulaValue> {
+        let ast = crate::parser::parse_formula(formula)?;
+        crate::evaluator::evaluate(&ast, &EvaluationContext::simple())
+    }
+
+    #[test]
+    fn test_stdev_s() {
+        let result = eval("=STDEV.S(2,4,4,4,5,5,7,9)").unwrap();
+        if let FormulaValue::Number(n) = result {
+            assert!((n - 2.1380899353).abs() < 1e-9);
+        } else {
+            panic!("Expected Number");
+        }
+        assert_eq!(
+            eval("=STDEV.S(1)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_stdev_p() {
+        let result = eval("=STDEV.P(2,4,4,4,5,5,7,9)").unwrap();
+        if let FormulaValue::Number(n) = result {
+            assert!((n - 2.0).abs() < 1e-12);
+        } else {
+            panic!("Expected Number");
+        }
+        assert_eq!(eval("=STDEV.P(5)").unwrap(), FormulaValue::Number(0.0));
+    }
+
+    #[test]
+    fn test_var_s() {
+        let result = eval("=VAR.S(2,4,4,4,5,5,7,9)").unwrap();
+        if let FormulaValue::Number(n) = result {
+            assert!((n - 4.5714285714).abs() < 1e-9);
+        } else {
+            panic!("Expected Number");
+        }
+        assert_eq!(
+            eval("=VAR.S(1)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_var_p() {
+        assert_eq!(
+            eval("=VAR.P(2,4,4,4,5,5,7,9)").unwrap(),
+            FormulaValue::Number(4.0)
+        );
+        assert_eq!(eval("=VAR.P(5)").unwrap(), FormulaValue::Number(0.0));
+    }
+
+    #[test]
+    fn test_mode_sngl() {
+        assert_eq!(
+            eval("=MODE.SNGL(1,2,2,3,3,3)").unwrap(),
+            FormulaValue::Number(3.0)
+        );
+        assert_eq!(
+            eval("=MODE.SNGL(2,1,1,2)").unwrap(),
+            FormulaValue::Number(2.0)
+        );
+    }
+
+    #[test]
+    fn test_maxifs() {
+        assert_eq!(
+            eval("=MAXIFS({10,20,30,40},{1,2,1,2},2)").unwrap(),
+            FormulaValue::Number(40.0)
+        );
+        assert_eq!(
+            eval("=MAXIFS({10,20,30},{1,2,3},99)").unwrap(),
+            FormulaValue::Number(0.0)
+        );
+    }
+
+    #[test]
+    fn test_minifs() {
+        assert_eq!(
+            eval("=MINIFS({10,20,30,40},{1,2,1,2},2)").unwrap(),
+            FormulaValue::Number(20.0)
+        );
+        assert_eq!(
+            eval("=MINIFS({10,20,30},{1,2,3},99)").unwrap(),
+            FormulaValue::Number(0.0)
+        );
+    }
+
+    #[test]
+    fn test_rank_eq() {
+        assert_eq!(
+            eval("=RANK.EQ(7,{10,9,7,7,4})").unwrap(),
+            FormulaValue::Number(3.0)
+        );
+        assert_eq!(
+            eval("=RANK.EQ(7,{4,7,7,9,10},1)").unwrap(),
+            FormulaValue::Number(2.0)
+        );
+    }
+
+    #[test]
+    fn test_rank_avg() {
+        assert_eq!(
+            eval("=RANK.AVG(7,{10,9,7,7,4})").unwrap(),
+            FormulaValue::Number(3.5)
+        );
+        assert_eq!(
+            eval("=RANK.AVG(7,{4,7,7,9,10},1)").unwrap(),
+            FormulaValue::Number(2.5)
+        );
+    }
+
+    #[test]
+    fn test_percentile_inc() {
+        assert_eq!(
+            eval("=PERCENTILE.INC({1,2,3,4},0.25)").unwrap(),
+            FormulaValue::Number(1.75)
+        );
+        assert_eq!(
+            eval("=PERCENTILE.INC({1,2,3,4},1.1)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_percentile_exc() {
+        assert_eq!(
+            eval("=PERCENTILE.EXC({1,2,3,4},0.25)").unwrap(),
+            FormulaValue::Number(1.25)
+        );
+        assert_eq!(
+            eval("=PERCENTILE.EXC({1,2,3,4},0.2)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_quartile_inc() {
+        assert_eq!(
+            eval("=QUARTILE.INC({1,2,3,4},2)").unwrap(),
+            FormulaValue::Number(2.5)
+        );
+        assert_eq!(
+            eval("=QUARTILE.INC({1,2,3,4},5)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_quartile_exc() {
+        assert_eq!(
+            eval("=QUARTILE.EXC({1,2,3,4},2)").unwrap(),
+            FormulaValue::Number(2.5)
+        );
+        assert_eq!(
+            eval("=QUARTILE.EXC({1,2,3,4},0)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_percentrank_inc() {
+        assert_eq!(
+            eval("=PERCENTRANK.INC({1,2,3,4},2)").unwrap(),
+            FormulaValue::Number(0.333)
+        );
+        assert_eq!(
+            eval("=PERCENTRANK.INC({1,2,3,4},0)").unwrap(),
+            FormulaValue::Number(0.0)
+        );
+    }
+
+    #[test]
+    fn test_percentrank_exc() {
+        assert_eq!(
+            eval("=PERCENTRANK.EXC({1,2,3,4},2)").unwrap(),
+            FormulaValue::Number(0.4)
+        );
+        assert_eq!(
+            eval("=PERCENTRANK.EXC({1,2,3,4},0)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_stdev_alias() {
+        assert_eq!(
+            eval("=STDEV(1,2,3)").unwrap(),
+            eval("=STDEV.S(1,2,3)").unwrap()
+        );
+        assert_eq!(
+            eval("=STDEV(1)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_stdevp_alias() {
+        assert_eq!(
+            eval("=STDEVP(1,2,3)").unwrap(),
+            eval("=STDEV.P(1,2,3)").unwrap()
+        );
+        assert_eq!(eval("=STDEVP(5)").unwrap(), FormulaValue::Number(0.0));
+    }
+
+    #[test]
+    fn test_var_alias() {
+        assert_eq!(eval("=VAR(1,2,3)").unwrap(), eval("=VAR.S(1,2,3)").unwrap());
+        assert_eq!(
+            eval("=VAR(1)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_varp_alias() {
+        assert_eq!(
+            eval("=VARP(1,2,3)").unwrap(),
+            eval("=VAR.P(1,2,3)").unwrap()
+        );
+        assert_eq!(eval("=VARP(5)").unwrap(), FormulaValue::Number(0.0));
+    }
+
+    #[test]
+    fn test_mode_alias() {
+        assert_eq!(
+            eval("=MODE(1,2,2,3)").unwrap(),
+            eval("=MODE.SNGL(1,2,2,3)").unwrap()
+        );
+        assert_eq!(eval("=MODE(4,4,5)").unwrap(), FormulaValue::Number(4.0));
+    }
+
+    #[test]
+    fn test_percentile_alias() {
+        assert_eq!(
+            eval("=PERCENTILE({1,2,3,4},0.5)").unwrap(),
+            eval("=PERCENTILE.INC({1,2,3,4},0.5)").unwrap()
+        );
+        assert_eq!(
+            eval("=PERCENTILE({1,2,3,4},-1)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_quartile_alias() {
+        assert_eq!(
+            eval("=QUARTILE({1,2,3,4},1)").unwrap(),
+            eval("=QUARTILE.INC({1,2,3,4},1)").unwrap()
+        );
+        assert_eq!(
+            eval("=QUARTILE({1,2,3,4},9)").unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    #[test]
+    fn test_rank_alias() {
+        assert_eq!(
+            eval("=RANK(5,{10,5,1})").unwrap(),
+            eval("=RANK.EQ(5,{10,5,1})").unwrap()
+        );
+        assert_eq!(
+            eval("=RANK(5,{1,5,10},1)").unwrap(),
+            eval("=RANK.EQ(5,{1,5,10},1)").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_percentrank_alias() {
+        assert_eq!(
+            eval("=PERCENTRANK({1,2,3,4},2)").unwrap(),
+            eval("=PERCENTRANK.INC({1,2,3,4},2)").unwrap()
+        );
+        assert_eq!(
+            eval("=PERCENTRANK({1,2,3,4},0)").unwrap(),
+            FormulaValue::Number(0.0)
+        );
+    }
 }

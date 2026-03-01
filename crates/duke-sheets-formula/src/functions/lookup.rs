@@ -3,6 +3,7 @@
 use crate::error::FormulaResult;
 use crate::evaluator::{EvaluationContext, FormulaValue};
 use duke_sheets_core::CellError;
+use std::cmp::Ordering;
 
 fn to_i64_trunc(v: &FormulaValue) -> Option<i64> {
     v.as_number().map(|n| n.trunc() as i64)
@@ -42,6 +43,101 @@ fn array_dims(arr: &[Vec<FormulaValue>]) -> (usize, usize) {
     let rows = arr.len();
     let cols = arr.first().map(|r| r.len()).unwrap_or(0);
     (rows, cols)
+}
+
+fn compare_lookup_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering> {
+    match (a, b) {
+        (FormulaValue::Number(x), FormulaValue::Number(y)) => x.partial_cmp(y),
+        (FormulaValue::Boolean(x), FormulaValue::Boolean(y)) => Some(x.cmp(y)),
+        (FormulaValue::String(x), FormulaValue::String(y)) => {
+            Some(x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase()))
+        }
+        (FormulaValue::Number(x), FormulaValue::String(s)) => {
+            s.parse::<f64>().ok().and_then(|n| x.partial_cmp(&n))
+        }
+        (FormulaValue::String(s), FormulaValue::Number(x)) => {
+            s.parse::<f64>().ok().and_then(|n| n.partial_cmp(x))
+        }
+        (FormulaValue::Empty, FormulaValue::Empty) => Some(Ordering::Equal),
+        (FormulaValue::Empty, FormulaValue::Number(n)) => 0.0f64.partial_cmp(n),
+        (FormulaValue::Number(n), FormulaValue::Empty) => n.partial_cmp(&0.0),
+        (FormulaValue::Empty, FormulaValue::String(s)) => {
+            Some("".cmp(s.to_ascii_lowercase().as_str()))
+        }
+        (FormulaValue::String(s), FormulaValue::Empty) => {
+            Some(s.to_ascii_lowercase().as_str().cmp(""))
+        }
+        _ => None,
+    }
+}
+
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    let mut dp = vec![vec![false; t.len() + 1]; p.len() + 1];
+    dp[0][0] = true;
+    for i in 1..=p.len() {
+        if p[i - 1] == '*' {
+            dp[i][0] = dp[i - 1][0];
+        }
+    }
+    for i in 1..=p.len() {
+        for j in 1..=t.len() {
+            if p[i - 1] == '*' {
+                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
+            } else if p[i - 1] == '?' || p[i - 1].eq_ignore_ascii_case(&t[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1];
+            }
+        }
+    }
+    dp[p.len()][t.len()]
+}
+
+fn vector_from_array(arr: &[Vec<FormulaValue>]) -> Option<Vec<FormulaValue>> {
+    let (rows, cols) = array_dims(arr);
+    if rows == 0 || cols == 0 {
+        return None;
+    }
+    if rows == 1 {
+        return Some(arr[0].clone());
+    }
+    if cols == 1 {
+        return Some(
+            arr.iter()
+                .map(|r| r.first().cloned().unwrap_or(FormulaValue::Empty))
+                .collect(),
+        );
+    }
+    None
+}
+
+fn parse_column_letters(s: &str) -> Option<u16> {
+    let upper = s.to_ascii_uppercase();
+    let mut col: u16 = 0;
+    for c in upper.chars() {
+        if !c.is_ascii_uppercase() {
+            return None;
+        }
+        col = col
+            .checked_mul(26)?
+            .checked_add((c as u16) - ('A' as u16) + 1)?;
+    }
+    Some(col - 1)
+}
+
+fn parse_cell_address(addr: &str) -> Option<(u32, u16)> {
+    let col_end = addr
+        .find(|c: char| c.is_ascii_digit())
+        .unwrap_or(addr.len());
+    if col_end == 0 || col_end == addr.len() {
+        return None;
+    }
+    let col = parse_column_letters(&addr[..col_end])?;
+    let row: u32 = addr[col_end..].parse().ok()?;
+    if row == 0 {
+        return None;
+    }
+    Some((row - 1, col))
 }
 
 /// INDEX(array, row_num, [column_num])
@@ -341,6 +437,330 @@ pub fn fn_vlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     Ok(FormulaValue::Error(CellError::Na))
 }
 
+pub fn fn_hlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    for v in args {
+        if let FormulaValue::Error(e) = v {
+            return Ok(FormulaValue::Error(*e));
+        }
+    }
+
+    let lookup_value = args.get(0).unwrap();
+    if matches!(lookup_value, FormulaValue::Array(_)) {
+        return Ok(FormulaValue::Error(CellError::Value));
+    }
+
+    let table = match expect_array(args.get(1).unwrap()) {
+        Some(a) => a,
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+    let (rows, cols) = array_dims(table);
+    if rows == 0 || cols == 0 {
+        return Ok(FormulaValue::Error(CellError::Na));
+    }
+
+    let row_index = to_i64_trunc(args.get(2).unwrap()).unwrap_or(0);
+    if row_index < 1 {
+        return Ok(FormulaValue::Error(CellError::Value));
+    }
+    let row_index0 = (row_index - 1) as usize;
+    if row_index0 >= rows {
+        return Ok(FormulaValue::Error(CellError::Ref));
+    }
+
+    let range_lookup = args
+        .get(3)
+        .map(|v| v.as_bool().unwrap_or(false))
+        .unwrap_or(true);
+
+    let first_row = &table[0];
+
+    let col_idx = if range_lookup {
+        let mut is_sorted = true;
+        for i in 1..first_row.len() {
+            let prev = &first_row[i - 1];
+            let curr = &first_row[i];
+            match compare_lookup_values(prev, curr) {
+                Some(Ordering::Greater) | None => {
+                    is_sorted = false;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if !is_sorted {
+            return Ok(FormulaValue::Error(CellError::Na));
+        }
+
+        let mut lo = 0usize;
+        let mut hi = first_row.len();
+        let mut best: Option<usize> = None;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match compare_lookup_values(&first_row[mid], lookup_value) {
+                Some(Ordering::Equal) => {
+                    best = Some(mid);
+                    break;
+                }
+                Some(Ordering::Less) => {
+                    best = Some(mid);
+                    lo = mid + 1;
+                }
+                Some(Ordering::Greater) => {
+                    hi = mid;
+                }
+                None => return Ok(FormulaValue::Error(CellError::Na)),
+            }
+        }
+        match best {
+            Some(i) => i,
+            None => return Ok(FormulaValue::Error(CellError::Na)),
+        }
+    } else {
+        match first_row.iter().position(|k| values_equal(lookup_value, k)) {
+            Some(i) => i,
+            None => return Ok(FormulaValue::Error(CellError::Na)),
+        }
+    };
+
+    Ok(table
+        .get(row_index0)
+        .and_then(|r| r.get(col_idx))
+        .cloned()
+        .unwrap_or(FormulaValue::Empty))
+}
+
+pub fn fn_xmatch(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    for v in args {
+        if let FormulaValue::Error(e) = v {
+            return Ok(FormulaValue::Error(*e));
+        }
+    }
+
+    let lookup_value = args.get(0).unwrap();
+    if matches!(lookup_value, FormulaValue::Array(_)) {
+        return Ok(FormulaValue::Error(CellError::Value));
+    }
+
+    let lookup_arr = match expect_array(args.get(1).unwrap()).and_then(|a| vector_from_array(a)) {
+        Some(v) => v,
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    let match_mode = args.get(2).and_then(to_i64_trunc).unwrap_or(0);
+    let search_mode = args.get(3).and_then(to_i64_trunc).unwrap_or(1);
+
+    let indices: Vec<usize> = if search_mode == -1 {
+        (0..lookup_arr.len()).rev().collect()
+    } else {
+        (0..lookup_arr.len()).collect()
+    };
+
+    let exact_pos = || {
+        indices
+            .iter()
+            .copied()
+            .find(|&i| values_equal(lookup_value, &lookup_arr[i]))
+    };
+
+    let result = match match_mode {
+        0 => exact_pos(),
+        2 => {
+            let pattern = lookup_value.as_string();
+            indices.iter().copied().find(|&i| {
+                wildcard_match(
+                    &pattern.to_ascii_lowercase(),
+                    &lookup_arr[i].as_string().to_ascii_lowercase(),
+                )
+            })
+        }
+        -1 => {
+            if let Some(i) = exact_pos() {
+                Some(i)
+            } else {
+                let mut best: Option<usize> = None;
+                for (i, v) in lookup_arr.iter().enumerate() {
+                    if let Some(ord) = compare_lookup_values(v, lookup_value) {
+                        if ord == Ordering::Less {
+                            if let Some(prev) = best {
+                                if compare_lookup_values(v, &lookup_arr[prev])
+                                    == Some(Ordering::Greater)
+                                {
+                                    best = Some(i);
+                                }
+                            } else {
+                                best = Some(i);
+                            }
+                        }
+                    }
+                }
+                best
+            }
+        }
+        1 => {
+            if let Some(i) = exact_pos() {
+                Some(i)
+            } else {
+                let mut best: Option<usize> = None;
+                for (i, v) in lookup_arr.iter().enumerate() {
+                    if let Some(ord) = compare_lookup_values(v, lookup_value) {
+                        if ord == Ordering::Greater {
+                            if let Some(prev) = best {
+                                if compare_lookup_values(v, &lookup_arr[prev])
+                                    == Some(Ordering::Less)
+                                {
+                                    best = Some(i);
+                                }
+                            } else {
+                                best = Some(i);
+                            }
+                        }
+                    }
+                }
+                best
+            }
+        }
+        _ => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    match result {
+        Some(i) => Ok(FormulaValue::Number((i + 1) as f64)),
+        None => Ok(FormulaValue::Error(CellError::Na)),
+    }
+}
+
+pub fn fn_xlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    for v in args {
+        if let FormulaValue::Error(e) = v {
+            return Ok(FormulaValue::Error(*e));
+        }
+    }
+
+    let lookup_value = args.get(0).unwrap().clone();
+    let lookup_array = args.get(1).unwrap().clone();
+    let return_arr = match expect_array(args.get(2).unwrap()).and_then(|a| vector_from_array(a)) {
+        Some(v) => v,
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    let lookup_vec = match expect_array(&lookup_array).and_then(|a| vector_from_array(a)) {
+        Some(v) => v,
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    if lookup_vec.len() != return_arr.len() {
+        return Ok(FormulaValue::Error(CellError::Value));
+    }
+
+    let if_not_found = args
+        .get(3)
+        .cloned()
+        .unwrap_or(FormulaValue::Error(CellError::Na));
+    let match_mode = args.get(4).cloned().unwrap_or(FormulaValue::Number(0.0));
+    let search_mode = args.get(5).cloned().unwrap_or(FormulaValue::Number(1.0));
+
+    let lookup_array_value = FormulaValue::Array(vec![lookup_vec]);
+    let xmatch_result = fn_xmatch(
+        &[lookup_value, lookup_array_value, match_mode, search_mode],
+        ctx,
+    )?;
+
+    match xmatch_result {
+        FormulaValue::Number(pos) => {
+            let idx = pos as usize;
+            if idx == 0 || idx > return_arr.len() {
+                Ok(FormulaValue::Error(CellError::Na))
+            } else {
+                Ok(return_arr[idx - 1].clone())
+            }
+        }
+        FormulaValue::Error(CellError::Na) => Ok(if_not_found),
+        FormulaValue::Error(e) => Ok(FormulaValue::Error(e)),
+        _ => Ok(FormulaValue::Error(CellError::Na)),
+    }
+}
+
+pub fn fn_indirect(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    for v in args {
+        if let FormulaValue::Error(e) = v {
+            return Ok(FormulaValue::Error(*e));
+        }
+    }
+
+    if ctx.workbook.is_none() {
+        return Ok(FormulaValue::Error(CellError::Ref));
+    }
+
+    let ref_text = args.get(0).unwrap();
+    if matches!(ref_text, FormulaValue::Array(_)) {
+        return Ok(FormulaValue::Error(CellError::Value));
+    }
+
+    let a1_style = args
+        .get(1)
+        .map(|v| v.as_bool().unwrap_or(false))
+        .unwrap_or(true);
+    if !a1_style {
+        return Ok(FormulaValue::Error(CellError::Ref));
+    }
+
+    let text = ref_text.as_string();
+    let (sheet_name, ref_part) = if let Some(pos) = text.rfind('!') {
+        let raw_sheet = text[..pos].trim();
+        let clean_sheet = raw_sheet.trim_matches('\'').to_string();
+        (Some(clean_sheet), text[pos + 1..].trim().to_string())
+    } else {
+        (None, text.trim().to_string())
+    };
+
+    let ref_clean = ref_part.replace('$', "");
+    if let Some(colon) = ref_clean.find(':') {
+        let start = &ref_clean[..colon];
+        let end = &ref_clean[colon + 1..];
+        let (sr, sc) = match parse_cell_address(start) {
+            Some(v) => v,
+            None => return Ok(FormulaValue::Error(CellError::Ref)),
+        };
+        let (er, ec) = match parse_cell_address(end) {
+            Some(v) => v,
+            None => return Ok(FormulaValue::Error(CellError::Ref)),
+        };
+        Ok(ctx.get_range_values(sheet_name.as_deref(), sr, sc, er, ec))
+    } else {
+        let (row, col) = match parse_cell_address(&ref_clean) {
+            Some(v) => v,
+            None => return Ok(FormulaValue::Error(CellError::Ref)),
+        };
+        Ok(ctx.get_cell_value(sheet_name.as_deref(), row, col))
+    }
+}
+
+pub fn fn_offset(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    for v in args {
+        if let FormulaValue::Error(e) = v {
+            return Ok(FormulaValue::Error(*e));
+        }
+    }
+
+    if args.get(1).and_then(to_i64_trunc).is_none() || args.get(2).and_then(to_i64_trunc).is_none()
+    {
+        return Ok(FormulaValue::Error(CellError::Value));
+    }
+
+    if let Some(h) = args.get(3).and_then(to_i64_trunc) {
+        if h < 1 {
+            return Ok(FormulaValue::Error(CellError::Value));
+        }
+    }
+    if let Some(w) = args.get(4).and_then(to_i64_trunc) {
+        if w < 1 {
+            return Ok(FormulaValue::Error(CellError::Value));
+        }
+    }
+
+    // TODO: full OFFSET behavior requires evaluator support for unevaluated references.
+    Ok(FormulaValue::Error(CellError::Ref))
+}
+
 /// SEQUENCE(rows, [columns], [start], [step]) - Generates a sequence of numbers
 ///
 /// Reference: Microsoft SEQUENCE function, LibreOffice SEQUENCE
@@ -418,4 +838,119 @@ pub fn fn_sequence(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     }
 
     Ok(FormulaValue::Array(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use duke_sheets_core::{CellValue, Workbook};
+
+    fn eval(formula: &str) -> FormulaResult<FormulaValue> {
+        let ast = crate::parser::parse_formula(formula)?;
+        crate::evaluator::evaluate(&ast, &EvaluationContext::simple())
+    }
+
+    #[test]
+    fn test_hlookup() {
+        assert_eq!(
+            eval("=HLOOKUP(2,{1,2,3;\"a\",\"b\",\"c\"},2,FALSE)").unwrap(),
+            FormulaValue::String("b".into())
+        );
+        assert_eq!(
+            eval("=HLOOKUP(2.5,{1,2,3;10,20,30},2,TRUE)").unwrap(),
+            FormulaValue::Number(20.0)
+        );
+        assert_eq!(
+            eval("=HLOOKUP(9,{1,2,3;10,20,30},2,FALSE)").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+    }
+
+    #[test]
+    fn test_xmatch() {
+        assert_eq!(
+            eval("=XMATCH(3,{1,2,3,4})").unwrap(),
+            FormulaValue::Number(3.0)
+        );
+        assert_eq!(
+            eval("=XMATCH(\"ab*\",{\"aa\",\"abc\",\"def\"},2)").unwrap(),
+            FormulaValue::Number(2.0)
+        );
+        assert_eq!(
+            eval("=XMATCH(2.5,{1,2,3},-1)").unwrap(),
+            FormulaValue::Number(2.0)
+        );
+    }
+
+    #[test]
+    fn test_xlookup() {
+        assert_eq!(
+            eval("=XLOOKUP(2,{1,2,3},{\"a\",\"b\",\"c\"})").unwrap(),
+            FormulaValue::String("b".into())
+        );
+        assert_eq!(
+            eval("=XLOOKUP(4,{1,2,3},{\"a\",\"b\",\"c\"},\"NF\")").unwrap(),
+            FormulaValue::String("NF".into())
+        );
+        // match_mode=1 (next larger): 2.5 not found, next larger is 3 → return 30
+        // Note: ideally we'd test =XLOOKUP(2.5,...,,1) with an omitted 4th arg,
+        // but the parser doesn't yet support empty arguments (,,). Using explicit
+        // if_not_found here; the lookup succeeds so it's never reached.
+        assert_eq!(
+            eval("=XLOOKUP(2.5,{1,2,3},{10,20,30},\"NF\",1)").unwrap(),
+            FormulaValue::Number(30.0)
+        );
+        // Default if_not_found is #N/A (tested via 4-arg form)
+        assert_eq!(
+            eval("=XLOOKUP(99,{1,2,3},{10,20,30})").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+    }
+
+    #[test]
+    fn test_indirect() {
+        assert_eq!(
+            eval("=INDIRECT(\"A1\")").unwrap(),
+            FormulaValue::Error(CellError::Ref)
+        );
+
+        let mut workbook = Workbook::new();
+        {
+            let sheet = workbook.worksheet_mut(0).unwrap();
+            sheet
+                .set_cell_value_at(0, 0, CellValue::Number(42.0))
+                .unwrap();
+            sheet
+                .set_cell_value_at(0, 1, CellValue::String("x".into()))
+                .unwrap();
+        }
+        let ctx = EvaluationContext::new(Some(&workbook), 0, 0, 0);
+        assert_eq!(
+            fn_indirect(&[FormulaValue::String("A1".into())], &ctx).unwrap(),
+            FormulaValue::Number(42.0)
+        );
+        assert_eq!(
+            fn_indirect(&[FormulaValue::String("A1:B1".into())], &ctx).unwrap(),
+            FormulaValue::Array(vec![vec![
+                FormulaValue::Number(42.0),
+                FormulaValue::String("x".into())
+            ]])
+        );
+    }
+
+    #[test]
+    fn test_offset() {
+        assert_eq!(
+            eval("=OFFSET(1,1,1)").unwrap(),
+            FormulaValue::Error(CellError::Ref)
+        );
+        assert_eq!(
+            eval("=OFFSET(1,\"x\",1)").unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
+        assert_eq!(
+            eval("=OFFSET(1,1,1,0,1)").unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
+    }
 }
