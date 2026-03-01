@@ -194,9 +194,19 @@ impl XlsxReader {
                     &sheet_rels,
                 )?;
 
-                // Read comments for this worksheet (if present)
-                let comments_path = format!("xl/comments{}.xml", idx + 1);
-                let vml_path = format!("xl/drawings/vmlDrawing{}.vml", idx + 1);
+                // Read comments for this worksheet (if present).
+                // Resolve paths via sheet .rels relationships; fall back to
+                // index-based filenames for files that lack .rels entries.
+                let comments_path = sheet_rels
+                    .values()
+                    .find(|r| r.rel_type.ends_with("/comments"))
+                    .map(|r| r.target.clone())
+                    .unwrap_or_else(|| format!("xl/comments{}.xml", idx + 1));
+                let vml_path = sheet_rels
+                    .values()
+                    .find(|r| r.rel_type.ends_with("/vmlDrawing"))
+                    .map(|r| r.target.clone())
+                    .unwrap_or_else(|| format!("xl/drawings/vmlDrawing{}.vml", idx + 1));
                 read_worksheet_comments(
                     &mut archive,
                     &comments_path,
@@ -623,6 +633,9 @@ impl XlsxReader {
                     }
                     b"selection" => {
                         Self::parse_sheet_selection_attrs(&e, worksheet);
+                    }
+                    b"pane" => {
+                        Self::parse_pane_attrs(&e, worksheet);
                     }
                     b"hyperlink" => {
                         Self::parse_hyperlink_element(worksheet, &e, sheet_rels);
@@ -1503,62 +1516,7 @@ impl XlsxReader {
                             Self::parse_hyperlink_element(worksheet, &e, sheet_rels);
                         }
                         b"pane" => {
-                            let mut state: Option<String> = None;
-                            let mut x_split_raw: Option<f64> = None;
-                            let mut y_split_raw: Option<f64> = None;
-                            let mut top_left_cell: Option<(u32, u16)> = None;
-                            let mut active_pane: Option<String> = None;
-
-                            for attr in e.attributes().flatten() {
-                                match attr.key.local_name().as_ref() {
-                                    b"state" => {
-                                        state = attr.unescape_value().ok().map(|s| s.to_string());
-                                    }
-                                    b"xSplit" => {
-                                        x_split_raw = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .and_then(|s| s.parse::<f64>().ok());
-                                    }
-                                    b"ySplit" => {
-                                        y_split_raw = attr
-                                            .unescape_value()
-                                            .ok()
-                                            .and_then(|s| s.parse::<f64>().ok());
-                                    }
-                                    b"topLeftCell" => {
-                                        if let Some(a1) =
-                                            attr.unescape_value().ok().map(|s| s.to_string())
-                                        {
-                                            if let Ok(addr) = CellAddress::parse(&a1) {
-                                                top_left_cell = Some((addr.row, addr.col));
-                                            }
-                                        }
-                                    }
-                                    b"activePane" => {
-                                        active_pane =
-                                            attr.unescape_value().ok().map(|s| s.to_string());
-                                    }
-                                    _ => {}
-                                }
-                            }
-
-                            match state.as_deref() {
-                                Some("frozen") | Some("frozenSplit") => {
-                                    let row = y_split_raw.unwrap_or(0.0).round().max(0.0) as u32;
-                                    let col = x_split_raw.unwrap_or(0.0).round().max(0.0) as u16;
-                                    worksheet.set_freeze_panes(row, col);
-                                }
-                                Some("split") => {
-                                    worksheet.set_split_panes(Some(SplitPanes {
-                                        x_split: x_split_raw.unwrap_or(0.0),
-                                        y_split: y_split_raw.unwrap_or(0.0),
-                                        top_left: top_left_cell,
-                                        active_pane,
-                                    }));
-                                }
-                                _ => {}
-                            }
+                            Self::parse_pane_attrs(&e, worksheet);
                         }
                         b"f" if in_cell => {
                             // Self-closing formula elements appear for shared formula
@@ -1838,6 +1796,70 @@ impl XlsxReader {
             active_cell,
             sqref,
         });
+    }
+
+    /// Parse `<pane>` attributes (frozen / split pane state).
+    /// Called from both Event::Empty and Event::Start branches.
+    fn parse_pane_attrs(
+        e: &quick_xml::events::BytesStart<'_>,
+        worksheet: &mut duke_sheets_core::Worksheet,
+    ) {
+        let mut state: Option<String> = None;
+        let mut x_split_raw: Option<f64> = None;
+        let mut y_split_raw: Option<f64> = None;
+        let mut top_left_cell: Option<(u32, u16)> = None;
+        let mut active_pane: Option<String> = None;
+
+        for attr in e.attributes().flatten() {
+            match attr.key.local_name().as_ref() {
+                b"state" => {
+                    state = attr.unescape_value().ok().map(|s| s.to_string());
+                }
+                b"xSplit" => {
+                    x_split_raw = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<f64>().ok());
+                }
+                b"ySplit" => {
+                    y_split_raw = attr
+                        .unescape_value()
+                        .ok()
+                        .and_then(|s| s.parse::<f64>().ok());
+                }
+                b"topLeftCell" => {
+                    if let Some(a1) =
+                        attr.unescape_value().ok().map(|s| s.to_string())
+                    {
+                        if let Ok(addr) = CellAddress::parse(&a1) {
+                            top_left_cell = Some((addr.row, addr.col));
+                        }
+                    }
+                }
+                b"activePane" => {
+                    active_pane =
+                        attr.unescape_value().ok().map(|s| s.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        match state.as_deref() {
+            Some("frozen") | Some("frozenSplit") => {
+                let row = y_split_raw.unwrap_or(0.0).round().max(0.0) as u32;
+                let col = x_split_raw.unwrap_or(0.0).round().max(0.0) as u16;
+                worksheet.set_freeze_panes(row, col);
+            }
+            Some("split") => {
+                worksheet.set_split_panes(Some(SplitPanes {
+                    x_split: x_split_raw.unwrap_or(0.0),
+                    y_split: y_split_raw.unwrap_or(0.0),
+                    top_left: top_left_cell,
+                    active_pane,
+                }));
+            }
+            _ => {}
+        }
     }
 
     fn parse_hyperlink_element(
@@ -2196,6 +2218,33 @@ mod tests {
     }
 
     #[test]
+    fn test_read_pane_non_self_closing_tags() {
+        // Some XLSX generators emit <pane ...></pane> instead of <pane ... />.
+        // Both forms must be handled identically.
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews>
+    <sheetView workbookViewId="0">
+      <pane xSplit="1" ySplit="2" topLeftCell="B3" activePane="bottomRight" state="frozen"></pane>
+      <selection pane="bottomRight" activeCell="C4" sqref="C4"/>
+    </sheetView>
+  </sheetViews>
+  <sheetData>
+    <row r="1"><c r="A1" t="n"><v>1</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        let freeze = sheet.freeze_panes().expect("freeze panes from non-self-closing <pane>");
+        assert_eq!(freeze.row, 2);
+        assert_eq!(freeze.col, 1);
+        assert_eq!(sheet.selection_active_cell(), Some((3, 2)));
+    }
+
+    #[test]
     fn test_read_outline_and_collapsed_row_col_attrs() {
         let sheet_xml = r#"<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -2463,5 +2512,50 @@ mod tests {
 
         assert_eq!(workbook.sheet_count(), 1);
         assert_eq!(workbook.worksheet(0).unwrap().name(), "Sheet1");
+    }
+
+    #[test]
+    fn test_comments_resolved_via_rels_not_index() {
+        // Verify that comments are loaded using sheet .rels targets,
+        // not by assuming comments{N}.xml naming convention.
+        // The comment file here is named "xl/commentsCustom.xml" (non-standard)
+        // and is referenced via rId1 in the sheet .rels.
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+
+            zip.start_file("[Content_Types].xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/commentsCustom.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/></Types>"#).unwrap();
+
+            zip.start_file("_rels/.rels", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#).unwrap();
+
+            zip.start_file("xl/workbook.xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#).unwrap();
+
+            zip.start_file("xl/_rels/workbook.xml.rels", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#).unwrap();
+
+            zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="n"><v>1</v></c></row></sheetData></worksheet>"#).unwrap();
+
+            // Sheet rels with non-standard comment filename
+            zip.start_file("xl/worksheets/_rels/sheet1.xml.rels", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../commentsCustom.xml"/></Relationships>"#).unwrap();
+
+            // Comment file with a non-standard name
+            zip.start_file("xl/commentsCustom.xml", options).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>Alice</author></authors><commentList><comment ref="A1" authorId="0"><text><r><t>Custom path comment</t></r></text></comment></commentList></comments>"#).unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let workbook = XlsxReader::read(Cursor::new(buf)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+        let comment = sheet.comment("A1").unwrap().expect("comment via rels path");
+        assert_eq!(comment.author, "Alice");
+        assert_eq!(comment.text, "Custom path comment");
     }
 }
