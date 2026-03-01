@@ -38,6 +38,8 @@ const RT_VML_DRAWING: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
 const RT_HYPERLINK: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+const RT_TABLE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
 
 // Content types
 const CT_WORKBOOK: &str =
@@ -51,6 +53,7 @@ const CT_COMMENTS: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
 const CT_THEME: &str = "application/vnd.openxmlformats-officedocument.theme+xml";
 const CT_RELS: &str = "application/vnd.openxmlformats-package.relationships+xml";
+const CT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
 
 const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
@@ -422,8 +425,19 @@ impl XlsxWriter {
             .map(|(i, _)| i)
             .collect();
 
+        // Build a mapping: (sheet_index, table_index_in_sheet) → global table number
+        // Used for: xl/tables/table{N}.xml paths and relationship IDs.
+        let mut table_numbering: Vec<(usize, usize, usize)> = Vec::new(); // (sheet_idx, table_in_sheet_idx, global_num)
+        let mut global_table_num = 1usize;
+        for (i, sheet) in workbook.worksheets().enumerate() {
+            for j in 0..sheet.table_count() {
+                table_numbering.push((i, j, global_table_num));
+                global_table_num += 1;
+            }
+        }
+
         // Write [Content_Types].xml
-        Self::write_content_types(&mut zip, workbook, &sheets_with_comments, &sst)?;
+        Self::write_content_types(&mut zip, workbook, &sheets_with_comments, &sst, &table_numbering)?;
 
         // Write _rels/.rels
         Self::write_root_rels(&mut zip)?;
@@ -447,7 +461,16 @@ impl XlsxWriter {
 
         // Write worksheets and their relationships
         for (i, sheet) in workbook.worksheets().enumerate() {
-            let rels = Self::write_worksheet(&mut zip, workbook, i, &style_table, &sst)?;
+            // Collect global table numbers for this sheet
+            let sheet_table_globals: Vec<usize> = table_numbering
+                .iter()
+                .filter(|(si, _, _)| *si == i)
+                .map(|(_, _, gn)| *gn)
+                .collect();
+
+            let rels = Self::write_worksheet(
+                &mut zip, workbook, i, &style_table, &sst, &sheet_table_globals,
+            )?;
 
             if !rels.is_empty() {
                 Self::write_worksheet_rels(&mut zip, i, &rels)?;
@@ -456,6 +479,11 @@ impl XlsxWriter {
             if sheet.comment_count() > 0 {
                 Self::write_vml_drawing(&mut zip, workbook, i)?;
                 Self::write_comments(&mut zip, workbook, i)?;
+            }
+
+            // Write table part XML files for this sheet
+            for (local_idx, &global_num) in sheet_table_globals.iter().enumerate() {
+                Self::write_table_part(&mut zip, sheet, local_idx, global_num)?;
             }
         }
 
@@ -497,6 +525,7 @@ impl XlsxWriter {
         workbook: &Workbook,
         sheets_with_comments: &[usize],
         sst: &SharedStringTable,
+        table_numbering: &[(usize, usize, usize)],
     ) -> XlsxResult<()> {
         Self::write_xml_part(zip, "[Content_Types].xml", |w| {
             let mut tag = BytesStart::new("Types");
@@ -553,6 +582,14 @@ impl XlsxWriter {
                 w.create_element("Override")
                     .with_attribute(("PartName", part.as_str()))
                     .with_attribute(("ContentType", CT_COMMENTS))
+                    .write_empty()?;
+            }
+
+            for &(_, _, global_num) in table_numbering {
+                let part = format!("/xl/tables/table{}.xml", global_num);
+                w.create_element("Override")
+                    .with_attribute(("PartName", part.as_str()))
+                    .with_attribute(("ContentType", CT_TABLE))
                     .write_empty()?;
             }
 
@@ -796,6 +833,7 @@ impl XlsxWriter {
         index: usize,
         style_table: &XlsxStyleTable,
         sst: &SharedStringTable,
+        sheet_table_globals: &[usize],  // global table numbers for this sheet
     ) -> XlsxResult<Vec<WorksheetRelationship>> {
         let path = format!("xl/worksheets/sheet{}.xml", index + 1);
         let mut rels = Vec::new();
@@ -864,6 +902,28 @@ impl XlsxWriter {
                 let mut legacy_drawing = BytesStart::new("legacyDrawing");
                 legacy_drawing.push_attribute(("r:id", "rId1"));
                 w.write_event(Event::Empty(legacy_drawing))?;
+            }
+
+            // tableParts (references to xl/tables/tableN.xml)
+            if !sheet_table_globals.is_empty() {
+                let count_str = sheet_table_globals.len().to_string();
+                let mut tp = BytesStart::new("tableParts");
+                tp.push_attribute(("count", count_str.as_str()));
+                w.write_event(Event::Start(tp))?;
+                for &global_num in sheet_table_globals {
+                    let rid = format!("rId{}", rels.len() + 1);
+                    let target = format!("../tables/table{}.xml", global_num);
+                    rels.push(WorksheetRelationship {
+                        id: rid.clone(),
+                        rel_type: RT_TABLE,
+                        target,
+                        target_mode: None,
+                    });
+                    let mut part = BytesStart::new("tablePart");
+                    part.push_attribute(("r:id", rid.as_str()));
+                    w.write_event(Event::Empty(part))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("tableParts")))?;
             }
 
             w.write_event(Event::End(BytesEnd::new("worksheet")))?;
@@ -2549,6 +2609,125 @@ impl XlsxWriter {
             Ok(())
         })
     }
+
+    // -----------------------------------------------------------------------
+    // xl/tables/table{N}.xml
+    // -----------------------------------------------------------------------
+
+    fn write_table_part<W: Write + Seek>(
+        zip: &mut zip::ZipWriter<W>,
+        sheet: &duke_sheets_core::Worksheet,
+        table_in_sheet_idx: usize,
+        global_num: usize,
+    ) -> XlsxResult<()> {
+        let table = &sheet.tables()[table_in_sheet_idx];
+        let path = format!("xl/tables/table{}.xml", global_num);
+
+        Self::write_xml_part(zip, &path, |w| {
+            let mut tag = BytesStart::new("table");
+            tag.push_attribute(("xmlns", NS_SPREADSHEET));
+
+            let id_str = table.id.to_string();
+            tag.push_attribute(("id", id_str.as_str()));
+            tag.push_attribute(("name", table.name.as_str()));
+            tag.push_attribute(("displayName", table.display_name.as_str()));
+
+            let ref_str = table.reference.to_string();
+            tag.push_attribute(("ref", ref_str.as_str()));
+
+            // Only write headerRowCount when != 1 (spec default is 1)
+            if table.header_row_count != 1 {
+                let hrc = table.header_row_count.to_string();
+                tag.push_attribute(("headerRowCount", hrc.as_str()));
+            }
+
+            if table.totals_row_count > 0 {
+                let trc = table.totals_row_count.to_string();
+                tag.push_attribute(("totalsRowCount", trc.as_str()));
+            }
+
+            if !table.totals_row_shown {
+                tag.push_attribute(("totalsRowShown", "0"));
+            }
+
+            w.write_event(Event::Start(tag))?;
+
+            // autoFilter — covers header + data rows (excludes totals)
+            {
+                let auto_ref = if table.has_totals_row() {
+                    // AutoFilter range excludes the totals row
+                    let start = &table.reference.start;
+                    let end_row = table.reference.end.row.saturating_sub(table.totals_row_count);
+                    let end_col = table.reference.end.col;
+                    let end_addr = CellAddress::new(end_row, end_col);
+                    format!("{}:{}", start, end_addr)
+                } else {
+                    ref_str.clone()
+                };
+                let mut af = BytesStart::new("autoFilter");
+                af.push_attribute(("ref", auto_ref.as_str()));
+                w.write_event(Event::Empty(af))?;
+            }
+
+            // tableColumns
+            if !table.columns.is_empty() {
+                let count_str = table.columns.len().to_string();
+                let mut tc = BytesStart::new("tableColumns");
+                tc.push_attribute(("count", count_str.as_str()));
+                w.write_event(Event::Start(tc))?;
+
+                for col in &table.columns {
+                    let col_id = col.id.to_string();
+                    let has_child = col.calculated_column_formula.is_some()
+                        || col.totals_row_formula.is_some();
+
+                    let mut tc_el = BytesStart::new("tableColumn");
+                    tc_el.push_attribute(("id", col_id.as_str()));
+                    tc_el.push_attribute(("name", col.name.as_str()));
+
+                    if let Some(ref label) = col.totals_row_label {
+                        tc_el.push_attribute(("totalsRowLabel", label.as_str()));
+                    }
+                    if let Some(func) = col.totals_row_function {
+                        tc_el.push_attribute(("totalsRowFunction", func.to_ooxml()));
+                    }
+
+                    if has_child {
+                        w.write_event(Event::Start(tc_el))?;
+                        if let Some(ref formula) = col.totals_row_formula {
+                            w.create_element("totalsRowFormula")
+                                .write_text_content(BytesText::new(formula))?;
+                        }
+                        if let Some(ref formula) = col.calculated_column_formula {
+                            w.create_element("calculatedColumnFormula")
+                                .write_text_content(BytesText::new(formula))?;
+                        }
+                        w.write_event(Event::End(BytesEnd::new("tableColumn")))?;
+                    } else {
+                        w.write_event(Event::Empty(tc_el))?;
+                    }
+                }
+
+                w.write_event(Event::End(BytesEnd::new("tableColumns")))?;
+            }
+
+            // tableStyleInfo
+            if let Some(ref style) = table.style_info {
+                let mut si = BytesStart::new("tableStyleInfo");
+                if let Some(ref name) = style.name {
+                    si.push_attribute(("name", name.as_str()));
+                }
+                si.push_attribute(("showFirstColumn", if style.show_first_column { "1" } else { "0" }));
+                si.push_attribute(("showLastColumn", if style.show_last_column { "1" } else { "0" }));
+                si.push_attribute(("showRowStripes", if style.show_row_stripes { "1" } else { "0" }));
+                si.push_attribute(("showColumnStripes", if style.show_column_stripes { "1" } else { "0" }));
+                w.write_event(Event::Empty(si))?;
+            }
+
+            w.write_event(Event::End(BytesEnd::new("table")))?;
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -2906,5 +3085,92 @@ mod tests {
         assert_eq!(b2.target, "#Sheet1!A1");
         assert_eq!(b2.location.as_deref(), Some("Sheet1!A1"));
         assert_eq!(b2.display.as_deref(), Some("Go to A1"));
+    }
+
+    #[test]
+    fn test_writer_emits_table_parts() {
+        use duke_sheets_core::table::{Table, TableColumn, TableStyleInfo};
+
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Name").unwrap();
+        sheet.set_cell_value("B1", "Score").unwrap();
+        sheet.set_cell_value("A2", "Alice").unwrap();
+        sheet.set_cell_value("B2", 95.0).unwrap();
+
+        let mut table = Table::new(1, "Scores", CellRange::parse("A1:B3").unwrap());
+        table.columns = vec![
+            TableColumn::new(1, "Name"),
+            TableColumn::new(2, "Score"),
+        ];
+        table.style_info = Some(TableStyleInfo {
+            name: Some("TableStyleMedium2".into()),
+            show_row_stripes: true,
+            ..TableStyleInfo::default()
+        });
+        sheet.add_table(table);
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        // Check sheet XML has tableParts
+        let sheet_xml = read_zip_entry(bytes.clone(), "xl/worksheets/sheet1.xml");
+        assert!(sheet_xml.contains("<tableParts count=\"1\">"), "missing tableParts");
+        assert!(sheet_xml.contains("<tablePart r:id="), "missing tablePart ref");
+
+        // Check table XML exists and has correct structure
+        let table_xml = read_zip_entry(bytes.clone(), "xl/tables/table1.xml");
+        assert!(table_xml.contains(r#"name="Scores""#), "wrong name");
+        assert!(table_xml.contains(r#"displayName="Scores""#), "wrong displayName");
+        assert!(table_xml.contains(r#"ref="A1:B3""#), "wrong ref");
+        assert!(table_xml.contains("<autoFilter"), "missing autoFilter");
+        assert!(table_xml.contains(r#"<tableColumns count="2""#), "wrong column count");
+        assert!(table_xml.contains(r#"name="Name""#), "missing col Name");
+        assert!(table_xml.contains(r#"name="Score""#), "missing col Score");
+        assert!(table_xml.contains(r#"name="TableStyleMedium2""#), "wrong style");
+        assert!(table_xml.contains(r#"showRowStripes="1""#), "wrong stripes");
+
+        // Check content types
+        let ct = read_zip_entry(bytes.clone(), "[Content_Types].xml");
+        assert!(ct.contains("/xl/tables/table1.xml"), "missing table content type");
+        assert!(ct.contains("spreadsheetml.table+xml"), "wrong table content type");
+
+        // Check sheet rels
+        let rels = read_zip_entry(bytes, "xl/worksheets/_rels/sheet1.xml.rels");
+        assert!(rels.contains("../tables/table1.xml"), "missing table rel target");
+        assert!(rels.contains("/table\""), "missing table rel type");
+    }
+
+    #[test]
+    fn test_writer_emits_table_with_totals_row() {
+        use duke_sheets_core::table::{
+            Table, TableColumn, TotalsRowFunction,
+        };
+
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Item").unwrap();
+        sheet.set_cell_value("B1", "Qty").unwrap();
+
+        let mut table = Table::new(1, "Items", CellRange::parse("A1:B4").unwrap());
+        let mut col1 = TableColumn::new(1, "Item");
+        col1.totals_row_label = Some("Total".into());
+        let mut col2 = TableColumn::new(2, "Qty");
+        col2.totals_row_function = Some(TotalsRowFunction::Sum);
+        table.columns = vec![col1, col2];
+        table.totals_row_count = 1;
+        sheet.add_table(table);
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write");
+        let bytes = out.into_inner();
+
+        let table_xml = read_zip_entry(bytes, "xl/tables/table1.xml");
+        assert!(table_xml.contains(r#"totalsRowCount="1""#), "missing totalsRowCount");
+        assert!(table_xml.contains(r#"totalsRowLabel="Total""#), "missing totalsRowLabel");
+        assert!(table_xml.contains(r#"totalsRowFunction="sum""#), "missing totalsRowFunction");
+        // autoFilter ref should exclude the totals row: A1:B3 not A1:B4
+        assert!(table_xml.contains(r#"<autoFilter ref="A1:B3""#), "autoFilter should exclude totals");
     }
 }

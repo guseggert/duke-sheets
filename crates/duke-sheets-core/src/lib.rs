@@ -37,6 +37,7 @@ pub mod named_range;
 pub mod range;
 pub mod row;
 pub mod style;
+pub mod table;
 pub mod validation;
 pub mod workbook;
 pub mod worksheet;
@@ -55,6 +56,7 @@ pub use error::{Error, Result};
 pub use hyperlink::Hyperlink;
 pub use rich_text::{RichTextRun, RunFont, rich_text_to_plain};
 pub use locale::Locale;
+pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
 pub use workbook::{Workbook, WorkbookSettings};
 pub use worksheet::{

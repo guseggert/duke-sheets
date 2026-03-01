@@ -2,7 +2,7 @@
 
 use duke_sheets::prelude::*;
 use duke_sheets_core::style::Underline;
-use duke_sheets_core::{FreezePanes, PageOrientation, Selection, SplitPanes};
+use duke_sheets_core::{FreezePanes, PageOrientation, Selection, SplitPanes, Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 use std::io::Cursor;
 
 /// Test basic roundtrip with numeric values
@@ -1050,4 +1050,165 @@ fn test_roundtrip_rich_text() {
         }
         other => panic!("expected RichText, got {:?}", other),
     }
+}
+
+/// Test table roundtrip: create table -> save -> read -> verify all fields survive
+#[test]
+fn test_roundtrip_table_basic() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Name").unwrap();
+    sheet.set_cell_value("B1", "Score").unwrap();
+    sheet.set_cell_value("C1", "Grade").unwrap();
+    sheet.set_cell_value("A2", "Alice").unwrap();
+    sheet.set_cell_value("B2", 95.0).unwrap();
+    sheet.set_cell_value("C2", "A").unwrap();
+
+    let mut table = Table::new(1, "Students", CellRange::parse("A1:C3").unwrap());
+    table.columns = vec![
+        TableColumn::new(1, "Name"),
+        TableColumn::new(2, "Score"),
+        TableColumn::new(3, "Grade"),
+    ];
+    table.style_info = Some(TableStyleInfo {
+        name: Some("TableStyleMedium9".into()),
+        show_first_column: false,
+        show_last_column: false,
+        show_row_stripes: true,
+        show_column_stripes: false,
+    });
+    sheet.add_table(table);
+
+    // Write
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Read back
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.table_count(), 1);
+    let t = &sheet2.tables()[0];
+    assert_eq!(t.id, 1);
+    assert_eq!(t.name, "Students");
+    assert_eq!(t.display_name, "Students");
+    assert_eq!(t.reference.to_string(), "A1:C3");
+    assert_eq!(t.header_row_count, 1);
+    assert_eq!(t.totals_row_count, 0);
+    assert!(t.has_header_row());
+    assert!(!t.has_totals_row());
+
+    assert_eq!(t.columns.len(), 3);
+    assert_eq!(t.columns[0].name, "Name");
+    assert_eq!(t.columns[1].name, "Score");
+    assert_eq!(t.columns[2].name, "Grade");
+
+    let style = t.style_info.as_ref().unwrap();
+    assert_eq!(style.name.as_deref(), Some("TableStyleMedium9"));
+    assert!(style.show_row_stripes);
+    assert!(!style.show_column_stripes);
+}
+
+/// Test table roundtrip with totals row, labels, and functions
+#[test]
+fn test_roundtrip_table_with_totals() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Item").unwrap();
+    sheet.set_cell_value("B1", "Qty").unwrap();
+    sheet.set_cell_value("C1", "Price").unwrap();
+
+    let mut table = Table::new(1, "Sales", CellRange::parse("A1:C5").unwrap());
+    let mut col1 = TableColumn::new(1, "Item");
+    col1.totals_row_label = Some("Total".into());
+    let mut col2 = TableColumn::new(2, "Qty");
+    col2.totals_row_function = Some(TotalsRowFunction::Sum);
+    let mut col3 = TableColumn::new(3, "Price");
+    col3.totals_row_function = Some(TotalsRowFunction::Custom);
+    col3.totals_row_formula = Some("SUBTOTAL(109,[Price])".into());
+    table.columns = vec![col1, col2, col3];
+    table.totals_row_count = 1;
+    sheet.add_table(table);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+    let t = &sheet2.tables()[0];
+
+    assert!(t.has_totals_row());
+    assert_eq!(t.totals_row_count, 1);
+    assert_eq!(t.columns[0].totals_row_label.as_deref(), Some("Total"));
+    assert_eq!(t.columns[1].totals_row_function, Some(TotalsRowFunction::Sum));
+    assert_eq!(t.columns[2].totals_row_function, Some(TotalsRowFunction::Custom));
+    assert_eq!(t.columns[2].totals_row_formula.as_deref(), Some("SUBTOTAL(109,[Price])"));
+}
+
+/// Test table roundtrip with calculated column formula
+#[test]
+fn test_roundtrip_table_with_calculated_column() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "X").unwrap();
+    sheet.set_cell_value("B1", "Y").unwrap();
+    sheet.set_cell_value("C1", "Sum").unwrap();
+
+    let mut table = Table::new(1, "Calc", CellRange::parse("A1:C4").unwrap());
+    let col1 = TableColumn::new(1, "X");
+    let col2 = TableColumn::new(2, "Y");
+    let mut col3 = TableColumn::new(3, "Sum");
+    col3.calculated_column_formula = Some("[X]+[Y]".into());
+    table.columns = vec![col1, col2, col3];
+    sheet.add_table(table);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+    let t = &sheet2.tables()[0];
+
+    assert_eq!(t.columns[2].calculated_column_formula.as_deref(), Some("[X]+[Y]"));
+}
+
+/// Test multiple tables across multiple sheets roundtrip
+#[test]
+fn test_roundtrip_multiple_tables() {
+    let mut wb = Workbook::new();
+
+    // Sheet 1 with 2 tables
+    let sheet1 = wb.worksheet_mut(0).unwrap();
+    sheet1.set_cell_value("A1", "H1").unwrap();
+    let mut t1 = Table::new(1, "Table1", CellRange::parse("A1:B3").unwrap());
+    t1.columns = vec![TableColumn::new(1, "H1"), TableColumn::new(2, "H2")];
+    sheet1.add_table(t1);
+
+    let mut t2 = Table::new(2, "Table2", CellRange::parse("D1:E3").unwrap());
+    t2.columns = vec![TableColumn::new(1, "D1"), TableColumn::new(2, "E1")];
+    sheet1.add_table(t2);
+
+    // Sheet 2 with 1 table
+    wb.add_worksheet_with_name("Sheet2").unwrap();
+    let sheet2 = wb.worksheet_mut(1).unwrap();
+    sheet2.set_cell_value("A1", "Col").unwrap();
+    let mut t3 = Table::new(3, "Table3", CellRange::parse("A1:A5").unwrap());
+    t3.columns = vec![TableColumn::new(1, "Col")];
+    sheet2.add_table(t3);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    // Sheet 1 should have 2 tables
+    let s1 = wb2.worksheet(0).unwrap();
+    assert_eq!(s1.table_count(), 2);
+    assert_eq!(s1.tables()[0].name, "Table1");
+    assert_eq!(s1.tables()[1].name, "Table2");
+
+    // Sheet 2 should have 1 table
+    let s2 = wb2.worksheet(1).unwrap();
+    assert_eq!(s2.table_count(), 1);
+    assert_eq!(s2.tables()[0].name, "Table3");
 }
