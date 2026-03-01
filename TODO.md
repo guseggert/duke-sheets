@@ -105,7 +105,7 @@
 - [x] Volatile function support (NOW, TODAY, RAND, RANDBETWEEN)
 - [x] Cell reference resolution (single cells, ranges)
 - [x] Cross-sheet references (`Sheet2!A1`)
-
+- [x] Structured reference evaluation (`Table1[Column]`, `Table1[@Col]`, `[#Headers]`, `[#Totals]`, `[#All]`, `[#Data]`)
 ### Implemented Functions (108 of ~506)
 
 | Category | Count | Functions (highlights) |
@@ -231,7 +231,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [x] **Data model** — `Table`, `TableColumn`, `TotalsRowFunction`, `TableStyleInfo` structs with header/totals row counts, calculated column formulas, totals row functions/labels/formulas, style info
 - [x] **XLSX reader** — parse `xl/tables/tableN.xml` via sheet rels; handles all column attributes and child formula elements
 - [x] **XLSX writer** — emit table parts (`xl/tables/tableN.xml`), `<tableParts>` in sheet XML, content types, and relationships; autoFilter ref correctly excludes totals row
-- [ ] **Structured reference evaluation** — resolve `Table1[Column]` refs in formula evaluator (parser already handles structured refs)
+- [x] **Structured reference evaluation** — resolve `Table1[Column]`, `Table1[@Column]`, `[#Headers]`, `[#Totals]`, `[#All]`, `[#Data]` specifiers in formula evaluator; dependency graph extraction for calculation engine
 
 #### Auto-Filters
 - [x] **Data model** — `AutoFilter` struct (range, column filters, sort state)
@@ -339,7 +339,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Cell display formatting (CellView) | 51 | ✅ |
 | Formula parser | 37 | ✅ |
 | Formula evaluator + functions | 74 | ✅ |
-| Calculation engine | 8 | ✅ |
+| Calculation engine | 17 | ✅ |
 | XLSX roundtrip | 46 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
@@ -354,14 +354,14 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 299 | ✅ |
-| **Total** | **789** | ✅ |
+| **Total** | **798** | ✅ |
 
 ---
 
 ## Known Issues
 
 1. ~~**Formula parsing failures**~~ — Fixed. Quoted sheet refs, structured refs, external refs, @/# operators now parsed.
-2. **Structured refs / external refs not evaluated** — Parser handles them, but evaluator returns #NAME? / #REF! (tables and external workbooks not implemented)
+2. ~~**Structured refs / external refs not evaluated**~~ — Structured refs now fully evaluated (Table1[Col], @ThisRow, #Headers, #Totals, #All, #Data). External refs still return #REF! (external workbooks not loaded).
 3. ~~**XLSX writer uses inline strings**~~ — Fixed. Now uses shared string table (SST).
 4. ~~**Theme colors not resolved**~~ — Fixed. XLSX reader parses `xl/theme/theme1.xml` and resolves theme+tint colors in styles and conditional formatting.
 5. **XLS reader drops comments, hyperlinks, CF, DV** — these features are supported by the XLSX reader but silently skipped in XLS

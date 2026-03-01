@@ -26,6 +26,7 @@ use crate::{
 };
 use duke_sheets_formula::dependency::{CellKey, DependencyGraph};
 use duke_sheets_formula::functions::FunctionRegistry;
+use duke_sheets_formula::{StructuredRefSpecifier, StructuredReference};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -438,14 +439,127 @@ fn extract_references_recursive(
                 }
             }
         }
-        // Literals and unresolvable references have no extractable cell refs
+        // Literals and unresolvable references
         FormulaExpr::Number(_)
         | FormulaExpr::String(_)
         | FormulaExpr::Boolean(_)
         | FormulaExpr::Error(_)
         | FormulaExpr::NameRef(_)
-        | FormulaExpr::StructuredRef(_)
         | FormulaExpr::ExternalRef(_) => {}
+        // Structured table references — resolve to dependent cell range.
+        FormulaExpr::StructuredRef(sr) => {
+            extract_structured_ref_deps(sr, current_sheet, workbook, refs);
+        }
+    }
+}
+
+/// Extract cell dependencies from a structured table reference.
+///
+/// Resolves the structured ref to a concrete cell range using the workbook's
+/// table definitions and adds all cells in that range to the dependency list.
+fn extract_structured_ref_deps(
+    sr: &StructuredReference,
+    current_sheet: usize,
+    workbook: &Workbook,
+    refs: &mut Vec<CellKey>,
+) {
+    // Find the table and its sheet index.
+    let (reference, columns, header_rows, totals_rows, sheet_idx) = match &sr.table {
+        Some(table_name) => {
+            let mut found = None;
+            for idx in 0..workbook.sheet_count() {
+                if let Some(ws) = workbook.worksheet(idx) {
+                    if let Some(t) = ws.table_by_name(table_name) {
+                        found = Some((
+                            t.reference,
+                            t.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+                            t.header_row_count,
+                            t.totals_row_count,
+                            idx,
+                        ));
+                        break;
+                    }
+                }
+            }
+            match found {
+                Some(f) => f,
+                None => return,
+            }
+        }
+        None => {
+            if let Some(ws) = workbook.worksheet(current_sheet) {
+                match ws.tables().first() {
+                    Some(t) => (
+                        t.reference,
+                        t.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+                        t.header_row_count,
+                        t.totals_row_count,
+                        current_sheet,
+                    ),
+                    None => return,
+                }
+            } else {
+                return;
+            }
+        }
+    };
+
+    // Determine column range.
+    let (col_start, col_end) = match &sr.column {
+        Some(col_name) => {
+            match columns.iter().position(|c| c.eq_ignore_ascii_case(col_name)) {
+                Some(i) => {
+                    let col = reference.start.col + i as u16;
+                    (col, col)
+                }
+                None => return, // column not found
+            }
+        }
+        None => (reference.start.col, reference.end.col),
+    };
+
+    // Determine row range based on specifiers.
+    let ref_start = reference.start.row;
+    let ref_end = reference.end.row;
+    let data_start = ref_start + header_rows;
+    let data_end = if totals_rows > 0 {
+        ref_end - totals_rows
+    } else {
+        ref_end
+    };
+
+    let has_all = sr.specifiers.contains(&StructuredRefSpecifier::All);
+    let has_headers = sr.specifiers.contains(&StructuredRefSpecifier::Headers);
+    let has_data = sr.specifiers.contains(&StructuredRefSpecifier::Data);
+    let has_totals = sr.specifiers.contains(&StructuredRefSpecifier::Totals);
+    let has_this_row = sr.specifiers.contains(&StructuredRefSpecifier::ThisRow);
+
+    let (row_start, row_end) = if has_all {
+        (ref_start, ref_end)
+    } else if has_this_row {
+        // ThisRow depends on context; conservatively include all data rows.
+        (data_start, data_end)
+    } else if has_headers && has_data && has_totals {
+        (ref_start, ref_end)
+    } else if has_headers && has_data {
+        let end = if has_totals { ref_end } else { data_end };
+        (ref_start, end)
+    } else if has_data && has_totals {
+        (data_start, ref_end)
+    } else if has_headers {
+        (ref_start, ref_start + header_rows.saturating_sub(1))
+    } else if has_totals && totals_rows > 0 {
+        (ref_end - totals_rows + 1, ref_end)
+    } else {
+        // Default: #Data (implicit)
+        (data_start, data_end)
+    };
+
+    // Add all cells in the resolved range.
+    for row in row_start..=row_end {
+        for col in col_start..=col_end {
+            refs.push(CellKey::new(sheet_idx, row, col));
+        }
     }
 }
 
@@ -776,7 +890,7 @@ mod tests {
         sheet.set_cell_formula("A1", "=SEQUENCE(5)").unwrap();
 
         // Calculate the workbook
-        let stats = workbook.calculate().unwrap();
+        workbook.calculate().unwrap();
 
         let sheet = workbook.worksheet(0).unwrap();
 
@@ -799,5 +913,225 @@ mod tests {
         // A3 should still have its original value (not overwritten)
         let a3 = sheet.get_calculated_value_at(2, 0);
         assert_eq!(a3, Some(&CellValue::Number(999.0)));
+    }
+
+    /// Helper: create a workbook with a table "Sales" over A1:C6 (header + 4 data + 1 totals).
+    /// Columns: Product, Region, Revenue. Data rows 2-5, totals row 6.
+    fn workbook_with_sales_table(with_totals: bool) -> Workbook {
+        use duke_sheets_core::{CellRange, Table, TableColumn};
+
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+
+        // Header row (row 0)
+        sheet.set_cell_value("A1", "Product").unwrap();
+        sheet.set_cell_value("B1", "Region").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+
+        // Data rows (rows 1-4)
+        sheet.set_cell_value("A2", "Widget").unwrap();
+        sheet.set_cell_value("B2", "East").unwrap();
+        sheet.set_cell_value("C2", 100.0).unwrap();
+
+        sheet.set_cell_value("A3", "Gadget").unwrap();
+        sheet.set_cell_value("B3", "West").unwrap();
+        sheet.set_cell_value("C3", 200.0).unwrap();
+
+        sheet.set_cell_value("A4", "Widget").unwrap();
+        sheet.set_cell_value("B4", "East").unwrap();
+        sheet.set_cell_value("C4", 300.0).unwrap();
+
+        sheet.set_cell_value("A5", "Gadget").unwrap();
+        sheet.set_cell_value("B5", "West").unwrap();
+        sheet.set_cell_value("C5", 400.0).unwrap();
+
+        let totals_count = if with_totals { 1 } else { 0 };
+        let end_row = if with_totals { "C6" } else { "C5" };
+
+        if with_totals {
+            // Totals row (row 5)
+            sheet.set_cell_value("A6", "Total").unwrap();
+            sheet.set_cell_value("C6", 1000.0).unwrap();
+        }
+
+        let reference = CellRange::parse(&format!("A1:{}", end_row)).unwrap();
+        let table = Table {
+            id: 1,
+            name: "Sales".into(),
+            display_name: "Sales".into(),
+            reference,
+            columns: vec![
+                TableColumn::new(1, "Product"),
+                TableColumn::new(2, "Region"),
+                TableColumn::new(3, "Revenue"),
+            ],
+            style_info: None,
+            header_row_count: 1,
+            totals_row_count: totals_count,
+            totals_row_shown: true,
+        };
+        sheet.add_table(table);
+        workbook
+    }
+
+    #[test]
+    fn test_structured_ref_sum_column() {
+        // =SUM(Sales[Revenue]) should sum the data column (100+200+300+400 = 1000)
+        let mut workbook = workbook_with_sales_table(false);
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("E1", "=SUM(Sales[Revenue])").unwrap();
+
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 4), // E1
+            Some(&CellValue::Number(1000.0))
+        );
+    }
+
+    #[test]
+    fn test_structured_ref_sum_column_with_totals() {
+        // With totals row, =SUM(Sales[Revenue]) should still only sum data rows
+        let mut workbook = workbook_with_sales_table(true);
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("E1", "=SUM(Sales[Revenue])").unwrap();
+
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 4), // E1
+            Some(&CellValue::Number(1000.0))
+        );
+    }
+
+    #[test]
+    fn test_structured_ref_this_row() {
+        // =Sales[@Revenue] in a data row should return the Revenue value for that row
+        let mut workbook = workbook_with_sales_table(false);
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        // Put formula in D2 (row 1, col 3) — inside the table's row range
+        sheet.set_cell_formula("D2", "=Sales[@Revenue]").unwrap();
+
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        // D2 should get the Revenue value from row 1 (C2 = 100)
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 3), // D2
+            Some(&CellValue::Number(100.0))
+        );
+    }
+
+    #[test]
+    fn test_structured_ref_headers() {
+        // =Sales[[#Headers],[Revenue]] should return the header text "Revenue"
+        let mut workbook = workbook_with_sales_table(false);
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("E1", "=Sales[[#Headers],[Revenue]]").unwrap();
+
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 4), // E1
+            Some(&CellValue::String("Revenue".into()))
+        );
+    }
+
+    #[test]
+    fn test_structured_ref_totals() {
+        // =Sales[[#Totals],[Revenue]] should return the totals row value
+        let mut workbook = workbook_with_sales_table(true);
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("E1", "=Sales[[#Totals],[Revenue]]").unwrap();
+
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 4), // E1
+            Some(&CellValue::Number(1000.0))
+        );
+    }
+
+    #[test]
+    fn test_structured_ref_all() {
+        // =COUNTA(Sales[#All]) should count all cells in the table (header + 4 data rows)
+        let mut workbook = workbook_with_sales_table(false);
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("E1", "=COUNTA(Sales[#All])").unwrap();
+
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        // 5 rows × 3 cols = 15 cells, all non-empty
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 4), // E1
+            Some(&CellValue::Number(15.0))
+        );
+    }
+
+    #[test]
+    fn test_structured_ref_table_not_found() {
+        // Reference to non-existent table should produce an error
+        let mut workbook = workbook_with_sales_table(false);
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("E1", "=SUM(NoSuchTable[Revenue])").unwrap();
+
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        let val = sheet.get_calculated_value_at(0, 4);
+        // Should be an error (either #REF! or #NAME?)
+        match val {
+            Some(CellValue::Error(_)) => {} // expected
+            other => panic!("Expected error for missing table, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_structured_ref_column_not_found() {
+        // Reference to non-existent column should produce an error
+        let mut workbook = workbook_with_sales_table(false);
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("E1", "=SUM(Sales[NoSuchCol])").unwrap();
+
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        let val = sheet.get_calculated_value_at(0, 4);
+        match val {
+            Some(CellValue::Error(_)) => {} // expected
+            other => panic!("Expected error for missing column, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_structured_ref_dependency_tracking() {
+        // Changing a cell in the table should cause formulas referencing
+        // the table via structured refs to recalculate correctly.
+        let mut workbook = workbook_with_sales_table(false);
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("E1", "=SUM(Sales[Revenue])").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 4),
+            Some(&CellValue::Number(1000.0))
+        );
+
+        // Change C2 from 100 to 500
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("C2", 500.0).unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 4),
+            Some(&CellValue::Number(1400.0)) // 500+200+300+400
+        );
     }
 }

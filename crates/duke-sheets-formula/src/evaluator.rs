@@ -2,10 +2,10 @@
 //!
 //! Evaluates formula ASTs to produce values.
 
-use crate::ast::{BinaryOperator, FormulaExpr, UnaryOperator};
+use crate::ast::{BinaryOperator, FormulaExpr, StructuredRefSpecifier, StructuredReference, UnaryOperator};
 use crate::error::{FormulaError, FormulaResult};
 use crate::functions::FunctionRegistry;
-use duke_sheets_core::{CellError, CellValue, Workbook};
+use duke_sheets_core::{CellError, CellValue, Table, Workbook};
 use std::sync::OnceLock;
 
 /// Global function registry (lazily initialized)
@@ -356,6 +356,291 @@ impl<'a> EvaluationContext<'a> {
         // Convert from 1-indexed to 0-indexed
         Ok(col - 1)
     }
+
+    /// Resolve a structured table reference to a formula value.
+    ///
+    /// Resolves references like `Table1[Revenue]`, `Table1[@Col]`,
+    /// `Table1[[#Headers],[Col]]`, etc. by finding the named table
+    /// across all worksheets and computing the target cell range.
+    pub fn resolve_structured_ref(
+        &self,
+        sr: &StructuredReference,
+    ) -> FormulaResult<FormulaValue> {
+        let workbook = self.workbook.ok_or_else(|| {
+            FormulaError::InvalidReference(
+                "No workbook context for structured reference".to_string(),
+            )
+        })?;
+
+        // Find the table by name across all worksheets.
+        // If no table name, search the current worksheet for a table
+        // that contains the current cell (unqualified ref like [Column]).
+        let (table, sheet_idx) = self.find_table(workbook, sr)?;
+
+        // Determine which column(s) to return.
+        let col_idx = match &sr.column {
+            Some(col_name) => {
+                let idx = table
+                    .columns
+                    .iter()
+                    .position(|c| c.name.eq_ignore_ascii_case(col_name))
+                    .ok_or_else(|| {
+                        FormulaError::InvalidReference(format!(
+                            "Column '{}' not found in table '{}'",
+                            col_name,
+                            table.name
+                        ))
+                    })?;
+                Some(idx)
+            }
+            None => None,
+        };
+
+        // Compute the spreadsheet column for this table column.
+        let abs_col = col_idx.map(|i| table.reference.start.col + i as u16);
+
+        // Determine row range based on specifiers.
+        let ref_start_row = table.reference.start.row;
+        let ref_end_row = table.reference.end.row;
+        let header_rows = table.header_row_count;
+        let totals_rows = table.totals_row_count;
+
+        // Data row boundaries (excluding header and totals).
+        let data_start = ref_start_row + header_rows;
+        let data_end = if totals_rows > 0 {
+            ref_end_row - totals_rows
+        } else {
+            ref_end_row
+        };
+
+        // Determine effective specifiers. If none provided:
+        // - With a column and no specifiers → #Data (implicit)
+        // - No column and no specifiers → #Data (implicit)
+        let has_this_row = sr.specifiers.contains(&StructuredRefSpecifier::ThisRow);
+        let has_all = sr.specifiers.contains(&StructuredRefSpecifier::All);
+        let has_data = sr.specifiers.contains(&StructuredRefSpecifier::Data);
+        let has_headers = sr.specifiers.contains(&StructuredRefSpecifier::Headers);
+        let has_totals = sr.specifiers.contains(&StructuredRefSpecifier::Totals);
+        let no_specifiers = sr.specifiers.is_empty();
+
+        // #This Row: return a single cell value from the current row.
+        if has_this_row {
+            let col = abs_col.ok_or_else(|| {
+                FormulaError::InvalidReference(
+                    "#This Row requires a column specifier".to_string(),
+                )
+            })?;
+            // The current_row from context must be within the table data range.
+            let row = self.current_row;
+            return Ok(self.get_cell_value(
+                self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                row,
+                col,
+            ));
+        }
+
+        // #All: entire table range including headers and totals.
+        if has_all {
+            return match abs_col {
+                Some(col) => Ok(self.get_range_values(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    ref_start_row,
+                    col,
+                    ref_end_row,
+                    col,
+                )),
+                None => Ok(self.get_range_values(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    ref_start_row,
+                    table.reference.start.col,
+                    ref_end_row,
+                    table.reference.end.col,
+                )),
+            };
+        }
+
+        // #Headers: header row only.
+        if has_headers && !has_data && !has_totals {
+            if header_rows == 0 {
+                return Ok(FormulaValue::Error(CellError::Ref));
+            }
+            let header_end = ref_start_row + header_rows - 1;
+            return match abs_col {
+                Some(col) => Ok(self.get_cell_value(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    ref_start_row,
+                    col,
+                )),
+                None => Ok(self.get_range_values(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    ref_start_row,
+                    table.reference.start.col,
+                    header_end,
+                    table.reference.end.col,
+                )),
+            };
+        }
+
+        // #Totals: totals row only.
+        if has_totals && !has_data && !has_headers {
+            if totals_rows == 0 {
+                return Ok(FormulaValue::Error(CellError::Ref));
+            }
+            let totals_start = ref_end_row - totals_rows + 1;
+            return match abs_col {
+                Some(col) => Ok(self.get_cell_value(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    totals_start,
+                    col,
+                )),
+                None => Ok(self.get_range_values(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    totals_start,
+                    table.reference.start.col,
+                    ref_end_row,
+                    table.reference.end.col,
+                )),
+            };
+        }
+
+        // Combined specifiers: #Headers + #Data, #Data + #Totals, or
+        // #Headers + #Data + #Totals (same as #All for a column).
+        if has_headers && has_data {
+            let end = if has_totals { ref_end_row } else { data_end };
+            return match abs_col {
+                Some(col) => Ok(self.get_range_values(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    ref_start_row,
+                    col,
+                    end,
+                    col,
+                )),
+                None => Ok(self.get_range_values(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    ref_start_row,
+                    table.reference.start.col,
+                    end,
+                    table.reference.end.col,
+                )),
+            };
+        }
+
+        if has_data && has_totals {
+            return match abs_col {
+                Some(col) => Ok(self.get_range_values(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    data_start,
+                    col,
+                    ref_end_row,
+                    col,
+                )),
+                None => Ok(self.get_range_values(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    data_start,
+                    table.reference.start.col,
+                    ref_end_row,
+                    table.reference.end.col,
+                )),
+            };
+        }
+
+        // Default: #Data (implicit when no specifiers or explicit #Data).
+        // Column specified → single column data range.
+        // No column → entire data range.
+        if no_specifiers || has_data {
+            return match abs_col {
+                Some(col) => {
+                    if data_start == data_end {
+                        // Single data row → return as cell value.
+                        Ok(self.get_cell_value(
+                            self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                            data_start,
+                            col,
+                        ))
+                    } else {
+                        Ok(self.get_range_values(
+                            self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                            data_start,
+                            col,
+                            data_end,
+                            col,
+                        ))
+                    }
+                }
+                None => Ok(self.get_range_values(
+                    self.sheet_name_for(workbook, sheet_idx).as_deref(),
+                    data_start,
+                    table.reference.start.col,
+                    data_end,
+                    table.reference.end.col,
+                )),
+            };
+        }
+
+        // Fallback — unrecognized specifier combination.
+        Ok(FormulaValue::Error(CellError::Ref))
+    }
+
+    /// Find a table by name across all worksheets.
+    ///
+    /// If the structured reference has no table name (unqualified ref),
+    /// searches the current worksheet for a table containing the current cell.
+    fn find_table<'b>(
+        &self,
+        workbook: &'b Workbook,
+        sr: &StructuredReference,
+    ) -> FormulaResult<(&'b Table, usize)> {
+        match &sr.table {
+            Some(table_name) => {
+                // Search all worksheets for the named table.
+                for idx in 0..workbook.sheet_count() {
+                    if let Some(ws) = workbook.worksheet(idx) {
+                        if let Some(t) = ws.table_by_name(table_name) {
+                            return Ok((t, idx));
+                        }
+                    }
+                }
+                Err(FormulaError::InvalidReference(format!(
+                    "Table '{}' not found",
+                    table_name
+                )))
+            }
+            None => {
+                // Unqualified ref: find a table on the current sheet
+                // that contains the current cell.
+                let ws = workbook.worksheet(self.current_sheet).ok_or_else(|| {
+                    FormulaError::InvalidReference(
+                        "Current worksheet not found".to_string(),
+                    )
+                })?;
+                for t in ws.tables() {
+                    let r = &t.reference;
+                    if self.current_row >= r.start.row
+                        && self.current_row <= r.end.row
+                        && self.current_col >= r.start.col
+                        && self.current_col <= r.end.col
+                    {
+                        return Ok((t, self.current_sheet));
+                    }
+                }
+                Err(FormulaError::InvalidReference(
+                    "No table found containing current cell".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Get the sheet name for a given worksheet index, or None if it's the
+    /// current sheet (to pass to get_cell_value / get_range_values).
+    fn sheet_name_for(&self, workbook: &Workbook, sheet_idx: usize) -> Option<String> {
+        if sheet_idx == self.current_sheet {
+            None
+        } else {
+            workbook
+                .worksheet(sheet_idx)
+                .map(|ws| ws.name().to_string())
+        }
+    }
 }
 
 /// Evaluate a formula expression
@@ -387,8 +672,8 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
             ctx.resolve_named_range(name)
         }
 
-        // Structured table references — not yet evaluated (tables not implemented)
-        FormulaExpr::StructuredRef(_) => Ok(FormulaValue::Error(CellError::Name)),
+        // Structured table references (e.g., Table1[Revenue], Table1[@Col]).
+        FormulaExpr::StructuredRef(sr) => ctx.resolve_structured_ref(sr),
 
         // External workbook references — external books are not loaded
         FormulaExpr::ExternalRef(_) => Ok(FormulaValue::Error(CellError::Ref)),
