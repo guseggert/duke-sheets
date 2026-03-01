@@ -227,10 +227,10 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [x] **Excel COM E2E tests** — writer roundtrip (bold/italic/color survives Excel re-save) + reader test (Characters API formatting parsed from SST)
 
 #### Tables / ListObjects
-- [ ] **Data model** — `Table` struct (name, range, columns, totals row, style)
-- [ ] **XLSX reader** — read `<tableParts>` + `xl/tables/table{N}.xml`
-- [ ] **XLSX writer** — write table definitions
-- [ ] **Structured reference evaluation** — resolve `Table1[Column]` refs in formula evaluator
+- [x] **Data model** — `Table`, `TableColumn`, `TotalsRowFunction`, `TableStyleInfo` structs with header/totals row counts, calculated column formulas, totals row functions/labels/formulas, style info
+- [x] **XLSX reader** — parse `xl/tables/tableN.xml` via sheet rels; handles all column attributes and child formula elements
+- [x] **XLSX writer** — emit table parts (`xl/tables/tableN.xml`), `<tableParts>` in sheet XML, content types, and relationships; autoFilter ref correctly excludes totals row
+- [ ] **Structured reference evaluation** — resolve `Table1[Column]` refs in formula evaluator (parser already handles structured refs)
 
 #### Auto-Filters
 - [ ] **Data model** — `AutoFilter` struct (range, column filters, sort state)
@@ -339,7 +339,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Formula parser | 37 | ✅ |
 | Formula evaluator + functions | 74 | ✅ |
 | Calculation engine | 8 | ✅ |
-| XLSX roundtrip | 27 | ✅ |
+| XLSX roundtrip | 31 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
@@ -352,8 +352,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
-| Other (unit, doc, integration) | 287 | ✅ |
-| **Total** | **754** | ✅ |
+| Other (unit, doc, integration) | 298 | ✅ |
+| **Total** | **769** | ✅ |
 
 ---
 
