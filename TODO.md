@@ -233,9 +233,9 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [ ] **Structured reference evaluation** — resolve `Table1[Column]` refs in formula evaluator (parser already handles structured refs)
 
 #### Auto-Filters
-- [ ] **Data model** — `AutoFilter` struct (range, column filters, sort state)
-- [ ] **XLSX reader** — read `<autoFilter>` from sheet XML
-- [ ] **XLSX writer** — write `<autoFilter>`
+- [x] **Data model** — `AutoFilter` struct (range, column filters, sort state)
+- [x] **XLSX reader** — read `<autoFilter>` from sheet XML
+- [x] **XLSX writer** — write `<autoFilter>`
 - [ ] **XLS reader** — parse `AUTOFILTER` record (0x009E)
 
 #### XLS Reader — Remaining Items
@@ -334,12 +334,12 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 
 | Test Suite | Count | Status |
 |------------|-------|--------|
-| Core (cell, workbook, worksheet) | 37 | ✅ |
+| Core (cell, workbook, worksheet) | 41 | ✅ |
 | Cell display formatting (CellView) | 51 | ✅ |
 | Formula parser | 37 | ✅ |
 | Formula evaluator + functions | 74 | ✅ |
 | Calculation engine | 8 | ✅ |
-| XLSX roundtrip | 31 | ✅ |
+| XLSX roundtrip | 37 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
@@ -353,7 +353,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 298 | ✅ |
-| **Total** | **769** | ✅ |
+| **Total** | **779** | ✅ |
 
 ---
 
