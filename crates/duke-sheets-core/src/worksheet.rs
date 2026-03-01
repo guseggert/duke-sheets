@@ -54,6 +54,10 @@ pub struct Worksheet {
     tables: Vec<Table>,
     /// Standalone auto-filter (dropdown filter on columns)
     auto_filter: Option<AutoFilter>,
+    /// Horizontal page breaks (row breaks)
+    row_breaks: Vec<PageBreak>,
+    /// Vertical page breaks (column breaks)
+    col_breaks: Vec<PageBreak>,
     /// Date system: false = 1900 (Windows default), true = 1904 (Mac legacy).
     /// Copied from WorkbookSettings during reading so cells can format dates.
     date_1904: bool,
@@ -87,6 +91,8 @@ impl Worksheet {
             conditional_formats: Vec::new(),
             tables: Vec::new(),
             auto_filter: None,
+            row_breaks: Vec::new(),
+            col_breaks: Vec::new(),
             date_1904: false,
             locale: Locale::en_us(),
             ssfmt_locale: ssfmt::Locale::en_us(),
@@ -268,6 +274,48 @@ impl Worksheet {
     /// Get columns to repeat at left of each printed page.
     pub fn repeat_cols(&self) -> Option<(u16, u16)> {
         self.page_setup.repeat_cols
+    }
+
+    /// Get row breaks (horizontal page breaks).
+    pub fn row_breaks(&self) -> &[PageBreak] {
+        &self.row_breaks
+    }
+
+    /// Get column breaks (vertical page breaks).
+    pub fn col_breaks(&self) -> &[PageBreak] {
+        &self.col_breaks
+    }
+
+    /// Add a manual row break (full-width, after the given 0-based row).
+    pub fn add_row_break(&mut self, row: u32) {
+        self.row_breaks.push(PageBreak {
+            id: row,
+            min: 0,
+            max: 16383,
+            man: true,
+            pt: false,
+        });
+    }
+
+    /// Add a manual column break (full-height, after the given 0-based column).
+    pub fn add_col_break(&mut self, col: u32) {
+        self.col_breaks.push(PageBreak {
+            id: col,
+            min: 0,
+            max: 1048575,
+            man: true,
+            pt: false,
+        });
+    }
+
+    /// Set row breaks (replaces existing).
+    pub fn set_row_breaks(&mut self, breaks: Vec<PageBreak>) {
+        self.row_breaks = breaks;
+    }
+
+    /// Set column breaks (replaces existing).
+    pub fn set_col_breaks(&mut self, breaks: Vec<PageBreak>) {
+        self.col_breaks = breaks;
     }
 
     /// Get the date system (false = 1900, true = 1904).
@@ -1381,6 +1429,23 @@ impl Default for PageSetup {
             repeat_cols: None,
         }
     }
+}
+
+/// A manual page break (row or column).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageBreak {
+    /// Row index (for row breaks) or column index (for col breaks).
+    /// This is the 0-based index; the XLSX format uses 1-based `id` attributes.
+    pub id: u32,
+    /// Minimum column (row breaks) or row (col breaks), 0-based. Default 0.
+    pub min: u32,
+    /// Maximum column (row breaks) or row (col breaks), 0-based.
+    /// Row breaks: 16383 for full-width. Col breaks: 1048575 for full-height.
+    pub max: u32,
+    /// Whether this is a manual break (true) or automatic (false).
+    pub man: bool,
+    /// Whether this break was created by a PivotTable.
+    pub pt: bool,
 }
 
 /// Page orientation

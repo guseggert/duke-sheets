@@ -92,6 +92,7 @@ pub use duke_sheets_core::{
 
     NumberFormat,
 
+    PageBreak,
     PageOrientation,
     PageSetup,
     Result,

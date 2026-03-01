@@ -1052,6 +1052,7 @@ impl XlsxWriter {
 
             // pageMargins + pageSetup
             Self::write_page_setup(w, sheet)?;
+            Self::write_page_breaks(w, sheet)?;
 
             if sheet.comment_count() > 0 {
                 let mut legacy_drawing = BytesStart::new("legacyDrawing");
@@ -2073,6 +2074,72 @@ impl XlsxWriter {
         Ok(())
     }
 
+    fn write_page_breaks(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
+        let row_breaks = sheet.row_breaks();
+        if !row_breaks.is_empty() {
+            let mut sorted: Vec<_> = row_breaks.to_vec();
+            sorted.sort_by_key(|b| b.id);
+            let count = sorted.len().to_string();
+            let manual_count = sorted.iter().filter(|b| b.man).count().to_string();
+            let mut el = BytesStart::new("rowBreaks");
+            el.push_attribute(("count", count.as_str()));
+            el.push_attribute(("manualBreakCount", manual_count.as_str()));
+            w.write_event(Event::Start(el))?;
+            for brk in &sorted {
+                let id = brk.id.to_string();
+                let max = brk.max.to_string();
+                let mut be = BytesStart::new("brk");
+                be.push_attribute(("id", id.as_str()));
+                if brk.min > 0 {
+                    let min = brk.min.to_string();
+                    be.push_attribute(("min", min.as_str()));
+                }
+                be.push_attribute(("max", max.as_str()));
+                if brk.man {
+                    be.push_attribute(("man", "1"));
+                }
+                if brk.pt {
+                    be.push_attribute(("pt", "1"));
+                }
+                w.write_event(Event::Empty(be))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("rowBreaks")))?;
+        }
+
+        let col_breaks = sheet.col_breaks();
+        if !col_breaks.is_empty() {
+            let mut sorted: Vec<_> = col_breaks.to_vec();
+            sorted.sort_by_key(|b| b.id);
+            let count = sorted.len().to_string();
+            let manual_count = sorted.iter().filter(|b| b.man).count().to_string();
+            let mut el = BytesStart::new("colBreaks");
+            el.push_attribute(("count", count.as_str()));
+            el.push_attribute(("manualBreakCount", manual_count.as_str()));
+            w.write_event(Event::Start(el))?;
+            for brk in &sorted {
+                let id = brk.id.to_string();
+                let max = brk.max.to_string();
+                let mut be = BytesStart::new("brk");
+                be.push_attribute(("id", id.as_str()));
+                if brk.min > 0 {
+                    let min = brk.min.to_string();
+                    be.push_attribute(("min", min.as_str()));
+                }
+                be.push_attribute(("max", max.as_str()));
+                if brk.man {
+                    be.push_attribute(("man", "1"));
+                }
+                if brk.pt {
+                    be.push_attribute(("pt", "1"));
+                }
+                w.write_event(Event::Empty(be))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("colBreaks")))?;
+        }
+
+        Ok(())
+    }
+
     fn write_hyperlinks(
         w: &mut XmlWriter,
         sheet: &duke_sheets_core::Worksheet,
@@ -2193,7 +2260,6 @@ impl XlsxWriter {
             Ok(())
         })
     }
-
 }
 
 #[cfg(test)]
