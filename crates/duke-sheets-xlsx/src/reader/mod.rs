@@ -232,6 +232,9 @@ impl XlsxReader {
             }
         }
 
+        // Apply print area and print titles from named ranges to worksheets.
+        Self::apply_print_settings(&mut workbook);
+
         // Ensure at least one sheet exists
         if workbook.is_empty() {
             workbook.add_worksheet()?;
@@ -256,6 +259,45 @@ impl XlsxReader {
             }
         };
         read_styles_xml(file)
+    }
+
+    /// Extract _xlnm.Print_Area and _xlnm.Print_Titles from named ranges
+    /// and apply them to the corresponding worksheets.
+    fn apply_print_settings(workbook: &mut Workbook) {
+        let sheet_count = workbook.sheet_count();
+        for sheet_idx in 0..sheet_count {
+            let sheet_name = workbook.worksheet(sheet_idx).map(|s| s.name().to_string());
+            let sheet_name = match sheet_name {
+                Some(n) => n,
+                None => continue,
+            };
+
+            if let Some(nr) = workbook.named_ranges().get_exact(
+                "_xlnm.Print_Area",
+                &duke_sheets_core::named_range::NameScope::Sheet(sheet_idx),
+            ) {
+                if let Some(range) = parse_print_area_formula(&nr.refers_to, &sheet_name) {
+                    if let Some(ws) = workbook.worksheet_mut(sheet_idx) {
+                        ws.set_print_area(range);
+                    }
+                }
+            }
+
+            if let Some(nr) = workbook.named_ranges().get_exact(
+                "_xlnm.Print_Titles",
+                &duke_sheets_core::named_range::NameScope::Sheet(sheet_idx),
+            ) {
+                let (rows, cols) = parse_print_titles_formula(&nr.refers_to, &sheet_name);
+                if let Some(ws) = workbook.worksheet_mut(sheet_idx) {
+                    if let Some((r1, r2)) = rows {
+                        ws.set_repeat_rows(r1, r2);
+                    }
+                    if let Some((c1, c2)) = cols {
+                        ws.set_repeat_cols(c1, c2);
+                    }
+                }
+            }
+        }
     }
 
     /// Read workbook.xml to get sheet names, rIds, workbook properties,
@@ -2521,6 +2563,62 @@ impl XlsxReader {
 
         Ok(())
     }
+}
+
+/// Parse a Print_Area formula like `Sheet1!$A$1:$D$20` or `'Sheet Name'!$A$1:$D$20`
+/// into a CellRange. Only handles a single contiguous range (no comma-separated multiple areas).
+fn parse_print_area_formula(formula: &str, _sheet_name: &str) -> Option<CellRange> {
+    let trimmed = formula.trim().trim_start_matches('=');
+    let range_part = trimmed.split('!').last()?.trim();
+    let first_area = range_part.split(',').next()?.trim();
+    let clean = first_area.replace('$', "");
+    CellRange::parse(&clean).ok()
+}
+
+/// Parse a Print_Titles formula like:
+/// - `Sheet1!$1:$5` (repeat rows only)
+/// - `Sheet1!$A:$B` (repeat cols only)
+/// - `Sheet1!$1:$5,Sheet1!$A:$B` (both)
+fn parse_print_titles_formula(
+    formula: &str,
+    _sheet_name: &str,
+) -> (Option<(u32, u32)>, Option<(u16, u16)>) {
+    let mut rows = None;
+    let mut cols = None;
+
+    for part in formula.trim().trim_start_matches('=').split(',') {
+        let range_part = match part.split('!').last() {
+            Some(r) => r.trim(),
+            None => continue,
+        };
+        let clean = range_part.replace('$', "");
+
+        if let Some((start, end)) = clean.split_once(':') {
+            let start = start.trim();
+            let end = end.trim();
+            if start.is_empty() || end.is_empty() {
+                continue;
+            }
+
+            if start.chars().all(|c| c.is_ascii_digit()) && end.chars().all(|c| c.is_ascii_digit())
+            {
+                if let (Ok(r1), Ok(r2)) = (start.parse::<u32>(), end.parse::<u32>()) {
+                    rows = Some((r1.saturating_sub(1), r2.saturating_sub(1)));
+                }
+            } else if start.chars().all(|c| c.is_ascii_alphabetic())
+                && end.chars().all(|c| c.is_ascii_alphabetic())
+            {
+                if let (Ok(c1), Ok(c2)) = (
+                    CellAddress::letters_to_column(start),
+                    CellAddress::letters_to_column(end),
+                ) {
+                    cols = Some((c1, c2));
+                }
+            }
+        }
+    }
+
+    (rows, cols)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! XLSX writer — generates OOXML SpreadsheetML using quick-xml Writer API.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Cursor, Seek, Write};
 use std::path::Path;
@@ -12,7 +12,7 @@ use quick_xml::Writer;
 use crate::error::{XlsxError, XlsxResult};
 use crate::styles::XlsxStyleTable;
 use duke_sheets_core::style::Color;
-use duke_sheets_core::{CellAddress, Workbook};
+use duke_sheets_core::{CellAddress, CellRange, Workbook};
 
 // ---------------------------------------------------------------------------
 // OOXML namespace URIs
@@ -679,29 +679,55 @@ impl XlsxWriter {
             }
             w.write_event(Event::End(BytesEnd::new("sheets")))?;
 
-            // definedNames
             let named = workbook.named_ranges();
-            if named.len() > 0 {
-                w.write_event(Event::Start(BytesStart::new("definedNames")))?;
-                for nr in named.iter() {
-                    let name_esc = escape(&nr.name);
-                    let mut el = w
-                        .create_element("definedName")
-                        .with_attribute(("name", &*name_esc));
-                    let scope_str;
-                    if let duke_sheets_core::named_range::NameScope::Sheet(idx) = nr.scope {
-                        scope_str = idx.to_string();
-                        el = el.with_attribute(("localSheetId", scope_str.as_str()));
-                    }
-                    if nr.hidden {
-                        el = el.with_attribute(("hidden", "1"));
-                    }
-                    if let Some(ref comment) = nr.comment {
-                        let c = escape(comment.as_str());
-                        el = el.with_attribute(("comment", &*c));
-                    }
-                    el.write_text_content(BytesText::new(&nr.refers_to))?;
+            let mut print_names: Vec<duke_sheets_core::named_range::NamedRange> = Vec::new();
+            let mut generated_keys: HashSet<String> = HashSet::new();
+            for (idx, sheet) in workbook.worksheets().enumerate() {
+                let ps = sheet.page_setup();
+
+                if let Some(ref range) = ps.print_area {
+                    let formula = Self::format_print_area_formula(sheet.name(), range);
+                    let mut nr = duke_sheets_core::named_range::NamedRange::new(
+                        "_xlnm.Print_Area",
+                        formula,
+                        duke_sheets_core::named_range::NameScope::Sheet(idx),
+                    );
+                    nr.hidden = true;
+                    generated_keys.insert(Self::defined_name_key(&nr.name, &nr.scope));
+                    print_names.push(nr);
                 }
+
+                if let Some(formula) =
+                    Self::format_print_titles_formula(sheet.name(), ps.repeat_rows, ps.repeat_cols)
+                {
+                    let mut nr = duke_sheets_core::named_range::NamedRange::new(
+                        "_xlnm.Print_Titles",
+                        formula,
+                        duke_sheets_core::named_range::NameScope::Sheet(idx),
+                    );
+                    nr.hidden = true;
+                    generated_keys.insert(Self::defined_name_key(&nr.name, &nr.scope));
+                    print_names.push(nr);
+                }
+            }
+
+            let existing_non_print: Vec<_> = named
+                .iter()
+                .filter(|nr| !generated_keys.contains(&Self::defined_name_key(&nr.name, &nr.scope)))
+                .collect();
+
+            let total = existing_non_print.len() + print_names.len();
+            if total > 0 {
+                w.write_event(Event::Start(BytesStart::new("definedNames")))?;
+
+                for nr in &existing_non_print {
+                    Self::write_defined_name(w, nr)?;
+                }
+
+                for nr in &print_names {
+                    Self::write_defined_name(w, nr)?;
+                }
+
                 w.write_event(Event::End(BytesEnd::new("definedNames")))?;
             }
 
@@ -774,6 +800,94 @@ impl XlsxWriter {
             w.write_event(Event::End(BytesEnd::new("Relationships")))?;
             Ok(())
         })
+    }
+
+    fn write_defined_name(
+        w: &mut XmlWriter,
+        nr: &duke_sheets_core::named_range::NamedRange,
+    ) -> XlsxResult<()> {
+        let name_esc = escape(&nr.name);
+        let mut el = w
+            .create_element("definedName")
+            .with_attribute(("name", &*name_esc));
+        let scope_str;
+        if let duke_sheets_core::named_range::NameScope::Sheet(idx) = nr.scope {
+            scope_str = idx.to_string();
+            el = el.with_attribute(("localSheetId", scope_str.as_str()));
+        }
+        if nr.hidden {
+            el = el.with_attribute(("hidden", "1"));
+        }
+        if let Some(ref comment) = nr.comment {
+            let c = escape(comment.as_str());
+            el = el.with_attribute(("comment", &*c));
+        }
+        el.write_text_content(BytesText::new(&nr.refers_to))?;
+        Ok(())
+    }
+
+    fn format_print_area_formula(sheet_name: &str, range: &CellRange) -> String {
+        let quoted_name = Self::quote_sheet_name(sheet_name);
+        let start_col = CellAddress::column_to_letters(range.start.col);
+        let end_col = CellAddress::column_to_letters(range.end.col);
+        format!(
+            "{}!${}${}:${}${}",
+            quoted_name,
+            start_col,
+            range.start.row + 1,
+            end_col,
+            range.end.row + 1,
+        )
+    }
+
+    fn format_print_titles_formula(
+        sheet_name: &str,
+        repeat_rows: Option<(u32, u32)>,
+        repeat_cols: Option<(u16, u16)>,
+    ) -> Option<String> {
+        let quoted_name = Self::quote_sheet_name(sheet_name);
+        let mut parts = Vec::new();
+
+        if let Some((r1, r2)) = repeat_rows {
+            parts.push(format!("{}!${}:${}", quoted_name, r1 + 1, r2 + 1));
+        }
+
+        if let Some((c1, c2)) = repeat_cols {
+            let start = CellAddress::column_to_letters(c1);
+            let end = CellAddress::column_to_letters(c2);
+            parts.push(format!("{}!${}:${}", quoted_name, start, end));
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(","))
+        }
+    }
+
+    fn quote_sheet_name(name: &str) -> String {
+        let needs_quoting = name.contains(' ')
+            || name.contains('\'')
+            || name.contains('!')
+            || name.contains('[')
+            || name.contains(']')
+            || name.chars().next().is_some_and(|c| c.is_ascii_digit());
+        if needs_quoting {
+            let escaped = name.replace('\'', "''");
+            format!("'{}'", escaped)
+        } else {
+            name.to_string()
+        }
+    }
+
+    fn defined_name_key(name: &str, scope: &duke_sheets_core::named_range::NameScope) -> String {
+        let name_lower = name.to_ascii_lowercase();
+        match scope {
+            duke_sheets_core::named_range::NameScope::Workbook => name_lower,
+            duke_sheets_core::named_range::NameScope::Sheet(idx) => {
+                format!("{}:sheet:{}", name_lower, idx)
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
