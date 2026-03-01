@@ -256,7 +256,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [x] **XLSX reader** — read `<definedNames>` from `workbook.xml`
 - [x] **XLSX writer** — write `<definedNames>`
 - [ ] **XLS reader** — parse `NAME` record formula bodies (names parsed but definitions not stored)
-- [ ] **Print areas / titles** — read `_xlnm.Print_Area` and `_xlnm.Print_Titles` defined names
+- [x] **Print areas / titles** — read `_xlnm.Print_Area` and `_xlnm.Print_Titles` defined names
 
 #### Large File Support
 - [ ] Streaming XLSX reader (SAX-style, low memory)
@@ -272,7 +272,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 - [ ] **Write theme** — preserve or generate theme on roundtrip
 
 #### Print Settings
-- [x] **Data model** — `PageSetup` supports paper/orientation/scale/fit, margins, print options, odd/even/first header/footer strings, and `headerFooter` flags; still missing print area + page breaks
+- [x] **Data model** — `PageSetup` supports paper/orientation/scale/fit, margins, print options, print area, repeat rows/cols titles, odd/even/first header/footer strings, and `headerFooter` flags; still missing page breaks
 - [x] **XLSX reader** — reads `<pageSetup>`, `<pageMargins>`, `<printOptions>`, `<headerFooter>` (odd + even + first + flags); still missing row/col breaks
 - [x] **XLSX writer** — writes the same; still missing row/col breaks
 - [ ] **XLS reader** — parse `SETUP`, `HEADER`, `FOOTER`, margin records, page break records
@@ -339,7 +339,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Formula parser | 37 | ✅ |
 | Formula evaluator + functions | 74 | ✅ |
 | Calculation engine | 8 | ✅ |
-| XLSX roundtrip | 37 | ✅ |
+| XLSX roundtrip | 43 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
@@ -353,7 +353,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 298 | ✅ |
-| **Total** | **779** | ✅ |
+| **Total** | **785** | ✅ |
 
 ---
 
