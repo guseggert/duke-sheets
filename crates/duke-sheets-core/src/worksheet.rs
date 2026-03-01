@@ -11,6 +11,7 @@ use crate::hyperlink::Hyperlink;
 use crate::locale::Locale;
 use crate::style::Style;
 use crate::validation::DataValidation;
+use crate::auto_filter::AutoFilter;
 use crate::table::Table;
 use crate::{MAX_COLS, MAX_ROWS};
 
@@ -51,6 +52,8 @@ pub struct Worksheet {
     conditional_formats: Vec<ConditionalFormatRule>,
     /// Tables (ListObjects)
     tables: Vec<Table>,
+    /// Standalone auto-filter (dropdown filter on columns)
+    auto_filter: Option<AutoFilter>,
     /// Date system: false = 1900 (Windows default), true = 1904 (Mac legacy).
     /// Copied from WorkbookSettings during reading so cells can format dates.
     date_1904: bool,
@@ -83,6 +86,7 @@ impl Worksheet {
             data_validations: Vec::new(),
             conditional_formats: Vec::new(),
             tables: Vec::new(),
+            auto_filter: None,
             date_1904: false,
             locale: Locale::en_us(),
             ssfmt_locale: ssfmt::Locale::en_us(),
@@ -859,6 +863,23 @@ impl Worksheet {
     /// Get the number of tables.
     pub fn table_count(&self) -> usize {
         self.tables.len()
+    }
+
+    // === Auto-Filter ===
+
+    /// Set the standalone auto-filter for this worksheet.
+    pub fn set_auto_filter(&mut self, auto_filter: Option<AutoFilter>) {
+        self.auto_filter = auto_filter;
+    }
+
+    /// Get the standalone auto-filter.
+    pub fn auto_filter(&self) -> Option<&AutoFilter> {
+        self.auto_filter.as_ref()
+    }
+
+    /// Get a mutable reference to the auto-filter.
+    pub fn auto_filter_mut(&mut self) -> &mut Option<AutoFilter> {
+        &mut self.auto_filter
     }
 
     // === Conditional Formatting ===

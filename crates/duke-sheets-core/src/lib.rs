@@ -25,6 +25,7 @@
 //! sheet.set_cell_value_at(1, 1, CellValue::Number(3.14)).unwrap();
 //! ```
 
+pub mod auto_filter;
 pub mod cell;
 pub mod column;
 pub mod comment;
@@ -46,6 +47,7 @@ pub mod worksheet;
 pub use cell::{
     format_cell_value, CellAddress, CellData, CellError, CellRange, CellValue, CellView,
 };
+pub use auto_filter::{AutoFilter, ColumnFilter, CustomFilterCondition, CustomFilters, FilterColumn, FilterOperator, Top10Filter, ValueFilter};
 pub use column::{Column, ColumnData};
 pub use comment::CellComment;
 pub use conditional_format::{

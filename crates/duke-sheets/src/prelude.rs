@@ -43,13 +43,13 @@ pub use crate::{
     FontStyle,
     HorizontalAlignment,
     Hyperlink,
-    // Rich text types
-    RichTextRun,
-    RunFont,
     IconSetStyle,
     NumberFormat,
     Result,
 
+    // Rich text types
+    RichTextRun,
+    RunFont,
     Style,
     ValidationErrorStyle,
     ValidationOperator,

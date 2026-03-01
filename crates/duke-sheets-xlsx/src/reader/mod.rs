@@ -30,13 +30,13 @@ mod comments;
 mod conditional_format;
 mod data_validation;
 mod formulas;
-mod theme;
 mod shared_strings;
 mod table;
+mod theme;
 
 pub(crate) use formulas::CellFormulaState;
-pub(crate) use theme::ThemePalette;
 use shared_strings::SharedStringEntry;
+pub(crate) use theme::ThemePalette;
 
 /// Decode Excel's `_xHHHH_` escape sequences in strings.
 ///
@@ -218,11 +218,12 @@ impl XlsxReader {
                 // Read tables for this worksheet (if present).
                 // Each relationship with type ending in "/table" points to
                 // an xl/tables/tableN.xml part.
-                let table_rels: Vec<String> = sheet_rels
+                let mut table_rels: Vec<String> = sheet_rels
                     .values()
                     .filter(|r| r.rel_type.ends_with("/table"))
                     .map(|r| r.target.clone())
                     .collect();
+                table_rels.sort();
                 for table_path in &table_rels {
                     if let Some(t) = table::read_table(&mut archive, table_path)? {
                         workbook.worksheet_mut(sheet_idx).unwrap().add_table(t);
@@ -240,7 +241,6 @@ impl XlsxReader {
 
         Ok(workbook)
     }
-
 
     fn read_styles<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> XlsxResult<ParsedStyles> {
         let file = match archive.by_name("xl/styles.xml") {
@@ -622,6 +622,22 @@ impl XlsxReader {
         let mut data_bar_color: Option<Color> = None;
         let mut data_bar_show_value = true;
 
+        // AutoFilter state
+        let mut in_auto_filter = false;
+        let mut auto_filter_range: Option<CellRange> = None;
+        let mut auto_filter_columns: Vec<duke_sheets_core::FilterColumn> = Vec::new();
+        let mut current_af_col_id: Option<u32> = None;
+        let mut current_af_hidden_button = false;
+        let mut current_af_show_button = true;
+        let mut current_af_filter_values: Vec<String> = Vec::new();
+        let mut current_af_blank = false;
+        let mut current_af_custom_and = false;
+        let mut current_af_custom_conditions: Vec<duke_sheets_core::CustomFilterCondition> =
+            Vec::new();
+        let mut current_af_column_filter: Option<duke_sheets_core::ColumnFilter> = None;
+        let mut in_af_filters = false;
+        let mut in_af_custom_filters = false;
+
         loop {
             match xml_reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
@@ -651,6 +667,87 @@ impl XlsxReader {
                     }
                     b"pane" => {
                         Self::parse_pane_attrs(&e, worksheet);
+                    }
+                    b"autoFilter" => {
+                        in_auto_filter = true;
+                        auto_filter_range = None;
+                        auto_filter_columns.clear();
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"ref" {
+                                if let Ok(value) = attr.unescape_value() {
+                                    match CellRange::parse(value.as_ref()) {
+                                        Ok(range) => auto_filter_range = Some(range),
+                                        Err(err) => log::warn!(
+                                            "Invalid autoFilter ref '{}': {}",
+                                            value,
+                                            err
+                                        ),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    b"filterColumn" if in_auto_filter => {
+                        current_af_col_id = None;
+                        current_af_hidden_button = false;
+                        current_af_show_button = true;
+                        current_af_filter_values.clear();
+                        current_af_blank = false;
+                        current_af_custom_and = false;
+                        current_af_custom_conditions.clear();
+                        current_af_column_filter = None;
+                        in_af_filters = false;
+                        in_af_custom_filters = false;
+
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"colId" => {
+                                    current_af_col_id = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<u32>().ok());
+                                }
+                                b"hiddenButton" => {
+                                    current_af_hidden_button =
+                                        attr.unescape_value().ok().map_or(false, |s| {
+                                            s.as_ref() == "1" || s.as_ref() == "true"
+                                        });
+                                }
+                                b"showButton" => {
+                                    current_af_show_button =
+                                        attr.unescape_value().ok().map_or(true, |s| {
+                                            !(s.as_ref() == "0" || s.as_ref() == "false")
+                                        });
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"filters" if in_auto_filter => {
+                        in_af_filters = true;
+                        current_af_filter_values.clear();
+                        current_af_blank = false;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"blank" {
+                                current_af_blank = attr
+                                    .unescape_value()
+                                    .ok()
+                                    .map_or(false, |s| s.as_ref() == "1" || s.as_ref() == "true");
+                            }
+                        }
+                    }
+                    b"customFilters" if in_auto_filter => {
+                        in_af_custom_filters = true;
+                        current_af_custom_conditions.clear();
+                        current_af_custom_and = false;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"and" {
+                                current_af_custom_and = attr
+                                    .unescape_value()
+                                    .ok()
+                                    .map_or(false, |s| s.as_ref() == "1" || s.as_ref() == "true");
+                            }
+                        }
                     }
                     b"hyperlink" => {
                         Self::parse_hyperlink_element(worksheet, &e, sheet_rels);
@@ -964,11 +1061,7 @@ impl XlsxReader {
                     }
                     // rPr children that use Start+End (rare, but handle defensively)
                     name if in_inline_rpr => {
-                        shared_strings::parse_rpr_element(
-                            name,
-                            &e,
-                            &mut inline_run_font,
-                        );
+                        shared_strings::parse_rpr_element(name, &e, &mut inline_run_font);
                     }
                     // Data validation parsing
                     b"dataValidation" => {
@@ -1069,23 +1162,35 @@ impl XlsxReader {
                                             };
                                             CellValue::Formula {
                                                 text: formula_text,
-                                                cached_value: Some(Box::new(CellValue::RichText(runs))),
+                                                cached_value: Some(Box::new(CellValue::RichText(
+                                                    runs,
+                                                ))),
                                                 array_result: None,
                                             }
                                         } else {
                                             CellValue::RichText(runs)
                                         };
-                                        if let Err(e) = worksheet.set_cell_value_at(
-                                            addr.row, addr.col, cell_value,
-                                        ) {
-                                            log::warn!("Skipping rich text cell {}: {}", cell_ref, e);
+                                        if let Err(e) = worksheet
+                                            .set_cell_value_at(addr.row, addr.col, cell_value)
+                                        {
+                                            log::warn!(
+                                                "Skipping rich text cell {}: {}",
+                                                cell_ref,
+                                                e
+                                            );
                                         }
                                         // Apply style
                                         if let Some(s) = current_cell_style {
                                             if s != 0 {
                                                 if let Some(style) = cell_styles.get(s as usize) {
-                                                    if let Err(e) = worksheet.set_cell_style_at(addr.row, addr.col, style) {
-                                                        log::warn!("Cell {}: failed to apply style: {}", cell_ref, e);
+                                                    if let Err(e) = worksheet.set_cell_style_at(
+                                                        addr.row, addr.col, style,
+                                                    ) {
+                                                        log::warn!(
+                                                            "Cell {}: failed to apply style: {}",
+                                                            cell_ref,
+                                                            e
+                                                        );
                                                     }
                                                 }
                                             }
@@ -1129,7 +1234,11 @@ impl XlsxReader {
                         b"r" if in_inline_r => {
                             // Finish current run — mirrors SST parser
                             let font = inline_run_font.take().and_then(|f| {
-                                if f.is_empty() { None } else { Some(f) }
+                                if f.is_empty() {
+                                    None
+                                } else {
+                                    Some(f)
+                                }
                             });
                             inline_runs.push(duke_sheets_core::RichTextRun {
                                 text: decode_excel_escapes(&std::mem::take(&mut inline_run_text)),
@@ -1255,6 +1364,70 @@ impl XlsxReader {
                         }
                         b"firstFooter" => {
                             in_first_footer = false;
+                        }
+                        b"filters" if in_auto_filter => {
+                            in_af_filters = false;
+                            current_af_column_filter =
+                                Some(duke_sheets_core::ColumnFilter::Values(
+                                    duke_sheets_core::ValueFilter {
+                                        values: std::mem::take(&mut current_af_filter_values),
+                                        blank: current_af_blank,
+                                    },
+                                ));
+                        }
+                        b"customFilters" if in_auto_filter => {
+                            in_af_custom_filters = false;
+                            current_af_column_filter =
+                                Some(duke_sheets_core::ColumnFilter::Custom(
+                                    duke_sheets_core::CustomFilters {
+                                        and: current_af_custom_and,
+                                        conditions: std::mem::take(
+                                            &mut current_af_custom_conditions,
+                                        ),
+                                    },
+                                ));
+                        }
+                        b"filterColumn" if in_auto_filter => {
+                            if let Some(col_id) = current_af_col_id {
+                                let filter = current_af_column_filter.take().unwrap_or_else(|| {
+                                    duke_sheets_core::ColumnFilter::Values(
+                                        duke_sheets_core::ValueFilter {
+                                            values: Vec::new(),
+                                            blank: false,
+                                        },
+                                    )
+                                });
+                                auto_filter_columns.push(duke_sheets_core::FilterColumn {
+                                    col_id,
+                                    hidden_button: current_af_hidden_button,
+                                    show_button: current_af_show_button,
+                                    filter,
+                                });
+                            } else {
+                                log::warn!("Skipping <filterColumn> without required colId");
+                            }
+                            current_af_col_id = None;
+                            current_af_hidden_button = false;
+                            current_af_show_button = true;
+                            current_af_filter_values.clear();
+                            current_af_blank = false;
+                            current_af_custom_and = false;
+                            current_af_custom_conditions.clear();
+                            current_af_column_filter = None;
+                            in_af_filters = false;
+                            in_af_custom_filters = false;
+                        }
+                        b"autoFilter" => {
+                            in_auto_filter = false;
+                            if let Some(range) = auto_filter_range.take() {
+                                worksheet.set_auto_filter(Some(duke_sheets_core::AutoFilter {
+                                    range,
+                                    filter_columns: std::mem::take(&mut auto_filter_columns),
+                                }));
+                            } else {
+                                log::warn!("Skipping <autoFilter> without valid ref");
+                                auto_filter_columns.clear();
+                            }
                         }
                         _ => {}
                     }
@@ -1770,6 +1943,278 @@ impl XlsxReader {
                                 }
                             }
                         }
+                        b"autoFilter" => {
+                            let mut range: Option<CellRange> = None;
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"ref" {
+                                    if let Ok(value) = attr.unescape_value() {
+                                        match CellRange::parse(value.as_ref()) {
+                                            Ok(parsed) => range = Some(parsed),
+                                            Err(err) => log::warn!(
+                                                "Invalid autoFilter ref '{}': {}",
+                                                value,
+                                                err
+                                            ),
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(range) = range {
+                                worksheet.set_auto_filter(Some(duke_sheets_core::AutoFilter::new(
+                                    range,
+                                )));
+                            } else {
+                                log::warn!("Skipping self-closing <autoFilter> without valid ref");
+                            }
+                        }
+                        b"filterColumn" if in_auto_filter => {
+                            let mut col_id: Option<u32> = None;
+                            let mut hidden_button = false;
+                            let mut show_button = true;
+
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"colId" => {
+                                        col_id = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u32>().ok());
+                                    }
+                                    b"hiddenButton" => {
+                                        hidden_button =
+                                            attr.unescape_value().ok().map_or(false, |s| {
+                                                s.as_ref() == "1" || s.as_ref() == "true"
+                                            });
+                                    }
+                                    b"showButton" => {
+                                        show_button =
+                                            attr.unescape_value().ok().map_or(true, |s| {
+                                                !(s.as_ref() == "0" || s.as_ref() == "false")
+                                            });
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if let Some(col_id) = col_id {
+                                auto_filter_columns.push(duke_sheets_core::FilterColumn {
+                                    col_id,
+                                    hidden_button,
+                                    show_button,
+                                    filter: duke_sheets_core::ColumnFilter::Values(
+                                        duke_sheets_core::ValueFilter {
+                                            values: Vec::new(),
+                                            blank: false,
+                                        },
+                                    ),
+                                });
+                            } else {
+                                log::warn!(
+                                    "Skipping self-closing <filterColumn> without required colId"
+                                );
+                            }
+                        }
+                        b"filters" if in_auto_filter => {
+                            current_af_filter_values.clear();
+                            current_af_blank = false;
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"blank" {
+                                    current_af_blank =
+                                        attr.unescape_value().ok().map_or(false, |s| {
+                                            s.as_ref() == "1" || s.as_ref() == "true"
+                                        });
+                                }
+                            }
+                            in_af_filters = false;
+                            current_af_column_filter =
+                                Some(duke_sheets_core::ColumnFilter::Values(
+                                    duke_sheets_core::ValueFilter {
+                                        values: Vec::new(),
+                                        blank: current_af_blank,
+                                    },
+                                ));
+                        }
+                        b"filter" if in_af_filters => {
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"val" {
+                                    if let Ok(value) = attr.unescape_value() {
+                                        current_af_filter_values.push(value.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        b"customFilters" if in_auto_filter => {
+                            current_af_custom_conditions.clear();
+                            current_af_custom_and = false;
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"and" {
+                                    current_af_custom_and =
+                                        attr.unescape_value().ok().map_or(false, |s| {
+                                            s.as_ref() == "1" || s.as_ref() == "true"
+                                        });
+                                }
+                            }
+                            in_af_custom_filters = false;
+                            current_af_column_filter =
+                                Some(duke_sheets_core::ColumnFilter::Custom(
+                                    duke_sheets_core::CustomFilters {
+                                        and: current_af_custom_and,
+                                        conditions: Vec::new(),
+                                    },
+                                ));
+                        }
+                        b"customFilter" if in_af_custom_filters => {
+                            let mut op = duke_sheets_core::FilterOperator::Equal;
+                            let mut value: Option<String> = None;
+
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"operator" => {
+                                        if let Some(parsed) =
+                                            attr.unescape_value().ok().and_then(|s| {
+                                                duke_sheets_core::FilterOperator::from_ooxml(
+                                                    s.as_ref(),
+                                                )
+                                            })
+                                        {
+                                            op = parsed;
+                                        }
+                                    }
+                                    b"val" => {
+                                        value = attr.unescape_value().ok().map(|s| s.to_string());
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if let Some(value) = value {
+                                current_af_custom_conditions.push(
+                                    duke_sheets_core::CustomFilterCondition {
+                                        operator: op,
+                                        value,
+                                    },
+                                );
+                            }
+                        }
+                        b"top10" if in_auto_filter => {
+                            let mut top = true;
+                            let mut percent = false;
+                            let mut val: Option<f64> = None;
+                            let mut filter_val: Option<f64> = None;
+
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"top" => {
+                                        top = attr.unescape_value().ok().map_or(true, |s| {
+                                            !(s.as_ref() == "0" || s.as_ref() == "false")
+                                        });
+                                    }
+                                    b"percent" => {
+                                        percent = attr.unescape_value().ok().map_or(false, |s| {
+                                            s.as_ref() == "1" || s.as_ref() == "true"
+                                        });
+                                    }
+                                    b"val" => {
+                                        val = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok());
+                                    }
+                                    b"filterVal" => {
+                                        filter_val = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok());
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if let Some(val) = val {
+                                current_af_column_filter =
+                                    Some(duke_sheets_core::ColumnFilter::Top10(
+                                        duke_sheets_core::Top10Filter {
+                                            top,
+                                            percent,
+                                            val,
+                                            filter_val,
+                                        },
+                                    ));
+                            } else {
+                                log::warn!("Skipping <top10> without required val");
+                            }
+                        }
+                        b"dynamicFilter" if in_auto_filter => {
+                            let mut filter_type: Option<
+                                duke_sheets_core::auto_filter::DynamicFilterType,
+                            > = None;
+                            let mut val: Option<f64> = None;
+                            let mut max_val: Option<f64> = None;
+
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"type" => {
+                                        filter_type = attr.unescape_value().ok().and_then(|s| {
+                                                duke_sheets_core::auto_filter::DynamicFilterType::from_ooxml(
+                                                    s.as_ref(),
+                                                )
+                                        });
+                                    }
+                                    b"val" => {
+                                        val = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok());
+                                    }
+                                    b"maxVal" => {
+                                        max_val = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok());
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if let Some(filter_type) = filter_type {
+                                current_af_column_filter =
+                                    Some(duke_sheets_core::ColumnFilter::Dynamic(
+                                        duke_sheets_core::auto_filter::DynamicFilter {
+                                            filter_type,
+                                            val,
+                                            max_val,
+                                        },
+                                    ));
+                            } else {
+                                log::warn!("Skipping <dynamicFilter> without required type");
+                            }
+                        }
+                        b"colorFilter" if in_auto_filter => {
+                            let mut dxf_id: Option<u32> = None;
+                            let mut cell_color = true;
+
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"dxfId" => {
+                                        dxf_id = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u32>().ok());
+                                    }
+                                    b"cellColor" => {
+                                        cell_color = attr.unescape_value().ok().map_or(true, |s| {
+                                            !(s.as_ref() == "0" || s.as_ref() == "false")
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            current_af_column_filter = Some(duke_sheets_core::ColumnFilter::Color(
+                                duke_sheets_core::auto_filter::ColorFilter { dxf_id, cell_color },
+                            ));
+                        }
                         _ => {}
                     }
                 }
@@ -1843,17 +2288,14 @@ impl XlsxReader {
                         .and_then(|s| s.parse::<f64>().ok());
                 }
                 b"topLeftCell" => {
-                    if let Some(a1) =
-                        attr.unescape_value().ok().map(|s| s.to_string())
-                    {
+                    if let Some(a1) = attr.unescape_value().ok().map(|s| s.to_string()) {
                         if let Ok(addr) = CellAddress::parse(&a1) {
                             top_left_cell = Some((addr.row, addr.col));
                         }
                     }
                 }
                 b"activePane" => {
-                    active_pane =
-                        attr.unescape_value().ok().map(|s| s.to_string());
+                    active_pane = attr.unescape_value().ok().map(|s| s.to_string());
                 }
                 _ => {}
             }
@@ -2253,7 +2695,9 @@ mod tests {
         let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let sheet = workbook.worksheet(0).unwrap();
 
-        let freeze = sheet.freeze_panes().expect("freeze panes from non-self-closing <pane>");
+        let freeze = sheet
+            .freeze_panes()
+            .expect("freeze panes from non-self-closing <pane>");
         assert_eq!(freeze.row, 2);
         assert_eq!(freeze.col, 1);
         assert_eq!(sheet.selection_active_cell(), Some((3, 2)));
@@ -2550,14 +2994,16 @@ mod tests {
             zip.start_file("xl/workbook.xml", options).unwrap();
             zip.write_all(br#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#).unwrap();
 
-            zip.start_file("xl/_rels/workbook.xml.rels", options).unwrap();
+            zip.start_file("xl/_rels/workbook.xml.rels", options)
+                .unwrap();
             zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#).unwrap();
 
             zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
             zip.write_all(br#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="n"><v>1</v></c></row></sheetData></worksheet>"#).unwrap();
 
             // Sheet rels with non-standard comment filename
-            zip.start_file("xl/worksheets/_rels/sheet1.xml.rels", options).unwrap();
+            zip.start_file("xl/worksheets/_rels/sheet1.xml.rels", options)
+                .unwrap();
             zip.write_all(br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../commentsCustom.xml"/></Relationships>"#).unwrap();
 
             // Comment file with a non-standard name

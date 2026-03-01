@@ -1,8 +1,14 @@
 //! End-to-end tests for XLSX roundtrip (create -> save -> read -> verify)
 
 use duke_sheets::prelude::*;
+use duke_sheets::{
+    AutoFilter, ColumnFilter, CustomFilterCondition, CustomFilters, DynamicFilter,
+    DynamicFilterType, FilterColumn, FilterOperator, Top10Filter, ValueFilter,
+};
 use duke_sheets_core::style::Underline;
-use duke_sheets_core::{FreezePanes, PageOrientation, Selection, SplitPanes, Table, TableColumn, TableStyleInfo, TotalsRowFunction};
+use duke_sheets_core::{
+    PageOrientation, Selection, SplitPanes, Table, TableColumn, TableStyleInfo, TotalsRowFunction,
+};
 use std::io::Cursor;
 
 /// Test basic roundtrip with numeric values
@@ -477,7 +483,9 @@ fn test_roundtrip_multi_selection_with_freeze_panes() {
     let sheet2 = wb2.worksheet(0).unwrap();
 
     // Freeze panes should survive
-    let freeze = sheet2.freeze_panes().expect("freeze panes should roundtrip");
+    let freeze = sheet2
+        .freeze_panes()
+        .expect("freeze panes should roundtrip");
     assert_eq!(freeze.row, 2);
     assert_eq!(freeze.col, 1);
 
@@ -501,13 +509,11 @@ fn test_roundtrip_multi_range_sqref() {
     let sheet = wb.worksheet_mut(0).unwrap();
 
     // A single selection with a multi-range sqref (space-separated)
-    sheet.set_selections(vec![
-        Selection {
-            pane: None,
-            active_cell: Some("B5".to_string()),
-            sqref: Some("B5:C6 E2:F3".to_string()),
-        },
-    ]);
+    sheet.set_selections(vec![Selection {
+        pane: None,
+        active_cell: Some("B5".to_string()),
+        sqref: Some("B5:C6 E2:F3".to_string()),
+    }]);
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -640,6 +646,213 @@ fn test_roundtrip_header_footer_odd_only_defaults() {
     assert!(!ps2.different_first);
     assert!(ps2.scale_with_doc);
     assert!(ps2.align_with_margins);
+}
+
+#[test]
+fn test_auto_filter_range_only() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let range = CellRange::parse("A1:D10").unwrap();
+    sheet.set_auto_filter(Some(AutoFilter::new(range.clone())));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let af = sheet2.auto_filter().expect("auto_filter should exist");
+    assert_eq!(af.range, range);
+    assert!(af.filter_columns.is_empty());
+}
+
+#[test]
+fn test_auto_filter_value_filter() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut af = AutoFilter::new(CellRange::parse("A1:D10").unwrap());
+    af.filter_columns.push(FilterColumn::new(
+        0,
+        ColumnFilter::Values(ValueFilter {
+            values: vec!["Alice".to_string(), "Bob".to_string()],
+            blank: false,
+        }),
+    ));
+    sheet.set_auto_filter(Some(af));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let af2 = sheet2.auto_filter().expect("auto_filter should exist");
+    assert_eq!(af2.filter_columns.len(), 1);
+    assert_eq!(af2.filter_columns[0].col_id, 0);
+    match &af2.filter_columns[0].filter {
+        ColumnFilter::Values(v) => {
+            assert_eq!(v.values, vec!["Alice".to_string(), "Bob".to_string()]);
+            assert!(!v.blank);
+        }
+        other => panic!("expected ValueFilter, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_auto_filter_custom_filter() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut af = AutoFilter::new(CellRange::parse("A1:D10").unwrap());
+    af.filter_columns.push(FilterColumn::new(
+        1,
+        ColumnFilter::Custom(CustomFilters {
+            and: false,
+            conditions: vec![CustomFilterCondition {
+                operator: FilterOperator::GreaterThan,
+                value: "100".to_string(),
+            }],
+        }),
+    ));
+    sheet.set_auto_filter(Some(af));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let af2 = sheet2.auto_filter().expect("auto_filter should exist");
+    assert_eq!(af2.filter_columns.len(), 1);
+    match &af2.filter_columns[0].filter {
+        ColumnFilter::Custom(custom) => {
+            assert!(!custom.and);
+            assert_eq!(custom.conditions.len(), 1);
+            assert_eq!(custom.conditions[0].operator, FilterOperator::GreaterThan);
+            assert_eq!(custom.conditions[0].value, "100");
+        }
+        other => panic!("expected CustomFilters, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_auto_filter_top10() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut af = AutoFilter::new(CellRange::parse("A1:D10").unwrap());
+    af.filter_columns.push(FilterColumn::new(
+        2,
+        ColumnFilter::Top10(Top10Filter {
+            top: true,
+            percent: false,
+            val: 10.0,
+            filter_val: None,
+        }),
+    ));
+    sheet.set_auto_filter(Some(af));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let af2 = sheet2.auto_filter().expect("auto_filter should exist");
+    assert_eq!(af2.filter_columns.len(), 1);
+    match &af2.filter_columns[0].filter {
+        ColumnFilter::Top10(top10) => {
+            assert!(top10.top);
+            assert!(!top10.percent);
+            assert_eq!(top10.val, 10.0);
+            assert_eq!(top10.filter_val, None);
+        }
+        other => panic!("expected Top10Filter, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_auto_filter_dynamic() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut af = AutoFilter::new(CellRange::parse("A1:D10").unwrap());
+    af.filter_columns.push(FilterColumn::new(
+        3,
+        ColumnFilter::Dynamic(DynamicFilter {
+            filter_type: DynamicFilterType::AboveAverage,
+            val: None,
+            max_val: None,
+        }),
+    ));
+    sheet.set_auto_filter(Some(af));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let af2 = sheet2.auto_filter().expect("auto_filter should exist");
+    assert_eq!(af2.filter_columns.len(), 1);
+    match &af2.filter_columns[0].filter {
+        ColumnFilter::Dynamic(dynamic) => {
+            assert_eq!(dynamic.filter_type, DynamicFilterType::AboveAverage);
+            assert_eq!(dynamic.val, None);
+            assert_eq!(dynamic.max_val, None);
+        }
+        other => panic!("expected DynamicFilter, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_auto_filter_multiple_columns() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut af = AutoFilter::new(CellRange::parse("A1:D10").unwrap());
+    af.filter_columns.push(FilterColumn::new(
+        0,
+        ColumnFilter::Values(ValueFilter {
+            values: vec!["East".to_string(), "West".to_string()],
+            blank: true,
+        }),
+    ));
+    af.filter_columns.push(FilterColumn::new(
+        2,
+        ColumnFilter::Top10(Top10Filter {
+            top: false,
+            percent: true,
+            val: 25.0,
+            filter_val: Some(200.0),
+        }),
+    ));
+    af.filter_columns.push(FilterColumn::new(
+        3,
+        ColumnFilter::Dynamic(DynamicFilter {
+            filter_type: DynamicFilterType::ThisMonth,
+            val: Some(1.0),
+            max_val: Some(31.0),
+        }),
+    ));
+    sheet.set_auto_filter(Some(af));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let af2 = sheet2.auto_filter().expect("auto_filter should exist");
+    assert_eq!(af2.filter_columns.len(), 3);
+    assert!(matches!(
+        af2.filter_columns[0].filter,
+        ColumnFilter::Values(_)
+    ));
+    assert!(matches!(
+        af2.filter_columns[1].filter,
+        ColumnFilter::Top10(_)
+    ));
+    assert!(matches!(
+        af2.filter_columns[2].filter,
+        ColumnFilter::Dynamic(_)
+    ));
 }
 
 // --- Formula cached value roundtrip tests ---
@@ -949,7 +1162,10 @@ fn test_worksheet_element_ordering() {
     assert!(!merged.is_empty(), "Merged cells should be preserved");
     let ps2 = sheet2.page_setup();
     assert!(ps2.print_gridlines, "Print gridlines should be preserved");
-    assert!((ps2.left_margin - 1.0).abs() < 1e-9, "Left margin should be preserved");
+    assert!(
+        (ps2.left_margin - 1.0).abs() < 1e-9,
+        "Left margin should be preserved"
+    );
     assert!(ps2.odd_header.is_some(), "Header should be preserved");
 }
 
@@ -962,15 +1178,21 @@ fn test_roundtrip_rich_text() {
     // Cell with mixed formatting: plain + bold + italic+colored
     let runs = vec![
         RichTextRun::plain("Hello "),
-        RichTextRun::with_font("bold", RunFont {
-            bold: Some(true),
-            ..Default::default()
-        }),
-        RichTextRun::with_font(" world", RunFont {
-            italic: Some(true),
-            color: Some(Color::rgb(255, 0, 0)),
-            ..Default::default()
-        }),
+        RichTextRun::with_font(
+            "bold",
+            RunFont {
+                bold: Some(true),
+                ..Default::default()
+            },
+        ),
+        RichTextRun::with_font(
+            " world",
+            RunFont {
+                italic: Some(true),
+                color: Some(Color::rgb(255, 0, 0)),
+                ..Default::default()
+            },
+        ),
     ];
     sheet
         .set_cell_value_at(0, 0, CellValue::RichText(runs.clone()))
@@ -983,8 +1205,9 @@ fn test_roundtrip_rich_text() {
         .unwrap();
 
     // Cell with many font properties
-    let fancy_runs = vec![
-        RichTextRun::with_font("fancy", RunFont {
+    let fancy_runs = vec![RichTextRun::with_font(
+        "fancy",
+        RunFont {
             bold: Some(true),
             italic: Some(true),
             size: Some(14.0),
@@ -993,8 +1216,8 @@ fn test_roundtrip_rich_text() {
             strikethrough: Some(true),
             color: Some(Color::rgb(0, 128, 255)),
             ..Default::default()
-        }),
-    ];
+        },
+    )];
     sheet
         .set_cell_value_at(2, 0, CellValue::RichText(fancy_runs.clone()))
         .unwrap();
@@ -1140,9 +1363,18 @@ fn test_roundtrip_table_with_totals() {
     assert!(t.has_totals_row());
     assert_eq!(t.totals_row_count, 1);
     assert_eq!(t.columns[0].totals_row_label.as_deref(), Some("Total"));
-    assert_eq!(t.columns[1].totals_row_function, Some(TotalsRowFunction::Sum));
-    assert_eq!(t.columns[2].totals_row_function, Some(TotalsRowFunction::Custom));
-    assert_eq!(t.columns[2].totals_row_formula.as_deref(), Some("SUBTOTAL(109,[Price])"));
+    assert_eq!(
+        t.columns[1].totals_row_function,
+        Some(TotalsRowFunction::Sum)
+    );
+    assert_eq!(
+        t.columns[2].totals_row_function,
+        Some(TotalsRowFunction::Custom)
+    );
+    assert_eq!(
+        t.columns[2].totals_row_formula.as_deref(),
+        Some("SUBTOTAL(109,[Price])")
+    );
 }
 
 /// Test table roundtrip with calculated column formula
@@ -1169,7 +1401,10 @@ fn test_roundtrip_table_with_calculated_column() {
     let sheet2 = wb2.worksheet(0).unwrap();
     let t = &sheet2.tables()[0];
 
-    assert_eq!(t.columns[2].calculated_column_formula.as_deref(), Some("[X]+[Y]"));
+    assert_eq!(
+        t.columns[2].calculated_column_formula.as_deref(),
+        Some("[X]+[Y]")
+    );
 }
 
 /// Test multiple tables across multiple sheets roundtrip

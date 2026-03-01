@@ -38,8 +38,7 @@ const RT_VML_DRAWING: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
 const RT_HYPERLINK: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
-const RT_TABLE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
+const RT_TABLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
 
 // Content types
 const CT_WORKBOOK: &str =
@@ -437,7 +436,13 @@ impl XlsxWriter {
         }
 
         // Write [Content_Types].xml
-        Self::write_content_types(&mut zip, workbook, &sheets_with_comments, &sst, &table_numbering)?;
+        Self::write_content_types(
+            &mut zip,
+            workbook,
+            &sheets_with_comments,
+            &sst,
+            &table_numbering,
+        )?;
 
         // Write _rels/.rels
         Self::write_root_rels(&mut zip)?;
@@ -469,7 +474,12 @@ impl XlsxWriter {
                 .collect();
 
             let rels = Self::write_worksheet(
-                &mut zip, workbook, i, &style_table, &sst, &sheet_table_globals,
+                &mut zip,
+                workbook,
+                i,
+                &style_table,
+                &sst,
+                &sheet_table_globals,
             )?;
 
             if !rels.is_empty() {
@@ -833,7 +843,7 @@ impl XlsxWriter {
         index: usize,
         style_table: &XlsxStyleTable,
         sst: &SharedStringTable,
-        sheet_table_globals: &[usize],  // global table numbers for this sheet
+        sheet_table_globals: &[usize], // global table numbers for this sheet
     ) -> XlsxResult<Vec<WorksheetRelationship>> {
         let path = format!("xl/worksheets/sheet{}.xml", index + 1);
         let mut rels = Vec::new();
@@ -884,6 +894,8 @@ impl XlsxWriter {
 
             // sheetProtection
             Self::write_sheet_protection(w, sheet)?;
+
+            Self::write_auto_filter(w, sheet)?;
 
             // mergeCells
             Self::write_merge_cells(w, sheet)?;
@@ -1519,10 +1531,7 @@ impl XlsxWriter {
     }
 
     /// Write `<rPr>` (run properties) element for a rich text run.
-    fn write_run_properties(
-        w: &mut XmlWriter,
-        font: &duke_sheets_core::RunFont,
-    ) -> XlsxResult<()> {
+    fn write_run_properties(w: &mut XmlWriter, font: &duke_sheets_core::RunFont) -> XlsxResult<()> {
         w.write_event(Event::Start(BytesStart::new("rPr")))?;
 
         if let Some(bold) = font.bold {
@@ -1616,7 +1625,10 @@ impl XlsxWriter {
                 tag.push_attribute(("rgb", format!("FF{:02X}{:02X}{:02X}", r, g, b).as_str()));
             }
             duke_sheets_core::Color::Argb { a, r, g, b } => {
-                tag.push_attribute(("rgb", format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b).as_str()));
+                tag.push_attribute((
+                    "rgb",
+                    format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b).as_str(),
+                ));
             }
             duke_sheets_core::Color::Theme { index, tint } => {
                 tag.push_attribute(("theme", index.to_string().as_str()));
@@ -1684,6 +1696,114 @@ impl XlsxWriter {
         }
 
         w.write_event(Event::Empty(tag))?;
+        Ok(())
+    }
+
+    fn write_auto_filter(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
+        let Some(auto_filter) = sheet.auto_filter() else {
+            return Ok(());
+        };
+
+        let range = auto_filter.range.to_string();
+        if auto_filter.filter_columns.is_empty() {
+            let mut elem = BytesStart::new("autoFilter");
+            elem.push_attribute(("ref", range.as_str()));
+            w.write_event(Event::Empty(elem))?;
+            return Ok(());
+        }
+
+        let mut elem = BytesStart::new("autoFilter");
+        elem.push_attribute(("ref", range.as_str()));
+        w.write_event(Event::Start(elem))?;
+
+        for column in &auto_filter.filter_columns {
+            Self::write_filter_column(w, column)?;
+        }
+
+        w.write_event(Event::End(BytesEnd::new("autoFilter")))?;
+        Ok(())
+    }
+
+    fn write_filter_column(
+        w: &mut XmlWriter,
+        column: &duke_sheets_core::FilterColumn,
+    ) -> XlsxResult<()> {
+        let col_id = column.col_id.to_string();
+        let mut elem = BytesStart::new("filterColumn");
+        elem.push_attribute(("colId", col_id.as_str()));
+        if column.hidden_button {
+            elem.push_attribute(("hiddenButton", "1"));
+        }
+        if !column.show_button {
+            elem.push_attribute(("showButton", "0"));
+        }
+        w.write_event(Event::Start(elem))?;
+
+        match &column.filter {
+            duke_sheets_core::ColumnFilter::Values(values) => {
+                let mut filters = BytesStart::new("filters");
+                if values.blank {
+                    filters.push_attribute(("blank", "1"));
+                }
+                w.write_event(Event::Start(filters))?;
+                for value in &values.values {
+                    let mut filter = BytesStart::new("filter");
+                    filter.push_attribute(("val", value.as_str()));
+                    w.write_event(Event::Empty(filter))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("filters")))?;
+            }
+            duke_sheets_core::ColumnFilter::Custom(custom) => {
+                let mut custom_filters = BytesStart::new("customFilters");
+                if custom.and {
+                    custom_filters.push_attribute(("and", "1"));
+                }
+                w.write_event(Event::Start(custom_filters))?;
+                for condition in &custom.conditions {
+                    let mut custom_filter = BytesStart::new("customFilter");
+                    custom_filter.push_attribute(("operator", condition.operator.to_ooxml()));
+                    custom_filter.push_attribute(("val", condition.value.as_str()));
+                    w.write_event(Event::Empty(custom_filter))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("customFilters")))?;
+            }
+            duke_sheets_core::ColumnFilter::Top10(top10) => {
+                let mut top10_el = BytesStart::new("top10");
+                top10_el.push_attribute(("top", if top10.top { "1" } else { "0" }));
+                top10_el.push_attribute(("percent", if top10.percent { "1" } else { "0" }));
+                let val = top10.val.to_string();
+                top10_el.push_attribute(("val", val.as_str()));
+                let filter_val = top10.filter_val.map(|v| v.to_string());
+                if let Some(filter_val) = filter_val.as_deref() {
+                    top10_el.push_attribute(("filterVal", filter_val));
+                }
+                w.write_event(Event::Empty(top10_el))?;
+            }
+            duke_sheets_core::ColumnFilter::Dynamic(dynamic) => {
+                let mut dynamic_el = BytesStart::new("dynamicFilter");
+                dynamic_el.push_attribute(("type", dynamic.filter_type.to_ooxml()));
+                let val = dynamic.val.map(|v| v.to_string());
+                if let Some(val) = val.as_deref() {
+                    dynamic_el.push_attribute(("val", val));
+                }
+                let max_val = dynamic.max_val.map(|v| v.to_string());
+                if let Some(max_val) = max_val.as_deref() {
+                    dynamic_el.push_attribute(("maxVal", max_val));
+                }
+                w.write_event(Event::Empty(dynamic_el))?;
+            }
+            duke_sheets_core::ColumnFilter::Color(color) => {
+                let mut color_el = BytesStart::new("colorFilter");
+                let dxf_id = color.dxf_id.map(|v| v.to_string());
+                if let Some(dxf_id) = dxf_id.as_deref() {
+                    color_el.push_attribute(("dxfId", dxf_id));
+                }
+                color_el.push_attribute(("cellColor", if color.cell_color { "1" } else { "0" }));
+                w.write_event(Event::Empty(color_el))?;
+            }
+        }
+
+        w.write_event(Event::End(BytesEnd::new("filterColumn")))?;
         Ok(())
     }
 
@@ -2657,7 +2777,11 @@ impl XlsxWriter {
                 let auto_ref = if table.has_totals_row() {
                     // AutoFilter range excludes the totals row
                     let start = &table.reference.start;
-                    let end_row = table.reference.end.row.saturating_sub(table.totals_row_count);
+                    let end_row = table
+                        .reference
+                        .end
+                        .row
+                        .saturating_sub(table.totals_row_count);
                     let end_col = table.reference.end.col;
                     let end_addr = CellAddress::new(end_row, end_col);
                     format!("{}:{}", start, end_addr)
@@ -2678,8 +2802,8 @@ impl XlsxWriter {
 
                 for col in &table.columns {
                     let col_id = col.id.to_string();
-                    let has_child = col.calculated_column_formula.is_some()
-                        || col.totals_row_formula.is_some();
+                    let has_child =
+                        col.calculated_column_formula.is_some() || col.totals_row_formula.is_some();
 
                     let mut tc_el = BytesStart::new("tableColumn");
                     tc_el.push_attribute(("id", col_id.as_str()));
@@ -2717,10 +2841,22 @@ impl XlsxWriter {
                 if let Some(ref name) = style.name {
                     si.push_attribute(("name", name.as_str()));
                 }
-                si.push_attribute(("showFirstColumn", if style.show_first_column { "1" } else { "0" }));
-                si.push_attribute(("showLastColumn", if style.show_last_column { "1" } else { "0" }));
-                si.push_attribute(("showRowStripes", if style.show_row_stripes { "1" } else { "0" }));
-                si.push_attribute(("showColumnStripes", if style.show_column_stripes { "1" } else { "0" }));
+                si.push_attribute((
+                    "showFirstColumn",
+                    if style.show_first_column { "1" } else { "0" },
+                ));
+                si.push_attribute((
+                    "showLastColumn",
+                    if style.show_last_column { "1" } else { "0" },
+                ));
+                si.push_attribute((
+                    "showRowStripes",
+                    if style.show_row_stripes { "1" } else { "0" },
+                ));
+                si.push_attribute((
+                    "showColumnStripes",
+                    if style.show_column_stripes { "1" } else { "0" },
+                ));
                 w.write_event(Event::Empty(si))?;
             }
 
@@ -2975,10 +3111,19 @@ mod tests {
         let xml = read_zip_entry(out.into_inner(), "xl/worksheets/sheet1.xml");
 
         // Attributes on headerFooter element
-        assert!(xml.contains("differentOddEven=\"1\""), "missing differentOddEven");
-        assert!(xml.contains("differentFirst=\"1\""), "missing differentFirst");
+        assert!(
+            xml.contains("differentOddEven=\"1\""),
+            "missing differentOddEven"
+        );
+        assert!(
+            xml.contains("differentFirst=\"1\""),
+            "missing differentFirst"
+        );
         assert!(xml.contains("scaleWithDoc=\"0\""), "missing scaleWithDoc");
-        assert!(xml.contains("alignWithMargins=\"0\""), "missing alignWithMargins");
+        assert!(
+            xml.contains("alignWithMargins=\"0\""),
+            "missing alignWithMargins"
+        );
 
         // All six child elements in spec order
         assert!(xml.contains("<oddHeader>&amp;COdd</oddHeader>"));
@@ -2993,7 +3138,10 @@ mod tests {
         let even_pos = xml.find("<evenHeader>").unwrap();
         let first_pos = xml.find("<firstHeader>").unwrap();
         assert!(odd_pos < even_pos, "oddHeader must come before evenHeader");
-        assert!(even_pos < first_pos, "evenHeader must come before firstHeader");
+        assert!(
+            even_pos < first_pos,
+            "evenHeader must come before firstHeader"
+        );
     }
 
     #[test]
@@ -3010,11 +3158,26 @@ mod tests {
         let xml = read_zip_entry(out.into_inner(), "xl/worksheets/sheet1.xml");
 
         // headerFooter element should have no attributes
-        assert!(xml.contains("<headerFooter>"), "should have plain headerFooter tag");
-        assert!(!xml.contains("differentOddEven"), "should not emit default differentOddEven");
-        assert!(!xml.contains("differentFirst"), "should not emit default differentFirst");
-        assert!(!xml.contains("scaleWithDoc"), "should not emit default scaleWithDoc");
-        assert!(!xml.contains("alignWithMargins"), "should not emit default alignWithMargins");
+        assert!(
+            xml.contains("<headerFooter>"),
+            "should have plain headerFooter tag"
+        );
+        assert!(
+            !xml.contains("differentOddEven"),
+            "should not emit default differentOddEven"
+        );
+        assert!(
+            !xml.contains("differentFirst"),
+            "should not emit default differentFirst"
+        );
+        assert!(
+            !xml.contains("scaleWithDoc"),
+            "should not emit default scaleWithDoc"
+        );
+        assert!(
+            !xml.contains("alignWithMargins"),
+            "should not emit default alignWithMargins"
+        );
     }
 
     #[test]
@@ -3099,10 +3262,7 @@ mod tests {
         sheet.set_cell_value("B2", 95.0).unwrap();
 
         let mut table = Table::new(1, "Scores", CellRange::parse("A1:B3").unwrap());
-        table.columns = vec![
-            TableColumn::new(1, "Name"),
-            TableColumn::new(2, "Score"),
-        ];
+        table.columns = vec![TableColumn::new(1, "Name"), TableColumn::new(2, "Score")];
         table.style_info = Some(TableStyleInfo {
             name: Some("TableStyleMedium2".into()),
             show_row_stripes: true,
@@ -3116,37 +3276,59 @@ mod tests {
 
         // Check sheet XML has tableParts
         let sheet_xml = read_zip_entry(bytes.clone(), "xl/worksheets/sheet1.xml");
-        assert!(sheet_xml.contains("<tableParts count=\"1\">"), "missing tableParts");
-        assert!(sheet_xml.contains("<tablePart r:id="), "missing tablePart ref");
+        assert!(
+            sheet_xml.contains("<tableParts count=\"1\">"),
+            "missing tableParts"
+        );
+        assert!(
+            sheet_xml.contains("<tablePart r:id="),
+            "missing tablePart ref"
+        );
 
         // Check table XML exists and has correct structure
         let table_xml = read_zip_entry(bytes.clone(), "xl/tables/table1.xml");
         assert!(table_xml.contains(r#"name="Scores""#), "wrong name");
-        assert!(table_xml.contains(r#"displayName="Scores""#), "wrong displayName");
+        assert!(
+            table_xml.contains(r#"displayName="Scores""#),
+            "wrong displayName"
+        );
         assert!(table_xml.contains(r#"ref="A1:B3""#), "wrong ref");
         assert!(table_xml.contains("<autoFilter"), "missing autoFilter");
-        assert!(table_xml.contains(r#"<tableColumns count="2""#), "wrong column count");
+        assert!(
+            table_xml.contains(r#"<tableColumns count="2""#),
+            "wrong column count"
+        );
         assert!(table_xml.contains(r#"name="Name""#), "missing col Name");
         assert!(table_xml.contains(r#"name="Score""#), "missing col Score");
-        assert!(table_xml.contains(r#"name="TableStyleMedium2""#), "wrong style");
+        assert!(
+            table_xml.contains(r#"name="TableStyleMedium2""#),
+            "wrong style"
+        );
         assert!(table_xml.contains(r#"showRowStripes="1""#), "wrong stripes");
 
         // Check content types
         let ct = read_zip_entry(bytes.clone(), "[Content_Types].xml");
-        assert!(ct.contains("/xl/tables/table1.xml"), "missing table content type");
-        assert!(ct.contains("spreadsheetml.table+xml"), "wrong table content type");
+        assert!(
+            ct.contains("/xl/tables/table1.xml"),
+            "missing table content type"
+        );
+        assert!(
+            ct.contains("spreadsheetml.table+xml"),
+            "wrong table content type"
+        );
 
         // Check sheet rels
         let rels = read_zip_entry(bytes, "xl/worksheets/_rels/sheet1.xml.rels");
-        assert!(rels.contains("../tables/table1.xml"), "missing table rel target");
+        assert!(
+            rels.contains("../tables/table1.xml"),
+            "missing table rel target"
+        );
         assert!(rels.contains("/table\""), "missing table rel type");
     }
 
     #[test]
     fn test_writer_emits_table_with_totals_row() {
-        use duke_sheets_core::table::{
-            Table, TableColumn, TotalsRowFunction,
-        };
+        use duke_sheets_core::table::{Table, TableColumn, TotalsRowFunction};
 
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
@@ -3167,10 +3349,22 @@ mod tests {
         let bytes = out.into_inner();
 
         let table_xml = read_zip_entry(bytes, "xl/tables/table1.xml");
-        assert!(table_xml.contains(r#"totalsRowCount="1""#), "missing totalsRowCount");
-        assert!(table_xml.contains(r#"totalsRowLabel="Total""#), "missing totalsRowLabel");
-        assert!(table_xml.contains(r#"totalsRowFunction="sum""#), "missing totalsRowFunction");
+        assert!(
+            table_xml.contains(r#"totalsRowCount="1""#),
+            "missing totalsRowCount"
+        );
+        assert!(
+            table_xml.contains(r#"totalsRowLabel="Total""#),
+            "missing totalsRowLabel"
+        );
+        assert!(
+            table_xml.contains(r#"totalsRowFunction="sum""#),
+            "missing totalsRowFunction"
+        );
         // autoFilter ref should exclude the totals row: A1:B3 not A1:B4
-        assert!(table_xml.contains(r#"<autoFilter ref="A1:B3""#), "autoFilter should exclude totals");
+        assert!(
+            table_xml.contains(r#"<autoFilter ref="A1:B3""#),
+            "autoFilter should exclude totals"
+        );
     }
 }
