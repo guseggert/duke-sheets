@@ -651,6 +651,7 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
         FormulaExpr::String(s) => Ok(FormulaValue::String(s.clone())),
         FormulaExpr::Boolean(b) => Ok(FormulaValue::Boolean(*b)),
         FormulaExpr::Error(e) => Ok(FormulaValue::Error(*e)),
+        FormulaExpr::Empty => Ok(FormulaValue::Empty),
 
         // === References ===
         FormulaExpr::CellRef(cell_ref) => Ok(ctx.get_cell_value(

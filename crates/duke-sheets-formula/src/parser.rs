@@ -872,13 +872,23 @@ impl<'a> FormulaParser<'a> {
 
         let mut args = Vec::new();
 
-        // Parse arguments
+        // Parse arguments, supporting empty/omitted args (e.g., XLOOKUP(x,a,b,,1))
         if !matches!(self.current_token(), Token::RightParen) {
-            args.push(self.parse_expression()?);
+            // First argument: empty if immediately followed by comma
+            if matches!(self.current_token(), Token::Comma) {
+                args.push(FormulaExpr::Empty);
+            } else {
+                args.push(self.parse_expression()?);
+            }
 
             while matches!(self.current_token(), Token::Comma) {
                 self.consume();
-                args.push(self.parse_expression()?);
+                // Empty argument if next token is comma or rparen
+                if matches!(self.current_token(), Token::Comma | Token::RightParen) {
+                    args.push(FormulaExpr::Empty);
+                } else {
+                    args.push(self.parse_expression()?);
+                }
             }
         }
 
@@ -1615,6 +1625,93 @@ mod tests {
             assert_eq!(ext.address.col, 1);
         } else {
             panic!("Expected ExternalRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_args_middle() {
+        // XLOOKUP(x,a,b,,1) — 4th arg is empty
+        let ast = parse_formula("=FUNC(1,2,,4)").unwrap();
+        if let FormulaExpr::Function { name, args } = ast {
+            assert_eq!(name, "FUNC");
+            assert_eq!(args.len(), 4);
+            assert_eq!(args[0], FormulaExpr::Number(1.0));
+            assert_eq!(args[1], FormulaExpr::Number(2.0));
+            assert_eq!(args[2], FormulaExpr::Empty);
+            assert_eq!(args[3], FormulaExpr::Number(4.0));
+        } else {
+            panic!("Expected Function, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_args_leading() {
+        // FUNC(,1) — 1st arg is empty
+        let ast = parse_formula("=FUNC(,1)").unwrap();
+        if let FormulaExpr::Function { name, args } = ast {
+            assert_eq!(name, "FUNC");
+            assert_eq!(args.len(), 2);
+            assert_eq!(args[0], FormulaExpr::Empty);
+            assert_eq!(args[1], FormulaExpr::Number(1.0));
+        } else {
+            panic!("Expected Function, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_args_trailing() {
+        // FUNC(1,) — 2nd arg is empty
+        let ast = parse_formula("=FUNC(1,)").unwrap();
+        if let FormulaExpr::Function { name, args } = ast {
+            assert_eq!(name, "FUNC");
+            assert_eq!(args.len(), 2);
+            assert_eq!(args[0], FormulaExpr::Number(1.0));
+            assert_eq!(args[1], FormulaExpr::Empty);
+        } else {
+            panic!("Expected Function, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_args_multiple_consecutive() {
+        // FUNC(1,,,4) — 2nd and 3rd args are empty
+        let ast = parse_formula("=FUNC(1,,,4)").unwrap();
+        if let FormulaExpr::Function { name, args } = ast {
+            assert_eq!(name, "FUNC");
+            assert_eq!(args.len(), 4);
+            assert_eq!(args[0], FormulaExpr::Number(1.0));
+            assert_eq!(args[1], FormulaExpr::Empty);
+            assert_eq!(args[2], FormulaExpr::Empty);
+            assert_eq!(args[3], FormulaExpr::Number(4.0));
+        } else {
+            panic!("Expected Function, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_args_all_empty() {
+        // FUNC(,,) — all 3 args empty
+        let ast = parse_formula("=FUNC(,,)").unwrap();
+        if let FormulaExpr::Function { name, args } = ast {
+            assert_eq!(name, "FUNC");
+            assert_eq!(args.len(), 3);
+            assert_eq!(args[0], FormulaExpr::Empty);
+            assert_eq!(args[1], FormulaExpr::Empty);
+            assert_eq!(args[2], FormulaExpr::Empty);
+        } else {
+            panic!("Expected Function, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_args_no_args_still_works() {
+        // FUNC() — zero args, no empties
+        let ast = parse_formula("=FUNC()").unwrap();
+        if let FormulaExpr::Function { name, args } = ast {
+            assert_eq!(name, "FUNC");
+            assert_eq!(args.len(), 0);
+        } else {
+            panic!("Expected Function, got {:?}", ast);
         }
     }
 }

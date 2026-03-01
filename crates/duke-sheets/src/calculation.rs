@@ -445,7 +445,8 @@ fn extract_references_recursive(
         | FormulaExpr::Boolean(_)
         | FormulaExpr::Error(_)
         | FormulaExpr::NameRef(_)
-        | FormulaExpr::ExternalRef(_) => {}
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::Empty => {}
         // Structured table references — resolve to dependent cell range.
         FormulaExpr::StructuredRef(sr) => {
             extract_structured_ref_deps(sr, current_sheet, workbook, refs);
@@ -593,7 +594,8 @@ fn contains_volatile_function(expr: &FormulaExpr) -> bool {
         | FormulaExpr::RangeRef(_)
         | FormulaExpr::NameRef(_)
         | FormulaExpr::StructuredRef(_)
-        | FormulaExpr::ExternalRef(_) => false,
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::Empty => false,
     }
 }
 

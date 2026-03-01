@@ -48,6 +48,9 @@ pub enum FormulaExpr {
 
     // === Array ===
     Array(Vec<Vec<FormulaExpr>>),
+
+    /// Empty/omitted argument (e.g., the missing 4th arg in `XLOOKUP(x,a,b,,1)`)
+    Empty,
 }
 
 /// Cell reference with optional sheet
