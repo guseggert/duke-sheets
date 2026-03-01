@@ -5,8 +5,8 @@ This document lists all Excel functions and their implementation status in duke-
 **Source:** [Microsoft Excel Functions (Alphabetical)](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188)
 
 **Total Functions:** 506
-**Implemented:** 108 (21%)
-**Remaining:** 398
+**Implemented:** 157 (31%)
+**Remaining:** 349
 
 Legend: ✅ = Implemented, ⬜ = Not implemented
 
@@ -114,19 +114,19 @@ Mark the function as implemented in the table below.
 ## Categories
 
 - [Add-in and Automation](#add-in-and-automation) (0/3)
-- [Compatibility](#compatibility) (0/40)
+- [Compatibility](#compatibility) (9/40)
 - [Cube](#cube) (0/7)
 - [Database](#database) (0/12)
-- [Date and time](#date-and-time) (6/25)
+- [Date and time](#date-and-time) (23/25)
 - [Engineering](#engineering) (0/54)
 - [Financial](#financial) (0/55)
 - [Information](#information) (6/21)
 - [Logical](#logical) (11/19)
 - [Look and reference](#look-and-reference) (0/3)
-- [Lookup and reference](#lookup-and-reference) (8/34)
+- [Lookup and reference](#lookup-and-reference) (13/34)
 - [Math and trigonometry](#math-and-trigonometry) (35/78)
-- [Statistical](#statistical) (13/110)
-- [Text](#text) (29/42)
+- [Statistical](#statistical) (28/110)
+- [Text](#text) (34/42)
 - [Web](#web) (0/3)
 
 ---
@@ -143,7 +143,7 @@ Mark the function as implemented in the table below.
 
 ## Compatibility
 
-**0/40 implemented**
+**9/40 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
@@ -167,24 +167,24 @@ Mark the function as implemented in the table below.
 | ⬜ | HYPGEOMDIST | Returns the hypergeometric distribution |
 | ⬜ | LOGINV | Returns the inverse of the lognormal cumulative distribution |
 | ⬜ | LOGNORMDIST | Returns the cumulative lognormal distribution |
-| ⬜ | MODE | Returns the most common value in a data set |
+| ✅ | MODE | Returns the most common value in a data set |
 | ⬜ | NEGBINOMDIST | Returns the negative binomial distribution |
 | ⬜ | NORM.INV | Returns the inverse of the normal cumulative distribution |
 | ⬜ | NORMDIST | Returns the normal cumulative distribution |
 | ⬜ | NORMSDIST | Returns the standard normal cumulative distribution |
 | ⬜ | NORMSINV | Returns the inverse of the standard normal cumulative distribution |
-| ⬜ | PERCENTILE | Returns the k-th percentile of values in a range |
-| ⬜ | PERCENTRANK | Returns the percentage rank of a value in a data set |
+| ✅ | PERCENTILE | Returns the k-th percentile of values in a range |
+| ✅ | PERCENTRANK | Returns the percentage rank of a value in a data set |
 | ⬜ | POISSON | Returns the Poisson distribution |
-| ⬜ | QUARTILE | Returns the quartile of a data set |
-| ⬜ | RANK | Returns the rank of a number in a list of numbers |
-| ⬜ | STDEV | Estimates standard deviation based on a sample |
-| ⬜ | STDEVP | Calculates standard deviation based on the entire population |
+| ✅ | QUARTILE | Returns the quartile of a data set |
+| ✅ | RANK | Returns the rank of a number in a list of numbers |
+| ✅ | STDEV | Estimates standard deviation based on a sample |
+| ✅ | STDEVP | Calculates standard deviation based on the entire population |
 | ⬜ | TDIST | Returns the Student's t-distribution |
 | ⬜ | TINV | Returns the inverse of the Student's t-distribution |
 | ⬜ | TTEST | Returns the probability associated with a Student's t-test |
-| ⬜ | VAR | Estimates variance based on a sample |
-| ⬜ | VARP | Calculates variance based on the entire population |
+| ✅ | VAR | Estimates variance based on a sample |
+| ✅ | VARP | Calculates variance based on the entire population |
 | ⬜ | WEIBULL | Calculates variance based on the entire population, including numbers, text, and logical values |
 | ⬜ | ZTEST | Returns the one-tailed probability-value of a z-test |
 
@@ -223,35 +223,35 @@ Mark the function as implemented in the table below.
 
 ## Date and time
 
-**6/25 implemented**
+**23/25 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
 | ✅ | DATE | Returns the serial number of a particular date |
-| ⬜ | DATEDIF | Calculates the number of days, months, or years between two dates. This function is useful in formulas where you need to calculate an age. |
-| ⬜ | DATEVALUE | Converts a date in the form of text to a serial number |
+| ✅ | DATEDIF | Calculates the number of days, months, or years between two dates. This function is useful in formulas where you need to calculate an age. |
+| ✅ | DATEVALUE | Converts a date in the form of text to a serial number |
 | ✅ | DAY | Converts a serial number to a day of the month |
-| ⬜ | DAYS | Returns the number of days between two dates |
-| ⬜ | DAYS360 | Calculates the number of days between two dates based on a 360-day year |
-| ⬜ | EDATE | Returns the serial number of the date that is the indicated number of months before or after the start date |
-| ⬜ | EOMONTH | Returns the serial number of the last day of the month before or after a specified number of months |
-| ⬜ | HOUR | Converts a serial number to an hour |
-| ⬜ | ISOWEEKNUM | Returns the number of the ISO week number of the year for a given date |
-| ⬜ | MINUTE | Converts a serial number to a minute |
+| ✅ | DAYS | Returns the number of days between two dates |
+| ✅ | DAYS360 | Calculates the number of days between two dates based on a 360-day year |
+| ✅ | EDATE | Returns the serial number of the date that is the indicated number of months before or after the start date |
+| ✅ | EOMONTH | Returns the serial number of the last day of the month before or after a specified number of months |
+| ✅ | HOUR | Converts a serial number to an hour |
+| ✅ | ISOWEEKNUM | Returns the number of the ISO week number of the year for a given date |
+| ✅ | MINUTE | Converts a serial number to a minute |
 | ✅ | MONTH | Converts a serial number to a month |
-| ⬜ | NETWORKDAYS | Returns the number of whole workdays between two dates |
+| ✅ | NETWORKDAYS | Returns the number of whole workdays between two dates |
 | ⬜ | NETWORKDAYS.INTL | Returns the number of whole workdays between two dates using parameters to indicate which and how many days are weekend days |
 | ✅ | NOW | Returns the serial number of the current date and time |
-| ⬜ | SECOND | Converts a serial number to a second |
-| ⬜ | TIME | Returns the serial number of a particular time |
-| ⬜ | TIMEVALUE | Converts a time in the form of text to a serial number |
+| ✅ | SECOND | Converts a serial number to a second |
+| ✅ | TIME | Returns the serial number of a particular time |
+| ✅ | TIMEVALUE | Converts a time in the form of text to a serial number |
 | ✅ | TODAY | Returns the serial number of today's date |
-| ⬜ | WEEKDAY | Converts a serial number to a day of the week |
-| ⬜ | WEEKNUM | Converts a serial number to a number representing where the week falls numerically with a year |
-| ⬜ | WORKDAY | Returns the serial number of the date before or after a specified number of workdays |
+| ✅ | WEEKDAY | Converts a serial number to a day of the week |
+| ✅ | WEEKNUM | Converts a serial number to a number representing where the week falls numerically with a year |
+| ✅ | WORKDAY | Returns the serial number of the date before or after a specified number of workdays |
 | ⬜ | WORKDAY.INTL | Returns the serial number of the date before or after a specified number of workdays using parameters to indicate which and how many days are weekend days |
 | ✅ | YEAR | Converts a serial number to a year |
-| ⬜ | YEARFRAC | Returns the year fraction representing the number of whole days between start\_date and end\_date |
+| ✅ | YEARFRAC | Returns the year fraction representing the number of whole days between start\_date and end\_date |
 
 ## Engineering
 
@@ -442,7 +442,7 @@ Mark the function as implemented in the table below.
 
 ## Lookup and reference
 
-**8/34 implemented**
+**13/34 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
@@ -458,15 +458,15 @@ Mark the function as implemented in the table below.
 | ⬜ | FILTER | Filters a range of data based on criteria you define |
 | ⬜ | FORMULATEXT | Returns the formula at the given reference as text |
 | ⬜ | GETPIVOTDATA | Returns data stored in a PivotTable report |
-| ⬜ | HLOOKUP | Looks in the top row of an array and returns the value of the indicated cell |
+| ✅ | HLOOKUP | Looks in the top row of an array and returns the value of the indicated cell |
 | ⬜ | HSTACK | Appends arrays horizontally and in sequence to return a larger array |
 | ⬜ | HYPERLINK | Creates a shortcut or jump that opens a document stored on a network server, an intranet, or the Internet |
 | ⬜ | IMAGE | Returns an image from a given source |
 | ✅ | INDEX | Uses an index to choose a value from a reference or array |
-| ⬜ | INDIRECT | Returns a reference indicated by a text value |
+| ✅ | INDIRECT | Returns a reference indicated by a text value |
 | ⬜ | LOOKUP | Looks up values in a vector or array |
 | ✅ | MATCH | Looks up values in a reference or array |
-| ⬜ | OFFSET | Returns a reference offset from a given reference |
+| ✅ | OFFSET | Returns a reference offset from a given reference |
 | ✅ | ROW | Returns the row number of a reference |
 | ✅ | ROWS | Returns the number of rows in a reference |
 | ⬜ | RTD | Retrieves real-time data from a program that supports COM automation |
@@ -478,8 +478,8 @@ Mark the function as implemented in the table below.
 | ⬜ | TRANSPOSE | Returns the transpose of an array |
 | ⬜ | UNIQUE | Returns a list of unique values in a list or range |
 | ✅ | VLOOKUP | Looks in the first column of an array and moves across the row to return the value of a cell |
-| ⬜ | XLOOKUP | Searches a range or an array, and returns an item corresponding to the first match it finds. If a match doesn't exist, then XLOOKUP can return the closest (approximate) match. |
-| ⬜ | XMATCH | Returns the relative position of an item in an array or range of cells. |
+| ✅ | XLOOKUP | Searches a range or an array, and returns an item corresponding to the first match it finds. If a match doesn't exist, then XLOOKUP can return the closest (approximate) match. |
+| ✅ | XMATCH | Returns the relative position of an item in an array or range of cells. |
 
 ## Math and trigonometry
 
@@ -568,7 +568,7 @@ Mark the function as implemented in the table below.
 
 ## Statistical
 
-**13/110 implemented**
+**28/110 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
@@ -631,40 +631,40 @@ Mark the function as implemented in the table below.
 | ⬜ | LOGNORM.INV | Returns the inverse of the lognormal cumulative distribution |
 | ✅ | MAX | Returns the maximum value in a list of arguments |
 | ⬜ | MAXA | Returns the maximum value in a list of arguments, including numbers, text, and logical values |
-| ⬜ | MAXIFS | Returns the maximum value among cells specified by a given set of conditions or criteria |
+| ✅ | MAXIFS | Returns the maximum value among cells specified by a given set of conditions or criteria |
 | ✅ | MEDIAN | Returns the median of the given numbers |
 | ✅ | MIN | Returns the minimum value in a list of arguments |
 | ⬜ | MINA | Returns the smallest value in a list of arguments, including numbers, text, and logical values |
-| ⬜ | MINIFS | Returns the minimum value among cells specified by a given set of conditions or criteria. |
+| ✅ | MINIFS | Returns the minimum value among cells specified by a given set of conditions or criteria. |
 | ⬜ | MODE.MULT | Returns a vertical array of the most frequently occurring, or repetitive values in an array or range of data |
-| ⬜ | MODE.SNGL | Returns the most common value in a data set |
+| ✅ | MODE.SNGL | Returns the most common value in a data set |
 | ⬜ | NEGBINOM.DIST | Returns the negative binomial distribution |
 | ⬜ | NORM.DIST | Returns the normal cumulative distribution |
 | ⬜ | NORM.S.DIST | Returns the standard normal cumulative distribution |
 | ⬜ | NORM.S.INV | Returns the inverse of the standard normal cumulative distribution |
 | ⬜ | NORMINV | Returns the inverse of the normal cumulative distribution |
 | ⬜ | PEARSON | Returns the Pearson product moment correlation coefficient |
-| ⬜ | PERCENTILE.EXC | Returns the k-th percentile of values in a range, where k is in the range 0..1, exclusive |
-| ⬜ | PERCENTILE.INC | Returns the k-th percentile of values in a range |
-| ⬜ | PERCENTRANK.EXC | Returns the rank of a value in a data set as a percentage (0..1, exclusive) of the data set |
-| ⬜ | PERCENTRANK.INC | Returns the percentage rank of a value in a data set |
+| ✅ | PERCENTILE.EXC | Returns the k-th percentile of values in a range, where k is in the range 0..1, exclusive |
+| ✅ | PERCENTILE.INC | Returns the k-th percentile of values in a range |
+| ✅ | PERCENTRANK.EXC | Returns the rank of a value in a data set as a percentage (0..1, exclusive) of the data set |
+| ✅ | PERCENTRANK.INC | Returns the percentage rank of a value in a data set |
 | ⬜ | PERMUT | Returns the number of permutations for a given number of objects |
 | ⬜ | PERMUTATIONA | Returns the number of permutations for a given number of objects (with repetitions) that can be selected from the total objects |
 | ⬜ | PHI | Returns the value of the density function for a standard normal distribution |
 | ⬜ | POISSON.DIST | Returns the Poisson distribution |
 | ⬜ | PROB | Returns the probability that values in a range are between two limits |
-| ⬜ | QUARTILE.EXC | Returns the quartile of the data set, based on percentile values from 0..1, exclusive |
-| ⬜ | QUARTILE.INC | Returns the quartile of a data set |
-| ⬜ | RANK.AVG | Returns the rank of a number in a list of numbers |
-| ⬜ | RANK.EQ | Returns the rank of a number in a list of numbers |
+| ✅ | QUARTILE.EXC | Returns the quartile of the data set, based on percentile values from 0..1, exclusive |
+| ✅ | QUARTILE.INC | Returns the quartile of a data set |
+| ✅ | RANK.AVG | Returns the rank of a number in a list of numbers |
+| ✅ | RANK.EQ | Returns the rank of a number in a list of numbers |
 | ⬜ | RSQ | Returns the square of the Pearson product moment correlation coefficient |
 | ⬜ | SKEW | Returns the skewness of a distribution |
 | ⬜ | SKEW.P | Returns the skewness of a distribution based on a population: a characterization of the degree of asymmetry of a distribution around its mean |
 | ⬜ | SLOPE | Returns the slope of the linear regression line |
 | ✅ | SMALL | Returns the k-th smallest value in a data set |
 | ⬜ | STANDARDIZE | Returns a normalized value |
-| ⬜ | STDEV.P | Calculates standard deviation based on the entire population |
-| ⬜ | STDEV.S | Estimates standard deviation based on a sample |
+| ✅ | STDEV.P | Calculates standard deviation based on the entire population |
+| ✅ | STDEV.S | Estimates standard deviation based on a sample |
 | ⬜ | STDEVA | Estimates standard deviation based on a sample, including numbers, text, and logical values |
 | ⬜ | STDEVPA | Calculates standard deviation based on the entire population, including numbers, text, and logical values |
 | ⬜ | STEYX | Returns the standard error of the predicted y-value for each x in the regression |
@@ -676,8 +676,8 @@ Mark the function as implemented in the table below.
 | ⬜ | T.TEST | Returns the probability associated with a Student's t-test |
 | ⬜ | TREND | Returns values along a linear trend |
 | ⬜ | TRIMMEAN | Returns the mean of the interior of a data set |
-| ⬜ | VAR.P | Calculates variance based on the entire population |
-| ⬜ | VAR.S | Estimates variance based on a sample |
+| ✅ | VAR.P | Calculates variance based on the entire population |
+| ✅ | VAR.S | Estimates variance based on a sample |
 | ⬜ | VARA | Estimates variance based on a sample, including numbers, text, and logical values |
 | ⬜ | VARPA | Calculates variance based on the entire population, including numbers, text, and logical values |
 | ⬜ | WEIBULL.DIST | Returns the Weibull distribution |
@@ -685,7 +685,7 @@ Mark the function as implemented in the table below.
 
 ## Text
 
-**29/42 implemented**
+**34/42 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
@@ -697,11 +697,11 @@ Mark the function as implemented in the table below.
 | ✅ | CONCAT | Combines the text from multiple ranges and/or strings, but it doesn't provide the delimiter or IgnoreEmpty arguments. |
 | ✅ | CONCATENATE | Joins several text items into one text item |
 | ⬜ | DBCS | Changes half-width (single-byte) English letters or katakana within a character string to full-width (double-byte) characters |
-| ⬜ | DOLLAR | Converts a number to text, using the $ (dollar) currency format |
+| ✅ | DOLLAR | Converts a number to text, using the $ (dollar) currency format |
 | ✅ | EXACT | Checks to see if two text values are identical |
 | ✅ | FIND | Finds one text value within another (case-sensitive) |
 | ✅ | FINDB | Finds one text value within another (case-sensitive) |
-| ⬜ | FIXED | Formats a number as text with a fixed number of decimals |
+| ✅ | FIXED | Formats a number as text with a fixed number of decimals |
 | ⬜ | JIS | Changes half-width (single-byte) characters within a string to full-width (double-byte) characters |
 | ✅ | LEFT | Returns the leftmost characters from a text value |
 | ✅ | LEFTB | Returns the leftmost characters from a text value |
@@ -710,7 +710,7 @@ Mark the function as implemented in the table below.
 | ✅ | LOWER | Converts text to lowercase |
 | ✅ | MID | Returns a specific number of characters from a text string starting at the position you specify |
 | ✅ | MIDB | Returns a specific number of characters from a text string starting at the position you specify |
-| ⬜ | NUMBERVALUE | Converts text to number in a locale-independent manner |
+| ✅ | NUMBERVALUE | Converts text to number in a locale-independent manner |
 | ⬜ | PHONETIC | Extracts the phonetic (furigana) characters from a text string |
 | ✅ | PROPER | Capitalizes the first letter in each word of a text value |
 | ⬜ | REPLACE | Replaces characters within text |
@@ -721,10 +721,10 @@ Mark the function as implemented in the table below.
 | ✅ | SEARCH | Finds one text value within another (not case-sensitive) |
 | ✅ | SEARCHB | Finds one text value within another (not case-sensitive) |
 | ✅ | SUBSTITUTE | Substitutes new text for old text in a text string |
-| ⬜ | TEXT | Formats a number and converts it to text |
+| ✅ | TEXT | Formats a number and converts it to text |
 | ⬜ | TEXTAFTER | Returns text that occurs after given character or string |
 | ⬜ | TEXTBEFORE | Returns text that occurs before a given character or string |
-| ⬜ | TEXTJOIN | Combines the text from multiple ranges and/or strings |
+| ✅ | TEXTJOIN | Combines the text from multiple ranges and/or strings |
 | ⬜ | TEXTSPLIT | Splits text strings by using column and row delimiters |
 | ✅ | TRIM | Removes spaces from text |
 | ⬜ | UNICHAR | Returns the Unicode character that is references by the given numeric value |

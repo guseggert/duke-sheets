@@ -106,17 +106,18 @@
 - [x] Cell reference resolution (single cells, ranges)
 - [x] Cross-sheet references (`Sheet2!A1`)
 - [x] Structured reference evaluation (`Table1[Column]`, `Table1[@Col]`, `[#Headers]`, `[#Totals]`, `[#All]`, `[#Data]`)
-### Implemented Functions (108 of ~506)
+### Implemented Functions (157 of ~506)
 
 | Category | Count | Functions (highlights) |
 |----------|-------|----------------------|
 | Math & Trig | 35 | SUM, SUMIF, SUMIFS, AVERAGE, MIN, MAX, COUNT, COUNTIF, COUNTIFS, ROUND, ABS, MOD, INT, CEILING, FLOOR, POWER, SQRT, RAND, LOG, LN, PI, ... |
-| Text | 29 | LEN, LEFT, RIGHT, MID, LOWER, UPPER, TRIM, CONCAT, CONCATENATE, FIND, SEARCH, SUBSTITUTE, REPLACE, REPT, EXACT, CLEAN, CHAR, CODE, T, N, VALUE, ... |
-| Statistical | 13 | AVERAGEIF, AVERAGEIFS, COUNTBLANK, LARGE, SMALL, ... |
+| Text | 34 | LEN, LEFT, RIGHT, MID, LOWER, UPPER, TRIM, CONCAT, CONCATENATE, FIND, SEARCH, SUBSTITUTE, TEXT, TEXTJOIN, FIXED, DOLLAR, NUMBERVALUE, ... |
+| Statistical | 28 | AVERAGEIF, AVERAGEIFS, COUNTBLANK, LARGE, SMALL, STDEV.S, STDEV.P, VAR.S, VAR.P, MAXIFS, MINIFS, RANK.EQ, RANK.AVG, PERCENTILE.INC, QUARTILE.INC, MODE.SNGL, ... |
 | Logical | 11 | IF, AND, OR, NOT, IFERROR, IFNA, IFS, SWITCH, XOR, TRUE, FALSE |
-| Lookup | 8 | INDEX, MATCH, VLOOKUP, CHOOSE, ROW, COLUMN, ROWS, COLUMNS |
-| Date | 6 | DATE, YEAR, MONTH, DAY, NOW, TODAY |
+| Lookup | 13 | INDEX, MATCH, VLOOKUP, HLOOKUP, XLOOKUP, XMATCH, CHOOSE, ROW, COLUMN, ROWS, COLUMNS, INDIRECT, OFFSET |
+| Date | 23 | DATE, YEAR, MONTH, DAY, NOW, TODAY, TIME, HOUR, MINUTE, SECOND, WEEKDAY, WEEKNUM, ISOWEEKNUM, EDATE, EOMONTH, DAYS, DAYS360, DATEDIF, YEARFRAC, DATEVALUE, TIMEVALUE, NETWORKDAYS, WORKDAY |
 | Information | 6 | ISBLANK, ISNUMBER, ISTEXT, ISERROR, ISNA, NA |
+| Compatibility | 9 | STDEV, STDEVP, VAR, VARP, MODE, PERCENTILE, QUARTILE, RANK, PERCENTRANK |
 
 ### CLI Tool (`duke`)
 - [x] `duke to-csv` — convert spreadsheet to CSV (with `-f` for formatted output)
@@ -338,8 +339,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Core (cell, workbook, worksheet) | 41 | ✅ |
 | Cell display formatting (CellView) | 51 | ✅ |
 | Formula parser | 37 | ✅ |
-| Formula evaluator + functions | 74 | ✅ |
-| Calculation engine | 17 | ✅ |
+| Formula evaluator + functions | 126 | ✅ |
+| Calculation engine | 26 | ✅ |
 | XLSX roundtrip | 46 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
@@ -354,7 +355,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 299 | ✅ |
-| **Total** | **798** | ✅ |
+| **Total** | **850** | ✅ |
 
 ---
 
