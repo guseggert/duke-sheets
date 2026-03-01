@@ -893,11 +893,8 @@ mod tests {
             FormulaValue::String("NF".into())
         );
         // match_mode=1 (next larger): 2.5 not found, next larger is 3 → return 30
-        // Note: ideally we'd test =XLOOKUP(2.5,...,,1) with an omitted 4th arg,
-        // but the parser doesn't yet support empty arguments (,,). Using explicit
-        // if_not_found here; the lookup succeeds so it's never reached.
         assert_eq!(
-            eval("=XLOOKUP(2.5,{1,2,3},{10,20,30},\"NF\",1)").unwrap(),
+            eval("=XLOOKUP(2.5,{1,2,3},{10,20,30},,1)").unwrap(),
             FormulaValue::Number(30.0)
         );
         // Default if_not_found is #N/A (tested via 4-arg form)

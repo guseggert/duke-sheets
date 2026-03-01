@@ -338,7 +338,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 |------------|-------|--------|
 | Core (cell, workbook, worksheet) | 41 | ✅ |
 | Cell display formatting (CellView) | 51 | ✅ |
-| Formula parser | 37 | ✅ |
+| Formula parser | 43 | ✅ |
 | Formula evaluator + functions | 126 | ✅ |
 | Calculation engine | 26 | ✅ |
 | XLSX roundtrip | 46 | ✅ |
@@ -355,7 +355,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 299 | ✅ |
-| **Total** | **850** | ✅ |
+| **Total** | **856** | ✅ |
 
 ---
 
@@ -376,7 +376,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 ```
 duke-sheets/
 ├── duke-sheets-core        # Data model, cell storage, locale
-├── duke-sheets-formula     # Parser, evaluator, 108 functions
+├── duke-sheets-formula     # Parser, evaluator, 157 functions
 ├── duke-sheets-xlsx        # XLSX read/write
 ├── duke-sheets-xls         # XLS reader (BIFF8, read-only)
 ├── duke-sheets-csv         # CSV read/write
