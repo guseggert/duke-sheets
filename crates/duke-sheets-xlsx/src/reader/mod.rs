@@ -32,6 +32,7 @@ mod data_validation;
 mod formulas;
 mod theme;
 mod shared_strings;
+mod table;
 
 pub(crate) use formulas::CellFormulaState;
 pub(crate) use theme::ThemePalette;
@@ -213,6 +214,20 @@ impl XlsxReader {
                     Some(&vml_path),
                     workbook.worksheet_mut(sheet_idx).unwrap(),
                 )?;
+
+                // Read tables for this worksheet (if present).
+                // Each relationship with type ending in "/table" points to
+                // an xl/tables/tableN.xml part.
+                let table_rels: Vec<String> = sheet_rels
+                    .values()
+                    .filter(|r| r.rel_type.ends_with("/table"))
+                    .map(|r| r.target.clone())
+                    .collect();
+                for table_path in &table_rels {
+                    if let Some(t) = table::read_table(&mut archive, table_path)? {
+                        workbook.worksheet_mut(sheet_idx).unwrap().add_table(t);
+                    }
+                }
             }
         }
 

@@ -93,6 +93,11 @@ pub use duke_sheets_core::{
     Result,
 
     SheetProtection,
+    // Table types
+    Table,
+    TableColumn,
+    TableStyleInfo,
+    TotalsRowFunction,
 
     // Style types
     Style,

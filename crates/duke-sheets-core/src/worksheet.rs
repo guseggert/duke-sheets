@@ -11,6 +11,7 @@ use crate::hyperlink::Hyperlink;
 use crate::locale::Locale;
 use crate::style::Style;
 use crate::validation::DataValidation;
+use crate::table::Table;
 use crate::{MAX_COLS, MAX_ROWS};
 
 /// A worksheet (single sheet in a workbook)
@@ -48,6 +49,8 @@ pub struct Worksheet {
     data_validations: Vec<DataValidation>,
     /// Conditional formatting rules
     conditional_formats: Vec<ConditionalFormatRule>,
+    /// Tables (ListObjects)
+    tables: Vec<Table>,
     /// Date system: false = 1900 (Windows default), true = 1904 (Mac legacy).
     /// Copied from WorkbookSettings during reading so cells can format dates.
     date_1904: bool,
@@ -79,6 +82,7 @@ impl Worksheet {
             comment_authors: Vec::new(),
             data_validations: Vec::new(),
             conditional_formats: Vec::new(),
+            tables: Vec::new(),
             date_1904: false,
             locale: Locale::en_us(),
             ssfmt_locale: ssfmt::Locale::en_us(),
@@ -828,6 +832,33 @@ impl Worksheet {
     /// Clear all data validations
     pub fn clear_data_validations(&mut self) {
         self.data_validations.clear();
+    }
+
+    // === Tables (ListObjects) ===
+
+    /// Add a table to this worksheet.
+    pub fn add_table(&mut self, table: Table) {
+        self.tables.push(table);
+    }
+
+    /// Get all tables.
+    pub fn tables(&self) -> &[Table] {
+        &self.tables
+    }
+
+    /// Get a mutable reference to all tables.
+    pub fn tables_mut(&mut self) -> &mut Vec<Table> {
+        &mut self.tables
+    }
+
+    /// Get a table by name.
+    pub fn table_by_name(&self, name: &str) -> Option<&Table> {
+        self.tables.iter().find(|t| t.name == name)
+    }
+
+    /// Get the number of tables.
+    pub fn table_count(&self) -> usize {
+        self.tables.len()
     }
 
     // === Conditional Formatting ===
