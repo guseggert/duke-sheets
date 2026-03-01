@@ -14,6 +14,11 @@ use crate::styles::XlsxStyleTable;
 use duke_sheets_core::style::Color;
 use duke_sheets_core::{CellAddress, CellRange, Workbook};
 
+mod comments;
+mod conditional_format;
+mod data_validation;
+mod tables;
+
 // ---------------------------------------------------------------------------
 // OOXML namespace URIs
 // ---------------------------------------------------------------------------
@@ -338,24 +343,73 @@ const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 "#;
 
 /// Alias for the XML writer backed by an in-memory buffer.
-type XmlWriter = Writer<Cursor<Vec<u8>>>;
+pub(super) type XmlWriter = Writer<Cursor<Vec<u8>>>;
 
 // ---------------------------------------------------------------------------
 // Shared string table
 // ---------------------------------------------------------------------------
 
 /// Shared string table — maps string content to SST index.
-struct SharedStringTable {
+pub(super) struct SharedStringTable {
     strings: Vec<String>,
     index: HashMap<String, u32>,
 }
 
 #[derive(Debug, Clone)]
-struct WorksheetRelationship {
+pub(super) struct WorksheetRelationship {
     id: String,
     rel_type: &'static str,
     target: String,
     target_mode: Option<&'static str>,
+}
+
+pub(super) fn write_color_element(w: &mut XmlWriter, tag: &str, color: &Color) -> XlsxResult<()> {
+    let mut el = BytesStart::new(tag);
+    match color {
+        Color::Auto => {
+            el.push_attribute(("indexed", "64"));
+        }
+        Color::Rgb { r, g, b } => {
+            let v = format!("FF{:02X}{:02X}{:02X}", r, g, b);
+            el.push_attribute(("rgb", v.as_str()));
+        }
+        Color::Argb { a, r, g, b } => {
+            let v = format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b);
+            el.push_attribute(("rgb", v.as_str()));
+        }
+        Color::Indexed(i) => {
+            let v = i.to_string();
+            el.push_attribute(("indexed", v.as_str()));
+        }
+        Color::Theme { index, tint } => {
+            let v = index.to_string();
+            el.push_attribute(("theme", v.as_str()));
+            if *tint != 0 {
+                let t = ((*tint as f64) / 100.0).to_string();
+                el.push_attribute(("tint", t.as_str()));
+            }
+        }
+    }
+    w.write_event(Event::Empty(el))?;
+    Ok(())
+}
+
+pub(super) fn write_xml_part<W: Write + Seek>(
+    zip: &mut zip::ZipWriter<W>,
+    path: &str,
+    build: impl FnOnce(&mut XmlWriter) -> XlsxResult<()>,
+) -> XlsxResult<()> {
+    let options = zip::write::SimpleFileOptions::default();
+    zip.start_file(path, options)?;
+    let mut w = Writer::new(Cursor::new(Vec::new()));
+    w.write_event(Event::Decl(BytesDecl::new(
+        "1.0",
+        Some("UTF-8"),
+        Some("yes"),
+    )))?;
+    build(&mut w)?;
+    zip.write_all(&w.into_inner().into_inner())?;
+    Ok(())
 }
 
 impl SharedStringTable {
@@ -487,42 +541,17 @@ impl XlsxWriter {
             }
 
             if sheet.comment_count() > 0 {
-                Self::write_vml_drawing(&mut zip, workbook, i)?;
-                Self::write_comments(&mut zip, workbook, i)?;
+                comments::write_vml_drawing(&mut zip, workbook, i)?;
+                comments::write_comments(&mut zip, workbook, i)?;
             }
 
             // Write table part XML files for this sheet
             for (local_idx, &global_num) in sheet_table_globals.iter().enumerate() {
-                Self::write_table_part(&mut zip, sheet, local_idx, global_num)?;
+                tables::write_table_part(&mut zip, sheet, local_idx, global_num)?;
             }
         }
 
         zip.finish()?;
-        Ok(())
-    }
-
-    // -----------------------------------------------------------------------
-    // Helper: write an XML part to the zip archive
-    // -----------------------------------------------------------------------
-
-    /// Write an XML part to the zip archive.  Creates a `Writer` backed by an
-    /// in-memory buffer, writes the XML declaration, calls `build` to produce
-    /// the element tree, and flushes the result into the zip entry at `path`.
-    fn write_xml_part<W: Write + Seek>(
-        zip: &mut zip::ZipWriter<W>,
-        path: &str,
-        build: impl FnOnce(&mut XmlWriter) -> XlsxResult<()>,
-    ) -> XlsxResult<()> {
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file(path, options)?;
-        let mut w = Writer::new(Cursor::new(Vec::new()));
-        w.write_event(Event::Decl(BytesDecl::new(
-            "1.0",
-            Some("UTF-8"),
-            Some("yes"),
-        )))?;
-        build(&mut w)?;
-        zip.write_all(&w.into_inner().into_inner())?;
         Ok(())
     }
 
@@ -537,7 +566,7 @@ impl XlsxWriter {
         sst: &SharedStringTable,
         table_numbering: &[(usize, usize, usize)],
     ) -> XlsxResult<()> {
-        Self::write_xml_part(zip, "[Content_Types].xml", |w| {
+        write_xml_part(zip, "[Content_Types].xml", |w| {
             let mut tag = BytesStart::new("Types");
             tag.push_attribute(("xmlns", NS_CONTENT_TYPES));
             w.write_event(Event::Start(tag))?;
@@ -613,7 +642,7 @@ impl XlsxWriter {
     // -----------------------------------------------------------------------
 
     fn write_root_rels<W: Write + Seek>(zip: &mut zip::ZipWriter<W>) -> XlsxResult<()> {
-        Self::write_xml_part(zip, "_rels/.rels", |w| {
+        write_xml_part(zip, "_rels/.rels", |w| {
             let mut tag = BytesStart::new("Relationships");
             tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
             w.write_event(Event::Start(tag))?;
@@ -637,7 +666,7 @@ impl XlsxWriter {
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
     ) -> XlsxResult<()> {
-        Self::write_xml_part(zip, "xl/workbook.xml", |w| {
+        write_xml_part(zip, "xl/workbook.xml", |w| {
             let mut tag = BytesStart::new("workbook");
             tag.push_attribute(("xmlns", NS_SPREADSHEET));
             tag.push_attribute(("xmlns:r", NS_DOC_RELS));
@@ -753,7 +782,7 @@ impl XlsxWriter {
         workbook: &Workbook,
         sst: &SharedStringTable,
     ) -> XlsxResult<()> {
-        Self::write_xml_part(zip, "xl/_rels/workbook.xml.rels", |w| {
+        write_xml_part(zip, "xl/_rels/workbook.xml.rels", |w| {
             let mut tag = BytesStart::new("Relationships");
             tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
             w.write_event(Event::Start(tag))?;
@@ -898,7 +927,7 @@ impl XlsxWriter {
         zip: &mut zip::ZipWriter<W>,
         sst: &SharedStringTable,
     ) -> XlsxResult<()> {
-        Self::write_xml_part(zip, "xl/sharedStrings.xml", |w| {
+        write_xml_part(zip, "xl/sharedStrings.xml", |w| {
             let count = sst.strings.len().to_string();
             let mut tag = BytesStart::new("sst");
             tag.push_attribute(("xmlns", NS_SPREADSHEET));
@@ -937,7 +966,7 @@ impl XlsxWriter {
         zip: &mut zip::ZipWriter<W>,
         style_table: &XlsxStyleTable,
     ) -> XlsxResult<()> {
-        Self::write_xml_part(zip, "xl/styles.xml", |w| style_table.write_styles_xml(w))
+        write_xml_part(zip, "xl/styles.xml", |w| style_table.write_styles_xml(w))
     }
 
     fn write_theme_xml<W: Write + Seek>(zip: &mut zip::ZipWriter<W>) -> XlsxResult<()> {
@@ -961,7 +990,7 @@ impl XlsxWriter {
     ) -> XlsxResult<Vec<WorksheetRelationship>> {
         let path = format!("xl/worksheets/sheet{}.xml", index + 1);
         let mut rels = Vec::new();
-        Self::write_xml_part(zip, &path, |w| {
+        write_xml_part(zip, &path, |w| {
             let sheet = workbook
                 .worksheet(index)
                 .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
@@ -1015,10 +1044,10 @@ impl XlsxWriter {
             Self::write_merge_cells(w, sheet)?;
 
             // conditionalFormatting
-            Self::write_conditional_formatting(w, sheet, index, style_table)?;
+            conditional_format::write_conditional_formatting(w, sheet, index, style_table)?;
 
             // dataValidations
-            Self::write_data_validations(w, sheet)?;
+            data_validation::write_data_validations(w, sheet)?;
             Self::write_hyperlinks(w, sheet, &mut rels)?;
 
             // pageMargins + pageSetup
@@ -1064,7 +1093,7 @@ impl XlsxWriter {
     fn write_sheet_pr(w: &mut XmlWriter, sheet: &duke_sheets_core::Worksheet) -> XlsxResult<()> {
         if let Some(color) = sheet.tab_color() {
             w.write_event(Event::Start(BytesStart::new("sheetPr")))?;
-            Self::write_color_element(w, "tabColor", &color)?;
+            write_color_element(w, "tabColor", &color)?;
             w.write_event(Event::End(BytesEnd::new("sheetPr")))?;
         }
         Ok(())
@@ -1079,37 +1108,6 @@ impl XlsxWriter {
         w.create_element("dimension")
             .with_attribute(("ref", ref_str.as_str()))
             .write_empty()?;
-        Ok(())
-    }
-
-    fn write_color_element(w: &mut XmlWriter, tag: &str, color: &Color) -> XlsxResult<()> {
-        let mut el = BytesStart::new(tag);
-        match color {
-            Color::Auto => {
-                el.push_attribute(("indexed", "64"));
-            }
-            Color::Rgb { r, g, b } => {
-                let v = format!("FF{:02X}{:02X}{:02X}", r, g, b);
-                el.push_attribute(("rgb", v.as_str()));
-            }
-            Color::Argb { a, r, g, b } => {
-                let v = format!("{:02X}{:02X}{:02X}{:02X}", a, r, g, b);
-                el.push_attribute(("rgb", v.as_str()));
-            }
-            Color::Indexed(i) => {
-                let v = i.to_string();
-                el.push_attribute(("indexed", v.as_str()));
-            }
-            Color::Theme { index, tint } => {
-                let v = index.to_string();
-                el.push_attribute(("theme", v.as_str()));
-                if *tint != 0 {
-                    let t = ((*tint as f64) / 100.0).to_string();
-                    el.push_attribute(("tint", t.as_str()));
-                }
-            }
-        }
-        w.write_event(Event::Empty(el))?;
         Ok(())
     }
 
@@ -2075,488 +2073,6 @@ impl XlsxWriter {
         Ok(())
     }
 
-    // -----------------------------------------------------------------------
-    // Conditional formatting
-    // -----------------------------------------------------------------------
-
-    fn write_conditional_formatting(
-        w: &mut XmlWriter,
-        sheet: &duke_sheets_core::Worksheet,
-        sheet_index: usize,
-        style_table: &XlsxStyleTable,
-    ) -> XlsxResult<()> {
-        use duke_sheets_core::conditional_format::CfRuleType;
-
-        let rules = sheet.conditional_formats();
-        if rules.is_empty() {
-            return Ok(());
-        }
-
-        for (rule_idx, rule) in rules.iter().enumerate() {
-            if rule.ranges.is_empty() {
-                continue;
-            }
-
-            let sqref: String = rule
-                .ranges
-                .iter()
-                .map(|r| r.to_string())
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            let mut cf_tag = BytesStart::new("conditionalFormatting");
-            cf_tag.push_attribute(("sqref", sqref.as_str()));
-            w.write_event(Event::Start(cf_tag))?;
-
-            // Build cfRule attributes
-            let rule_type = rule.rule_type.xlsx_type();
-            let dxf_id = style_table
-                .dxf_id_for(sheet_index, rule_idx)
-                .or(rule.dxf_id);
-            let priority_val = rule.priority.max(1);
-            let priority_s = priority_val.to_string();
-
-            match &rule.rule_type {
-                CfRuleType::CellIs {
-                    operator,
-                    formula1,
-                    formula2,
-                } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("operator", operator.xlsx_operator()));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
-                    w.write_event(Event::Start(tag))?;
-
-                    w.create_element("formula")
-                        .write_text_content(BytesText::new(formula1))?;
-                    if let Some(f2) = formula2 {
-                        w.create_element("formula")
-                            .write_text_content(BytesText::new(f2))?;
-                    }
-                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
-                }
-
-                CfRuleType::Expression { formula } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
-                    w.write_event(Event::Start(tag))?;
-
-                    w.create_element("formula")
-                        .write_text_content(BytesText::new(formula))?;
-                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
-                }
-
-                CfRuleType::ColorScale { colors } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    if rule.stop_if_true {
-                        tag.push_attribute(("stopIfTrue", "1"));
-                    }
-                    w.write_event(Event::Start(tag))?;
-
-                    w.write_event(Event::Start(BytesStart::new("colorScale")))?;
-                    for cv in colors {
-                        let mut cfvo = BytesStart::new("cfvo");
-                        cfvo.push_attribute(("type", cv.value_type.xlsx_type()));
-                        if let Some(ref v) = cv.value {
-                            cfvo.push_attribute(("val", v.as_str()));
-                        }
-                        w.write_event(Event::Empty(cfvo))?;
-                    }
-                    for cv in colors {
-                        Self::write_color_element(w, "color", &cv.color)?;
-                    }
-                    w.write_event(Event::End(BytesEnd::new("colorScale")))?;
-                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
-                }
-
-                CfRuleType::DataBar {
-                    min_value,
-                    max_value,
-                    color,
-                    show_value,
-                    ..
-                } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    if rule.stop_if_true {
-                        tag.push_attribute(("stopIfTrue", "1"));
-                    }
-                    w.write_event(Event::Start(tag))?;
-
-                    let mut db = BytesStart::new("dataBar");
-                    if !*show_value {
-                        db.push_attribute(("showValue", "0"));
-                    }
-                    w.write_event(Event::Start(db))?;
-
-                    // cfvo for min
-                    let mut cfvo_min = BytesStart::new("cfvo");
-                    cfvo_min.push_attribute(("type", min_value.value_type.xlsx_type()));
-                    if let Some(ref v) = min_value.value {
-                        cfvo_min.push_attribute(("val", v.as_str()));
-                    }
-                    w.write_event(Event::Empty(cfvo_min))?;
-
-                    // cfvo for max
-                    let mut cfvo_max = BytesStart::new("cfvo");
-                    cfvo_max.push_attribute(("type", max_value.value_type.xlsx_type()));
-                    if let Some(ref v) = max_value.value {
-                        cfvo_max.push_attribute(("val", v.as_str()));
-                    }
-                    w.write_event(Event::Empty(cfvo_max))?;
-
-                    Self::write_color_element(w, "color", color)?;
-
-                    w.write_event(Event::End(BytesEnd::new("dataBar")))?;
-                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
-                }
-
-                CfRuleType::IconSet {
-                    icon_style,
-                    values,
-                    reverse,
-                    show_value,
-                } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    if rule.stop_if_true {
-                        tag.push_attribute(("stopIfTrue", "1"));
-                    }
-                    w.write_event(Event::Start(tag))?;
-
-                    let mut is_tag = BytesStart::new("iconSet");
-                    is_tag.push_attribute(("iconSet", icon_style.xlsx_name()));
-                    if *reverse {
-                        is_tag.push_attribute(("reverse", "1"));
-                    }
-                    if !*show_value {
-                        is_tag.push_attribute(("showValue", "0"));
-                    }
-                    w.write_event(Event::Start(is_tag))?;
-
-                    for val in values {
-                        let mut cfvo = BytesStart::new("cfvo");
-                        cfvo.push_attribute(("type", val.value_type.xlsx_type()));
-                        if let Some(ref v) = val.value {
-                            cfvo.push_attribute(("val", v.as_str()));
-                        }
-                        w.write_event(Event::Empty(cfvo))?;
-                    }
-
-                    w.write_event(Event::End(BytesEnd::new("iconSet")))?;
-                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
-                }
-
-                CfRuleType::Top10 {
-                    rank,
-                    percent,
-                    bottom,
-                } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    let rank_s = rank.to_string();
-                    tag.push_attribute(("rank", rank_s.as_str()));
-                    if *percent {
-                        tag.push_attribute(("percent", "1"));
-                    }
-                    if *bottom {
-                        tag.push_attribute(("bottom", "1"));
-                    }
-                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
-                    w.write_event(Event::Empty(tag))?;
-                }
-
-                CfRuleType::AboveAverage {
-                    above,
-                    equal_average,
-                    std_dev,
-                } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    if !*above {
-                        tag.push_attribute(("aboveAverage", "0"));
-                    }
-                    if *equal_average {
-                        tag.push_attribute(("equalAverage", "1"));
-                    }
-                    if let Some(s) = std_dev {
-                        let v = s.to_string();
-                        tag.push_attribute(("stdDev", v.as_str()));
-                    }
-                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
-                    w.write_event(Event::Empty(tag))?;
-                }
-
-                CfRuleType::ContainsText { text } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    let text_esc = escape(text.as_str());
-                    tag.push_attribute(("text", &*text_esc));
-                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
-                    w.write_event(Event::Start(tag))?;
-
-                    let first_cell = sqref.split(' ').next().unwrap_or("A1");
-                    let formula = format!(
-                        "NOT(ISERROR(SEARCH(\"{}\",{})))",
-                        text.replace('"', "\"\""),
-                        first_cell
-                    );
-                    w.create_element("formula")
-                        .write_text_content(BytesText::new(&formula))?;
-                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
-                }
-
-                CfRuleType::BeginsWith { text } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    let text_esc = escape(text.as_str());
-                    tag.push_attribute(("text", &*text_esc));
-                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
-                    w.write_event(Event::Start(tag))?;
-
-                    let first_cell = sqref
-                        .split(' ')
-                        .next()
-                        .unwrap_or("A1")
-                        .split(':')
-                        .next()
-                        .unwrap_or("A1");
-                    let formula = format!(
-                        "LEFT({},{})=\"{}\"",
-                        first_cell,
-                        text.len(),
-                        text.replace('"', "\"\"")
-                    );
-                    w.create_element("formula")
-                        .write_text_content(BytesText::new(&formula))?;
-                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
-                }
-
-                CfRuleType::EndsWith { text } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    let text_esc = escape(text.as_str());
-                    tag.push_attribute(("text", &*text_esc));
-                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
-                    w.write_event(Event::Start(tag))?;
-
-                    let first_cell = sqref
-                        .split(' ')
-                        .next()
-                        .unwrap_or("A1")
-                        .split(':')
-                        .next()
-                        .unwrap_or("A1");
-                    let formula = format!(
-                        "RIGHT({},{})=\"{}\"",
-                        first_cell,
-                        text.len(),
-                        text.replace('"', "\"\"")
-                    );
-                    w.create_element("formula")
-                        .write_text_content(BytesText::new(&formula))?;
-                    w.write_event(Event::End(BytesEnd::new("cfRule")))?;
-                }
-
-                CfRuleType::DuplicateValues
-                | CfRuleType::UniqueValues
-                | CfRuleType::ContainsBlanks
-                | CfRuleType::NotContainsBlanks
-                | CfRuleType::ContainsErrors
-                | CfRuleType::NotContainsErrors => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
-                    w.write_event(Event::Empty(tag))?;
-                }
-
-                CfRuleType::TimePeriod { period } => {
-                    let mut tag = BytesStart::new("cfRule");
-                    tag.push_attribute(("type", rule_type));
-                    tag.push_attribute(("priority", priority_s.as_str()));
-                    tag.push_attribute(("timePeriod", period.xlsx_period()));
-                    Self::push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
-                    w.write_event(Event::Empty(tag))?;
-                }
-            }
-
-            w.write_event(Event::End(BytesEnd::new("conditionalFormatting")))?;
-        }
-
-        Ok(())
-    }
-
-    /// Push optional `dxfId` and `stopIfTrue` attributes onto a `BytesStart`.
-    fn push_dxf_and_stop(tag: &mut BytesStart, dxf_id: Option<u32>, stop_if_true: bool) {
-        if let Some(id) = dxf_id {
-            let s = id.to_string();
-            // push_attribute borrows the value, so we need an owned copy in
-            // the tag buffer.  BytesStart copies into its internal Vec<u8>.
-            tag.push_attribute(("dxfId", s.as_str()));
-        }
-        if stop_if_true {
-            tag.push_attribute(("stopIfTrue", "1"));
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Data validations
-    // -----------------------------------------------------------------------
-
-    fn write_data_validations(
-        w: &mut XmlWriter,
-        sheet: &duke_sheets_core::Worksheet,
-    ) -> XlsxResult<()> {
-        use duke_sheets_core::validation::ValidationType;
-
-        let validations = sheet.data_validations();
-        if validations.is_empty() {
-            return Ok(());
-        }
-
-        let count = validations.len().to_string();
-        let mut dv_tag = BytesStart::new("dataValidations");
-        dv_tag.push_attribute(("count", count.as_str()));
-        w.write_event(Event::Start(dv_tag))?;
-
-        for validation in validations {
-            if validation.ranges.is_empty() {
-                continue;
-            }
-
-            let sqref: String = validation
-                .ranges
-                .iter()
-                .map(|r| r.to_string())
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            let mut tag = BytesStart::new("dataValidation");
-
-            match &validation.validation_type {
-                ValidationType::None => {}
-                _ => {
-                    tag.push_attribute(("type", validation.validation_type.xlsx_type()));
-                }
-            }
-
-            // Operator attribute
-            match &validation.validation_type {
-                ValidationType::Whole { operator, .. }
-                | ValidationType::Decimal { operator, .. }
-                | ValidationType::Date { operator, .. }
-                | ValidationType::Time { operator, .. }
-                | ValidationType::TextLength { operator, .. } => {
-                    tag.push_attribute(("operator", operator.xlsx_operator()));
-                }
-                _ => {}
-            }
-
-            if validation.allow_blank {
-                tag.push_attribute(("allowBlank", "1"));
-            }
-            if !validation.show_dropdown {
-                tag.push_attribute(("showDropDown", "1"));
-            }
-            if validation.show_input_message {
-                tag.push_attribute(("showInputMessage", "1"));
-            }
-            if validation.show_error_alert {
-                tag.push_attribute(("showErrorMessage", "1"));
-            }
-
-            match validation.error_style {
-                duke_sheets_core::ValidationErrorStyle::Stop => {}
-                duke_sheets_core::ValidationErrorStyle::Warning => {
-                    tag.push_attribute(("errorStyle", "warning"));
-                }
-                duke_sheets_core::ValidationErrorStyle::Information => {
-                    tag.push_attribute(("errorStyle", "information"));
-                }
-            }
-
-            if let Some(ref t) = validation.error_title {
-                let v = escape(t.as_str());
-                tag.push_attribute(("errorTitle", &*v));
-            }
-            if let Some(ref m) = validation.error_message {
-                let v = escape(m.as_str());
-                tag.push_attribute(("error", &*v));
-            }
-            if let Some(ref t) = validation.input_title {
-                let v = escape(t.as_str());
-                tag.push_attribute(("promptTitle", &*v));
-            }
-            if let Some(ref m) = validation.input_message {
-                let v = escape(m.as_str());
-                tag.push_attribute(("prompt", &*v));
-            }
-
-            tag.push_attribute(("sqref", sqref.as_str()));
-            w.write_event(Event::Start(tag))?;
-
-            // Write formulas based on validation type
-            match &validation.validation_type {
-                ValidationType::List { source } => {
-                    let formula = if source.starts_with('=') {
-                        source[1..].to_string()
-                    } else if source.contains('!')
-                        || source
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '$' || c == ':')
-                    {
-                        source.clone()
-                    } else {
-                        format!("\"{}\"", source)
-                    };
-                    w.create_element("formula1")
-                        .write_text_content(BytesText::new(&formula))?;
-                }
-                ValidationType::Whole { value1, value2, .. }
-                | ValidationType::Decimal { value1, value2, .. }
-                | ValidationType::Date { value1, value2, .. }
-                | ValidationType::Time { value1, value2, .. }
-                | ValidationType::TextLength { value1, value2, .. } => {
-                    w.create_element("formula1")
-                        .write_text_content(BytesText::new(value1))?;
-                    if let Some(v2) = value2 {
-                        w.create_element("formula2")
-                            .write_text_content(BytesText::new(v2))?;
-                    }
-                }
-                ValidationType::Custom { formula } => {
-                    let f = if formula.starts_with('=') {
-                        &formula[1..]
-                    } else {
-                        formula
-                    };
-                    w.create_element("formula1")
-                        .write_text_content(BytesText::new(f))?;
-                }
-                ValidationType::None => {}
-            }
-
-            w.write_event(Event::End(BytesEnd::new("dataValidation")))?;
-        }
-
-        w.write_event(Event::End(BytesEnd::new("dataValidations")))?;
-        Ok(())
-    }
-
     fn write_hyperlinks(
         w: &mut XmlWriter,
         sheet: &duke_sheets_core::Worksheet,
@@ -2656,7 +2172,7 @@ impl XlsxWriter {
         rels: &[WorksheetRelationship],
     ) -> XlsxResult<()> {
         let path = format!("xl/worksheets/_rels/sheet{}.xml.rels", sheet_index + 1);
-        Self::write_xml_part(zip, &path, |w| {
+        write_xml_part(zip, &path, |w| {
             let mut tag = BytesStart::new("Relationships");
             tag.push_attribute(("xmlns", NS_RELATIONSHIPS));
             w.write_event(Event::Start(tag))?;
@@ -2678,306 +2194,6 @@ impl XlsxWriter {
         })
     }
 
-    fn write_vml_drawing<W: Write + Seek>(
-        zip: &mut zip::ZipWriter<W>,
-        workbook: &Workbook,
-        sheet_index: usize,
-    ) -> XlsxResult<()> {
-        let sheet = workbook
-            .worksheet(sheet_index)
-            .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
-
-        if sheet.comment_count() == 0 {
-            return Ok(());
-        }
-
-        let path = format!("xl/drawings/vmlDrawing{}.vml", sheet_index + 1);
-        let options = zip::write::SimpleFileOptions::default();
-        zip.start_file(path, options)?;
-
-        let sheet_idx = sheet_index + 1;
-        let mut comments: Vec<_> = sheet.comments().collect();
-        comments.sort_by_key(|((row, col), _)| (*row, *col));
-
-        let mut xml = String::new();
-        xml.push_str("<xml xmlns:v=\"urn:schemas-microsoft-com:vml\"\n");
-        xml.push_str(" xmlns:o=\"urn:schemas-microsoft-com:office:office\"\n");
-        xml.push_str(" xmlns:x=\"urn:schemas-microsoft-com:office:excel\">\n");
-        xml.push_str(" <o:shapelayout v:ext=\"edit\">\n");
-        xml.push_str(&format!(
-            "  <o:idmap v:ext=\"edit\" data=\"{}\"/>\n",
-            sheet_idx
-        ));
-        xml.push_str(" </o:shapelayout>\n");
-        xml.push_str(" <v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\"\n");
-        xml.push_str("  path=\"m,l,21600r21600,l21600,xe\">\n");
-        xml.push_str("  <v:stroke joinstyle=\"miter\"/>\n");
-        xml.push_str("  <v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/>\n");
-        xml.push_str(" </v:shapetype>\n");
-
-        for (shape_index, ((row, col), comment)) in comments.iter().enumerate() {
-            let row = *row;
-            let col = *col;
-            let row_above = row.saturating_sub(1);
-            let shape_id = sheet_idx * 1024 + 1 + shape_index;
-            let z_index = shape_index + 1;
-            let left = (u32::from(col) + 1) * 64;
-            let top = row * 15;
-            let visibility = if comment.visible { "visible" } else { "hidden" };
-
-            xml.push_str(&format!(
-                " <v:shape id=\"_x0000_s{}\" type=\"#_x0000_t202\"\n",
-                shape_id
-            ));
-            xml.push_str(&format!(
-                "  style='position:absolute;margin-left:{}pt;margin-top:{}pt;width:96pt;height:55.5pt;z-index:{};visibility:{}'\n",
-                left, top, z_index, visibility
-            ));
-            xml.push_str("  fillcolor=\"#ffffe1\" o:insetmode=\"auto\">\n");
-            xml.push_str("  <v:fill color2=\"#ffffe1\"/>\n");
-            xml.push_str("  <v:shadow on=\"t\" color=\"black\" obscured=\"t\"/>\n");
-            xml.push_str("  <v:path o:connecttype=\"none\"/>\n");
-            xml.push_str("  <v:textbox style='mso-direction-alt:auto'>\n");
-            xml.push_str("   <div style='text-align:left'></div>\n");
-            xml.push_str("  </v:textbox>\n");
-            xml.push_str("  <x:ClientData ObjectType=\"Note\">\n");
-            xml.push_str("   <x:MoveWithCells/>\n");
-            xml.push_str("   <x:SizeWithCells/>\n");
-            xml.push_str(&format!(
-                "   <x:Anchor>{}, 15, {}, 10, {}, 15, {}, 4</x:Anchor>\n",
-                col + 1,
-                row_above,
-                col + 3,
-                row + 3
-            ));
-            xml.push_str("   <x:AutoFill>False</x:AutoFill>\n");
-            xml.push_str(&format!("   <x:Row>{}</x:Row>\n", row));
-            xml.push_str(&format!("   <x:Column>{}</x:Column>\n", col));
-            xml.push_str("  </x:ClientData>\n");
-            xml.push_str(" </v:shape>\n");
-        }
-
-        xml.push_str("</xml>");
-        zip.write_all(xml.as_bytes())?;
-        Ok(())
-    }
-
-    // -----------------------------------------------------------------------
-    // Comments
-    // -----------------------------------------------------------------------
-
-    fn write_comments<W: Write + Seek>(
-        zip: &mut zip::ZipWriter<W>,
-        workbook: &Workbook,
-        sheet_index: usize,
-    ) -> XlsxResult<()> {
-        let sheet = workbook
-            .worksheet(sheet_index)
-            .ok_or_else(|| XlsxError::InvalidFormat("Sheet not found".into()))?;
-
-        if sheet.comment_count() == 0 {
-            return Ok(());
-        }
-
-        let path = format!("xl/comments{}.xml", sheet_index + 1);
-        Self::write_xml_part(zip, &path, |w| {
-            let mut tag = BytesStart::new("comments");
-            tag.push_attribute(("xmlns", NS_SPREADSHEET));
-            w.write_event(Event::Start(tag))?;
-
-            // Authors
-            w.write_event(Event::Start(BytesStart::new("authors")))?;
-            let authors = sheet.comment_authors();
-            for author in authors {
-                w.create_element("author")
-                    .write_text_content(BytesText::new(author))?;
-            }
-            if authors.is_empty() {
-                // Add empty author for comments without author
-                w.create_element("author")
-                    .write_text_content(BytesText::new(""))?;
-            }
-            w.write_event(Event::End(BytesEnd::new("authors")))?;
-
-            // Comment list
-            w.write_event(Event::Start(BytesStart::new("commentList")))?;
-
-            let mut comments: Vec<_> = sheet.comments().collect();
-            comments.sort_by_key(|((row, col), _)| (*row, *col));
-
-            let author_index: std::collections::HashMap<&str, usize> = authors
-                .iter()
-                .enumerate()
-                .map(|(i, a)| (a.as_str(), i))
-                .collect();
-
-            for ((row, col), comment) in comments {
-                let cell_ref = CellAddress::new(row, col).to_a1_string();
-                let author_id = if comment.author.is_empty() {
-                    0
-                } else {
-                    author_index
-                        .get(comment.author.as_str())
-                        .copied()
-                        .unwrap_or(0)
-                };
-                let aid = author_id.to_string();
-
-                let mut c_tag = BytesStart::new("comment");
-                c_tag.push_attribute(("ref", cell_ref.as_str()));
-                c_tag.push_attribute(("authorId", aid.as_str()));
-                w.write_event(Event::Start(c_tag))?;
-
-                w.write_event(Event::Start(BytesStart::new("text")))?;
-                w.write_event(Event::Start(BytesStart::new("r")))?;
-                w.create_element("t")
-                    .write_text_content(BytesText::new(&comment.text))?;
-                w.write_event(Event::End(BytesEnd::new("r")))?;
-                w.write_event(Event::End(BytesEnd::new("text")))?;
-
-                w.write_event(Event::End(BytesEnd::new("comment")))?;
-            }
-
-            w.write_event(Event::End(BytesEnd::new("commentList")))?;
-            w.write_event(Event::End(BytesEnd::new("comments")))?;
-            Ok(())
-        })
-    }
-
-    // -----------------------------------------------------------------------
-    // xl/tables/table{N}.xml
-    // -----------------------------------------------------------------------
-
-    fn write_table_part<W: Write + Seek>(
-        zip: &mut zip::ZipWriter<W>,
-        sheet: &duke_sheets_core::Worksheet,
-        table_in_sheet_idx: usize,
-        global_num: usize,
-    ) -> XlsxResult<()> {
-        let table = &sheet.tables()[table_in_sheet_idx];
-        let path = format!("xl/tables/table{}.xml", global_num);
-
-        Self::write_xml_part(zip, &path, |w| {
-            let mut tag = BytesStart::new("table");
-            tag.push_attribute(("xmlns", NS_SPREADSHEET));
-
-            let id_str = table.id.to_string();
-            tag.push_attribute(("id", id_str.as_str()));
-            tag.push_attribute(("name", table.name.as_str()));
-            tag.push_attribute(("displayName", table.display_name.as_str()));
-
-            let ref_str = table.reference.to_string();
-            tag.push_attribute(("ref", ref_str.as_str()));
-
-            // Only write headerRowCount when != 1 (spec default is 1)
-            if table.header_row_count != 1 {
-                let hrc = table.header_row_count.to_string();
-                tag.push_attribute(("headerRowCount", hrc.as_str()));
-            }
-
-            if table.totals_row_count > 0 {
-                let trc = table.totals_row_count.to_string();
-                tag.push_attribute(("totalsRowCount", trc.as_str()));
-            }
-
-            if !table.totals_row_shown {
-                tag.push_attribute(("totalsRowShown", "0"));
-            }
-
-            w.write_event(Event::Start(tag))?;
-
-            // autoFilter — covers header + data rows (excludes totals)
-            {
-                let auto_ref = if table.has_totals_row() {
-                    // AutoFilter range excludes the totals row
-                    let start = &table.reference.start;
-                    let end_row = table
-                        .reference
-                        .end
-                        .row
-                        .saturating_sub(table.totals_row_count);
-                    let end_col = table.reference.end.col;
-                    let end_addr = CellAddress::new(end_row, end_col);
-                    format!("{}:{}", start, end_addr)
-                } else {
-                    ref_str.clone()
-                };
-                let mut af = BytesStart::new("autoFilter");
-                af.push_attribute(("ref", auto_ref.as_str()));
-                w.write_event(Event::Empty(af))?;
-            }
-
-            // tableColumns
-            if !table.columns.is_empty() {
-                let count_str = table.columns.len().to_string();
-                let mut tc = BytesStart::new("tableColumns");
-                tc.push_attribute(("count", count_str.as_str()));
-                w.write_event(Event::Start(tc))?;
-
-                for col in &table.columns {
-                    let col_id = col.id.to_string();
-                    let has_child =
-                        col.calculated_column_formula.is_some() || col.totals_row_formula.is_some();
-
-                    let mut tc_el = BytesStart::new("tableColumn");
-                    tc_el.push_attribute(("id", col_id.as_str()));
-                    tc_el.push_attribute(("name", col.name.as_str()));
-
-                    if let Some(ref label) = col.totals_row_label {
-                        tc_el.push_attribute(("totalsRowLabel", label.as_str()));
-                    }
-                    if let Some(func) = col.totals_row_function {
-                        tc_el.push_attribute(("totalsRowFunction", func.to_ooxml()));
-                    }
-
-                    if has_child {
-                        w.write_event(Event::Start(tc_el))?;
-                        if let Some(ref formula) = col.totals_row_formula {
-                            w.create_element("totalsRowFormula")
-                                .write_text_content(BytesText::new(formula))?;
-                        }
-                        if let Some(ref formula) = col.calculated_column_formula {
-                            w.create_element("calculatedColumnFormula")
-                                .write_text_content(BytesText::new(formula))?;
-                        }
-                        w.write_event(Event::End(BytesEnd::new("tableColumn")))?;
-                    } else {
-                        w.write_event(Event::Empty(tc_el))?;
-                    }
-                }
-
-                w.write_event(Event::End(BytesEnd::new("tableColumns")))?;
-            }
-
-            // tableStyleInfo
-            if let Some(ref style) = table.style_info {
-                let mut si = BytesStart::new("tableStyleInfo");
-                if let Some(ref name) = style.name {
-                    si.push_attribute(("name", name.as_str()));
-                }
-                si.push_attribute((
-                    "showFirstColumn",
-                    if style.show_first_column { "1" } else { "0" },
-                ));
-                si.push_attribute((
-                    "showLastColumn",
-                    if style.show_last_column { "1" } else { "0" },
-                ));
-                si.push_attribute((
-                    "showRowStripes",
-                    if style.show_row_stripes { "1" } else { "0" },
-                ));
-                si.push_attribute((
-                    "showColumnStripes",
-                    if style.show_column_stripes { "1" } else { "0" },
-                ));
-                w.write_event(Event::Empty(si))?;
-            }
-
-            w.write_event(Event::End(BytesEnd::new("table")))?;
-            Ok(())
-        })
-    }
 }
 
 #[cfg(test)]
