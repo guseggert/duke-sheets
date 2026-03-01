@@ -45,8 +45,11 @@ pub mod prelude;
 pub use calculation::{CalculationOptions, CalculationStats, WorkbookCalculationExt};
 
 // Re-export core types
+pub use duke_sheets_core::auto_filter::{ColorFilter, DynamicFilter, DynamicFilterType};
 pub use duke_sheets_core::{
+    rich_text_to_plain,
     Alignment,
+    AutoFilter,
     BorderEdge,
     BorderLineStyle,
     BorderStyle,
@@ -67,21 +70,22 @@ pub use duke_sheets_core::{
     CfValue,
     CfValueType,
     Color,
+    ColumnFilter,
     ConditionalFormatRule,
     // Data validation types
+    CustomFilterCondition,
+    CustomFilters,
     DataValidation,
     // Error types
     Error,
     FillStyle,
+    FilterColumn,
+    FilterOperator,
     FontStyle,
     // Sheet-level types
     FreezePanes,
     HorizontalAlignment,
     Hyperlink,
-    // Rich text types
-    RichTextRun,
-    RunFont,
-    rich_text_to_plain,
     IconSetStyle,
     // Locale for cell formatting
     Locale,
@@ -92,20 +96,25 @@ pub use duke_sheets_core::{
     PageSetup,
     Result,
 
+    // Rich text types
+    RichTextRun,
+    RunFont,
     SheetProtection,
+    // Style types
+    Style,
+    StylePool,
     // Table types
     Table,
     TableColumn,
     TableStyleInfo,
+    TimePeriod,
+    Top10Filter,
     TotalsRowFunction,
 
-    // Style types
-    Style,
-    StylePool,
-    TimePeriod,
     ValidationErrorStyle,
     ValidationOperator,
     ValidationType,
+    ValueFilter,
     VerticalAlignment,
     // Main types
     Workbook,
