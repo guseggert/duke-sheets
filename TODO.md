@@ -88,7 +88,7 @@
 - [x] QEMU/KVM VM management scripts (`tools/vm/`)
 - [x] Shared file access via QEMU SMB
 - [x] Excel parity E2E test suite — Phase 1-5 complete (59 reader tests)
-- [x] Writer E2E tests — 31 double-roundtrip tests (fonts, fills, borders, alignment, number formats, dimensions, merged cells, conditional formatting, data validation)
+- [x] Writer E2E tests — 33 double-roundtrip tests (fonts, fills, borders, alignment, number formats, dimensions, merged cells, conditional formatting, data validation, freeze panes + multi-selection)
 
 ### CSV Support
 - [x] Read CSV files
@@ -347,13 +347,13 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 60 | ✅ |
-| E2E via Excel COM — reader (XLSX) | 61 | ✅ |
-| E2E via Excel COM — writer (XLSX) | 33 | ✅ |
+| E2E via Excel COM — reader (XLSX) | 62 | ✅ |
+| E2E via Excel COM — writer (XLSX) | 35 | ✅ |
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
-| Other (unit, doc, integration) | 285 | ✅ |
-| **Total** | **748** | ✅ |
+| Other (unit, doc, integration) | 283 | ✅ |
+| **Total** | **750** | ✅ |
 
 ---
 
