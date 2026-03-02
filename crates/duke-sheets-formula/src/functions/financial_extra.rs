@@ -1669,6 +1669,130 @@ pub fn fn_yieldmat(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     ))
 }
 
+/// Helper: look up euro conversion rate and calc precision for a currency code.
+/// Returns (rate_per_eur, calc_precision_decimal_places).
+fn euro_currency(code: &str) -> Option<(f64, i32)> {
+    match code {
+        "EUR" => Some((1.0, 2)),
+        "BEF" => Some((40.3399, 0)),
+        "LUF" => Some((40.3399, 0)),
+        "DEM" => Some((1.95583, 2)),
+        "ESP" => Some((166.386, 0)),
+        "FRF" => Some((6.55957, 2)),
+        "IEP" => Some((0.787564, 2)),
+        "ITL" => Some((1936.27, 0)),
+        "NLG" => Some((2.20371, 2)),
+        "ATS" => Some((13.7603, 2)),
+        "PTE" => Some((200.482, 0)),
+        "FIM" => Some((5.94573, 2)),
+        "GRD" => Some((340.750, 0)),
+        "SIT" => Some((239.640, 2)),
+        "CYP" => Some((0.585274, 2)),
+        "MTL" => Some((0.429300, 2)),
+        "SKK" => Some((30.1260, 2)),
+        "EEK" => Some((15.6466, 2)),
+        "LVL" => Some((0.702804, 2)),
+        "LTL" => Some((3.45280, 2)),
+        "HRK" => Some((7.53450, 2)),
+        _ => None,
+    }
+}
+
+/// Round a value to n significant digits.
+fn round_significant(x: f64, n: u32) -> f64 {
+    if x == 0.0 {
+        return 0.0;
+    }
+    let magnitude = x.abs().log10().floor() as i32;
+    let factor = 10f64.powi(n as i32 - 1 - magnitude);
+    (x * factor).round() / factor
+}
+
+/// Round a value to n decimal places (half-up).
+fn round_decimal(x: f64, dp: i32) -> f64 {
+    let factor = 10f64.powi(dp);
+    (x * factor + 0.5f64.copysign(x)).floor().copysign(x) / factor
+}
+
+/// EUROCONVERT(number, source, target, [full_precision], [triangulation_precision])
+pub fn fn_euroconvert(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let number = match required_number(args, 0) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let source = match args.get(1) {
+        Some(v) => v.as_string(),
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+    let target = match args.get(2) {
+        Some(v) => v.as_string(),
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+    let full_precision = match args.get(3).filter(|v| !matches!(v, FormulaValue::Empty)) {
+        Some(v) => v.as_bool().unwrap_or(false),
+        None => false,
+    };
+    let tri_precision = match args.get(4).filter(|v| !matches!(v, FormulaValue::Empty)) {
+        Some(v) => {
+            let n = match scalar_number(v) {
+                Ok(n) => n.trunc() as i32,
+                Err(e) => return Ok(e),
+            };
+            if n < 3 {
+                return Ok(FormulaValue::Error(CellError::Value));
+            }
+            Some(n as u32)
+        }
+        None => None,
+    };
+
+    let src = source.trim().to_ascii_uppercase();
+    let tgt = target.trim().to_ascii_uppercase();
+
+    // Same currency: return unchanged
+    if src == tgt {
+        return Ok(FormulaValue::Number(number));
+    }
+
+    let (src_rate, _) = match euro_currency(&src) {
+        Some(v) => v,
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+    let (tgt_rate, tgt_prec) = match euro_currency(&tgt) {
+        Some(v) => v,
+        None => return Ok(FormulaValue::Error(CellError::Value)),
+    };
+
+    // Step 1: convert to EUR
+    let eur_value = if src == "EUR" {
+        number
+    } else {
+        number / src_rate
+    };
+
+    // Step 2: optionally round intermediate EUR to significant digits
+    let eur_rounded = match tri_precision {
+        Some(prec) => round_significant(eur_value, prec),
+        None => eur_value,
+    };
+
+    // Step 3: convert from EUR to target
+    let result = if tgt == "EUR" {
+        eur_rounded
+    } else {
+        eur_rounded * tgt_rate
+    };
+
+    // Step 4: apply rounding if not full precision
+    if full_precision {
+        Ok(FormulaValue::Number(result))
+    } else {
+        Ok(FormulaValue::Number(round_decimal(result, tgt_prec)))
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1880,5 +2004,138 @@ mod tests {
     #[test]
     fn test_yieldmat() {
         assert_finite("=YIELDMAT(45474,45658,45292,0.08,98,0)");
+    }
+
+    // ---------- EUROCONVERT tests ----------
+
+    #[test]
+    fn test_euroconvert_same_currency() {
+        // Same currency returns unchanged
+        assert_eq!(
+            eval("=EUROCONVERT(100,\"DEM\",\"DEM\")").unwrap(),
+            FormulaValue::Number(100.0)
+        );
+    }
+
+    #[test]
+    fn test_euroconvert_dem_to_eur() {
+        // 100 DEM -> EUR: 100 / 1.95583 = 51.129... -> rounded to 2dp = 51.13
+        let result = eval("=EUROCONVERT(100,\"DEM\",\"EUR\")").unwrap();
+        match result {
+            FormulaValue::Number(n) => assert!((n - 51.13).abs() < 0.005, "got {}", n),
+            other => panic!("expected number, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_euroconvert_eur_to_dem() {
+        // 100 EUR -> DEM: 100 * 1.95583 = 195.583 -> rounded to 2dp = 195.58
+        let result = eval("=EUROCONVERT(100,\"EUR\",\"DEM\")").unwrap();
+        match result {
+            FormulaValue::Number(n) => assert!((n - 195.58).abs() < 0.005, "got {}", n),
+            other => panic!("expected number, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_euroconvert_cross_currency() {
+        // 1 FRF -> DEM: 1 / 6.55957 * 1.95583 = 0.2981 -> rounded to 2dp = 0.30
+        let result = eval("=EUROCONVERT(1,\"FRF\",\"DEM\")").unwrap();
+        match result {
+            FormulaValue::Number(n) => assert!((n - 0.30).abs() < 0.005, "got {}", n),
+            other => panic!("expected number, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_euroconvert_full_precision() {
+        // 1 FRF -> DEM with full precision
+        let result = eval("=EUROCONVERT(1,\"FRF\",\"DEM\",TRUE)").unwrap();
+        match result {
+            FormulaValue::Number(n) => {
+                // Should be ~0.29808...
+                assert!((n - 0.298164).abs() < 0.001, "got {}", n);
+            }
+            other => panic!("expected number, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_euroconvert_triangulation_precision() {
+        // 1 FRF -> DEM with triangulation precision 3
+        // 1 / 6.55957 = 0.15244... -> rounded to 3 sig figs = 0.152
+        // 0.152 * 1.95583 = 0.29728...
+        let result = eval("=EUROCONVERT(1,\"FRF\",\"DEM\",TRUE,3)").unwrap();
+        match result {
+            FormulaValue::Number(n) => assert!((n - 0.29729).abs() < 0.001, "got {}", n),
+            other => panic!("expected number, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_euroconvert_integer_currencies() {
+        // ITL (lira) has calc_precision 0 -> rounds to integer
+        // 100 EUR -> ITL: 100 * 1936.27 = 193627.0
+        let result = eval("=EUROCONVERT(100,\"EUR\",\"ITL\")").unwrap();
+        match result {
+            FormulaValue::Number(n) => assert!((n - 193627.0).abs() < 0.5, "got {}", n),
+            other => panic!("expected number, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_euroconvert_zero() {
+        assert_eq!(
+            eval("=EUROCONVERT(0,\"DEM\",\"EUR\")").unwrap(),
+            FormulaValue::Number(0.0)
+        );
+    }
+
+    #[test]
+    fn test_euroconvert_negative() {
+        // Negative values convert normally
+        let result = eval("=EUROCONVERT(-100,\"DEM\",\"EUR\")").unwrap();
+        match result {
+            FormulaValue::Number(n) => assert!(n < 0.0 && (n + 51.13).abs() < 0.01, "got {}", n),
+            other => panic!("expected number, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_euroconvert_invalid_currency() {
+        assert_eq!(
+            eval("=EUROCONVERT(100,\"USD\",\"EUR\")").unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
+        assert_eq!(
+            eval("=EUROCONVERT(100,\"EUR\",\"GBP\")").unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
+    }
+
+    #[test]
+    fn test_euroconvert_triangulation_too_small() {
+        // Triangulation precision < 3 -> #VALUE!
+        assert_eq!(
+            eval("=EUROCONVERT(1,\"FRF\",\"DEM\",FALSE,2)").unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
+    }
+
+    #[test]
+    fn test_euroconvert_all_currencies() {
+        // Verify all 21 currencies are recognized
+        let codes = [
+            "EUR", "BEF", "LUF", "DEM", "ESP", "FRF", "IEP", "ITL", "NLG", "ATS", "PTE", "FIM",
+            "GRD", "SIT", "CYP", "MTL", "SKK", "EEK", "LVL", "LTL", "HRK",
+        ];
+        for code in &codes {
+            let formula = format!("=EUROCONVERT(100,\"EUR\",\"{}\")", code);
+            let result = eval(&formula).unwrap();
+            match result {
+                FormulaValue::Number(_) => {} // OK
+                other => panic!("currency {} failed: {:?}", code, other),
+            }
+        }
     }
 }
