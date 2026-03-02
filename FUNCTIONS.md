@@ -5,8 +5,8 @@ This document lists all Excel functions and their implementation status in duke-
 **Source:** [Microsoft Excel Functions (Alphabetical)](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188)
 
 **Total Functions:** 506
-**Implemented:** 490 (97%)
-**Remaining:** 16
+**Implemented:** 495 (98%)
+**Remaining:** 11
 
 Legend: ✅ = Implemented, ⬜ = Not implemented
 
@@ -138,7 +138,7 @@ Mark the function as implemented in the table below.
 | Status | Function | Description |
 |--------|----------|-------------|
 | ⬜ | CALL | Calls a procedure in a dynamic link library or code resource |
-| ⬜ | EUROCONVERT | Converts a number to euros, converts a number from euros to a euro member currency, or converts a number from one euro member currency to another by using the euro as an intermediary (triangulation). |
+| ✅ | EUROCONVERT | Converts a number to euros, converts a number from euros to a euro member currency, or converts a number from one euro member currency to another by using the euro as an intermediary (triangulation). |
 | ⬜ | REGISTER.ID | Returns the register ID of the specified dynamic link library (DLL) or code resource that has been previously registered |
 
 ## Compatibility
@@ -689,20 +689,20 @@ Mark the function as implemented in the table below.
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | ASC | Changes full-width (double-byte) English letters or katakana within a character string to half-width (single-byte) characters |
-| ⬜ | BAHTTEXT | Converts a number to text, using the ß (baht) currency format |
+| ✅ | ASC | Changes full-width (double-byte) English letters or katakana within a character string to half-width (single-byte) characters |
+| ✅ | BAHTTEXT | Converts a number to text, using the ß (baht) currency format |
 | ✅ | CHAR | Returns the character specified by the code number |
 | ✅ | CLEAN | Removes all nonprintable characters from text |
 | ✅ | CODE | Returns a numeric code for the first character in a text string |
 | ✅ | CONCAT | Combines the text from multiple ranges and/or strings, but it doesn't provide the delimiter or IgnoreEmpty arguments. |
 | ✅ | CONCATENATE | Joins several text items into one text item |
-| ⬜ | DBCS | Changes half-width (single-byte) English letters or katakana within a character string to full-width (double-byte) characters |
+| ✅ | DBCS | Changes half-width (single-byte) English letters or katakana within a character string to full-width (double-byte) characters |
 | ✅ | DOLLAR | Converts a number to text, using the $ (dollar) currency format |
 | ✅ | EXACT | Checks to see if two text values are identical |
 | ✅ | FIND | Finds one text value within another (case-sensitive) |
 | ✅ | FINDB | Finds one text value within another (case-sensitive) |
 | ✅ | FIXED | Formats a number as text with a fixed number of decimals |
-| ⬜ | JIS | Changes half-width (single-byte) characters within a string to full-width (double-byte) characters |
+| ✅ | JIS | Changes half-width (single-byte) characters within a string to full-width (double-byte) characters |
 | ✅ | LEFT | Returns the leftmost characters from a text value |
 | ✅ | LEFTB | Returns the leftmost characters from a text value |
 | ✅ | LEN | Returns the number of characters in a text string |

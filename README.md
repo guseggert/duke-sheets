@@ -5,7 +5,7 @@ A Rust library for reading, writing, and manipulating spreadsheets, with an API 
 ## Features
 
 - **File Formats**: XLSX, XLS (legacy), CSV
-- **Formula Engine**: Full evaluation of ~490 Excel functions
+- **Formula Engine**: Full evaluation of ~495 Excel functions
 - **Charts**: Create, read, and modify chart types
 - **Styling**: Fonts, colors, borders, number formats
 - **Large Files**: Streaming APIs for 1M+ cells

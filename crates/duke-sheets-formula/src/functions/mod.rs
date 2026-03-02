@@ -1219,6 +1219,34 @@ impl FunctionRegistry {
             implementation: text_extra::fn_unicode,
             volatile: false,
         });
+        self.register(FunctionDef {
+            name: "ASC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: text_extra::fn_asc,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "JIS",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: text_extra::fn_jis,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DBCS",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: text_extra::fn_dbcs,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BAHTTEXT",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: text_extra::fn_bahttext,
+            volatile: false,
+        });
     }
 
     fn register_info_functions(&mut self) {
@@ -3144,6 +3172,13 @@ impl FunctionRegistry {
             min_args: 5,
             max_args: Some(6),
             implementation: financial_extra::fn_yieldmat,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "EUROCONVERT",
+            min_args: 3,
+            max_args: Some(5),
+            implementation: financial_extra::fn_euroconvert,
             volatile: false,
         });
     }
