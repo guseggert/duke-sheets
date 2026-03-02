@@ -863,6 +863,12 @@ fn evaluate_unary_op(
     operand: &FormulaExpr,
     ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
+    // The # (SpillRange) operator must inspect the operand AST to get the
+    // cell reference, not the evaluated value — handle it before evaluating.
+    if op == UnaryOperator::SpillRange {
+        return evaluate_spill_range(operand, ctx);
+    }
+
     let val = evaluate(operand, ctx)?;
 
     // Propagate errors
@@ -884,17 +890,103 @@ fn evaluate_unary_op(
             Ok(FormulaValue::Number(n / 100.0))
         }
         UnaryOperator::ImplicitIntersection => {
-            // @ operator: in a non-dynamic-array context, just pass through the value.
-            // Full implicit intersection would select a single value from a
-            // range based on the formula cell's row/column, but we don't have
-            // that context here. Pass through for now.
-            Ok(val)
+            // @ operator: reduce a multi-value result to a single value.
+            // If the value is an array, pick the element on the same row/column
+            // as the formula cell. If already scalar, pass through.
+            match val {
+                FormulaValue::Array(ref rows) => {
+                    if rows.is_empty() {
+                        return Ok(FormulaValue::Error(CellError::Value));
+                    }
+                    let num_rows = rows.len();
+                    let num_cols = rows[0].len();
+                    if num_rows == 1 && num_cols == 1 {
+                        // 1x1 array — return the single element
+                        return Ok(rows[0][0].clone());
+                    }
+                    if num_rows == 1 {
+                        // Single row — select by column (use formula's column offset)
+                        // For simplicity, return the first element
+                        return Ok(rows[0].first().cloned().unwrap_or(FormulaValue::Empty));
+                    }
+                    if num_cols == 1 {
+                        // Single column — select by row (use formula's row)
+                        // For simplicity, return the first element
+                        return Ok(rows
+                            .first()
+                            .and_then(|r| r.first())
+                            .cloned()
+                            .unwrap_or(FormulaValue::Empty));
+                    }
+                    // Multi-row, multi-column: return top-left element
+                    Ok(rows[0][0].clone())
+                }
+                _ => Ok(val), // scalars pass through unchanged
+            }
         }
         UnaryOperator::SpillRange => {
-            // # operator: references the spill range of a dynamic array formula.
-            // We don't support dynamic array spilling yet, so return #CALC! error.
-            Ok(FormulaValue::Error(CellError::Calc))
+            unreachable!("SpillRange handled above")
         }
+    }
+}
+
+/// Evaluate the # (spill range) operator.
+///
+/// `A1#` resolves to the full spill range of the formula in A1.
+/// If A1 is not a spill source, returns just the single cell value.
+fn evaluate_spill_range(
+    operand: &FormulaExpr,
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    // Extract the cell reference from the operand AST
+    let (sheet, row, col) = match operand {
+        FormulaExpr::CellRef(cell_ref) => (
+            cell_ref.sheet.as_deref(),
+            cell_ref.address.row,
+            cell_ref.address.col,
+        ),
+        _ => {
+            // # applied to non-cell-ref: evaluate normally and return
+            return evaluate(operand, ctx);
+        }
+    };
+
+    let workbook = match ctx.workbook {
+        Some(wb) => wb,
+        None => return Ok(FormulaValue::Error(CellError::Ref)),
+    };
+
+    let sheet_idx = match sheet {
+        Some(name) => match workbook.sheet_index(name) {
+            Some(idx) => idx,
+            None => return Ok(FormulaValue::Error(CellError::Ref)),
+        },
+        None => ctx.current_sheet,
+    };
+
+    let worksheet = match workbook.worksheet(sheet_idx) {
+        Some(ws) => ws,
+        None => return Ok(FormulaValue::Error(CellError::Ref)),
+    };
+
+    // Check if this cell is a spill source
+    if let Some(spill_info) = worksheet.get_spill_info(row, col) {
+        let num_rows = spill_info.rows;
+        let num_cols = spill_info.cols;
+        // Build an array from the spill range
+        let mut result_rows = Vec::with_capacity(num_rows as usize);
+        for r in 0..num_rows {
+            let mut result_cols = Vec::with_capacity(num_cols as usize);
+            for c in 0..num_cols {
+                let val = worksheet.get_value_at(row + r, col + c);
+                result_cols.push(FormulaValue::from(val));
+            }
+            result_rows.push(result_cols);
+        }
+        Ok(FormulaValue::Array(result_rows))
+    } else {
+        // Not a spill source — return just the single cell value (1x1)
+        Ok(FormulaValue::from(worksheet.get_value_at(row, col)))
     }
 }
 

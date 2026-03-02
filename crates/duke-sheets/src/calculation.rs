@@ -240,74 +240,103 @@ impl CalculationEngine {
         order: &[CellKey],
         stats: &mut CalculationStats,
     ) -> Result<()> {
+        let mut spill_created = false;
+
+        // First pass: calculate all formulas in dependency order
         for &cell_key in order {
-            if let Some(ast) = self.parsed_formulas.get(&cell_key) {
-                // Skip circular reference cells in non-iterative mode
-                if self.circular_cells.contains(&cell_key) && !self.options.iterative {
-                    // Set error value for circular reference
-                    if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
-                        let _ = sheet.set_formula_result(
-                            cell_key.row,
-                            cell_key.col,
-                            CellValue::Error(duke_sheets_core::CellError::Ref),
-                        );
-                    }
-                    stats.errors += 1;
-                    continue;
-                }
+            spill_created |= self.evaluate_and_store(workbook, cell_key, stats);
+        }
 
-                // Evaluate the formula
-                let ctx = EvaluationContext::new(
-                    Some(workbook),
-                    cell_key.sheet,
-                    cell_key.row,
-                    cell_key.col,
-                );
-
-                let result = match evaluate(ast, &ctx) {
-                    Ok(value) => value,
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: Evaluation error at ({}, {}, {}): {}",
-                            cell_key.sheet, cell_key.row, cell_key.col, e
-                        );
-                        stats.errors += 1;
-                        FormulaValue::Error(duke_sheets_core::CellError::Value)
-                    }
-                };
-
-                // Store the result - handle arrays specially for dynamic array spilling
-                if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
-                    match result {
-                        FormulaValue::Array(array) => {
-                            // Convert FormulaValue array to CellValue array
-                            let cell_array: Vec<Vec<CellValue>> = array
-                                .into_iter()
-                                .map(|row| row.into_iter().map(|v| v.into()).collect())
-                                .collect();
-
-                            // Try to spill the array
-                            // If spill fails, the method already sets #SPILL! error on the source cell
-                            let _ = sheet.set_array_formula_result(
-                                cell_key.row,
-                                cell_key.col,
-                                cell_array,
-                            );
-                        }
-                        _ => {
-                            // Single value - store normally
-                            let _ =
-                                sheet.set_formula_result(cell_key.row, cell_key.col, result.into());
-                        }
+        // Second pass: if any arrays were spilled, recalculate formulas that
+        // might reference spill target cells.  Spill targets are created during
+        // the first pass, but the dependency graph (built before evaluation)
+        // does not know about them.  A formula like =A3*10 depends on A3, which
+        // may be a spill target from A1's SEQUENCE — if it was evaluated before
+        // A1, it would have read an empty cell.  Re-evaluating once resolves this.
+        if spill_created {
+            for &cell_key in order {
+                // Only re-evaluate formulas that are NOT themselves array sources
+                // (those already produced their arrays in pass 1).
+                if let Some(sheet) = workbook.worksheet(cell_key.sheet) {
+                    if sheet.is_spill_source(cell_key.row, cell_key.col) {
+                        continue;
                     }
                 }
-                stats.cells_calculated += 1;
+                self.evaluate_and_store(workbook, cell_key, stats);
             }
         }
 
         stats.iterations = 1;
         stats.converged = true;
         Ok(())
+    }
+
+    /// Evaluate a single formula cell and store its result.
+    ///
+    /// Returns `true` if the formula produced an array (spill was created).
+    fn evaluate_and_store(
+        &self,
+        workbook: &mut Workbook,
+        cell_key: CellKey,
+        stats: &mut CalculationStats,
+    ) -> bool {
+        let ast = match self.parsed_formulas.get(&cell_key) {
+            Some(ast) => ast,
+            None => return false,
+        };
+
+        // Skip circular reference cells in non-iterative mode
+        if self.circular_cells.contains(&cell_key) && !self.options.iterative {
+            if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
+                let _ = sheet.set_formula_result(
+                    cell_key.row,
+                    cell_key.col,
+                    CellValue::Error(duke_sheets_core::CellError::Ref),
+                );
+            }
+            stats.errors += 1;
+            return false;
+        }
+
+        // Clear any existing spill targets before re-evaluating
+        if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
+            sheet.clear_spill(cell_key.row, cell_key.col);
+        }
+
+        // Evaluate the formula
+        let ctx =
+            EvaluationContext::new(Some(workbook), cell_key.sheet, cell_key.row, cell_key.col);
+
+        let result = match evaluate(ast, &ctx) {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Evaluation error at ({}, {}, {}): {}",
+                    cell_key.sheet, cell_key.row, cell_key.col, e
+                );
+                stats.errors += 1;
+                FormulaValue::Error(duke_sheets_core::CellError::Value)
+            }
+        };
+
+        // Store the result
+        let is_array = matches!(result, FormulaValue::Array(_));
+        if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
+            match result {
+                FormulaValue::Array(array) => {
+                    let cell_array: Vec<Vec<CellValue>> = array
+                        .into_iter()
+                        .map(|row| row.into_iter().map(|v| v.into()).collect())
+                        .collect();
+                    let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
+                }
+                _ => {
+                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, result.into());
+                }
+            }
+        }
+        stats.cells_calculated += 1;
+        is_array
     }
 
     /// Calculate cells with iterative calculation for circular references
@@ -326,6 +355,11 @@ impl CalculationEngine {
 
             for &cell_key in order {
                 if let Some(ast) = self.parsed_formulas.get(&cell_key) {
+                    // Clear any existing spill targets before re-evaluating
+                    if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
+                        sheet.clear_spill(cell_key.row, cell_key.col);
+                    }
+
                     // Evaluate the formula
                     let ctx = EvaluationContext::new(
                         Some(workbook),
@@ -334,14 +368,14 @@ impl CalculationEngine {
                         cell_key.col,
                     );
 
-                    let result: CellValue = match evaluate(ast, &ctx) {
-                        Ok(value) => value.into(),
-                        Err(_) => CellValue::Error(duke_sheets_core::CellError::Value),
+                    let result = match evaluate(ast, &ctx) {
+                        Ok(value) => value,
+                        Err(_) => FormulaValue::Error(duke_sheets_core::CellError::Value),
                     };
 
                     // Track convergence for numeric values in circular references
                     if self.circular_cells.contains(&cell_key) {
-                        if let CellValue::Number(new_val) = &result {
+                        if let FormulaValue::Number(new_val) = &result {
                             if let Some(&old_val) = prev_values.get(&cell_key) {
                                 let change = (new_val - old_val).abs();
                                 max_change = max_change.max(change);
@@ -350,9 +384,28 @@ impl CalculationEngine {
                         }
                     }
 
-                    // Store the result
+                    // Store the result — handle arrays for dynamic array spilling
                     if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
-                        let _ = sheet.set_formula_result(cell_key.row, cell_key.col, result);
+                        match result {
+                            FormulaValue::Array(array) => {
+                                let cell_array: Vec<Vec<CellValue>> = array
+                                    .into_iter()
+                                    .map(|row| row.into_iter().map(|v| v.into()).collect())
+                                    .collect();
+                                let _ = sheet.set_array_formula_result(
+                                    cell_key.row,
+                                    cell_key.col,
+                                    cell_array,
+                                );
+                            }
+                            _ => {
+                                let _ = sheet.set_formula_result(
+                                    cell_key.row,
+                                    cell_key.col,
+                                    result.into(),
+                                );
+                            }
+                        }
                     }
 
                     if iteration == 0 {
@@ -1153,6 +1206,377 @@ mod tests {
         assert_eq!(
             sheet.get_calculated_value_at(0, 4),
             Some(&CellValue::Number(1400.0)) // 500+200+300+400
+        );
+    }
+
+    // ==================== Dynamic Array Spilling Tests ====================
+
+    #[test]
+    fn test_spill_value_resolution_get_value_at() {
+        // get_value_at resolves SpillTarget cells, but anchor cell is still Formula.
+        // Use get_calculated_value_at for anchor, get_value_at for spill targets.
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        // Anchor cell (Formula): get_calculated_value_at resolves cached_value
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(1.0))
+        );
+        // SpillTarget cells: get_value_at resolves to actual value
+        assert_eq!(sheet.get_value_at(1, 0), CellValue::Number(2.0));
+        assert_eq!(sheet.get_value_at(2, 0), CellValue::Number(3.0));
+        assert_eq!(sheet.get_value_at(3, 0), CellValue::Empty);
+    }
+
+    #[test]
+    fn test_spill_value_resolution_get_calculated_value_at() {
+        // get_calculated_value_at() should also resolve SpillTarget transparently
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(4)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(1.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 0),
+            Some(&CellValue::Number(2.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(2, 0),
+            Some(&CellValue::Number(3.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(3, 0),
+            Some(&CellValue::Number(4.0))
+        );
+    }
+
+    #[test]
+    fn test_spill_2d_value_resolution() {
+        // 2D spill: SEQUENCE(2,3) should produce a 2x3 grid
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(2,3)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        // Row 0: 1, 2, 3 (A1 is anchor, B1/C1 are spill targets)
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(1.0))
+        );
+        assert_eq!(sheet.get_value_at(0, 1), CellValue::Number(2.0));
+        assert_eq!(sheet.get_value_at(0, 2), CellValue::Number(3.0));
+        // Row 1: 4, 5, 6
+        assert_eq!(sheet.get_value_at(1, 0), CellValue::Number(4.0));
+        assert_eq!(sheet.get_value_at(1, 1), CellValue::Number(5.0));
+        assert_eq!(sheet.get_value_at(1, 2), CellValue::Number(6.0));
+        // Row 2: empty (no spill)
+        assert_eq!(sheet.get_value_at(2, 0), CellValue::Empty);
+    }
+
+    #[test]
+    fn test_formula_references_spill_target() {
+        // A formula in B1 referencing A2 (a spill target) should get the resolved value
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(5)").unwrap();
+        // B1 references A3 which is a spill target (value 3.0)
+        sheet.set_cell_formula("B1", "=A3*10").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 1),
+            Some(&CellValue::Number(30.0))
+        );
+    }
+
+    #[test]
+    fn test_sum_over_spill_range() {
+        // SUM over a range that includes spill targets should sum the resolved values
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(5)").unwrap();
+        sheet.set_cell_formula("B1", "=SUM(A1:A5)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        // SUM(1+2+3+4+5) = 15
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 1),
+            Some(&CellValue::Number(15.0))
+        );
+    }
+
+    #[test]
+    fn test_spill_blocked_returns_spill_error() {
+        // When spill range is blocked, anchor cell should show #SPILL!
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A2", 999.0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Error(duke_sheets_core::CellError::Spill))
+        );
+        // Original value should be preserved
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 0),
+            Some(&CellValue::Number(999.0))
+        );
+    }
+
+    #[test]
+    fn test_spill_range_operator() {
+        // A1# should return the full spill range as an array
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(4)").unwrap();
+        // SUM(A1#) should sum the entire spill range
+        sheet.set_cell_formula("B1", "=SUM(A1#)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        // SUM(1+2+3+4) = 10
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 1),
+            Some(&CellValue::Number(10.0))
+        );
+    }
+
+    #[test]
+    fn test_spill_range_operator_non_spill_source() {
+        // A1# on a cell that is NOT a spill source returns just A1's value
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", 42.0).unwrap();
+        sheet.set_cell_formula("B1", "=SUM(A1#)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 1),
+            Some(&CellValue::Number(42.0))
+        );
+    }
+
+    #[test]
+    fn test_spill_single_cell_no_spill_targets() {
+        // Single-cell array result (1x1) should not create any SpillTarget cells
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(1,1)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(1.0))
+        );
+        assert!(!sheet.is_spill_source(0, 0));
+        assert_eq!(sheet.get_value_at(1, 0), CellValue::Empty);
+    }
+
+    #[test]
+    fn test_spill_is_spill_source_after_calculate() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert!(sheet.is_spill_source(0, 0));
+        assert!(sheet.is_spill_target(1, 0));
+        assert!(sheet.is_spill_target(2, 0));
+        assert!(!sheet.is_spill_target(3, 0));
+    }
+
+    #[test]
+    fn test_spill_clear_on_recalculate_to_scalar() {
+        // If a formula's result changes from array to scalar, old spill targets
+        // should be cleared.
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+
+        // First: SEQUENCE(3) spills to A1:A3
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)").unwrap();
+        workbook.calculate().unwrap();
+        {
+            let sheet = workbook.worksheet(0).unwrap();
+            assert!(sheet.is_spill_source(0, 0));
+            assert_eq!(sheet.get_value_at(2, 0), CellValue::Number(3.0));
+        }
+
+        // Change formula to a scalar
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=42").unwrap();
+        workbook.calculate().unwrap();
+        {
+            let sheet = workbook.worksheet(0).unwrap();
+            assert_eq!(
+                sheet.get_calculated_value_at(0, 0),
+                Some(&CellValue::Number(42.0))
+            );
+            // Old spill targets should be gone
+            assert!(!sheet.is_spill_target(1, 0));
+            assert!(!sheet.is_spill_target(2, 0));
+            assert_eq!(sheet.get_value_at(1, 0), CellValue::Empty);
+        }
+    }
+
+    #[test]
+    fn test_spill_filter_function() {
+        // Test FILTER producing a dynamic-sized spill
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+
+        // Data in A1:A5
+        sheet.set_cell_value("A1", 10.0).unwrap();
+        sheet.set_cell_value("A2", 20.0).unwrap();
+        sheet.set_cell_value("A3", 30.0).unwrap();
+        sheet.set_cell_value("A4", 40.0).unwrap();
+        sheet.set_cell_value("A5", 50.0).unwrap();
+
+        // Criteria in B1:B5 (TRUE for values >= 30)
+        sheet.set_cell_value("B1", false).unwrap();
+        sheet.set_cell_value("B2", false).unwrap();
+        sheet.set_cell_value("B3", true).unwrap();
+        sheet.set_cell_value("B4", true).unwrap();
+        sheet.set_cell_value("B5", true).unwrap();
+
+        // FILTER: keep values where criteria is TRUE
+        sheet
+            .set_cell_formula("C1", "=FILTER(A1:A5,B1:B5)")
+            .unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        // Should spill 30, 40, 50 into C1:C3
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 2),
+            Some(&CellValue::Number(30.0))
+        );
+        assert_eq!(sheet.get_value_at(1, 2), CellValue::Number(40.0));
+        assert_eq!(sheet.get_value_at(2, 2), CellValue::Number(50.0));
+        assert_eq!(sheet.get_value_at(3, 2), CellValue::Empty);
+    }
+
+    #[test]
+    fn test_spill_sort_function() {
+        // Test SORT producing a spill
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+
+        sheet.set_cell_value("A1", 30.0).unwrap();
+        sheet.set_cell_value("A2", 10.0).unwrap();
+        sheet.set_cell_value("A3", 50.0).unwrap();
+        sheet.set_cell_value("A4", 20.0).unwrap();
+
+        sheet.set_cell_formula("B1", "=SORT(A1:A4)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 1),
+            Some(&CellValue::Number(10.0))
+        );
+        assert_eq!(sheet.get_value_at(1, 1), CellValue::Number(20.0));
+        assert_eq!(sheet.get_value_at(2, 1), CellValue::Number(30.0));
+        assert_eq!(sheet.get_value_at(3, 1), CellValue::Number(50.0));
+    }
+
+    #[test]
+    fn test_spill_unique_function() {
+        // Test UNIQUE deduplication
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+
+        sheet.set_cell_value("A1", "apple").unwrap();
+        sheet.set_cell_value("A2", "banana").unwrap();
+        sheet.set_cell_value("A3", "apple").unwrap();
+        sheet.set_cell_value("A4", "cherry").unwrap();
+        sheet.set_cell_value("A5", "banana").unwrap();
+
+        sheet.set_cell_formula("B1", "=UNIQUE(A1:A5)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        // Should produce: apple, banana, cherry (3 unique values)
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 1),
+            Some(&CellValue::String("apple".into()))
+        );
+        assert_eq!(sheet.get_value_at(1, 1), CellValue::String("banana".into()));
+        assert_eq!(sheet.get_value_at(2, 1), CellValue::String("cherry".into()));
+        assert_eq!(sheet.get_value_at(3, 1), CellValue::Empty);
+    }
+
+    #[test]
+    fn test_spill_transpose_function() {
+        // TRANSPOSE a column to a row
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+
+        sheet.set_cell_value("A1", 1.0).unwrap();
+        sheet.set_cell_value("A2", 2.0).unwrap();
+        sheet.set_cell_value("A3", 3.0).unwrap();
+
+        sheet.set_cell_formula("B1", "=TRANSPOSE(A1:A3)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        // Should spill horizontally: B1=1, C1=2, D1=3
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 1),
+            Some(&CellValue::Number(1.0))
+        );
+        assert_eq!(sheet.get_value_at(0, 2), CellValue::Number(2.0));
+        assert_eq!(sheet.get_value_at(0, 3), CellValue::Number(3.0));
+        // B2 should be empty (transposed is 1 row)
+        assert_eq!(sheet.get_value_at(1, 1), CellValue::Empty);
+    }
+
+    #[test]
+    fn test_spill_range_2d() {
+        // A1# on a 2D spill should return the full 2D array
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(2,3)").unwrap();
+        // SUM of all 6 values: 1+2+3+4+5+6 = 21
+        sheet.set_cell_formula("E1", "=SUM(A1#)").unwrap();
+
+        workbook.calculate().unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 4),
+            Some(&CellValue::Number(21.0))
         );
     }
 }

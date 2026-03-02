@@ -367,12 +367,24 @@ impl Worksheet {
             .unwrap_or(CellValue::Empty))
     }
 
-    /// Get cell value by indices
+    /// Get cell value by indices.
+    ///
+    /// SpillTarget cells are resolved transparently: the actual spilled value
+    /// is returned by looking up the source formula cell's array_result.
     pub fn get_value_at(&self, row: u32, col: u16) -> CellValue {
-        self.cells
-            .get(row, col)
-            .map(|c| c.value.clone())
-            .unwrap_or(CellValue::Empty)
+        let cell = match self.cells.get(row, col) {
+            Some(c) => c,
+            None => return CellValue::Empty,
+        };
+        match &cell.value {
+            CellValue::SpillTarget {
+                source_row,
+                source_col,
+                offset_row,
+                offset_col,
+            } => self.resolve_spill_value(*source_row, *source_col, *offset_row, *offset_col),
+            other => other.clone(),
+        }
     }
 
     /// Get a cell's style index by address string.
@@ -1096,8 +1108,14 @@ impl Worksheet {
         })?;
 
         match &mut cell.value {
-            CellValue::Formula { cached_value, .. } => {
+            CellValue::Formula {
+                cached_value,
+                array_result,
+                ..
+            } => {
                 *cached_value = Some(Box::new(value));
+                // Clear any stale array_result from a previous array evaluation
+                *array_result = None;
                 Ok(())
             }
             _ => Err(Error::InvalidAddress(format!(
@@ -1107,15 +1125,76 @@ impl Worksheet {
         }
     }
 
-    /// Get the cached value of a formula cell, or the cell value directly if not a formula
+    /// Get the cached value of a formula cell, or the cell value directly if not a formula.
+    ///
+    /// SpillTarget cells are resolved: returns the actual spilled value by reference.
     pub fn get_calculated_value_at(&self, row: u32, col: u16) -> Option<&CellValue> {
-        self.cells.get(row, col).map(|cell| match &cell.value {
+        let cell = self.cells.get(row, col)?;
+        match &cell.value {
             CellValue::Formula {
                 cached_value: Some(v),
                 ..
-            } => v.as_ref(),
-            other => other,
-        })
+            } => Some(v.as_ref()),
+            CellValue::SpillTarget {
+                source_row,
+                source_col,
+                offset_row,
+                offset_col,
+            } => self.resolve_spill_value_ref(*source_row, *source_col, *offset_row, *offset_col),
+            other => Some(other),
+        }
+    }
+
+    /// Resolve a SpillTarget to its actual value (owned).
+    ///
+    /// Looks up the source formula cell's array_result and returns the value
+    /// at the given offset. Returns Empty if the source cell or array is missing.
+    fn resolve_spill_value(
+        &self,
+        source_row: u32,
+        source_col: u16,
+        offset_row: u32,
+        offset_col: u16,
+    ) -> CellValue {
+        self.cells
+            .get(source_row, source_col)
+            .and_then(|source| {
+                if let CellValue::Formula {
+                    array_result: Some(arr),
+                    ..
+                } = &source.value
+                {
+                    arr.get(offset_row as usize)
+                        .and_then(|r| r.get(offset_col as usize))
+                        .cloned()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(CellValue::Empty)
+    }
+
+    /// Resolve a SpillTarget to its actual value (by reference).
+    ///
+    /// Returns a reference into the source formula cell's array_result.
+    fn resolve_spill_value_ref(
+        &self,
+        source_row: u32,
+        source_col: u16,
+        offset_row: u32,
+        offset_col: u16,
+    ) -> Option<&CellValue> {
+        let source = self.cells.get(source_row, source_col)?;
+        if let CellValue::Formula {
+            array_result: Some(arr),
+            ..
+        } = &source.value
+        {
+            arr.get(offset_row as usize)
+                .and_then(|r| r.get(offset_col as usize))
+        } else {
+            None
+        }
     }
 
     // ==================== Dynamic Array Spill Support ====================
@@ -1180,47 +1259,41 @@ impl Worksheet {
         self.cells
             .register_spill_source(row, col, crate::cell::SpillInfo::new(num_rows, num_cols));
 
-        // Write the array values
-        for (row_offset, row_values) in array.into_iter().enumerate() {
-            for (col_offset, value) in row_values.into_iter().enumerate() {
-                let target_row = row + row_offset as u32;
-                let target_col = col + col_offset as u16;
+        // Store the full array in the source cell's array_result for SpillTarget resolution.
+        // SpillTarget cells only store coordinates; actual values are resolved through
+        // the source cell's array_result via get_value_at() / get_calculated_value_at().
+        let top_left_value = array[0][0].clone();
+        if let Some(cell) = self.cells.get_mut(row, col) {
+            if let CellValue::Formula {
+                cached_value,
+                array_result,
+                ..
+            } = &mut cell.value
+            {
+                *cached_value = Some(Box::new(top_left_value));
+                *array_result = Some(array);
+            }
+        }
 
+        // Write SpillTarget cells for all non-anchor positions
+        for row_offset in 0..num_rows {
+            for col_offset in 0..num_cols as u32 {
                 if row_offset == 0 && col_offset == 0 {
-                    // Source cell - update the formula's cached value and array_result
-                    if let Some(cell) = self.cells.get_mut(target_row, target_col) {
-                        if let CellValue::Formula {
-                            cached_value,
-                            array_result,
-                            ..
-                        } = &mut cell.value
-                        {
-                            *cached_value = Some(Box::new(value));
-                            // Note: We could store the full array here too, but it's
-                            // redundant since we have the spill targets
-                            *array_result = None;
-                        }
-                    }
-                } else {
-                    // Spill target cell
-                    let spill_target = CellValue::SpillTarget {
-                        source_row: row,
-                        source_col: col,
-                        offset_row: row_offset as u32,
-                        offset_col: col_offset as u16,
-                    };
-                    self.cells.set(
-                        target_row,
-                        target_col,
-                        crate::cell::CellData::new(spill_target),
-                    );
-
-                    // Store the actual value somewhere accessible
-                    // For now, SpillTarget cells don't store the value directly -
-                    // we'd need to look it up from the source. This is a simplification.
-                    // A full implementation would store the value in the SpillTarget or
-                    // maintain a separate cache.
+                    continue; // anchor cell already handled above
                 }
+                let target_row = row + row_offset;
+                let target_col = col + col_offset as u16;
+                let spill_target = CellValue::SpillTarget {
+                    source_row: row,
+                    source_col: col,
+                    offset_row: row_offset,
+                    offset_col: col_offset as u16,
+                };
+                self.cells.set(
+                    target_row,
+                    target_col,
+                    crate::cell::CellData::new(spill_target),
+                );
             }
         }
 
@@ -1252,6 +1325,13 @@ impl Worksheet {
         self.cells
             .get(row, col)
             .and_then(|c| c.value.spill_source())
+    }
+
+    /// Get the spill info (dimensions) for a spill source cell.
+    ///
+    /// Returns None if the cell is not a spill source.
+    pub fn get_spill_info(&self, row: u32, col: u16) -> Option<&crate::cell::SpillInfo> {
+        self.cells.get_spill_info(row, col)
     }
 
     /// Check if a range can be used for spilling
