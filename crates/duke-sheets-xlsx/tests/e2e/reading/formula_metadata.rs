@@ -131,3 +131,126 @@ fn test_outline_and_sheet_view_metadata() {
 
     cleanup_fixture(&path);
 }
+
+/// Test that the reader correctly parses cm attributes on cells.
+/// This simulates an Excel-generated file with dynamic array metadata.
+#[test]
+fn test_reader_parses_cm_attribute() {
+    let path = temp_fixture_path();
+    // Handcrafted sheet XML with cm attributes (like Excel would produce)
+    let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" cm="1"><f>SEQUENCE(3,1)</f><v>1</v></c>
+    </row>
+    <row r="2">
+      <c r="A2" cm="2"><v>2</v></c>
+    </row>
+    <row r="3">
+      <c r="A3" cm="2"><v>3</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+    write_single_sheet_fixture(&path, sheet_xml);
+
+    let workbook = XlsxReader::read_file(&path).expect("read workbook");
+    let sheet = workbook.worksheet(0).expect("sheet exists");
+
+    // A1 is a formula (anchor cell with cm=1)
+    assert_eq!(
+        sheet.get_value("A1").unwrap().formula_text(),
+        Some("=SEQUENCE(3,1)")
+    );
+    assert_eq!(sheet.get_value("A1").unwrap().as_number(), Some(1.0));
+
+    // A2 and A3 are plain numeric values (ghost cells with cm=2)
+    // After reading, they are just numbers (not SpillTarget — that's
+    // reconstructed by the formula engine during calculation).
+    assert_eq!(sheet.get_value("A2").unwrap().as_number(), Some(2.0));
+    assert_eq!(sheet.get_value("A3").unwrap().as_number(), Some(3.0));
+
+    cleanup_fixture(&path);
+}
+
+/// Test reader with cm attribute and string-type ghost cells.
+#[test]
+fn test_reader_parses_cm_attribute_string_ghost() {
+    let path = temp_fixture_path();
+    let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" cm="1" t="str"><f>UNIQUE(B1:B3)</f><v>apple</v></c>
+    </row>
+    <row r="2">
+      <c r="A2" cm="2" t="str"><v>banana</v></c>
+    </row>
+    <row r="3">
+      <c r="A3" cm="2" t="str"><v>cherry</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+    write_single_sheet_fixture(&path, sheet_xml);
+
+    let workbook = XlsxReader::read_file(&path).expect("read workbook");
+    let sheet = workbook.worksheet(0).expect("sheet exists");
+
+    // A1 is formula with string cached value
+    assert_eq!(
+        sheet.get_value("A1").unwrap().formula_text(),
+        Some("=UNIQUE(B1:B3)")
+    );
+
+    // Ghost cells are plain strings
+    assert_eq!(sheet.get_value("A2").unwrap().as_string(), Some("banana"));
+    assert_eq!(sheet.get_value("A3").unwrap().as_string(), Some("cherry"));
+
+    cleanup_fixture(&path);
+}
+
+/// Test reader with cm attribute on error-type cells.
+#[test]
+fn test_reader_parses_cm_attribute_error_anchor() {
+    let path = temp_fixture_path();
+    let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" cm="1" t="e"><f>SEQUENCE(3)</f><v>#SPILL!</v></c>
+    </row>
+    <row r="2">
+      <c r="A2"><v>999</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+    write_single_sheet_fixture(&path, sheet_xml);
+
+    let workbook = XlsxReader::read_file(&path).expect("read workbook");
+    let sheet = workbook.worksheet(0).expect("sheet exists");
+
+    // A1 is formula with #SPILL! cached error
+    let a1 = sheet.get_value("A1").unwrap();
+    assert!(a1.formula_text().is_some());
+    match &a1 {
+        duke_sheets_core::CellValue::Formula {
+            cached_value: Some(cv),
+            ..
+        } => {
+            assert!(
+                matches!(
+                    cv.as_ref(),
+                    duke_sheets_core::CellValue::Error(duke_sheets_core::CellError::Spill)
+                ),
+                "should be #SPILL! error, got {:?}",
+                cv
+            );
+        }
+        _ => panic!("expected formula with cached error, got {:?}", a1),
+    }
+
+    // A2 is the blocker value
+    assert_eq!(sheet.get_value("A2").unwrap().as_number(), Some(999.0));
+
+    cleanup_fixture(&path);
+}

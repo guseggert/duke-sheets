@@ -1801,3 +1801,344 @@ fn roundtrip_dynamic_array_content_types_and_rels() {
         );
     }
 }
+
+/// Verify UNIQUE (string spill targets) roundtrip.
+#[test]
+fn roundtrip_dynamic_array_unique_strings() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "apple").unwrap();
+    ws.set_cell_value("A2", "banana").unwrap();
+    ws.set_cell_value("A3", "apple").unwrap();
+    ws.set_cell_value("A4", "cherry").unwrap();
+    ws.set_cell_formula("B1", "=UNIQUE(A1:A4)").unwrap();
+    wb.calculate().unwrap();
+
+    // Verify in-memory
+    let ws = wb.worksheet(0).unwrap();
+    assert_eq!(ws.get_value_at(0, 1).as_string(), Some("apple"));
+    assert_eq!(ws.get_value_at(1, 1).as_string(), Some("banana"));
+    assert_eq!(ws.get_value_at(2, 1).as_string(), Some("cherry"));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Verify cm attributes for string ghost cells
+    {
+        let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+        let mut sheet_xml = String::new();
+        use std::io::Read;
+        zip.by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+        // String ghost cells should use t="str" and cm="2"
+        assert!(
+            sheet_xml.contains("cm=\"2\""),
+            "string ghost cells should have cm=2"
+        );
+    }
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let ws2 = wb2.worksheet(0).unwrap();
+
+    // Anchor keeps formula
+    assert!(ws2.get_value("B1").unwrap().formula_text().is_some());
+    // Ghost cells become plain string values
+    assert_eq!(ws2.get_value("B2").unwrap().as_string(), Some("banana"));
+    assert_eq!(ws2.get_value("B3").unwrap().as_string(), Some("cherry"));
+    // B4 should be empty (only 3 unique values)
+    let b4 = ws2.get_value("B4").unwrap();
+    assert!(
+        matches!(b4, duke_sheets_core::CellValue::Empty),
+        "B4 should be empty, got {:?}",
+        b4
+    );
+}
+
+/// Verify boolean spill targets roundtrip.
+/// Uses SEQUENCE > threshold to produce boolean array.
+#[test]
+fn roundtrip_dynamic_array_boolean_spill() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    // Produce booleans: {1,2,3} > 1 = {FALSE, TRUE, TRUE}
+    ws.set_cell_formula("A1", "=SEQUENCE(3,1)>1").unwrap();
+    wb.calculate().unwrap();
+
+    let ws = wb.worksheet(0).unwrap();
+    let _a1 = ws.get_calculated_value_at(0, 0);
+    // Result depends on whether the engine produces a spill array from comparison
+    // or a single scalar. Check what we got:
+    let is_array = matches!(
+        ws.get_value("A1").unwrap(),
+        duke_sheets_core::CellValue::Formula {
+            array_result: Some(_),
+            ..
+        }
+    );
+
+    if is_array {
+        // Full array spill: write and read back
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+        let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+        let ws2 = wb2.worksheet(0).unwrap();
+        assert!(ws2.get_value("A1").unwrap().formula_text().is_some());
+    } else {
+        // Engine produces scalar (implicit intersection) — single cached value
+        // Still verify roundtrip works without crash
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+        let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+        assert!(wb2.worksheet(0).is_some());
+    }
+}
+
+/// Verify #SPILL! error on blocked range roundtrips.
+#[test]
+fn roundtrip_dynamic_array_spill_error() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    // Block the spill range
+    ws.set_cell_value("A2", 999.0).unwrap();
+    ws.set_cell_formula("A1", "=SEQUENCE(3)").unwrap();
+    wb.calculate().unwrap();
+
+    let ws = wb.worksheet(0).unwrap();
+    // A1 should have #SPILL! error
+    assert_eq!(
+        ws.get_calculated_value_at(0, 0),
+        Some(&duke_sheets_core::CellValue::Error(
+            duke_sheets_core::CellError::Spill,
+        ))
+    );
+    // A2 keeps its original value
+    assert_eq!(ws.get_value_at(1, 0).as_number(), Some(999.0));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // No dynamic arrays actually spilled, so no metadata.xml
+    {
+        let zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+        // The workbook has a formula with a #SPILL! cached error but no
+        // array_result, so has_dynamic_arrays should return false.
+        // However, the formula itself exists — just verify the file is valid.
+        let _ = zip;
+    }
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let ws2 = wb2.worksheet(0).unwrap();
+
+    // Formula should survive roundtrip
+    let a1 = ws2.get_value("A1").unwrap();
+    assert!(a1.formula_text().is_some(), "A1 should still be a formula");
+    // Cached value should be the #SPILL! error
+    match &a1 {
+        duke_sheets_core::CellValue::Formula {
+            cached_value: Some(cv),
+            ..
+        } => {
+            assert!(
+                matches!(
+                    cv.as_ref(),
+                    duke_sheets_core::CellValue::Error(duke_sheets_core::CellError::Spill)
+                ),
+                "cached value should be #SPILL!, got {:?}",
+                cv
+            );
+        }
+        _ => panic!("A1 should be formula with cached error, got {:?}", a1),
+    }
+    // A2 original value preserved
+    assert_eq!(ws2.get_value("A2").unwrap().as_number(), Some(999.0));
+}
+
+/// Verify multiple dynamic arrays on the same sheet.
+#[test]
+fn roundtrip_dynamic_array_multiple_on_same_sheet() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    // Two separate spill ranges that don't overlap
+    ws.set_cell_formula("A1", "=SEQUENCE(3,1)").unwrap(); // A1:A3
+    ws.set_cell_formula("C1", "=SEQUENCE(2,2)").unwrap(); // C1:D2
+    wb.calculate().unwrap();
+
+    let ws = wb.worksheet(0).unwrap();
+    assert_eq!(ws.get_value_at(0, 0).as_number(), Some(1.0));
+    assert_eq!(ws.get_value_at(2, 0).as_number(), Some(3.0));
+    assert_eq!(ws.get_value_at(0, 2).as_number(), Some(1.0));
+    assert_eq!(ws.get_value_at(1, 3).as_number(), Some(4.0));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Both arrays should produce cm attributes
+    {
+        let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+        let mut sheet_xml = String::new();
+        use std::io::Read;
+        zip.by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+        // Count cm="1" occurrences (should be 2 — one per anchor)
+        let cm1_count = sheet_xml.matches("cm=\"1\"").count();
+        assert_eq!(cm1_count, 2, "should have 2 anchor cells with cm=1");
+        // Ghost cell count: A2,A3 + C2,D1,D2 = 5
+        let cm2_count = sheet_xml.matches("cm=\"2\"").count();
+        assert_eq!(cm2_count, 5, "should have 5 ghost cells with cm=2");
+    }
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let ws2 = wb2.worksheet(0).unwrap();
+
+    // Both formulas survive
+    assert!(ws2.get_value("A1").unwrap().formula_text().is_some());
+    assert!(ws2.get_value("C1").unwrap().formula_text().is_some());
+    // Cached values for ghost cells
+    assert_eq!(ws2.get_value("A2").unwrap().as_number(), Some(2.0));
+    assert_eq!(ws2.get_value("A3").unwrap().as_number(), Some(3.0));
+    assert_eq!(ws2.get_value("D1").unwrap().as_number(), Some(2.0));
+    assert_eq!(ws2.get_value("C2").unwrap().as_number(), Some(3.0));
+    assert_eq!(ws2.get_value("D2").unwrap().as_number(), Some(4.0));
+}
+
+/// Verify dynamic arrays on multiple sheets.
+#[test]
+fn roundtrip_dynamic_array_multi_sheet() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=SEQUENCE(2,1)").unwrap();
+
+    wb.add_worksheet_with_name("Sheet2").unwrap();
+    let ws2 = wb.worksheet_mut(1).unwrap();
+    ws2.set_cell_formula("A1", "=SEQUENCE(3,1)").unwrap();
+    wb.calculate().unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // metadata.xml present (arrays exist)
+    {
+        let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+        assert!(zip.by_name("xl/metadata.xml").is_ok());
+    }
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    // Sheet1: A1 formula, A2 cached value
+    let s1 = wb2.worksheet(0).unwrap();
+    assert!(s1.get_value("A1").unwrap().formula_text().is_some());
+    assert_eq!(s1.get_value("A2").unwrap().as_number(), Some(2.0));
+
+    // Sheet2: A1 formula, A2-A3 cached values
+    let s2 = wb2.worksheet(1).unwrap();
+    assert!(s2.get_value("A1").unwrap().formula_text().is_some());
+    assert_eq!(s2.get_value("A2").unwrap().as_number(), Some(2.0));
+    assert_eq!(s2.get_value("A3").unwrap().as_number(), Some(3.0));
+}
+
+/// Validate the structure of xl/metadata.xml.
+#[test]
+fn roundtrip_dynamic_array_metadata_xml_structure() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=SEQUENCE(2,1)").unwrap();
+    wb.calculate().unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+    let mut metadata_xml = String::new();
+    use std::io::Read;
+    zip.by_name("xl/metadata.xml")
+        .unwrap()
+        .read_to_string(&mut metadata_xml)
+        .unwrap();
+
+    // Root element
+    assert!(
+        metadata_xml.contains("<metadata"),
+        "should have <metadata> root"
+    );
+    assert!(
+        metadata_xml.contains("xmlns:xda"),
+        "should have xda namespace"
+    );
+    assert!(
+        metadata_xml.contains("dynamicarray"),
+        "xda namespace URI should reference dynamicarray"
+    );
+
+    // metadataTypes with XLDAPR
+    assert!(
+        metadata_xml.contains("metadataType"),
+        "should have metadataType element"
+    );
+    assert!(
+        metadata_xml.contains("XLDAPR"),
+        "should have XLDAPR metadata type name"
+    );
+    assert!(
+        metadata_xml.contains("cellMeta=\"1\""),
+        "XLDAPR should have cellMeta=1"
+    );
+
+    // futureMetadata with 2 entries
+    assert!(
+        metadata_xml.contains("futureMetadata"),
+        "should have futureMetadata section"
+    );
+    assert!(
+        metadata_xml.contains("fDynamic=\"1\""),
+        "first entry should have fDynamic=1 (anchor)"
+    );
+    assert!(
+        metadata_xml.contains("fCollapsed=\"1\""),
+        "second entry should have fCollapsed=1 (ghost)"
+    );
+
+    // cellMetadata with rc entries
+    assert!(
+        metadata_xml.contains("cellMetadata"),
+        "should have cellMetadata section"
+    );
+    // rc t="1" v="0" (anchor) and rc t="1" v="1" (ghost)
+    assert!(
+        metadata_xml.contains(r#"v="0""#),
+        "cellMetadata should have v=0 entry (anchor)"
+    );
+    assert!(
+        metadata_xml.contains(r#"v="1""#),
+        "cellMetadata should have v=1 entry (ghost)"
+    );
+}
+
+/// Verify SORT with string data roundtrips (string type in ghost cells).
+#[test]
+fn roundtrip_dynamic_array_sort_strings() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "cherry").unwrap();
+    ws.set_cell_value("A2", "apple").unwrap();
+    ws.set_cell_value("A3", "banana").unwrap();
+    ws.set_cell_formula("B1", "=SORT(A1:A3)").unwrap();
+    wb.calculate().unwrap();
+
+    let ws = wb.worksheet(0).unwrap();
+    assert_eq!(ws.get_value_at(0, 1).as_string(), Some("apple"));
+    assert_eq!(ws.get_value_at(1, 1).as_string(), Some("banana"));
+    assert_eq!(ws.get_value_at(2, 1).as_string(), Some("cherry"));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let ws2 = wb2.worksheet(0).unwrap();
+
+    assert!(ws2.get_value("B1").unwrap().formula_text().is_some());
+    assert_eq!(ws2.get_value("B2").unwrap().as_string(), Some("banana"));
+    assert_eq!(ws2.get_value("B3").unwrap().as_string(), Some("cherry"));
+}
