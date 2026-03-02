@@ -8,6 +8,8 @@ pub mod lookup;
 pub mod math;
 pub mod statistical;
 pub mod text;
+pub mod financial;
+pub mod database;
 
 use crate::error::FormulaResult;
 use crate::evaluator::{EvaluationContext, FormulaValue};
@@ -52,6 +54,8 @@ impl FunctionRegistry {
         registry.register_date_functions();
         registry.register_lookup_functions();
         registry.register_statistical_functions();
+        registry.register_financial_functions();
+        registry.register_database_functions();
 
         registry
     }
@@ -1438,6 +1442,275 @@ impl FunctionRegistry {
             min_args: 3,
             max_args: None, // avg_range + up to 127 criteria pairs
             implementation: statistical::fn_averageifs,
+            volatile: false,
+        });
+    }
+
+    fn register_financial_functions(&mut self) {
+        // PMT
+        self.register(FunctionDef {
+            name: "PMT",
+            min_args: 3,
+            max_args: Some(5),
+            implementation: financial::fn_pmt,
+            volatile: false,
+        });
+
+        // FV
+        self.register(FunctionDef {
+            name: "FV",
+            min_args: 3,
+            max_args: Some(5),
+            implementation: financial::fn_fv,
+            volatile: false,
+        });
+
+        // PV
+        self.register(FunctionDef {
+            name: "PV",
+            min_args: 3,
+            max_args: Some(5),
+            implementation: financial::fn_pv,
+            volatile: false,
+        });
+
+        // NPER
+        self.register(FunctionDef {
+            name: "NPER",
+            min_args: 3,
+            max_args: Some(5),
+            implementation: financial::fn_nper,
+            volatile: false,
+        });
+
+        // RATE
+        self.register(FunctionDef {
+            name: "RATE",
+            min_args: 3,
+            max_args: Some(6),
+            implementation: financial::fn_rate,
+            volatile: false,
+        });
+
+        // IPMT
+        self.register(FunctionDef {
+            name: "IPMT",
+            min_args: 4,
+            max_args: Some(6),
+            implementation: financial::fn_ipmt,
+            volatile: false,
+        });
+
+        // PPMT
+        self.register(FunctionDef {
+            name: "PPMT",
+            min_args: 4,
+            max_args: Some(6),
+            implementation: financial::fn_ppmt,
+            volatile: false,
+        });
+
+        // CUMIPMT
+        self.register(FunctionDef {
+            name: "CUMIPMT",
+            min_args: 6,
+            max_args: Some(6),
+            implementation: financial::fn_cumipmt,
+            volatile: false,
+        });
+
+        // CUMPRINC
+        self.register(FunctionDef {
+            name: "CUMPRINC",
+            min_args: 6,
+            max_args: Some(6),
+            implementation: financial::fn_cumprinc,
+            volatile: false,
+        });
+
+        // NPV
+        self.register(FunctionDef {
+            name: "NPV",
+            min_args: 2,
+            max_args: None,
+            implementation: financial::fn_npv,
+            volatile: false,
+        });
+
+        // IRR
+        self.register(FunctionDef {
+            name: "IRR",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: financial::fn_irr,
+            volatile: false,
+        });
+
+        // MIRR
+        self.register(FunctionDef {
+            name: "MIRR",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: financial::fn_mirr,
+            volatile: false,
+        });
+
+        // XNPV
+        self.register(FunctionDef {
+            name: "XNPV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: financial::fn_xnpv,
+            volatile: false,
+        });
+
+        // SLN
+        self.register(FunctionDef {
+            name: "SLN",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: financial::fn_sln,
+            volatile: false,
+        });
+
+        // SYD
+        self.register(FunctionDef {
+            name: "SYD",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: financial::fn_syd,
+            volatile: false,
+        });
+
+        // DB
+        self.register(FunctionDef {
+            name: "DB",
+            min_args: 4,
+            max_args: Some(5),
+            implementation: financial::fn_db,
+            volatile: false,
+        });
+
+        // DDB
+        self.register(FunctionDef {
+            name: "DDB",
+            min_args: 4,
+            max_args: Some(5),
+            implementation: financial::fn_ddb,
+            volatile: false,
+        });
+
+        // EFFECT
+        self.register(FunctionDef {
+            name: "EFFECT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: financial::fn_effect,
+            volatile: false,
+        });
+
+        // NOMINAL
+        self.register(FunctionDef {
+            name: "NOMINAL",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: financial::fn_nominal,
+            volatile: false,
+        });
+
+        // PDURATION
+        self.register(FunctionDef {
+            name: "PDURATION",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: financial::fn_pduration,
+            volatile: false,
+        });
+    }
+
+    fn register_database_functions(&mut self) {
+        self.register(FunctionDef {
+            name: "DAVERAGE",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_daverage,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DCOUNT",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dcount,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DCOUNTA",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dcounta,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DGET",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dget,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DMAX",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dmax,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DMIN",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dmin,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DPRODUCT",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dproduct,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DSTDEV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dstdev,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DSTDEVP",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dstdevp,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DSUM",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dsum,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DVAR",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dvar,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DVARP",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: database::fn_dvarp,
             volatile: false,
         });
     }
