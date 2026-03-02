@@ -106,7 +106,7 @@
 - [x] Cell reference resolution (single cells, ranges)
 - [x] Cross-sheet references (`Sheet2!A1`)
 - [x] Structured reference evaluation (`Table1[Column]`, `Table1[@Col]`, `[#Headers]`, `[#Totals]`, `[#All]`, `[#Data]`)
-### Implemented Functions (189 of ~506)
+### Implemented Functions (243 of ~506)
 
 | Category | Count | Functions (highlights) |
 |----------|-------|----------------------|
@@ -120,6 +120,7 @@
 | Compatibility | 9 | STDEV, STDEVP, VAR, VARP, MODE, PERCENTILE, QUARTILE, RANK, PERCENTRANK |
 | Financial | 20 | PMT, FV, PV, NPER, RATE, IPMT, PPMT, CUMIPMT, CUMPRINC, NPV, IRR, MIRR, XNPV, SLN, SYD, DB, DDB, EFFECT, NOMINAL, PDURATION |
 | Database | 12 | DAVERAGE, DCOUNT, DCOUNTA, DGET, DMAX, DMIN, DPRODUCT, DSTDEV, DSTDEVP, DSUM, DVAR, DVARP |
+| Engineering | 54 | BESSELI, BESSELJ, BESSELK, BESSELY, BIN2DEC, BIN2HEX, BIN2OCT, BITAND, BITOR, BITXOR, COMPLEX, CONVERT, DEC2BIN, DEC2HEX, DEC2OCT, DELTA, ERF, ERFC, GESTEP, HEX2BIN, HEX2DEC, HEX2OCT, IMABS, IMAGINARY, IMCOS, IMDIV, IMEXP, IMLN, IMPOWER, IMPRODUCT, IMREAL, IMSIN, IMSQRT, IMSUB, IMSUM, OCT2BIN, OCT2DEC, OCT2HEX, ... |
 
 ### CLI Tool (`duke`)
 - [x] `duke to-csv` — convert spreadsheet to CSV (with `-f` for formatted output)
@@ -180,13 +181,13 @@
 - [x] **Comment visibility (robust)** — parse VML `<x:Visible/>` element and tolerate whitespace in style `visibility:visible` check
 - [x] **Rich text in shared strings** — reader preserves `<rPr>` formatting runs as `CellValue::RichText`
 
-#### More Excel Functions (~317 remaining)
+#### More Excel Functions (~263 remaining)
 See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 
 | Category | Implemented | Total | Key missing functions |
 |----------|------------|-------|----------------------|
 | Financial | 20 | 55 | ACCRINT, DISC, DURATION, FVSCHEDULE, INTRATE, XIRR, YIELD, ... |
-| Engineering | 0 | 54 | BIN2DEC, DEC2BIN, HEX2DEC, CONVERT, COMPLEX |
+| Engineering | 54 | 54 | *(complete)* |
 | Database | 12 | 12 | *(complete)* |
 | Compatibility | 9 | 40 | CEILING, FLOOR, BETADIST, BINOMDIST, ... |
 | Statistical | 28 / 110 | 25% | CORREL, COVARIANCE, F.DIST, NORM.DIST, T.DIST, TREND, LINEST, ... |
@@ -349,7 +350,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Core (cell, workbook, worksheet) | 41 | ✅ |
 | Cell display formatting (CellView) | 51 | ✅ |
 | Formula parser | 43 | ✅ |
-| Formula evaluator + functions | 202 | ✅ |
+| Formula evaluator + functions | 258 | ✅ |
 | Calculation engine | 26 | ✅ |
 | XLSX roundtrip | 46 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
@@ -364,8 +365,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
-| Other (unit, doc, integration) | 223 | ✅ |
-| **Total** | **889** | ✅ |
+| Other (unit, doc, integration) | 167 | ✅ |
+| **Total** | **945** | ✅ |
 
 ---
 
@@ -386,7 +387,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 ```
 duke-sheets/
 ├── duke-sheets-core        # Data model, cell storage, locale
-├── duke-sheets-formula     # Parser, evaluator, 189 functions
+├── duke-sheets-formula     # Parser, evaluator, 243 functions
 ├── duke-sheets-xlsx        # XLSX read/write
 ├── duke-sheets-xls         # XLS reader (BIFF8, read-only)
 ├── duke-sheets-csv         # CSV read/write
