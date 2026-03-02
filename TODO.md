@@ -150,7 +150,7 @@
 - [x] Array literals (`{1,2,3}`)
 - [ ] Array formula entry (`Ctrl+Shift+Enter` style) in XLSX reader
 - [x] Dynamic array spilling in evaluator — SpillTarget value resolution, `#` (spill range) operator, `@` (implicit intersection) operator, two-pass calculation for spill-dependent formulas, #SPILL! error on blocked ranges
-- [ ] XLSX dynamic array metadata (`cm` attribute, `xl/metadata.xml`) — read/write `fDynamic`/`fCollapsed` markers
+- [x] XLSX dynamic array metadata (`cm` attribute, `xl/metadata.xml`) — writer emits `cm="1"` on anchor cells, `cm="2"` on ghost cells, writes `xl/metadata.xml` with XLDAPR structure; reader parses `cm` attribute
 
 ### Financial Functions
 - [x] Core financial function implementations added in `crates/duke-sheets-formula/src/functions/financial.rs` (PMT, FV, PV, NPER, RATE, IPMT, PPMT, CUMIPMT, CUMPRINC, NPV, IRR, MIRR, XNPV, SLN, SYD, DB, DDB, EFFECT, NOMINAL, PDURATION)
@@ -351,7 +351,7 @@ or cell-level metadata not available in standalone evaluation):
 | Formula parser | 43 | ✅ |
 | Formula evaluator + functions | 519 | ✅ |
 | Calculation engine | 36 | ✅ |
-| XLSX roundtrip | 46 | ✅ |
+| XLSX roundtrip | 50 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
@@ -365,7 +365,7 @@ or cell-level metadata not available in standalone evaluation):
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1222** | ✅ |
+| **Total** | **1226** | ✅ |
 
 ---
 

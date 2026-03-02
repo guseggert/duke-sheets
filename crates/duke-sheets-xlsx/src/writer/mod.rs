@@ -44,6 +44,8 @@ const RT_VML_DRAWING: &str =
 const RT_HYPERLINK: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
 const RT_TABLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
+const RT_SHEET_METADATA: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata";
 
 // Content types
 const CT_WORKBOOK: &str =
@@ -58,6 +60,8 @@ const CT_COMMENTS: &str =
 const CT_THEME: &str = "application/vnd.openxmlformats-officedocument.theme+xml";
 const CT_RELS: &str = "application/vnd.openxmlformats-package.relationships+xml";
 const CT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
+const CT_METADATA: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.metadata+xml";
 
 const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
@@ -463,6 +467,7 @@ impl XlsxWriter {
     /// Write a workbook to a writer
     pub fn write<W: Write + Seek>(workbook: &Workbook, writer: W) -> XlsxResult<()> {
         let mut zip = zip::ZipWriter::new(writer);
+        let needs_metadata = Self::has_dynamic_arrays(workbook);
 
         // Build a workbook-wide style table.
         let style_table = XlsxStyleTable::build(workbook);
@@ -496,6 +501,7 @@ impl XlsxWriter {
             &sheets_with_comments,
             &sst,
             &table_numbering,
+            needs_metadata,
         )?;
 
         // Write _rels/.rels
@@ -505,7 +511,7 @@ impl XlsxWriter {
         Self::write_workbook_xml(&mut zip, workbook)?;
 
         // Write xl/_rels/workbook.xml.rels
-        Self::write_workbook_rels(&mut zip, workbook, &sst)?;
+        Self::write_workbook_rels(&mut zip, workbook, &sst, needs_metadata)?;
 
         // Write xl/styles.xml
         Self::write_styles_xml(&mut zip, &style_table)?;
@@ -516,6 +522,10 @@ impl XlsxWriter {
         // Write shared string table
         if !sst.is_empty() {
             Self::write_shared_strings(&mut zip, &sst)?;
+        }
+
+        if needs_metadata {
+            Self::write_metadata_xml(&mut zip)?;
         }
 
         // Write worksheets and their relationships
@@ -565,6 +575,7 @@ impl XlsxWriter {
         sheets_with_comments: &[usize],
         sst: &SharedStringTable,
         table_numbering: &[(usize, usize, usize)],
+        has_metadata: bool,
     ) -> XlsxResult<()> {
         write_xml_part(zip, "[Content_Types].xml", |w| {
             let mut tag = BytesStart::new("Types");
@@ -629,6 +640,13 @@ impl XlsxWriter {
                 w.create_element("Override")
                     .with_attribute(("PartName", part.as_str()))
                     .with_attribute(("ContentType", CT_TABLE))
+                    .write_empty()?;
+            }
+
+            if has_metadata {
+                w.create_element("Override")
+                    .with_attribute(("PartName", "/xl/metadata.xml"))
+                    .with_attribute(("ContentType", CT_METADATA))
                     .write_empty()?;
             }
 
@@ -781,6 +799,7 @@ impl XlsxWriter {
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
         sst: &SharedStringTable,
+        has_metadata: bool,
     ) -> XlsxResult<()> {
         write_xml_part(zip, "xl/_rels/workbook.xml.rels", |w| {
             let mut tag = BytesStart::new("Relationships");
@@ -825,6 +844,16 @@ impl XlsxWriter {
                 .with_attribute(("Type", RT_THEME))
                 .with_attribute(("Target", "theme/theme1.xml"))
                 .write_empty()?;
+            next_rid += 1;
+
+            if has_metadata {
+                let rid = format!("rId{}", next_rid);
+                w.create_element("Relationship")
+                    .with_attribute(("Id", rid.as_str()))
+                    .with_attribute(("Type", RT_SHEET_METADATA))
+                    .with_attribute(("Target", "metadata.xml"))
+                    .write_empty()?;
+            }
 
             w.write_event(Event::End(BytesEnd::new("Relationships")))?;
             Ok(())
@@ -954,6 +983,105 @@ impl XlsxWriter {
             }
 
             w.write_event(Event::End(BytesEnd::new("sst")))?;
+            Ok(())
+        })
+    }
+
+    fn has_dynamic_arrays(workbook: &Workbook) -> bool {
+        for sheet in workbook.worksheets() {
+            for (_, _, cell) in sheet.iter_cells() {
+                match &cell.value {
+                    duke_sheets_core::CellValue::Formula {
+                        array_result: Some(_),
+                        ..
+                    } => return true,
+                    duke_sheets_core::CellValue::SpillTarget { .. } => return true,
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
+    fn write_metadata_xml<W: Write + Seek>(zip: &mut zip::ZipWriter<W>) -> XlsxResult<()> {
+        write_xml_part(zip, "xl/metadata.xml", |w| {
+            let mut tag = BytesStart::new("metadata");
+            tag.push_attribute(("xmlns", NS_SPREADSHEET));
+            tag.push_attribute((
+                "xmlns:xda",
+                "http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray",
+            ));
+            w.write_event(Event::Start(tag))?;
+
+            w.write_event(Event::Start(BytesStart::new("metadataTypes")))?;
+            let mut mt = BytesStart::new("metadataType");
+            mt.push_attribute(("name", "XLDAPR"));
+            mt.push_attribute(("minSupportedVersion", "120000"));
+            mt.push_attribute(("copy", "1"));
+            mt.push_attribute(("pasteAll", "1"));
+            mt.push_attribute(("pasteValues", "1"));
+            mt.push_attribute(("merge", "1"));
+            mt.push_attribute(("splitFirst", "1"));
+            mt.push_attribute(("rowColShift", "1"));
+            mt.push_attribute(("clearFormats", "1"));
+            mt.push_attribute(("clearComments", "1"));
+            mt.push_attribute(("assign", "1"));
+            mt.push_attribute(("coerce", "1"));
+            mt.push_attribute(("cellMeta", "1"));
+            w.write_event(Event::Empty(mt))?;
+            w.write_event(Event::End(BytesEnd::new("metadataTypes")))?;
+
+            let mut fm = BytesStart::new("futureMetadata");
+            fm.push_attribute(("name", "XLDAPR"));
+            fm.push_attribute(("count", "2"));
+            w.write_event(Event::Start(fm))?;
+
+            w.write_event(Event::Start(BytesStart::new("bk")))?;
+            w.write_event(Event::Start(BytesStart::new("extLst")))?;
+            let mut ext1 = BytesStart::new("ext");
+            ext1.push_attribute(("uri", "{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"));
+            w.write_event(Event::Start(ext1))?;
+            w.create_element("xda:dynamicArrayProperties")
+                .with_attribute(("fDynamic", "1"))
+                .with_attribute(("fCollapsed", "0"))
+                .write_empty()?;
+            w.write_event(Event::End(BytesEnd::new("ext")))?;
+            w.write_event(Event::End(BytesEnd::new("extLst")))?;
+            w.write_event(Event::End(BytesEnd::new("bk")))?;
+
+            w.write_event(Event::Start(BytesStart::new("bk")))?;
+            w.write_event(Event::Start(BytesStart::new("extLst")))?;
+            let mut ext2 = BytesStart::new("ext");
+            ext2.push_attribute(("uri", "{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"));
+            w.write_event(Event::Start(ext2))?;
+            w.create_element("xda:dynamicArrayProperties")
+                .with_attribute(("fDynamic", "0"))
+                .with_attribute(("fCollapsed", "1"))
+                .write_empty()?;
+            w.write_event(Event::End(BytesEnd::new("ext")))?;
+            w.write_event(Event::End(BytesEnd::new("extLst")))?;
+            w.write_event(Event::End(BytesEnd::new("bk")))?;
+
+            w.write_event(Event::End(BytesEnd::new("futureMetadata")))?;
+
+            let mut cm = BytesStart::new("cellMetadata");
+            cm.push_attribute(("count", "2"));
+            w.write_event(Event::Start(cm))?;
+            w.write_event(Event::Start(BytesStart::new("bk")))?;
+            w.create_element("rc")
+                .with_attribute(("t", "1"))
+                .with_attribute(("v", "0"))
+                .write_empty()?;
+            w.write_event(Event::End(BytesEnd::new("bk")))?;
+            w.write_event(Event::Start(BytesStart::new("bk")))?;
+            w.create_element("rc")
+                .with_attribute(("t", "1"))
+                .with_attribute(("v", "1"))
+                .write_empty()?;
+            w.write_event(Event::End(BytesEnd::new("bk")))?;
+            w.write_event(Event::End(BytesEnd::new("cellMetadata")))?;
+
+            w.write_event(Event::End(BytesEnd::new("metadata")))?;
             Ok(())
         })
     }
@@ -1406,8 +1534,7 @@ impl XlsxWriter {
                 written_rows.insert(row);
             }
 
-            // Write cell
-            Self::write_cell(w, row, col, cell, sheet_index, style_table, sst)?;
+            Self::write_cell(w, row, col, cell, sheet_index, style_table, sst, sheet)?;
         }
 
         if current_row.is_some() {
@@ -1472,6 +1599,7 @@ impl XlsxWriter {
         sheet_index: usize,
         style_table: &XlsxStyleTable,
         sst: &SharedStringTable,
+        worksheet: &duke_sheets_core::Worksheet,
     ) -> XlsxResult<()> {
         let addr = CellAddress::new(row, col);
         let cell_ref = addr.to_a1_string();
@@ -1527,7 +1655,9 @@ impl XlsxWriter {
                 w.write_event(Event::End(BytesEnd::new("c")))?;
             }
             duke_sheets_core::CellValue::Formula {
-                text, cached_value, ..
+                text,
+                cached_value,
+                array_result,
             } => {
                 let formula_text = if text.starts_with('=') {
                     &text[1..]
@@ -1551,6 +1681,9 @@ impl XlsxWriter {
                         c.push_attribute(("t", "e"));
                     }
                     _ => {}
+                }
+                if array_result.is_some() {
+                    c.push_attribute(("cm", "1"));
                 }
                 w.write_event(Event::Start(c))?;
                 w.create_element("f")
@@ -1600,7 +1733,62 @@ impl XlsxWriter {
                 }
             }
             duke_sheets_core::CellValue::SpillTarget { .. } => {
-                // SpillTarget cells are not written — computed at runtime.
+                let resolved = worksheet.get_value_at(row, col);
+                match &resolved {
+                    duke_sheets_core::CellValue::Number(n) => {
+                        let mut c = BytesStart::new("c");
+                        c.push_attribute(("r", cell_ref.as_str()));
+                        if xf_id != 0 {
+                            c.push_attribute(("s", xf_str.as_str()));
+                        }
+                        c.push_attribute(("cm", "2"));
+                        w.write_event(Event::Start(c))?;
+                        let v = n.to_string();
+                        w.create_element("v")
+                            .write_text_content(BytesText::new(&v))?;
+                        w.write_event(Event::End(BytesEnd::new("c")))?;
+                    }
+                    duke_sheets_core::CellValue::String(s) => {
+                        let mut c = BytesStart::new("c");
+                        c.push_attribute(("r", cell_ref.as_str()));
+                        if xf_id != 0 {
+                            c.push_attribute(("s", xf_str.as_str()));
+                        }
+                        c.push_attribute(("t", "str"));
+                        c.push_attribute(("cm", "2"));
+                        w.write_event(Event::Start(c))?;
+                        w.create_element("v")
+                            .write_text_content(BytesText::new(s.as_str()))?;
+                        w.write_event(Event::End(BytesEnd::new("c")))?;
+                    }
+                    duke_sheets_core::CellValue::Boolean(b) => {
+                        let mut c = BytesStart::new("c");
+                        c.push_attribute(("r", cell_ref.as_str()));
+                        if xf_id != 0 {
+                            c.push_attribute(("s", xf_str.as_str()));
+                        }
+                        c.push_attribute(("t", "b"));
+                        c.push_attribute(("cm", "2"));
+                        w.write_event(Event::Start(c))?;
+                        w.create_element("v")
+                            .write_text_content(BytesText::new(if *b { "1" } else { "0" }))?;
+                        w.write_event(Event::End(BytesEnd::new("c")))?;
+                    }
+                    duke_sheets_core::CellValue::Error(e) => {
+                        let mut c = BytesStart::new("c");
+                        c.push_attribute(("r", cell_ref.as_str()));
+                        if xf_id != 0 {
+                            c.push_attribute(("s", xf_str.as_str()));
+                        }
+                        c.push_attribute(("t", "e"));
+                        c.push_attribute(("cm", "2"));
+                        w.write_event(Event::Start(c))?;
+                        w.create_element("v")
+                            .write_text_content(BytesText::new(e.as_str()))?;
+                        w.write_event(Event::End(BytesEnd::new("c")))?;
+                    }
+                    _ => {}
+                }
             }
             duke_sheets_core::CellValue::RichText(runs) => {
                 let mut c = BytesStart::new("c");

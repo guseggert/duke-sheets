@@ -1612,3 +1612,192 @@ fn roundtrip_mixed_breaks() {
     assert_eq!(ws2.col_breaks().len(), 1);
     assert_eq!(ws2.col_breaks()[0].id, 2);
 }
+
+// ===========================================================================
+// Dynamic array spilling — XLSX metadata roundtrip
+// ===========================================================================
+
+/// Verify that SEQUENCE formula produces spilled values that survive roundtrip.
+/// After calculate→write→read, the anchor cell keeps its formula and the
+/// spill-target cells are written as plain cached values with cm attributes.
+#[test]
+fn roundtrip_dynamic_array_sequence() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=SEQUENCE(3,1)").unwrap();
+    wb.calculate().unwrap();
+
+    // Verify in-memory spill before writing
+    let ws = wb.worksheet(0).unwrap();
+    assert_eq!(ws.get_value_at(0, 0).as_number(), Some(1.0)); // A1
+    assert_eq!(ws.get_value_at(1, 0).as_number(), Some(2.0)); // A2
+    assert_eq!(ws.get_value_at(2, 0).as_number(), Some(3.0)); // A3
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Verify xl/metadata.xml is in the ZIP
+    {
+        let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+        assert!(
+            zip.by_name("xl/metadata.xml").is_ok(),
+            "xl/metadata.xml should be present for dynamic arrays"
+        );
+    }
+
+    // Verify cm attributes in sheet XML
+    {
+        let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+        let mut sheet_xml = String::new();
+        use std::io::Read;
+        zip.by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+        // Anchor cell A1 should have cm="1"
+        assert!(
+            sheet_xml.contains("cm=\"1\""),
+            "anchor cell should have cm=1 attribute"
+        );
+        // Ghost cells A2, A3 should have cm="2"
+        assert!(
+            sheet_xml.contains("cm=\"2\""),
+            "ghost cells should have cm=2 attribute"
+        );
+    }
+
+    // Read back and verify
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let ws2 = wb2.worksheet(0).unwrap();
+
+    // A1 should still be a formula
+    match ws2.get_value("A1").unwrap() {
+        duke_sheets_core::CellValue::Formula {
+            text, cached_value, ..
+        } => {
+            assert!(
+                text.contains("SEQUENCE"),
+                "formula text should contain SEQUENCE"
+            );
+            // Cached value should be 1.0 (top-left of sequence)
+            if let Some(cv) = cached_value {
+                assert_eq!(cv.as_number(), Some(1.0));
+            }
+        }
+        other => panic!("A1 should be a formula, got {:?}", other),
+    }
+
+    // A2 and A3 should have cached numeric values (written as plain cells)
+    // They were SpillTarget in memory but written as value cells.
+    let a2 = ws2.get_value("A2").unwrap();
+    assert_eq!(a2.as_number(), Some(2.0), "A2 cached spill value");
+    let a3 = ws2.get_value("A3").unwrap();
+    assert_eq!(a3.as_number(), Some(3.0), "A3 cached spill value");
+}
+
+/// Verify that a 2D SEQUENCE (rows × cols) roundtrips correctly.
+#[test]
+fn roundtrip_dynamic_array_sequence_2d() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=SEQUENCE(2,3)").unwrap();
+    wb.calculate().unwrap();
+
+    let ws = wb.worksheet(0).unwrap();
+    // 2×3 grid: [[1,2,3],[4,5,6]]
+    assert_eq!(ws.get_value_at(0, 0).as_number(), Some(1.0));
+    assert_eq!(ws.get_value_at(0, 1).as_number(), Some(2.0));
+    assert_eq!(ws.get_value_at(0, 2).as_number(), Some(3.0));
+    assert_eq!(ws.get_value_at(1, 0).as_number(), Some(4.0));
+    assert_eq!(ws.get_value_at(1, 1).as_number(), Some(5.0));
+    assert_eq!(ws.get_value_at(1, 2).as_number(), Some(6.0));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let ws2 = wb2.worksheet(0).unwrap();
+
+    // Anchor cell keeps formula
+    match ws2.get_value("A1").unwrap() {
+        duke_sheets_core::CellValue::Formula { text, .. } => {
+            assert!(text.contains("SEQUENCE"));
+        }
+        other => panic!("A1 should be formula, got {:?}", other),
+    }
+
+    // Spill targets become plain cached values after roundtrip
+    assert_eq!(ws2.get_value("B1").unwrap().as_number(), Some(2.0));
+    assert_eq!(ws2.get_value("C1").unwrap().as_number(), Some(3.0));
+    assert_eq!(ws2.get_value("A2").unwrap().as_number(), Some(4.0));
+    assert_eq!(ws2.get_value("B2").unwrap().as_number(), Some(5.0));
+    assert_eq!(ws2.get_value("C2").unwrap().as_number(), Some(6.0));
+}
+
+/// Verify metadata.xml is NOT written when there are no dynamic arrays.
+#[test]
+fn roundtrip_no_metadata_without_dynamic_arrays() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).unwrap();
+    ws.set_cell_formula("B1", "=A1*2").unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+    assert!(
+        zip.by_name("xl/metadata.xml").is_err(),
+        "xl/metadata.xml should NOT be present without dynamic arrays"
+    );
+}
+
+/// Verify content types and workbook rels include metadata entries.
+#[test]
+fn roundtrip_dynamic_array_content_types_and_rels() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=SEQUENCE(2,1)").unwrap();
+    wb.calculate().unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+
+    // Check [Content_Types].xml mentions metadata
+    {
+        let mut ct_xml = String::new();
+        use std::io::Read;
+        zip.by_name("[Content_Types].xml")
+            .unwrap()
+            .read_to_string(&mut ct_xml)
+            .unwrap();
+        assert!(
+            ct_xml.contains("metadata.xml"),
+            "Content_Types should reference metadata.xml"
+        );
+        assert!(
+            ct_xml.contains("metadata+xml"),
+            "Content_Types should have metadata content type"
+        );
+    }
+
+    // Check xl/_rels/workbook.xml.rels mentions metadata
+    {
+        let mut rels_xml = String::new();
+        use std::io::Read;
+        zip.by_name("xl/_rels/workbook.xml.rels")
+            .unwrap()
+            .read_to_string(&mut rels_xml)
+            .unwrap();
+        assert!(
+            rels_xml.contains("metadata.xml"),
+            "workbook rels should reference metadata.xml"
+        );
+        assert!(
+            rels_xml.contains("sheetMetadata"),
+            "workbook rels should have sheetMetadata relationship type"
+        );
+    }
+}
