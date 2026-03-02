@@ -315,6 +315,7 @@ impl XlsxReader {
         let mut current_cell_ref: Option<String> = None;
         let mut current_cell_type: Option<String> = None;
         let mut current_cell_style: Option<u32> = None;
+        let mut current_cell_cm: Option<u32> = None;
         let mut current_value: Option<String> = None;
         let mut current_formula: Option<String> = None;
         let mut current_formula_state = CellFormulaState::default();
@@ -771,6 +772,7 @@ impl XlsxReader {
                         current_cell_ref = None;
                         current_cell_type = None;
                         current_cell_style = None;
+                        current_cell_cm = None;
                         current_value = None;
                         current_formula = None;
                         current_formula_state = CellFormulaState::default();
@@ -787,6 +789,12 @@ impl XlsxReader {
                                 }
                                 b"s" => {
                                     current_cell_style = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse::<u32>().ok());
+                                }
+                                b"cm" => {
+                                    current_cell_cm = attr
                                         .unescape_value()
                                         .ok()
                                         .and_then(|s| s.parse::<u32>().ok());
@@ -964,6 +972,9 @@ impl XlsxReader {
                                     }
                                     has_inline_runs = false;
                                 } else {
+                                    if let Some(cm) = current_cell_cm {
+                                        log::trace!("Cell {} has cm={}", cell_ref, cm);
+                                    }
                                     let resolved_formula = resolve_cell_formula(
                                         cell_ref,
                                         current_formula.as_deref(),
