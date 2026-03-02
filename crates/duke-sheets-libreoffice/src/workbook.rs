@@ -3,7 +3,7 @@
 use libreoffice_urp::connection::UrpConnection;
 use libreoffice_urp::interface;
 use libreoffice_urp::proxy::{self, UnoProxy};
-use libreoffice_urp::types::{Any, Type, UnoValue, type_names};
+use libreoffice_urp::types::{type_names, Any, Type, UnoValue};
 
 use crate::error::{BridgeError, Result};
 use crate::uno_types::{self, BorderLine2, CellAddress, Locale, StyleSpec};
@@ -89,9 +89,7 @@ impl<'a> Workbook<'a> {
             .query_interface(&self.doc, iface_type)
             .await?
             .ok_or_else(|| {
-                BridgeError::OperationFailed(format!(
-                    "document does not support {type_name}"
-                ))
+                BridgeError::OperationFailed(format!("document does not support {type_name}"))
             })
     }
 
@@ -102,7 +100,10 @@ impl<'a> Workbook<'a> {
         let result = self.conn.call(&ssd_proxy, &method, &[]).await?;
         let oid = proxy::extract_oid_from_return(&result)
             .ok_or_else(|| BridgeError::OperationFailed("getSheets returned null".into()))?;
-        Ok(UnoProxy::new(oid, Type::interface(type_names::X_SPREADSHEETS)))
+        Ok(UnoProxy::new(
+            oid,
+            Type::interface(type_names::X_SPREADSHEETS),
+        ))
     }
 
     /// Get a sheet proxy by its zero-based index, typed for the given interface.
@@ -235,15 +236,13 @@ impl<'a> Workbook<'a> {
     }
 
     /// Set a cell's value given its proxy.
-    pub async fn set_cell_value_on_proxy(
-        &mut self,
-        cell: &UnoProxy,
-        cv: CellValue,
-    ) -> Result<()> {
+    pub async fn set_cell_value_on_proxy(&mut self, cell: &UnoProxy, cv: CellValue) -> Result<()> {
         match cv {
             CellValue::Number(n) => {
                 let method = interface::cell_set_value();
-                self.conn.call(cell, &method, &[UnoValue::Double(n)]).await?;
+                self.conn
+                    .call(cell, &method, &[UnoValue::Double(n)])
+                    .await?;
             }
             CellValue::String(s) => {
                 let text_proxy = self.qi(cell, type_names::X_TEXT_RANGE).await?;
@@ -398,14 +397,9 @@ impl<'a> Workbook<'a> {
         // Get NamedRanges via getPropertyValue("NamedRanges") on the document
         let nr_value = self.get_property(&self.doc.clone(), "NamedRanges").await?;
         let nr_oid = proxy::extract_oid_from_return(&nr_value).ok_or_else(|| {
-            BridgeError::OperationFailed(
-                "getPropertyValue(NamedRanges) returned null".into(),
-            )
+            BridgeError::OperationFailed("getPropertyValue(NamedRanges) returned null".into())
         })?;
-        let nr_proxy = UnoProxy::new(
-            nr_oid,
-            Type::interface(type_names::X_NAMED_RANGES),
-        );
+        let nr_proxy = UnoProxy::new(nr_oid, Type::interface(type_names::X_NAMED_RANGES));
 
         // Build CellAddress struct for the base position
         let cell_addr = CellAddress::new(sheet_index as i16, col, row);
@@ -452,11 +446,7 @@ impl<'a> Workbook<'a> {
     }
 
     /// Get a property value from a proxy object (via XPropertySet::getPropertyValue).
-    pub async fn get_property(
-        &mut self,
-        proxy: &UnoProxy,
-        name: &str,
-    ) -> Result<UnoValue> {
+    pub async fn get_property(&mut self, proxy: &UnoProxy, name: &str) -> Result<UnoValue> {
         let ps_proxy = self.qi(proxy, type_names::X_PROPERTY_SET).await?;
         let method = interface::get_property_value();
         self.conn
@@ -479,11 +469,7 @@ impl<'a> Workbook<'a> {
         let method = interface::get_cell_range_by_name();
         let result = self
             .conn
-            .call(
-                &sheet,
-                &method,
-                &[UnoValue::String(range_ref.to_string())],
-            )
+            .call(&sheet, &method, &[UnoValue::String(range_ref.to_string())])
             .await?;
         let oid = Self::require_oid(&result, "getCellRangeByName")?;
         Ok(UnoProxy::new(
@@ -546,10 +532,7 @@ impl<'a> Workbook<'a> {
         let method = interface::get_annotations();
         let result = self.conn.call(&sheet, &method, &[]).await?;
         let ann_oid = Self::require_oid(&result, "getAnnotations")?;
-        let ann_proxy = UnoProxy::new(
-            ann_oid,
-            Type::interface(type_names::X_SHEET_ANNOTATIONS),
-        );
+        let ann_proxy = UnoProxy::new(ann_oid, Type::interface(type_names::X_SHEET_ANNOTATIONS));
 
         // Create CellAddress struct
         let cell_addr = CellAddress::new(sheet_index as i16, col, row);
@@ -558,10 +541,7 @@ impl<'a> Workbook<'a> {
             .call(
                 &ann_proxy,
                 &method,
-                &[
-                    cell_addr.to_uno(),
-                    UnoValue::String(text.to_string()),
-                ],
+                &[cell_addr.to_uno(), UnoValue::String(text.to_string())],
             )
             .await?;
 
@@ -598,10 +578,7 @@ impl<'a> Workbook<'a> {
             .call(&rows_idx, &get_by_idx, &[UnoValue::Long(row)])
             .await?;
         let row_oid = Self::require_oid(&row_result, "rows.getByIndex")?;
-        let row_proxy = UnoProxy::new(
-            row_oid,
-            Type::interface(type_names::X_PROPERTY_SET),
-        );
+        let row_proxy = UnoProxy::new(row_oid, Type::interface(type_names::X_PROPERTY_SET));
 
         // Height is in 1/100 mm; 1pt = 0.3528mm → multiply by 35.28
         let height_100mm = (height_pt * 35.28) as i32;
@@ -629,10 +606,7 @@ impl<'a> Workbook<'a> {
         let method = interface::get_columns();
         let result = self.conn.call(&sheet, &method, &[]).await?;
         let cols_oid = Self::require_oid(&result, "getColumns")?;
-        let cols_proxy = UnoProxy::new(
-            cols_oid,
-            Type::interface(type_names::X_TABLE_COLUMNS),
-        );
+        let cols_proxy = UnoProxy::new(cols_oid, Type::interface(type_names::X_TABLE_COLUMNS));
 
         let cols_idx = self.qi(&cols_proxy, type_names::X_INDEX_ACCESS).await?;
         let get_by_idx = interface::get_by_index();
@@ -641,10 +615,7 @@ impl<'a> Workbook<'a> {
             .call(&cols_idx, &get_by_idx, &[UnoValue::Long(col)])
             .await?;
         let col_oid = Self::require_oid(&col_result, "cols.getByIndex")?;
-        let col_proxy = UnoProxy::new(
-            col_oid,
-            Type::interface(type_names::X_PROPERTY_SET),
-        );
+        let col_proxy = UnoProxy::new(col_oid, Type::interface(type_names::X_PROPERTY_SET));
 
         // Width in 1/100 mm; 1 char ≈ 2.5mm → multiply by 250
         let width_100mm = (width_chars * 250.0) as i32;
@@ -660,12 +631,7 @@ impl<'a> Workbook<'a> {
     }
 
     /// Hide or show a row on a sheet.
-    pub async fn set_row_hidden(
-        &mut self,
-        sheet_index: i32,
-        row: i32,
-        hidden: bool,
-    ) -> Result<()> {
+    pub async fn set_row_hidden(&mut self, sheet_index: i32, row: i32, hidden: bool) -> Result<()> {
         let sheet = self
             .get_sheet_proxy_as(sheet_index, type_names::X_COLUMN_ROW_RANGE)
             .await?;
@@ -681,10 +647,7 @@ impl<'a> Workbook<'a> {
             .call(&rows_idx, &get_by_idx, &[UnoValue::Long(row)])
             .await?;
         let row_oid = Self::require_oid(&row_result, "rows.getByIndex")?;
-        let row_proxy = UnoProxy::new(
-            row_oid,
-            Type::interface(type_names::X_PROPERTY_SET),
-        );
+        let row_proxy = UnoProxy::new(row_oid, Type::interface(type_names::X_PROPERTY_SET));
 
         self.set_property(
             &row_proxy,
@@ -700,11 +663,7 @@ impl<'a> Workbook<'a> {
     /// Hide or show a sheet by its zero-based index.
     ///
     /// Note: At least one sheet must remain visible in a workbook.
-    pub async fn set_sheet_hidden(
-        &mut self,
-        sheet_index: i32,
-        hidden: bool,
-    ) -> Result<()> {
+    pub async fn set_sheet_hidden(&mut self, sheet_index: i32, hidden: bool) -> Result<()> {
         let sheet = self
             .get_sheet_proxy_as(sheet_index, type_names::X_PROPERTY_SET)
             .await?;
@@ -735,16 +694,10 @@ impl<'a> Workbook<'a> {
         let ctrl_oid = Self::require_oid(&result, "getCurrentController")?;
 
         // Query the controller for XSpreadsheetView
-        let ctrl_raw = UnoProxy::new(
-            ctrl_oid,
-            Type::interface(type_names::X_SPREADSHEET_VIEW),
-        );
+        let ctrl_raw = UnoProxy::new(ctrl_oid, Type::interface(type_names::X_SPREADSHEET_VIEW));
         let ctrl = self
             .conn
-            .query_interface(
-                &ctrl_raw,
-                Type::interface(type_names::X_SPREADSHEET_VIEW),
-            )
+            .query_interface(&ctrl_raw, Type::interface(type_names::X_SPREADSHEET_VIEW))
             .await?
             .unwrap_or(ctrl_raw);
 
@@ -777,16 +730,11 @@ impl<'a> Workbook<'a> {
     /// Tries `queryKey` first; if not found (-1), calls `addNew`.
     pub async fn get_or_create_number_format(&mut self, format_str: &str) -> Result<i32> {
         // Get XNumberFormatsSupplier from the document
-        let nfs_proxy = self
-            .doc_qi(type_names::X_NUMBER_FORMATS_SUPPLIER)
-            .await?;
+        let nfs_proxy = self.doc_qi(type_names::X_NUMBER_FORMATS_SUPPLIER).await?;
         let method = interface::get_number_formats();
         let result = self.conn.call(&nfs_proxy, &method, &[]).await?;
         let nf_oid = Self::require_oid(&result, "getNumberFormats")?;
-        let nf_proxy = UnoProxy::new(
-            nf_oid,
-            Type::interface(type_names::X_NUMBER_FORMATS),
-        );
+        let nf_proxy = UnoProxy::new(nf_oid, Type::interface(type_names::X_NUMBER_FORMATS));
 
         let locale = Locale::empty();
 
@@ -821,10 +769,7 @@ impl<'a> Workbook<'a> {
             .call(
                 &nf_proxy,
                 &add_method,
-                &[
-                    UnoValue::String(format_str.to_string()),
-                    locale.to_uno(),
-                ],
+                &[UnoValue::String(format_str.to_string()), locale.to_uno()],
             )
             .await?;
 
@@ -844,11 +789,7 @@ impl<'a> Workbook<'a> {
     ///
     /// This mirrors the Python `_apply_style_to_cell` method, setting
     /// properties via XPropertySet.
-    pub async fn apply_style(
-        &mut self,
-        target: &UnoProxy,
-        spec: &StyleSpec,
-    ) -> Result<()> {
+    pub async fn apply_style(&mut self, target: &UnoProxy, spec: &StyleSpec) -> Result<()> {
         // Font properties
         if spec.bold {
             self.set_property(
@@ -1051,17 +992,14 @@ impl<'a> Workbook<'a> {
         // Borders — all sides
         if let Some(ref style_name) = spec.border_style {
             let color = spec.border_color.unwrap_or(0x000000);
-            let (line_style, line_width) =
-                uno_types::border_line_style::from_name(style_name);
+            let (line_style, line_width) = uno_types::border_line_style::from_name(style_name);
             let border = BorderLine2::new(color, line_style, line_width);
             for side in &["TopBorder", "BottomBorder", "LeftBorder", "RightBorder"] {
                 self.set_property(
                     target,
                     side,
                     UnoValue::Any(Box::new(Any {
-                        type_desc: Type::r#struct(
-                            uno_types::struct_type_names::BORDER_LINE2,
-                        ),
+                        type_desc: Type::r#struct(uno_types::struct_type_names::BORDER_LINE2),
                         value: border.to_uno(),
                     })),
                 )
@@ -1077,16 +1015,13 @@ impl<'a> Workbook<'a> {
             ("BottomBorder", &spec.bottom_border),
         ] {
             if let Some((ref style_name, color)) = border_opt {
-                let (line_style, line_width) =
-                    uno_types::border_line_style::from_name(style_name);
+                let (line_style, line_width) = uno_types::border_line_style::from_name(style_name);
                 let border = BorderLine2::new(*color, line_style, line_width);
                 self.set_property(
                     target,
                     prop_name,
                     UnoValue::Any(Box::new(Any {
-                        type_desc: Type::r#struct(
-                            uno_types::struct_type_names::BORDER_LINE2,
-                        ),
+                        type_desc: Type::r#struct(uno_types::struct_type_names::BORDER_LINE2),
                         value: border.to_uno(),
                     })),
                 )
@@ -1100,16 +1035,13 @@ impl<'a> Workbook<'a> {
             ("DiagonalBLTR", &spec.diagonal_bl_tr),
         ] {
             if let Some((ref style_name, color)) = border_opt {
-                let (line_style, line_width) =
-                    uno_types::border_line_style::from_name(style_name);
+                let (line_style, line_width) = uno_types::border_line_style::from_name(style_name);
                 let border = BorderLine2::new(*color, line_style, line_width);
                 self.set_property(
                     target,
                     prop_name,
                     UnoValue::Any(Box::new(Any {
-                        type_desc: Type::r#struct(
-                            uno_types::struct_type_names::BORDER_LINE2,
-                        ),
+                        type_desc: Type::r#struct(uno_types::struct_type_names::BORDER_LINE2),
                         value: border.to_uno(),
                     })),
                 )
@@ -1133,9 +1065,7 @@ impl<'a> Workbook<'a> {
                 target,
                 "CellProtection",
                 UnoValue::Any(Box::new(Any {
-                    type_desc: Type::r#struct(
-                        uno_types::struct_type_names::CELL_PROTECTION,
-                    ),
+                    type_desc: Type::r#struct(uno_types::struct_type_names::CELL_PROTECTION),
                     value: protection,
                 })),
             )
@@ -1207,15 +1137,9 @@ impl<'a> Workbook<'a> {
     // ========================================================================
 
     /// Create a named cell style for conditional formatting and return its name.
-    async fn create_cf_style(
-        &mut self,
-        style_name: &str,
-        spec: &StyleSpec,
-    ) -> Result<String> {
+    async fn create_cf_style(&mut self, style_name: &str, spec: &StyleSpec) -> Result<String> {
         // Get style families
-        let sf_proxy = self
-            .doc_qi(type_names::X_STYLE_FAMILIES_SUPPLIER)
-            .await?;
+        let sf_proxy = self.doc_qi(type_names::X_STYLE_FAMILIES_SUPPLIER).await?;
         let method = interface::get_style_families();
         let result = self.conn.call(&sf_proxy, &method, &[]).await?;
         let sf_oid = Self::require_oid(&result, "getStyleFamilies")?;
@@ -1225,17 +1149,10 @@ impl<'a> Workbook<'a> {
         let method = interface::get_by_name();
         let cs_result = self
             .conn
-            .call(
-                &sf,
-                &method,
-                &[UnoValue::String("CellStyles".to_string())],
-            )
+            .call(&sf, &method, &[UnoValue::String("CellStyles".to_string())])
             .await?;
         let cs_oid = Self::require_oid(&cs_result, "getByName(CellStyles)")?;
-        let cs_proxy = UnoProxy::new(
-            cs_oid,
-            Type::interface(type_names::X_NAME_CONTAINER),
-        );
+        let cs_proxy = UnoProxy::new(cs_oid, Type::interface(type_names::X_NAME_CONTAINER));
 
         // doc.createInstance("com.sun.star.style.CellStyle")
         let msf_proxy = self.doc_qi(type_names::X_MULTI_SERVICE_FACTORY).await?;
@@ -1251,10 +1168,7 @@ impl<'a> Workbook<'a> {
             )
             .await?;
         let style_oid = Self::require_oid(&style_result, "createInstance(CellStyle)")?;
-        let style_proxy = UnoProxy::new(
-            style_oid,
-            Type::interface(type_names::X_PROPERTY_SET),
-        );
+        let style_proxy = UnoProxy::new(style_oid, Type::interface(type_names::X_PROPERTY_SET));
 
         // insertByName(style_name, style)
         let method = interface::insert_by_name();
@@ -1304,9 +1218,7 @@ impl<'a> Workbook<'a> {
 
         // Extract the conditional format entries OID
         let cf_oid = proxy::extract_oid_from_return(&cf_value).ok_or_else(|| {
-            BridgeError::OperationFailed(
-                "getPropertyValue(ConditionalFormat) returned null".into(),
-            )
+            BridgeError::OperationFailed("getPropertyValue(ConditionalFormat) returned null".into())
         })?;
         let cf_proxy = UnoProxy::new(
             cf_oid,
@@ -1321,7 +1233,11 @@ impl<'a> Workbook<'a> {
                 UnoValue::Enum(op_val),
                 Type::r#enum("com.sun.star.sheet.ConditionOperator"),
             ),
-            make_property_value("Formula1", UnoValue::String(formula.to_string()), Type::string()),
+            make_property_value(
+                "Formula1",
+                UnoValue::String(formula.to_string()),
+                Type::string(),
+            ),
             make_property_value(
                 "StyleName",
                 UnoValue::String(style_name.to_string()),
@@ -1376,14 +1292,9 @@ impl<'a> Workbook<'a> {
         // Get validation sub-object
         let validation_value = self.get_property(&range, "Validation").await?;
         let val_oid = proxy::extract_oid_from_return(&validation_value).ok_or_else(|| {
-            BridgeError::OperationFailed(
-                "getPropertyValue(Validation) returned null".into(),
-            )
+            BridgeError::OperationFailed("getPropertyValue(Validation) returned null".into())
         })?;
-        let val_proxy = UnoProxy::new(
-            val_oid,
-            Type::interface(type_names::X_PROPERTY_SET),
-        );
+        let val_proxy = UnoProxy::new(val_oid, Type::interface(type_names::X_PROPERTY_SET));
 
         // Set Type
         let vtype = uno_types::validation_type::from_name(validation_type);
@@ -1579,8 +1490,7 @@ impl<'a> Workbook<'a> {
             UnoValue::String("Calc MS Excel 2007 XML".to_string()),
             Type::string(),
         );
-        let overwrite_pv =
-            make_property_value("Overwrite", UnoValue::Bool(true), Type::boolean());
+        let overwrite_pv = make_property_value("Overwrite", UnoValue::Bool(true), Type::boolean());
         let props = UnoValue::Sequence(vec![filter_pv, overwrite_pv]);
 
         let method = interface::store_to_url();
@@ -1616,8 +1526,7 @@ impl<'a> Workbook<'a> {
             UnoValue::String("MS Excel 97".to_string()),
             Type::string(),
         );
-        let overwrite_pv =
-            make_property_value("Overwrite", UnoValue::Bool(true), Type::boolean());
+        let overwrite_pv = make_property_value("Overwrite", UnoValue::Bool(true), Type::boolean());
         let props = UnoValue::Sequence(vec![filter_pv, overwrite_pv]);
 
         let method = interface::store_to_url();
@@ -1632,9 +1541,7 @@ impl<'a> Workbook<'a> {
     /// Close the workbook without saving.
     pub async fn close(self) -> Result<()> {
         let closeable_type = Type::interface(type_names::X_CLOSEABLE);
-        if let Ok(Some(closeable)) =
-            self.conn.query_interface(&self.doc, closeable_type).await
-        {
+        if let Ok(Some(closeable)) = self.conn.query_interface(&self.doc, closeable_type).await {
             let method = interface::closeable_close();
             let _ = self
                 .conn
@@ -1665,7 +1572,11 @@ mod tests {
 
     #[test]
     fn test_make_property_value() {
-        let pv = make_property_value("FilterName", UnoValue::String("test".into()), Type::string());
+        let pv = make_property_value(
+            "FilterName",
+            UnoValue::String("test".into()),
+            Type::string(),
+        );
         match pv {
             UnoValue::Struct(fields) => {
                 assert_eq!(fields.len(), 4);

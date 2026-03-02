@@ -77,7 +77,9 @@ fn test_string_values() {
 
         wb.set_cell_value("A1", "Hello").await.unwrap();
         wb.set_cell_value("A2", "World with spaces").await.unwrap();
-        wb.set_cell_value("A3", "Unicode: \u{65e5}\u{672c}\u{8a9e}").await.unwrap();
+        wb.set_cell_value("A3", "Unicode: \u{65e5}\u{672c}\u{8a9e}")
+            .await
+            .unwrap();
 
         wb.save(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();

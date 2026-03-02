@@ -108,14 +108,8 @@ fn test_xls_sheet_protection() {
 
     let sheet0 = workbook.worksheet(0).unwrap();
     let prot = sheet0.protection();
-    assert!(
-        prot.is_some(),
-        "Sheet 0 should have protection settings"
-    );
-    assert!(
-        prot.unwrap().protected,
-        "Sheet 0 should be protected"
-    );
+    assert!(prot.is_some(), "Sheet 0 should have protection settings");
+    assert!(prot.unwrap().protected, "Sheet 0 should be protected");
 
     let sheet1 = workbook.worksheet(1).unwrap();
     assert!(

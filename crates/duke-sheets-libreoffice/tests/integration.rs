@@ -61,10 +61,9 @@ async fn test_connect_and_bootstrap() {
 async fn test_create_workbook_and_set_cells() {
     skip_if_no_urp!();
 
-    let mut bridge =
-        duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002)
-            .await
-            .expect("connect");
+    let mut bridge = duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002)
+        .await
+        .expect("connect");
 
     let mut wb = bridge.create_workbook().await.expect("create_workbook");
 
@@ -75,14 +74,13 @@ async fn test_create_workbook_and_set_cells() {
     wb.set_cell_value("B1", "Hello").await.expect("set B1");
 
     // Set a formula
-    wb.set_cell_formula("C1", "=A1*2").await.expect("set C1 formula");
+    wb.set_cell_formula("C1", "=A1*2")
+        .await
+        .expect("set C1 formula");
 
     // Read back the numeric value
     let val = wb.get_cell_value("A1").await.expect("get A1");
-    assert!(
-        (val - 42.0).abs() < 1e-10,
-        "A1 should be 42.0, got {val}"
-    );
+    assert!((val - 42.0).abs() < 1e-10, "A1 should be 42.0, got {val}");
 
     // Read back the formula
     let formula = wb.get_cell_formula("C1").await.expect("get C1 formula");
@@ -105,20 +103,23 @@ async fn test_create_workbook_and_set_cells() {
 async fn test_save_and_read_back_with_duke_sheets() {
     skip_if_no_urp!();
 
-    let mut bridge =
-        duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002)
-            .await
-            .expect("connect");
+    let mut bridge = duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002)
+        .await
+        .expect("connect");
 
     let mut wb = bridge.create_workbook().await.expect("create_workbook");
 
     // Set various cell types
     wb.set_cell_value("A1", 3.14).await.expect("set A1");
-    wb.set_cell_value("A2", "Hello World").await.expect("set A2");
+    wb.set_cell_value("A2", "Hello World")
+        .await
+        .expect("set A2");
     wb.set_cell_formula("A3", "=A1*10").await.expect("set A3");
     wb.set_cell_value("B1", 100.0).await.expect("set B1");
     wb.set_cell_value("B2", 200.0).await.expect("set B2");
-    wb.set_cell_formula("B3", "=SUM(B1:B2)").await.expect("set B3");
+    wb.set_cell_formula("B3", "=SUM(B1:B2)")
+        .await
+        .expect("set B3");
 
     // Save to a temp file in the shared volume directory (accessible by both host and
     // the LibreOffice Docker container via -v /tmp/duke-sheets-urp:/tmp/duke-sheets-urp)
@@ -145,10 +146,7 @@ async fn test_save_and_read_back_with_duke_sheets() {
     let a1 = sheet.get_value_at(0, 0);
     match a1 {
         CellValue::Number(n) => {
-            assert!(
-                (n - 3.14).abs() < 1e-10,
-                "A1 should be 3.14, got {n}"
-            );
+            assert!((n - 3.14).abs() < 1e-10, "A1 should be 3.14, got {n}");
         }
         other => panic!("A1 should be Number(3.14), got {other:?}"),
     }
@@ -157,7 +155,11 @@ async fn test_save_and_read_back_with_duke_sheets() {
     let a2 = sheet.get_value_at(1, 0);
     match &a2 {
         CellValue::String(s) => {
-            assert_eq!(s.as_str(), "Hello World", "A2 should be 'Hello World', got '{s}'");
+            assert_eq!(
+                s.as_str(),
+                "Hello World",
+                "A2 should be 'Hello World', got '{s}'"
+            );
         }
         other => panic!("A2 should be String('Hello World'), got {other:?}"),
     }
@@ -224,9 +226,9 @@ async fn test_save_and_read_back_with_duke_sheets() {
 async fn test_set_array_formula() {
     skip_if_no_urp!();
 
-    let mut bridge =
-        duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002).await
-            .expect("connect");
+    let mut bridge = duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002)
+        .await
+        .expect("connect");
     let mut wb = bridge.create_workbook().await.expect("create_workbook");
 
     wb.set_cell_value("A1", 1.0).await.unwrap();

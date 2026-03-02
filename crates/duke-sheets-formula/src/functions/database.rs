@@ -649,10 +649,7 @@ mod tests {
             eval_db("DSTDEVP", "\"Height\"", r#"{"Tree";"Apple"}"#),
             4.109609335312651,
         );
-        assert_close(
-            eval_db("DSTDEVP", "2", r#"{"Tree";"Apple";"Pear"}"#),
-            3.6,
-        );
+        assert_close(eval_db("DSTDEVP", "2", r#"{"Tree";"Apple";"Pear"}"#), 3.6);
         assert_eq!(
             eval_db("DSTDEVP", "\"Height\"", r#"{"Tree";"Banana"}"#),
             FormulaValue::Error(CellError::Num)

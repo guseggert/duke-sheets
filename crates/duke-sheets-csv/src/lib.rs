@@ -2,12 +2,12 @@
 //!
 //! CSV reader and writer for duke-sheets.
 
+mod error;
+mod options;
 mod reader;
 mod writer;
-mod options;
-mod error;
 
+pub use error::{CsvError, CsvResult};
+pub use options::{CsvReadOptions, CsvWriteOptions};
 pub use reader::CsvReader;
 pub use writer::CsvWriter;
-pub use options::{CsvReadOptions, CsvWriteOptions};
-pub use error::{CsvError, CsvResult};

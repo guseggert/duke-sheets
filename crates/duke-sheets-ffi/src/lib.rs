@@ -4,11 +4,11 @@
 //!
 //! This crate provides a C-compatible API for using duke-sheets from other languages.
 
-mod handles;
+mod cell;
 mod error;
+mod handles;
 mod workbook;
 mod worksheet;
-mod cell;
 
 pub use error::*;
 pub use handles::Handle;

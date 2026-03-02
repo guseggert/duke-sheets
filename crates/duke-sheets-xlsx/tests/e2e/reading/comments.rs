@@ -13,7 +13,9 @@ fn test_comment_basic_text() {
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
         wb.set_cell_value("A1", "Has comment").await.unwrap();
-        wb.add_comment(0, "A1", "This is a comment", None).await.unwrap();
+        wb.add_comment(0, "A1", "This is a comment", None)
+            .await
+            .unwrap();
         wb.save(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();
     });
@@ -65,9 +67,14 @@ fn test_comment_unicode() {
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
         wb.set_cell_value("A1", "Unicode").await.unwrap();
-        wb.add_comment(0, "A1", "\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{30b3}\u{30e1}\u{30f3}\u{30c8}", None)
-            .await
-            .unwrap();
+        wb.add_comment(
+            0,
+            "A1",
+            "\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{30b3}\u{30e1}\u{30f3}\u{30c8}",
+            None,
+        )
+        .await
+        .unwrap();
         wb.save(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();
     });
@@ -94,11 +101,17 @@ fn test_multiple_comments() {
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
         wb.set_cell_value("A1", "Comment 1").await.unwrap();
-        wb.add_comment(0, "A1", "First comment", None).await.unwrap();
+        wb.add_comment(0, "A1", "First comment", None)
+            .await
+            .unwrap();
         wb.set_cell_value("A2", "Comment 2").await.unwrap();
-        wb.add_comment(0, "A2", "Second comment", None).await.unwrap();
+        wb.add_comment(0, "A2", "Second comment", None)
+            .await
+            .unwrap();
         wb.set_cell_value("A3", "Comment 3").await.unwrap();
-        wb.add_comment(0, "A3", "Third comment", None).await.unwrap();
+        wb.add_comment(0, "A3", "Third comment", None)
+            .await
+            .unwrap();
         wb.save(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();
     });

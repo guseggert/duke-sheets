@@ -12,9 +12,8 @@ use crate::error::{Result, UrpError};
 use crate::interface::{self, MethodDef};
 use crate::marshal;
 use crate::protocol::{
-    self, ReaderState, UrpMessage, WriterState,
+    self, ReaderState, UrpMessage, WriterState, FN_COMMIT_CHANGE, FN_REQUEST_CHANGE,
     OID_PROTOCOL_PROPERTIES, TID_PROTOCOL_PROPERTIES,
-    FN_REQUEST_CHANGE, FN_COMMIT_CHANGE,
 };
 use crate::proxy::{self, UnoProxy};
 use crate::transport::Transport;
@@ -107,7 +106,9 @@ impl UrpConnection {
                     if reply.is_exception {
                         // The other side doesn't support protocol properties negotiation.
                         // This is fine — we just skip CurrentContext mode.
-                        tracing::debug!("Protocol negotiation: exception in reply, skipping CurrentContext");
+                        tracing::debug!(
+                            "Protocol negotiation: exception in reply, skipping CurrentContext"
+                        );
                         return Ok(());
                     }
 
@@ -116,7 +117,10 @@ impl UrpConnection {
                     let result = if body.len() >= 4 {
                         marshal::read_value(&mut body, &Type::long())?
                     } else {
-                        tracing::debug!("Protocol negotiation: reply body too short ({}), assuming 1", body.len());
+                        tracing::debug!(
+                            "Protocol negotiation: reply body too short ({}), assuming 1",
+                            body.len()
+                        );
                         UnoValue::Long(1) // Assume success if empty
                     };
 
@@ -130,7 +134,9 @@ impl UrpConnection {
                         }
                         UnoValue::Long(0) => {
                             // We lost — wait for their commitChange, then reply
-                            tracing::debug!("Protocol negotiation: we lost, waiting for their commitChange");
+                            tracing::debug!(
+                                "Protocol negotiation: we lost, waiting for their commitChange"
+                            );
                             self.wait_for_commit_change().await?;
                             self.current_context_mode = true;
                             return Ok(());
@@ -142,7 +148,9 @@ impl UrpConnection {
                             return Ok(());
                         }
                         other => {
-                            tracing::warn!("Protocol negotiation: unexpected reply value: {other:?}");
+                            tracing::warn!(
+                                "Protocol negotiation: unexpected reply value: {other:?}"
+                            );
                             return Ok(());
                         }
                     }
@@ -178,17 +186,20 @@ impl UrpConnection {
 
                         // Send reply
                         let mut reply_body = BytesMut::new();
-                        marshal::write_value(&mut reply_body, &UnoValue::Long(reply_val), &Type::long());
-                        let reply_msg = self.writer_state.encode_reply(
-                            &req.tid,
-                            false,
-                            &reply_body,
+                        marshal::write_value(
+                            &mut reply_body,
+                            &UnoValue::Long(reply_val),
+                            &Type::long(),
                         );
+                        let reply_msg =
+                            self.writer_state.encode_reply(&req.tid, false, &reply_body);
                         self.transport.send_message(&reply_msg).await?;
 
                         if reply_val == 1 {
                             // They won — wait for their commitChange
-                            tracing::debug!("Protocol negotiation: they won, waiting for commitChange");
+                            tracing::debug!(
+                                "Protocol negotiation: they won, waiting for commitChange"
+                            );
                             self.wait_for_commit_change().await?;
                             self.current_context_mode = true;
                             return Ok(());
@@ -285,8 +296,10 @@ impl UrpConnection {
         let mut full_body = BytesMut::new();
 
         // In CurrentContext mode, prepend a null XCurrentContext interface reference
-        if self.current_context_mode && !method.one_way
-            && method.name != "requestChange" && method.name != "commitChange"
+        if self.current_context_mode
+            && !method.one_way
+            && method.name != "requestChange"
+            && method.name != "commitChange"
         {
             // Null interface reference: empty string + 0xFFFF cache index
             marshal::write_string(&mut full_body, "");
@@ -305,7 +318,9 @@ impl UrpConnection {
 
         tracing::trace!(
             "Calling {}() on OID={}, fn_id={}",
-            method.name, proxy.oid, method.index
+            method.name,
+            proxy.oid,
+            method.index
         );
 
         self.transport.send_message(&msg).await?;
@@ -339,7 +354,8 @@ impl UrpConnection {
                                 UnoValue::Exception(e) => e.message.clone(),
                                 UnoValue::Struct(members) => {
                                     // Try to extract message from first member
-                                    members.first()
+                                    members
+                                        .first()
                                         .and_then(|v| v.as_string())
                                         .unwrap_or("unknown exception")
                                         .to_string()
@@ -428,7 +444,9 @@ impl UrpConnection {
         );
 
         let xi_type = Type::interface("com.sun.star.uno.XInterface");
-        let result = self.query_interface(&initial_proxy, xi_type.clone()).await?;
+        let result = self
+            .query_interface(&initial_proxy, xi_type.clone())
+            .await?;
 
         match result {
             Some(proxy) => Ok(proxy),
@@ -450,12 +468,16 @@ impl UrpConnection {
         tracing::debug!("Bootstrapping UNO environment...");
 
         // 1. Get the initial XComponentContext
-        let ctx_proxy_raw = self.get_initial_object("StarOffice.ComponentContext").await?;
+        let ctx_proxy_raw = self
+            .get_initial_object("StarOffice.ComponentContext")
+            .await?;
         tracing::debug!("Got initial object OID={}", ctx_proxy_raw.oid);
 
         // queryInterface for XComponentContext
         let ctx_type = Type::interface(type_names::X_COMPONENT_CONTEXT);
-        let ctx_proxy = self.query_interface(&ctx_proxy_raw, ctx_type.clone()).await?
+        let ctx_proxy = self
+            .query_interface(&ctx_proxy_raw, ctx_type.clone())
+            .await?
             .unwrap_or_else(|| UnoProxy::new(ctx_proxy_raw.oid.clone(), ctx_type));
 
         tracing::debug!("Got XComponentContext OID={}", ctx_proxy.oid);
@@ -473,18 +495,27 @@ impl UrpConnection {
 
         // 3. Create the Desktop via the ServiceManager
         let create_inst = interface::create_instance_with_context();
-        let desktop_result = self.call(&sm_proxy, &create_inst, &[
-            UnoValue::String(type_names::SERVICE_DESKTOP.to_string()),
-            UnoValue::Interface(ctx_proxy.oid.clone()),
-        ]).await?;
+        let desktop_result = self
+            .call(
+                &sm_proxy,
+                &create_inst,
+                &[
+                    UnoValue::String(type_names::SERVICE_DESKTOP.to_string()),
+                    UnoValue::Interface(ctx_proxy.oid.clone()),
+                ],
+            )
+            .await?;
 
-        let desktop_oid = proxy::extract_oid_from_return(&desktop_result)
-            .ok_or_else(|| UrpError::Protocol("createInstanceWithContext(Desktop) returned null".into()))?;
+        let desktop_oid = proxy::extract_oid_from_return(&desktop_result).ok_or_else(|| {
+            UrpError::Protocol("createInstanceWithContext(Desktop) returned null".into())
+        })?;
 
         // queryInterface for XComponentLoader on the Desktop
         let loader_type = Type::interface(type_names::X_COMPONENT_LOADER);
         let desktop_raw = UnoProxy::new(desktop_oid, loader_type.clone());
-        let desktop_proxy = self.query_interface(&desktop_raw, loader_type.clone()).await?
+        let desktop_proxy = self
+            .query_interface(&desktop_raw, loader_type.clone())
+            .await?
             .unwrap_or(desktop_raw);
 
         tracing::info!("Got Desktop/ComponentLoader: {}", desktop_proxy.oid);

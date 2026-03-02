@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::rich_text::{RichTextRun, rich_text_to_plain};
+use crate::rich_text::{rich_text_to_plain, RichTextRun};
 
 /// Represents the value stored in a cell
 #[derive(Debug, Clone, PartialEq)]

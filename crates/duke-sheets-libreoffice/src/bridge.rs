@@ -7,7 +7,7 @@ use std::time::Duration;
 use libreoffice_urp::connection::UrpConnection;
 use libreoffice_urp::interface;
 use libreoffice_urp::proxy::{self, UnoProxy};
-use libreoffice_urp::types::{Type, UnoValue, type_names};
+use libreoffice_urp::types::{type_names, Type, UnoValue};
 use tokio::process::{Child, Command};
 use tokio::time::sleep;
 
@@ -135,22 +135,25 @@ impl LibreOfficeBridge {
     pub async fn create_workbook(&mut self) -> Result<Workbook<'_>> {
         // loadComponentFromURL("private:factory/scalc", "_blank", 0, ())
         let method = interface::load_component_from_url();
-        let result = self.conn.call(&self.desktop, &method, &[
-            UnoValue::String("private:factory/scalc".to_string()),
-            UnoValue::String("_blank".to_string()),
-            UnoValue::Long(0),
-            UnoValue::Sequence(vec![]), // empty PropertyValue sequence
-        ]).await?;
+        let result = self
+            .conn
+            .call(
+                &self.desktop,
+                &method,
+                &[
+                    UnoValue::String("private:factory/scalc".to_string()),
+                    UnoValue::String("_blank".to_string()),
+                    UnoValue::Long(0),
+                    UnoValue::Sequence(vec![]), // empty PropertyValue sequence
+                ],
+            )
+            .await?;
 
-        let doc_oid = proxy::extract_oid_from_return(&result)
-            .ok_or_else(|| BridgeError::OperationFailed(
-                "loadComponentFromURL returned null".into()
-            ))?;
+        let doc_oid = proxy::extract_oid_from_return(&result).ok_or_else(|| {
+            BridgeError::OperationFailed("loadComponentFromURL returned null".into())
+        })?;
 
-        let doc_proxy = UnoProxy::new(
-            doc_oid,
-            Type::interface(type_names::X_COMPONENT),
-        );
+        let doc_proxy = UnoProxy::new(doc_oid, Type::interface(type_names::X_COMPONENT));
 
         tracing::info!("Created new spreadsheet: {}", doc_proxy.oid);
 
@@ -176,22 +179,25 @@ impl LibreOfficeBridge {
         };
 
         let method = interface::load_component_from_url();
-        let result = self.conn.call(&self.desktop, &method, &[
-            UnoValue::String(url),
-            UnoValue::String("_blank".to_string()),
-            UnoValue::Long(0),
-            UnoValue::Sequence(vec![]),
-        ]).await?;
+        let result = self
+            .conn
+            .call(
+                &self.desktop,
+                &method,
+                &[
+                    UnoValue::String(url),
+                    UnoValue::String("_blank".to_string()),
+                    UnoValue::Long(0),
+                    UnoValue::Sequence(vec![]),
+                ],
+            )
+            .await?;
 
-        let doc_oid = proxy::extract_oid_from_return(&result)
-            .ok_or_else(|| BridgeError::OperationFailed(
-                "loadComponentFromURL returned null for open".into()
-            ))?;
+        let doc_oid = proxy::extract_oid_from_return(&result).ok_or_else(|| {
+            BridgeError::OperationFailed("loadComponentFromURL returned null for open".into())
+        })?;
 
-        let doc_proxy = UnoProxy::new(
-            doc_oid,
-            Type::interface(type_names::X_COMPONENT),
-        );
+        let doc_proxy = UnoProxy::new(doc_oid, Type::interface(type_names::X_COMPONENT));
 
         Ok(Workbook::new(&mut self.conn, doc_proxy))
     }
@@ -213,22 +219,24 @@ impl LibreOfficeBridge {
         desktop: &UnoProxy,
     ) -> Result<Workbook<'a>> {
         let method = interface::load_component_from_url();
-        let result = conn.call(desktop, &method, &[
-            UnoValue::String("private:factory/scalc".to_string()),
-            UnoValue::String("_blank".to_string()),
-            UnoValue::Long(0),
-            UnoValue::Sequence(vec![]),
-        ]).await?;
+        let result = conn
+            .call(
+                desktop,
+                &method,
+                &[
+                    UnoValue::String("private:factory/scalc".to_string()),
+                    UnoValue::String("_blank".to_string()),
+                    UnoValue::Long(0),
+                    UnoValue::Sequence(vec![]),
+                ],
+            )
+            .await?;
 
-        let doc_oid = proxy::extract_oid_from_return(&result)
-            .ok_or_else(|| BridgeError::OperationFailed(
-                "loadComponentFromURL returned null".into()
-            ))?;
+        let doc_oid = proxy::extract_oid_from_return(&result).ok_or_else(|| {
+            BridgeError::OperationFailed("loadComponentFromURL returned null".into())
+        })?;
 
-        let doc_proxy = UnoProxy::new(
-            doc_oid,
-            Type::interface(type_names::X_COMPONENT),
-        );
+        let doc_proxy = UnoProxy::new(doc_oid, Type::interface(type_names::X_COMPONENT));
 
         tracing::info!("Created new spreadsheet: {}", doc_proxy.oid);
 

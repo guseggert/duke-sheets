@@ -668,18 +668,45 @@ fn test_write_header_footer_even_first_and_flags() {
     let ps2 = s.page_setup();
 
     // Verify all header/footer strings survived Excel roundtrip
-    assert_eq!(ps2.odd_header.as_deref(), Some("&COdd Header"), "odd_header");
-    assert_eq!(ps2.odd_footer.as_deref(), Some("&COdd Footer"), "odd_footer");
-    assert_eq!(ps2.even_header.as_deref(), Some("&CEven Header"), "even_header");
-    assert_eq!(ps2.even_footer.as_deref(), Some("&CEven Footer"), "even_footer");
-    assert_eq!(ps2.first_header.as_deref(), Some("&CFirst Page"), "first_header");
-    assert_eq!(ps2.first_footer.as_deref(), Some("&CFirst Footer"), "first_footer");
+    assert_eq!(
+        ps2.odd_header.as_deref(),
+        Some("&COdd Header"),
+        "odd_header"
+    );
+    assert_eq!(
+        ps2.odd_footer.as_deref(),
+        Some("&COdd Footer"),
+        "odd_footer"
+    );
+    assert_eq!(
+        ps2.even_header.as_deref(),
+        Some("&CEven Header"),
+        "even_header"
+    );
+    assert_eq!(
+        ps2.even_footer.as_deref(),
+        Some("&CEven Footer"),
+        "even_footer"
+    );
+    assert_eq!(
+        ps2.first_header.as_deref(),
+        Some("&CFirst Page"),
+        "first_header"
+    );
+    assert_eq!(
+        ps2.first_footer.as_deref(),
+        Some("&CFirst Footer"),
+        "first_footer"
+    );
 
     // Verify flags
     assert!(ps2.different_odd_even, "different_odd_even");
     assert!(ps2.different_first, "different_first");
     assert!(!ps2.scale_with_doc, "scale_with_doc should be false");
-    assert!(!ps2.align_with_margins, "align_with_margins should be false");
+    assert!(
+        !ps2.align_with_margins,
+        "align_with_margins should be false"
+    );
 }
 
 #[test]
@@ -716,8 +743,7 @@ fn test_read_header_footer_from_excel() {
     }
 
     crate::pull_file_from_vm(&fixture);
-    let workbook =
-        duke_sheets_xlsx::XlsxReader::read_file(&fixture.host_path).expect("read");
+    let workbook = duke_sheets_xlsx::XlsxReader::read_file(&fixture.host_path).expect("read");
     let sheet = workbook.worksheet(0).expect("worksheet");
     let ps = sheet.page_setup();
 

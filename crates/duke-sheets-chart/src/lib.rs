@@ -2,13 +2,13 @@
 //!
 //! Chart support for duke-sheets.
 
-mod chart;
-mod series;
 mod axis;
+mod chart;
 mod legend;
+mod series;
 mod types;
 
-pub use chart::{Chart, ChartType, ChartAnchor};
-pub use series::{DataSeries, DataReference};
 pub use axis::{Axis, AxisPosition};
+pub use chart::{Chart, ChartAnchor, ChartType};
 pub use legend::{Legend, LegendPosition};
+pub use series::{DataReference, DataSeries};

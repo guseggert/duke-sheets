@@ -100,8 +100,14 @@ fn test_cf_dxf_fill() {
     let rules = sheet.conditional_formats();
     assert!(!rules.is_empty());
 
-    let format = rules[0].format.as_ref().expect("Rule should have a DXF format");
-    assert!(format.fill != FillStyle::None, "DXF should have non-None fill");
+    let format = rules[0]
+        .format
+        .as_ref()
+        .expect("Rule should have a DXF format");
+    assert!(
+        format.fill != FillStyle::None,
+        "DXF should have non-None fill"
+    );
 
     cleanup_fixture(&path);
 }
@@ -125,7 +131,10 @@ fn test_cf_dxf_alignment() {
     let rules = sheet.conditional_formats();
     assert!(!rules.is_empty());
 
-    let format = rules[0].format.as_ref().expect("Rule should have a DXF format");
+    let format = rules[0]
+        .format
+        .as_ref()
+        .expect("Rule should have a DXF format");
     assert_eq!(format.alignment.horizontal, HorizontalAlignment::Center);
     assert!(format.alignment.wrap_text, "DXF should have wrap_text");
 
@@ -164,8 +173,14 @@ fn test_cf_dxf_number_format() {
     let rules = sheet.conditional_formats();
     assert!(!rules.is_empty());
 
-    let format = rules[0].format.as_ref().expect("Rule should have a DXF format");
-    assert!(format.number_format != NumberFormat::General, "DXF should have non-General number format");
+    let format = rules[0]
+        .format
+        .as_ref()
+        .expect("Rule should have a DXF format");
+    assert!(
+        format.number_format != NumberFormat::General,
+        "DXF should have non-General number format"
+    );
 
     cleanup_fixture(&path);
 }
@@ -189,7 +204,10 @@ fn test_cf_dxf_border() {
     let rules = sheet.conditional_formats();
     assert!(!rules.is_empty());
 
-    let format = rules[0].format.as_ref().expect("Rule should have a DXF format");
+    let format = rules[0]
+        .format
+        .as_ref()
+        .expect("Rule should have a DXF format");
     let has_edges = format.border.left.is_some()
         || format.border.right.is_some()
         || format.border.top.is_some()
@@ -237,7 +255,11 @@ fn test_cf_multiple_rules() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let rules = sheet.conditional_formats();
-    assert!(rules.len() >= 2, "Should have at least 2 CF rules, got {}", rules.len());
+    assert!(
+        rules.len() >= 2,
+        "Should have at least 2 CF rules, got {}",
+        rules.len()
+    );
 
     for (i, rule) in rules.iter().enumerate() {
         assert!(rule.format.is_some(), "Rule {i} should have a DXF format");

@@ -481,7 +481,10 @@ impl<'a> Workbook<'a> {
             self.handle,
             chain,
             "Characters",
-            vec![serde_json::Value::from(start), serde_json::Value::from(length)],
+            vec![
+                serde_json::Value::from(start),
+                serde_json::Value::from(length),
+            ],
         )?;
         let char_handle = match data {
             Some(ResponseData::Handle { handle }) => handle,

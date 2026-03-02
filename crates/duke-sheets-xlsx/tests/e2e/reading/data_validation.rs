@@ -14,11 +14,19 @@ fn test_list_validation() {
         let mut wb = b.create_workbook().await.unwrap();
         wb.set_cell_value("A1", "Pick color").await.unwrap();
         wb.add_data_validation(
-            0, "B1", "list", "",
-            "\"Red,Green,Blue\"", "",
-            true, true,
-            Some("Colors"), Some("Pick a color"),
-            None, None, "stop",
+            0,
+            "B1",
+            "list",
+            "",
+            "\"Red,Green,Blue\"",
+            "",
+            true,
+            true,
+            Some("Colors"),
+            Some("Pick a color"),
+            None,
+            None,
+            "stop",
         )
         .await
         .unwrap();
@@ -29,7 +37,10 @@ fn test_list_validation() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let validations = sheet.data_validations();
-    assert!(!validations.is_empty(), "Should have at least one data validation");
+    assert!(
+        !validations.is_empty(),
+        "Should have at least one data validation"
+    );
 
     cleanup_fixture(&path);
 }
@@ -45,10 +56,7 @@ fn test_whole_number_validation() {
         let mut wb = b.create_workbook().await.unwrap();
         wb.set_cell_value("A1", "Enter 1-100").await.unwrap();
         wb.add_data_validation(
-            0, "B1", "whole", "between",
-            "1", "100",
-            true, false,
-            None, None, None, None, "stop",
+            0, "B1", "whole", "between", "1", "100", true, false, None, None, None, None, "stop",
         )
         .await
         .unwrap();
@@ -59,7 +67,10 @@ fn test_whole_number_validation() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let validations = sheet.data_validations();
-    assert!(!validations.is_empty(), "Should have at least one data validation");
+    assert!(
+        !validations.is_empty(),
+        "Should have at least one data validation"
+    );
 
     cleanup_fixture(&path);
 }
@@ -75,11 +86,18 @@ fn test_validation_with_messages() {
         let mut wb = b.create_workbook().await.unwrap();
         wb.set_cell_value("A1", "With messages").await.unwrap();
         wb.add_data_validation(
-            0, "B1", "whole", "greaterThan",
-            "0", "",
-            false, false,
-            Some("Positive Numbers"), Some("Please enter a positive integer"),
-            Some("Invalid Input"), Some("Value must be greater than 0"),
+            0,
+            "B1",
+            "whole",
+            "greaterThan",
+            "0",
+            "",
+            false,
+            false,
+            Some("Positive Numbers"),
+            Some("Please enter a positive integer"),
+            Some("Invalid Input"),
+            Some("Value must be greater than 0"),
             "stop",
         )
         .await
@@ -91,7 +109,10 @@ fn test_validation_with_messages() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let validations = sheet.data_validations();
-    assert!(!validations.is_empty(), "Should have at least one data validation");
+    assert!(
+        !validations.is_empty(),
+        "Should have at least one data validation"
+    );
 
     cleanup_fixture(&path);
 }
@@ -107,10 +128,19 @@ fn test_text_length_validation() {
         let mut wb = b.create_workbook().await.unwrap();
         wb.set_cell_value("A1", "Max 10 chars").await.unwrap();
         wb.add_data_validation(
-            0, "B1", "textLength", "lessThan",
-            "10", "",
-            true, false,
-            None, None, None, None, "warning",
+            0,
+            "B1",
+            "textLength",
+            "lessThan",
+            "10",
+            "",
+            true,
+            false,
+            None,
+            None,
+            None,
+            None,
+            "warning",
         )
         .await
         .unwrap();
@@ -121,7 +151,10 @@ fn test_text_length_validation() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let validations = sheet.data_validations();
-    assert!(!validations.is_empty(), "Should have at least one data validation");
+    assert!(
+        !validations.is_empty(),
+        "Should have at least one data validation"
+    );
 
     cleanup_fixture(&path);
 }

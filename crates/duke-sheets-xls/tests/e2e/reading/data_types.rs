@@ -111,7 +111,6 @@ fn test_xls_large_sst_with_continue() {
     cleanup_fixture(&path);
 }
 
-
 #[test]
 fn test_xls_boolean_values() {
     skip_if_no_lo!();
@@ -135,7 +134,10 @@ fn test_xls_boolean_values() {
     let a1 = sheet.get_value_at(0, 0);
     match &a1 {
         CellValue::Boolean(true) => {}
-        CellValue::Formula { cached_value: Some(cv), .. } => {
+        CellValue::Formula {
+            cached_value: Some(cv),
+            ..
+        } => {
             assert!(
                 matches!(cv.as_ref(), CellValue::Boolean(true)),
                 "A1 formula should cache TRUE, got {cv:?}"
@@ -147,7 +149,10 @@ fn test_xls_boolean_values() {
     let b1 = sheet.get_value_at(0, 1);
     match &b1 {
         CellValue::Boolean(false) => {}
-        CellValue::Formula { cached_value: Some(cv), .. } => {
+        CellValue::Formula {
+            cached_value: Some(cv),
+            ..
+        } => {
             assert!(
                 matches!(cv.as_ref(), CellValue::Boolean(false)),
                 "B1 formula should cache FALSE, got {cv:?}"
@@ -227,9 +232,15 @@ fn test_xls_error_values() {
                 "A1 should be #DIV/0!, got {e:?}"
             );
         }
-        CellValue::Formula { cached_value: Some(cv), .. } => {
+        CellValue::Formula {
+            cached_value: Some(cv),
+            ..
+        } => {
             assert!(
-                matches!(cv.as_ref(), CellValue::Error(duke_sheets_core::CellError::Div0)),
+                matches!(
+                    cv.as_ref(),
+                    CellValue::Error(duke_sheets_core::CellError::Div0)
+                ),
                 "A1 formula cached value should be #DIV/0!, got {cv:?}"
             );
         }
@@ -244,9 +255,15 @@ fn test_xls_error_values() {
                 "B1 should be #N/A, got {e:?}"
             );
         }
-        CellValue::Formula { cached_value: Some(cv), .. } => {
+        CellValue::Formula {
+            cached_value: Some(cv),
+            ..
+        } => {
             assert!(
-                matches!(cv.as_ref(), CellValue::Error(duke_sheets_core::CellError::Na)),
+                matches!(
+                    cv.as_ref(),
+                    CellValue::Error(duke_sheets_core::CellError::Na)
+                ),
                 "B1 formula cached value should be #N/A, got {cv:?}"
             );
         }
@@ -270,9 +287,12 @@ fn test_xls_multiple_sheets() {
 
         wb.add_sheet("Second").await.unwrap();
         let cell = wb.get_cell_on_sheet(1, 0, 0).await.unwrap();
-        wb.set_cell_value_on_proxy(&cell, duke_sheets_libreoffice::CellValue::String("Sheet2 Data".into()))
-            .await
-            .unwrap();
+        wb.set_cell_value_on_proxy(
+            &cell,
+            duke_sheets_libreoffice::CellValue::String("Sheet2 Data".into()),
+        )
+        .await
+        .unwrap();
 
         wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();

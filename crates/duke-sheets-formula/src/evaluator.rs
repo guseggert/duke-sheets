@@ -2,7 +2,9 @@
 //!
 //! Evaluates formula ASTs to produce values.
 
-use crate::ast::{BinaryOperator, FormulaExpr, StructuredRefSpecifier, StructuredReference, UnaryOperator};
+use crate::ast::{
+    BinaryOperator, FormulaExpr, StructuredRefSpecifier, StructuredReference, UnaryOperator,
+};
 use crate::error::{FormulaError, FormulaResult};
 use crate::functions::FunctionRegistry;
 use duke_sheets_core::{CellError, CellValue, Table, Workbook};
@@ -113,7 +115,9 @@ impl From<CellValue> for FormulaValue {
             // In this simple conversion, we return Empty - proper resolution
             // happens in the worksheet's get_value methods
             CellValue::SpillTarget { .. } => FormulaValue::Empty,
-            CellValue::RichText(runs) => FormulaValue::String(duke_sheets_core::rich_text_to_plain(&runs)),
+            CellValue::RichText(runs) => {
+                FormulaValue::String(duke_sheets_core::rich_text_to_plain(&runs))
+            }
         }
     }
 }
@@ -362,10 +366,7 @@ impl<'a> EvaluationContext<'a> {
     /// Resolves references like `Table1[Revenue]`, `Table1[@Col]`,
     /// `Table1[[#Headers],[Col]]`, etc. by finding the named table
     /// across all worksheets and computing the target cell range.
-    pub fn resolve_structured_ref(
-        &self,
-        sr: &StructuredReference,
-    ) -> FormulaResult<FormulaValue> {
+    pub fn resolve_structured_ref(&self, sr: &StructuredReference) -> FormulaResult<FormulaValue> {
         let workbook = self.workbook.ok_or_else(|| {
             FormulaError::InvalidReference(
                 "No workbook context for structured reference".to_string(),
@@ -387,8 +388,7 @@ impl<'a> EvaluationContext<'a> {
                     .ok_or_else(|| {
                         FormulaError::InvalidReference(format!(
                             "Column '{}' not found in table '{}'",
-                            col_name,
-                            table.name
+                            col_name, table.name
                         ))
                     })?;
                 Some(idx)
@@ -426,9 +426,7 @@ impl<'a> EvaluationContext<'a> {
         // #This Row: return a single cell value from the current row.
         if has_this_row {
             let col = abs_col.ok_or_else(|| {
-                FormulaError::InvalidReference(
-                    "#This Row requires a column specifier".to_string(),
-                )
+                FormulaError::InvalidReference("#This Row requires a column specifier".to_string())
             })?;
             // The current_row from context must be within the table data range.
             let row = self.current_row;
@@ -609,9 +607,7 @@ impl<'a> EvaluationContext<'a> {
                 // Unqualified ref: find a table on the current sheet
                 // that contains the current cell.
                 let ws = workbook.worksheet(self.current_sheet).ok_or_else(|| {
-                    FormulaError::InvalidReference(
-                        "Current worksheet not found".to_string(),
-                    )
+                    FormulaError::InvalidReference("Current worksheet not found".to_string())
                 })?;
                 for t in ws.tables() {
                     let r = &t.reference;

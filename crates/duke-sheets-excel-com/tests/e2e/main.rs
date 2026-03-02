@@ -28,8 +28,8 @@ mod merged_cells;
 mod number_formats;
 mod rich_text;
 mod roundtrip;
-mod smoke;
 mod selections;
+mod smoke;
 mod writing;
 
 pub use common::*;

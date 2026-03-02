@@ -29,7 +29,10 @@ fn test_solid_fill_red() {
     match &style.fill {
         FillStyle::Solid { color } => {
             let (r, g, b) = color.to_rgb();
-            assert!(r > 200 && g < 50 && b < 50, "Expected red fill, got ({r}, {g}, {b})");
+            assert!(
+                r > 200 && g < 50 && b < 50,
+                "Expected red fill, got ({r}, {g}, {b})"
+            );
         }
         other => panic!("Expected Solid fill, got {other:?}"),
     }
@@ -46,9 +49,13 @@ fn test_multiple_fill_colors() {
         let lo = lo_bridge().await.unwrap();
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
-        for (row, (label, color)) in [("Red", 0xFF0000i32), ("Green", 0x00FF00), ("Blue", 0x0000FF)]
-            .iter()
-            .enumerate()
+        for (row, (label, color)) in [
+            ("Red", 0xFF0000i32),
+            ("Green", 0x00FF00),
+            ("Blue", 0x0000FF),
+        ]
+        .iter()
+        .enumerate()
         {
             let cell = format!("A{}", row + 1);
             wb.set_cell_value(&cell, *label).await.unwrap();
@@ -111,7 +118,10 @@ fn test_fill_with_white_font() {
     }
 
     let (r, g, b) = style.font.color.to_rgb();
-    assert!(r > 200 && g > 200 && b > 200, "Expected white font, got ({r}, {g}, {b})");
+    assert!(
+        r > 200 && g > 200 && b > 200,
+        "Expected white font, got ({r}, {g}, {b})"
+    );
 
     cleanup_fixture(&path);
 }

@@ -27,7 +27,10 @@ fn test_percentage_format() {
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
     let fmt = style.number_format.format_string();
-    assert!(fmt.contains('%'), "Number format should contain '%', got: {fmt}");
+    assert!(
+        fmt.contains('%'),
+        "Number format should contain '%', got: {fmt}"
+    );
 
     cleanup_fixture(&path);
 }
@@ -84,7 +87,10 @@ fn test_custom_decimal_format() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
-    assert!(style.number_format != NumberFormat::General, "Should not be General");
+    assert!(
+        style.number_format != NumberFormat::General,
+        "Should not be General"
+    );
     let fmt = style.number_format.format_string();
     assert!(
         fmt.contains("#,##0") || fmt.contains("0.00"),
@@ -116,7 +122,10 @@ fn test_date_format() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
-    assert!(style.number_format != NumberFormat::General, "Should not be General");
+    assert!(
+        style.number_format != NumberFormat::General,
+        "Should not be General"
+    );
 
     cleanup_fixture(&path);
 }
