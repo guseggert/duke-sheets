@@ -67,9 +67,7 @@ fn test_xls_formula_functions() {
         let mut wb = b.create_workbook().await.unwrap();
         // Set up some data
         for i in 1..=5 {
-            wb.set_cell_value(&format!("A{i}"), i as f64)
-                .await
-                .unwrap();
+            wb.set_cell_value(&format!("A{i}"), i as f64).await.unwrap();
         }
         // B1 = SUM(A1:A5)
         wb.set_cell_formula("B1", "=SUM(A1:A5)").await.unwrap();
@@ -250,10 +248,7 @@ fn test_xls_formula_parentheses() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
 
-    assert_eq!(
-        formula_text(&sheet.get_value_at(0, 3)),
-        "=(A1+B1)*C1"
-    );
+    assert_eq!(formula_text(&sheet.get_value_at(0, 3)), "=(A1+B1)*C1");
 
     cleanup_fixture(&path);
 }
@@ -281,9 +276,7 @@ fn test_xls_formula_cached_values() {
     let val = sheet.get_value_at(0, 1);
     match &val {
         CellValue::Formula {
-            text,
-            cached_value,
-            ..
+            text, cached_value, ..
         } => {
             assert_eq!(text, "=SUM(A1:A2)", "formula text");
             match cached_value.as_deref() {
@@ -337,17 +330,15 @@ fn test_xls_formula_cross_sheet_ref() {
 
     // Verify cached value is 42
     match &b1 {
-        CellValue::Formula { cached_value, .. } => {
-            match cached_value.as_deref() {
-                Some(CellValue::Number(n)) => {
-                    assert!(
-                        (*n - 42.0).abs() < f64::EPSILON,
-                        "cached value should be 42.0, got {n}"
-                    );
-                }
-                other => panic!("Expected cached Number(42.0), got {:?}", other),
+        CellValue::Formula { cached_value, .. } => match cached_value.as_deref() {
+            Some(CellValue::Number(n)) => {
+                assert!(
+                    (*n - 42.0).abs() < f64::EPSILON,
+                    "cached value should be 42.0, got {n}"
+                );
             }
-        }
+            other => panic!("Expected cached Number(42.0), got {:?}", other),
+        },
         _ => unreachable!(),
     }
 
@@ -400,9 +391,7 @@ fn test_xls_formula_named_range() {
         let mut wb = b.create_workbook().await.unwrap();
         // Put values in A1:A5
         for i in 1..=5 {
-            wb.set_cell_value(&format!("A{i}"), i as f64)
-                .await
-                .unwrap();
+            wb.set_cell_value(&format!("A{i}"), i as f64).await.unwrap();
         }
         // Define a named range "MyData" = $Sheet1.$A$1:$A$5
         // LO named range content uses absolute $-notation with dot separator
@@ -424,17 +413,15 @@ fn test_xls_formula_named_range() {
 
     // Cached value should be 15 (1+2+3+4+5)
     match &b1 {
-        CellValue::Formula { cached_value, .. } => {
-            match cached_value.as_deref() {
-                Some(CellValue::Number(n)) => {
-                    assert!(
-                        (*n - 15.0).abs() < f64::EPSILON,
-                        "cached value should be 15.0, got {n}"
-                    );
-                }
-                other => panic!("Expected cached Number(15.0), got {:?}", other),
+        CellValue::Formula { cached_value, .. } => match cached_value.as_deref() {
+            Some(CellValue::Number(n)) => {
+                assert!(
+                    (*n - 15.0).abs() < f64::EPSILON,
+                    "cached value should be 15.0, got {n}"
+                );
             }
-        }
+            other => panic!("Expected cached Number(15.0), got {:?}", other),
+        },
         _ => unreachable!(),
     }
 
@@ -471,17 +458,15 @@ fn test_xls_formula_named_range_in_expression() {
 
     // Cached value should be 1.5 (10 * 0.15)
     match &b1 {
-        CellValue::Formula { cached_value, .. } => {
-            match cached_value.as_deref() {
-                Some(CellValue::Number(n)) => {
-                    assert!(
-                        (*n - 1.5).abs() < f64::EPSILON,
-                        "cached value should be 1.5, got {n}"
-                    );
-                }
-                other => panic!("Expected cached Number(1.5), got {:?}", other),
+        CellValue::Formula { cached_value, .. } => match cached_value.as_deref() {
+            Some(CellValue::Number(n)) => {
+                assert!(
+                    (*n - 1.5).abs() < f64::EPSILON,
+                    "cached value should be 1.5, got {n}"
+                );
             }
-        }
+            other => panic!("Expected cached Number(1.5), got {:?}", other),
+        },
         _ => unreachable!(),
     }
 
@@ -502,9 +487,7 @@ fn test_xls_formula_array_constant() {
         // SUM({1;2;3}) — column array constant (LO uses ; for row separator)
         // In LO locale, both arg separator and array row separator are ;
         // so =SUM({1;2;3}) means SUM of a 3x1 column array = 6
-        wb.set_cell_formula("A1", "=SUM({1;2;3})")
-            .await
-            .unwrap();
+        wb.set_cell_formula("A1", "=SUM({1;2;3})").await.unwrap();
         wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();
     });
@@ -520,17 +503,15 @@ fn test_xls_formula_array_constant() {
 
     // Cached value should be 6.0
     match &val {
-        CellValue::Formula { cached_value, .. } => {
-            match cached_value.as_deref() {
-                Some(CellValue::Number(n)) => {
-                    assert!(
-                        (*n - 6.0).abs() < f64::EPSILON,
-                        "expected cached 6.0, got {n}"
-                    );
-                }
-                other => panic!("Expected cached Number(6.0), got {:?}", other),
+        CellValue::Formula { cached_value, .. } => match cached_value.as_deref() {
+            Some(CellValue::Number(n)) => {
+                assert!(
+                    (*n - 6.0).abs() < f64::EPSILON,
+                    "expected cached 6.0, got {n}"
+                );
             }
-        }
+            other => panic!("Expected cached Number(6.0), got {:?}", other),
+        },
         _ => unreachable!(),
     }
 
@@ -551,9 +532,7 @@ fn test_xls_formula_cse_array_formula() {
         let mut wb = b.create_workbook().await.unwrap();
         // Set data: A1=1, A2=2, A3=3, B1=10, B2=20, B3=30
         for i in 1..=3 {
-            wb.set_cell_value(&format!("A{i}"), i as f64)
-                .await
-                .unwrap();
+            wb.set_cell_value(&format!("A{i}"), i as f64).await.unwrap();
             wb.set_cell_value(&format!("B{i}"), (i * 10) as f64)
                 .await
                 .unwrap();
@@ -575,17 +554,15 @@ fn test_xls_formula_cse_array_formula() {
 
     // Cached value should be 1*10 + 2*20 + 3*30 = 140
     match &val {
-        CellValue::Formula { cached_value, .. } => {
-            match cached_value.as_deref() {
-                Some(CellValue::Number(n)) => {
-                    assert!(
-                        (*n - 140.0).abs() < f64::EPSILON,
-                        "expected cached 140.0, got {n}"
-                    );
-                }
-                other => panic!("Expected cached Number(140.0), got {:?}", other),
+        CellValue::Formula { cached_value, .. } => match cached_value.as_deref() {
+            Some(CellValue::Number(n)) => {
+                assert!(
+                    (*n - 140.0).abs() < f64::EPSILON,
+                    "expected cached 140.0, got {n}"
+                );
             }
-        }
+            other => panic!("Expected cached Number(140.0), got {:?}", other),
+        },
         _ => unreachable!(),
     }
 

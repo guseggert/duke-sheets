@@ -93,7 +93,6 @@ fn test_subscript() {
     cleanup_fixture(&path);
 }
 
-
 #[test]
 fn test_underline_single() {
     skip_if_no_lo!();
@@ -171,7 +170,10 @@ fn test_font_color() {
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
     let (r, g, b) = style.font.color.to_rgb();
-    assert!(r > 200 && g < 50 && b < 50, "Expected red font, got ({r}, {g}, {b})");
+    assert!(
+        r > 200 && g < 50 && b < 50,
+        "Expected red font, got ({r}, {g}, {b})"
+    );
 
     cleanup_fixture(&path);
 }

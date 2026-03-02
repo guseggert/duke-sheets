@@ -9,7 +9,9 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
 use crate::error::{XlsxError, XlsxResult};
-use crate::styles::{read_styles_xml, register_roundtrip_style_data, register_roundtrip_theme_data, ParsedStyles};
+use crate::styles::{
+    read_styles_xml, register_roundtrip_style_data, register_roundtrip_theme_data, ParsedStyles,
+};
 use comments::read_worksheet_comments;
 use conditional_format::{
     apply_cf_formulas, parse_cf_rule_attrs, parse_color_element, parse_sqref,

@@ -110,10 +110,9 @@ pub(crate) fn read_shared_strings<R: Read + Seek>(
                 }
                 b"r" if in_r => {
                     // Finish current run
-                    let font =
-                        run_font
-                            .take()
-                            .and_then(|f| if f.is_empty() { None } else { Some(f) });
+                    let font = run_font
+                        .take()
+                        .and_then(|f| if f.is_empty() { None } else { Some(f) });
                     runs.push(RichTextRun {
                         text: std::mem::take(&mut run_text),
                         font,

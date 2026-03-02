@@ -328,7 +328,10 @@ fn test_xls_border_thin() {
                 .map(|e| e.style == BorderLineStyle::Thin)
                 .unwrap_or(false)
         });
-    assert!(has_thin, "A1 should have at least one thin border edge, got {border:?}");
+    assert!(
+        has_thin,
+        "A1 should have at least one thin border edge, got {border:?}"
+    );
 
     cleanup_fixture(&path);
 }
@@ -452,7 +455,10 @@ fn test_xls_wrap_text() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
-    assert!(style.alignment.wrap_text, "A1 should have wrap text enabled");
+    assert!(
+        style.alignment.wrap_text,
+        "A1 should have wrap text enabled"
+    );
 
     cleanup_fixture(&path);
 }
@@ -737,7 +743,7 @@ fn test_xls_combined_styles() {
             italic: true,
             font_size: Some(14.0),
             font_color: Some(0x0000FF_u32 as i32), // Blue text
-            fill_color: Some(0xFFFF00_u32 as i32),  // Yellow bg
+            fill_color: Some(0xFFFF00_u32 as i32), // Yellow bg
             horizontal: Some("center".into()),
             ..Default::default()
         };
@@ -827,16 +833,10 @@ fn test_xls_cell_protection_locked() {
     let sheet = workbook.worksheet(0).unwrap();
 
     let style_a = sheet.cell_style_at(0, 0).expect("A1 should have style");
-    assert!(
-        style_a.protection.locked,
-        "A1 should be locked"
-    );
+    assert!(style_a.protection.locked, "A1 should be locked");
 
     let style_b = sheet.cell_style_at(0, 1).expect("B1 should have style");
-    assert!(
-        !style_b.protection.locked,
-        "B1 should be unlocked"
-    );
+    assert!(!style_b.protection.locked, "B1 should be unlocked");
 
     cleanup_fixture(&path);
 }

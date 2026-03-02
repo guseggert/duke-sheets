@@ -137,7 +137,10 @@ fn test_shrink_to_fit() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
-    assert!(style.alignment.shrink_to_fit, "Shrink to fit should be true");
+    assert!(
+        style.alignment.shrink_to_fit,
+        "Shrink to fit should be true"
+    );
 
     cleanup_fixture(&path);
 }
@@ -165,7 +168,10 @@ fn test_rotation() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
-    assert_eq!(style.alignment.rotation, 45, "Rotation should be 45 degrees");
+    assert_eq!(
+        style.alignment.rotation, 45,
+        "Rotation should be 45 degrees"
+    );
 
     cleanup_fixture(&path);
 }
@@ -192,7 +198,11 @@ fn test_indent() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
-    assert!(style.alignment.indent >= 1, "Indent should be >= 1, got {}", style.alignment.indent);
+    assert!(
+        style.alignment.indent >= 1,
+        "Indent should be >= 1, got {}",
+        style.alignment.indent
+    );
 
     cleanup_fixture(&path);
 }

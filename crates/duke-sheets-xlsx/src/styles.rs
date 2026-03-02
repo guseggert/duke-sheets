@@ -246,7 +246,6 @@ impl XlsxStyleTable {
         self.dxf_map.get(&(sheet_index, rule_index)).copied()
     }
 
-
     pub(crate) fn write_styles_xml(&self, w: &mut XmlWriter) -> XlsxResult<()> {
         // Build component tables
         let mut font_ids: HashMap<FontStyle, u32> = HashMap::new();

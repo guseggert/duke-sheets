@@ -508,7 +508,10 @@ fn extract_structured_ref_deps(
     // Determine column range.
     let (col_start, col_end) = match &sr.column {
         Some(col_name) => {
-            match columns.iter().position(|c| c.eq_ignore_ascii_case(col_name)) {
+            match columns
+                .iter()
+                .position(|c| c.eq_ignore_ascii_case(col_name))
+            {
                 Some(i) => {
                     let col = reference.start.col + i as u16;
                     (col, col)
@@ -981,7 +984,9 @@ mod tests {
         // =SUM(Sales[Revenue]) should sum the data column (100+200+300+400 = 1000)
         let mut workbook = workbook_with_sales_table(false);
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet.set_cell_formula("E1", "=SUM(Sales[Revenue])").unwrap();
+        sheet
+            .set_cell_formula("E1", "=SUM(Sales[Revenue])")
+            .unwrap();
 
         workbook.calculate().unwrap();
 
@@ -997,7 +1002,9 @@ mod tests {
         // With totals row, =SUM(Sales[Revenue]) should still only sum data rows
         let mut workbook = workbook_with_sales_table(true);
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet.set_cell_formula("E1", "=SUM(Sales[Revenue])").unwrap();
+        sheet
+            .set_cell_formula("E1", "=SUM(Sales[Revenue])")
+            .unwrap();
 
         workbook.calculate().unwrap();
 
@@ -1031,7 +1038,9 @@ mod tests {
         // =Sales[[#Headers],[Revenue]] should return the header text "Revenue"
         let mut workbook = workbook_with_sales_table(false);
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet.set_cell_formula("E1", "=Sales[[#Headers],[Revenue]]").unwrap();
+        sheet
+            .set_cell_formula("E1", "=Sales[[#Headers],[Revenue]]")
+            .unwrap();
 
         workbook.calculate().unwrap();
 
@@ -1047,7 +1056,9 @@ mod tests {
         // =Sales[[#Totals],[Revenue]] should return the totals row value
         let mut workbook = workbook_with_sales_table(true);
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet.set_cell_formula("E1", "=Sales[[#Totals],[Revenue]]").unwrap();
+        sheet
+            .set_cell_formula("E1", "=Sales[[#Totals],[Revenue]]")
+            .unwrap();
 
         workbook.calculate().unwrap();
 
@@ -1063,7 +1074,9 @@ mod tests {
         // =COUNTA(Sales[#All]) should count all cells in the table (header + 4 data rows)
         let mut workbook = workbook_with_sales_table(false);
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet.set_cell_formula("E1", "=COUNTA(Sales[#All])").unwrap();
+        sheet
+            .set_cell_formula("E1", "=COUNTA(Sales[#All])")
+            .unwrap();
 
         workbook.calculate().unwrap();
 
@@ -1080,7 +1093,9 @@ mod tests {
         // Reference to non-existent table should produce an error
         let mut workbook = workbook_with_sales_table(false);
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet.set_cell_formula("E1", "=SUM(NoSuchTable[Revenue])").unwrap();
+        sheet
+            .set_cell_formula("E1", "=SUM(NoSuchTable[Revenue])")
+            .unwrap();
 
         workbook.calculate().unwrap();
 
@@ -1098,7 +1113,9 @@ mod tests {
         // Reference to non-existent column should produce an error
         let mut workbook = workbook_with_sales_table(false);
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet.set_cell_formula("E1", "=SUM(Sales[NoSuchCol])").unwrap();
+        sheet
+            .set_cell_formula("E1", "=SUM(Sales[NoSuchCol])")
+            .unwrap();
 
         workbook.calculate().unwrap();
 
@@ -1116,7 +1133,9 @@ mod tests {
         // the table via structured refs to recalculate correctly.
         let mut workbook = workbook_with_sales_table(false);
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet.set_cell_formula("E1", "=SUM(Sales[Revenue])").unwrap();
+        sheet
+            .set_cell_formula("E1", "=SUM(Sales[Revenue])")
+            .unwrap();
 
         workbook.calculate().unwrap();
         let sheet = workbook.worksheet(0).unwrap();

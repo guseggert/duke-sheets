@@ -21,7 +21,12 @@ fn test_merged_cells_horizontal() {
     let workbook = XlsxReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
     let regions = sheet.merged_regions();
-    assert_eq!(regions.len(), 1, "Should have 1 merged region, got {}", regions.len());
+    assert_eq!(
+        regions.len(),
+        1,
+        "Should have 1 merged region, got {}",
+        regions.len()
+    );
     let r = &regions[0];
     assert_eq!(r.start.row, 0, "Start row should be 0");
     assert_eq!(r.start.col, 0, "Start col should be 0 (A)");

@@ -58,7 +58,12 @@ fn test_border_color() {
     let sheet = workbook.worksheet(0).unwrap();
     let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
 
-    let edge = style.border.top.as_ref().or(style.border.left.as_ref()).expect("Should have a border");
+    let edge = style
+        .border
+        .top
+        .as_ref()
+        .or(style.border.left.as_ref())
+        .expect("Should have a border");
     let (r, _, _) = edge.color.to_rgb();
     assert!(r > 200, "Expected red border color");
 
@@ -90,7 +95,10 @@ fn test_individual_border_left_only() {
     assert!(style.border.left.is_some(), "Should have left border");
     assert!(style.border.right.is_none(), "Should NOT have right border");
     assert!(style.border.top.is_none(), "Should NOT have top border");
-    assert!(style.border.bottom.is_none(), "Should NOT have bottom border");
+    assert!(
+        style.border.bottom.is_none(),
+        "Should NOT have bottom border"
+    );
 
     cleanup_fixture(&path);
 }
@@ -144,7 +152,9 @@ fn test_border_on_range() {
         for row in 0..3 {
             for col in 0..3 {
                 let cell = format!("{}{}", (b'A' + col as u8) as char, row + 1);
-                wb.set_cell_value(&cell, (row * 3 + col + 1) as f64).await.unwrap();
+                wb.set_cell_value(&cell, (row * 3 + col + 1) as f64)
+                    .await
+                    .unwrap();
             }
         }
         let spec = duke_sheets_libreoffice::StyleSpec {
@@ -174,7 +184,10 @@ fn test_border_on_range() {
             }
         }
     }
-    assert!(cells_with_borders >= 9, "All 9 cells should have borders, got {cells_with_borders}");
+    assert!(
+        cells_with_borders >= 9,
+        "All 9 cells should have borders, got {cells_with_borders}"
+    );
 
     cleanup_fixture(&path);
 }
