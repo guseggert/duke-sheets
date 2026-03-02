@@ -6,14 +6,17 @@ pub mod database;
 pub mod date;
 pub mod engineering;
 pub mod financial;
+pub mod financial_extra;
 pub mod info;
 pub mod info_extra;
 pub mod logical;
+pub mod logical_extra;
 pub mod lookup;
 pub mod lookup_extra;
 pub mod math;
 pub mod math_extra;
 pub mod statistical;
+pub mod statistical_extra;
 pub mod text;
 pub mod text_extra;
 
@@ -444,6 +447,13 @@ impl FunctionRegistry {
             volatile: false,
         });
         self.register(FunctionDef {
+            name: "ACOTH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_acoth,
+            volatile: false,
+        });
+        self.register(FunctionDef {
             name: "COSH",
             min_args: 1,
             max_args: Some(1),
@@ -815,6 +825,63 @@ impl FunctionRegistry {
             min_args: 3,
             max_args: None, // Up to 126 value-result pairs + optional default
             implementation: logical::fn_switch,
+            volatile: false,
+        });
+        // --- logical_extra functions ---
+        self.register(FunctionDef {
+            name: "LET",
+            min_args: 3,
+            max_args: None,
+            implementation: logical_extra::fn_let,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "LAMBDA",
+            min_args: 1,
+            max_args: None,
+            implementation: logical_extra::fn_lambda,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MAP",
+            min_args: 2,
+            max_args: None,
+            implementation: logical_extra::fn_map,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "REDUCE",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: logical_extra::fn_reduce,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SCAN",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: logical_extra::fn_scan,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BYCOL",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: logical_extra::fn_bycol,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BYROW",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: logical_extra::fn_byrow,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MAKEARRAY",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: logical_extra::fn_makearray,
             volatile: false,
         });
     }
@@ -2580,6 +2647,77 @@ impl FunctionRegistry {
             implementation: statistical::fn_varpa,
             volatile: false,
         });
+        // --- statistical_extra functions ---
+        self.register(FunctionDef {
+            name: "LOGNORM.DIST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: statistical_extra::fn_lognorm_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "LOGNORM.INV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical_extra::fn_lognorm_inv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "LINEST",
+            min_args: 1,
+            max_args: Some(4),
+            implementation: statistical_extra::fn_linest,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "LOGEST",
+            min_args: 1,
+            max_args: Some(4),
+            implementation: statistical_extra::fn_logest,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GROWTH",
+            min_args: 1,
+            max_args: Some(4),
+            implementation: statistical_extra::fn_growth,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TREND",
+            min_args: 1,
+            max_args: Some(4),
+            implementation: statistical_extra::fn_trend,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FORECAST.ETS",
+            min_args: 3,
+            max_args: Some(6),
+            implementation: statistical_extra::fn_forecast_ets,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FORECAST.ETS.CONFINT",
+            min_args: 3,
+            max_args: Some(7),
+            implementation: statistical_extra::fn_forecast_ets_confint,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FORECAST.ETS.SEASONALITY",
+            min_args: 2,
+            max_args: Some(4),
+            implementation: statistical_extra::fn_forecast_ets_seasonality,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FORECAST.ETS.STAT",
+            min_args: 2,
+            max_args: Some(5),
+            implementation: statistical_extra::fn_forecast_ets_stat,
+            volatile: false,
+        });
     }
 
     fn register_financial_functions(&mut self) {
@@ -2760,6 +2898,252 @@ impl FunctionRegistry {
             min_args: 3,
             max_args: Some(3),
             implementation: financial::fn_pduration,
+            volatile: false,
+        });
+        // --- financial_extra functions ---
+        self.register(FunctionDef {
+            name: "ACCRINT",
+            min_args: 6,
+            max_args: Some(8),
+            implementation: financial_extra::fn_accrint,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ACCRINTM",
+            min_args: 3,
+            max_args: Some(5),
+            implementation: financial_extra::fn_accrintm,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "AMORDEGRC",
+            min_args: 6,
+            max_args: Some(7),
+            implementation: financial_extra::fn_amordegrc,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "AMORLINC",
+            min_args: 6,
+            max_args: Some(7),
+            implementation: financial_extra::fn_amorlinc,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COUPDAYBS",
+            min_args: 3,
+            max_args: Some(4),
+            implementation: financial_extra::fn_coupdaybs,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COUPDAYS",
+            min_args: 3,
+            max_args: Some(4),
+            implementation: financial_extra::fn_coupdays,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COUPDAYSNC",
+            min_args: 3,
+            max_args: Some(4),
+            implementation: financial_extra::fn_coupdaysnc,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COUPNCD",
+            min_args: 3,
+            max_args: Some(4),
+            implementation: financial_extra::fn_coupncd,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COUPNUM",
+            min_args: 3,
+            max_args: Some(4),
+            implementation: financial_extra::fn_coupnum,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COUPPCD",
+            min_args: 3,
+            max_args: Some(4),
+            implementation: financial_extra::fn_couppcd,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DISC",
+            min_args: 4,
+            max_args: Some(5),
+            implementation: financial_extra::fn_disc,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DOLLARDE",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: financial_extra::fn_dollarde,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DOLLARFR",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: financial_extra::fn_dollarfr,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DURATION",
+            min_args: 5,
+            max_args: Some(6),
+            implementation: financial_extra::fn_duration,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FVSCHEDULE",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: financial_extra::fn_fvschedule,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "INTRATE",
+            min_args: 4,
+            max_args: Some(5),
+            implementation: financial_extra::fn_intrate,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ISPMT",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: financial_extra::fn_ispmt,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MDURATION",
+            min_args: 5,
+            max_args: Some(6),
+            implementation: financial_extra::fn_mduration,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ODDFPRICE",
+            min_args: 8,
+            max_args: Some(9),
+            implementation: financial_extra::fn_oddfprice,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ODDFYIELD",
+            min_args: 8,
+            max_args: Some(9),
+            implementation: financial_extra::fn_oddfyield,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ODDLPRICE",
+            min_args: 7,
+            max_args: Some(8),
+            implementation: financial_extra::fn_oddlprice,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ODDLYIELD",
+            min_args: 7,
+            max_args: Some(8),
+            implementation: financial_extra::fn_oddlyield,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "PRICE",
+            min_args: 6,
+            max_args: Some(7),
+            implementation: financial_extra::fn_price,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "PRICEDISC",
+            min_args: 4,
+            max_args: Some(5),
+            implementation: financial_extra::fn_pricedisc,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "PRICEMAT",
+            min_args: 5,
+            max_args: Some(6),
+            implementation: financial_extra::fn_pricemat,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "RECEIVED",
+            min_args: 4,
+            max_args: Some(5),
+            implementation: financial_extra::fn_received,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "RRI",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: financial_extra::fn_rri,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TBILLEQ",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: financial_extra::fn_tbilleq,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TBILLPRICE",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: financial_extra::fn_tbillprice,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TBILLYIELD",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: financial_extra::fn_tbillyield,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "VDB",
+            min_args: 5,
+            max_args: Some(7),
+            implementation: financial_extra::fn_vdb,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "XIRR",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: financial_extra::fn_xirr,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "YIELD",
+            min_args: 6,
+            max_args: Some(7),
+            implementation: financial_extra::fn_yield,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "YIELDDISC",
+            min_args: 4,
+            max_args: Some(5),
+            implementation: financial_extra::fn_yielddisc,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "YIELDMAT",
+            min_args: 5,
+            max_args: Some(6),
+            implementation: financial_extra::fn_yieldmat,
             volatile: false,
         });
     }
