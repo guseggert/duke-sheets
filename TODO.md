@@ -351,21 +351,21 @@ or cell-level metadata not available in standalone evaluation):
 | Formula parser | 43 | ✅ |
 | Formula evaluator + functions | 519 | ✅ |
 | Calculation engine | 36 | ✅ |
-| XLSX roundtrip | 50 | ✅ |
+| XLSX roundtrip | 57 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
 | XLS unit (BIFF parser, strings, styles, formula decompiler) | 87 | ✅ |
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
 | XLS real-file integration | 2 | ✅ |
-| E2E XLSX reader integration (LO + handcrafted OOXML) | 60 | ✅ |
+| E2E XLSX reader integration (LO + handcrafted OOXML) | 63 | ✅ |
 | E2E via Excel COM — reader (XLSX) | 62 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 35 | ✅ |
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1226** | ✅ |
+| **Total** | **1236** | ✅ |
 
 ---
 
