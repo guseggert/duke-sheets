@@ -1,5 +1,6 @@
 //! Built-in Excel functions
 
+pub mod compatibility;
 pub mod criteria;
 pub mod database;
 pub mod date;
@@ -58,6 +59,7 @@ impl FunctionRegistry {
         registry.register_financial_functions();
         registry.register_database_functions();
         registry.register_engineering_functions();
+        registry.register_compatibility_functions();
 
         registry
     }
@@ -1446,6 +1448,505 @@ impl FunctionRegistry {
             implementation: statistical::fn_averageifs,
             volatile: false,
         });
+
+        self.register(FunctionDef {
+            name: "NORM.DIST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: statistical::fn_norm_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "NORM.S.DIST",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_norm_s_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "NORM.INV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_norm_inv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "NORM.S.INV",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: statistical::fn_norm_s_inv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "PHI",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: statistical::fn_phi,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BINOM.DIST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: statistical::fn_binom_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BINOM.DIST.RANGE",
+            min_args: 3,
+            max_args: Some(4),
+            implementation: statistical::fn_binom_dist_range,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BINOM.INV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_binom_inv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CHISQ.DIST",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_chisq_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CHISQ.DIST.RT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_chisq_dist_rt,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CHISQ.INV",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_chisq_inv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CHISQ.INV.RT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_chisq_inv_rt,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CHISQ.TEST",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_chisq_test,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "T.DIST",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_t_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "T.DIST.2T",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_t_dist_2t,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "T.DIST.RT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_t_dist_rt,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "T.INV",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_t_inv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "T.INV.2T",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_t_inv_2t,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "T.TEST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: statistical::fn_t_test,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "F.DIST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: statistical::fn_f_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "F.DIST.RT",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_f_dist_rt,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "F.INV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_f_inv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "F.INV.RT",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_f_inv_rt,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "F.TEST",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_f_test,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GAMMA",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: statistical::fn_gamma,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GAMMA.DIST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: statistical::fn_gamma_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GAMMA.INV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_gamma_inv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GAMMALN",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: statistical::fn_gammaln,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GAMMALN.PRECISE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: statistical::fn_gammaln_precise,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BETA.DIST",
+            min_args: 4,
+            max_args: Some(6),
+            implementation: statistical::fn_beta_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "EXPON.DIST",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_expon_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "HYPGEOM.DIST",
+            min_args: 4,
+            max_args: Some(5),
+            implementation: statistical::fn_hypgeom_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "NEGBINOM.DIST",
+            min_args: 3,
+            max_args: Some(4),
+            implementation: statistical::fn_negbinom_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "POISSON.DIST",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_poisson_dist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "WEIBULL.DIST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: statistical::fn_weibull_dist,
+            volatile: false,
+        });
+
+        self.register(FunctionDef {
+            name: "AVEDEV",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_avedev,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "AVERAGEA",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_averagea,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DEVSQ",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_devsq,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GEOMEAN",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_geomean,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "HARMEAN",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_harmean,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "KURT",
+            min_args: 4,
+            max_args: None,
+            implementation: statistical::fn_kurt,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SKEW",
+            min_args: 3,
+            max_args: None,
+            implementation: statistical::fn_skew,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SKEW.P",
+            min_args: 3,
+            max_args: None,
+            implementation: statistical::fn_skew_p,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TRIMMEAN",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_trimmean,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "STANDARDIZE",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_standardize,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CORREL",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_correl,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COVARIANCE.P",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_covariance_p,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COVARIANCE.S",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_covariance_s,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "PEARSON",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_pearson,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "RSQ",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_rsq,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SLOPE",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_slope,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "INTERCEPT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_intercept,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FISHER",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: statistical::fn_fisher,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FISHERINV",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: statistical::fn_fisherinv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FORECAST.LINEAR",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_forecast_linear,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FORECAST",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_forecast,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FREQUENCY",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_frequency,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MAXA",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_maxa,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MINA",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_mina,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "STEYX",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_steyx,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "PROB",
+            min_args: 3,
+            max_args: Some(4),
+            implementation: statistical::fn_prob,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "PERMUT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_permut,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "PERMUTATIONA",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: statistical::fn_permutationa,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CONFIDENCE.NORM",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_confidence_norm,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CONFIDENCE.T",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: statistical::fn_confidence_t,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GAUSS",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: statistical::fn_gauss,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MODE.MULT",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_mode_mult,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "STDEVA",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_stdeva,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "STDEVPA",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_stdevpa,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "VARA",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_vara,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "VARPA",
+            min_args: 1,
+            max_args: None,
+            implementation: statistical::fn_varpa,
+            volatile: false,
+        });
     }
 
     fn register_financial_functions(&mut self) {
@@ -2094,6 +2595,226 @@ impl FunctionRegistry {
             min_args: 3,
             max_args: Some(3),
             implementation: database::fn_dvarp,
+            volatile: false,
+        });
+    }
+
+    fn register_compatibility_functions(&mut self) {
+        self.register(FunctionDef {
+            name: "BETADIST",
+            min_args: 3,
+            max_args: Some(5),
+            implementation: compatibility::fn_betadist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BETAINV",
+            min_args: 3,
+            max_args: Some(5),
+            implementation: compatibility::fn_betainv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BINOMDIST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: compatibility::fn_binomdist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CEILING",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: compatibility::fn_ceiling,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CHIDIST",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: compatibility::fn_chidist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CHIINV",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: compatibility::fn_chiinv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CHITEST",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: compatibility::fn_chitest,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CONFIDENCE",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_confidence,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COVAR",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: compatibility::fn_covar,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CRITBINOM",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_critbinom,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "EXPONDIST",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_expondist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FDIST",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_fdist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FINV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_finv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FLOOR",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: compatibility::fn_floor,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FTEST",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: compatibility::fn_ftest,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GAMMADIST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: compatibility::fn_gammadist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GAMMAINV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_gammainv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "HYPGEOMDIST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: compatibility::fn_hypgeomdist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "LOGINV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_loginv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "LOGNORMDIST",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_lognormdist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "NEGBINOMDIST",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_negbinomdist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "NORMDIST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: compatibility::fn_normdist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "NORMSDIST",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: compatibility::fn_normsdist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "NORMSINV",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: compatibility::fn_normsinv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "NORM.INV",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_norm_inv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "POISSON",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_poisson,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TDIST",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: compatibility::fn_tdist,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TINV",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: compatibility::fn_tinv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TTEST",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: compatibility::fn_ttest,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "WEIBULL",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: compatibility::fn_weibull,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ZTEST",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: compatibility::fn_ztest,
             volatile: false,
         });
     }
