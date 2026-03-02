@@ -2142,3 +2142,107 @@ fn roundtrip_dynamic_array_sort_strings() {
     assert_eq!(ws2.get_value("B2").unwrap().as_string(), Some("banana"));
     assert_eq!(ws2.get_value("B3").unwrap().as_string(), Some("cherry"));
 }
+
+/// Verify boolean array from comparison operator roundtrips with correct
+/// cm attributes and boolean type in ghost cells.
+#[test]
+fn roundtrip_dynamic_array_comparison_boolean() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    // =SEQUENCE(4)>2 produces {FALSE,FALSE,TRUE,TRUE}
+    ws.set_cell_formula("A1", "=SEQUENCE(4)>2").unwrap();
+    wb.calculate().unwrap();
+
+    let ws = wb.worksheet(0).unwrap();
+    // Verify the engine produced an array result
+    assert!(
+        matches!(
+            ws.get_value("A1").unwrap(),
+            duke_sheets_core::CellValue::Formula {
+                array_result: Some(_),
+                ..
+            }
+        ),
+        "A1 should be a formula with array_result"
+    );
+    assert_eq!(
+        ws.get_calculated_value_at(0, 0),
+        Some(&duke_sheets_core::CellValue::Boolean(false))
+    );
+    assert_eq!(
+        ws.get_calculated_value_at(1, 0),
+        Some(&duke_sheets_core::CellValue::Boolean(false))
+    );
+    assert_eq!(
+        ws.get_calculated_value_at(2, 0),
+        Some(&duke_sheets_core::CellValue::Boolean(true))
+    );
+    assert_eq!(
+        ws.get_calculated_value_at(3, 0),
+        Some(&duke_sheets_core::CellValue::Boolean(true))
+    );
+
+    // Write to XLSX
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Verify the XML has cm attributes and boolean types
+    {
+        use std::io::Read;
+
+        let mut zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+
+        // Check sheet XML for cm attributes
+        let mut sheet_xml = String::new();
+        zip.by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+
+        // Anchor cell should have cm="1"
+        assert!(
+            sheet_xml.contains(r#"cm="1""#),
+            "anchor cell should have cm=1, xml: {}",
+            sheet_xml
+        );
+        // Ghost cells should have cm="2"
+        assert!(
+            sheet_xml.contains(r#"cm="2""#),
+            "ghost cells should have cm=2, xml: {}",
+            sheet_xml
+        );
+        // Ghost cells should have t="b" (boolean type)
+        assert!(
+            sheet_xml.contains(r#"t="b""#),
+            "ghost cells should have boolean type, xml: {}",
+            sheet_xml
+        );
+
+        // metadata.xml should exist
+        assert!(
+            zip.by_name("xl/metadata.xml").is_ok(),
+            "metadata.xml should exist for dynamic arrays"
+        );
+    }
+
+    // Read back and verify values
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let ws2 = wb2.worksheet(0).unwrap();
+
+    // Formula should survive
+    let a1 = ws2.get_value("A1").unwrap();
+    assert!(a1.formula_text().is_some(), "A1 should still be a formula");
+
+    // Ghost cells should have boolean values
+    let a2 = ws2.get_value("A2").unwrap();
+    assert_eq!(
+        a2.as_bool(),
+        Some(false),
+        "A2 should be false, got {:?}",
+        a2
+    );
+    let a3 = ws2.get_value("A3").unwrap();
+    assert_eq!(a3.as_bool(), Some(true), "A3 should be true, got {:?}", a3);
+    let a4 = ws2.get_value("A4").unwrap();
+    assert_eq!(a4.as_bool(), Some(true), "A4 should be true, got {:?}", a4);
+}

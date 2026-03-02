@@ -658,6 +658,7 @@ fn contains_volatile_function(expr: &FormulaExpr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CellError;
 
     #[test]
     fn test_simple_calculation() {
@@ -1577,6 +1578,258 @@ mod tests {
         assert_eq!(
             sheet.get_calculated_value_at(0, 4),
             Some(&CellValue::Number(21.0))
+        );
+    }
+
+    // ==================== Array Binary Operators ====================
+
+    #[test]
+    fn test_array_comparison_greater_than() {
+        // =SEQUENCE(4)>2 should produce {FALSE,FALSE,TRUE,TRUE}
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(4)>2").unwrap();
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Boolean(false))
+        ); // 1>2
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 0),
+            Some(&CellValue::Boolean(false))
+        ); // 2>2
+        assert_eq!(
+            sheet.get_calculated_value_at(2, 0),
+            Some(&CellValue::Boolean(true))
+        ); // 3>2
+        assert_eq!(
+            sheet.get_calculated_value_at(3, 0),
+            Some(&CellValue::Boolean(true))
+        ); // 4>2
+        assert_eq!(sheet.get_calculated_value_at(4, 0), None); // no spill beyond
+    }
+
+    #[test]
+    fn test_array_comparison_equal() {
+        // =SEQUENCE(3)=2 should produce {FALSE,TRUE,FALSE}
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)=2").unwrap();
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Boolean(false))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 0),
+            Some(&CellValue::Boolean(true))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(2, 0),
+            Some(&CellValue::Boolean(false))
+        );
+    }
+
+    #[test]
+    fn test_array_comparison_less_than() {
+        // =SEQUENCE(3)<3 should produce {TRUE,TRUE,FALSE}
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)<3").unwrap();
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Boolean(true))
+        ); // 1<3
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 0),
+            Some(&CellValue::Boolean(true))
+        ); // 2<3
+        assert_eq!(
+            sheet.get_calculated_value_at(2, 0),
+            Some(&CellValue::Boolean(false))
+        ); // 3<3
+    }
+
+    #[test]
+    fn test_array_arithmetic_add() {
+        // =SEQUENCE(3)+10 should produce {11,12,13}
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)+10").unwrap();
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(11.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 0),
+            Some(&CellValue::Number(12.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(2, 0),
+            Some(&CellValue::Number(13.0))
+        );
+    }
+
+    #[test]
+    fn test_array_arithmetic_multiply() {
+        // =SEQUENCE(3)*2 should produce {2,4,6}
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)*2").unwrap();
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(2.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 0),
+            Some(&CellValue::Number(4.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(2, 0),
+            Some(&CellValue::Number(6.0))
+        );
+    }
+
+    #[test]
+    fn test_array_arithmetic_2d() {
+        // =SEQUENCE(2,3)*10 should produce {{10,20,30},{40,50,60}}
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(2,3)*10").unwrap();
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(10.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 1),
+            Some(&CellValue::Number(20.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 2),
+            Some(&CellValue::Number(30.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 0),
+            Some(&CellValue::Number(40.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 1),
+            Some(&CellValue::Number(50.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 2),
+            Some(&CellValue::Number(60.0))
+        );
+    }
+
+    #[test]
+    fn test_array_arithmetic_divide_with_zero() {
+        // =SEQUENCE(3)/B1 where B1=0 should produce {#DIV/0!,#DIV/0!,#DIV/0!}
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("B1", 0.0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)/B1").unwrap();
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Error(CellError::Div0))
+        );
+    }
+
+    #[test]
+    fn test_array_concat() {
+        // =SEQUENCE(3)&"x" should produce {"1x","2x","3x"}
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)&\"x\"").unwrap();
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::String("1x".into()))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 0),
+            Some(&CellValue::String("2x".into()))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(2, 0),
+            Some(&CellValue::String("3x".into()))
+        );
+    }
+
+    #[test]
+    fn test_array_comparison_chained_with_sum() {
+        // =SUM((SEQUENCE(5)>2)*1) should count values >2 = 3
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet
+            .set_cell_formula("A1", "=SUM((SEQUENCE(5)>2)*1)")
+            .unwrap();
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        // {F,F,T,T,T} * 1 = {0,0,1,1,1}, SUM = 3
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(3.0))
+        );
+    }
+
+    #[test]
+    fn test_array_cross_reference_with_arithmetic() {
+        // A1: =SEQUENCE(3)  → {1,2,3}
+        // B1: =A1:A3*10     — but this is a range × scalar, not array lifting
+        // Instead test: B1: =SEQUENCE(3)*10 and C1: =A1+B1 (spill + spill addition)
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=SEQUENCE(3)").unwrap();
+        sheet.set_cell_formula("B1", "=SEQUENCE(3)*10").unwrap();
+        workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(1.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 0),
+            Some(&CellValue::Number(2.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(2, 0),
+            Some(&CellValue::Number(3.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 1),
+            Some(&CellValue::Number(10.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(1, 1),
+            Some(&CellValue::Number(20.0))
+        );
+        assert_eq!(
+            sheet.get_calculated_value_at(2, 1),
+            Some(&CellValue::Number(30.0))
         );
     }
 }
