@@ -5,8 +5,8 @@ This document lists all Excel functions and their implementation status in duke-
 **Source:** [Microsoft Excel Functions (Alphabetical)](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188)
 
 **Total Functions:** 506
-**Implemented:** 243 (48%)
-**Remaining:** 263
+**Implemented:** 346 (68%)
+**Remaining:** 160
 
 Legend: ✅ = Implemented, ⬜ = Not implemented
 
@@ -143,50 +143,50 @@ Mark the function as implemented in the table below.
 
 ## Compatibility
 
-**9/40 implemented**
+**40/40 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | BETADIST | Returns the beta cumulative distribution function |
-| ⬜ | BETAINV | Returns the inverse of the cumulative distribution function for a specified beta distribution |
-| ⬜ | BINOMDIST | Returns the individual term binomial distribution probability |
-| ⬜ | CEILING | Rounds a number to the nearest integer or to the nearest multiple of significance |
-| ⬜ | CHIDIST | Returns the one-tailed probability of the chi-squared distribution |
-| ⬜ | CHIINV | Returns the inverse of the one-tailed probability of the chi-squared distribution |
-| ⬜ | CHITEST | Returns the test for independence |
-| ⬜ | CONFIDENCE | Returns the confidence interval for a population mean |
-| ⬜ | COVAR | Returns covariance, the average of the products of paired deviations |
-| ⬜ | CRITBINOM | Returns the smallest value for which the cumulative binomial distribution is less than or equal to a criterion value |
-| ⬜ | EXPONDIST | Returns the exponential distribution |
-| ⬜ | FDIST | Returns the F probability distribution |
-| ⬜ | FINV | Returns the inverse of the F probability distribution |
-| ⬜ | FLOOR | Rounds a number down, toward zero |
-| ⬜ | FTEST | Returns the result of an F-test |
-| ⬜ | GAMMADIST | Returns the gamma distribution |
-| ⬜ | GAMMAINV | Returns the inverse of the gamma cumulative distribution |
-| ⬜ | HYPGEOMDIST | Returns the hypergeometric distribution |
-| ⬜ | LOGINV | Returns the inverse of the lognormal cumulative distribution |
-| ⬜ | LOGNORMDIST | Returns the cumulative lognormal distribution |
+| ✅ | BETADIST | Returns the beta cumulative distribution function |
+| ✅ | BETAINV | Returns the inverse of the cumulative distribution function for a specified beta distribution |
+| ✅ | BINOMDIST | Returns the individual term binomial distribution probability |
+| ✅ | CEILING | Rounds a number to the nearest integer or to the nearest multiple of significance |
+| ✅ | CHIDIST | Returns the one-tailed probability of the chi-squared distribution |
+| ✅ | CHIINV | Returns the inverse of the one-tailed probability of the chi-squared distribution |
+| ✅ | CHITEST | Returns the test for independence |
+| ✅ | CONFIDENCE | Returns the confidence interval for a population mean |
+| ✅ | COVAR | Returns covariance, the average of the products of paired deviations |
+| ✅ | CRITBINOM | Returns the smallest value for which the cumulative binomial distribution is less than or equal to a criterion value |
+| ✅ | EXPONDIST | Returns the exponential distribution |
+| ✅ | FDIST | Returns the F probability distribution |
+| ✅ | FINV | Returns the inverse of the F probability distribution |
+| ✅ | FLOOR | Rounds a number down, toward zero |
+| ✅ | FTEST | Returns the result of an F-test |
+| ✅ | GAMMADIST | Returns the gamma distribution |
+| ✅ | GAMMAINV | Returns the inverse of the gamma cumulative distribution |
+| ✅ | HYPGEOMDIST | Returns the hypergeometric distribution |
+| ✅ | LOGINV | Returns the inverse of the lognormal cumulative distribution |
+| ✅ | LOGNORMDIST | Returns the cumulative lognormal distribution |
 | ✅ | MODE | Returns the most common value in a data set |
-| ⬜ | NEGBINOMDIST | Returns the negative binomial distribution |
-| ⬜ | NORM.INV | Returns the inverse of the normal cumulative distribution |
-| ⬜ | NORMDIST | Returns the normal cumulative distribution |
-| ⬜ | NORMSDIST | Returns the standard normal cumulative distribution |
-| ⬜ | NORMSINV | Returns the inverse of the standard normal cumulative distribution |
+| ✅ | NEGBINOMDIST | Returns the negative binomial distribution |
+| ✅ | NORM.INV | Returns the inverse of the normal cumulative distribution |
+| ✅ | NORMDIST | Returns the normal cumulative distribution |
+| ✅ | NORMSDIST | Returns the standard normal cumulative distribution |
+| ✅ | NORMSINV | Returns the inverse of the standard normal cumulative distribution |
 | ✅ | PERCENTILE | Returns the k-th percentile of values in a range |
 | ✅ | PERCENTRANK | Returns the percentage rank of a value in a data set |
-| ⬜ | POISSON | Returns the Poisson distribution |
+| ✅ | POISSON | Returns the Poisson distribution |
 | ✅ | QUARTILE | Returns the quartile of a data set |
 | ✅ | RANK | Returns the rank of a number in a list of numbers |
 | ✅ | STDEV | Estimates standard deviation based on a sample |
 | ✅ | STDEVP | Calculates standard deviation based on the entire population |
-| ⬜ | TDIST | Returns the Student's t-distribution |
-| ⬜ | TINV | Returns the inverse of the Student's t-distribution |
-| ⬜ | TTEST | Returns the probability associated with a Student's t-test |
+| ✅ | TDIST | Returns the Student's t-distribution |
+| ✅ | TINV | Returns the inverse of the Student's t-distribution |
+| ✅ | TTEST | Returns the probability associated with a Student's t-test |
 | ✅ | VAR | Estimates variance based on a sample |
 | ✅ | VARP | Calculates variance based on the entire population |
-| ⬜ | WEIBULL | Calculates variance based on the entire population, including numbers, text, and logical values |
-| ⬜ | ZTEST | Returns the one-tailed probability-value of a z-test |
+| ✅ | WEIBULL | Calculates variance based on the entire population, including numbers, text, and logical values |
+| ✅ | ZTEST | Returns the one-tailed probability-value of a z-test |
 
 ## Cube
 
@@ -568,120 +568,120 @@ Mark the function as implemented in the table below.
 
 ## Statistical
 
-**28/110 implemented**
+**101/110 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | AVEDEV | Returns the average of the absolute deviations of data points from their mean |
+| ✅ | AVEDEV | Returns the average of the absolute deviations of data points from their mean |
 | ✅ | AVERAGE | Returns the average of its arguments |
-| ⬜ | AVERAGEA | Returns the average of its arguments, including numbers, text, and logical values |
+| ✅ | AVERAGEA | Returns the average of its arguments, including numbers, text, and logical values |
 | ✅ | AVERAGEIF | Returns the average (arithmetic mean) of all the cells in a range that meet a given criteria |
 | ✅ | AVERAGEIFS | Returns the average (arithmetic mean) of all cells that meet multiple criteria. |
-| ⬜ | BETA.DIST | Returns the beta cumulative distribution function |
-| ⬜ | BINOM.DIST | Returns the individual term binomial distribution probability |
-| ⬜ | BINOM.DIST.RANGE | Returns the probability of a trial result using a binomial distribution |
-| ⬜ | BINOM.INV | Returns the smallest value for which the cumulative binomial distribution is less than or equal to a criterion value |
-| ⬜ | CHISQ.DIST | Returns the cumulative beta probability density function |
-| ⬜ | CHISQ.DIST.RT | Returns the one-tailed probability of the chi-squared distribution |
-| ⬜ | CHISQ.INV | Returns the cumulative beta probability density function |
-| ⬜ | CHISQ.INV.RT | Returns the inverse of the one-tailed probability of the chi-squared distribution |
-| ⬜ | CHISQ.TEST | Returns the test for independence |
-| ⬜ | CONFIDENCE.NORM | Returns the confidence interval for a population mean |
-| ⬜ | CONFIDENCE.T | Returns the confidence interval for a population mean, using a Student's t distribution |
-| ⬜ | CORREL | Returns the correlation coefficient between two data sets |
+| ✅ | BETA.DIST | Returns the beta cumulative distribution function |
+| ✅ | BINOM.DIST | Returns the individual term binomial distribution probability |
+| ✅ | BINOM.DIST.RANGE | Returns the probability of a trial result using a binomial distribution |
+| ✅ | BINOM.INV | Returns the smallest value for which the cumulative binomial distribution is less than or equal to a criterion value |
+| ✅ | CHISQ.DIST | Returns the cumulative beta probability density function |
+| ✅ | CHISQ.DIST.RT | Returns the one-tailed probability of the chi-squared distribution |
+| ✅ | CHISQ.INV | Returns the cumulative beta probability density function |
+| ✅ | CHISQ.INV.RT | Returns the inverse of the one-tailed probability of the chi-squared distribution |
+| ✅ | CHISQ.TEST | Returns the test for independence |
+| ✅ | CONFIDENCE.NORM | Returns the confidence interval for a population mean |
+| ✅ | CONFIDENCE.T | Returns the confidence interval for a population mean, using a Student's t distribution |
+| ✅ | CORREL | Returns the correlation coefficient between two data sets |
 | ✅ | COUNT | Counts how many numbers are in the list of arguments |
 | ✅ | COUNTA | Counts how many values are in the list of arguments |
 | ✅ | COUNTBLANK | Counts the number of blank cells within a range |
 | ✅ | COUNTIF | Counts the number of cells within a range that meet the given criteria |
 | ✅ | COUNTIFS | Counts the number of cells within a range that meet multiple criteria |
-| ⬜ | COVARIANCE.P | Returns covariance, the average of the products of paired deviations |
-| ⬜ | COVARIANCE.S | Returns the sample covariance, the average of the products deviations for each data point pair in two data sets |
-| ⬜ | DEVSQ | Returns the sum of squares of deviations |
-| ⬜ | EXPON.DIST | Returns the exponential distribution |
-| ⬜ | F.DIST | Returns the F probability distribution |
-| ⬜ | F.DIST.RT | Returns the F probability distribution |
-| ⬜ | F.INV | Returns the inverse of the F probability distribution |
-| ⬜ | F.INV.RT | Returns the inverse of the F probability distribution |
-| ⬜ | F.TEST | Returns the result of an F-test |
-| ⬜ | FISHER | Returns the Fisher transformation |
-| ⬜ | FISHERINV | Returns the inverse of the Fisher transformation |
-| ⬜ | FORECAST | Returns a value along a linear trend |
+| ✅ | COVARIANCE.P | Returns covariance, the average of the products of paired deviations |
+| ✅ | COVARIANCE.S | Returns the sample covariance, the average of the products deviations for each data point pair in two data sets |
+| ✅ | DEVSQ | Returns the sum of squares of deviations |
+| ✅ | EXPON.DIST | Returns the exponential distribution |
+| ✅ | F.DIST | Returns the F probability distribution |
+| ✅ | F.DIST.RT | Returns the F probability distribution |
+| ✅ | F.INV | Returns the inverse of the F probability distribution |
+| ✅ | F.INV.RT | Returns the inverse of the F probability distribution |
+| ✅ | F.TEST | Returns the result of an F-test |
+| ✅ | FISHER | Returns the Fisher transformation |
+| ✅ | FISHERINV | Returns the inverse of the Fisher transformation |
+| ✅ | FORECAST | Returns a value along a linear trend |
 | ⬜ | FORECAST.ETS | Returns a future value based on existing (historical) values by using the AAA version of the Exponential Smoothing (ETS) algorithm |
 | ⬜ | FORECAST.ETS.CONFINT | Returns a confidence interval for the forecast value at the specified target date |
 | ⬜ | FORECAST.ETS.SEASONALITY | Returns the length of the repetitive pattern Excel detects for the specified time series |
 | ⬜ | FORECAST.ETS.STAT | Returns a statistical value as a result of time series forecasting |
-| ⬜ | FORECAST.LINEAR | Returns a future value based on existing values |
-| ⬜ | FREQUENCY | Returns a frequency distribution as a vertical array |
-| ⬜ | GAMMA | Returns the Gamma function value |
-| ⬜ | GAMMA.DIST | Returns the gamma distribution |
-| ⬜ | GAMMA.INV | Returns the inverse of the gamma cumulative distribution |
-| ⬜ | GAMMALN | Returns the natural logarithm of the gamma function, Γ(x) |
-| ⬜ | GAMMALN.PRECISE | Returns the natural logarithm of the gamma function, Γ(x) |
-| ⬜ | GAUSS | Returns 0.5 less than the standard normal cumulative distribution |
-| ⬜ | GEOMEAN | Returns the geometric mean |
+| ✅ | FORECAST.LINEAR | Returns a future value based on existing values |
+| ✅ | FREQUENCY | Returns a frequency distribution as a vertical array |
+| ✅ | GAMMA | Returns the Gamma function value |
+| ✅ | GAMMA.DIST | Returns the gamma distribution |
+| ✅ | GAMMA.INV | Returns the inverse of the gamma cumulative distribution |
+| ✅ | GAMMALN | Returns the natural logarithm of the gamma function, Γ(x) |
+| ✅ | GAMMALN.PRECISE | Returns the natural logarithm of the gamma function, Γ(x) |
+| ✅ | GAUSS | Returns 0.5 less than the standard normal cumulative distribution |
+| ✅ | GEOMEAN | Returns the geometric mean |
 | ⬜ | GROWTH | Returns values along an exponential trend |
-| ⬜ | HARMEAN | Returns the harmonic mean |
-| ⬜ | HYPGEOM.DIST | Returns the hypergeometric distribution |
-| ⬜ | INTERCEPT | Returns the intercept of the linear regression line |
-| ⬜ | KURT | Returns the kurtosis of a data set |
+| ✅ | HARMEAN | Returns the harmonic mean |
+| ✅ | HYPGEOM.DIST | Returns the hypergeometric distribution |
+| ✅ | INTERCEPT | Returns the intercept of the linear regression line |
+| ✅ | KURT | Returns the kurtosis of a data set |
 | ✅ | LARGE | Returns the k-th largest value in a data set |
 | ⬜ | LINEST | Returns the parameters of a linear trend |
 | ⬜ | LOGEST | Returns the parameters of an exponential trend |
 | ⬜ | LOGNORM.DIST | Returns the cumulative lognormal distribution |
 | ⬜ | LOGNORM.INV | Returns the inverse of the lognormal cumulative distribution |
 | ✅ | MAX | Returns the maximum value in a list of arguments |
-| ⬜ | MAXA | Returns the maximum value in a list of arguments, including numbers, text, and logical values |
+| ✅ | MAXA | Returns the maximum value in a list of arguments, including numbers, text, and logical values |
 | ✅ | MAXIFS | Returns the maximum value among cells specified by a given set of conditions or criteria |
 | ✅ | MEDIAN | Returns the median of the given numbers |
 | ✅ | MIN | Returns the minimum value in a list of arguments |
-| ⬜ | MINA | Returns the smallest value in a list of arguments, including numbers, text, and logical values |
+| ✅ | MINA | Returns the smallest value in a list of arguments, including numbers, text, and logical values |
 | ✅ | MINIFS | Returns the minimum value among cells specified by a given set of conditions or criteria. |
-| ⬜ | MODE.MULT | Returns a vertical array of the most frequently occurring, or repetitive values in an array or range of data |
+| ✅ | MODE.MULT | Returns a vertical array of the most frequently occurring, or repetitive values in an array or range of data |
 | ✅ | MODE.SNGL | Returns the most common value in a data set |
-| ⬜ | NEGBINOM.DIST | Returns the negative binomial distribution |
-| ⬜ | NORM.DIST | Returns the normal cumulative distribution |
-| ⬜ | NORM.S.DIST | Returns the standard normal cumulative distribution |
-| ⬜ | NORM.S.INV | Returns the inverse of the standard normal cumulative distribution |
-| ⬜ | NORMINV | Returns the inverse of the normal cumulative distribution |
-| ⬜ | PEARSON | Returns the Pearson product moment correlation coefficient |
+| ✅ | NEGBINOM.DIST | Returns the negative binomial distribution |
+| ✅ | NORM.DIST | Returns the normal cumulative distribution |
+| ✅ | NORM.S.DIST | Returns the standard normal cumulative distribution |
+| ✅ | NORM.S.INV | Returns the inverse of the standard normal cumulative distribution |
+| ✅ | NORMINV | Returns the inverse of the normal cumulative distribution |
+| ✅ | PEARSON | Returns the Pearson product moment correlation coefficient |
 | ✅ | PERCENTILE.EXC | Returns the k-th percentile of values in a range, where k is in the range 0..1, exclusive |
 | ✅ | PERCENTILE.INC | Returns the k-th percentile of values in a range |
 | ✅ | PERCENTRANK.EXC | Returns the rank of a value in a data set as a percentage (0..1, exclusive) of the data set |
 | ✅ | PERCENTRANK.INC | Returns the percentage rank of a value in a data set |
-| ⬜ | PERMUT | Returns the number of permutations for a given number of objects |
-| ⬜ | PERMUTATIONA | Returns the number of permutations for a given number of objects (with repetitions) that can be selected from the total objects |
-| ⬜ | PHI | Returns the value of the density function for a standard normal distribution |
-| ⬜ | POISSON.DIST | Returns the Poisson distribution |
-| ⬜ | PROB | Returns the probability that values in a range are between two limits |
+| ✅ | PERMUT | Returns the number of permutations for a given number of objects |
+| ✅ | PERMUTATIONA | Returns the number of permutations for a given number of objects (with repetitions) that can be selected from the total objects |
+| ✅ | PHI | Returns the value of the density function for a standard normal distribution |
+| ✅ | POISSON.DIST | Returns the Poisson distribution |
+| ✅ | PROB | Returns the probability that values in a range are between two limits |
 | ✅ | QUARTILE.EXC | Returns the quartile of the data set, based on percentile values from 0..1, exclusive |
 | ✅ | QUARTILE.INC | Returns the quartile of a data set |
 | ✅ | RANK.AVG | Returns the rank of a number in a list of numbers |
 | ✅ | RANK.EQ | Returns the rank of a number in a list of numbers |
-| ⬜ | RSQ | Returns the square of the Pearson product moment correlation coefficient |
-| ⬜ | SKEW | Returns the skewness of a distribution |
-| ⬜ | SKEW.P | Returns the skewness of a distribution based on a population: a characterization of the degree of asymmetry of a distribution around its mean |
-| ⬜ | SLOPE | Returns the slope of the linear regression line |
+| ✅ | RSQ | Returns the square of the Pearson product moment correlation coefficient |
+| ✅ | SKEW | Returns the skewness of a distribution |
+| ✅ | SKEW.P | Returns the skewness of a distribution based on a population: a characterization of the degree of asymmetry of a distribution around its mean |
+| ✅ | SLOPE | Returns the slope of the linear regression line |
 | ✅ | SMALL | Returns the k-th smallest value in a data set |
-| ⬜ | STANDARDIZE | Returns a normalized value |
+| ✅ | STANDARDIZE | Returns a normalized value |
 | ✅ | STDEV.P | Calculates standard deviation based on the entire population |
 | ✅ | STDEV.S | Estimates standard deviation based on a sample |
-| ⬜ | STDEVA | Estimates standard deviation based on a sample, including numbers, text, and logical values |
-| ⬜ | STDEVPA | Calculates standard deviation based on the entire population, including numbers, text, and logical values |
-| ⬜ | STEYX | Returns the standard error of the predicted y-value for each x in the regression |
-| ⬜ | T.DIST | Returns the Percentage Points (probability) for the Student t-distribution |
-| ⬜ | T.DIST.2T | Returns the Percentage Points (probability) for the Student t-distribution |
-| ⬜ | T.DIST.RT | Returns the Student's t-distribution |
-| ⬜ | T.INV | Returns the t-value of the Student's t-distribution as a function of the probability and the degrees of freedom |
-| ⬜ | T.INV.2T | Returns the inverse of the Student's t-distribution |
-| ⬜ | T.TEST | Returns the probability associated with a Student's t-test |
+| ✅ | STDEVA | Estimates standard deviation based on a sample, including numbers, text, and logical values |
+| ✅ | STDEVPA | Calculates standard deviation based on the entire population, including numbers, text, and logical values |
+| ✅ | STEYX | Returns the standard error of the predicted y-value for each x in the regression |
+| ✅ | T.DIST | Returns the Percentage Points (probability) for the Student t-distribution |
+| ✅ | T.DIST.2T | Returns the Percentage Points (probability) for the Student t-distribution |
+| ✅ | T.DIST.RT | Returns the Student's t-distribution |
+| ✅ | T.INV | Returns the t-value of the Student's t-distribution as a function of the probability and the degrees of freedom |
+| ✅ | T.INV.2T | Returns the inverse of the Student's t-distribution |
+| ✅ | T.TEST | Returns the probability associated with a Student's t-test |
 | ⬜ | TREND | Returns values along a linear trend |
-| ⬜ | TRIMMEAN | Returns the mean of the interior of a data set |
+| ✅ | TRIMMEAN | Returns the mean of the interior of a data set |
 | ✅ | VAR.P | Calculates variance based on the entire population |
 | ✅ | VAR.S | Estimates variance based on a sample |
-| ⬜ | VARA | Estimates variance based on a sample, including numbers, text, and logical values |
-| ⬜ | VARPA | Calculates variance based on the entire population, including numbers, text, and logical values |
-| ⬜ | WEIBULL.DIST | Returns the Weibull distribution |
-| ⬜ | Z.TEST | Returns the one-tailed probability-value of a z-test |
+| ✅ | VARA | Estimates variance based on a sample, including numbers, text, and logical values |
+| ✅ | VARPA | Calculates variance based on the entire population, including numbers, text, and logical values |
+| ✅ | WEIBULL.DIST | Returns the Weibull distribution |
+| ✅ | Z.TEST | Returns the one-tailed probability-value of a z-test |
 
 ## Text
 

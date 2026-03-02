@@ -106,18 +106,18 @@
 - [x] Cell reference resolution (single cells, ranges)
 - [x] Cross-sheet references (`Sheet2!A1`)
 - [x] Structured reference evaluation (`Table1[Column]`, `Table1[@Col]`, `[#Headers]`, `[#Totals]`, `[#All]`, `[#Data]`)
-### Implemented Functions (243 of ~506)
+### Implemented Functions (346 of ~506)
 
 | Category | Count | Functions (highlights) |
 |----------|-------|----------------------|
 | Math & Trig | 35 | SUM, SUMIF, SUMIFS, AVERAGE, MIN, MAX, COUNT, COUNTIF, COUNTIFS, ROUND, ABS, MOD, INT, CEILING, FLOOR, POWER, SQRT, RAND, LOG, LN, PI, ... |
 | Text | 34 | LEN, LEFT, RIGHT, MID, LOWER, UPPER, TRIM, CONCAT, CONCATENATE, FIND, SEARCH, SUBSTITUTE, TEXT, TEXTJOIN, FIXED, DOLLAR, NUMBERVALUE, ... |
-| Statistical | 28 | AVERAGEIF, AVERAGEIFS, COUNTBLANK, LARGE, SMALL, STDEV.S, STDEV.P, VAR.S, VAR.P, MAXIFS, MINIFS, RANK.EQ, RANK.AVG, PERCENTILE.INC, QUARTILE.INC, MODE.SNGL, ... |
+| Statistical | 101 | AVERAGEIF, AVERAGEIFS, COUNTBLANK, LARGE, SMALL, STDEV.S, STDEV.P, VAR.S, VAR.P, MAXIFS, MINIFS, RANK.EQ, RANK.AVG, PERCENTILE.INC, QUARTILE.INC, MODE.SNGL, BETA.DIST, BINOM.DIST, CHISQ.DIST, CORREL, COVARIANCE.P, COVARIANCE.S, EXPON.DIST, F.DIST, FISHER, FORECAST, GAMMA, GAMMA.DIST, HYPGEOM.DIST, NORM.DIST, NORM.S.DIST, PEARSON, POISSON.DIST, T.DIST, WEIBULL.DIST, Z.TEST, ... |
 | Logical | 11 | IF, AND, OR, NOT, IFERROR, IFNA, IFS, SWITCH, XOR, TRUE, FALSE |
 | Lookup | 13 | INDEX, MATCH, VLOOKUP, HLOOKUP, XLOOKUP, XMATCH, CHOOSE, ROW, COLUMN, ROWS, COLUMNS, INDIRECT, OFFSET |
 | Date | 23 | DATE, YEAR, MONTH, DAY, NOW, TODAY, TIME, HOUR, MINUTE, SECOND, WEEKDAY, WEEKNUM, ISOWEEKNUM, EDATE, EOMONTH, DAYS, DAYS360, DATEDIF, YEARFRAC, DATEVALUE, TIMEVALUE, NETWORKDAYS, WORKDAY |
 | Information | 6 | ISBLANK, ISNUMBER, ISTEXT, ISERROR, ISNA, NA |
-| Compatibility | 9 | STDEV, STDEVP, VAR, VARP, MODE, PERCENTILE, QUARTILE, RANK, PERCENTRANK |
+| Compatibility | 40 | BETADIST, BETAINV, BINOMDIST, CEILING, CHIDIST, CHIINV, CHITEST, CONFIDENCE, COVAR, CRITBINOM, EXPONDIST, FDIST, FINV, FLOOR, FTEST, GAMMADIST, GAMMAINV, HYPGEOMDIST, LOGINV, LOGNORMDIST, NEGBINOMDIST, NORM.INV, NORMDIST, NORMSDIST, NORMSINV, POISSON, TDIST, TINV, TTEST, WEIBULL, ZTEST, MODE, PERCENTILE, PERCENTRANK, QUARTILE, RANK, STDEV, STDEVP, VAR, VARP |
 | Financial | 20 | PMT, FV, PV, NPER, RATE, IPMT, PPMT, CUMIPMT, CUMPRINC, NPV, IRR, MIRR, XNPV, SLN, SYD, DB, DDB, EFFECT, NOMINAL, PDURATION |
 | Database | 12 | DAVERAGE, DCOUNT, DCOUNTA, DGET, DMAX, DMIN, DPRODUCT, DSTDEV, DSTDEVP, DSUM, DVAR, DVARP |
 | Engineering | 54 | BESSELI, BESSELJ, BESSELK, BESSELY, BIN2DEC, BIN2HEX, BIN2OCT, BITAND, BITOR, BITXOR, COMPLEX, CONVERT, DEC2BIN, DEC2HEX, DEC2OCT, DELTA, ERF, ERFC, GESTEP, HEX2BIN, HEX2DEC, HEX2OCT, IMABS, IMAGINARY, IMCOS, IMDIV, IMEXP, IMLN, IMPOWER, IMPRODUCT, IMREAL, IMSIN, IMSQRT, IMSUB, IMSUM, OCT2BIN, OCT2DEC, OCT2HEX, ... |
@@ -181,7 +181,7 @@
 - [x] **Comment visibility (robust)** — parse VML `<x:Visible/>` element and tolerate whitespace in style `visibility:visible` check
 - [x] **Rich text in shared strings** — reader preserves `<rPr>` formatting runs as `CellValue::RichText`
 
-#### More Excel Functions (~263 remaining)
+#### More Excel Functions (~160 remaining)
 See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 
 | Category | Implemented | Total | Key missing functions |
@@ -189,8 +189,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Financial | 20 | 55 | ACCRINT, DISC, DURATION, FVSCHEDULE, INTRATE, XIRR, YIELD, ... |
 | Engineering | 54 | 54 | *(complete)* |
 | Database | 12 | 12 | *(complete)* |
-| Compatibility | 9 | 40 | CEILING, FLOOR, BETADIST, BINOMDIST, ... |
-| Statistical | 28 / 110 | 25% | CORREL, COVARIANCE, F.DIST, NORM.DIST, T.DIST, TREND, LINEST, ... |
+| Compatibility | 40 | 40 | *(complete)* |
+| Statistical | 101 / 110 | 92% | GROWTH, LINEST, LOGEST, TREND |
 | Date & Time | 23 / 25 | 92% | NETWORKDAYS.INTL, WORKDAY.INTL |
 | Lookup | 13 / 34 | 38% | FILTER, SORT, UNIQUE, ADDRESS, TRANSPOSE, ... |
 | Text | 34 / 42 | 81% | REPLACE, TEXTBEFORE, TEXTAFTER, TEXTSPLIT, ... |
@@ -350,7 +350,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Core (cell, workbook, worksheet) | 41 | ✅ |
 | Cell display formatting (CellView) | 51 | ✅ |
 | Formula parser | 43 | ✅ |
-| Formula evaluator + functions | 258 | ✅ |
+| Formula evaluator + functions | 382 | ✅ |
 | Calculation engine | 26 | ✅ |
 | XLSX roundtrip | 46 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
@@ -366,7 +366,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 167 | ✅ |
-| **Total** | **945** | ✅ |
+| **Total** | **1069** | ✅ |
 
 ---
 
@@ -387,7 +387,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 ```
 duke-sheets/
 ├── duke-sheets-core        # Data model, cell storage, locale
-├── duke-sheets-formula     # Parser, evaluator, 243 functions
+├── duke-sheets-formula     # Parser, evaluator, 346 functions
 ├── duke-sheets-xlsx        # XLSX read/write
 ├── duke-sheets-xls         # XLS reader (BIFF8, read-only)
 ├── duke-sheets-csv         # CSV read/write
