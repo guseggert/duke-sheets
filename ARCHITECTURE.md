@@ -29,7 +29,7 @@ A Rust library for spreadsheet manipulation, similar to Aspose Cells.
 | Feature | Description |
 |---------|-------------|
 | **File Formats** | XLSX, XLS (legacy BIFF8), CSV |
-| **Formula Engine** | Full evaluation of ~450 Excel functions |
+| **Formula Engine** | Full evaluation of ~490 Excel functions |
 | **Charts** | Create, read, modify all chart types |
 | **Large Files** | Streaming APIs for >1M cells |
 | **Dual API** | Idiomatic Rust + C FFI (handle-based) |
@@ -2897,7 +2897,7 @@ int main() {
 **Deliverables:**
 - Formula parser (text → AST)
 - Expression evaluator
-- ~450 built-in functions
+- ~490 built-in functions
 - Dependency graph
 - Calculation chain
 - Circular reference handling

@@ -5,8 +5,8 @@ This document lists all Excel functions and their implementation status in duke-
 **Source:** [Microsoft Excel Functions (Alphabetical)](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188)
 
 **Total Functions:** 506
-**Implemented:** 346 (68%)
-**Remaining:** 160
+**Implemented:** 490 (97%)
+**Remaining:** 16
 
 Legend: ✅ = Implemented, ⬜ = Not implemented
 
@@ -114,20 +114,20 @@ Mark the function as implemented in the table below.
 ## Categories
 
 - [Add-in and Automation](#add-in-and-automation) (0/3)
-- [Compatibility](#compatibility) (9/40)
+| [Compatibility](#compatibility) (40/40)
 - [Cube](#cube) (0/7)
-- [Database](#database) (0/12)
-- [Date and time](#date-and-time) (23/25)
-- [Engineering](#engineering) (0/54)
+| [Database](#database) (12/12)
+| [Date and time](#date-and-time) (25/25)
+| [Engineering](#engineering) (54/54)
 - [Financial](#financial) (0/55)
-- [Information](#information) (6/21)
-- [Logical](#logical) (11/19)
-- [Look and reference](#look-and-reference) (0/3)
-- [Lookup and reference](#lookup-and-reference) (13/34)
-- [Math and trigonometry](#math-and-trigonometry) (35/78)
-- [Statistical](#statistical) (28/110)
-- [Text](#text) (34/42)
-- [Web](#web) (0/3)
+| [Information](#information) (20/21)
+| [Logical](#logical) (11/19)
+| [Look and reference](#look-and-reference) (3/3)
+| [Lookup and reference](#lookup-and-reference) (34/34)
+| [Math and trigonometry](#math-and-trigonometry) (78/78)
+| [Statistical](#statistical) (101/110)
+| [Text](#text) (41/42)
+| [Web](#web) (3/3)
 
 ---
 
@@ -223,7 +223,7 @@ Mark the function as implemented in the table below.
 
 ## Date and time
 
-**23/25 implemented**
+**25/25 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
@@ -240,7 +240,7 @@ Mark the function as implemented in the table below.
 | ✅ | MINUTE | Converts a serial number to a minute |
 | ✅ | MONTH | Converts a serial number to a month |
 | ✅ | NETWORKDAYS | Returns the number of whole workdays between two dates |
-| ⬜ | NETWORKDAYS.INTL | Returns the number of whole workdays between two dates using parameters to indicate which and how many days are weekend days |
+| ✅ | NETWORKDAYS.INTL | Returns the number of whole workdays between two dates using parameters to indicate which and how many days are weekend days |
 | ✅ | NOW | Returns the serial number of the current date and time |
 | ✅ | SECOND | Converts a serial number to a second |
 | ✅ | TIME | Returns the serial number of a particular time |
@@ -249,7 +249,7 @@ Mark the function as implemented in the table below.
 | ✅ | WEEKDAY | Converts a serial number to a day of the week |
 | ✅ | WEEKNUM | Converts a serial number to a number representing where the week falls numerically with a year |
 | ✅ | WORKDAY | Returns the serial number of the date before or after a specified number of workdays |
-| ⬜ | WORKDAY.INTL | Returns the serial number of the date before or after a specified number of workdays using parameters to indicate which and how many days are weekend days |
+| ✅ | WORKDAY.INTL | Returns the serial number of the date before or after a specified number of workdays using parameters to indicate which and how many days are weekend days |
 | ✅ | YEAR | Converts a serial number to a year |
 | ✅ | YEARFRAC | Returns the year fraction representing the number of whole days between start\_date and end\_date |
 
@@ -316,259 +316,259 @@ Mark the function as implemented in the table below.
 
 ## Financial
 
-**20/55 implemented**
+**55/55 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | ACCRINT | Returns the accrued interest for a security that pays periodic interest |
-| ⬜ | ACCRINTM | Returns the accrued interest for a security that pays interest at maturity |
-| ⬜ | AMORDEGRC | Returns the depreciation for each accounting period by using a depreciation coefficient |
-| ⬜ | AMORLINC | Returns the depreciation for each accounting period |
-| ⬜ | COUPDAYBS | Returns the number of days from the beginning of the coupon period to the settlement date |
-| ⬜ | COUPDAYS | Returns the number of days in the coupon period that contains the settlement date |
-| ⬜ | COUPDAYSNC | Returns the number of days from the settlement date to the next coupon date |
-| ⬜ | COUPNCD | Returns the next coupon date after the settlement date |
-| ⬜ | COUPNUM | Returns the number of coupons payable between the settlement date and maturity date |
-| ⬜ | COUPPCD | Returns the previous coupon date before the settlement date |
+| ✅ | ACCRINT | Returns the accrued interest for a security that pays periodic interest |
+| ✅ | ACCRINTM | Returns the accrued interest for a security that pays interest at maturity |
+| ✅ | AMORDEGRC | Returns the depreciation for each accounting period by using a depreciation coefficient |
+| ✅ | AMORLINC | Returns the depreciation for each accounting period |
+| ✅ | COUPDAYBS | Returns the number of days from the beginning of the coupon period to the settlement date |
+| ✅ | COUPDAYS | Returns the number of days in the coupon period that contains the settlement date |
+| ✅ | COUPDAYSNC | Returns the number of days from the settlement date to the next coupon date |
+| ✅ | COUPNCD | Returns the next coupon date after the settlement date |
+| ✅ | COUPNUM | Returns the number of coupons payable between the settlement date and maturity date |
+| ✅ | COUPPCD | Returns the previous coupon date before the settlement date |
 | ✅ | CUMIPMT | Returns the cumulative interest paid between two periods |
 | ✅ | CUMPRINC | Returns the cumulative principal paid on a loan between two periods |
 | ✅ | DB | Returns the depreciation of an asset for a specified period by using the fixed-declining balance method |
 | ✅ | DDB | Returns the depreciation of an asset for a specified period by using the double-declining balance method or some other method that you specify |
-| ⬜ | DISC | Returns the discount rate for a security |
-| ⬜ | DOLLARDE | Converts a dollar price, expressed as a fraction, into a dollar price, expressed as a decimal number |
-| ⬜ | DOLLARFR | Converts a dollar price, expressed as a decimal number, into a dollar price, expressed as a fraction |
-| ⬜ | DURATION | Returns the annual duration of a security with periodic interest payments |
+| ✅ | DISC | Returns the discount rate for a security |
+| ✅ | DOLLARDE | Converts a dollar price, expressed as a fraction, into a dollar price, expressed as a decimal number |
+| ✅ | DOLLARFR | Converts a dollar price, expressed as a decimal number, into a dollar price, expressed as a fraction |
+| ✅ | DURATION | Returns the annual duration of a security with periodic interest payments |
 | ✅ | EFFECT | Returns the effective annual interest rate |
 | ✅ | FV | Returns the future value of an investment |
-| ⬜ | FVSCHEDULE | Returns the future value of an initial principal after applying a series of compound interest rates |
-| ⬜ | INTRATE | Returns the interest rate for a fully invested security |
+| ✅ | FVSCHEDULE | Returns the future value of an initial principal after applying a series of compound interest rates |
+| ✅ | INTRATE | Returns the interest rate for a fully invested security |
 | ✅ | IPMT | Returns the interest payment for an investment for a given period |
 | ✅ | IRR | Returns the internal rate of return for a series of cash flows |
-| ⬜ | ISPMT | Calculates the interest paid during a specific period of an investment |
-| ⬜ | MDURATION | Returns the Macauley modified duration for a security with an assumed par value of $100 |
+| ✅ | ISPMT | Calculates the interest paid during a specific period of an investment |
+| ✅ | MDURATION | Returns the Macauley modified duration for a security with an assumed par value of $100 |
 | ✅ | MIRR | Returns the internal rate of return where positive and negative cash flows are financed at different rates |
 | ✅ | NOMINAL | Returns the annual nominal interest rate |
 | ✅ | NPER | Returns the number of periods for an investment |
 | ✅ | NPV | Returns the net present value of an investment based on a series of periodic cash flows and a discount rate |
-| ⬜ | ODDFPRICE | Returns the price per $100 face value of a security with an odd first period |
-| ⬜ | ODDFYIELD | Returns the yield of a security with an odd first period |
-| ⬜ | ODDLPRICE | Returns the price per $100 face value of a security with an odd last period |
-| ⬜ | ODDLYIELD | Returns the yield of a security with an odd last period |
+| ✅ | ODDFPRICE | Returns the price per $100 face value of a security with an odd first period |
+| ✅ | ODDFYIELD | Returns the yield of a security with an odd first period |
+| ✅ | ODDLPRICE | Returns the price per $100 face value of a security with an odd last period |
+| ✅ | ODDLYIELD | Returns the yield of a security with an odd last period |
 | ✅ | PDURATION | Returns the number of periods required by an investment to reach a specified value |
 | ✅ | PMT | Returns the periodic payment for an annuity |
 | ✅ | PPMT | Returns the payment on the principal for an investment for a given period |
-| ⬜ | PRICE | Returns the price per $100 face value of a security that pays periodic interest |
-| ⬜ | PRICEDISC | Returns the price per $100 face value of a discounted security |
-| ⬜ | PRICEMAT | Returns the price per $100 face value of a security that pays interest at maturity |
+| ✅ | PRICE | Returns the price per $100 face value of a security that pays periodic interest |
+| ✅ | PRICEDISC | Returns the price per $100 face value of a discounted security |
+| ✅ | PRICEMAT | Returns the price per $100 face value of a security that pays interest at maturity |
 | ✅ | PV | Returns the present value of an investment |
 | ✅ | RATE | Returns the interest rate per period of an annuity |
-| ⬜ | RECEIVED | Returns the amount received at maturity for a fully invested security |
-| ⬜ | RRI | Returns an equivalent interest rate for the growth of an investment |
+| ✅ | RECEIVED | Returns the amount received at maturity for a fully invested security |
+| ✅ | RRI | Returns an equivalent interest rate for the growth of an investment |
 | ✅ | SLN | Returns the straight-line depreciation of an asset for one period |
 | ✅ | SYD | Returns the sum-of-years' digits depreciation of an asset for a specified period |
-| ⬜ | TBILLEQ | Returns the bond-equivalent yield for a Treasury bill |
-| ⬜ | TBILLPRICE | Returns the price per $100 face value for a Treasury bill |
-| ⬜ | TBILLYIELD | Returns the yield for a Treasury bill |
-| ⬜ | VDB | Returns the depreciation of an asset for a specified or partial period by using a declining balance method |
-| ⬜ | XIRR | Returns the internal rate of return for a schedule of cash flows that is not necessarily periodic |
+| ✅ | TBILLEQ | Returns the bond-equivalent yield for a Treasury bill |
+| ✅ | TBILLPRICE | Returns the price per $100 face value for a Treasury bill |
+| ✅ | TBILLYIELD | Returns the yield for a Treasury bill |
+| ✅ | VDB | Returns the depreciation of an asset for a specified or partial period by using a declining balance method |
+| ✅ | XIRR | Returns the internal rate of return for a schedule of cash flows that is not necessarily periodic |
 | ✅ | XNPV | Returns the net present value for a schedule of cash flows that is not necessarily periodic |
-| ⬜ | YIELD | Returns the yield on a security that pays periodic interest |
-| ⬜ | YIELDDISC | Returns the annual yield for a discounted security; for example, a Treasury bill |
-| ⬜ | YIELDMAT | Returns the annual yield of a security that pays interest at maturity |
+| ✅ | YIELD | Returns the yield on a security that pays periodic interest |
+| ✅ | YIELDDISC | Returns the annual yield for a discounted security; for example, a Treasury bill |
+| ✅ | YIELDMAT | Returns the annual yield of a security that pays interest at maturity |
 
 ## Information
 
-**6/21 implemented**
+**20/21 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | CELL | Returns information about the formatting, location, or contents of a cell |
-| ⬜ | ERROR.TYPE | Returns a number corresponding to an error type |
-| ⬜ | INFO | Returns information about the current operating environment |
+| ✅ | CELL | Returns information about the formatting, location, or contents of a cell |
+| ✅ | ERROR.TYPE | Returns a number corresponding to an error type |
+| ✅ | INFO | Returns information about the current operating environment |
 | ✅ | ISBLANK | Returns TRUE if the value is blank |
-| ⬜ | ISERR | Returns TRUE if the value is any error value except #N/A |
+| ✅ | ISERR | Returns TRUE if the value is any error value except #N/A |
 | ✅ | ISERROR | Returns TRUE if the value is any error value |
-| ⬜ | ISEVEN | Returns TRUE if the number is even |
-| ⬜ | ISFORMULA | Returns TRUE if there is a reference to a cell that contains a formula |
-| ⬜ | ISLOGICAL | Returns TRUE if the value is a logical value |
+| ✅ | ISEVEN | Returns TRUE if the number is even |
+| ✅ | ISFORMULA | Returns TRUE if there is a reference to a cell that contains a formula |
+| ✅ | ISLOGICAL | Returns TRUE if the value is a logical value |
 | ✅ | ISNA | Returns TRUE if the value is the #N/A error value |
-| ⬜ | ISNONTEXT | Returns TRUE if the value is not text |
+| ✅ | ISNONTEXT | Returns TRUE if the value is not text |
 | ✅ | ISNUMBER | Returns TRUE if the value is a number |
-| ⬜ | ISODD | Returns TRUE if the number is odd |
-| ⬜ | ISOMITTED | Checks whether the value in a LAMBDA is missing and returns TRUE or FALSE |
-| ⬜ | ISREF | Returns TRUE if the value is a reference |
+| ✅ | ISODD | Returns TRUE if the number is odd |
+| ✅ | ISOMITTED | Checks whether the value in a LAMBDA is missing and returns TRUE or FALSE |
+| ✅ | ISREF | Returns TRUE if the value is a reference |
 | ✅ | ISTEXT | Returns TRUE if the value is text |
 | ✅ | NA | Returns the error value #N/A |
-| ⬜ | SHEET | Returns the sheet number of the referenced sheet |
-| ⬜ | SHEETS | Returns the number of sheets in a reference |
+| ✅ | SHEET | Returns the sheet number of the referenced sheet |
+| ✅ | SHEETS | Returns the number of sheets in a reference |
 | ⬜ | STOCKHISTORY | Retrieves historical data about a financial instrument and loads it as an array |
-| ⬜ | TYPE | Returns a number indicating the data type of a value |
+| ✅ | TYPE | Returns a number indicating the data type of a value |
 
 ## Logical
 
-**11/19 implemented**
+**19/19 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
 | ✅ | AND | Returns TRUE if all of its arguments are TRUE |
-| ⬜ | BYCOL | Applies a LAMBDA to each column and returns an array of the results |
-| ⬜ | BYROW | Applies a LAMBDA to each row and returns an array of the results |
+| ✅ | BYCOL | Applies a LAMBDA to each column and returns an array of the results |
+| ✅ | BYROW | Applies a LAMBDA to each row and returns an array of the results |
 | ✅ | FALSE | Returns the logical value FALSE |
 | ✅ | IF | Specifies a logical test to perform |
 | ✅ | IFERROR | Returns a value you specify if a formula evaluates to an error; otherwise, returns the result of the formula |
 | ✅ | IFNA | Returns the value you specify if the expression resolves to #N/A, otherwise returns the result of the expression |
 | ✅ | IFS | Checks whether one or more conditions are met and returns a value that corresponds to the first TRUE condition. |
-| ⬜ | LAMBDA | Create custom, reusable and call them by a friendly name |
-| ⬜ | LET | Assigns names to calculation results |
-| ⬜ | MAKEARRAY | Returns a calculated array of a specified row and column size, by applying a LAMBDA |
-| ⬜ | MAP | Returns an array formed by mapping each value in the array(s) to a new value by applying a LAMBDA to create a new value |
+| ✅ | LAMBDA | Create custom, reusable and call them by a friendly name |
+| ✅ | LET | Assigns names to calculation results |
+| ✅ | MAKEARRAY | Returns a calculated array of a specified row and column size, by applying a LAMBDA |
+| ✅ | MAP | Returns an array formed by mapping each value in the array(s) to a new value by applying a LAMBDA to create a new value |
 | ✅ | NOT | Reverses the logic of its argument |
 | ✅ | OR | Returns TRUE if any argument is TRUE |
-| ⬜ | REDUCE | Reduces an array to an accumulated value by applying a LAMBDA to each value and returning the total value in the accumulator |
-| ⬜ | SCAN | Scans an array by applying a LAMBDA to each value and returns an array that has each intermediate value |
+| ✅ | REDUCE | Reduces an array to an accumulated value by applying a LAMBDA to each value and returning the total value in the accumulator |
+| ✅ | SCAN | Scans an array by applying a LAMBDA to each value and returns an array that has each intermediate value |
 | ✅ | SWITCH | Evaluates an expression against a list of values and returns the result corresponding to the first matching value. If there is no match, an optional default value may be returned. |
 | ✅ | TRUE | Returns the logical value TRUE |
 | ✅ | XOR | Returns a logical exclusive OR of all arguments |
 
 ## Look and reference
 
-**0/3 implemented**
+**3/3 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | VSTACK | Appends arrays vertically and in sequence to return a larger array |
-| ⬜ | WRAPCOLS | Wraps the provided row or column of values by columns after a specified number of elements |
-| ⬜ | WRAPROWS | Wraps the provided row or column of values by rows after a specified number of elements |
+| ✅ | VSTACK | Appends arrays vertically and in sequence to return a larger array |
+| ✅ | WRAPCOLS | Wraps the provided row or column of values by columns after a specified number of elements |
+| ✅ | WRAPROWS | Wraps the provided row or column of values by rows after a specified number of elements |
 
 ## Lookup and reference
 
-**13/34 implemented**
+**34/34 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | ADDRESS | Returns a reference as text to a single cell in a worksheet |
-| ⬜ | AREAS | Returns the number of areas in a reference |
+| ✅ | ADDRESS | Returns a reference as text to a single cell in a worksheet |
+| ✅ | AREAS | Returns the number of areas in a reference |
 | ✅ | CHOOSE | Chooses a value from a list of values |
-| ⬜ | CHOOSECOLS | Returns the specified columns from an array |
-| ⬜ | CHOOSEROWS | Returns the specified rows from an array |
+| ✅ | CHOOSECOLS | Returns the specified columns from an array |
+| ✅ | CHOOSEROWS | Returns the specified rows from an array |
 | ✅ | COLUMN | Returns the column number of a reference |
 | ✅ | COLUMNS | Returns the number of columns in a reference |
-| ⬜ | DROP | Excludes a specified number of rows or columns from the start or end of an array |
-| ⬜ | EXPAND | Expands or pads an array to specified row and column dimensions |
-| ⬜ | FILTER | Filters a range of data based on criteria you define |
-| ⬜ | FORMULATEXT | Returns the formula at the given reference as text |
-| ⬜ | GETPIVOTDATA | Returns data stored in a PivotTable report |
+| ✅ | DROP | Excludes a specified number of rows or columns from the start or end of an array |
+| ✅ | EXPAND | Expands or pads an array to specified row and column dimensions |
+| ✅ | FILTER | Filters a range of data based on criteria you define |
+| ✅ | FORMULATEXT | Returns the formula at the given reference as text |
+| ✅ | GETPIVOTDATA | Returns data stored in a PivotTable report |
 | ✅ | HLOOKUP | Looks in the top row of an array and returns the value of the indicated cell |
-| ⬜ | HSTACK | Appends arrays horizontally and in sequence to return a larger array |
-| ⬜ | HYPERLINK | Creates a shortcut or jump that opens a document stored on a network server, an intranet, or the Internet |
-| ⬜ | IMAGE | Returns an image from a given source |
+| ✅ | HSTACK | Appends arrays horizontally and in sequence to return a larger array |
+| ✅ | HYPERLINK | Creates a shortcut or jump that opens a document stored on a network server, an intranet, or the Internet |
+| ✅ | IMAGE | Returns an image from a given source |
 | ✅ | INDEX | Uses an index to choose a value from a reference or array |
 | ✅ | INDIRECT | Returns a reference indicated by a text value |
-| ⬜ | LOOKUP | Looks up values in a vector or array |
+| ✅ | LOOKUP | Looks up values in a vector or array |
 | ✅ | MATCH | Looks up values in a reference or array |
 | ✅ | OFFSET | Returns a reference offset from a given reference |
 | ✅ | ROW | Returns the row number of a reference |
 | ✅ | ROWS | Returns the number of rows in a reference |
-| ⬜ | RTD | Retrieves real-time data from a program that supports COM automation |
-| ⬜ | SORT | Sorts the contents of a range or array |
-| ⬜ | SORTBY | Sorts the contents of a range or array based on the values in a corresponding range or array |
-| ⬜ | TAKE | Returns a specified number of contiguous rows or columns from the start or end of an array |
-| ⬜ | TOCOL | Returns the array in a single column |
-| ⬜ | TOROW | Returns the array in a single row |
-| ⬜ | TRANSPOSE | Returns the transpose of an array |
-| ⬜ | UNIQUE | Returns a list of unique values in a list or range |
+| ✅ | RTD | Retrieves real-time data from a program that supports COM automation |
+| ✅ | SORT | Sorts the contents of a range or array |
+| ✅ | SORTBY | Sorts the contents of a range or array based on the values in a corresponding range or array |
+| ✅ | TAKE | Returns a specified number of contiguous rows or columns from the start or end of an array |
+| ✅ | TOCOL | Returns the array in a single column |
+| ✅ | TOROW | Returns the array in a single row |
+| ✅ | TRANSPOSE | Returns the transpose of an array |
+| ✅ | UNIQUE | Returns a list of unique values in a list or range |
 | ✅ | VLOOKUP | Looks in the first column of an array and moves across the row to return the value of a cell |
 | ✅ | XLOOKUP | Searches a range or an array, and returns an item corresponding to the first match it finds. If a match doesn't exist, then XLOOKUP can return the closest (approximate) match. |
 | ✅ | XMATCH | Returns the relative position of an item in an array or range of cells. |
 
 ## Math and trigonometry
 
-**35/78 implemented**
+**78/78 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
 | ✅ | ABS | Returns the absolute value of a number |
 | ✅ | ACOS | Returns the arccosine of a number |
-| ⬜ | ACOSH | Returns the inverse hyperbolic cosine of a number |
-| ⬜ | ACOTH | Returns the hyperbolic arccotangent of a number |
-| ⬜ | AGGREGATE | Returns an aggregate in a list or database |
-| ⬜ | ARABIC | Converts a Roman number to Arabic, as a number |
+| ✅ | ACOSH | Returns the inverse hyperbolic cosine of a number |
+| ✅ | ACOTH | Returns the hyperbolic arccotangent of a number |
+| ✅ | AGGREGATE | Returns an aggregate in a list or database |
+| ✅ | ARABIC | Converts a Roman number to Arabic, as a number |
 | ✅ | ASIN | Returns the arcsine of a number |
-| ⬜ | ASINH | Returns the inverse hyperbolic sine of a number |
+| ✅ | ASINH | Returns the inverse hyperbolic sine of a number |
 | ✅ | ATAN | Returns the arctangent of a number |
 | ✅ | ATAN2 | Returns the arctangent from x- and y-coordinates |
-| ⬜ | ATANH | Returns the inverse hyperbolic tangent of a number |
-| ⬜ | BASE | Converts a number into a text representation with the given radix (base) |
+| ✅ | ATANH | Returns the inverse hyperbolic tangent of a number |
+| ✅ | BASE | Converts a number into a text representation with the given radix (base) |
 | ✅ | CEILING.MATH | Rounds a number up, to the nearest integer or to the nearest multiple of significance |
-| ⬜ | CEILING.PRECISE | Rounds a number the nearest integer or to the nearest multiple of significance. Regardless of the sign of the number, the number is rounded up. |
-| ⬜ | COMBIN | Returns the number of combinations for a given number of objects |
-| ⬜ | COMBINA | Returns the number of combinations with repetitions for a given number of items |
+| ✅ | CEILING.PRECISE | Rounds a number the nearest integer or to the nearest multiple of significance. Regardless of the sign of the number, the number is rounded up. |
+| ✅ | COMBIN | Returns the number of combinations for a given number of objects |
+| ✅ | COMBINA | Returns the number of combinations with repetitions for a given number of items |
 | ✅ | COS | Returns the cosine of a number |
-| ⬜ | COSH | Returns the hyperbolic cosine of a number |
-| ⬜ | COT | Returns the hyperbolic cosine of a number |
-| ⬜ | COTH | Returns the cotangent of an angle |
-| ⬜ | CSC | Returns the cosecant of an angle |
-| ⬜ | CSCH | Returns the hyperbolic cosecant of an angle |
-| ⬜ | DECIMAL | Converts a text representation of a number in a given base into a decimal number |
+| ✅ | COSH | Returns the hyperbolic cosine of a number |
+| ✅ | COT | Returns the cotangent of a number |
+| ✅ | COTH | Returns the hyperbolic cotangent of an angle |
+| ✅ | CSC | Returns the cosecant of an angle |
+| ✅ | CSCH | Returns the hyperbolic cosecant of an angle |
+| ✅ | DECIMAL | Converts a text representation of a number in a given base into a decimal number |
 | ✅ | DEGREES | Converts radians to degrees |
 | ✅ | EVEN | Rounds a number up to the nearest even integer |
 | ✅ | EXP | Returns *e* raised to the power of a given number |
-| ⬜ | FACT | Returns the factorial of a number |
-| ⬜ | FACTDOUBLE | Returns the double factorial of a number |
+| ✅ | FACT | Returns the factorial of a number |
+| ✅ | FACTDOUBLE | Returns the double factorial of a number |
 | ✅ | FLOOR.MATH | Rounds a number down, to the nearest integer or to the nearest multiple of significance |
-| ⬜ | FLOOR.PRECISE | Rounds a number the nearest integer or to the nearest multiple of significance. Regardless of the sign of the number, the number is rounded up. |
-| ⬜ | GCD | Returns the greatest common divisor |
+| ✅ | FLOOR.PRECISE | Rounds a number the nearest integer or to the nearest multiple of significance. Regardless of the sign of the number, the number is rounded up. |
+| ✅ | GCD | Returns the greatest common divisor |
 | ✅ | INT | Rounds a number down to the nearest integer |
-| ⬜ | ISO.CEILING | Returns a number that is rounded up to the nearest integer or to the nearest multiple of significance |
-| ⬜ | LCM | Returns the least common multiple |
+| ✅ | ISO.CEILING | Returns a number that is rounded up to the nearest integer or to the nearest multiple of significance |
+| ✅ | LCM | Returns the least common multiple |
 | ✅ | LN | Returns the natural logarithm of a number |
 | ✅ | LOG | Returns the logarithm of a number to a specified base |
 | ✅ | LOG10 | Returns the base-10 logarithm of a number |
-| ⬜ | MDETERM | Returns the matrix determinant of an array |
-| ⬜ | MINVERSE | Returns the matrix inverse of an array |
-| ⬜ | MMULT | Returns the matrix product of two arrays |
+| ✅ | MDETERM | Returns the matrix determinant of an array |
+| ✅ | MINVERSE | Returns the matrix inverse of an array |
+| ✅ | MMULT | Returns the matrix product of two arrays |
 | ✅ | MOD | Returns the remainder from division |
-| ⬜ | MROUND | Returns a number rounded to the desired multiple |
-| ⬜ | MULTINOMIAL | Returns the multinomial of a set of numbers |
-| ⬜ | MUNIT | Returns the unit matrix or the specified dimension |
+| ✅ | MROUND | Returns a number rounded to the desired multiple |
+| ✅ | MULTINOMIAL | Returns the multinomial of a set of numbers |
+| ✅ | MUNIT | Returns the unit matrix or the specified dimension |
 | ✅ | ODD | Rounds a number up to the nearest odd integer |
 | ✅ | PI | Returns the value of pi |
 | ✅ | POWER | Returns the result of a number raised to a power |
-| ⬜ | PRODUCT | Multiplies its arguments |
-| ⬜ | QUOTIENT | Returns the integer portion of a division |
+| ✅ | PRODUCT | Multiplies its arguments |
+| ✅ | QUOTIENT | Returns the integer portion of a division |
 | ✅ | RADIANS | Converts degrees to radians |
 | ✅ | RAND | Returns a random number between 0 and 1 |
-| ⬜ | RANDARRAY | Returns an array of random numbers between 0 and 1. However, you can specify the number of rows and columns to fill, minimum and maximum values, and whether to return whole numbers or decimal values. |
+| ✅ | RANDARRAY | Returns an array of random numbers between 0 and 1. However, you can specify the number of rows and columns to fill, minimum and maximum values, and whether to return whole numbers or decimal values. |
 | ✅ | RANDBETWEEN | Returns a random number between the numbers you specify |
-| ⬜ | ROMAN | Converts an arabic numeral to roman, as text |
+| ✅ | ROMAN | Converts an arabic numeral to roman, as text |
 | ✅ | ROUND | Rounds a number to a specified number of digits |
 | ✅ | ROUNDDOWN | Rounds a number down, toward zero |
 | ✅ | ROUNDUP | Rounds a number up, away from zero |
-| ⬜ | SEC | Returns the secant of an angle |
-| ⬜ | SECH | Returns the hyperbolic secant of an angle |
+| ✅ | SEC | Returns the secant of an angle |
+| ✅ | SECH | Returns the hyperbolic secant of an angle |
 | ✅ | SEQUENCE | Generates a list of sequential numbers in an array, such as 1, 2, 3, 4 |
-| ⬜ | SERIESSUM | Returns the sum of a power series based on the formula |
+| ✅ | SERIESSUM | Returns the sum of a power series based on the formula |
 | ✅ | SIGN | Returns the sign of a number |
 | ✅ | SIN | Returns the sine of the given angle |
-| ⬜ | SINH | Returns the hyperbolic sine of a number |
+| ✅ | SINH | Returns the hyperbolic sine of a number |
 | ✅ | SQRT | Returns a positive square root |
-| ⬜ | SQRTPI | Returns the square root of (number \* pi) |
-| ⬜ | SUBTOTAL | Returns a subtotal in a list or database |
+| ✅ | SQRTPI | Returns the square root of (number \* pi) |
+| ✅ | SUBTOTAL | Returns a subtotal in a list or database |
 | ✅ | SUM | Adds its arguments |
 | ✅ | SUMIF | Adds the cells specified by a given criteria |
 | ✅ | SUMIFS | Adds the cells in a range that meet multiple criteria |
 | ✅ | SUMPRODUCT | Returns the sum of the products of corresponding array components |
-| ⬜ | SUMSQ | Returns the sum of the squares of the arguments |
-| ⬜ | SUMX2MY2 | Returns the sum of the difference of squares of corresponding values in two arrays |
-| ⬜ | SUMX2PY2 | Returns the sum of the sum of squares of corresponding values in two arrays |
-| ⬜ | SUMXMY2 | Returns the sum of squares of differences of corresponding values in two arrays |
+| ✅ | SUMSQ | Returns the sum of the squares of the arguments |
+| ✅ | SUMX2MY2 | Returns the sum of the difference of squares of corresponding values in two arrays |
+| ✅ | SUMX2PY2 | Returns the sum of the sum of squares of corresponding values in two arrays |
+| ✅ | SUMXMY2 | Returns the sum of squares of differences of corresponding values in two arrays |
 | ✅ | TAN | Returns the tangent of a number |
-| ⬜ | TANH | Returns the hyperbolic tangent of a number |
+| ✅ | TANH | Returns the hyperbolic tangent of a number |
 | ✅ | TRUNC | Truncates a number to an integer |
 
 ## Statistical
 
-**101/110 implemented**
+**110/110 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
@@ -606,10 +606,10 @@ Mark the function as implemented in the table below.
 | ✅ | FISHER | Returns the Fisher transformation |
 | ✅ | FISHERINV | Returns the inverse of the Fisher transformation |
 | ✅ | FORECAST | Returns a value along a linear trend |
-| ⬜ | FORECAST.ETS | Returns a future value based on existing (historical) values by using the AAA version of the Exponential Smoothing (ETS) algorithm |
-| ⬜ | FORECAST.ETS.CONFINT | Returns a confidence interval for the forecast value at the specified target date |
-| ⬜ | FORECAST.ETS.SEASONALITY | Returns the length of the repetitive pattern Excel detects for the specified time series |
-| ⬜ | FORECAST.ETS.STAT | Returns a statistical value as a result of time series forecasting |
+| ✅ | FORECAST.ETS | Returns a future value based on existing (historical) values by using the AAA version of the Exponential Smoothing (ETS) algorithm |
+| ✅ | FORECAST.ETS.CONFINT | Returns a confidence interval for the forecast value at the specified target date |
+| ✅ | FORECAST.ETS.SEASONALITY | Returns the length of the repetitive pattern Excel detects for the specified time series |
+| ✅ | FORECAST.ETS.STAT | Returns a statistical value as a result of time series forecasting |
 | ✅ | FORECAST.LINEAR | Returns a future value based on existing values |
 | ✅ | FREQUENCY | Returns a frequency distribution as a vertical array |
 | ✅ | GAMMA | Returns the Gamma function value |
@@ -619,16 +619,16 @@ Mark the function as implemented in the table below.
 | ✅ | GAMMALN.PRECISE | Returns the natural logarithm of the gamma function, Γ(x) |
 | ✅ | GAUSS | Returns 0.5 less than the standard normal cumulative distribution |
 | ✅ | GEOMEAN | Returns the geometric mean |
-| ⬜ | GROWTH | Returns values along an exponential trend |
+| ✅ | GROWTH | Returns values along an exponential trend |
 | ✅ | HARMEAN | Returns the harmonic mean |
 | ✅ | HYPGEOM.DIST | Returns the hypergeometric distribution |
 | ✅ | INTERCEPT | Returns the intercept of the linear regression line |
 | ✅ | KURT | Returns the kurtosis of a data set |
 | ✅ | LARGE | Returns the k-th largest value in a data set |
-| ⬜ | LINEST | Returns the parameters of a linear trend |
-| ⬜ | LOGEST | Returns the parameters of an exponential trend |
-| ⬜ | LOGNORM.DIST | Returns the cumulative lognormal distribution |
-| ⬜ | LOGNORM.INV | Returns the inverse of the lognormal cumulative distribution |
+| ✅ | LINEST | Returns the parameters of a linear trend |
+| ✅ | LOGEST | Returns the parameters of an exponential trend |
+| ✅ | LOGNORM.DIST | Returns the cumulative lognormal distribution |
+| ✅ | LOGNORM.INV | Returns the inverse of the lognormal cumulative distribution |
 | ✅ | MAX | Returns the maximum value in a list of arguments |
 | ✅ | MAXA | Returns the maximum value in a list of arguments, including numbers, text, and logical values |
 | ✅ | MAXIFS | Returns the maximum value among cells specified by a given set of conditions or criteria |
@@ -674,7 +674,7 @@ Mark the function as implemented in the table below.
 | ✅ | T.INV | Returns the t-value of the Student's t-distribution as a function of the probability and the degrees of freedom |
 | ✅ | T.INV.2T | Returns the inverse of the Student's t-distribution |
 | ✅ | T.TEST | Returns the probability associated with a Student's t-test |
-| ⬜ | TREND | Returns values along a linear trend |
+| ✅ | TREND | Returns values along a linear trend |
 | ✅ | TRIMMEAN | Returns the mean of the interior of a data set |
 | ✅ | VAR.P | Calculates variance based on the entire population |
 | ✅ | VAR.S | Estimates variance based on a sample |
@@ -685,7 +685,7 @@ Mark the function as implemented in the table below.
 
 ## Text
 
-**34/42 implemented**
+**41/42 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
@@ -713,8 +713,8 @@ Mark the function as implemented in the table below.
 | ✅ | NUMBERVALUE | Converts text to number in a locale-independent manner |
 | ⬜ | PHONETIC | Extracts the phonetic (furigana) characters from a text string |
 | ✅ | PROPER | Capitalizes the first letter in each word of a text value |
-| ⬜ | REPLACE | Replaces characters within text |
-| ⬜ | REPLACEB | Replaces characters within text |
+| ✅ | REPLACE | Replaces characters within text |
+| ✅ | REPLACEB | Replaces characters within text |
 | ✅ | REPT | Repeats text a given number of times |
 | ✅ | RIGHT | Returns the rightmost characters from a text value |
 | ✅ | RIGHTB | Returns the rightmost characters from a text value |
@@ -722,22 +722,22 @@ Mark the function as implemented in the table below.
 | ✅ | SEARCHB | Finds one text value within another (not case-sensitive) |
 | ✅ | SUBSTITUTE | Substitutes new text for old text in a text string |
 | ✅ | TEXT | Formats a number and converts it to text |
-| ⬜ | TEXTAFTER | Returns text that occurs after given character or string |
-| ⬜ | TEXTBEFORE | Returns text that occurs before a given character or string |
+| ✅ | TEXTAFTER | Returns text that occurs after given character or string |
+| ✅ | TEXTBEFORE | Returns text that occurs before a given character or string |
 | ✅ | TEXTJOIN | Combines the text from multiple ranges and/or strings |
-| ⬜ | TEXTSPLIT | Splits text strings by using column and row delimiters |
+| ✅ | TEXTSPLIT | Splits text strings by using column and row delimiters |
 | ✅ | TRIM | Removes spaces from text |
-| ⬜ | UNICHAR | Returns the Unicode character that is references by the given numeric value |
-| ⬜ | UNICODE | Returns the number (code point) that corresponds to the first character of the text |
+| ✅ | UNICHAR | Returns the Unicode character that is references by the given numeric value |
+| ✅ | UNICODE | Returns the number (code point) that corresponds to the first character of the text |
 | ✅ | UPPER | Converts text to uppercase |
 | ✅ | VALUE | Converts a text argument to a number |
 
 ## Web
 
-**0/3 implemented**
+**3/3 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | ENCODEURL | Returns a URL-encoded string |
-| ⬜ | FILTERXML | Returns specific data from the XML content by using the specified XPath |
-| ⬜ | WEBSERVICE | Returns data from a web service. |
+| ✅ | ENCODEURL | Returns a URL-encoded string |
+| ✅ | FILTERXML | Returns specific data from the XML content by using the specified XPath |
+| ✅ | WEBSERVICE | Returns data from a web service. |
