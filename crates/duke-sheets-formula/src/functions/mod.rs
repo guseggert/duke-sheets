@@ -1,15 +1,16 @@
 //! Built-in Excel functions
 
 pub mod criteria;
+pub mod database;
 pub mod date;
+pub mod engineering;
+pub mod financial;
 pub mod info;
 pub mod logical;
 pub mod lookup;
 pub mod math;
 pub mod statistical;
 pub mod text;
-pub mod financial;
-pub mod database;
 
 use crate::error::FormulaResult;
 use crate::evaluator::{EvaluationContext, FormulaValue};
@@ -56,6 +57,7 @@ impl FunctionRegistry {
         registry.register_statistical_functions();
         registry.register_financial_functions();
         registry.register_database_functions();
+        registry.register_engineering_functions();
 
         registry
     }
@@ -1624,6 +1626,387 @@ impl FunctionRegistry {
             min_args: 3,
             max_args: Some(3),
             implementation: financial::fn_pduration,
+            volatile: false,
+        });
+    }
+
+    fn register_engineering_functions(&mut self) {
+        self.register(FunctionDef {
+            name: "BIN2DEC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_bin2dec,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BIN2HEX",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_bin2hex,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BIN2OCT",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_bin2oct,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DEC2BIN",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_dec2bin,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DEC2HEX",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_dec2hex,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DEC2OCT",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_dec2oct,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "HEX2BIN",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_hex2bin,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "HEX2DEC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_hex2dec,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "HEX2OCT",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_hex2oct,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "OCT2BIN",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_oct2bin,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "OCT2DEC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_oct2dec,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "OCT2HEX",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_oct2hex,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BITAND",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_bitand,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BITOR",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_bitor,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BITXOR",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_bitxor,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BITLSHIFT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_bitlshift,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BITRSHIFT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_bitrshift,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DELTA",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_delta,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GESTEP",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_gestep,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ERF",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: engineering::fn_erf,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ERF.PRECISE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_erf_precise,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ERFC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_erfc,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ERFC.PRECISE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_erfc_precise,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COMPLEX",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: engineering::fn_complex,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMABS",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imabs,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMAGINARY",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imaginary,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMARGUMENT",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imargument,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMCONJUGATE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imconjugate,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMCOS",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imcos,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMCOSH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imcosh,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMCOT",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imcot,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMCSC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imcsc,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMCSCH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imcsch,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMDIV",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_imdiv,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMEXP",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imexp,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMLN",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imln,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMLOG10",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imlog10,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMLOG2",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imlog2,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMPOWER",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_impower,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMPRODUCT",
+            min_args: 2,
+            max_args: None,
+            implementation: engineering::fn_improduct,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMREAL",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imreal,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMSEC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imsec,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMSECH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imsech,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMSIN",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imsin,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMSINH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imsinh,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMSQRT",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imsqrt,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMSUB",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_imsub,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMSUM",
+            min_args: 2,
+            max_args: None,
+            implementation: engineering::fn_imsum,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMTAN",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: engineering::fn_imtan,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BESSELI",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_besseli,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BESSELJ",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_besselj,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BESSELK",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_besselk,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BESSELY",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: engineering::fn_bessely,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CONVERT",
+            min_args: 3,
+            max_args: Some(3),
+            implementation: engineering::fn_convert,
             volatile: false,
         });
     }

@@ -5,8 +5,8 @@ This document lists all Excel functions and their implementation status in duke-
 **Source:** [Microsoft Excel Functions (Alphabetical)](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188)
 
 **Total Functions:** 506
-**Implemented:** 189 (37%)
-**Remaining:** 317
+**Implemented:** 243 (48%)
+**Remaining:** 263
 
 Legend: ✅ = Implemented, ⬜ = Not implemented
 
@@ -255,64 +255,64 @@ Mark the function as implemented in the table below.
 
 ## Engineering
 
-**0/54 implemented**
+**54/54 implemented**
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | BESSELI | Returns the modified Bessel function In(x) |
-| ⬜ | BESSELJ | Returns the Bessel function Jn(x) |
-| ⬜ | BESSELK | Returns the modified Bessel function Kn(x) |
-| ⬜ | BESSELY | Returns the Bessel function Yn(x) |
-| ⬜ | BIN2DEC | Converts a binary number to decimal |
-| ⬜ | BIN2HEX | Converts a binary number to hexadecimal |
-| ⬜ | BIN2OCT | Converts a binary number to octal |
-| ⬜ | BITAND | Returns a 'Bitwise And' of two numbers |
-| ⬜ | BITLSHIFT | Returns a value number shifted left by shift\_amount bits |
-| ⬜ | BITOR | Returns a bitwise OR of 2 numbers |
-| ⬜ | BITRSHIFT | Returns a value number shifted right by shift\_amount bits |
-| ⬜ | BITXOR | Returns a bitwise 'Exclusive Or' of two numbers |
-| ⬜ | COMPLEX | Converts real and imaginary coefficients into a complex number |
-| ⬜ | CONVERT | Converts a number from one measurement system to another |
-| ⬜ | DEC2BIN | Converts a decimal number to binary |
-| ⬜ | DEC2HEX | Converts a decimal number to hexadecimal |
-| ⬜ | DEC2OCT | Converts a decimal number to octal |
-| ⬜ | DELTA | Tests whether two values are equal |
-| ⬜ | ERF | Returns the error function |
-| ⬜ | ERF.PRECISE | Returns the error function |
-| ⬜ | ERFC | Returns the complementary error function |
-| ⬜ | ERFC.PRECISE | Returns the complementary ERF function integrated between x and infinity |
-| ⬜ | GESTEP | Tests whether a number is greater than a threshold value |
-| ⬜ | HEX2BIN | Converts a hexadecimal number to binary |
-| ⬜ | HEX2DEC | Converts a hexadecimal number to decimal |
-| ⬜ | HEX2OCT | Converts a hexadecimal number to octal |
-| ⬜ | IMABS | Returns the absolute value (modulus) of a complex number |
-| ⬜ | IMAGINARY | Returns the imaginary coefficient of a complex number |
-| ⬜ | IMARGUMENT | Returns the argument theta, an angle expressed in radians |
-| ⬜ | IMCONJUGATE | Returns the complex conjugate of a complex number |
-| ⬜ | IMCOS | Returns the cosine of a complex number |
-| ⬜ | IMCOSH | Returns the hyperbolic cosine of a complex number |
-| ⬜ | IMCOT | Returns the cotangent of a complex number |
-| ⬜ | IMCSC | Returns the cosecant of a complex number |
-| ⬜ | IMCSCH | Returns the hyperbolic cosecant of a complex number |
-| ⬜ | IMDIV | Returns the quotient of two complex numbers |
-| ⬜ | IMEXP | Returns the exponential of a complex number |
-| ⬜ | IMLN | Returns the natural logarithm of a complex number |
-| ⬜ | IMLOG10 | Returns the base-10 logarithm of a complex number |
-| ⬜ | IMLOG2 | Returns the base-2 logarithm of a complex number |
-| ⬜ | IMPOWER | Returns a complex number raised to an integer power |
-| ⬜ | IMPRODUCT | Returns the product of complex numbers |
-| ⬜ | IMREAL | Returns the real coefficient of a complex number |
-| ⬜ | IMSEC | Returns the secant of a complex number |
-| ⬜ | IMSECH | Returns the hyperbolic secant of a complex number |
-| ⬜ | IMSIN | Returns the sine of a complex number |
-| ⬜ | IMSINH | Returns the hyperbolic sine of a complex number |
-| ⬜ | IMSQRT | Returns the square root of a complex number |
-| ⬜ | IMSUB | Returns the difference between two complex numbers |
-| ⬜ | IMSUM | Returns the sum of complex numbers |
-| ⬜ | IMTAN | Returns the tangent of a complex number |
-| ⬜ | OCT2BIN | Converts an octal number to binary |
-| ⬜ | OCT2DEC | Converts an octal number to decimal |
-| ⬜ | OCT2HEX | Converts an octal number to hexadecimal |
+| ✅ | BESSELI | Returns the modified Bessel function In(x) |
+| ✅ | BESSELJ | Returns the Bessel function Jn(x) |
+| ✅ | BESSELK | Returns the modified Bessel function Kn(x) |
+| ✅ | BESSELY | Returns the Bessel function Yn(x) |
+| ✅ | BIN2DEC | Converts a binary number to decimal |
+| ✅ | BIN2HEX | Converts a binary number to hexadecimal |
+| ✅ | BIN2OCT | Converts a binary number to octal |
+| ✅ | BITAND | Returns a 'Bitwise And' of two numbers |
+| ✅ | BITLSHIFT | Returns a value number shifted left by shift\_amount bits |
+| ✅ | BITOR | Returns a bitwise OR of 2 numbers |
+| ✅ | BITRSHIFT | Returns a value number shifted right by shift\_amount bits |
+| ✅ | BITXOR | Returns a bitwise 'Exclusive Or' of two numbers |
+| ✅ | COMPLEX | Converts real and imaginary coefficients into a complex number |
+| ✅ | CONVERT | Converts a number from one measurement system to another |
+| ✅ | DEC2BIN | Converts a decimal number to binary |
+| ✅ | DEC2HEX | Converts a decimal number to hexadecimal |
+| ✅ | DEC2OCT | Converts a decimal number to octal |
+| ✅ | DELTA | Tests whether two values are equal |
+| ✅ | ERF | Returns the error function |
+| ✅ | ERF.PRECISE | Returns the error function |
+| ✅ | ERFC | Returns the complementary error function |
+| ✅ | ERFC.PRECISE | Returns the complementary ERF function integrated between x and infinity |
+| ✅ | GESTEP | Tests whether a number is greater than a threshold value |
+| ✅ | HEX2BIN | Converts a hexadecimal number to binary |
+| ✅ | HEX2DEC | Converts a hexadecimal number to decimal |
+| ✅ | HEX2OCT | Converts a hexadecimal number to octal |
+| ✅ | IMABS | Returns the absolute value (modulus) of a complex number |
+| ✅ | IMAGINARY | Returns the imaginary coefficient of a complex number |
+| ✅ | IMARGUMENT | Returns the argument theta, an angle expressed in radians |
+| ✅ | IMCONJUGATE | Returns the complex conjugate of a complex number |
+| ✅ | IMCOS | Returns the cosine of a complex number |
+| ✅ | IMCOSH | Returns the hyperbolic cosine of a complex number |
+| ✅ | IMCOT | Returns the cotangent of a complex number |
+| ✅ | IMCSC | Returns the cosecant of a complex number |
+| ✅ | IMCSCH | Returns the hyperbolic cosecant of a complex number |
+| ✅ | IMDIV | Returns the quotient of two complex numbers |
+| ✅ | IMEXP | Returns the exponential of a complex number |
+| ✅ | IMLN | Returns the natural logarithm of a complex number |
+| ✅ | IMLOG10 | Returns the base-10 logarithm of a complex number |
+| ✅ | IMLOG2 | Returns the base-2 logarithm of a complex number |
+| ✅ | IMPOWER | Returns a complex number raised to an integer power |
+| ✅ | IMPRODUCT | Returns the product of complex numbers |
+| ✅ | IMREAL | Returns the real coefficient of a complex number |
+| ✅ | IMSEC | Returns the secant of a complex number |
+| ✅ | IMSECH | Returns the hyperbolic secant of a complex number |
+| ✅ | IMSIN | Returns the sine of a complex number |
+| ✅ | IMSINH | Returns the hyperbolic sine of a complex number |
+| ✅ | IMSQRT | Returns the square root of a complex number |
+| ✅ | IMSUB | Returns the difference between two complex numbers |
+| ✅ | IMSUM | Returns the sum of complex numbers |
+| ✅ | IMTAN | Returns the tangent of a complex number |
+| ✅ | OCT2BIN | Converts an octal number to binary |
+| ✅ | OCT2DEC | Converts an octal number to decimal |
+| ✅ | OCT2HEX | Converts an octal number to hexadecimal |
 
 ## Financial
 
