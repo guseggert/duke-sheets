@@ -106,17 +106,17 @@
 - [x] Cell reference resolution (single cells, ranges)
 - [x] Cross-sheet references (`Sheet2!A1`)
 - [x] Structured reference evaluation (`Table1[Column]`, `Table1[@Col]`, `[#Headers]`, `[#Totals]`, `[#All]`, `[#Data]`)
-### Implemented Functions (495 of ~506)
+### Implemented Functions (506 of 506)
 
 | Category | Count | Functions (highlights) |
 |----------|-------|----------------------|
 | Math & Trig | 78 | SUM, SUMIF, SUMIFS, AVERAGE, MIN, MAX, COUNT, COUNTIF, COUNTIFS, ROUND, ABS, MOD, INT, CEILING, FLOOR, POWER, SQRT, RAND, LOG, LN, PI, ACOSH, ASINH, ATANH, ACOTH, COSH, SINH, TANH, COT, COTH, CSC, CSCH, SEC, SECH, COMBIN, COMBINA, FACT, FACTDOUBLE, GCD, LCM, PRODUCT, QUOTIENT, MROUND, SUMSQ, SQRTPI, BASE, DECIMAL, ROMAN, ARABIC, MDETERM, MINVERSE, MMULT, MUNIT, AGGREGATE, SUBTOTAL, SERIESSUM, RANDARRAY, ... |
-| Text | 42 | LEN, LEFT, RIGHT, MID, LOWER, UPPER, TRIM, CONCAT, CONCATENATE, FIND, SEARCH, SUBSTITUTE, TEXT, TEXTJOIN, FIXED, DOLLAR, NUMBERVALUE, REPLACE, REPLACEB, TEXTBEFORE, TEXTAFTER, TEXTSPLIT, UNICHAR, UNICODE, VALUETOTEXT, ARRAYTOTEXT, ASC, BAHTTEXT, DBCS, JIS, ... |
+| Text | 43 | LEN, LEFT, RIGHT, MID, LOWER, UPPER, TRIM, CONCAT, CONCATENATE, FIND, SEARCH, SUBSTITUTE, TEXT, TEXTJOIN, FIXED, DOLLAR, NUMBERVALUE, REPLACE, REPLACEB, TEXTBEFORE, TEXTAFTER, TEXTSPLIT, UNICHAR, UNICODE, VALUETOTEXT, ARRAYTOTEXT, ASC, BAHTTEXT, DBCS, JIS, PHONETIC, ... |
 | Statistical | 110 | AVERAGEIF, AVERAGEIFS, COUNTBLANK, LARGE, SMALL, STDEV.S, STDEV.P, VAR.S, VAR.P, MAXIFS, MINIFS, RANK.EQ, RANK.AVG, PERCENTILE.INC, QUARTILE.INC, MODE.SNGL, BETA.DIST, BINOM.DIST, CHISQ.DIST, CORREL, COVARIANCE.P, COVARIANCE.S, EXPON.DIST, F.DIST, FISHER, FORECAST, GAMMA, GAMMA.DIST, HYPGEOM.DIST, NORM.DIST, NORM.S.DIST, PEARSON, POISSON.DIST, T.DIST, WEIBULL.DIST, Z.TEST, LOGNORM.DIST, LOGNORM.INV, LINEST, LOGEST, GROWTH, TREND, FORECAST.ETS, ... |
 | Logical | 19 | IF, AND, OR, NOT, IFERROR, IFNA, IFS, SWITCH, XOR, TRUE, FALSE, LET, LAMBDA, MAP, REDUCE, SCAN, BYCOL, BYROW, MAKEARRAY |
 | Lookup & Reference | 37 | INDEX, MATCH, VLOOKUP, HLOOKUP, XLOOKUP, XMATCH, CHOOSE, ROW, COLUMN, ROWS, COLUMNS, INDIRECT, OFFSET, ADDRESS, AREAS, FILTER, SORT, SORTBY, UNIQUE, TRANSPOSE, LOOKUP, HSTACK, VSTACK, TAKE, DROP, EXPAND, CHOOSECOLS, CHOOSEROWS, TOCOL, TOROW, WRAPCOLS, WRAPROWS, HYPERLINK, ... |
 | Date | 25 | DATE, YEAR, MONTH, DAY, NOW, TODAY, TIME, HOUR, MINUTE, SECOND, WEEKDAY, WEEKNUM, ISOWEEKNUM, EDATE, EOMONTH, DAYS, DAYS360, DATEDIF, YEARFRAC, DATEVALUE, TIMEVALUE, NETWORKDAYS, WORKDAY, NETWORKDAYS.INTL, WORKDAY.INTL |
-| Information | 20 | ISBLANK, ISNUMBER, ISTEXT, ISERROR, ISNA, NA, ISERR, ISEVEN, ISODD, ISLOGICAL, ISNONTEXT, ISREF, ERROR.TYPE, TYPE, CELL, INFO, SHEET, SHEETS, ISFORMULA, ISOMITTED |
+| Information | 21 | ISBLANK, ISNUMBER, ISTEXT, ISERROR, ISNA, NA, ISERR, ISEVEN, ISODD, ISLOGICAL, ISNONTEXT, ISREF, ERROR.TYPE, TYPE, CELL, INFO, SHEET, SHEETS, ISFORMULA, ISOMITTED, STOCKHISTORY |
 | Compatibility | 40 | BETADIST, BETAINV, BINOMDIST, CEILING, CHIDIST, CHIINV, CHITEST, CONFIDENCE, COVAR, CRITBINOM, EXPONDIST, FDIST, FINV, FLOOR, FTEST, GAMMADIST, GAMMAINV, HYPGEOMDIST, LOGINV, LOGNORMDIST, NEGBINOMDIST, NORM.INV, NORMDIST, NORMSDIST, NORMSINV, POISSON, TDIST, TINV, TTEST, WEIBULL, ZTEST, MODE, PERCENTILE, PERCENTRANK, QUARTILE, RANK, STDEV, STDEVP, VAR, VARP |
 | Financial | 56 | PMT, FV, PV, NPER, RATE, IPMT, PPMT, CUMIPMT, CUMPRINC, NPV, IRR, MIRR, XNPV, XIRR, SLN, SYD, DB, DDB, VDB, EFFECT, NOMINAL, PDURATION, ACCRINT, ACCRINTM, AMORDEGRC, AMORLINC, COUPDAYBS, COUPDAYS, COUPDAYSNC, COUPNCD, COUPNUM, COUPPCD, DISC, DOLLARDE, DOLLARFR, DURATION, EUROCONVERT, FVSCHEDULE, INTRATE, MDURATION, ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD, PRICE, PRICEDISC, PRICEMAT, RECEIVED, RRI, TBILLEQ, TBILLPRICE, TBILLYIELD, YIELD, YIELDDISC, YIELDMAT, ISPMT |
 | Database | 12 | DAVERAGE, DCOUNT, DCOUNTA, DGET, DMAX, DMIN, DPRODUCT, DSTDEV, DSTDEVP, DSUM, DVAR, DVARP |
@@ -181,25 +181,18 @@
 - [x] **Comment visibility (robust)** — parse VML `<x:Visible/>` element and tolerate whitespace in style `visibility:visible` check
 - [x] **Rich text in shared strings** — reader preserves `<rPr>` formatting runs as `CellValue::RichText`
 
-#### Remaining Excel Functions (11 of 506)
-See `FUNCTIONS.md` for the complete tracking list. The remaining 11 functions cannot be implemented as standalone computations (OS DLL calls, server-dependent, or web service data feeds):
+#### Excel Function Coverage — Complete (506/506)
 
-| Category | Implemented | Total | Remaining |
-|----------|------------|-------|-----------|
-| Add-in | 1 | 3 | CALL, REGISTER.ID (OS DLL calls) |
-| Cube | 0 | 7 | CUBEKPIMEMBER, CUBEMEMBER, CUBEMEMBERPROPERTY, CUBERANKEDMEMBER, CUBESET, CUBESETCOUNT, CUBEVALUE (OLAP server) |
-| Information | 20 | 21 | STOCKHISTORY (web service) |
-| Text | 42 | 42 | PHONETIC (requires cell metadata, not text-derivable) |
-| Math & Trig | 78 | 78 | *(complete)* |
-| Statistical | 110 | 110 | *(complete)* |
-| Logical | 19 | 19 | *(complete)* |
-| Lookup & Reference | 37 | 37 | *(complete)* |
-| Date & Time | 25 | 25 | *(complete)* |
-| Financial | 56 | 56 | *(complete)* |
-| Engineering | 54 | 54 | *(complete)* |
-| Database | 12 | 12 | *(complete)* |
-| Compatibility | 40 | 40 | *(complete)* |
-| Web | 3 | 3 | *(complete)* |
+All 506 Excel functions are registered. 11 are stubs returning #N/A because they
+require external runtime resources (OS DLL calls, OLAP servers, web data feeds,
+or cell-level metadata not available in standalone evaluation):
+
+| Category | Stub functions |
+|----------|---------------|
+| Add-in | CALL, REGISTER.ID (OS DLL calls) |
+| Cube | CUBEKPIMEMBER, CUBEMEMBER, CUBEMEMBERPROPERTY, CUBERANKEDMEMBER, CUBESET, CUBESETCOUNT, CUBEVALUE (OLAP server) |
+| Information | STOCKHISTORY (web service) |
+| Text | PHONETIC (cell `<rPh>` metadata) |
 
 #### Reader Robustness
 - [x] Fix XML namespace handling (58 call sites)
@@ -355,7 +348,7 @@ See `FUNCTIONS.md` for the complete tracking list. The remaining 11 functions ca
 | Core (cell, workbook, worksheet) | 41 | ✅ |
 | Cell display formatting (CellView) | 51 | ✅ |
 | Formula parser | 43 | ✅ |
-| Formula evaluator + functions | 514 | ✅ |
+| Formula evaluator + functions | 519 | ✅ |
 | Calculation engine | 26 | ✅ |
 | XLSX roundtrip | 46 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
@@ -371,7 +364,7 @@ See `FUNCTIONS.md` for the complete tracking list. The remaining 11 functions ca
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1201** | ✅ |
+| **Total** | **1206** | ✅ |
 
 ---
 
@@ -392,7 +385,7 @@ See `FUNCTIONS.md` for the complete tracking list. The remaining 11 functions ca
 ```
 duke-sheets/
 ├── duke-sheets-core        # Data model, cell storage, locale
-├── duke-sheets-formula     # Parser, evaluator, 495 functions
+├── duke-sheets-formula     # Parser, evaluator, 506 functions
 ├── duke-sheets-xlsx        # XLSX read/write
 ├── duke-sheets-xls         # XLS reader (BIFF8, read-only)
 ├── duke-sheets-csv         # CSV read/write

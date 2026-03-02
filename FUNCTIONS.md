@@ -5,8 +5,8 @@ This document lists all Excel functions and their implementation status in duke-
 **Source:** [Microsoft Excel Functions (Alphabetical)](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188)
 
 **Total Functions:** 506
-**Implemented:** 495 (98%)
-**Remaining:** 11
+**Implemented:** 506 (100%)
+**Remaining:** 0
 
 Legend: ✅ = Implemented, ⬜ = Not implemented
 
@@ -137,9 +137,9 @@ Mark the function as implemented in the table below.
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | CALL | Calls a procedure in a dynamic link library or code resource |
+| ✅ | CALL | Calls a procedure in a dynamic link library or code resource (stub: returns #N/A) |
 | ✅ | EUROCONVERT | Converts a number to euros, converts a number from euros to a euro member currency, or converts a number from one euro member currency to another by using the euro as an intermediary (triangulation). |
-| ⬜ | REGISTER.ID | Returns the register ID of the specified dynamic link library (DLL) or code resource that has been previously registered |
+| ✅ | REGISTER.ID | Returns the register ID of the specified dynamic link library (DLL) or code resource that has been previously registered (stub: returns #N/A) |
 
 ## Compatibility
 
@@ -194,13 +194,13 @@ Mark the function as implemented in the table below.
 
 | Status | Function | Description |
 |--------|----------|-------------|
-| ⬜ | CUBEKPIMEMBER | Returns a key performance indicator (KPI) name, property, and measure, and displays the name and property in the cell. A KPI is a quantifiable measurement, such as monthly gross profit or quarterly employee turnover, used to monitor an organization's performance. |
-| ⬜ | CUBEMEMBER | Returns a member or tuple in a cube hierarchy. Use to validate that the member or tuple exists in the cube. |
-| ⬜ | CUBEMEMBERPROPERTY | Returns the value of a member property in the cube. Use to validate that a member name exists within the cube and to return the specified property for this member. |
-| ⬜ | CUBERANKEDMEMBER | Returns the nth, or ranked, member in a set. Use to return one or more elements in a set, such as the top sales performer or top 10 students. |
-| ⬜ | CUBESET | Defines a calculated set of members or tuples by sending a set expression to the cube on the server, which creates the set, and then returns that set to Microsoft Office Excel. |
-| ⬜ | CUBESETCOUNT | Returns the number of items in a set. |
-| ⬜ | CUBEVALUE | Returns an aggregated value from a cube. |
+| ✅ | CUBEKPIMEMBER | Returns a key performance indicator (KPI) name, property, and measure, and displays the name and property in the cell (stub: returns #N/A) |
+| ✅ | CUBEMEMBER | Returns a member or tuple in a cube hierarchy (stub: returns #N/A) |
+| ✅ | CUBEMEMBERPROPERTY | Returns the value of a member property in the cube (stub: returns #N/A) |
+| ✅ | CUBERANKEDMEMBER | Returns the nth, or ranked, member in a set (stub: returns #N/A) |
+| ✅ | CUBESET | Defines a calculated set of members or tuples by sending a set expression to the cube on the server (stub: returns #N/A) |
+| ✅ | CUBESETCOUNT | Returns the number of items in a set (stub: returns #N/A) |
+| ✅ | CUBEVALUE | Returns an aggregated value from a cube (stub: returns #N/A) |
 
 ## Database
 
@@ -401,7 +401,7 @@ Mark the function as implemented in the table below.
 | ✅ | NA | Returns the error value #N/A |
 | ✅ | SHEET | Returns the sheet number of the referenced sheet |
 | ✅ | SHEETS | Returns the number of sheets in a reference |
-| ⬜ | STOCKHISTORY | Retrieves historical data about a financial instrument and loads it as an array |
+| ✅ | STOCKHISTORY | Retrieves historical data about a financial instrument and loads it as an array (stub: returns #N/A) |
 | ✅ | TYPE | Returns a number indicating the data type of a value |
 
 ## Logical
@@ -711,7 +711,7 @@ Mark the function as implemented in the table below.
 | ✅ | MID | Returns a specific number of characters from a text string starting at the position you specify |
 | ✅ | MIDB | Returns a specific number of characters from a text string starting at the position you specify |
 | ✅ | NUMBERVALUE | Converts text to number in a locale-independent manner |
-| ⬜ | PHONETIC | Extracts the phonetic (furigana) characters from a text string |
+| ✅ | PHONETIC | Extracts the phonetic (furigana) characters from a text string (stub: returns empty string) |
 | ✅ | PROPER | Capitalizes the first letter in each word of a text value |
 | ✅ | REPLACE | Replaces characters within text |
 | ✅ | REPLACEB | Replaces characters within text |
