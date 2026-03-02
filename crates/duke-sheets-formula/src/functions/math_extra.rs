@@ -275,6 +275,19 @@ pub fn fn_atanh(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     Ok(FormulaValue::Number(x.atanh()))
 }
 
+/// ACOTH(number) — inverse hyperbolic cotangent
+pub fn fn_acoth(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let x = match get_number(args.first()) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    // acoth(x) = atanh(1/x), domain: |x| > 1
+    if x.abs() <= 1.0 {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+    Ok(FormulaValue::Number((1.0 / x).atanh()))
+}
+
 pub fn fn_cosh(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let x = match get_number(args.first()) {
         Ok(v) => v,
