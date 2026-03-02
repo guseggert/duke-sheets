@@ -698,17 +698,64 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
     }
 }
 
-/// Evaluate a binary operation
-fn evaluate_binary_op(
+fn apply_binary_op_array(
     op: BinaryOperator,
-    left: &FormulaExpr,
-    right: &FormulaExpr,
-    ctx: &EvaluationContext,
+    left: &FormulaValue,
+    right: &FormulaValue,
 ) -> FormulaResult<FormulaValue> {
-    // Evaluate operands first
-    let left_val = evaluate(left, ctx)?;
-    let right_val = evaluate(right, ctx)?;
+    let left_arr = to_array(left);
+    let right_arr = to_array(right);
+    let left_is_array = matches!(left, FormulaValue::Array(_));
+    let right_is_array = matches!(right, FormulaValue::Array(_));
 
+    let rows = left_arr.len().max(right_arr.len());
+    let cols = left_arr
+        .iter()
+        .map(|r| r.len())
+        .max()
+        .unwrap_or(0)
+        .max(right_arr.iter().map(|r| r.len()).max().unwrap_or(0));
+
+    let mut result = Vec::with_capacity(rows);
+    for r in 0..rows {
+        let mut row = Vec::with_capacity(cols);
+        for c in 0..cols {
+            let l = if left_is_array {
+                left_arr.get(r).and_then(|row| row.get(c))
+            } else {
+                left_arr.first().and_then(|row| row.first())
+            };
+            let r_val = if right_is_array {
+                right_arr.get(r).and_then(|row| row.get(c))
+            } else {
+                right_arr.first().and_then(|row| row.first())
+            };
+
+            let cell_result = match (l, r_val) {
+                (Some(lv), Some(rv)) => apply_scalar_binary_op(op, lv, rv)
+                    .unwrap_or(FormulaValue::Error(CellError::Value)),
+                _ => FormulaValue::Error(CellError::Na),
+            };
+            row.push(cell_result);
+        }
+        result.push(row);
+    }
+
+    Ok(FormulaValue::Array(result))
+}
+
+fn to_array(val: &FormulaValue) -> Vec<Vec<FormulaValue>> {
+    match val {
+        FormulaValue::Array(rows) => rows.clone(),
+        other => vec![vec![other.clone()]],
+    }
+}
+
+fn apply_scalar_binary_op(
+    op: BinaryOperator,
+    left_val: &FormulaValue,
+    right_val: &FormulaValue,
+) -> FormulaResult<FormulaValue> {
     // Propagate errors
     if let Some(e) = left_val.get_error() {
         return Ok(FormulaValue::Error(e));
@@ -806,6 +853,23 @@ fn evaluate_binary_op(
             FormulaError::Evaluation("Range operators not supported in this context".into()),
         ),
     }
+}
+
+/// Evaluate a binary operation
+fn evaluate_binary_op(
+    op: BinaryOperator,
+    left: &FormulaExpr,
+    right: &FormulaExpr,
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let left_val = evaluate(left, ctx)?;
+    let right_val = evaluate(right, ctx)?;
+
+    if matches!(left_val, FormulaValue::Array(_)) || matches!(right_val, FormulaValue::Array(_)) {
+        return apply_binary_op_array(op, &left_val, &right_val);
+    }
+
+    apply_scalar_binary_op(op, &left_val, &right_val)
 }
 
 /// Compare two values for ordering (Excel-style comparison)
