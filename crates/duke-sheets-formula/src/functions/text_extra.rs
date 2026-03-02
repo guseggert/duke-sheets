@@ -806,6 +806,17 @@ pub fn fn_bahttext(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
         Ok(FormulaValue::String(number_to_bahttext(value)))
     }
 }
+
+/// PHONETIC(text) — Stub: returns empty string.
+/// Furigana (phonetic readings) are stored as cell metadata (`<rPh>` in XLSX),
+/// not derivable from the text content. Would need EvaluationContext access to
+/// cell-level rich text metadata to implement fully.
+pub fn fn_phonetic(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    match args.get(0).unwrap() {
+        FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
+        _ => Ok(FormulaValue::String(String::new())),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1210,5 +1221,16 @@ mod tests {
             eval("=BAHTTEXT(5678)").unwrap(),
             s("ห้าพันหกร้อยเจ็ดสิบแปดบาทถ้วน")
         );
+    }
+
+    // ---------- PHONETIC stub test ----------
+
+    #[test]
+    fn test_phonetic_stub_returns_empty() {
+        // PHONETIC requires cell-level <rPh> metadata from XLSX, which is not
+        // available in a standalone formula evaluation context. Returns empty string.
+        assert_eq!(eval("=PHONETIC(\"\u{6771}\u{4EAC}\")").unwrap(), s(""));
+        assert_eq!(eval("=PHONETIC(\"hello\")").unwrap(), s(""));
+        assert_eq!(eval("=PHONETIC(\"\")").unwrap(), s(""));
     }
 }

@@ -1247,6 +1247,13 @@ impl FunctionRegistry {
             implementation: text_extra::fn_bahttext,
             volatile: false,
         });
+        self.register(FunctionDef {
+            name: "PHONETIC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: text_extra::fn_phonetic,
+            volatile: false,
+        });
     }
 
     fn register_info_functions(&mut self) {
@@ -1400,6 +1407,77 @@ impl FunctionRegistry {
             min_args: 1,
             max_args: Some(1),
             implementation: info_extra::fn_isomitted,
+            volatile: false,
+        });
+        // --- Stubs: external-service-dependent functions ---
+        self.register(FunctionDef {
+            name: "STOCKHISTORY",
+            min_args: 1,
+            max_args: None,
+            implementation: info_extra::fn_stockhistory,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CALL",
+            min_args: 1,
+            max_args: None,
+            implementation: info_extra::fn_call,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "REGISTER.ID",
+            min_args: 1,
+            max_args: None,
+            implementation: info_extra::fn_register_id,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CUBEKPIMEMBER",
+            min_args: 1,
+            max_args: None,
+            implementation: info_extra::fn_cubekpimember,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CUBEMEMBER",
+            min_args: 1,
+            max_args: None,
+            implementation: info_extra::fn_cubemember,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CUBEMEMBERPROPERTY",
+            min_args: 1,
+            max_args: None,
+            implementation: info_extra::fn_cubememberproperty,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CUBERANKEDMEMBER",
+            min_args: 1,
+            max_args: None,
+            implementation: info_extra::fn_cuberankedmember,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CUBESET",
+            min_args: 1,
+            max_args: None,
+            implementation: info_extra::fn_cubeset,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CUBESETCOUNT",
+            min_args: 1,
+            max_args: None,
+            implementation: info_extra::fn_cubesetcount,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CUBEVALUE",
+            min_args: 1,
+            max_args: None,
+            implementation: info_extra::fn_cubevalue,
             volatile: false,
         });
     }

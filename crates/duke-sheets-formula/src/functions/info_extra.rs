@@ -156,6 +156,92 @@ pub fn fn_isomitted(
     Ok(FormulaValue::Boolean(false))
 }
 
+// ---------- Stubs for functions that require external services ----------
+// These return #N/A because they cannot work as standalone computations.
+
+/// Helper: stub that propagates errors, otherwise returns #N/A.
+fn stub_na(args: &[FormulaValue]) -> FormulaResult<FormulaValue> {
+    for v in args {
+        if let FormulaValue::Error(e) = v {
+            return Ok(FormulaValue::Error(*e));
+        }
+    }
+    Ok(FormulaValue::Error(CellError::Na))
+}
+
+/// STOCKHISTORY(...) — Stub: requires Microsoft's live stock data feed.
+pub fn fn_stockhistory(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    stub_na(args)
+}
+
+/// CALL(...) — Stub: calls a Windows DLL procedure at runtime.
+pub fn fn_call(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    stub_na(args)
+}
+
+/// REGISTER.ID(...) — Stub: returns the register ID of a loaded DLL.
+pub fn fn_register_id(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    stub_na(args)
+}
+
+/// CUBEKPIMEMBER(...) — Stub: requires OLAP server connection.
+pub fn fn_cubekpimember(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    stub_na(args)
+}
+
+/// CUBEMEMBER(...) — Stub: requires OLAP server connection.
+pub fn fn_cubemember(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    stub_na(args)
+}
+
+/// CUBEMEMBERPROPERTY(...) — Stub: requires OLAP server connection.
+pub fn fn_cubememberproperty(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    stub_na(args)
+}
+
+/// CUBERANKEDMEMBER(...) — Stub: requires OLAP server connection.
+pub fn fn_cuberankedmember(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    stub_na(args)
+}
+
+/// CUBESET(...) — Stub: requires OLAP server connection.
+pub fn fn_cubeset(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    stub_na(args)
+}
+
+/// CUBESETCOUNT(...) — Stub: requires OLAP server connection.
+pub fn fn_cubesetcount(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    stub_na(args)
+}
+
+/// CUBEVALUE(...) — Stub: requires OLAP server connection.
+pub fn fn_cubevalue(
+    args: &[FormulaValue],
+    _ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    stub_na(args)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,5 +556,69 @@ mod tests {
     #[test]
     fn info_extra_eval_helper_smoke() {
         assert_eq!(eval("=NA()").unwrap(), FormulaValue::Error(CellError::Na));
+    }
+
+    // ---------- Stub tests: explicitly skipped external-service functions ----------
+    // These functions are registered so formulas parse, but return #N/A because
+    // they require runtime resources unavailable in a standalone spreadsheet engine.
+
+    #[test]
+    fn stub_stockhistory_returns_na() {
+        // Requires Microsoft's live stock data feed.
+        assert_eq!(
+            eval("=STOCKHISTORY(\"MSFT\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+    }
+
+    #[test]
+    fn stub_call_returns_na() {
+        // Calls a Windows DLL procedure at runtime.
+        assert_eq!(
+            eval("=CALL(\"kernel32\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+    }
+
+    #[test]
+    fn stub_register_id_returns_na() {
+        // Returns the register ID of a loaded DLL.
+        assert_eq!(
+            eval("=REGISTER.ID(\"lib\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+    }
+
+    #[test]
+    fn stub_cube_functions_return_na() {
+        // All 7 CUBE functions require an OLAP server connection.
+        assert_eq!(
+            eval("=CUBEKPIMEMBER(\"conn\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        assert_eq!(
+            eval("=CUBEMEMBER(\"conn\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        assert_eq!(
+            eval("=CUBEMEMBERPROPERTY(\"conn\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        assert_eq!(
+            eval("=CUBERANKEDMEMBER(\"conn\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        assert_eq!(
+            eval("=CUBESET(\"conn\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        assert_eq!(
+            eval("=CUBESETCOUNT(\"conn\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        assert_eq!(
+            eval("=CUBEVALUE(\"conn\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
     }
 }
