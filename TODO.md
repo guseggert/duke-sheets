@@ -106,7 +106,7 @@
 - [x] Cell reference resolution (single cells, ranges)
 - [x] Cross-sheet references (`Sheet2!A1`)
 - [x] Structured reference evaluation (`Table1[Column]`, `Table1[@Col]`, `[#Headers]`, `[#Totals]`, `[#All]`, `[#Data]`)
-### Implemented Functions (157 of ~506)
+### Implemented Functions (189 of ~506)
 
 | Category | Count | Functions (highlights) |
 |----------|-------|----------------------|
@@ -118,6 +118,8 @@
 | Date | 23 | DATE, YEAR, MONTH, DAY, NOW, TODAY, TIME, HOUR, MINUTE, SECOND, WEEKDAY, WEEKNUM, ISOWEEKNUM, EDATE, EOMONTH, DAYS, DAYS360, DATEDIF, YEARFRAC, DATEVALUE, TIMEVALUE, NETWORKDAYS, WORKDAY |
 | Information | 6 | ISBLANK, ISNUMBER, ISTEXT, ISERROR, ISNA, NA |
 | Compatibility | 9 | STDEV, STDEVP, VAR, VARP, MODE, PERCENTILE, QUARTILE, RANK, PERCENTRANK |
+| Financial | 20 | PMT, FV, PV, NPER, RATE, IPMT, PPMT, CUMIPMT, CUMPRINC, NPV, IRR, MIRR, XNPV, SLN, SYD, DB, DDB, EFFECT, NOMINAL, PDURATION |
+| Database | 12 | DAVERAGE, DCOUNT, DCOUNTA, DGET, DMAX, DMIN, DPRODUCT, DSTDEV, DSTDEVP, DSUM, DVAR, DVARP |
 
 ### CLI Tool (`duke`)
 - [x] `duke to-csv` — convert spreadsheet to CSV (with `-f` for formatted output)
@@ -129,6 +131,10 @@
 ---
 
 ## In Progress / Partial
+
+### Database Functions
+- [x] Implemented all 12 D-functions in `crates/duke-sheets-formula/src/functions/database.rs` with shared criteria filtering and unit tests
+- [x] Wire `database.rs` into `functions/mod.rs` registry (module + function registrations)
 
 ### Formula Parser
 - [x] Quoted sheet references (`'Sheet Name'!A1`)
@@ -143,6 +149,10 @@
 - [x] Array literals (`{1,2,3}`)
 - [ ] Array formula entry (`Ctrl+Shift+Enter` style) in XLSX reader
 - [ ] Dynamic array spilling in evaluator
+
+### Financial Functions
+- [x] Core financial function implementations added in `crates/duke-sheets-formula/src/functions/financial.rs` (PMT, FV, PV, NPER, RATE, IPMT, PPMT, CUMIPMT, CUMPRINC, NPV, IRR, MIRR, XNPV, SLN, SYD, DB, DDB, EFFECT, NOMINAL, PDURATION)
+- [x] Wire `financial.rs` into `functions/mod.rs` registry entries (module + function registration)
 
 ---
 
@@ -170,20 +180,20 @@
 - [x] **Comment visibility (robust)** — parse VML `<x:Visible/>` element and tolerate whitespace in style `visibility:visible` check
 - [x] **Rich text in shared strings** — reader preserves `<rPr>` formatting runs as `CellValue::RichText`
 
-#### More Excel Functions (~398 remaining)
+#### More Excel Functions (~317 remaining)
 See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 
 | Category | Implemented | Total | Key missing functions |
 |----------|------------|-------|----------------------|
-| Financial | 0 | 55 | PMT, FV, PV, NPV, IRR, RATE, NPER, SLN |
+| Financial | 20 | 55 | ACCRINT, DISC, DURATION, FVSCHEDULE, INTRATE, XIRR, YIELD, ... |
 | Engineering | 0 | 54 | BIN2DEC, DEC2BIN, HEX2DEC, CONVERT, COMPLEX |
-| Database | 0 | 12 | DSUM, DCOUNT, DAVERAGE, DGET |
-| Compatibility | 0 | 40 | STDEV, VAR, MODE, PERCENTILE, RANK, CEILING, FLOOR |
-| Statistical | 13 / 110 | 12% | STDEV.S, STDEV.P, VAR.S, VAR.P, MEDIAN, MODE.SNGL, MAXIFS, MINIFS, RANK.EQ, PERCENTILE.INC |
-| Date & Time | 6 / 25 | 24% | TIME, HOUR, MINUTE, SECOND, WEEKDAY, EDATE, EOMONTH, DATEDIF, NETWORKDAYS |
-| Lookup | 8 / 34 | 24% | HLOOKUP, XLOOKUP, XMATCH, INDIRECT, OFFSET, FILTER, SORT, UNIQUE |
-| Text | 29 / 42 | 69% | TEXT, TEXTJOIN, FIXED, DOLLAR |
-| Logical | 11 / 19 | 58% | LET, LAMBDA |
+| Database | 12 | 12 | *(complete)* |
+| Compatibility | 9 | 40 | CEILING, FLOOR, BETADIST, BINOMDIST, ... |
+| Statistical | 28 / 110 | 25% | CORREL, COVARIANCE, F.DIST, NORM.DIST, T.DIST, TREND, LINEST, ... |
+| Date & Time | 23 / 25 | 92% | NETWORKDAYS.INTL, WORKDAY.INTL |
+| Lookup | 13 / 34 | 38% | FILTER, SORT, UNIQUE, ADDRESS, TRANSPOSE, ... |
+| Text | 34 / 42 | 81% | REPLACE, TEXTBEFORE, TEXTAFTER, TEXTSPLIT, ... |
+| Logical | 11 / 19 | 58% | LET, LAMBDA, MAP, REDUCE, SCAN, BYCOL, BYROW, MAKEARRAY |
 
 #### Reader Robustness
 - [x] Fix XML namespace handling (58 call sites)
@@ -339,7 +349,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | Core (cell, workbook, worksheet) | 41 | ✅ |
 | Cell display formatting (CellView) | 51 | ✅ |
 | Formula parser | 43 | ✅ |
-| Formula evaluator + functions | 126 | ✅ |
+| Formula evaluator + functions | 202 | ✅ |
 | Calculation engine | 26 | ✅ |
 | XLSX roundtrip | 46 | ✅ |
 | XLSX style roundtrip | 10 | ✅ |
@@ -354,8 +364,8 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
-| Other (unit, doc, integration) | 299 | ✅ |
-| **Total** | **856** | ✅ |
+| Other (unit, doc, integration) | 223 | ✅ |
+| **Total** | **889** | ✅ |
 
 ---
 
@@ -376,7 +386,7 @@ See `FUNCTIONS.md` for the complete tracking list. High-priority gaps:
 ```
 duke-sheets/
 ├── duke-sheets-core        # Data model, cell storage, locale
-├── duke-sheets-formula     # Parser, evaluator, 157 functions
+├── duke-sheets-formula     # Parser, evaluator, 189 functions
 ├── duke-sheets-xlsx        # XLSX read/write
 ├── duke-sheets-xls         # XLS reader (BIFF8, read-only)
 ├── duke-sheets-csv         # CSV read/write
