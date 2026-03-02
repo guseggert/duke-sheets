@@ -7,11 +7,15 @@ pub mod date;
 pub mod engineering;
 pub mod financial;
 pub mod info;
+pub mod info_extra;
 pub mod logical;
 pub mod lookup;
+pub mod lookup_extra;
 pub mod math;
+pub mod math_extra;
 pub mod statistical;
 pub mod text;
+pub mod text_extra;
 
 use crate::error::FormulaResult;
 use crate::evaluator::{EvaluationContext, FormulaValue};
@@ -60,6 +64,7 @@ impl FunctionRegistry {
         registry.register_database_functions();
         registry.register_engineering_functions();
         registry.register_compatibility_functions();
+        registry.register_web_functions();
 
         registry
     }
@@ -414,6 +419,301 @@ impl FunctionRegistry {
             min_args: 1,
             max_args: Some(1),
             implementation: math::fn_even,
+            volatile: false,
+        });
+        // --- math_extra functions ---
+        self.register(FunctionDef {
+            name: "ACOSH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_acosh,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ASINH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_asinh,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ATANH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_atanh,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COSH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_cosh,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SINH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_sinh,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TANH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_tanh,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COT",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_cot,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COTH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_coth,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CSC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_csc,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CSCH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_csch,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SEC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_sec,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SECH",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_sech,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COMBIN",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: math_extra::fn_combin,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "COMBINA",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: math_extra::fn_combina,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FACT",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_fact,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FACTDOUBLE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_factdouble,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MULTINOMIAL",
+            min_args: 1,
+            max_args: None,
+            implementation: math_extra::fn_multinomial,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GCD",
+            min_args: 1,
+            max_args: None,
+            implementation: math_extra::fn_gcd,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "LCM",
+            min_args: 1,
+            max_args: None,
+            implementation: math_extra::fn_lcm,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "PRODUCT",
+            min_args: 1,
+            max_args: None,
+            implementation: math_extra::fn_product,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "QUOTIENT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: math_extra::fn_quotient,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MROUND",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: math_extra::fn_mround,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SUMSQ",
+            min_args: 1,
+            max_args: None,
+            implementation: math_extra::fn_sumsq,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SQRTPI",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_sqrtpi,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "BASE",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: math_extra::fn_base,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DECIMAL",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: math_extra::fn_decimal,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ROMAN",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: math_extra::fn_roman,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ARABIC",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_arabic,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CEILING.PRECISE",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: math_extra::fn_ceiling_precise,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FLOOR.PRECISE",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: math_extra::fn_floor_precise,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ISO.CEILING",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: math_extra::fn_iso_ceiling,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MDETERM",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_mdeterm,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MINVERSE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_minverse,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MMULT",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: math_extra::fn_mmult,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "MUNIT",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_munit,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "RANDARRAY",
+            min_args: 0,
+            max_args: Some(5),
+            implementation: math_extra::fn_randarray,
+            volatile: true,
+        });
+        self.register(FunctionDef {
+            name: "SERIESSUM",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: math_extra::fn_seriessum,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SUMX2MY2",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: math_extra::fn_sumx2my2,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SUMX2PY2",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: math_extra::fn_sumx2py2,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SUMXMY2",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: math_extra::fn_sumxmy2,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "AGGREGATE",
+            min_args: 3,
+            max_args: None,
+            implementation: math_extra::fn_aggregate,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SUBTOTAL",
+            min_args: 2,
+            max_args: None,
+            implementation: math_extra::fn_subtotal,
             volatile: false,
         });
     }
@@ -802,6 +1102,56 @@ impl FunctionRegistry {
             implementation: text::fn_mid,
             volatile: false,
         });
+        // --- text_extra functions ---
+        self.register(FunctionDef {
+            name: "REPLACE",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: text_extra::fn_replace,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "REPLACEB",
+            min_args: 4,
+            max_args: Some(4),
+            implementation: text_extra::fn_replaceb,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TEXTBEFORE",
+            min_args: 2,
+            max_args: Some(6),
+            implementation: text_extra::fn_textbefore,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TEXTAFTER",
+            min_args: 2,
+            max_args: Some(6),
+            implementation: text_extra::fn_textafter,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TEXTSPLIT",
+            min_args: 2,
+            max_args: Some(6),
+            implementation: text_extra::fn_textsplit,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "UNICHAR",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: text_extra::fn_unichar,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "UNICODE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: text_extra::fn_unicode,
+            volatile: false,
+        });
     }
 
     fn register_info_functions(&mut self) {
@@ -856,6 +1206,105 @@ impl FunctionRegistry {
             min_args: 0,
             max_args: Some(0),
             implementation: info::fn_na,
+            volatile: false,
+        });
+        // --- info_extra functions ---
+        self.register(FunctionDef {
+            name: "ISERR",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_iserr,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ISEVEN",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_iseven,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ISODD",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_isodd,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ISLOGICAL",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_islogical,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ISNONTEXT",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_isnontext,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ISREF",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_isref,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ERROR.TYPE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_error_type,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TYPE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_type,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CELL",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: info_extra::fn_cell,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "INFO",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_info,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SHEET",
+            min_args: 0,
+            max_args: Some(1),
+            implementation: info_extra::fn_sheet,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SHEETS",
+            min_args: 0,
+            max_args: Some(1),
+            implementation: info_extra::fn_sheets,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ISFORMULA",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_isformula,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "ISOMITTED",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: info_extra::fn_isomitted,
             volatile: false,
         });
     }
@@ -1050,6 +1499,21 @@ impl FunctionRegistry {
             implementation: date::fn_today,
             volatile: true,
         });
+        // --- date functions from lookup_extra ---
+        self.register(FunctionDef {
+            name: "NETWORKDAYS.INTL",
+            min_args: 2,
+            max_args: Some(4),
+            implementation: lookup_extra::fn_networkdays_intl,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "WORKDAY.INTL",
+            min_args: 2,
+            max_args: Some(4),
+            implementation: lookup_extra::fn_workday_intl,
+            volatile: false,
+        });
     }
 
     fn register_lookup_functions(&mut self) {
@@ -1172,6 +1636,175 @@ impl FunctionRegistry {
             max_args: Some(5),
             implementation: lookup::fn_offset,
             volatile: true,
+        });
+        // --- lookup_extra functions ---
+        self.register(FunctionDef {
+            name: "ADDRESS",
+            min_args: 2,
+            max_args: Some(5),
+            implementation: lookup_extra::fn_address,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "AREAS",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: lookup_extra::fn_areas,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CHOOSECOLS",
+            min_args: 2,
+            max_args: None,
+            implementation: lookup_extra::fn_choosecols,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "CHOOSEROWS",
+            min_args: 2,
+            max_args: None,
+            implementation: lookup_extra::fn_chooserows,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "DROP",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: lookup_extra::fn_drop,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "EXPAND",
+            min_args: 2,
+            max_args: Some(4),
+            implementation: lookup_extra::fn_expand,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FILTER",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: lookup_extra::fn_filter,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FORMULATEXT",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: lookup_extra::fn_formulatext,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "HSTACK",
+            min_args: 1,
+            max_args: None,
+            implementation: lookup_extra::fn_hstack,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "LOOKUP",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: lookup_extra::fn_lookup,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SORT",
+            min_args: 1,
+            max_args: Some(4),
+            implementation: lookup_extra::fn_sort,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "SORTBY",
+            min_args: 2,
+            max_args: None,
+            implementation: lookup_extra::fn_sortby,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TAKE",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: lookup_extra::fn_take,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TOCOL",
+            min_args: 1,
+            max_args: Some(3),
+            implementation: lookup_extra::fn_tocol,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TOROW",
+            min_args: 1,
+            max_args: Some(3),
+            implementation: lookup_extra::fn_torow,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "TRANSPOSE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: lookup_extra::fn_transpose,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "UNIQUE",
+            min_args: 1,
+            max_args: Some(3),
+            implementation: lookup_extra::fn_unique,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "VSTACK",
+            min_args: 1,
+            max_args: None,
+            implementation: lookup_extra::fn_vstack,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "WRAPCOLS",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: lookup_extra::fn_wrapcols,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "WRAPROWS",
+            min_args: 2,
+            max_args: Some(3),
+            implementation: lookup_extra::fn_wraprows,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "HYPERLINK",
+            min_args: 1,
+            max_args: Some(2),
+            implementation: lookup_extra::fn_hyperlink,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "GETPIVOTDATA",
+            min_args: 2,
+            max_args: None,
+            implementation: lookup_extra::fn_getpivotdata,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "RTD",
+            min_args: 2,
+            max_args: None,
+            implementation: lookup_extra::fn_rtd,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "IMAGE",
+            min_args: 1,
+            max_args: Some(4),
+            implementation: lookup_extra::fn_image,
+            volatile: false,
         });
     }
 
@@ -2818,8 +3451,31 @@ impl FunctionRegistry {
             volatile: false,
         });
     }
-}
 
+    fn register_web_functions(&mut self) {
+        self.register(FunctionDef {
+            name: "ENCODEURL",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: lookup_extra::fn_encodeurl,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "FILTERXML",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: lookup_extra::fn_filterxml,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "WEBSERVICE",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: lookup_extra::fn_webservice,
+            volatile: false,
+        });
+    }
+}
 impl Default for FunctionRegistry {
     fn default() -> Self {
         Self::new()
