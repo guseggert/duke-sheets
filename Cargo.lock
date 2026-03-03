@@ -515,6 +515,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "duke-sheets-core",
+ "duke-sheets-xls",
  "duke-sheets-xlsx",
  "excel-com-protocol",
  "serde",

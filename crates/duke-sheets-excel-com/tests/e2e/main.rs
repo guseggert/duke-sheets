@@ -31,5 +31,6 @@ mod roundtrip;
 mod selections;
 mod smoke;
 mod writing;
+mod xls_reader;
 
 pub use common::*;
