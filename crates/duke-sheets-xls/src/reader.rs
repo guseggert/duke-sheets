@@ -861,7 +861,17 @@ impl XlsReader {
                     ws.set_cell_value_at(row, col, CellValue::String(SharedString::new(s)))?;
                 }
                 SstEntry::Rich { text, runs } => {
-                    let rich_runs = Self::sst_runs_to_rich_text(text, runs, style_ctx);
+                    let mut rich_runs = Self::sst_runs_to_rich_text(text, runs, style_ctx);
+                    // If the first run has font: None, it inherits from the cell's
+                    // XF font record.  Resolve the XF font so the first run carries
+                    // the correct formatting (italic, color, etc.).
+                    if let Some(first) = rich_runs.first_mut() {
+                        if first.font.is_none() {
+                            if let Some(xf) = style_ctx.xfs.get(xf_idx as usize) {
+                                first.font = style_ctx.resolve_run_font(xf.font_index);
+                            }
+                        }
+                    }
                     ws.set_cell_value_at(row, col, CellValue::RichText(rich_runs))?;
                 }
             }
@@ -1672,7 +1682,8 @@ impl XlsReader {
             if is_builtin && cch == 1 {
                 // Built-in name: the single "character" is an index byte
                 let idx = data.get(off).copied().unwrap_or(0) as usize;
-                let _skip = if (name_flags & 0x01) != 0 { 2 } else { 1 };
+                let skip = if (name_flags & 0x01) != 0 { 2 } else { 1 };
+                off += skip;
                 if idx < BUILTIN_NAMES.len() {
                     BUILTIN_NAMES[idx].to_string()
                 } else {
