@@ -249,7 +249,7 @@ or cell-level metadata not available in standalone evaluation):
 - [x] **Data model** — `AutoFilter` struct (range, column filters, sort state)
 - [x] **XLSX reader** — read `<autoFilter>` from sheet XML
 - [x] **XLSX writer** — write `<autoFilter>`
-- [ ] **XLS reader** — parse `AUTOFILTER` record (0x009E)
+- [x] **XLS reader** — parse `AUTOFILTER`/`AUTOFILTERINFO` records and `_FilterDatabase` range
 
 #### XLS Reader — Remaining Items
 - [x] Formula Phase 3 (shared formulas, array formulas, memory tokens) — **done**
@@ -268,7 +268,7 @@ or cell-level metadata not available in standalone evaluation):
 #### Named Ranges I/O
 - [x] **XLSX reader** — read `<definedNames>` from `workbook.xml`
 - [x] **XLSX writer** — write `<definedNames>`
-- [ ] **XLS reader** — parse `NAME` record formula bodies (names parsed but definitions not stored)
+- [x] **XLS reader** — parse `NAME` record formula bodies (store raw token bytes)
 - [x] **Print areas / titles** — read `_xlnm.Print_Area` and `_xlnm.Print_Titles` defined names
 
 #### Large File Support
@@ -356,8 +356,8 @@ or cell-level metadata not available in standalone evaluation):
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
-| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 111 | ✅ |
-| XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 59 | ✅ |
+| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 115 | ✅ |
+| XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas, comments, CF, DV) | 68 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 63 | ✅ |
 | E2E via Excel COM — reader (XLSX) | 62 | ✅ |
@@ -366,7 +366,7 @@ or cell-level metadata not available in standalone evaluation):
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1272** | ✅ |
+| **Total** | **1285** | ✅ |
 
 ---
 

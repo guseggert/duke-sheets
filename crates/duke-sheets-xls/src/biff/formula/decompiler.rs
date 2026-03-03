@@ -1164,6 +1164,7 @@ mod tests {
                 name: "MyRange".to_string(),
                 sheet_idx: 0,
                 is_builtin: false,
+                formula_body: Vec::new(),
             }],
             base_cell: None,
         };
@@ -1246,6 +1247,7 @@ mod tests {
                 name: "TaxRate".to_string(),
                 sheet_idx: 0,
                 is_builtin: false,
+                formula_body: Vec::new(),
             }],
             base_cell: None,
         };
