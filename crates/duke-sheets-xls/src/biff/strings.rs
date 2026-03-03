@@ -26,6 +26,27 @@ pub struct BiffString {
     pub bytes_consumed: usize,
 }
 
+/// A formatting run within an SST string: start position + font index.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormattingRun {
+    /// 0-based character position where this run begins.
+    pub char_pos: u16,
+    /// Font index into the workbook's FONT record table.
+    pub font_index: u16,
+}
+
+/// An entry in the Shared String Table.
+#[derive(Debug, Clone)]
+pub enum SstEntry {
+    /// Plain text string with no formatting runs.
+    Plain(String),
+    /// Rich text: the full text plus formatting run markers.
+    Rich {
+        text: String,
+        runs: Vec<FormattingRun>,
+    },
+}
+
 /// Read a BIFF8 "short" string (1-byte length prefix, used in BOUNDSHEET etc.).
 pub fn read_short_string(data: &[u8], offset: &mut usize) -> XlsResult<String> {
     let char_count = read_u8(data, offset)? as u16;
@@ -155,6 +176,32 @@ pub fn parse_sst_continued(data: &[u8], continue_offsets: &[usize]) -> XlsResult
     Ok(strings)
 }
 
+/// Parse the SST with full CONTINUE boundary awareness, preserving formatting runs.
+///
+/// Like `parse_sst_continued`, but returns `SstEntry` variants that carry
+/// rich text formatting run data (character position + font index pairs)
+/// instead of stripping them.
+pub fn parse_sst_entries(data: &[u8], continue_offsets: &[usize]) -> XlsResult<Vec<SstEntry>> {
+    let mut reader = ContinueReader::new(data, continue_offsets);
+
+    let _total_strings = reader.read_u32()?;
+    let unique_count = reader.read_u32()? as usize;
+
+    let mut entries = Vec::with_capacity(unique_count);
+
+    for i in 0..unique_count {
+        match reader.read_sst_entry() {
+            Ok(entry) => entries.push(entry),
+            Err(e) => {
+                log::warn!("SST parse error at string {i}/{unique_count}: {e}");
+                break;
+            }
+        }
+    }
+
+    Ok(entries)
+}
+
 // ─── ContinueReader ─────────────────────────────────────────────────────
 
 /// A reader over a concatenated BIFF8 record buffer that tracks CONTINUE
@@ -267,6 +314,65 @@ impl<'a> ContinueReader<'a> {
         }
 
         Ok(text)
+    }
+
+    /// Read a full SST Unicode string entry, preserving formatting runs.
+    fn read_sst_entry(&mut self) -> XlsResult<SstEntry> {
+        let char_count = self.read_u16()? as usize;
+        let flags = self.read_u8()?;
+
+        let is_rich = (flags & 0x08) != 0;
+        let has_ext = (flags & 0x04) != 0;
+        let is_wide = (flags & 0x01) != 0;
+
+        let run_count = if is_rich {
+            self.read_u16()? as usize
+        } else {
+            0
+        };
+        let ext_size = if has_ext {
+            self.read_u32()? as usize
+        } else {
+            0
+        };
+
+        // Character data — this is where CONTINUE encoding changes happen.
+        let text = self.read_chars(char_count, is_wide)?;
+
+        // Rich text runs (4 bytes each: char_pos u16 + font_idx u16).
+        let mut formatting_runs = Vec::new();
+        if run_count > 0 {
+            for _ in 0..run_count {
+                if self.pos + 4 <= self.data.len() {
+                    let char_pos =
+                        u16::from_le_bytes([self.data[self.pos], self.data[self.pos + 1]]);
+                    let font_index =
+                        u16::from_le_bytes([self.data[self.pos + 2], self.data[self.pos + 3]]);
+                    formatting_runs.push(FormattingRun {
+                        char_pos,
+                        font_index,
+                    });
+                    self.pos += 4;
+                } else {
+                    // Truncated run data — skip what we can
+                    self.skip(run_count.saturating_sub(formatting_runs.len()) * 4);
+                    break;
+                }
+            }
+        }
+        // Extended string data — raw data, no flags at boundaries.
+        if ext_size > 0 {
+            self.skip(ext_size);
+        }
+
+        if formatting_runs.is_empty() {
+            Ok(SstEntry::Plain(text))
+        } else {
+            Ok(SstEntry::Rich {
+                text,
+                runs: formatting_runs,
+            })
+        }
     }
 
     /// Read `char_count` characters from the buffer, handling encoding
@@ -589,5 +695,132 @@ mod tests {
 
         let strings = parse_sst_continued(&buf, &[]).unwrap();
         assert_eq!(strings, vec!["A", "BC"]);
+    }
+
+    #[test]
+    fn test_parse_sst_entries_plain() {
+        // SST with 2 plain strings: "A" and "BC"
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&2u32.to_le_bytes()); // total
+        buf.extend_from_slice(&2u32.to_le_bytes()); // unique
+        buf.extend_from_slice(&[0x01, 0x00, 0x00, b'A']);
+        buf.extend_from_slice(&[0x02, 0x00, 0x00, b'B', b'C']);
+
+        let entries = parse_sst_entries(&buf, &[]).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(&entries[0], SstEntry::Plain(s) if s == "A"));
+        assert!(matches!(&entries[1], SstEntry::Plain(s) if s == "BC"));
+    }
+
+    #[test]
+    fn test_parse_sst_entries_rich_text() {
+        // SST with 1 rich-text string "AB" with 1 formatting run at char 1, font 5.
+        // char_count=2, flags=0x08 (rich), run_count=1, data="AB",
+        // run: char_pos=1(u16) + font_idx=5(u16)
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&1u32.to_le_bytes()); // total
+        buf.extend_from_slice(&1u32.to_le_bytes()); // unique
+        buf.extend_from_slice(&2u16.to_le_bytes()); // char_count = 2
+        buf.push(0x08); // flags: rich text
+        buf.extend_from_slice(&1u16.to_le_bytes()); // run_count = 1
+        buf.extend_from_slice(b"AB"); // char data
+        buf.extend_from_slice(&1u16.to_le_bytes()); // run char_pos = 1
+        buf.extend_from_slice(&5u16.to_le_bytes()); // run font_idx = 5
+
+        let entries = parse_sst_entries(&buf, &[]).unwrap();
+        assert_eq!(entries.len(), 1);
+        match &entries[0] {
+            SstEntry::Rich { text, runs } => {
+                assert_eq!(text, "AB");
+                assert_eq!(runs.len(), 1);
+                assert_eq!(runs[0].char_pos, 1);
+                assert_eq!(runs[0].font_index, 5);
+            }
+            other => panic!("Expected Rich, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sst_entries_rich_text_multiple_runs() {
+        // SST with 1 string "Hello World" with 2 runs:
+        // Run 0: char_pos=0, font=1 (bold)
+        // Run 1: char_pos=6, font=2 (italic)
+        let text = "Hello World";
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&1u32.to_le_bytes()); // total
+        buf.extend_from_slice(&1u32.to_le_bytes()); // unique
+        buf.extend_from_slice(&(text.len() as u16).to_le_bytes()); // char_count
+        buf.push(0x08); // flags: rich text
+        buf.extend_from_slice(&2u16.to_le_bytes()); // run_count = 2
+        buf.extend_from_slice(text.as_bytes()); // char data
+                                                // Run 1: char_pos=0, font_idx=1
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes());
+        // Run 2: char_pos=6, font_idx=2
+        buf.extend_from_slice(&6u16.to_le_bytes());
+        buf.extend_from_slice(&2u16.to_le_bytes());
+
+        let entries = parse_sst_entries(&buf, &[]).unwrap();
+        assert_eq!(entries.len(), 1);
+        match &entries[0] {
+            SstEntry::Rich { text, runs } => {
+                assert_eq!(text, "Hello World");
+                assert_eq!(runs.len(), 2);
+                assert_eq!(
+                    runs[0],
+                    FormattingRun {
+                        char_pos: 0,
+                        font_index: 1
+                    }
+                );
+                assert_eq!(
+                    runs[1],
+                    FormattingRun {
+                        char_pos: 6,
+                        font_index: 2
+                    }
+                );
+            }
+            other => panic!("Expected Rich, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sst_entries_mixed_plain_and_rich() {
+        // SST with 2 strings: "Plain" (no runs) and "Bold" (1 run)
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&2u32.to_le_bytes()); // total
+        buf.extend_from_slice(&2u32.to_le_bytes()); // unique
+
+        // String 1: plain "Plain"
+        buf.extend_from_slice(&5u16.to_le_bytes());
+        buf.push(0x00); // flags: no rich, no ext
+        buf.extend_from_slice(b"Plain");
+
+        // String 2: rich "Bold" with 1 run at pos 0, font 3
+        buf.extend_from_slice(&4u16.to_le_bytes());
+        buf.push(0x08); // flags: rich
+        buf.extend_from_slice(&1u16.to_le_bytes()); // 1 run
+        buf.extend_from_slice(b"Bold");
+        buf.extend_from_slice(&0u16.to_le_bytes()); // char_pos = 0
+        buf.extend_from_slice(&3u16.to_le_bytes()); // font_idx = 3
+
+        let entries = parse_sst_entries(&buf, &[]).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(&entries[0], SstEntry::Plain(s) if s == "Plain"));
+        match &entries[1] {
+            SstEntry::Rich { text, runs } => {
+                assert_eq!(text, "Bold");
+                assert_eq!(runs.len(), 1);
+                assert_eq!(
+                    runs[0],
+                    FormattingRun {
+                        char_pos: 0,
+                        font_index: 3
+                    }
+                );
+            }
+            other => panic!("Expected Rich, got {:?}", other),
+        }
     }
 }

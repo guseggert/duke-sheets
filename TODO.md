@@ -267,7 +267,7 @@ or cell-level metadata not available in standalone evaluation):
 - [x] **Zoom (SCL record 0x00A0)** — SCL numerator/denominator parsed into `zoom_scale`
 - [x] **Print gridlines/headings (PRINTHEADERS 0x002A, PRINTGRIDLINES 0x002B)** — parsed into `PageSetup.print_gridlines` / `print_headings`
 - [x] **Print_Area / Print_Titles from NAME formula** — resolved from NAME formula_body into `PageSetup.print_area`, `repeat_rows`, `repeat_cols`
-- [ ] **Rich text in SST** — XLS SST parser discards formatting runs; XLSX reader preserves `RichTextRun`
+- [x] **Rich text in SST** — SST parser preserves formatting runs as `SstEntry::Rich`; reader resolves FONT indices to `RichTextRun` with `RunFont` properties
 
 #### Named Ranges I/O
 - [x] **XLSX reader** — read `<definedNames>` from `workbook.xml`
@@ -361,7 +361,7 @@ or cell-level metadata not available in standalone evaluation):
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
-| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 142 | ✅ |
+| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 150 | ✅ |
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas, comments, CF, DV) | 68 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 63 | ✅ |
@@ -371,7 +371,7 @@ or cell-level metadata not available in standalone evaluation):
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1312** | ✅ |
+| **Total** | **1320** | ✅ |
 
 ---
 
