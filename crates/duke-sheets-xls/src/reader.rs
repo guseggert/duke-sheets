@@ -587,6 +587,120 @@ impl XlsReader {
                         auto_filter_columns.push(fc);
                     }
                 }
+                records::SETUP => {
+                    if rec.data.len() >= 12 {
+                        let mut ps = ws.page_setup().clone();
+                        let mut off = 0;
+                        let paper_size = read_u16(&rec.data, &mut off).unwrap_or(1);
+                        let scale = read_u16(&rec.data, &mut off).unwrap_or(100);
+                        let _page_start = read_u16(&rec.data, &mut off).unwrap_or(1);
+                        let fit_width = read_u16(&rec.data, &mut off).unwrap_or(0);
+                        let fit_height = read_u16(&rec.data, &mut off).unwrap_or(0);
+                        let grbit = read_u16(&rec.data, &mut off).unwrap_or(0);
+
+                        ps.paper_size = paper_size.min(255) as u8;
+                        ps.scale = scale.clamp(10, 400);
+                        if fit_width > 0 {
+                            ps.fit_to_width = Some(fit_width);
+                        }
+                        if fit_height > 0 {
+                            ps.fit_to_height = Some(fit_height);
+                        }
+
+                        if (grbit & 0x0040) == 0 {
+                            ps.orientation = if (grbit & 0x0002) != 0 {
+                                duke_sheets_core::PageOrientation::Landscape
+                            } else {
+                                duke_sheets_core::PageOrientation::Portrait
+                            };
+                        }
+
+                        if rec.data.len() >= 32 {
+                            let mut hdr_off = 16usize;
+                            if let Ok(hdr_margin) = read_f64(&rec.data, &mut hdr_off) {
+                                ps.header_margin = hdr_margin;
+                            }
+
+                            let mut ftr_off = 24usize;
+                            if let Ok(ftr_margin) = read_f64(&rec.data, &mut ftr_off) {
+                                ps.footer_margin = ftr_margin;
+                            }
+                        }
+
+                        ws.set_page_setup(ps);
+                    }
+                }
+                records::HEADER => {
+                    if rec.data.len() >= 3 {
+                        let mut off = 0;
+                        if let Ok(text) = read_unicode_string(&rec.data, &mut off) {
+                            if !text.is_empty() {
+                                let mut ps = ws.page_setup().clone();
+                                ps.odd_header = Some(text);
+                                ws.set_page_setup(ps);
+                            }
+                        }
+                    }
+                }
+                records::FOOTER => {
+                    if rec.data.len() >= 3 {
+                        let mut off = 0;
+                        if let Ok(text) = read_unicode_string(&rec.data, &mut off) {
+                            if !text.is_empty() {
+                                let mut ps = ws.page_setup().clone();
+                                ps.odd_footer = Some(text);
+                                ws.set_page_setup(ps);
+                            }
+                        }
+                    }
+                }
+                records::LEFT_MARGIN => {
+                    if rec.data.len() >= 8 {
+                        let mut off = 0;
+                        if let Ok(val) = read_f64(&rec.data, &mut off) {
+                            let mut ps = ws.page_setup().clone();
+                            ps.left_margin = val;
+                            ws.set_page_setup(ps);
+                        }
+                    }
+                }
+                records::RIGHT_MARGIN => {
+                    if rec.data.len() >= 8 {
+                        let mut off = 0;
+                        if let Ok(val) = read_f64(&rec.data, &mut off) {
+                            let mut ps = ws.page_setup().clone();
+                            ps.right_margin = val;
+                            ws.set_page_setup(ps);
+                        }
+                    }
+                }
+                records::TOP_MARGIN => {
+                    if rec.data.len() >= 8 {
+                        let mut off = 0;
+                        if let Ok(val) = read_f64(&rec.data, &mut off) {
+                            let mut ps = ws.page_setup().clone();
+                            ps.top_margin = val;
+                            ws.set_page_setup(ps);
+                        }
+                    }
+                }
+                records::BOTTOM_MARGIN => {
+                    if rec.data.len() >= 8 {
+                        let mut off = 0;
+                        if let Ok(val) = read_f64(&rec.data, &mut off) {
+                            let mut ps = ws.page_setup().clone();
+                            ps.bottom_margin = val;
+                            ws.set_page_setup(ps);
+                        }
+                    }
+                }
+                records::HCENTER | records::VCENTER => {}
+                records::HPAGEBREAKS => {
+                    Self::parse_page_breaks(&rec.data, ws, true);
+                }
+                records::VPAGEBREAKS => {
+                    Self::parse_page_breaks(&rec.data, ws, false);
+                }
                 _ => {
                     // Skip unknown/unhandled records
                 }
@@ -1855,6 +1969,43 @@ impl XlsReader {
         }
     }
 
+    fn parse_page_breaks(data: &[u8], ws: &mut duke_sheets_core::Worksheet, is_row: bool) {
+        use duke_sheets_core::worksheet::PageBreak;
+
+        if data.len() < 2 {
+            return;
+        }
+
+        let count = u16::from_le_bytes([data[0], data[1]]) as usize;
+        let mut breaks = Vec::with_capacity(count);
+        let mut off = 2;
+
+        for _ in 0..count {
+            if off + 6 > data.len() {
+                break;
+            }
+
+            let id = u16::from_le_bytes([data[off], data[off + 1]]) as u32;
+            let min = u16::from_le_bytes([data[off + 2], data[off + 3]]) as u32;
+            let max = u16::from_le_bytes([data[off + 4], data[off + 5]]) as u32;
+            off += 6;
+
+            breaks.push(PageBreak {
+                id,
+                min,
+                max,
+                man: true,
+                pt: false,
+            });
+        }
+
+        if is_row {
+            ws.set_row_breaks(breaks);
+        } else {
+            ws.set_col_breaks(breaks);
+        }
+    }
+
     // ── Comment record parsers (OBJ → TXO → NOTE) ───────────────────────
 
     /// Extract the object ID from an OBJ record.
@@ -2609,6 +2760,86 @@ mod tests {
             ws.tab_color(),
             Some(duke_sheets_core::Color::rgb(0x11, 0x22, 0x33))
         );
+    }
+
+    #[test]
+    fn test_parse_setup_record() {
+        let mut data = vec![0u8; 34];
+        data[0..2].copy_from_slice(&9u16.to_le_bytes());
+        data[2..4].copy_from_slice(&85u16.to_le_bytes());
+        data[4..6].copy_from_slice(&1u16.to_le_bytes());
+        data[6..8].copy_from_slice(&1u16.to_le_bytes());
+        data[8..10].copy_from_slice(&2u16.to_le_bytes());
+        data[10..12].copy_from_slice(&0x0002u16.to_le_bytes());
+        data[16..24].copy_from_slice(&0.5f64.to_le_bytes());
+        data[24..32].copy_from_slice(&0.4f64.to_le_bytes());
+
+        let ws = parse(vec![rec(records::SETUP, data)]);
+        let ps = ws.page_setup();
+        assert_eq!(ps.paper_size, 9);
+        assert_eq!(ps.scale, 85);
+        assert_eq!(ps.fit_to_width, Some(1));
+        assert_eq!(ps.fit_to_height, Some(2));
+        assert_eq!(ps.orientation, duke_sheets_core::PageOrientation::Landscape);
+        assert!((ps.header_margin - 0.5).abs() < 0.001);
+        assert!((ps.footer_margin - 0.4).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_margins() {
+        let ws = parse(vec![
+            rec(records::LEFT_MARGIN, 0.5f64.to_le_bytes().to_vec()),
+            rec(records::RIGHT_MARGIN, 0.6f64.to_le_bytes().to_vec()),
+            rec(records::TOP_MARGIN, 0.8f64.to_le_bytes().to_vec()),
+            rec(records::BOTTOM_MARGIN, 0.9f64.to_le_bytes().to_vec()),
+        ]);
+
+        let ps = ws.page_setup();
+        assert!((ps.left_margin - 0.5).abs() < 0.001);
+        assert!((ps.right_margin - 0.6).abs() < 0.001);
+        assert!((ps.top_margin - 0.8).abs() < 0.001);
+        assert!((ps.bottom_margin - 0.9).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_page_breaks() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&2u16.to_le_bytes());
+        data.extend_from_slice(&10u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&255u16.to_le_bytes());
+        data.extend_from_slice(&25u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&255u16.to_le_bytes());
+
+        let ws = parse(vec![rec(records::HPAGEBREAKS, data)]);
+        let breaks = ws.row_breaks();
+        assert_eq!(breaks.len(), 2);
+        assert_eq!(breaks[0].id, 10);
+        assert_eq!(breaks[1].id, 25);
+    }
+
+    #[test]
+    fn test_parse_header_footer() {
+        let header_text = "&LLeft&CCenter&RRight";
+        let mut header_data = Vec::new();
+        header_data.extend_from_slice(&(header_text.len() as u16).to_le_bytes());
+        header_data.push(0x00);
+        header_data.extend_from_slice(header_text.as_bytes());
+
+        let footer_text = "&CPage &P";
+        let mut footer_data = Vec::new();
+        footer_data.extend_from_slice(&(footer_text.len() as u16).to_le_bytes());
+        footer_data.push(0x00);
+        footer_data.extend_from_slice(footer_text.as_bytes());
+
+        let ws = parse(vec![
+            rec(records::HEADER, header_data),
+            rec(records::FOOTER, footer_data),
+        ]);
+        let ps = ws.page_setup();
+        assert_eq!(ps.odd_header.as_deref(), Some(header_text));
+        assert_eq!(ps.odd_footer.as_deref(), Some(footer_text));
     }
 
     fn rec_with_continue(
