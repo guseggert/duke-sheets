@@ -576,6 +576,16 @@ impl Worksheet {
         self.cells.row_height(row)
     }
 
+    /// Get default row height in points.
+    pub fn default_row_height(&self) -> f64 {
+        self.cells.default_row_height()
+    }
+
+    /// Set default row height in points.
+    pub fn set_default_row_height(&mut self, height: f64) {
+        self.cells.set_default_row_height(height);
+    }
+
     /// Set row height
     pub fn set_row_height(&mut self, row: u32, height: f64) {
         self.cells.set_row_height(row, height);
@@ -614,6 +624,16 @@ impl Worksheet {
     /// Get column width
     pub fn column_width(&self, col: u16) -> f64 {
         self.cells.column_width(col)
+    }
+
+    /// Get default column width in characters.
+    pub fn default_column_width(&self) -> f64 {
+        self.cells.default_column_width()
+    }
+
+    /// Set default column width in characters.
+    pub fn set_default_column_width(&mut self, width: f64) {
+        self.cells.set_default_column_width(width);
     }
 
     /// Set column width

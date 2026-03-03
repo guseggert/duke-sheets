@@ -7,12 +7,12 @@ use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 
 use duke_sheets_core::cell::SharedString;
-use duke_sheets_core::worksheet::SheetProtection;
+use duke_sheets_core::worksheet::{Selection, SheetProtection};
 use duke_sheets_core::{CellError, CellValue, Style, Workbook};
 
 use crate::biff::formula::token_parser::ParsedToken;
 use crate::biff::formula::{ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES};
-use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32};
+use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32, read_u8};
 use crate::biff::records;
 use crate::biff::strings::{
     parse_sst_continued, read_character_data, read_short_string, read_unicode_string,
@@ -326,6 +326,7 @@ impl XlsReader {
         let mut pending_formula_cell: Option<(u32, u16)> = None;
         let mut sheet_protected = false;
         let mut sheet_password_hash: Option<u16> = None;
+        let mut window2_frozen = false;
 
         // Shared formula support: stores (master_row, master_col) → token bytes
         let mut shared_formulas: std::collections::HashMap<(u16, u16), Vec<u8>> =
@@ -456,6 +457,24 @@ impl XlsReader {
                 }
                 records::COLINFO => {
                     Self::parse_colinfo(&rec.data, ws)?;
+                }
+                records::DEFCOLWIDTH => {
+                    Self::parse_defcolwidth(&rec.data, ws)?;
+                }
+                records::DEFAULTROWHEIGHT => {
+                    Self::parse_defaultrowheight(&rec.data, ws)?;
+                }
+                records::WINDOW2 => {
+                    window2_frozen = Self::parse_window2(&rec.data);
+                }
+                records::PANE => {
+                    Self::parse_pane(&rec.data, ws, window2_frozen)?;
+                }
+                records::SELECTION => {
+                    Self::parse_selection(&rec.data, ws)?;
+                }
+                records::SHEETLAYOUT => {
+                    Self::parse_sheetlayout(&rec.data, ws);
                 }
                 records::PROTECT => {
                     if rec.data.len() >= 2 {
@@ -1143,12 +1162,20 @@ impl XlsReader {
             let options = read_u32(data, &mut opt_off).unwrap_or(0);
             let hidden = (options & 0x20) != 0;
             let custom_height = (options & 0x40) != 0;
+            let outline_level = ((options >> 8) & 0x07) as u8;
+            let collapsed = (options & 0x10) != 0;
 
             if hidden {
                 ws.set_row_hidden(row_index, true);
             }
             if custom_height && height_pt > 0.0 {
                 ws.set_row_height(row_index, height_pt);
+            }
+            if outline_level > 0 {
+                ws.set_row_outline_level(row_index, outline_level);
+            }
+            if collapsed {
+                ws.set_row_collapsed(row_index, true);
             }
         }
 
@@ -1303,6 +1330,8 @@ impl XlsReader {
         let options = read_u16(data, &mut off)?;
 
         let hidden = (options & 0x0001) != 0;
+        let outline_level = ((options >> 8) & 0x0007) as u8;
+        let collapsed = (options & 0x1000) != 0;
         let width_chars = raw_width as f64 / 256.0;
 
         for col in first_col..=last_col {
@@ -1312,8 +1341,251 @@ impl XlsReader {
             if width_chars > 0.0 {
                 ws.set_column_width(col, width_chars);
             }
+            if outline_level > 0 {
+                ws.set_column_outline_level(col, outline_level);
+            }
+            if collapsed {
+                ws.set_column_collapsed(col, true);
+            }
         }
 
         Ok(())
+    }
+
+    fn parse_defcolwidth(data: &[u8], ws: &mut duke_sheets_core::Worksheet) -> XlsResult<()> {
+        if data.len() < 2 {
+            return Ok(());
+        }
+        let mut off = 0;
+        let width_chars = read_u16(data, &mut off)? as f64;
+        if width_chars > 0.0 {
+            ws.set_default_column_width(width_chars);
+        }
+        Ok(())
+    }
+
+    fn parse_defaultrowheight(data: &[u8], ws: &mut duke_sheets_core::Worksheet) -> XlsResult<()> {
+        if data.len() < 2 {
+            return Ok(());
+        }
+
+        let mut off = 0;
+        let raw_height = if data.len() >= 4 {
+            let _flags = read_u16(data, &mut off)?;
+            read_u16(data, &mut off)?
+        } else {
+            read_u16(data, &mut off)?
+        };
+
+        let height_pt = (raw_height & 0x7FFF) as f64 / 20.0;
+        if height_pt > 0.0 {
+            ws.set_default_row_height(height_pt);
+        }
+        Ok(())
+    }
+
+    fn parse_window2(data: &[u8]) -> bool {
+        if data.len() < 2 {
+            return false;
+        }
+        let options = u16::from_le_bytes([data[0], data[1]]);
+        (options & 0x0008) != 0
+    }
+
+    fn parse_pane(
+        data: &[u8],
+        ws: &mut duke_sheets_core::Worksheet,
+        window2_frozen: bool,
+    ) -> XlsResult<()> {
+        if data.len() < 10 {
+            return Ok(());
+        }
+        let mut off = 0;
+        let x = read_u16(data, &mut off)?;
+        let y = read_u16(data, &mut off)?;
+        let _top_row = read_u16(data, &mut off)?;
+        let _left_col = read_u16(data, &mut off)?;
+        let _active_pane = read_u16(data, &mut off)?;
+
+        if window2_frozen && (x > 0 || y > 0) {
+            ws.set_freeze_panes(y as u32, x);
+        }
+
+        Ok(())
+    }
+
+    fn parse_selection(data: &[u8], ws: &mut duke_sheets_core::Worksheet) -> XlsResult<()> {
+        if data.len() < 9 {
+            return Ok(());
+        }
+
+        let mut off = 0;
+        let _pane = data[off];
+        off += 1;
+        let active_row = read_u16(data, &mut off)? as u32;
+        let active_col = read_u16(data, &mut off)?;
+        let _active_ref = read_u16(data, &mut off)?;
+        let ref_count = read_u16(data, &mut off)? as usize;
+
+        let mut refs = Vec::new();
+        for _ in 0..ref_count {
+            if off + 6 > data.len() {
+                break;
+            }
+            let r1 = read_u16(data, &mut off)? as u32;
+            let r2 = read_u16(data, &mut off)? as u32;
+            let c1 = read_u8(data, &mut off)? as u16;
+            let c2 = read_u8(data, &mut off)? as u16;
+            refs.push(duke_sheets_core::CellRange::from_indices(r1, c1, r2, c2).to_string());
+        }
+
+        let active = duke_sheets_core::CellAddress::new(active_row, active_col).to_string();
+        let sqref = if refs.is_empty() {
+            None
+        } else {
+            Some(refs.join(" "))
+        };
+
+        ws.add_selection(Selection {
+            pane: None,
+            active_cell: Some(active),
+            sqref,
+        });
+
+        Ok(())
+    }
+
+    fn parse_sheetlayout(data: &[u8], ws: &mut duke_sheets_core::Worksheet) {
+        if data.len() >= 11 {
+            let r = data[8];
+            let g = data[9];
+            let b = data[10];
+            ws.set_tab_color(Some(duke_sheets_core::Color::rgb(r, g, b)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(record_type: u16, data: Vec<u8>) -> BiffRecord {
+        BiffRecord {
+            record_type,
+            data,
+            stream_offset: 0,
+            continue_offsets: Vec::new(),
+        }
+    }
+
+    fn parse(records: Vec<BiffRecord>) -> duke_sheets_core::Worksheet {
+        let mut ws = duke_sheets_core::Worksheet::new("Sheet1");
+        let refs: Vec<&BiffRecord> = records.iter().collect();
+        let formula_ctx = FormulaContext::new(vec!["Sheet1".to_string()]);
+        XlsReader::parse_sheet_records(&refs, &mut ws, &[], &[], &formula_ctx).unwrap();
+        ws
+    }
+
+    #[test]
+    fn test_parse_default_dimensions() {
+        let mut def_col = Vec::new();
+        def_col.extend_from_slice(&20u16.to_le_bytes());
+
+        let mut def_row = Vec::new();
+        def_row.extend_from_slice(&0u16.to_le_bytes());
+        def_row.extend_from_slice(&400u16.to_le_bytes());
+
+        let ws = parse(vec![
+            rec(records::DEFCOLWIDTH, def_col),
+            rec(records::DEFAULTROWHEIGHT, def_row),
+        ]);
+
+        assert_eq!(ws.default_column_width(), 20.0);
+        assert_eq!(ws.default_row_height(), 20.0);
+        assert_eq!(ws.column_width(42), 20.0);
+        assert_eq!(ws.row_height(99), 20.0);
+    }
+
+    #[test]
+    fn test_parse_freeze_panes_and_selection() {
+        let mut window2 = Vec::new();
+        window2.extend_from_slice(&0x0008u16.to_le_bytes());
+
+        let mut pane = Vec::new();
+        pane.extend_from_slice(&2u16.to_le_bytes());
+        pane.extend_from_slice(&3u16.to_le_bytes());
+        pane.extend_from_slice(&3u16.to_le_bytes());
+        pane.extend_from_slice(&2u16.to_le_bytes());
+        pane.extend_from_slice(&0u16.to_le_bytes());
+
+        let mut selection = Vec::new();
+        selection.push(0u8);
+        selection.extend_from_slice(&5u16.to_le_bytes());
+        selection.extend_from_slice(&4u16.to_le_bytes());
+        selection.extend_from_slice(&0u16.to_le_bytes());
+        selection.extend_from_slice(&1u16.to_le_bytes());
+        selection.extend_from_slice(&5u16.to_le_bytes());
+        selection.extend_from_slice(&6u16.to_le_bytes());
+        selection.push(4u8);
+        selection.push(5u8);
+
+        let ws = parse(vec![
+            rec(records::WINDOW2, window2),
+            rec(records::PANE, pane),
+            rec(records::SELECTION, selection),
+        ]);
+
+        assert_eq!(ws.freeze_panes().map(|p| (p.row, p.col)), Some((3, 2)));
+        assert_eq!(ws.selections().len(), 1);
+        let sel = &ws.selections()[0];
+        assert_eq!(sel.active_cell.as_deref(), Some("E6"));
+        assert_eq!(sel.sqref.as_deref(), Some("E6:F7"));
+    }
+
+    #[test]
+    fn test_parse_outline_and_collapsed_from_row_colinfo() {
+        let mut row = vec![0u8; 16];
+        row[0..2].copy_from_slice(&4u16.to_le_bytes());
+        row[6..8].copy_from_slice(&400u16.to_le_bytes());
+        let row_opts: u32 = (3u32 << 8) | 0x10 | 0x20 | 0x40;
+        row[12..16].copy_from_slice(&row_opts.to_le_bytes());
+
+        let mut col = Vec::new();
+        col.extend_from_slice(&2u16.to_le_bytes());
+        col.extend_from_slice(&3u16.to_le_bytes());
+        col.extend_from_slice(&2048u16.to_le_bytes());
+        col.extend_from_slice(&0u16.to_le_bytes());
+        let col_opts: u16 = 0x0001 | (2u16 << 8) | 0x1000;
+        col.extend_from_slice(&col_opts.to_le_bytes());
+        col.extend_from_slice(&0u16.to_le_bytes());
+
+        let ws = parse(vec![rec(records::ROW, row), rec(records::COLINFO, col)]);
+
+        assert!(ws.is_row_hidden(4));
+        assert_eq!(ws.row_outline_level(4), 3);
+        assert!(ws.is_row_collapsed(4));
+        assert!((ws.row_height(4) - 20.0).abs() < 0.001);
+
+        assert!(ws.is_column_hidden(2));
+        assert!(ws.is_column_hidden(3));
+        assert_eq!(ws.column_outline_level(2), 2);
+        assert_eq!(ws.column_outline_level(3), 2);
+        assert!(ws.is_column_collapsed(2));
+        assert!(ws.is_column_collapsed(3));
+    }
+
+    #[test]
+    fn test_parse_sheetlayout_tab_color() {
+        let mut sheetlayout = vec![0u8; 11];
+        sheetlayout[8] = 0x11;
+        sheetlayout[9] = 0x22;
+        sheetlayout[10] = 0x33;
+
+        let ws = parse(vec![rec(records::SHEETLAYOUT, sheetlayout)]);
+
+        assert_eq!(
+            ws.tab_color(),
+            Some(duke_sheets_core::Color::rgb(0x11, 0x22, 0x33))
+        );
     }
 }

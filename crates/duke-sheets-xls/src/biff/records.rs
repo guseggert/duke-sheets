@@ -51,6 +51,7 @@ pub const WINDOW2: u16 = 0x023E; // Sheet view settings (freeze panes, etc.)
 pub const PANE: u16 = 0x0041; // Pane split position
 pub const SELECTION: u16 = 0x001D; // Selected cell range
 pub const HLINK: u16 = 0x01B8; // Hyperlink
+pub const SHEETLAYOUT: u16 = 0x0862;
 
 // ── BOF subtypes (the `dt` field) ───────────────────────────────────────
 pub const BOF_WORKBOOK_GLOBALS: u16 = 0x0005;

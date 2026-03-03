@@ -253,16 +253,16 @@ or cell-level metadata not available in standalone evaluation):
 
 #### XLS Reader — Remaining Items
 - [x] Formula Phase 3 (shared formulas, array formulas, memory tokens) — **done**
-- [ ] **tTbl** (data table formula indicator) — parsed but emits `Unknown`
-- [ ] **Future function mapping** — index >= 0x8000 not mapped to `_xlfn.NAME` format
+- [x] **tTbl** (data table formula indicator) — parser emits `ParsedToken::Table`, decompiler outputs `TABLE(<cell>)` placeholder
+- [x] **Future function mapping** — unknown function indices with future-function bit now emit `_xlfn.FUNC<n>(...)` placeholders
 - [ ] **Cell comments** — `NOTE` record (0x001C) not parsed
 - [ ] **Conditional formatting** — `CONDFMT`/`CF` records not parsed (XLSX reader supports this)
 - [ ] **Data validation** — `DVAL`/`DV` records not parsed (XLSX reader supports this)
 - [ ] **Hyperlinks** — `HLINK` record defined but not handled
-- [ ] **Freeze panes** — `WINDOW2`/`PANE` records defined but not parsed
-- [ ] **Default row/column dimensions** — `DEFCOLWIDTH`/`DEFAULTROWHEIGHT` not parsed
-- [ ] **Outline/grouping** — outline levels from ROW/COLINFO not extracted
-- [ ] **Sheet tab colors** — `SHEETLAYOUT` record not parsed
+- [x] **Freeze panes** — `WINDOW2`/`PANE` + `SELECTION` parsed into worksheet freeze pane and sheet-view selection state
+- [x] **Default row/column dimensions** — `DEFCOLWIDTH`/`DEFAULTROWHEIGHT` parsed and applied to worksheet defaults
+- [x] **Outline/grouping** — row/column outline level + collapsed flags extracted from ROW/COLINFO options
+- [x] **Sheet tab colors** — `SHEETLAYOUT` record parsed for tab RGB color
 - [ ] **Pattern fills (non-solid) E2E** — LO Calc doesn't support pattern fills; unit test only
 
 #### Named Ranges I/O
@@ -356,7 +356,7 @@ or cell-level metadata not available in standalone evaluation):
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
-| XLS unit (BIFF parser, strings, styles, formula decompiler) | 87 | ✅ |
+| XLS unit (BIFF parser, strings, styles, formula decompiler) | 94 | ✅ |
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 63 | ✅ |
@@ -366,7 +366,7 @@ or cell-level metadata not available in standalone evaluation):
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1247** | ✅ |
+| **Total** | **1254** | ✅ |
 
 ---
 

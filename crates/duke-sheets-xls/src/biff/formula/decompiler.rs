@@ -425,6 +425,11 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 // the FORMULA record alone. Push empty so we don't break the stack.
             }
 
+            ParsedToken::Table { row, col } => {
+                let addr = duke_sheets_core::CellAddress::new(*row as u32, *col).to_string();
+                stack.push(StackEntry::atom(format!("TABLE({})", addr)));
+            }
+
             // MemFunc — no-op for decompilation; sub-expression tokens handle it
             ParsedToken::MemFunc { .. } => {}
 
@@ -491,7 +496,11 @@ fn decompile_function(stack: &mut Vec<StackEntry>, name: &str, func_idx: u16, ar
     args.reverse();
 
     let display_name = if name.is_empty() {
-        format!("_xlfn.{}", func_idx)
+        if func_idx >= 0x8000 {
+            format!("_xlfn.FUNC{}", func_idx & 0x7FFF)
+        } else {
+            format!("_xlfn.{}", func_idx)
+        }
     } else {
         name.to_string()
     };
@@ -1319,5 +1328,19 @@ mod tests {
             col_relative: true,
         }];
         assert_eq!(decompile(&tokens, &ctx), "C6");
+    }
+
+    #[test]
+    fn test_ttbl_decompile() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Table { row: 1, col: 2 }];
+        assert_eq!(decompile(&tokens, &ctx), "TABLE(C2)");
+    }
+
+    #[test]
+    fn test_future_function_placeholder_name() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Func { func_idx: 0x8001 }];
+        assert_eq!(decompile(&tokens, &ctx), "_xlfn.FUNC1()");
     }
 }
