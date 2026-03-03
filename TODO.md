@@ -264,9 +264,9 @@ or cell-level metadata not available in standalone evaluation):
 - [x] **Outline/grouping** — row/column outline level + collapsed flags extracted from ROW/COLINFO options
 - [x] **Sheet tab colors** — `SHEETLAYOUT` record parsed for tab RGB color
 - [ ] **Pattern fills (non-solid) E2E** — LO Calc doesn't support pattern fills; unit test only
-- [ ] **Zoom (SCL record 0x00A0)** — model supports zoom_scale, XLSX reads it, XLS does not
-- [ ] **Print gridlines/headings (PRINTHEADERS 0x002A, PRINTGRIDLINES 0x002B)** — PageSetup has fields, not parsed from XLS
-- [ ] **Print_Area / Print_Titles from NAME formula** — NAME formula_body stored but not resolved into PageSetup print_area/repeat_rows/repeat_cols
+- [x] **Zoom (SCL record 0x00A0)** — SCL numerator/denominator parsed into `zoom_scale`
+- [x] **Print gridlines/headings (PRINTHEADERS 0x002A, PRINTGRIDLINES 0x002B)** — parsed into `PageSetup.print_gridlines` / `print_headings`
+- [x] **Print_Area / Print_Titles from NAME formula** — resolved from NAME formula_body into `PageSetup.print_area`, `repeat_rows`, `repeat_cols`
 - [ ] **Rich text in SST** — XLS SST parser discards formatting runs; XLSX reader preserves `RichTextRun`
 
 #### Named Ranges I/O
@@ -274,7 +274,7 @@ or cell-level metadata not available in standalone evaluation):
 - [x] **XLSX writer** — write `<definedNames>`
 - [x] **XLS reader** — parse `NAME` record formula bodies (store raw token bytes)
 - [x] **Print areas / titles** — read `_xlnm.Print_Area` and `_xlnm.Print_Titles` defined names
-- [ ] **XLS reader** — resolve `Print_Area` / `Print_Titles` NAME formula bodies into PageSetup
+- [x] **XLS reader** — resolve `Print_Area` / `Print_Titles` NAME formula bodies into PageSetup
 
 #### Large File Support
 - [ ] Streaming XLSX reader (SAX-style, low memory)
@@ -361,7 +361,7 @@ or cell-level metadata not available in standalone evaluation):
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
-| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 119 | ✅ |
+| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 142 | ✅ |
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas, comments, CF, DV) | 68 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 63 | ✅ |
@@ -371,7 +371,7 @@ or cell-level metadata not available in standalone evaluation):
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1289** | ✅ |
+| **Total** | **1312** | ✅ |
 
 ---
 
