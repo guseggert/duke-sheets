@@ -264,12 +264,17 @@ or cell-level metadata not available in standalone evaluation):
 - [x] **Outline/grouping** — row/column outline level + collapsed flags extracted from ROW/COLINFO options
 - [x] **Sheet tab colors** — `SHEETLAYOUT` record parsed for tab RGB color
 - [ ] **Pattern fills (non-solid) E2E** — LO Calc doesn't support pattern fills; unit test only
+- [ ] **Zoom (SCL record 0x00A0)** — model supports zoom_scale, XLSX reads it, XLS does not
+- [ ] **Print gridlines/headings (PRINTHEADERS 0x002A, PRINTGRIDLINES 0x002B)** — PageSetup has fields, not parsed from XLS
+- [ ] **Print_Area / Print_Titles from NAME formula** — NAME formula_body stored but not resolved into PageSetup print_area/repeat_rows/repeat_cols
+- [ ] **Rich text in SST** — XLS SST parser discards formatting runs; XLSX reader preserves `RichTextRun`
 
 #### Named Ranges I/O
 - [x] **XLSX reader** — read `<definedNames>` from `workbook.xml`
 - [x] **XLSX writer** — write `<definedNames>`
 - [x] **XLS reader** — parse `NAME` record formula bodies (store raw token bytes)
 - [x] **Print areas / titles** — read `_xlnm.Print_Area` and `_xlnm.Print_Titles` defined names
+- [ ] **XLS reader** — resolve `Print_Area` / `Print_Titles` NAME formula bodies into PageSetup
 
 #### Large File Support
 - [ ] Streaming XLSX reader (SAX-style, low memory)
