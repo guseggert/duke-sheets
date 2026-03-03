@@ -288,7 +288,7 @@ or cell-level metadata not available in standalone evaluation):
 - [x] **Data model** — `PageSetup` supports paper/orientation/scale/fit, margins, print options, print area, repeat rows/cols titles, odd/even/first header/footer strings, and `headerFooter` flags
 - [x] **XLSX reader** — reads `<pageSetup>`, `<pageMargins>`, `<printOptions>`, `<headerFooter>` (odd + even + first + flags), and `<rowBreaks>/<colBreaks>`
 - [x] **XLSX writer** — writes the same, including `<rowBreaks>/<colBreaks>` in spec order
-- [ ] **XLS reader** — parse `SETUP`, `HEADER`, `FOOTER`, margin records, page break records
+- [x] **XLS reader** — parse `SETUP`, `HEADER`, `FOOTER`, margin records, page break records
 
 #### Sheet Views
 - [x] **Data model** — zoom level, selection (single + multi via `Vec<Selection>`), freeze/split panes; still missing gridline visibility
@@ -356,7 +356,7 @@ or cell-level metadata not available in standalone evaluation):
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
-| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 115 | ✅ |
+| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 119 | ✅ |
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas, comments, CF, DV) | 68 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 63 | ✅ |
@@ -366,7 +366,7 @@ or cell-level metadata not available in standalone evaluation):
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1285** | ✅ |
+| **Total** | **1289** | ✅ |
 
 ---
 

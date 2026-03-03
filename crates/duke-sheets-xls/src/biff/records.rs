@@ -69,6 +69,19 @@ pub const DV: u16 = 0x01BE; // Data validation criteria
 pub const AUTOFILTERINFO: u16 = 0x009D; // AutoFilter info (column count)
 pub const AUTOFILTER: u16 = 0x009E; // AutoFilter criteria
 
+// ── Print settings ────────────────────────────────────────────────────
+pub const HEADER: u16 = 0x0014; // Page header string
+pub const FOOTER: u16 = 0x0015; // Page footer string
+pub const HPAGEBREAKS: u16 = 0x001B; // Horizontal (row) page breaks
+pub const VPAGEBREAKS: u16 = 0x001A; // Vertical (column) page breaks
+pub const LEFT_MARGIN: u16 = 0x0026; // Left margin (f64, inches)
+pub const RIGHT_MARGIN: u16 = 0x0027; // Right margin
+pub const TOP_MARGIN: u16 = 0x0028; // Top margin
+pub const BOTTOM_MARGIN: u16 = 0x0029; // Bottom margin
+pub const HCENTER: u16 = 0x0083; // Center on page horizontally
+pub const VCENTER: u16 = 0x0084; // Center on page vertically
+pub const SETUP: u16 = 0x00A1; // Page setup (paper, orientation, scale)
+
 // ── BOF subtypes (the `dt` field) ───────────────────────────────────────
 pub const BOF_WORKBOOK_GLOBALS: u16 = 0x0005;
 pub const BOF_WORKSHEET: u16 = 0x0010;
