@@ -7,8 +7,14 @@ use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 
 use duke_sheets_core::cell::SharedString;
+use duke_sheets_core::conditional_format::{CfOperator, CfRuleType, ConditionalFormatRule};
+use duke_sheets_core::validation::{
+    DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType,
+};
 use duke_sheets_core::worksheet::{Selection, SheetProtection};
-use duke_sheets_core::{CellError, CellValue, Style, Workbook};
+use duke_sheets_core::{
+    CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, Style, Workbook,
+};
 
 use crate::biff::formula::token_parser::ParsedToken;
 use crate::biff::formula::{ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES};
@@ -338,6 +344,18 @@ impl XlsReader {
         // (cell_row, cell_col, master_row, master_col)
         let mut pending_shared: Option<(u32, u16, u16, u16)> = None;
 
+        // Comment support: OBJ → TXO → NOTE correlation
+        let mut last_obj_id: Option<u16> = None;
+        let mut obj_texts: std::collections::HashMap<u16, String> =
+            std::collections::HashMap::new();
+
+        // Conditional formatting: CONDFMT range header for following CF records
+        let mut cf_ranges: Vec<CellRange> = Vec::new();
+
+        // Hyperlink tooltip: HLINKTOOLTIP records keyed by (row, col)
+        let mut hlink_tooltips: std::collections::HashMap<(u32, u16), String> =
+            std::collections::HashMap::new();
+
         for rec in records {
             match rec.record_type {
                 records::LABELSST => {
@@ -490,6 +508,41 @@ impl XlsReader {
                         }
                     }
                 }
+                // ── Comments (OBJ → TXO → NOTE) ──────────────────────
+                records::OBJ => {
+                    last_obj_id = Self::parse_obj_id(&rec.data);
+                }
+                records::TXO => {
+                    if let Some(oid) = last_obj_id.take() {
+                        if let Some(text) = Self::parse_txo_text(&rec.data, &rec.continue_offsets) {
+                            obj_texts.insert(oid, text);
+                        }
+                    }
+                }
+                records::NOTE => {
+                    Self::parse_note(&rec.data, ws, &obj_texts)?;
+                }
+                // ── Hyperlinks ──────────────────────────────────────
+                records::HLINK => {
+                    Self::parse_hlink(&rec.data, ws)?;
+                }
+                records::HLINKTOOLTIP => {
+                    Self::parse_hlinktooltip(&rec.data, &mut hlink_tooltips);
+                }
+                // ── Conditional formatting ──────────────────────────
+                records::CONDFMT => {
+                    cf_ranges = Self::parse_condfmt(&rec.data);
+                }
+                records::CF => {
+                    Self::parse_cf(&rec.data, ws, &cf_ranges, formula_ctx);
+                }
+                // ── Data validation ─────────────────────────────────
+                records::DVAL => {
+                    // Header only — DV records follow with actual rules
+                }
+                records::DV => {
+                    Self::parse_dv(&rec.data, ws, formula_ctx)?;
+                }
                 _ => {
                     // Skip unknown/unhandled records
                 }
@@ -503,6 +556,14 @@ impl XlsReader {
                 password_hash: sheet_password_hash,
                 ..Default::default()
             }));
+        }
+
+        // Apply HLINKTOOLTIP records to existing hyperlinks
+        for ((row, col), tooltip) in &hlink_tooltips {
+            let addr = CellAddress::new(*row, *col).to_a1_string();
+            if let Some(hl) = ws.hyperlink_mut(&addr) {
+                hl.tooltip = Some(tooltip.clone());
+            }
         }
 
         Ok(())
@@ -1463,6 +1524,637 @@ impl XlsReader {
             ws.set_tab_color(Some(duke_sheets_core::Color::rgb(r, g, b)));
         }
     }
+
+    // ── Comment record parsers (OBJ → TXO → NOTE) ───────────────────────
+
+    /// Extract the object ID from an OBJ record.
+    ///
+    /// The OBJ record contains sub-records. The first sub-record is ftCmo
+    /// (common object data): rt(2) + cb(2) + ot(2) + id(2) + flags(2) ...
+    /// We only need the `id` field at offset 6.
+    fn parse_obj_id(data: &[u8]) -> Option<u16> {
+        if data.len() < 8 {
+            return None;
+        }
+        let rt = u16::from_le_bytes([data[0], data[1]]);
+        if rt != 0x0015 {
+            // ftCmo sub-record type must be 0x0015
+            return None;
+        }
+        Some(u16::from_le_bytes([data[6], data[7]]))
+    }
+
+    /// Extract text from a TXO record (with merged CONTINUE data).
+    ///
+    /// TXO header (18 bytes): options(2) + rotation(2) + reserved(6) +
+    /// text_len(2) + format_run_size(2) + reserved(4).
+    /// First CONTINUE: grbit(1) + text_data.
+    /// Second CONTINUE: formatting runs (ignored).
+    fn parse_txo_text(data: &[u8], continue_offsets: &[usize]) -> Option<String> {
+        if data.len() < 18 {
+            return None;
+        }
+        let text_len = u16::from_le_bytes([data[10], data[11]]) as usize;
+        if text_len == 0 {
+            return Some(String::new());
+        }
+
+        // Text lives in the first CONTINUE block
+        let text_start = if !continue_offsets.is_empty() {
+            continue_offsets[0]
+        } else if data.len() > 18 {
+            18 // No CONTINUE marker — text follows header directly
+        } else {
+            return None;
+        };
+
+        if text_start >= data.len() {
+            return None;
+        }
+
+        let grbit = data[text_start];
+        let char_data_start = text_start + 1;
+
+        if (grbit & 0x01) != 0 {
+            // UTF-16LE
+            let byte_len = text_len * 2;
+            if char_data_start + byte_len > data.len() {
+                return None;
+            }
+            let chars: Vec<u16> = data[char_data_start..char_data_start + byte_len]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            Some(String::from_utf16_lossy(&chars))
+        } else {
+            // Compressed Latin-1
+            if char_data_start + text_len > data.len() {
+                return None;
+            }
+            Some(
+                data[char_data_start..char_data_start + text_len]
+                    .iter()
+                    .map(|&b| b as char)
+                    .collect(),
+            )
+        }
+    }
+
+    /// Parse a NOTE record to create a cell comment.
+    ///
+    /// NOTE: row(2) + col(2) + flags(2) + objId(2) + author(XLUnicodeString).
+    fn parse_note(
+        data: &[u8],
+        ws: &mut duke_sheets_core::Worksheet,
+        obj_texts: &std::collections::HashMap<u16, String>,
+    ) -> XlsResult<()> {
+        if data.len() < 8 {
+            return Ok(());
+        }
+        let mut off = 0;
+        let row = read_u16(data, &mut off)? as u32;
+        let col = read_u16(data, &mut off)?;
+        let flags = read_u16(data, &mut off)?;
+        let obj_id = read_u16(data, &mut off)?;
+
+        // Author follows as a XLUnicodeString (len(2) + flags(1) + chars)
+        let author = if off < data.len() {
+            read_unicode_string(data, &mut off).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let text = obj_texts.get(&obj_id).cloned().unwrap_or_default();
+
+        let visible = (flags & 0x0002) != 0;
+        let comment = CellComment::new(author, text).with_visible(visible);
+        ws.set_comment_at(row, col, comment);
+        Ok(())
+    }
+
+    // ── Hyperlink record parsers ────────────────────────────────────────
+
+    /// Parse an HLINK record.
+    ///
+    /// Format: Ref8U(8) + classId(16) + streamVersion(4) + flags(4) +
+    /// [displayName] + [frameName] + [moniker] + [location].
+    fn parse_hlink(data: &[u8], ws: &mut duke_sheets_core::Worksheet) -> XlsResult<()> {
+        if data.len() < 32 {
+            return Ok(());
+        }
+        let mut off = 0;
+        let row_first = read_u16(data, &mut off)? as u32;
+        let _row_last = read_u16(data, &mut off)?;
+        let col_first = read_u16(data, &mut off)?;
+        let _col_last = read_u16(data, &mut off)?;
+
+        // Skip CLSID (16 bytes) and streamVersion (4 bytes)
+        off += 20;
+
+        let flags = read_u32(data, &mut off)?;
+        let has_moniker = (flags & 0x01) != 0;
+        let is_absolute = (flags & 0x02) != 0;
+        let has_location = (flags & 0x08) != 0;
+        let has_display = (flags & 0x10) != 0;
+        let has_frame = (flags & 0x80) != 0;
+
+        let display = if has_display {
+            Some(Self::read_hlink_string(data, &mut off)?)
+        } else {
+            None
+        };
+
+        // Skip target frame name if present
+        if has_frame {
+            let _ = Self::read_hlink_string(data, &mut off)?;
+        }
+
+        let mut target = String::new();
+        if has_moniker {
+            target = Self::parse_hlink_moniker(data, &mut off, is_absolute)?;
+        }
+
+        let location = if has_location {
+            Some(Self::read_hlink_string(data, &mut off)?)
+        } else {
+            None
+        };
+
+        // If no moniker but has location, it's an internal link
+        if target.is_empty() {
+            if let Some(loc) = &location {
+                target = format!("#{}", loc);
+            }
+        }
+
+        let hyperlink = Hyperlink {
+            target,
+            display,
+            tooltip: None, // Set later from HLINKTOOLTIP if present
+            location,
+        };
+
+        let cell_a1 = CellAddress::new(row_first, col_first).to_a1_string();
+        let _ = ws.set_hyperlink(&cell_a1, hyperlink);
+        Ok(())
+    }
+
+    /// Read a length-prefixed UTF-16LE string from HLINK data.
+    /// Format: char_count(u32, includes null terminator) + UTF-16LE chars.
+    fn read_hlink_string(data: &[u8], off: &mut usize) -> XlsResult<String> {
+        if *off + 4 > data.len() {
+            return Ok(String::new());
+        }
+        let char_count = read_u32(data, off)? as usize;
+        if char_count == 0 {
+            return Ok(String::new());
+        }
+        let byte_len = char_count * 2;
+        if *off + byte_len > data.len() {
+            return Ok(String::new());
+        }
+        let chars: Vec<u16> = data[*off..*off + byte_len]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        *off += byte_len;
+        // Strip null terminator
+        let s = String::from_utf16_lossy(&chars);
+        Ok(s.trim_end_matches('\0').to_string())
+    }
+
+    /// Parse the moniker portion of an HLINK record.
+    fn parse_hlink_moniker(data: &[u8], off: &mut usize, _is_absolute: bool) -> XlsResult<String> {
+        // URL moniker GUID (little-endian): E0C9EA79-F9BA-CE11-8C82-00AA004BA90B
+        const URL_MONIKER: [u8; 16] = [
+            0x79, 0xEA, 0xC9, 0xE0, 0xBA, 0xF9, 0x11, 0xCE, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B,
+            0xA9, 0x0B,
+        ];
+        // File moniker GUID: 00000303-0000-0000-C000-000000000046
+        const FILE_MONIKER: [u8; 16] = [
+            0x03, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x46,
+        ];
+
+        if *off + 16 > data.len() {
+            return Ok(String::new());
+        }
+        let guid = &data[*off..*off + 16];
+        *off += 16;
+
+        if guid == URL_MONIKER {
+            // URL moniker: length(4) + url(length bytes, UTF-16LE null-terminated)
+            if *off + 4 > data.len() {
+                return Ok(String::new());
+            }
+            let url_byte_len = read_u32(data, off)? as usize;
+            if *off + url_byte_len > data.len() {
+                return Ok(String::new());
+            }
+            let chars: Vec<u16> = data[*off..*off + url_byte_len]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            *off += url_byte_len;
+            Ok(String::from_utf16_lossy(&chars)
+                .trim_end_matches('\0')
+                .to_string())
+        } else if guid == FILE_MONIKER {
+            // File moniker: dir_up(2) + path_len(4) + path(Latin-1) + ...
+            if *off + 6 > data.len() {
+                return Ok(String::new());
+            }
+            let dir_up = read_u16(data, off)? as usize;
+            let path_len = read_u32(data, off)? as usize;
+            if *off + path_len > data.len() {
+                return Ok(String::new());
+            }
+            let short_path: String = data[*off..*off + path_len]
+                .iter()
+                .map(|&b| b as char)
+                .collect();
+            *off += path_len;
+
+            // Skip unknown block (24 bytes)
+            if *off + 24 <= data.len() {
+                *off += 24;
+            }
+
+            // Try to read long filename if present
+            if *off + 4 <= data.len() {
+                let long_path_total = read_u32(data, off)? as usize;
+                if long_path_total > 0 && *off + 6 <= data.len() {
+                    *off += 2; // unknown
+                    let long_path_len = read_u32(data, off)? as usize;
+                    if long_path_len > 0 && *off + 2 <= data.len() {
+                        *off += 2; // unknown
+                        let byte_len = long_path_len;
+                        if *off + byte_len <= data.len() {
+                            let chars: Vec<u16> = data[*off..*off + byte_len]
+                                .chunks_exact(2)
+                                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                                .collect();
+                            *off += byte_len;
+                            let long_path = String::from_utf16_lossy(&chars)
+                                .trim_end_matches('\0')
+                                .to_string();
+                            if !long_path.is_empty() {
+                                let prefix = "../ ".repeat(dir_up);
+                                return Ok(format!("{}{}", prefix.replace(" ", ""), long_path));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fall back to short path
+            let prefix = "../".repeat(dir_up);
+            let trimmed = short_path.trim_end_matches('\0');
+            Ok(format!("{}{}", prefix, trimmed))
+        } else {
+            // Unknown moniker type — skip
+            Ok(String::new())
+        }
+    }
+
+    /// Parse HLINKTOOLTIP (0x0800) — FRT record with tooltip text.
+    fn parse_hlinktooltip(
+        data: &[u8],
+        tooltips: &mut std::collections::HashMap<(u32, u16), String>,
+    ) {
+        // FRT header: rt(2) + grbitFrt(2) + ref8(8) = 12 bytes, then UTF-16LE tooltip
+        if data.len() < 14 {
+            return;
+        }
+        let _rt = u16::from_le_bytes([data[0], data[1]]);
+        let mut off = 4; // skip rt + grbitFrt
+        let row_first = u16::from_le_bytes([data[off], data[off + 1]]) as u32;
+        off += 2;
+        let _row_last = u16::from_le_bytes([data[off], data[off + 1]]);
+        off += 2;
+        let col_first = u16::from_le_bytes([data[off], data[off + 1]]);
+        off += 2;
+        let _col_last = u16::from_le_bytes([data[off], data[off + 1]]);
+        off += 2;
+        // Remaining bytes are null-terminated UTF-16LE tooltip
+        let remaining = &data[off..];
+        let chars: Vec<u16> = remaining
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let tooltip = String::from_utf16_lossy(&chars)
+            .trim_end_matches('\0')
+            .to_string();
+        if !tooltip.is_empty() {
+            tooltips.insert((row_first, col_first), tooltip);
+        }
+    }
+
+    // ── Conditional formatting record parsers ────────────────────────────
+
+    /// Parse CONDFMT (0x01B0) — conditional formatting range header.
+    ///
+    /// Format: cCF(2) + flags(2) + enclosing_range(8) + range_count(2) + ranges.
+    fn parse_condfmt(data: &[u8]) -> Vec<CellRange> {
+        if data.len() < 14 {
+            return Vec::new();
+        }
+        let mut off = 4; // skip cCF(2) + flags(2)
+                         // Skip enclosing range (8 bytes) — individual ranges are more precise
+        off += 8;
+        let range_count = u16::from_le_bytes([data[off], data[off + 1]]) as usize;
+        off += 2;
+
+        let mut ranges = Vec::with_capacity(range_count);
+        for _ in 0..range_count {
+            if off + 8 > data.len() {
+                break;
+            }
+            let r1 = u16::from_le_bytes([data[off], data[off + 1]]) as u32;
+            off += 2;
+            let r2 = u16::from_le_bytes([data[off], data[off + 1]]) as u32;
+            off += 2;
+            let c1 = u16::from_le_bytes([data[off], data[off + 1]]);
+            off += 2;
+            let c2 = u16::from_le_bytes([data[off], data[off + 1]]);
+            off += 2;
+            ranges.push(CellRange::from_indices(r1, c1, r2, c2));
+        }
+        ranges
+    }
+
+    /// Parse CF (0x01B1) — conditional formatting rule.
+    ///
+    /// Format: ct(1) + cp(1) + cce1(2) + cce2(2) + [dxf_data] + formula1 + formula2.
+    fn parse_cf(
+        data: &[u8],
+        ws: &mut duke_sheets_core::Worksheet,
+        cf_ranges: &[CellRange],
+        formula_ctx: &FormulaContext,
+    ) {
+        if data.len() < 6 {
+            return;
+        }
+        let ct = data[0]; // 1=CellIs, 2=Expression
+        let cp = data[1]; // comparison operator (0 for expression)
+        let cce1 = u16::from_le_bytes([data[2], data[3]]) as usize;
+        let cce2 = u16::from_le_bytes([data[4], data[5]]) as usize;
+
+        // Formulas are at the END of the record
+        let total = data.len();
+        if total < 6 + cce1 + cce2 {
+            return;
+        }
+        let f1_start = total - cce1 - cce2;
+        let f2_start = total - cce2;
+
+        let formula1 = if cce1 > 0 {
+            let tokens = &data[f1_start..f1_start + cce1];
+            let text = crate::biff::formula::decompile(tokens, formula_ctx);
+            if text.is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        } else {
+            None
+        };
+
+        let formula2 = if cce2 > 0 {
+            let tokens = &data[f2_start..f2_start + cce2];
+            let text = crate::biff::formula::decompile(tokens, formula_ctx);
+            if text.is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        } else {
+            None
+        };
+
+        let rule_type = match ct {
+            1 => {
+                // CellIs — map CP to CfOperator
+                let operator = match cp {
+                    1 => CfOperator::Between,
+                    2 => CfOperator::NotBetween,
+                    3 => CfOperator::Equal,
+                    4 => CfOperator::NotEqual,
+                    5 => CfOperator::GreaterThan,
+                    6 => CfOperator::LessThan,
+                    7 => CfOperator::GreaterThanOrEqual,
+                    8 => CfOperator::LessThanOrEqual,
+                    _ => CfOperator::Equal,
+                };
+                CfRuleType::CellIs {
+                    operator,
+                    formula1: formula1.unwrap_or_default(),
+                    formula2,
+                }
+            }
+            2 => {
+                // Expression
+                CfRuleType::Expression {
+                    formula: formula1.unwrap_or_default(),
+                }
+            }
+            _ => return,
+        };
+
+        let mut rule = ConditionalFormatRule::new(rule_type);
+        rule.ranges = cf_ranges.to_vec();
+        ws.add_conditional_format(rule);
+    }
+
+    // ── Data validation record parsers ───────────────────────────────────
+
+    /// Parse a DV record (0x01BE) — data validation criteria.
+    ///
+    /// Format: flags(4) + input_title + error_title + input_msg + error_msg +
+    /// cce1(2) + unused(2) + formula1 + cce2(2) + unused(2) + formula2 +
+    /// range_count(2) + ranges.
+    fn parse_dv(
+        data: &[u8],
+        ws: &mut duke_sheets_core::Worksheet,
+        formula_ctx: &FormulaContext,
+    ) -> XlsResult<()> {
+        if data.len() < 4 {
+            return Ok(());
+        }
+        let mut off = 0;
+        let flags = read_u32(data, &mut off)?;
+
+        let val_type = (flags & 0x0F) as u8;
+        let err_style = ((flags >> 4) & 0x07) as u8;
+        let is_explicit_list = (flags & 0x80) != 0;
+        let allow_blank = (flags & 0x100) != 0;
+        let suppress_dropdown = (flags & 0x200) != 0;
+        let show_input = (flags & 0x40000) != 0;
+        let show_error = (flags & 0x80000) != 0;
+        let operator = ((flags >> 20) & 0x0F) as u8;
+
+        // Read four Unicode strings: input_title, error_title, input_msg, error_msg
+        let input_title = read_unicode_string(data, &mut off).unwrap_or_default();
+        let error_title = read_unicode_string(data, &mut off).unwrap_or_default();
+        let input_msg = read_unicode_string(data, &mut off).unwrap_or_default();
+        let error_msg = read_unicode_string(data, &mut off).unwrap_or_default();
+
+        // Formula 1: cce(2) + unused(2) + token_data(cce)
+        let formula1 = if off + 4 <= data.len() {
+            let cce1 = read_u16(data, &mut off)? as usize;
+            let _unused = read_u16(data, &mut off)?;
+            if cce1 > 0 && off + cce1 <= data.len() {
+                let tokens = &data[off..off + cce1];
+                off += cce1;
+                let text = crate::biff::formula::decompile(tokens, formula_ctx);
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            } else {
+                off += cce1;
+                None
+            }
+        } else {
+            None
+        };
+
+        // Formula 2: cce(2) + unused(2) + token_data(cce)
+        let formula2 = if off + 4 <= data.len() {
+            let cce2 = read_u16(data, &mut off)? as usize;
+            let _unused = read_u16(data, &mut off)?;
+            if cce2 > 0 && off + cce2 <= data.len() {
+                let tokens = &data[off..off + cce2];
+                off += cce2;
+                let text = crate::biff::formula::decompile(tokens, formula_ctx);
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            } else {
+                off += cce2;
+                None
+            }
+        } else {
+            None
+        };
+
+        // Ranges: range_count(2) + ranges(8 bytes each)
+        let mut ranges = Vec::new();
+        if off + 2 <= data.len() {
+            let range_count = read_u16(data, &mut off)? as usize;
+            for _ in 0..range_count {
+                if off + 8 > data.len() {
+                    break;
+                }
+                let r1 = read_u16(data, &mut off)? as u32;
+                let r2 = read_u16(data, &mut off)? as u32;
+                let c1 = read_u16(data, &mut off)?;
+                let c2 = read_u16(data, &mut off)?;
+                ranges.push(CellRange::from_indices(r1, c1, r2, c2));
+            }
+        }
+
+        // Map operator byte to ValidationOperator
+        let val_operator = match operator {
+            0 => ValidationOperator::Between,
+            1 => ValidationOperator::NotBetween,
+            2 => ValidationOperator::Equal,
+            3 => ValidationOperator::NotEqual,
+            4 => ValidationOperator::GreaterThan,
+            5 => ValidationOperator::LessThan,
+            6 => ValidationOperator::GreaterThanOrEqual,
+            7 => ValidationOperator::LessThanOrEqual,
+            _ => ValidationOperator::Between,
+        };
+
+        // Build the validation type
+        let f1 = formula1.unwrap_or_default();
+        let f2 = formula2;
+
+        let validation_type = match val_type {
+            0 => ValidationType::None,
+            1 => ValidationType::Whole {
+                operator: val_operator,
+                value1: f1,
+                value2: f2,
+            },
+            2 => ValidationType::Decimal {
+                operator: val_operator,
+                value1: f1,
+                value2: f2,
+            },
+            3 => {
+                // List — formula1 may be a comma-separated string or formula
+                let source = if is_explicit_list {
+                    // Inline list: strip surrounding quotes if present
+                    f1.trim_matches('"').to_string()
+                } else {
+                    f1
+                };
+                ValidationType::List { source }
+            }
+            4 => ValidationType::Date {
+                operator: val_operator,
+                value1: f1,
+                value2: f2,
+            },
+            5 => ValidationType::Time {
+                operator: val_operator,
+                value1: f1,
+                value2: f2,
+            },
+            6 => ValidationType::TextLength {
+                operator: val_operator,
+                value1: f1,
+                value2: f2,
+            },
+            7 => ValidationType::Custom { formula: f1 },
+            _ => ValidationType::None,
+        };
+
+        let error_style_val = match err_style {
+            0 => ValidationErrorStyle::Stop,
+            1 => ValidationErrorStyle::Warning,
+            2 => ValidationErrorStyle::Information,
+            _ => ValidationErrorStyle::Stop,
+        };
+
+        let validation = DataValidation {
+            validation_type,
+            ranges,
+            allow_blank,
+            show_dropdown: !suppress_dropdown,
+            show_input_message: show_input,
+            input_title: if input_title.is_empty() {
+                None
+            } else {
+                Some(input_title)
+            },
+            input_message: if input_msg.is_empty() {
+                None
+            } else {
+                Some(input_msg)
+            },
+            show_error_alert: show_error,
+            error_style: error_style_val,
+            error_title: if error_title.is_empty() {
+                None
+            } else {
+                Some(error_title)
+            },
+            error_message: if error_msg.is_empty() {
+                None
+            } else {
+                Some(error_msg)
+            },
+        };
+
+        ws.add_data_validation(validation);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1587,5 +2279,523 @@ mod tests {
             ws.tab_color(),
             Some(duke_sheets_core::Color::rgb(0x11, 0x22, 0x33))
         );
+    }
+
+    fn rec_with_continue(
+        record_type: u16,
+        data: Vec<u8>,
+        continue_offsets: Vec<usize>,
+    ) -> BiffRecord {
+        BiffRecord {
+            record_type,
+            data,
+            stream_offset: 0,
+            continue_offsets,
+        }
+    }
+
+    // ── Comment tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_obj_id() {
+        // ftCmo sub-record: rt=0x0015, cb=0x0012, ot=0x19(note), id=42
+        let mut data = vec![0u8; 22];
+        data[0..2].copy_from_slice(&0x0015u16.to_le_bytes()); // rt = ftCmo
+        data[2..4].copy_from_slice(&0x0012u16.to_le_bytes()); // cb
+        data[4..6].copy_from_slice(&0x0019u16.to_le_bytes()); // ot = note
+        data[6..8].copy_from_slice(&42u16.to_le_bytes()); // id = 42
+        assert_eq!(XlsReader::parse_obj_id(&data), Some(42));
+    }
+
+    #[test]
+    fn test_parse_obj_id_wrong_subrecord() {
+        let mut data = vec![0u8; 8];
+        data[0..2].copy_from_slice(&0x0016u16.to_le_bytes()); // wrong rt
+        assert_eq!(XlsReader::parse_obj_id(&data), None);
+    }
+
+    #[test]
+    fn test_parse_txo_text_latin1() {
+        // TXO header: 18 bytes, text_len at offset 10
+        let mut header = vec![0u8; 18];
+        header[10..12].copy_from_slice(&5u16.to_le_bytes()); // text_len = 5
+
+        // CONTINUE data: grbit(1, compressed) + "Hello"
+        let mut text_data = vec![0u8]; // grbit = 0 (Latin-1)
+        text_data.extend_from_slice(b"Hello");
+
+        let mut data = header;
+        let continue_start = data.len();
+        data.extend_from_slice(&text_data);
+
+        let text = XlsReader::parse_txo_text(&data, &[continue_start]);
+        assert_eq!(text, Some("Hello".to_string()));
+    }
+
+    #[test]
+    fn test_parse_txo_text_utf16() {
+        let mut header = vec![0u8; 18];
+        header[10..12].copy_from_slice(&3u16.to_le_bytes()); // text_len = 3 chars
+
+        // CONTINUE data: grbit(1, UTF-16) + 3 UTF-16LE chars "ABC"
+        let mut text_data = vec![0x01u8]; // grbit = 1 (UTF-16LE)
+        for &ch in &[b'A' as u16, b'B' as u16, b'C' as u16] {
+            text_data.extend_from_slice(&ch.to_le_bytes());
+        }
+
+        let mut data = header;
+        let continue_start = data.len();
+        data.extend_from_slice(&text_data);
+
+        let text = XlsReader::parse_txo_text(&data, &[continue_start]);
+        assert_eq!(text, Some("ABC".to_string()));
+    }
+
+    #[test]
+    fn test_parse_note_with_comment() {
+        // Build OBJ record with id=7
+        let mut obj_data = vec![0u8; 22];
+        obj_data[0..2].copy_from_slice(&0x0015u16.to_le_bytes());
+        obj_data[2..4].copy_from_slice(&0x0012u16.to_le_bytes());
+        obj_data[4..6].copy_from_slice(&0x0019u16.to_le_bytes());
+        obj_data[6..8].copy_from_slice(&7u16.to_le_bytes()); // id=7
+
+        // Build TXO with text "Review this"
+        let text = b"Review this";
+        let mut txo_header = vec![0u8; 18];
+        txo_header[10..12].copy_from_slice(&(text.len() as u16).to_le_bytes());
+        let mut txo_data = txo_header;
+        let cont_off = txo_data.len();
+        txo_data.push(0x00); // grbit = Latin-1
+        txo_data.extend_from_slice(text);
+
+        // Build NOTE: row=2, col=3, flags=0x0002(visible), objId=7, author="John"
+        let mut note_data = Vec::new();
+        note_data.extend_from_slice(&2u16.to_le_bytes()); // row
+        note_data.extend_from_slice(&3u16.to_le_bytes()); // col
+        note_data.extend_from_slice(&0x0002u16.to_le_bytes()); // flags (visible)
+        note_data.extend_from_slice(&7u16.to_le_bytes()); // objId
+                                                          // Author as XLUnicodeString: len(2) + flags(1) + chars
+        let author = "John";
+        note_data.extend_from_slice(&(author.len() as u16).to_le_bytes());
+        note_data.push(0x00); // flags = compressed
+        note_data.extend_from_slice(author.as_bytes());
+
+        let ws = {
+            let mut ws = duke_sheets_core::Worksheet::new("Sheet1");
+            let recs = vec![
+                rec(records::OBJ, obj_data),
+                rec_with_continue(records::TXO, txo_data, vec![cont_off]),
+                rec(records::NOTE, note_data),
+            ];
+            let refs: Vec<&BiffRecord> = recs.iter().collect();
+            let formula_ctx = FormulaContext::new(vec!["Sheet1".to_string()]);
+            XlsReader::parse_sheet_records(&refs, &mut ws, &[], &[], &formula_ctx).unwrap();
+            ws
+        };
+
+        let comment = ws.comment_at(2, 3).expect("comment should exist");
+        assert_eq!(comment.author, "John");
+        assert_eq!(comment.text, "Review this");
+        assert!(comment.visible);
+    }
+
+    #[test]
+    fn test_parse_note_no_text() {
+        // NOTE without matching OBJ/TXO — should produce empty comment text
+        let mut note_data = Vec::new();
+        note_data.extend_from_slice(&0u16.to_le_bytes()); // row
+        note_data.extend_from_slice(&0u16.to_le_bytes()); // col
+        note_data.extend_from_slice(&0u16.to_le_bytes()); // flags
+        note_data.extend_from_slice(&99u16.to_le_bytes()); // objId (no matching OBJ)
+        note_data.extend_from_slice(&0u16.to_le_bytes()); // author len=0
+        note_data.push(0x00); // flags
+
+        let ws = parse(vec![rec(records::NOTE, note_data)]);
+        let comment = ws.comment_at(0, 0).expect("comment should exist");
+        assert_eq!(comment.text, "");
+        assert_eq!(comment.author, "");
+    }
+
+    // ── Hyperlink tests ───────────────────────────────────────────────
+
+    fn build_hlink_url(row: u16, col: u16, url: &str, display: Option<&str>) -> Vec<u8> {
+        let mut data = Vec::new();
+        // Ref8U: row_first, row_last, col_first, col_last
+        data.extend_from_slice(&row.to_le_bytes());
+        data.extend_from_slice(&row.to_le_bytes());
+        data.extend_from_slice(&col.to_le_bytes());
+        data.extend_from_slice(&col.to_le_bytes());
+
+        // CLSID (16 bytes) + streamVersion (4 bytes)
+        data.extend_from_slice(&[
+            0x79, 0xEA, 0xC9, 0xD0, 0xBA, 0xF9, 0x11, 0xCE, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B,
+            0xA9, 0x0B,
+        ]);
+        data.extend_from_slice(&2u32.to_le_bytes());
+
+        // Flags
+        let mut flags: u32 = 0x01 | 0x02; // hasMoniker | isAbsolute
+        if display.is_some() {
+            flags |= 0x10; // hasDisplayName
+        }
+        data.extend_from_slice(&flags.to_le_bytes());
+
+        // Display name (if present)
+        if let Some(d) = display {
+            let chars: Vec<u16> = d.encode_utf16().chain(std::iter::once(0)).collect();
+            data.extend_from_slice(&(chars.len() as u32).to_le_bytes());
+            for ch in &chars {
+                data.extend_from_slice(&ch.to_le_bytes());
+            }
+        }
+
+        // URL moniker GUID
+        data.extend_from_slice(&[
+            0x79, 0xEA, 0xC9, 0xE0, 0xBA, 0xF9, 0x11, 0xCE, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B,
+            0xA9, 0x0B,
+        ]);
+
+        // URL: byte length + UTF-16LE null-terminated
+        let url_chars: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+        let url_byte_len = url_chars.len() * 2;
+        data.extend_from_slice(&(url_byte_len as u32).to_le_bytes());
+        for ch in &url_chars {
+            data.extend_from_slice(&ch.to_le_bytes());
+        }
+
+        data
+    }
+
+    #[test]
+    fn test_parse_hlink_url() {
+        let data = build_hlink_url(0, 0, "https://example.com", Some("Example"));
+        let ws = parse(vec![rec(records::HLINK, data)]);
+
+        let hl = ws.hyperlink("A1").expect("hyperlink should exist");
+        assert_eq!(hl.target, "https://example.com");
+        assert_eq!(hl.display.as_deref(), Some("Example"));
+    }
+
+    #[test]
+    fn test_parse_hlink_url_no_display() {
+        let data = build_hlink_url(1, 2, "https://rust-lang.org", None);
+        let ws = parse(vec![rec(records::HLINK, data)]);
+
+        let hl = ws.hyperlink("C2").expect("hyperlink should exist");
+        assert_eq!(hl.target, "https://rust-lang.org");
+        assert_eq!(hl.display, None);
+    }
+
+    #[test]
+    fn test_parse_hlink_internal() {
+        // Internal link (location only, no moniker)
+        let mut data = Vec::new();
+        // Ref8U
+        data.extend_from_slice(&0u16.to_le_bytes()); // row
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes()); // col
+        data.extend_from_slice(&0u16.to_le_bytes());
+        // CLSID + streamVersion
+        data.extend_from_slice(&[0u8; 16]);
+        data.extend_from_slice(&2u32.to_le_bytes());
+        // Flags: hasLocation only
+        data.extend_from_slice(&0x08u32.to_le_bytes());
+        // Location string: "Sheet2!A1"
+        let loc = "Sheet2!A1";
+        let chars: Vec<u16> = loc.encode_utf16().chain(std::iter::once(0)).collect();
+        data.extend_from_slice(&(chars.len() as u32).to_le_bytes());
+        for ch in &chars {
+            data.extend_from_slice(&ch.to_le_bytes());
+        }
+
+        let ws = parse(vec![rec(records::HLINK, data)]);
+        let hl = ws.hyperlink("A1").expect("hyperlink should exist");
+        assert_eq!(hl.target, "#Sheet2!A1");
+        assert_eq!(hl.location.as_deref(), Some("Sheet2!A1"));
+    }
+
+    // ── Conditional formatting tests ─────────────────────────────────
+
+    fn build_condfmt(ranges: &[(u32, u32, u16, u16)]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_le_bytes()); // cCF = 1
+        data.extend_from_slice(&0u16.to_le_bytes()); // flags
+                                                     // Enclosing range (first range)
+        let (r1, r2, c1, c2) = ranges[0];
+        data.extend_from_slice(&(r1 as u16).to_le_bytes());
+        data.extend_from_slice(&(r2 as u16).to_le_bytes());
+        data.extend_from_slice(&c1.to_le_bytes());
+        data.extend_from_slice(&c2.to_le_bytes());
+        // Range count + ranges
+        data.extend_from_slice(&(ranges.len() as u16).to_le_bytes());
+        for &(r1, r2, c1, c2) in ranges {
+            data.extend_from_slice(&(r1 as u16).to_le_bytes());
+            data.extend_from_slice(&(r2 as u16).to_le_bytes());
+            data.extend_from_slice(&c1.to_le_bytes());
+            data.extend_from_slice(&c2.to_le_bytes());
+        }
+        data
+    }
+
+    fn build_cf_cellis(operator: u8, formula1: &[u8], formula2: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.push(1); // ct = CellIs
+        data.push(operator); // cp
+        data.extend_from_slice(&(formula1.len() as u16).to_le_bytes()); // cce1
+        data.extend_from_slice(&(formula2.len() as u16).to_le_bytes()); // cce2
+                                                                        // No DXF data for this test — formulas are at the end
+        data.extend_from_slice(formula1);
+        data.extend_from_slice(formula2);
+        data
+    }
+
+    #[test]
+    fn test_parse_condfmt_and_cf_cellis() {
+        let condfmt_data = build_condfmt(&[(0, 9, 0, 2)]); // A1:C10
+                                                           // CF: CellIs, GreaterThan (5), formula1 = integer 100
+                                                           // PTG for integer: tInt (0x1E) + value(2) = [0x1E, 0x64, 0x00]
+        let cf_data = build_cf_cellis(5, &[0x1E, 0x64, 0x00], &[]);
+
+        let ws = parse(vec![
+            rec(records::CONDFMT, condfmt_data),
+            rec(records::CF, cf_data),
+        ]);
+
+        let cf_rules = ws.conditional_formats();
+        assert_eq!(cf_rules.len(), 1);
+        let rule = &cf_rules[0];
+        assert_eq!(rule.ranges.len(), 1);
+        match &rule.rule_type {
+            CfRuleType::CellIs {
+                operator, formula1, ..
+            } => {
+                assert_eq!(*operator, CfOperator::GreaterThan);
+                assert_eq!(formula1, "100");
+            }
+            _ => panic!("Expected CellIs rule type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_condfmt_expression() {
+        let condfmt_data = build_condfmt(&[(0, 4, 0, 0)]); // A1:A5
+                                                           // CF: Expression (ct=2), formula1 = tInt(0x1E) + 0
+        let mut cf_data = Vec::new();
+        cf_data.push(2); // ct = Expression
+        cf_data.push(0); // cp (unused for expression)
+        cf_data.extend_from_slice(&3u16.to_le_bytes()); // cce1 = 3
+        cf_data.extend_from_slice(&0u16.to_le_bytes()); // cce2 = 0
+        cf_data.extend_from_slice(&[0x1E, 0x01, 0x00]); // tInt(1)
+
+        let ws = parse(vec![
+            rec(records::CONDFMT, condfmt_data),
+            rec(records::CF, cf_data),
+        ]);
+
+        let cf_rules = ws.conditional_formats();
+        assert_eq!(cf_rules.len(), 1);
+        match &cf_rules[0].rule_type {
+            CfRuleType::Expression { formula } => {
+                assert_eq!(formula, "1");
+            }
+            _ => panic!("Expected Expression rule type"),
+        }
+    }
+
+    // ── Data validation tests ─────────────────────────────────────────
+
+    fn build_dv_record(
+        val_type: u8,
+        err_style: u8,
+        operator: u8,
+        allow_blank: bool,
+        show_input: bool,
+        show_error: bool,
+        input_title: &str,
+        error_title: &str,
+        input_msg: &str,
+        error_msg: &str,
+        formula1_tokens: &[u8],
+        formula2_tokens: &[u8],
+        ranges: &[(u32, u32, u16, u16)],
+    ) -> Vec<u8> {
+        let mut data = Vec::new();
+
+        // Build flags
+        let mut flags: u32 = (val_type as u32) & 0x0F;
+        flags |= ((err_style as u32) & 0x07) << 4;
+        if allow_blank {
+            flags |= 0x100;
+        }
+        if show_input {
+            flags |= 0x40000;
+        }
+        if show_error {
+            flags |= 0x80000;
+        }
+        flags |= ((operator as u32) & 0x0F) << 20;
+        data.extend_from_slice(&flags.to_le_bytes());
+
+        // Write unicode strings: len(u16) + flags(u8) + chars
+        for s in &[input_title, error_title, input_msg, error_msg] {
+            data.extend_from_slice(&(s.len() as u16).to_le_bytes());
+            data.push(0x00); // compressed Latin-1
+            data.extend_from_slice(s.as_bytes());
+        }
+
+        // Formula 1: cce(2) + unused(2) + tokens
+        data.extend_from_slice(&(formula1_tokens.len() as u16).to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(formula1_tokens);
+
+        // Formula 2: cce(2) + unused(2) + tokens
+        data.extend_from_slice(&(formula2_tokens.len() as u16).to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(formula2_tokens);
+
+        // Ranges
+        data.extend_from_slice(&(ranges.len() as u16).to_le_bytes());
+        for &(r1, r2, c1, c2) in ranges {
+            data.extend_from_slice(&(r1 as u16).to_le_bytes());
+            data.extend_from_slice(&(r2 as u16).to_le_bytes());
+            data.extend_from_slice(&c1.to_le_bytes());
+            data.extend_from_slice(&c2.to_le_bytes());
+        }
+
+        data
+    }
+
+    #[test]
+    fn test_parse_dv_list_validation() {
+        // List validation with explicit inline list
+        let mut flags: u32 = 3; // type=list
+        flags |= 0x80; // fStrLookup (explicit list)
+        flags |= 0x100; // allow blank
+        flags |= 0x40000; // show input
+        flags |= 0x80000; // show error
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&flags.to_le_bytes());
+
+        // Strings: input_title, error_title, input_msg, error_msg
+        for s in &["Choose", "Error", "Pick one", "Invalid"] {
+            data.extend_from_slice(&(s.len() as u16).to_le_bytes());
+            data.push(0x00);
+            data.extend_from_slice(s.as_bytes());
+        }
+
+        // Formula 1: tStr for the list "Red,Green,Blue"
+        // For simplicity, use tStr: 0x17 + len(1) + flags(1) + chars
+        let list_str = "Red,Green,Blue";
+        let mut f1 = vec![0x17]; // tStr
+        f1.push(list_str.len() as u8);
+        f1.push(0x00); // compressed
+        f1.extend_from_slice(list_str.as_bytes());
+        data.extend_from_slice(&(f1.len() as u16).to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&f1);
+
+        // Formula 2: empty
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+
+        // Ranges: A1:A10
+        data.extend_from_slice(&1u16.to_le_bytes()); // count
+        data.extend_from_slice(&0u16.to_le_bytes()); // r1
+        data.extend_from_slice(&9u16.to_le_bytes()); // r2
+        data.extend_from_slice(&0u16.to_le_bytes()); // c1
+        data.extend_from_slice(&0u16.to_le_bytes()); // c2
+
+        let ws = parse(vec![rec(records::DV, data)]);
+        let validations = ws.data_validations();
+        assert_eq!(validations.len(), 1);
+        let v = &validations[0];
+        assert!(v.allow_blank);
+        assert!(v.show_input_message);
+        assert!(v.show_error_alert);
+        assert_eq!(v.input_title.as_deref(), Some("Choose"));
+        assert_eq!(v.error_title.as_deref(), Some("Error"));
+        match &v.validation_type {
+            ValidationType::List { source } => {
+                // The decompiled formula might include quotes or not
+                assert!(source.contains("Red"));
+                assert!(source.contains("Green"));
+                assert!(source.contains("Blue"));
+            }
+            _ => panic!("Expected List validation, got {:?}", v.validation_type),
+        }
+    }
+
+    #[test]
+    fn test_parse_dv_whole_number_between() {
+        // tInt(0x1E) + value(u16): encodes an integer constant
+        let f1 = vec![0x1E, 0x01, 0x00]; // tInt(1)
+        let f2 = vec![0x1E, 0x64, 0x00]; // tInt(100)
+        let dv_data = build_dv_record(
+            1,     // whole number
+            0,     // stop
+            0,     // between
+            true,  // allow blank
+            false, // no input msg
+            true,  // show error
+            "",
+            "Invalid",
+            "",
+            "Enter 1-100",
+            &f1,
+            &f2,
+            &[(0, 9, 0, 0)], // A1:A10
+        );
+
+        let ws = parse(vec![rec(records::DV, dv_data)]);
+        let validations = ws.data_validations();
+        assert_eq!(validations.len(), 1);
+        let v = &validations[0];
+        match &v.validation_type {
+            ValidationType::Whole {
+                operator,
+                value1,
+                value2,
+            } => {
+                assert_eq!(*operator, ValidationOperator::Between);
+                assert_eq!(value1, "1");
+                assert_eq!(value2.as_deref(), Some("100"));
+            }
+            _ => panic!("Expected Whole validation, got {:?}", v.validation_type),
+        }
+        assert_eq!(v.error_title.as_deref(), Some("Invalid"));
+        assert_eq!(v.error_message.as_deref(), Some("Enter 1-100"));
+        assert_eq!(v.ranges.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_dv_custom_formula() {
+        let f1 = vec![0x1E, 0x00, 0x00]; // tInt(0) as placeholder formula
+        let dv_data = build_dv_record(
+            7, // custom
+            0, // stop
+            0, // unused
+            true,
+            false,
+            false,
+            "",
+            "",
+            "",
+            "",
+            &f1,
+            &[],
+            &[(0, 0, 0, 0)], // A1
+        );
+
+        let ws = parse(vec![rec(records::DV, dv_data)]);
+        let validations = ws.data_validations();
+        assert_eq!(validations.len(), 1);
+        match &validations[0].validation_type {
+            ValidationType::Custom { formula } => {
+                assert_eq!(formula, "0");
+            }
+            _ => panic!("Expected Custom validation"),
+        }
     }
 }
