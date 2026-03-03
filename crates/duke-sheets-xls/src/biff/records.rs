@@ -52,6 +52,20 @@ pub const PANE: u16 = 0x0041; // Pane split position
 pub const SELECTION: u16 = 0x001D; // Selected cell range
 pub const HLINK: u16 = 0x01B8; // Hyperlink
 pub const SHEETLAYOUT: u16 = 0x0862;
+pub const HLINKTOOLTIP: u16 = 0x0800; // Hyperlink tooltip (FRT record)
+
+// ── Comments / drawing objects ──────────────────────────────────────────
+pub const NOTE: u16 = 0x001C; // Cell note (comment reference)
+pub const OBJ: u16 = 0x005D; // Drawing object
+pub const TXO: u16 = 0x01B6; // Text object (comment text)
+
+// ── Conditional formatting ──────────────────────────────────────────────
+pub const CONDFMT: u16 = 0x01B0; // Conditional formatting range header
+pub const CF: u16 = 0x01B1; // Conditional formatting rule
+
+// ── Data validation ────────────────────────────────────────────────────
+pub const DVAL: u16 = 0x01B2; // Data validation header
+pub const DV: u16 = 0x01BE; // Data validation criteria
 
 // ── BOF subtypes (the `dt` field) ───────────────────────────────────────
 pub const BOF_WORKBOOK_GLOBALS: u16 = 0x0005;

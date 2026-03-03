@@ -804,6 +804,13 @@ impl Worksheet {
             .and_then(|addr| self.hyperlinks.get(&addr))
     }
 
+    /// Get a mutable reference to a hyperlink by address string.
+    pub fn hyperlink_mut(&mut self, cell: &str) -> Option<&mut Hyperlink> {
+        CellAddress::parse(cell)
+            .ok()
+            .and_then(move |addr| self.hyperlinks.get_mut(&addr))
+    }
+
     /// Get all hyperlinks in this worksheet.
     pub fn hyperlinks(&self) -> &HashMap<CellAddress, Hyperlink> {
         &self.hyperlinks
