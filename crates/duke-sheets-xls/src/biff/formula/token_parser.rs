@@ -161,6 +161,10 @@ pub enum ParsedToken {
         row: u16,
         col: u16,
     },
+    Table {
+        row: u16,
+        col: u16,
+    },
     /// Memory function — the decompiler treats this as a no-op; the
     /// sub-expression tokens that follow produce the actual reference.
     MemFunc {
@@ -574,8 +578,10 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 if pos + 4 > data.len() {
                     break;
                 }
+                let row = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                let col = u16::from_le_bytes([data[pos + 2], data[pos + 3]]);
                 pos += 4;
-                tokens.push(ParsedToken::Unknown(raw_byte));
+                tokens.push(ParsedToken::Table { row, col });
             }
 
             _ => {
@@ -1142,5 +1148,12 @@ mod tests {
                 text: "{\"hello\",TRUE,#N/A}".to_string()
             }]
         );
+    }
+
+    #[test]
+    fn test_parse_ttbl_token() {
+        let data = [ptg::PTG_TBL, 0x02, 0x00, 0x03, 0x00];
+        let tokens = parse_tokens(&data);
+        assert_eq!(tokens, vec![ParsedToken::Table { row: 2, col: 3 }]);
     }
 }
