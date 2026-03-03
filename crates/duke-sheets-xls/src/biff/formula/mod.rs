@@ -64,6 +64,8 @@ pub struct NameRecord {
     pub sheet_idx: u16,
     /// Whether this is a built-in name (Print_Area, _FilterDatabase, etc.).
     pub is_builtin: bool,
+    /// Raw formula token bytes from the NAME record body.
+    pub formula_body: Vec<u8>,
 }
 
 /// Built-in name indices (when the `fBuiltin` flag is set in the NAME record).

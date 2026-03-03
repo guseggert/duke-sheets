@@ -66,6 +66,8 @@ pub const CF: u16 = 0x01B1; // Conditional formatting rule
 // ── Data validation ────────────────────────────────────────────────────
 pub const DVAL: u16 = 0x01B2; // Data validation header
 pub const DV: u16 = 0x01BE; // Data validation criteria
+pub const AUTOFILTERINFO: u16 = 0x009D; // AutoFilter info (column count)
+pub const AUTOFILTER: u16 = 0x009E; // AutoFilter criteria
 
 // ── BOF subtypes (the `dt` field) ───────────────────────────────────────
 pub const BOF_WORKBOOK_GLOBALS: u16 = 0x0005;

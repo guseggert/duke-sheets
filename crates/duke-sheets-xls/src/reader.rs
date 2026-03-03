@@ -60,6 +60,16 @@ enum FormulaResult {
     },
 }
 
+enum DoperValue {
+    None,
+    Float(f64),
+    StrInfo { cch: u8 },
+    Bool(bool),
+    Error(u8),
+    Blanks,
+    NonBlanks,
+}
+
 impl XlsReader {
     /// Read an XLS file from a filesystem path.
     pub fn read_file<P: AsRef<Path>>(path: P) -> XlsResult<Workbook> {
@@ -222,6 +232,23 @@ impl XlsReader {
             base_cell: None,
         };
 
+        let mut filter_db_ranges: std::collections::HashMap<usize, CellRange> =
+            std::collections::HashMap::new();
+        for name_rec in &formula_ctx.names {
+            if name_rec.name == "_FilterDatabase" && !name_rec.formula_body.is_empty() {
+                if let Some(range) =
+                    Self::extract_filter_db_range(&name_rec.formula_body, &formula_ctx)
+                {
+                    let sheet_0based = if name_rec.sheet_idx > 0 {
+                        (name_rec.sheet_idx - 1) as usize
+                    } else {
+                        0
+                    };
+                    filter_db_ranges.insert(sheet_0based, range);
+                }
+            }
+        }
+
         // Phase 2: Parse each worksheet substream
         // The records after globals_end_idx contain per-sheet substreams
         // (BOF..EOF pairs). We match them to SheetInfo entries in order.
@@ -250,7 +277,15 @@ impl XlsReader {
 
             // Get this sheet's records (indexed by BIFF order, not wb order)
             if let Some(sheet_records) = sheet_record_groups.get(biff_idx) {
-                Self::parse_sheet_records(sheet_records, ws, &sst, &style_table, &formula_ctx)?;
+                let af_range = filter_db_ranges.get(&biff_idx);
+                Self::parse_sheet_records(
+                    sheet_records,
+                    ws,
+                    &sst,
+                    &style_table,
+                    &formula_ctx,
+                    af_range,
+                )?;
             }
 
             wb_sheet_idx += 1;
@@ -327,6 +362,7 @@ impl XlsReader {
         sst: &[String],
         styles: &[Style],
         formula_ctx: &FormulaContext,
+        auto_filter_range: Option<&CellRange>,
     ) -> XlsResult<()> {
         // We need to track the last FORMULA record to associate a STRING record
         let mut pending_formula_cell: Option<(u32, u16)> = None;
@@ -351,6 +387,8 @@ impl XlsReader {
 
         // Conditional formatting: CONDFMT range header for following CF records
         let mut cf_ranges: Vec<CellRange> = Vec::new();
+
+        let mut auto_filter_columns: Vec<duke_sheets_core::FilterColumn> = Vec::new();
 
         // Hyperlink tooltip: HLINKTOOLTIP records keyed by (row, col)
         let mut hlink_tooltips: std::collections::HashMap<(u32, u16), String> =
@@ -543,6 +581,12 @@ impl XlsReader {
                 records::DV => {
                     Self::parse_dv(&rec.data, ws, formula_ctx)?;
                 }
+                records::AUTOFILTERINFO => {}
+                records::AUTOFILTER => {
+                    if let Some(fc) = Self::parse_autofilter(&rec.data) {
+                        auto_filter_columns.push(fc);
+                    }
+                }
                 _ => {
                     // Skip unknown/unhandled records
                 }
@@ -564,6 +608,16 @@ impl XlsReader {
             if let Some(hl) = ws.hyperlink_mut(&addr) {
                 hl.tooltip = Some(tooltip.clone());
             }
+        }
+
+        if let Some(range) = auto_filter_range {
+            let af = duke_sheets_core::AutoFilter {
+                range: range.clone(),
+                filter_columns: auto_filter_columns,
+            };
+            ws.set_auto_filter(Some(af));
+        } else if !auto_filter_columns.is_empty() {
+            log::warn!("AUTOFILTER records found without _FilterDatabase name");
         }
 
         Ok(())
@@ -1342,7 +1396,7 @@ impl XlsReader {
         off += 1;
         let cch = data[off] as u16;
         off += 1;
-        let _cce = read_u16(data, &mut off)?;
+        let cce = read_u16(data, &mut off)?;
         let _reserved1 = read_u16(data, &mut off)?;
         let itab = read_u16(data, &mut off)?;
         off += 4; // reserved 4 bytes
@@ -1371,10 +1425,286 @@ impl XlsReader {
             String::new()
         };
 
+        let formula_body = if cce > 0 && off + cce as usize <= data.len() {
+            data[off..off + cce as usize].to_vec()
+        } else {
+            Vec::new()
+        };
+
         Ok(NameRecord {
             name,
             sheet_idx: itab,
             is_builtin,
+            formula_body,
+        })
+    }
+
+    fn extract_filter_db_range(
+        formula_body: &[u8],
+        _formula_ctx: &FormulaContext,
+    ) -> Option<CellRange> {
+        let pos = 0;
+        while pos < formula_body.len() {
+            let token = formula_body[pos];
+            let base = token & 0x7F;
+            match base {
+                0x3B => {
+                    if pos + 11 <= formula_body.len() {
+                        let first_row =
+                            u16::from_le_bytes([formula_body[pos + 3], formula_body[pos + 4]])
+                                as u32;
+                        let last_row =
+                            u16::from_le_bytes([formula_body[pos + 5], formula_body[pos + 6]])
+                                as u32;
+                        let first_col =
+                            u16::from_le_bytes([formula_body[pos + 7], formula_body[pos + 8]])
+                                & 0x3FFF;
+                        let last_col =
+                            u16::from_le_bytes([formula_body[pos + 9], formula_body[pos + 10]])
+                                & 0x3FFF;
+                        return Some(CellRange::from_indices(
+                            first_row, first_col, last_row, last_col,
+                        ));
+                    }
+                    break;
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+        None
+    }
+
+    fn parse_autofilter(data: &[u8]) -> Option<duke_sheets_core::FilterColumn> {
+        use duke_sheets_core::auto_filter::*;
+
+        if data.len() < 24 {
+            return None;
+        }
+
+        let i_entry = u16::from_le_bytes([data[0], data[1]]);
+        let flags = u16::from_le_bytes([data[2], data[3]]);
+
+        let join_or = (flags & 0x03) != 0;
+        let f_top_n = (flags & 0x0010) != 0;
+        let f_top = (flags & 0x0020) != 0;
+        let f_percent = (flags & 0x0040) != 0;
+        let w_top_n = (flags >> 7) & 0x01FF;
+
+        if f_top_n {
+            return Some(FilterColumn::new(
+                i_entry as u32,
+                ColumnFilter::Top10(Top10Filter {
+                    top: f_top,
+                    percent: f_percent,
+                    val: w_top_n as f64,
+                    filter_val: None,
+                }),
+            ));
+        }
+
+        let (vt1, op1, val1_info) = Self::parse_afdoper(&data[4..14]);
+        let (vt2, op2, val2_info) = Self::parse_afdoper(&data[14..24]);
+
+        let mut pos = 24;
+        let str1 = if vt1 == 0x06 {
+            if let DoperValue::StrInfo { cch } = &val1_info {
+                Some(Self::read_xlstring_nocch(data, &mut pos, *cch as usize))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let str2 = if vt2 == 0x06 {
+            if let DoperValue::StrInfo { cch } = &val2_info {
+                Some(Self::read_xlstring_nocch(data, &mut pos, *cch as usize))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if vt1 == 0x0C && vt2 == 0x00 {
+            return Some(FilterColumn::new(
+                i_entry as u32,
+                ColumnFilter::Values(ValueFilter {
+                    values: vec![],
+                    blank: true,
+                }),
+            ));
+        }
+
+        if vt1 == 0x0E && vt2 == 0x00 {
+            return Some(FilterColumn::new(
+                i_entry as u32,
+                ColumnFilter::Custom(CustomFilters {
+                    and: false,
+                    conditions: vec![CustomFilterCondition {
+                        operator: FilterOperator::NotEqual,
+                        value: String::new(),
+                    }],
+                }),
+            ));
+        }
+
+        let mut conditions = Vec::new();
+        if vt1 != 0x00 {
+            if let Some(cond) = Self::doper_to_condition(op1, &val1_info, &str1) {
+                conditions.push(cond);
+            }
+        }
+        if vt2 != 0x00 {
+            if let Some(cond) = Self::doper_to_condition(op2, &val2_info, &str2) {
+                conditions.push(cond);
+            }
+        }
+
+        if conditions.is_empty() {
+            return None;
+        }
+
+        if conditions.len() <= 2
+            && conditions
+                .iter()
+                .all(|c| c.operator == FilterOperator::Equal)
+            && join_or
+        {
+            return Some(FilterColumn::new(
+                i_entry as u32,
+                ColumnFilter::Values(ValueFilter {
+                    values: conditions.into_iter().map(|c| c.value).collect(),
+                    blank: false,
+                }),
+            ));
+        }
+
+        Some(FilterColumn::new(
+            i_entry as u32,
+            ColumnFilter::Custom(CustomFilters {
+                and: !join_or,
+                conditions,
+            }),
+        ))
+    }
+
+    fn parse_afdoper(data: &[u8]) -> (u8, u8, DoperValue) {
+        if data.len() < 10 {
+            return (0x00, 0x00, DoperValue::None);
+        }
+
+        let vt = data[0];
+        let op = data[1];
+        let payload = &data[2..10];
+
+        let value = match vt {
+            0x00 => DoperValue::None,
+            0x02 => {
+                let rk_bytes = [payload[0], payload[1], payload[2], payload[3]];
+                DoperValue::Float(Self::decode_rk_value(&rk_bytes))
+            }
+            0x04 => DoperValue::Float(f64::from_le_bytes(payload.try_into().unwrap())),
+            0x06 => DoperValue::StrInfo { cch: payload[4] },
+            0x08 => {
+                if payload[1] != 0 {
+                    DoperValue::Error(payload[0])
+                } else {
+                    DoperValue::Bool(payload[0] != 0)
+                }
+            }
+            0x0C => DoperValue::Blanks,
+            0x0E => DoperValue::NonBlanks,
+            _ => DoperValue::None,
+        };
+
+        (vt, op, value)
+    }
+
+    fn decode_rk_value(bytes: &[u8; 4]) -> f64 {
+        let raw = u32::from_le_bytes(*bytes);
+        let fx100 = (raw & 1) != 0;
+        let fint = (raw & 2) != 0;
+
+        let value = if fint {
+            ((raw as i32) >> 2) as f64
+        } else {
+            f64::from_bits(((raw & 0xFFFF_FFFC) as u64) << 32)
+        };
+
+        if fx100 {
+            value / 100.0
+        } else {
+            value
+        }
+    }
+
+    fn read_xlstring_nocch(data: &[u8], pos: &mut usize, cch: usize) -> String {
+        if *pos >= data.len() || cch == 0 {
+            return String::new();
+        }
+
+        let flags = data[*pos];
+        *pos += 1;
+        let high_byte = (flags & 1) != 0;
+
+        if high_byte {
+            let byte_len = cch * 2;
+            if *pos + byte_len > data.len() {
+                return String::new();
+            }
+            let chars: Vec<u16> = data[*pos..*pos + byte_len]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            *pos += byte_len;
+            String::from_utf16_lossy(&chars)
+        } else {
+            if *pos + cch > data.len() {
+                return String::new();
+            }
+            let s = String::from_utf8_lossy(&data[*pos..*pos + cch]).into_owned();
+            *pos += cch;
+            s
+        }
+    }
+
+    fn doper_to_condition(
+        op: u8,
+        value: &DoperValue,
+        str_val: &Option<String>,
+    ) -> Option<duke_sheets_core::auto_filter::CustomFilterCondition> {
+        use duke_sheets_core::auto_filter::*;
+
+        let operator = match op {
+            0x01 => FilterOperator::LessThan,
+            0x02 => FilterOperator::Equal,
+            0x03 => FilterOperator::LessThanOrEqual,
+            0x04 => FilterOperator::GreaterThan,
+            0x05 => FilterOperator::NotEqual,
+            0x06 => FilterOperator::GreaterThanOrEqual,
+            _ => return None,
+        };
+
+        let val_str = match value {
+            DoperValue::Float(f) => format!("{f}"),
+            DoperValue::StrInfo { .. } => str_val.clone().unwrap_or_default(),
+            DoperValue::Bool(b) => {
+                if *b {
+                    "TRUE".to_string()
+                } else {
+                    "FALSE".to_string()
+                }
+            }
+            DoperValue::Error(e) => format!("#ERR{e}"),
+            _ => return None,
+        };
+
+        Some(CustomFilterCondition {
+            operator,
+            value: val_str,
         })
     }
 
@@ -2174,7 +2504,7 @@ mod tests {
         let mut ws = duke_sheets_core::Worksheet::new("Sheet1");
         let refs: Vec<&BiffRecord> = records.iter().collect();
         let formula_ctx = FormulaContext::new(vec!["Sheet1".to_string()]);
-        XlsReader::parse_sheet_records(&refs, &mut ws, &[], &[], &formula_ctx).unwrap();
+        XlsReader::parse_sheet_records(&refs, &mut ws, &[], &[], &formula_ctx, None).unwrap();
         ws
     }
 
@@ -2390,7 +2720,7 @@ mod tests {
             ];
             let refs: Vec<&BiffRecord> = recs.iter().collect();
             let formula_ctx = FormulaContext::new(vec!["Sheet1".to_string()]);
-            XlsReader::parse_sheet_records(&refs, &mut ws, &[], &[], &formula_ctx).unwrap();
+            XlsReader::parse_sheet_records(&refs, &mut ws, &[], &[], &formula_ctx, None).unwrap();
             ws
         };
 
@@ -2797,5 +3127,99 @@ mod tests {
             }
             _ => panic!("Expected Custom validation"),
         }
+    }
+
+    #[test]
+    fn test_parse_autofilter_top_n() {
+        let mut data = vec![0u8; 24];
+        data[0] = 2;
+        data[1] = 0;
+        let flags: u16 = (1 << 4) | (1 << 5) | (5 << 7);
+        data[2..4].copy_from_slice(&flags.to_le_bytes());
+
+        let fc = XlsReader::parse_autofilter(&data).unwrap();
+        assert_eq!(fc.col_id, 2);
+        match &fc.filter {
+            duke_sheets_core::auto_filter::ColumnFilter::Top10(t) => {
+                assert!(t.top);
+                assert!(!t.percent);
+                assert_eq!(t.val as u16, 5);
+            }
+            other => panic!("Expected Top10, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_autofilter_custom_greater_than() {
+        let mut data = vec![0u8; 24];
+        data[0] = 0;
+        data[1] = 0;
+        data[2] = 0;
+        data[3] = 0;
+        data[4] = 0x04;
+        data[5] = 0x04;
+        data[6..14].copy_from_slice(&50.0f64.to_le_bytes());
+
+        let fc = XlsReader::parse_autofilter(&data).unwrap();
+        assert_eq!(fc.col_id, 0);
+        match &fc.filter {
+            duke_sheets_core::auto_filter::ColumnFilter::Custom(cf) => {
+                assert_eq!(cf.conditions.len(), 1);
+                assert_eq!(
+                    cf.conditions[0].operator,
+                    duke_sheets_core::auto_filter::FilterOperator::GreaterThan
+                );
+                assert!(cf.conditions[0].value.contains("50"));
+            }
+            other => panic!("Expected Custom, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_autofilter_string_equal() {
+        let mut data = vec![0u8; 24];
+        data[0] = 1;
+        data[1] = 0;
+        data[2] = 1;
+        data[3] = 0;
+        data[4] = 0x06;
+        data[5] = 0x02;
+        data[10] = 3;
+        data[11] = 1;
+        data.push(0x00);
+        data.extend_from_slice(b"Red");
+
+        let fc = XlsReader::parse_autofilter(&data).unwrap();
+        assert_eq!(fc.col_id, 1);
+        match &fc.filter {
+            duke_sheets_core::auto_filter::ColumnFilter::Values(vf) => {
+                assert_eq!(vf.values, vec!["Red"]);
+            }
+            other => panic!("Expected Values, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_extract_filter_db_range() {
+        let mut body = vec![0x3B];
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&9u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&3u16.to_le_bytes());
+
+        let ctx = FormulaContext {
+            sheet_names: vec!["Sheet1".to_string()],
+            extern_sheet: vec![],
+            supbooks: vec![],
+            names: vec![],
+            base_cell: None,
+        };
+
+        let range = XlsReader::extract_filter_db_range(&body, &ctx).unwrap();
+        assert_eq!(range.start.row, 0);
+        assert_eq!(range.end.row, 9);
+        assert_eq!(range.start.col, 0);
+        assert_eq!(range.end.col, 3);
     }
 }
