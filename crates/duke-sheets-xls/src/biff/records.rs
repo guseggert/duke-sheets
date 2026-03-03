@@ -81,6 +81,9 @@ pub const BOTTOM_MARGIN: u16 = 0x0029; // Bottom margin
 pub const HCENTER: u16 = 0x0083; // Center on page horizontally
 pub const VCENTER: u16 = 0x0084; // Center on page vertically
 pub const SETUP: u16 = 0x00A1; // Page setup (paper, orientation, scale)
+pub const SCL: u16 = 0x00A0; // Zoom level (numerator/denominator)
+pub const PRINTHEADERS: u16 = 0x002A; // Print row/column headings
+pub const PRINTGRIDLINES: u16 = 0x002B; // Print gridlines
 
 // ── BOF subtypes (the `dt` field) ───────────────────────────────────────
 pub const BOF_WORKBOOK_GLOBALS: u16 = 0x0005;

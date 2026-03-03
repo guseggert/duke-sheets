@@ -249,6 +249,37 @@ impl XlsReader {
             }
         }
 
+        // Extract Print_Area (builtin name 0x06) ranges per sheet
+        let mut print_area_ranges: std::collections::HashMap<usize, CellRange> =
+            std::collections::HashMap::new();
+        // Extract Print_Titles (builtin name 0x07) per sheet → (repeat_rows, repeat_cols)
+        let mut print_titles: std::collections::HashMap<
+            usize,
+            (Option<(u32, u32)>, Option<(u16, u16)>),
+        > = std::collections::HashMap::new();
+        for name_rec in &formula_ctx.names {
+            if name_rec.formula_body.is_empty() {
+                continue;
+            }
+            let sheet_0based = if name_rec.sheet_idx > 0 {
+                (name_rec.sheet_idx - 1) as usize
+            } else {
+                0
+            };
+            if name_rec.name == "Print_Area" {
+                if let Some(range) =
+                    Self::extract_filter_db_range(&name_rec.formula_body, &formula_ctx)
+                {
+                    print_area_ranges.insert(sheet_0based, range);
+                }
+            } else if name_rec.name == "Print_Titles" {
+                let titles = Self::extract_print_titles(&name_rec.formula_body);
+                if titles.0.is_some() || titles.1.is_some() {
+                    print_titles.insert(sheet_0based, titles);
+                }
+            }
+        }
+
         // Phase 2: Parse each worksheet substream
         // The records after globals_end_idx contain per-sheet substreams
         // (BOF..EOF pairs). We match them to SheetInfo entries in order.
@@ -286,6 +317,21 @@ impl XlsReader {
                     &formula_ctx,
                     af_range,
                 )?;
+            }
+
+            // Apply Print_Area from NAME formula body
+            if let Some(range) = print_area_ranges.get(&biff_idx) {
+                ws.set_print_area(range.clone());
+            }
+
+            // Apply Print_Titles (repeat rows/cols) from NAME formula body
+            if let Some((rows, cols)) = print_titles.get(&biff_idx) {
+                if let Some((r1, r2)) = rows {
+                    ws.set_repeat_rows(*r1, *r2);
+                }
+                if let Some((c1, c2)) = cols {
+                    ws.set_repeat_cols(*c1, *c2);
+                }
             }
 
             wb_sheet_idx += 1;
@@ -695,6 +741,37 @@ impl XlsReader {
                     }
                 }
                 records::HCENTER | records::VCENTER => {}
+                records::SCL => {
+                    // Zoom: numerator(u16) + denominator(u16)
+                    if rec.data.len() >= 4 {
+                        let num = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+                        let den = u16::from_le_bytes([rec.data[2], rec.data[3]]);
+                        if den != 0 {
+                            let zoom = ((num as u32) * 100 / (den as u32)) as u16;
+                            ws.set_zoom_scale(Some(zoom.clamp(10, 400)));
+                        }
+                    }
+                }
+                records::PRINTHEADERS => {
+                    if rec.data.len() >= 2 {
+                        let flag = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+                        if flag != 0 {
+                            let mut ps = ws.page_setup().clone();
+                            ps.print_headings = true;
+                            ws.set_page_setup(ps);
+                        }
+                    }
+                }
+                records::PRINTGRIDLINES => {
+                    if rec.data.len() >= 2 {
+                        let flag = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+                        if flag != 0 {
+                            let mut ps = ws.page_setup().clone();
+                            ps.print_gridlines = true;
+                            ws.set_page_setup(ps);
+                        }
+                    }
+                }
                 records::HPAGEBREAKS => {
                     Self::parse_page_breaks(&rec.data, ws, true);
                 }
@@ -1588,6 +1665,72 @@ impl XlsReader {
             }
         }
         None
+    }
+
+    /// Extract repeat rows and repeat cols from a Print_Titles NAME formula body.
+    ///
+    /// The formula body may contain:
+    /// - A single tArea3d for row titles only (full-column range)
+    /// - A single tArea3d for column titles only (full-row range)
+    /// - tMemFunc + two tArea3d tokens for both row AND column titles
+    ///
+    /// Row titles: first_col == 0 && last_col == 0xFF (or 0x3FFF), meaning entire rows.
+    /// Column titles: first_row == 0 && last_row == 0xFFFF (or 0xFFFF), meaning entire columns.
+    fn extract_print_titles(formula_body: &[u8]) -> (Option<(u32, u32)>, Option<(u16, u16)>) {
+        let mut repeat_rows: Option<(u32, u32)> = None;
+        let mut repeat_cols: Option<(u16, u16)> = None;
+        let mut pos = 0;
+
+        while pos < formula_body.len() {
+            let token = formula_body[pos];
+            let base = token & 0x7F;
+            match base {
+                // tArea3d: ixti(2) + first_row(2) + last_row(2) + first_col(2) + last_col(2)
+                0x3B => {
+                    if pos + 11 <= formula_body.len() {
+                        let first_row =
+                            u16::from_le_bytes([formula_body[pos + 3], formula_body[pos + 4]]);
+                        let last_row =
+                            u16::from_le_bytes([formula_body[pos + 5], formula_body[pos + 6]]);
+                        let first_col =
+                            u16::from_le_bytes([formula_body[pos + 7], formula_body[pos + 8]])
+                                & 0x3FFF;
+                        let last_col =
+                            u16::from_le_bytes([formula_body[pos + 9], formula_body[pos + 10]])
+                                & 0x3FFF;
+
+                        // Detect row titles: spans all columns (0..0xFF or 0..0x3FFF)
+                        // → repeat_rows = (first_row, last_row)
+                        if first_col == 0 && last_col >= 0xFF {
+                            repeat_rows = Some((first_row as u32, last_row as u32));
+                        }
+                        // Detect column titles: spans all rows (0..0xFFFF)
+                        // → repeat_cols = (first_col, last_col)
+                        else if first_row == 0 && last_row == 0xFFFF {
+                            repeat_cols = Some((first_col, last_col));
+                        }
+                    }
+                    pos += 11; // skip full tArea3d
+                }
+                // tMemFunc: size(2) — skip the size field, tokens follow inline
+                0x29 => {
+                    if pos + 3 <= formula_body.len() {
+                        pos += 3; // token(1) + cce(2)
+                    } else {
+                        break;
+                    }
+                }
+                // tList (union operator) — 1 byte, skip
+                0x10 => {
+                    pos += 1;
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+
+        (repeat_rows, repeat_cols)
     }
 
     fn parse_autofilter(data: &[u8]) -> Option<duke_sheets_core::FilterColumn> {
@@ -3452,5 +3595,146 @@ mod tests {
         assert_eq!(range.end.row, 9);
         assert_eq!(range.start.col, 0);
         assert_eq!(range.end.col, 3);
+    }
+
+    #[test]
+    fn test_parse_scl_zoom() {
+        // SCL record: numerator(u16) + denominator(u16)
+        // 75% zoom: 3/4
+        let mut scl = Vec::new();
+        scl.extend_from_slice(&3u16.to_le_bytes()); // numerator
+        scl.extend_from_slice(&4u16.to_le_bytes()); // denominator
+
+        let ws = parse(vec![rec(records::SCL, scl)]);
+        assert_eq!(ws.zoom_scale(), Some(75));
+    }
+
+    #[test]
+    fn test_parse_scl_zoom_150() {
+        // 150% zoom: 3/2
+        let mut scl = Vec::new();
+        scl.extend_from_slice(&3u16.to_le_bytes());
+        scl.extend_from_slice(&2u16.to_le_bytes());
+
+        let ws = parse(vec![rec(records::SCL, scl)]);
+        assert_eq!(ws.zoom_scale(), Some(150));
+    }
+
+    #[test]
+    fn test_parse_scl_zoom_zero_denominator() {
+        // Zero denominator should be ignored
+        let mut scl = Vec::new();
+        scl.extend_from_slice(&3u16.to_le_bytes());
+        scl.extend_from_slice(&0u16.to_le_bytes());
+
+        let ws = parse(vec![rec(records::SCL, scl)]);
+        assert_eq!(ws.zoom_scale(), None);
+    }
+
+    #[test]
+    fn test_parse_printheaders() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_le_bytes()); // print headings = true
+
+        let ws = parse(vec![rec(records::PRINTHEADERS, data)]);
+        assert!(ws.page_setup().print_headings);
+    }
+
+    #[test]
+    fn test_parse_printheaders_off() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u16.to_le_bytes()); // print headings = false
+
+        let ws = parse(vec![rec(records::PRINTHEADERS, data)]);
+        assert!(!ws.page_setup().print_headings);
+    }
+
+    #[test]
+    fn test_parse_printgridlines() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_le_bytes()); // print gridlines = true
+
+        let ws = parse(vec![rec(records::PRINTGRIDLINES, data)]);
+        assert!(ws.page_setup().print_gridlines);
+    }
+
+    #[test]
+    fn test_parse_printgridlines_off() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u16.to_le_bytes()); // print gridlines = false
+
+        let ws = parse(vec![rec(records::PRINTGRIDLINES, data)]);
+        assert!(!ws.page_setup().print_gridlines);
+    }
+
+    #[test]
+    fn test_extract_print_titles_rows_only() {
+        // Print_Titles with repeat rows 1:3 (rows 0..2, all columns)
+        // tArea3d: token(0x3B) + ixti(2) + first_row(2) + last_row(2) + first_col(2) + last_col(2)
+        let mut body = vec![0x3B];
+        body.extend_from_slice(&0u16.to_le_bytes()); // ixti
+        body.extend_from_slice(&0u16.to_le_bytes()); // first_row = 0
+        body.extend_from_slice(&2u16.to_le_bytes()); // last_row = 2
+        body.extend_from_slice(&0u16.to_le_bytes()); // first_col = 0
+        body.extend_from_slice(&0x00FFu16.to_le_bytes()); // last_col = 0xFF (all cols)
+
+        let (rows, cols) = XlsReader::extract_print_titles(&body);
+        assert_eq!(rows, Some((0, 2)));
+        assert_eq!(cols, None);
+    }
+
+    #[test]
+    fn test_extract_print_titles_cols_only() {
+        // Print_Titles with repeat cols A:B (cols 0..1, all rows)
+        let mut body = vec![0x3B];
+        body.extend_from_slice(&0u16.to_le_bytes()); // ixti
+        body.extend_from_slice(&0u16.to_le_bytes()); // first_row = 0
+        body.extend_from_slice(&0xFFFFu16.to_le_bytes()); // last_row = 0xFFFF (all rows)
+        body.extend_from_slice(&0u16.to_le_bytes()); // first_col = 0
+        body.extend_from_slice(&1u16.to_le_bytes()); // last_col = 1
+
+        let (rows, cols) = XlsReader::extract_print_titles(&body);
+        assert_eq!(rows, None);
+        assert_eq!(cols, Some((0, 1)));
+    }
+
+    #[test]
+    fn test_extract_print_titles_both_rows_and_cols() {
+        // Print_Titles with both rows 1:3 and cols A:B
+        // tMemFunc(0x29) + cce(2) + tArea3d(rows) + tArea3d(cols) + tList(0x10)
+        let mut body = Vec::new();
+        body.push(0x29); // tMemFunc
+        body.extend_from_slice(&22u16.to_le_bytes()); // cce = 2*11 bytes for two tArea3d
+
+        // First tArea3d: rows 0..2, all columns
+        body.push(0x3B);
+        body.extend_from_slice(&0u16.to_le_bytes()); // ixti
+        body.extend_from_slice(&0u16.to_le_bytes()); // first_row = 0
+        body.extend_from_slice(&2u16.to_le_bytes()); // last_row = 2
+        body.extend_from_slice(&0u16.to_le_bytes()); // first_col = 0
+        body.extend_from_slice(&0x00FFu16.to_le_bytes()); // last_col = 0xFF
+
+        // Second tArea3d: all rows, cols 0..1
+        body.push(0x3B);
+        body.extend_from_slice(&0u16.to_le_bytes()); // ixti
+        body.extend_from_slice(&0u16.to_le_bytes()); // first_row = 0
+        body.extend_from_slice(&0xFFFFu16.to_le_bytes()); // last_row = 0xFFFF
+        body.extend_from_slice(&0u16.to_le_bytes()); // first_col = 0
+        body.extend_from_slice(&1u16.to_le_bytes()); // last_col = 1
+
+        // tList (union)
+        body.push(0x10);
+
+        let (rows, cols) = XlsReader::extract_print_titles(&body);
+        assert_eq!(rows, Some((0, 2)));
+        assert_eq!(cols, Some((0, 1)));
+    }
+
+    #[test]
+    fn test_extract_print_titles_empty_body() {
+        let body = vec![];
+        let (rows, cols) = XlsReader::extract_print_titles(&body);
+        assert_eq!(rows, None);
+        assert_eq!(cols, None);
     }
 }
