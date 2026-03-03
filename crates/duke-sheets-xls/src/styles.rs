@@ -217,6 +217,70 @@ impl StyleContext {
         }
     }
 
+    /// Convert a BIFF font index to a `RunFont` for rich text runs.
+    ///
+    /// Like `resolve_font`, but returns an `Option<RunFont>` with only the
+    /// non-default properties set.
+    pub(crate) fn resolve_run_font(
+        &self,
+        font_index: u16,
+    ) -> Option<duke_sheets_core::rich_text::RunFont> {
+        // BIFF8 quirk: font index 4 is skipped.
+        let actual = if font_index >= 5 {
+            (font_index - 1) as usize
+        } else {
+            font_index as usize
+        };
+
+        let bf = self.fonts.get(actual)?;
+
+        let mut f = duke_sheets_core::rich_text::RunFont::default();
+
+        if bf.bold {
+            f.bold = Some(true);
+        }
+        if bf.italic {
+            f.italic = Some(true);
+        }
+        if bf.strikethrough {
+            f.strikethrough = Some(true);
+        }
+
+        let size = bf.height_twips as f64 / 20.0;
+        if size > 0.0 {
+            f.size = Some(size);
+        }
+
+        if !bf.name.is_empty() {
+            f.name = Some(bf.name.clone());
+        }
+
+        match bf.underline {
+            0x01 => f.underline = Some(Underline::Single),
+            0x02 => f.underline = Some(Underline::Double),
+            0x21 => f.underline = Some(Underline::SingleAccounting),
+            0x22 => f.underline = Some(Underline::DoubleAccounting),
+            _ => {}
+        }
+
+        match bf.superscript {
+            1 => f.vertical_align = Some(FontVerticalAlign::Superscript),
+            2 => f.vertical_align = Some(FontVerticalAlign::Subscript),
+            _ => {}
+        }
+
+        let color = self.resolve_color(bf.color_index);
+        if color != Color::Auto {
+            f.color = Some(color);
+        }
+
+        if f.is_empty() {
+            None
+        } else {
+            Some(f)
+        }
+    }
+
     // ── Fill resolution ─────────────────────────────────────────────────
 
     fn resolve_fill(&self, xf: &BiffXf) -> FillStyle {

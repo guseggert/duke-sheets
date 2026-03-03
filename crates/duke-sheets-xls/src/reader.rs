@@ -8,6 +8,7 @@ use std::path::Path;
 
 use duke_sheets_core::cell::SharedString;
 use duke_sheets_core::conditional_format::{CfOperator, CfRuleType, ConditionalFormatRule};
+use duke_sheets_core::rich_text::RichTextRun;
 use duke_sheets_core::validation::{
     DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType,
 };
@@ -21,7 +22,7 @@ use crate::biff::formula::{ExternSheetEntry, FormulaContext, NameRecord, SupBook
 use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32, read_u8};
 use crate::biff::records;
 use crate::biff::strings::{
-    parse_sst_continued, read_character_data, read_short_string, read_unicode_string,
+    parse_sst_entries, read_character_data, read_short_string, read_unicode_string, SstEntry,
 };
 use crate::biff::{self, BiffRecord};
 use crate::error::{XlsError, XlsResult};
@@ -104,7 +105,7 @@ impl XlsReader {
         let all_records = biff::read_all_records(&mut cursor)?;
 
         // Phase 1: Parse workbook globals
-        let mut sst: Vec<String> = Vec::new();
+        let mut sst: Vec<SstEntry> = Vec::new();
         let mut sheets: Vec<SheetInfo> = Vec::new();
         let mut date_mode_1904 = false;
         let mut in_globals = false;
@@ -138,7 +139,7 @@ impl XlsReader {
                     break;
                 }
                 records::SST if in_globals => {
-                    sst = parse_sst_continued(&rec.data, &rec.continue_offsets)?;
+                    sst = parse_sst_entries(&rec.data, &rec.continue_offsets)?;
                 }
                 records::BOUNDSHEET if in_globals => {
                     let info = Self::parse_boundsheet(&rec.data)?;
@@ -314,6 +315,7 @@ impl XlsReader {
                     ws,
                     &sst,
                     &style_table,
+                    &style_ctx,
                     &formula_ctx,
                     af_range,
                 )?;
@@ -405,8 +407,9 @@ impl XlsReader {
     fn parse_sheet_records(
         records: &[&BiffRecord],
         ws: &mut duke_sheets_core::Worksheet,
-        sst: &[String],
+        sst: &[SstEntry],
         styles: &[Style],
+        style_ctx: &StyleContext,
         formula_ctx: &FormulaContext,
         auto_filter_range: Option<&CellRange>,
     ) -> XlsResult<()> {
@@ -443,7 +446,7 @@ impl XlsReader {
         for rec in records {
             match rec.record_type {
                 records::LABELSST => {
-                    Self::parse_labelsst(&rec.data, ws, sst, styles)?;
+                    Self::parse_labelsst(&rec.data, ws, sst, styles, style_ctx)?;
                     pending_formula_cell = None;
                 }
                 records::LABEL => {
@@ -842,8 +845,9 @@ impl XlsReader {
     fn parse_labelsst(
         data: &[u8],
         ws: &mut duke_sheets_core::Worksheet,
-        sst: &[String],
+        sst: &[SstEntry],
         styles: &[Style],
+        style_ctx: &StyleContext,
     ) -> XlsResult<()> {
         let mut off = 0;
         let row = read_u16(data, &mut off)? as u32;
@@ -851,11 +855,76 @@ impl XlsReader {
         let xf_idx = read_u16(data, &mut off)?;
         let sst_idx = read_u32(data, &mut off)? as usize;
 
-        if let Some(s) = sst.get(sst_idx) {
-            ws.set_cell_value_at(row, col, CellValue::String(SharedString::new(s)))?;
+        if let Some(entry) = sst.get(sst_idx) {
+            match entry {
+                SstEntry::Plain(s) => {
+                    ws.set_cell_value_at(row, col, CellValue::String(SharedString::new(s)))?;
+                }
+                SstEntry::Rich { text, runs } => {
+                    let rich_runs = Self::sst_runs_to_rich_text(text, runs, style_ctx);
+                    ws.set_cell_value_at(row, col, CellValue::RichText(rich_runs))?;
+                }
+            }
         }
         Self::apply_style(ws, row, col, xf_idx, styles)?;
         Ok(())
+    }
+
+    /// Convert BIFF8 SST formatting runs into `RichTextRun` segments.
+    ///
+    /// Each `FormattingRun` marks where a new font begins (char_pos, font_index).
+    /// We split the text at those character positions and attach the resolved
+    /// `RunFont` from the workbook's font table.
+    fn sst_runs_to_rich_text(
+        text: &str,
+        runs: &[crate::biff::strings::FormattingRun],
+        style_ctx: &StyleContext,
+    ) -> Vec<RichTextRun> {
+        use duke_sheets_core::rich_text::RunFont;
+
+        if runs.is_empty() {
+            return vec![RichTextRun::plain(text)];
+        }
+
+        let chars: Vec<char> = text.chars().collect();
+        let total_chars = chars.len();
+        let mut result = Vec::new();
+
+        // Build (start_pos, font_index) boundaries
+        // If the first run doesn't start at 0, the leading text has no special font.
+        let mut boundaries: Vec<(usize, Option<u16>)> = Vec::new();
+
+        if runs[0].char_pos > 0 {
+            boundaries.push((0, None)); // leading text with no run font
+        }
+        for run in runs {
+            boundaries.push((run.char_pos as usize, Some(run.font_index)));
+        }
+
+        for (i, &(start, font_idx)) in boundaries.iter().enumerate() {
+            if start >= total_chars {
+                break;
+            }
+            let end = boundaries
+                .get(i + 1)
+                .map(|&(pos, _)| pos.min(total_chars))
+                .unwrap_or(total_chars);
+            if end <= start {
+                continue;
+            }
+            let segment: String = chars[start..end].iter().collect();
+            let font: Option<RunFont> = font_idx.and_then(|idx| style_ctx.resolve_run_font(idx));
+            result.push(RichTextRun {
+                text: segment,
+                font,
+            });
+        }
+
+        if result.is_empty() {
+            vec![RichTextRun::plain(text)]
+        } else {
+            result
+        }
     }
 
     /// LABEL: row(2) + col(2) + xf(2) + unicode_string
@@ -2798,7 +2867,9 @@ mod tests {
         let mut ws = duke_sheets_core::Worksheet::new("Sheet1");
         let refs: Vec<&BiffRecord> = records.iter().collect();
         let formula_ctx = FormulaContext::new(vec!["Sheet1".to_string()]);
-        XlsReader::parse_sheet_records(&refs, &mut ws, &[], &[], &formula_ctx, None).unwrap();
+        let style_ctx = crate::styles::StyleContext::new();
+        XlsReader::parse_sheet_records(&refs, &mut ws, &[], &[], &style_ctx, &formula_ctx, None)
+            .unwrap();
         ws
     }
 
@@ -3094,7 +3165,17 @@ mod tests {
             ];
             let refs: Vec<&BiffRecord> = recs.iter().collect();
             let formula_ctx = FormulaContext::new(vec!["Sheet1".to_string()]);
-            XlsReader::parse_sheet_records(&refs, &mut ws, &[], &[], &formula_ctx, None).unwrap();
+            let style_ctx = crate::styles::StyleContext::new();
+            XlsReader::parse_sheet_records(
+                &refs,
+                &mut ws,
+                &[],
+                &[],
+                &style_ctx,
+                &formula_ctx,
+                None,
+            )
+            .unwrap();
             ws
         };
 
@@ -3736,5 +3817,134 @@ mod tests {
         let (rows, cols) = XlsReader::extract_print_titles(&body);
         assert_eq!(rows, None);
         assert_eq!(cols, None);
+    }
+
+    #[test]
+    fn test_sst_runs_to_rich_text_no_runs() {
+        let style_ctx = crate::styles::StyleContext::new();
+        let runs = XlsReader::sst_runs_to_rich_text("Hello", &[], &style_ctx);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "Hello");
+        assert!(runs[0].font.is_none());
+    }
+
+    #[test]
+    fn test_sst_runs_to_rich_text_single_run_from_start() {
+        use crate::biff::strings::FormattingRun;
+        let mut style_ctx = crate::styles::StyleContext::new();
+        // Add a bold font at index 0
+        style_ctx.fonts.push(crate::styles::BiffFont {
+            height_twips: 220, // 11pt
+            bold: true,
+            italic: false,
+            underline: 0,
+            strikethrough: false,
+            color_index: 0x7FFF, // auto
+            superscript: 0,
+            name: "Calibri".to_string(),
+        });
+
+        let formatting_runs = vec![FormattingRun {
+            char_pos: 0,
+            font_index: 0,
+        }];
+
+        let runs = XlsReader::sst_runs_to_rich_text("Bold text", &formatting_runs, &style_ctx);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "Bold text");
+        let font = runs[0].font.as_ref().unwrap();
+        assert_eq!(font.bold, Some(true));
+        assert_eq!(font.name, Some("Calibri".to_string()));
+        assert_eq!(font.size, Some(11.0));
+    }
+
+    #[test]
+    fn test_sst_runs_to_rich_text_two_runs() {
+        use crate::biff::strings::FormattingRun;
+        let mut style_ctx = crate::styles::StyleContext::new();
+        // Font 0: normal
+        style_ctx.fonts.push(crate::styles::BiffFont {
+            height_twips: 220,
+            bold: false,
+            italic: false,
+            underline: 0,
+            strikethrough: false,
+            color_index: 0x7FFF,
+            superscript: 0,
+            name: "Calibri".to_string(),
+        });
+        // Font 1: bold italic
+        style_ctx.fonts.push(crate::styles::BiffFont {
+            height_twips: 280, // 14pt
+            bold: true,
+            italic: true,
+            underline: 0,
+            strikethrough: false,
+            color_index: 10, // red from palette
+            superscript: 0,
+            name: "Arial".to_string(),
+        });
+
+        let formatting_runs = vec![
+            FormattingRun {
+                char_pos: 0,
+                font_index: 0,
+            },
+            FormattingRun {
+                char_pos: 6,
+                font_index: 1,
+            },
+        ];
+
+        let runs = XlsReader::sst_runs_to_rich_text("Hello World", &formatting_runs, &style_ctx);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "Hello ");
+        // Font 0 is "normal" — no bold/italic, so RunFont will have
+        // size + name set but no bold.
+        let f0 = runs[0].font.as_ref().unwrap();
+        assert_eq!(f0.name, Some("Calibri".to_string()));
+        assert_eq!(f0.size, Some(11.0));
+
+        assert_eq!(runs[1].text, "World");
+        let f1 = runs[1].font.as_ref().unwrap();
+        assert_eq!(f1.bold, Some(true));
+        assert_eq!(f1.italic, Some(true));
+        assert_eq!(f1.size, Some(14.0));
+        assert_eq!(f1.name, Some("Arial".to_string()));
+        // Red from palette index 10
+        assert!(matches!(
+            f1.color,
+            Some(duke_sheets_core::Color::Rgb { r: 255, g: 0, b: 0 })
+        ));
+    }
+
+    #[test]
+    fn test_sst_runs_to_rich_text_leading_plain() {
+        use crate::biff::strings::FormattingRun;
+        let mut style_ctx = crate::styles::StyleContext::new();
+        // Font 0: bold
+        style_ctx.fonts.push(crate::styles::BiffFont {
+            height_twips: 220,
+            bold: true,
+            italic: false,
+            underline: 0,
+            strikethrough: false,
+            color_index: 0x7FFF,
+            superscript: 0,
+            name: "Calibri".to_string(),
+        });
+
+        // Run starts at char 6 ("World"), so "Hello " is plain (no run font)
+        let formatting_runs = vec![FormattingRun {
+            char_pos: 6,
+            font_index: 0,
+        }];
+
+        let runs = XlsReader::sst_runs_to_rich_text("Hello World", &formatting_runs, &style_ctx);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "Hello ");
+        assert!(runs[0].font.is_none()); // leading text inherits cell style
+        assert_eq!(runs[1].text, "World");
+        assert_eq!(runs[1].font.as_ref().unwrap().bold, Some(true));
     }
 }
