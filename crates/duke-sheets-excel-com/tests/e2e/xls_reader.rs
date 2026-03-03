@@ -1,0 +1,254 @@
+use crate::{
+    cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm, temp_fixture_xls,
+};
+use duke_sheets_core::cell::CellValue;
+use duke_sheets_xls::XlsReader;
+
+#[test]
+fn test_xls_rich_text() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+
+        wb.set_cell_value("A1", "Hello World").expect("set A1");
+        wb.set_character_font_property("A1", 7, 5, "Bold", serde_json::Value::from(true))
+            .expect("bold World");
+
+        wb.set_cell_value("A2", "Red Blue").expect("set A2");
+        wb.set_character_font_property("A2", 1, 3, "Italic", serde_json::Value::from(true))
+            .expect("italic Red");
+        wb.set_character_font_property("A2", 1, 3, "Color", serde_json::Value::from(0x0000FFi64))
+            .expect("color Red");
+        wb.set_character_font_property("A2", 5, 4, "Bold", serde_json::Value::from(true))
+            .expect("bold Blue");
+        wb.set_character_font_property("A2", 5, 4, "Color", serde_json::Value::from(0xFF0000i64))
+            .expect("color Blue");
+
+        wb.save(&fixture.vm_path).expect("save xls");
+        wb.close().expect("close");
+    }
+
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+
+    match sheet.get_value_at(0, 0) {
+        CellValue::RichText(runs) => {
+            let text: String = runs.iter().map(|r| r.text.as_str()).collect();
+            assert_eq!(text, "Hello World", "A1 text");
+            let has_bold = runs
+                .iter()
+                .any(|r| r.font.as_ref().is_some_and(|f| f.bold == Some(true)));
+            assert!(has_bold, "A1 should have bold run: {runs:#?}");
+        }
+        CellValue::String(s) => {
+            assert_eq!(s.as_ref(), "Hello World", "A1 collapsed to plain");
+        }
+        other => panic!("A1: expected RichText/String, got {other:?}"),
+    }
+
+    match sheet.get_value_at(1, 0) {
+        CellValue::RichText(runs) => {
+            let text: String = runs.iter().map(|r| r.text.as_str()).collect();
+            assert_eq!(text, "Red Blue", "A2 text");
+            let has_italic = runs
+                .iter()
+                .any(|r| r.font.as_ref().is_some_and(|f| f.italic == Some(true)));
+            let has_bold = runs
+                .iter()
+                .any(|r| r.font.as_ref().is_some_and(|f| f.bold == Some(true)));
+            assert!(has_italic, "A2 should have italic run: {runs:#?}");
+            assert!(has_bold, "A2 should have bold run: {runs:#?}");
+        }
+        CellValue::String(s) => {
+            assert_eq!(s.as_ref(), "Red Blue", "A2 collapsed to plain");
+        }
+        other => panic!("A2: expected RichText/String, got {other:?}"),
+    }
+
+    cleanup_fixture(&fixture);
+}
+
+#[test]
+fn test_xls_zoom() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", "Zoom test").expect("set A1");
+        wb.set_page_setup_property("Zoom", serde_json::Value::from(75))
+            .expect("set zoom");
+        wb.set_page_setup_property("FitToPagesWide", serde_json::Value::from(false))
+            .expect("disable FitToPagesWide");
+        wb.set_page_setup_property("FitToPagesTall", serde_json::Value::from(false))
+            .expect("disable FitToPagesTall");
+        wb.save(&fixture.vm_path).expect("save");
+        wb.close().expect("close");
+    }
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+    let ps = sheet.page_setup();
+    assert_eq!(ps.scale, 75, "print scale should be 75, got {}", ps.scale);
+    cleanup_fixture(&fixture);
+}
+
+#[test]
+fn test_xls_view_zoom() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", "View zoom test").expect("set A1");
+        excel
+            .set(
+                0,
+                vec![duke_sheets_excel_com::ChainStep::Property(
+                    "ActiveWindow".to_string(),
+                )],
+                "Zoom",
+                serde_json::Value::from(150),
+            )
+            .expect("set view zoom");
+        wb.save(&fixture.vm_path).expect("save");
+        wb.close().expect("close");
+    }
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+    assert_eq!(sheet.zoom_scale(), Some(150), "view zoom should be 150");
+    cleanup_fixture(&fixture);
+}
+
+#[test]
+fn test_xls_print_gridlines() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", "Gridlines test").expect("set A1");
+        wb.set_page_setup_property("PrintGridlines", serde_json::Value::from(true))
+            .expect("set print gridlines");
+        wb.save(&fixture.vm_path).expect("save");
+        wb.close().expect("close");
+    }
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+    assert!(
+        sheet.page_setup().print_gridlines,
+        "print_gridlines should be true"
+    );
+    cleanup_fixture(&fixture);
+}
+
+#[test]
+fn test_xls_print_headings() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", "Headings test").expect("set A1");
+        wb.set_page_setup_property("PrintHeadings", serde_json::Value::from(true))
+            .expect("set print headings");
+        wb.save(&fixture.vm_path).expect("save");
+        wb.close().expect("close");
+    }
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+    assert!(
+        sheet.page_setup().print_headings,
+        "print_headings should be true"
+    );
+    cleanup_fixture(&fixture);
+}
+
+#[test]
+fn test_xls_print_area() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+        for r in 0..10 {
+            for c in 0..4u16 {
+                let cell = format!("{}{}", (b'A' + c as u8) as char, r + 1);
+                wb.set_cell_value(&cell, (r * 4 + c as u32) as f64)
+                    .expect("set cell");
+            }
+        }
+        wb.set_page_setup_property("PrintArea", serde_json::Value::from("$A$1:$D$10"))
+            .expect("set print area");
+        wb.save(&fixture.vm_path).expect("save");
+        wb.close().expect("close");
+    }
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+    let area = sheet.print_area().expect("should have print area");
+    assert_eq!(area.start.row, 0, "print area first_row");
+    assert_eq!(area.end.row, 9, "print area last_row");
+    assert_eq!(area.start.col, 0, "print area first_col");
+    assert_eq!(area.end.col, 3, "print area last_col");
+    cleanup_fixture(&fixture);
+}
+
+#[test]
+fn test_xls_print_titles() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", "Header 1").expect("set A1");
+        wb.set_cell_value("B1", "Header 2").expect("set B1");
+        wb.set_cell_value("A2", 100.0).expect("set A2");
+        wb.set_page_setup_property("PrintTitleRows", serde_json::Value::from("$1:$2"))
+            .expect("set print title rows");
+        wb.save(&fixture.vm_path).expect("save");
+        wb.close().expect("close");
+    }
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+    let repeat = sheet.repeat_rows().expect("should have repeat_rows");
+    assert_eq!(repeat, (0, 1), "repeat_rows should be (0, 1)");
+    cleanup_fixture(&fixture);
+}
+
+#[test]
+fn test_xls_print_titles_columns() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", "Row header").expect("set A1");
+        wb.set_cell_value("B1", "Data").expect("set B1");
+        wb.set_page_setup_property("PrintTitleColumns", serde_json::Value::from("$A:$B"))
+            .expect("set print title cols");
+        wb.save(&fixture.vm_path).expect("save");
+        wb.close().expect("close");
+    }
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+    let repeat = sheet.repeat_cols().expect("should have repeat_cols");
+    assert_eq!(repeat, (0, 1), "repeat_cols should be (0, 1)");
+    cleanup_fixture(&fixture);
+}

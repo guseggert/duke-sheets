@@ -63,6 +63,19 @@ pub fn temp_fixture() -> TempFixture {
     }
 }
 
+/// Generate a unique temp fixture with .xls extension for XLS format tests.
+pub fn temp_fixture_xls() -> TempFixture {
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    let name = format!("test_{pid}_{n}.xls");
+    let _ = std::fs::create_dir_all(HOST_DIR);
+    TempFixture {
+        host_path: PathBuf::from(format!("{HOST_DIR}/{name}")),
+        vm_path: format!("{VM_DIR}\\{name}"),
+        name: name.clone(),
+    }
+}
+
 /// Ensure C:\temp exists inside the VM (called once).
 pub fn ensure_vm_temp_dir() {
     static DONE: std::sync::Once = std::sync::Once::new();
