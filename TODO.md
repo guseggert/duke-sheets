@@ -229,7 +229,7 @@ or cell-level metadata not available in standalone evaluation):
 - [x] **Data model** — `Hyperlink` struct (URL, display text, tooltip, location)
 - [x] **XLSX reader** — read `<hyperlinks>` + relationship targets
 - [x] **XLSX writer** — write hyperlinks
-- [ ] **XLS reader** — parse `HLINK` record (0x01B8, constant already defined)
+- [x] **XLS reader** — parse `HLINK`/`HLINKTOOLTIP` records (URL, file, and internal monikers with tooltip support)
 
 #### Rich Text Runs
 - [x] **Data model** — `RichTextRun` (text + `RunFont` override), `CellValue::RichText` variant with 25+ match-site updates
@@ -255,10 +255,10 @@ or cell-level metadata not available in standalone evaluation):
 - [x] Formula Phase 3 (shared formulas, array formulas, memory tokens) — **done**
 - [x] **tTbl** (data table formula indicator) — parser emits `ParsedToken::Table`, decompiler outputs `TABLE(<cell>)` placeholder
 - [x] **Future function mapping** — unknown function indices with future-function bit now emit `_xlfn.FUNC<n>(...)` placeholders
-- [ ] **Cell comments** — `NOTE` record (0x001C) not parsed
-- [ ] **Conditional formatting** — `CONDFMT`/`CF` records not parsed (XLSX reader supports this)
-- [ ] **Data validation** — `DVAL`/`DV` records not parsed (XLSX reader supports this)
-- [ ] **Hyperlinks** — `HLINK` record defined but not handled
+- [x] **Cell comments** — `NOTE`/`OBJ`/`TXO` records parsed with object ID correlation and Latin-1/UTF-16LE text support
+- [x] **Conditional formatting** — `CONDFMT`/`CF` records parsed (CellIs with all 8 operators, Expression rule type)
+- [x] **Data validation** — `DVAL`/`DV` records parsed (all 8 validation types, all operators, input/error messages)
+- [x] **Hyperlinks** — `HLINK`/`HLINKTOOLTIP` records parsed (URL moniker, file moniker, internal links, display text, tooltips)
 - [x] **Freeze panes** — `WINDOW2`/`PANE` + `SELECTION` parsed into worksheet freeze pane and sheet-view selection state
 - [x] **Default row/column dimensions** — `DEFCOLWIDTH`/`DEFAULTROWHEIGHT` parsed and applied to worksheet defaults
 - [x] **Outline/grouping** — row/column outline level + collapsed flags extracted from ROW/COLINFO options
@@ -294,7 +294,7 @@ or cell-level metadata not available in standalone evaluation):
 - [x] **Data model** — zoom level, selection (single + multi via `Vec<Selection>`), freeze/split panes; still missing gridline visibility
 - [x] **XLSX reader** — reads `<sheetViews>/<sheetView>` for zoom/selection/panes; multi-selection + multi-range sqref preserved
 - [x] **XLSX writer** — writes `<sheetViews>` for zoom/selection/panes; emits all selections with pane inference
-- [ ] **XLS reader** — parse `WINDOW2`, `PANE`, `SELECTION`
+- [x] **XLS reader** — parse `WINDOW2`, `PANE`, `SELECTION`
 
 #### Charts
 - [ ] Chart data model
@@ -356,8 +356,8 @@ or cell-level metadata not available in standalone evaluation):
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
-| XLS unit (BIFF parser, strings, styles, formula decompiler) | 94 | ✅ |
-| XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 56 | ✅ |
+| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 111 | ✅ |
+| XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas) | 59 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 63 | ✅ |
 | E2E via Excel COM — reader (XLSX) | 62 | ✅ |
@@ -366,7 +366,7 @@ or cell-level metadata not available in standalone evaluation):
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1254** | ✅ |
+| **Total** | **1272** | ✅ |
 
 ---
 
@@ -376,7 +376,7 @@ or cell-level metadata not available in standalone evaluation):
 2. ~~**Structured refs / external refs not evaluated**~~ — Structured refs now fully evaluated (Table1[Col], @ThisRow, #Headers, #Totals, #All, #Data). External refs still return #REF! (external workbooks not loaded).
 3. ~~**XLSX writer uses inline strings**~~ — Fixed. Now uses shared string table (SST).
 4. ~~**Theme colors not resolved**~~ — Fixed. XLSX reader parses `xl/theme/theme1.xml` and resolves theme+tint colors in styles and conditional formatting.
-5. **XLS reader drops comments, hyperlinks, CF, DV** — these features are supported by the XLSX reader but silently skipped in XLS
+5. ~~**XLS reader drops comments, hyperlinks, CF, DV**~~ — Fixed. XLS reader now parses NOTE/OBJ/TXO (comments), HLINK/HLINKTOOLTIP (hyperlinks), CONDFMT/CF (conditional formatting), and DVAL/DV (data validation)
 6. ~~**Comment VML not written**~~ — Fixed. Writer now emits VML note shapes, worksheet `legacyDrawing`, and VML/comment relationships.
 
 ---
