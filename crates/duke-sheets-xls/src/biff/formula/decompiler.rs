@@ -118,14 +118,20 @@ fn format_error(code: u8) -> &'static str {
         0x24 => "#NUM!",
         0x2A => "#N/A",
         0x2B => "#GETTING_DATA",
+        0x2C => "#CALC!",
+        0x2D => "#SPILL!",
+        0x2E => "#CONNECT!",
+        0x2F => "#BLOCKED!",
+        0x30 => "#UNKNOWN!",
+        0x31 => "#FIELD!",
         _ => "#UNKNOWN!",
     }
 }
 
 /// Format a floating-point number for display in a formula.
 ///
-/// Strips trailing zeros and unnecessary decimal points, matching Excel's
-/// compact representation.
+/// Integers are rendered without a decimal point.  Floats use Rust's
+/// default `Display` which already produces a compact representation.
 fn format_number(val: f64) -> String {
     if val == val.trunc() && val.abs() < 1e15 {
         // Integer value — no decimal point needed
@@ -383,7 +389,11 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
             } => {
                 let ref_str = format_ref(*row, *col, *row_relative, *col_relative);
                 let sheet = resolve_sheet_prefix(ctx, *extern_sheet_idx);
-                stack.push(StackEntry::atom(format!("{}!{}", sheet, ref_str)));
+                if sheet.is_empty() {
+                    stack.push(StackEntry::atom(ref_str));
+                } else {
+                    stack.push(StackEntry::atom(format!("{}!{}", sheet, ref_str)));
+                }
             }
             ParsedToken::Area3d {
                 extern_sheet_idx,
@@ -407,7 +417,11 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                     *last_col_rel,
                 );
                 let sheet = resolve_sheet_prefix(ctx, *extern_sheet_idx);
-                stack.push(StackEntry::atom(format!("{}!{}", sheet, area_str)));
+                if sheet.is_empty() {
+                    stack.push(StackEntry::atom(area_str));
+                } else {
+                    stack.push(StackEntry::atom(format!("{}!{}", sheet, area_str)));
+                }
             }
             ParsedToken::RefErr3d { .. } | ParsedToken::AreaErr3d { .. } => {
                 stack.push(StackEntry::atom("#REF!".to_string()));
@@ -433,8 +447,8 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
             // MemFunc — no-op for decompilation; sub-expression tokens handle it
             ParsedToken::MemFunc { .. } => {}
 
-            ParsedToken::Unknown(_) => {
-                stack.push(StackEntry::atom("<?>".to_string()));
+            ParsedToken::Unknown(byte) => {
+                stack.push(StackEntry::atom(format!("<?{:#04X}>", byte)));
             }
         }
     }
@@ -1344,5 +1358,149 @@ mod tests {
         let ctx = empty_ctx();
         let tokens = vec![ParsedToken::Func { func_idx: 0x8001 }];
         assert_eq!(decompile(&tokens, &ctx), "_xlfn.FUNC1()");
+    }
+
+    // ---- Tests for decompiler edge case fixes ----
+
+    #[test]
+    fn test_error_code_calc() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Err(0x2C)];
+        assert_eq!(decompile(&tokens, &ctx), "#CALC!");
+    }
+
+    #[test]
+    fn test_error_code_spill() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Err(0x2D)];
+        assert_eq!(decompile(&tokens, &ctx), "#SPILL!");
+    }
+
+    #[test]
+    fn test_error_code_connect() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Err(0x2E)];
+        assert_eq!(decompile(&tokens, &ctx), "#CONNECT!");
+    }
+
+    #[test]
+    fn test_error_code_blocked() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Err(0x2F)];
+        assert_eq!(decompile(&tokens, &ctx), "#BLOCKED!");
+    }
+
+    #[test]
+    fn test_error_code_unknown() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Err(0x30)];
+        assert_eq!(decompile(&tokens, &ctx), "#UNKNOWN!");
+    }
+
+    #[test]
+    fn test_error_code_field() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Err(0x31)];
+        assert_eq!(decompile(&tokens, &ctx), "#FIELD!");
+    }
+
+    #[test]
+    fn test_error_code_getting_data() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Err(0x2B)];
+        assert_eq!(decompile(&tokens, &ctx), "#GETTING_DATA");
+    }
+
+    #[test]
+    fn test_error_code_unrecognized_falls_back() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Err(0xFF)];
+        assert_eq!(decompile(&tokens, &ctx), "#UNKNOWN!");
+    }
+
+    #[test]
+    fn test_ref3d_empty_sheet_prefix() {
+        // A workbook-level EXTERNSHEET entry (first_sheet=0xFFFE) produces an
+        // empty sheet prefix. Ref3d should output just the cell reference
+        // without a leading '!'.
+        let ctx = FormulaContext {
+            sheet_names: vec!["Sheet1".to_string()],
+            supbooks: vec![SupBook::SelfRef { sheet_count: 1 }],
+            extern_sheet: vec![ExternSheetEntry {
+                sup_book_idx: 0,
+                first_sheet: 0xFFFE,
+                last_sheet: 0xFFFE,
+            }],
+            names: Vec::new(),
+            base_cell: None,
+        };
+        let tokens = vec![ParsedToken::Ref3d {
+            extern_sheet_idx: 0,
+            row: 0,
+            col: 0,
+            row_relative: false,
+            col_relative: false,
+        }];
+        let result = decompile(&tokens, &ctx);
+        assert!(
+            !result.starts_with('!'),
+            "got '{}' — should not have leading '!'",
+            result
+        );
+        assert_eq!(result, "$A$1");
+    }
+
+    #[test]
+    fn test_area3d_empty_sheet_prefix() {
+        // Same scenario for Area3d with workbook-level EXTERNSHEET entry.
+        let ctx = FormulaContext {
+            sheet_names: vec!["Sheet1".to_string()],
+            supbooks: vec![SupBook::SelfRef { sheet_count: 1 }],
+            extern_sheet: vec![ExternSheetEntry {
+                sup_book_idx: 0,
+                first_sheet: 0xFFFE,
+                last_sheet: 0xFFFE,
+            }],
+            names: Vec::new(),
+            base_cell: None,
+        };
+        let tokens = vec![ParsedToken::Area3d {
+            extern_sheet_idx: 0,
+            first_row: 0,
+            last_row: 1,
+            first_col: 0,
+            last_col: 1,
+            first_row_rel: false,
+            first_col_rel: false,
+            last_row_rel: false,
+            last_col_rel: false,
+        }];
+        let result = decompile(&tokens, &ctx);
+        assert!(
+            !result.starts_with('!'),
+            "got '{}' — should not have leading '!'",
+            result
+        );
+        assert_eq!(result, "$A$1:$B$2");
+    }
+
+    #[test]
+    fn test_unknown_token_includes_hex() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Unknown(0xAB)];
+        let result = decompile(&tokens, &ctx);
+        assert!(
+            result.contains("0xAB"),
+            "got '{}' — should contain hex byte",
+            result
+        );
+        assert_eq!(result, "<?0xAB>");
+    }
+
+    #[test]
+    fn test_unknown_token_zero() {
+        let ctx = empty_ctx();
+        let tokens = vec![ParsedToken::Unknown(0x00)];
+        assert_eq!(decompile(&tokens, &ctx), "<?0x00>");
     }
 }
