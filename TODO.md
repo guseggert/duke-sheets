@@ -144,7 +144,7 @@
 - [x] Implicit intersection operator (`@`)
 - [x] Spill range operator (`#`)
 - [x] Better error messages for unknown characters
-- [ ] Some complex formulas may still fail to parse (edge cases)
+- [x] Decompiler edge cases fixed: Ref3d/Area3d empty sheet prefix, extended error codes (#CALC!, #SPILL!, etc.), hex format for unknown tokens
 
 ### Array Formulas
 - [x] Array literals (`{1,2,3}`)
@@ -361,18 +361,18 @@ or cell-level metadata not available in standalone evaluation):
 | XLSX style roundtrip | 10 | ✅ |
 | XLSX escape decoding | 9 | ✅ |
 | Formula E2E | 10 | ✅ |
-| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 150 | ✅ |
+| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 166 | ✅ |
 | XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas, comments, CF, DV) | 68 | ✅ |
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 63 | ✅ |
 | E2E via Excel COM — reader (XLSX) | 62 | ✅ |
-| E2E via Excel COM — reader (XLS) | 8 | ✅ |
+| E2E via Excel COM — reader (XLS) | 10 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 35 | ✅ |
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1328** | ✅ |
+| **Total** | **1346** | ✅ |
 
 ---
 
