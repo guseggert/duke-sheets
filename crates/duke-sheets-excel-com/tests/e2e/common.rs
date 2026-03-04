@@ -224,7 +224,7 @@ pub fn roundtrip_through_excel(wb: &duke_sheets_core::Workbook) -> duke_sheets_c
 // ---------------------------------------------------------------------------
 
 /// Run a PowerShell command on the VM via WinRM and return stdout.
-fn run_winrm_ps(script: &str) -> Result<String, String> {
+pub fn run_winrm_ps(script: &str) -> Result<String, String> {
     let utf16: Vec<u8> = script
         .encode_utf16()
         .flat_map(|c| c.to_le_bytes())
