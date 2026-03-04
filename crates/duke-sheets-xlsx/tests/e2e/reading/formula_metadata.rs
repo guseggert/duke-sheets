@@ -164,11 +164,12 @@ fn test_reader_parses_cm_attribute() {
     );
     assert_eq!(sheet.get_value("A1").unwrap().as_number(), Some(1.0));
 
-    // A2 and A3 are plain numeric values (ghost cells with cm=2)
-    // After reading, they are just numbers (not SpillTarget — that's
-    // reconstructed by the formula engine during calculation).
-    assert_eq!(sheet.get_value("A2").unwrap().as_number(), Some(2.0));
-    assert_eq!(sheet.get_value("A3").unwrap().as_number(), Some(3.0));
+    // Ghost cells are now SpillTarget (reader reconstructs dynamic array)
+    assert!(sheet.get_value("A2").unwrap().is_spill_target());
+    assert!(sheet.get_value("A3").unwrap().is_spill_target());
+    // Resolved values match
+    assert_eq!(sheet.get_value_at(1, 0).as_number(), Some(2.0));
+    assert_eq!(sheet.get_value_at(2, 0).as_number(), Some(3.0));
 
     cleanup_fixture(&path);
 }
@@ -202,9 +203,11 @@ fn test_reader_parses_cm_attribute_string_ghost() {
         Some("=UNIQUE(B1:B3)")
     );
 
-    // Ghost cells are plain strings
-    assert_eq!(sheet.get_value("A2").unwrap().as_string(), Some("banana"));
-    assert_eq!(sheet.get_value("A3").unwrap().as_string(), Some("cherry"));
+    // Ghost cells are SpillTarget; resolved values are strings
+    assert!(sheet.get_value("A2").unwrap().is_spill_target());
+    assert!(sheet.get_value("A3").unwrap().is_spill_target());
+    assert_eq!(sheet.get_value_at(1, 0).as_string(), Some("banana"));
+    assert_eq!(sheet.get_value_at(2, 0).as_string(), Some("cherry"));
 
     cleanup_fixture(&path);
 }

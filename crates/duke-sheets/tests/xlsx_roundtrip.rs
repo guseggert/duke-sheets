@@ -1613,9 +1613,7 @@ fn roundtrip_mixed_breaks() {
     assert_eq!(ws2.col_breaks()[0].id, 2);
 }
 
-// ===========================================================================
 // Dynamic array spilling — XLSX metadata roundtrip
-// ===========================================================================
 
 /// Verify that SEQUENCE formula produces spilled values that survive roundtrip.
 /// After calculate→write→read, the anchor cell keeps its formula and the
@@ -1688,12 +1686,14 @@ fn roundtrip_dynamic_array_sequence() {
         other => panic!("A1 should be a formula, got {:?}", other),
     }
 
-    // A2 and A3 should have cached numeric values (written as plain cells)
-    // They were SpillTarget in memory but written as value cells.
+    // Ghost cells should now be SpillTarget (reader reconstructs dynamic array)
     let a2 = ws2.get_value("A2").unwrap();
-    assert_eq!(a2.as_number(), Some(2.0), "A2 cached spill value");
+    assert!(a2.is_spill_target(), "A2 should be SpillTarget, got {:?}", a2);
     let a3 = ws2.get_value("A3").unwrap();
-    assert_eq!(a3.as_number(), Some(3.0), "A3 cached spill value");
+    assert!(a3.is_spill_target(), "A3 should be SpillTarget, got {:?}", a3);
+    // Resolved values match
+    assert_eq!(ws2.get_value_at(1, 0).as_number(), Some(2.0), "A2 resolved");
+    assert_eq!(ws2.get_value_at(2, 0).as_number(), Some(3.0), "A3 resolved");
 }
 
 /// Verify that a 2D SEQUENCE (rows × cols) roundtrips correctly.
@@ -1726,12 +1726,17 @@ fn roundtrip_dynamic_array_sequence_2d() {
         other => panic!("A1 should be formula, got {:?}", other),
     }
 
-    // Spill targets become plain cached values after roundtrip
-    assert_eq!(ws2.get_value("B1").unwrap().as_number(), Some(2.0));
-    assert_eq!(ws2.get_value("C1").unwrap().as_number(), Some(3.0));
-    assert_eq!(ws2.get_value("A2").unwrap().as_number(), Some(4.0));
-    assert_eq!(ws2.get_value("B2").unwrap().as_number(), Some(5.0));
-    assert_eq!(ws2.get_value("C2").unwrap().as_number(), Some(6.0));
+    // Ghost cells are now SpillTarget; resolved values match
+    assert!(ws2.get_value("B1").unwrap().is_spill_target());
+    assert!(ws2.get_value("C1").unwrap().is_spill_target());
+    assert!(ws2.get_value("A2").unwrap().is_spill_target());
+    assert!(ws2.get_value("B2").unwrap().is_spill_target());
+    assert!(ws2.get_value("C2").unwrap().is_spill_target());
+    assert_eq!(ws2.get_value_at(0, 1).as_number(), Some(2.0));
+    assert_eq!(ws2.get_value_at(0, 2).as_number(), Some(3.0));
+    assert_eq!(ws2.get_value_at(1, 0).as_number(), Some(4.0));
+    assert_eq!(ws2.get_value_at(1, 1).as_number(), Some(5.0));
+    assert_eq!(ws2.get_value_at(1, 2).as_number(), Some(6.0));
 }
 
 /// Verify metadata.xml is NOT written when there are no dynamic arrays.
@@ -1844,9 +1849,11 @@ fn roundtrip_dynamic_array_unique_strings() {
 
     // Anchor keeps formula
     assert!(ws2.get_value("B1").unwrap().formula_text().is_some());
-    // Ghost cells become plain string values
-    assert_eq!(ws2.get_value("B2").unwrap().as_string(), Some("banana"));
-    assert_eq!(ws2.get_value("B3").unwrap().as_string(), Some("cherry"));
+    // Ghost cells are now SpillTarget; resolved values match
+    assert!(ws2.get_value("B2").unwrap().is_spill_target());
+    assert!(ws2.get_value("B3").unwrap().is_spill_target());
+    assert_eq!(ws2.get_value_at(1, 1).as_string(), Some("banana"));
+    assert_eq!(ws2.get_value_at(2, 1).as_string(), Some("cherry"));
     // B4 should be empty (only 3 unique values)
     let b4 = ws2.get_value("B4").unwrap();
     assert!(
@@ -1997,12 +2004,17 @@ fn roundtrip_dynamic_array_multiple_on_same_sheet() {
     // Both formulas survive
     assert!(ws2.get_value("A1").unwrap().formula_text().is_some());
     assert!(ws2.get_value("C1").unwrap().formula_text().is_some());
-    // Cached values for ghost cells
-    assert_eq!(ws2.get_value("A2").unwrap().as_number(), Some(2.0));
-    assert_eq!(ws2.get_value("A3").unwrap().as_number(), Some(3.0));
-    assert_eq!(ws2.get_value("D1").unwrap().as_number(), Some(2.0));
-    assert_eq!(ws2.get_value("C2").unwrap().as_number(), Some(3.0));
-    assert_eq!(ws2.get_value("D2").unwrap().as_number(), Some(4.0));
+    // Ghost cells are SpillTarget; resolved values match
+    assert!(ws2.get_value("A2").unwrap().is_spill_target());
+    assert!(ws2.get_value("A3").unwrap().is_spill_target());
+    assert!(ws2.get_value("D1").unwrap().is_spill_target());
+    assert!(ws2.get_value("C2").unwrap().is_spill_target());
+    assert!(ws2.get_value("D2").unwrap().is_spill_target());
+    assert_eq!(ws2.get_value_at(1, 0).as_number(), Some(2.0));
+    assert_eq!(ws2.get_value_at(2, 0).as_number(), Some(3.0));
+    assert_eq!(ws2.get_value_at(0, 3).as_number(), Some(2.0));
+    assert_eq!(ws2.get_value_at(1, 2).as_number(), Some(3.0));
+    assert_eq!(ws2.get_value_at(1, 3).as_number(), Some(4.0));
 }
 
 /// Verify dynamic arrays on multiple sheets.
@@ -2028,16 +2040,19 @@ fn roundtrip_dynamic_array_multi_sheet() {
 
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
 
-    // Sheet1: A1 formula, A2 cached value
+    // Sheet1: A1 formula, A2 SpillTarget
     let s1 = wb2.worksheet(0).unwrap();
     assert!(s1.get_value("A1").unwrap().formula_text().is_some());
-    assert_eq!(s1.get_value("A2").unwrap().as_number(), Some(2.0));
+    assert!(s1.get_value("A2").unwrap().is_spill_target());
+    assert_eq!(s1.get_value_at(1, 0).as_number(), Some(2.0));
 
-    // Sheet2: A1 formula, A2-A3 cached values
+    // Sheet2: A1 formula, A2-A3 SpillTarget
     let s2 = wb2.worksheet(1).unwrap();
     assert!(s2.get_value("A1").unwrap().formula_text().is_some());
-    assert_eq!(s2.get_value("A2").unwrap().as_number(), Some(2.0));
-    assert_eq!(s2.get_value("A3").unwrap().as_number(), Some(3.0));
+    assert!(s2.get_value("A2").unwrap().is_spill_target());
+    assert!(s2.get_value("A3").unwrap().is_spill_target());
+    assert_eq!(s2.get_value_at(1, 0).as_number(), Some(2.0));
+    assert_eq!(s2.get_value_at(2, 0).as_number(), Some(3.0));
 }
 
 /// Validate the structure of xl/metadata.xml.
@@ -2139,8 +2154,10 @@ fn roundtrip_dynamic_array_sort_strings() {
     let ws2 = wb2.worksheet(0).unwrap();
 
     assert!(ws2.get_value("B1").unwrap().formula_text().is_some());
-    assert_eq!(ws2.get_value("B2").unwrap().as_string(), Some("banana"));
-    assert_eq!(ws2.get_value("B3").unwrap().as_string(), Some("cherry"));
+    assert!(ws2.get_value("B2").unwrap().is_spill_target());
+    assert!(ws2.get_value("B3").unwrap().is_spill_target());
+    assert_eq!(ws2.get_value_at(1, 1).as_string(), Some("banana"));
+    assert_eq!(ws2.get_value_at(2, 1).as_string(), Some("cherry"));
 }
 
 /// Verify boolean array from comparison operator roundtrips with correct
@@ -2233,16 +2250,11 @@ fn roundtrip_dynamic_array_comparison_boolean() {
     let a1 = ws2.get_value("A1").unwrap();
     assert!(a1.formula_text().is_some(), "A1 should still be a formula");
 
-    // Ghost cells should have boolean values
-    let a2 = ws2.get_value("A2").unwrap();
-    assert_eq!(
-        a2.as_bool(),
-        Some(false),
-        "A2 should be false, got {:?}",
-        a2
-    );
-    let a3 = ws2.get_value("A3").unwrap();
-    assert_eq!(a3.as_bool(), Some(true), "A3 should be true, got {:?}", a3);
-    let a4 = ws2.get_value("A4").unwrap();
-    assert_eq!(a4.as_bool(), Some(true), "A4 should be true, got {:?}", a4);
+    // Ghost cells are SpillTarget; resolved values are booleans
+    assert!(ws2.get_value("A2").unwrap().is_spill_target());
+    assert!(ws2.get_value("A3").unwrap().is_spill_target());
+    assert!(ws2.get_value("A4").unwrap().is_spill_target());
+    assert_eq!(ws2.get_value_at(1, 0).as_bool(), Some(false));
+    assert_eq!(ws2.get_value_at(2, 0).as_bool(), Some(true));
+    assert_eq!(ws2.get_value_at(3, 0).as_bool(), Some(true));
 }

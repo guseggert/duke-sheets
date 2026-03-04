@@ -281,6 +281,7 @@ mod tests {
     use std::io::{Cursor, Write};
 
     use crate::reader::XlsxReader;
+    use duke_sheets_core::CellValue;
 
     fn build_single_sheet_xlsx(sheet_xml: &str) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -565,5 +566,147 @@ mod tests {
         assert_eq!(a1.as_number(), Some(15.0));
         // Single-cell array formula: anchor has array_result with one element
         assert!(a1.is_array_formula());
+    }
+
+    #[test]
+    fn test_read_dynamic_array_column() {
+        // Dynamic array: cm="1" on anchor, cm="2" on ghosts (column spill)
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" cm="1"><f>SEQUENCE(3)</f><v>1</v></c>
+    </row>
+    <row r="2"><c r="A2" cm="2"><v>2</v></c></row>
+    <row r="3"><c r="A3" cm="2"><v>3</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        let a1 = sheet.get_value("A1").unwrap();
+        assert_eq!(a1.formula_text(), Some("=SEQUENCE(3)"));
+        assert!(a1.is_array_formula(), "anchor should have array_result");
+        assert_eq!(a1.as_number(), Some(1.0));
+
+        let a2 = sheet.get_value("A2").unwrap();
+        assert!(a2.is_spill_target(), "A2 should be SpillTarget");
+        assert_eq!(a2.spill_source(), Some((0, 0)));
+
+        let a3 = sheet.get_value("A3").unwrap();
+        assert!(a3.is_spill_target(), "A3 should be SpillTarget");
+        assert_eq!(a3.spill_source(), Some((0, 0)));
+
+        // SpillTarget resolution returns the actual values
+        assert_eq!(sheet.get_value_at(1, 0), CellValue::Number(2.0));
+        assert_eq!(sheet.get_value_at(2, 0), CellValue::Number(3.0));
+    }
+
+    #[test]
+    fn test_read_dynamic_array_2d() {
+        // 2D dynamic array: 2 rows x 3 cols
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" cm="1"><f>SEQUENCE(2,3)</f><v>1</v></c>
+      <c r="B1" cm="2"><v>2</v></c>
+      <c r="C1" cm="2"><v>3</v></c>
+    </row>
+    <row r="2">
+      <c r="A2" cm="2"><v>4</v></c>
+      <c r="B2" cm="2"><v>5</v></c>
+      <c r="C2" cm="2"><v>6</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        let a1 = sheet.get_value("A1").unwrap();
+        assert!(a1.is_array_formula(), "anchor should have array_result");
+        assert_eq!(a1.as_number(), Some(1.0));
+
+        // All non-anchor cells are SpillTargets
+        for (cell_ref, expected_source) in [
+            ("B1", (0u32, 0u16)),
+            ("C1", (0, 0)),
+            ("A2", (0, 0)),
+            ("B2", (0, 0)),
+            ("C2", (0, 0)),
+        ] {
+            let val = sheet.get_value(cell_ref).unwrap();
+            assert!(val.is_spill_target(), "{cell_ref} should be SpillTarget");
+            assert_eq!(val.spill_source(), Some(expected_source), "{cell_ref} source");
+        }
+
+        // Resolution gives correct values
+        assert_eq!(sheet.get_value_at(0, 1), CellValue::Number(2.0));
+        assert_eq!(sheet.get_value_at(0, 2), CellValue::Number(3.0));
+        assert_eq!(sheet.get_value_at(1, 0), CellValue::Number(4.0));
+        assert_eq!(sheet.get_value_at(1, 1), CellValue::Number(5.0));
+        assert_eq!(sheet.get_value_at(1, 2), CellValue::Number(6.0));
+    }
+
+    #[test]
+    fn test_read_dynamic_array_single_cell() {
+        // Single-cell dynamic array: cm="1" with no ghosts
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" cm="1"><f>TODAY()</f><v>45000</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        let a1 = sheet.get_value("A1").unwrap();
+        assert_eq!(a1.formula_text(), Some("=TODAY()"));
+        // Single-cell anchor: array_result with 1x1 grid
+        assert!(a1.is_array_formula(), "single-cell anchor should have array_result");
+        assert_eq!(a1.as_number(), Some(45000.0));
+    }
+
+    #[test]
+    fn test_read_dynamic_array_with_strings() {
+        // Dynamic array with string values
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" cm="1" t="str"><f>UNIQUE(B1:B3)</f><v>apple</v></c>
+    </row>
+    <row r="2"><c r="A2" cm="2" t="str"><v>banana</v></c></row>
+    <row r="3"><c r="A3" cm="2" t="str"><v>cherry</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        let a1 = sheet.get_value("A1").unwrap();
+        assert!(a1.is_array_formula());
+
+        let a2 = sheet.get_value("A2").unwrap();
+        assert!(a2.is_spill_target());
+
+        // Resolved values
+        assert_eq!(
+            sheet.get_value_at(1, 0),
+            CellValue::String("banana".to_string().into())
+        );
+        assert_eq!(
+            sheet.get_value_at(2, 0),
+            CellValue::String("cherry".to_string().into())
+        );
     }
 }
