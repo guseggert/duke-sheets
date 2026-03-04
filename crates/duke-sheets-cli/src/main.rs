@@ -60,6 +60,39 @@ enum Commands {
         /// Input spreadsheet file
         input: PathBuf,
     },
+
+    /// Convert a spreadsheet to HTML and output to stdout or file
+    #[command(alias = "html")]
+    ToHtml {
+        /// Input spreadsheet file (xlsx, xls, csv)
+        input: PathBuf,
+
+        /// Output HTML file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Sheet index to convert (0-based, default: 0)
+        #[arg(short, long, default_value = "0")]
+        sheet: usize,
+
+        /// Skip formula calculation (formulas are calculated by default
+        /// so that cells show values instead of blanks).
+        #[arg(long)]
+        no_calculate: bool,
+
+        /// Emit raw values instead of formatted (by default, Excel number
+        /// formats are applied so dates, percentages, etc. render properly).
+        #[arg(long)]
+        raw: bool,
+
+        /// Output only the <table> element (no full HTML document wrapper)
+        #[arg(long)]
+        fragment: bool,
+
+        /// Custom document title
+        #[arg(short, long)]
+        title: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -83,6 +116,15 @@ fn main() -> Result<()> {
         ),
         Commands::Info { input } => show_info(&input),
         Commands::Sheets { input } => list_sheets(&input),
+        Commands::ToHtml {
+            input,
+            output,
+            sheet,
+            no_calculate,
+            raw,
+            fragment,
+            title,
+        } => to_html(&input, output.as_deref(), sheet, !no_calculate, raw, fragment, title),
     }
 }
 
@@ -260,6 +302,57 @@ fn list_sheets(input: &PathBuf) -> Result<()> {
         if let Some(sheet) = workbook.worksheet(i) {
             println!("{}\t{}", i, sheet.name());
         }
+    }
+
+    Ok(())
+}
+
+fn to_html(
+    input: &PathBuf,
+    output: Option<&std::path::Path>,
+    sheet_idx: usize,
+    calculate: bool,
+    raw: bool,
+    fragment: bool,
+    title: Option<String>,
+) -> Result<()> {
+    let mut workbook =
+        Workbook::open(input).with_context(|| format!("Failed to open '{}'", input.display()))?;
+
+    if calculate {
+        let stats = workbook
+            .calculate_with_options(&CalculationOptions {
+                force_full_calculation: true,
+                ..Default::default()
+            })
+            .context("Failed to calculate formulas")?;
+
+        eprintln!(
+            "Calculated {} formulas ({} errors)",
+            stats.cells_calculated, stats.errors
+        );
+    }
+
+    let sheet = workbook
+        .worksheet(sheet_idx)
+        .with_context(|| format!("Sheet index {} not found", sheet_idx))?;
+
+    let options = duke_sheets_html::HtmlOptions {
+        full_document: !fragment,
+        title,
+        formatted: !raw,
+    };
+
+    let html = duke_sheets_html::worksheet_to_html(sheet, &options);
+
+    if let Some(output_path) = output {
+        std::fs::write(output_path, &html)
+            .with_context(|| format!("Failed to write '{}'", output_path.display()))?;
+        eprintln!("Wrote HTML to '{}'", output_path.display());
+    } else {
+        io::stdout()
+            .write_all(html.as_bytes())
+            .context("Failed to write to stdout")?;
     }
 
     Ok(())
