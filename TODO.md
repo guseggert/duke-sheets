@@ -82,7 +82,7 @@
 - [x] On-demand E2E test fixtures via global LO connection singleton
 
 ### Excel COM Bridge
-- [x] Generic COM proxy protocol (Get/Set/Invoke over NDJSON-over-TCP)
+- [x] Generic COM proxy protocol (Get/Set/Invoke/Navigate over NDJSON-over-TCP)
 - [x] C# bridge server for Windows VM (`tools/excel-bridge-server/`)
 - [x] Rust TCP client with typed Excel convenience methods
 - [x] QEMU/KVM VM management scripts (`tools/vm/`)
@@ -366,13 +366,13 @@ or cell-level metadata not available in standalone evaluation):
 | XLS real-file integration | 2 | ✅ |
 | E2E XLSX reader integration (LO + handcrafted OOXML) | 63 | ✅ |
 | E2E via Excel COM — reader (XLSX) | 62 | ✅ |
-| E2E via Excel COM — reader (XLS) | 10 | ✅ |
+| E2E via Excel COM — reader (XLS) | 13 | ✅ |
 | E2E via Excel COM — writer (XLSX) | 35 | ✅ |
 | XLSX formatting roundtrip | 17 | ✅ |
 | Shared string reader | 9 | ✅ |
 | Rich text unit tests | 4 | ✅ |
 | Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1346** | ✅ |
+| **Total** | **1349** | ✅ |
 
 ---
 

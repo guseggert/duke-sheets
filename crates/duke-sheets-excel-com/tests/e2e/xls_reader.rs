@@ -256,6 +256,241 @@ fn test_xls_print_titles_columns() {
     cleanup_fixture(&fixture);
 }
 
+#[test]
+fn test_xls_shared_formula() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+
+        for (i, v) in [10.0, 20.0, 30.0, 40.0, 50.0].iter().enumerate() {
+            let cell = format!("A{}", i + 1);
+            wb.set_cell_value(&cell, *v).expect("set A");
+        }
+        for (i, v) in [1.0, 2.0, 3.0, 4.0, 5.0].iter().enumerate() {
+            let cell = format!("B{}", i + 1);
+            wb.set_cell_value(&cell, *v).expect("set B");
+        }
+
+        wb.set_cell_formula("C1", "=A1+B1").expect("set C1 formula");
+        let h = wb.handle();
+        excel
+            .invoke(
+                h,
+                vec![
+                    SheetRef::Index(0).to_chain_step(),
+                    ChainStep::Indexed("Range".to_string(), serde_json::Value::from("C1:C5")),
+                ],
+                "FillDown",
+                vec![],
+            )
+            .expect("FillDown");
+
+        wb.save(&fixture.vm_path).expect("save xls");
+        wb.close().expect("close");
+    }
+
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+
+    let expected = [11.0, 22.0, 33.0, 44.0, 55.0];
+    for (row, expected_value) in expected.iter().enumerate() {
+        match sheet.get_value_at(row as u32, 2) {
+            CellValue::Formula {
+                text, cached_value, ..
+            } => {
+                if row == 0 {
+                    assert!(
+                        text.contains("A1") && text.contains("B1"),
+                        "C1 formula: {text}"
+                    );
+                }
+                if row == 1 {
+                    assert!(
+                        text.contains("A2") && text.contains("B2"),
+                        "C2 formula: {text}"
+                    );
+                }
+                if row == 4 {
+                    assert!(
+                        text.contains("A5") && text.contains("B5"),
+                        "C5 formula: {text}"
+                    );
+                }
+
+                let cached = cached_value
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("C{} missing cached value", row + 1));
+                match cached.as_ref() {
+                    CellValue::Number(n) => {
+                        assert_eq!(*n, *expected_value, "C{} cached value", row + 1);
+                    }
+                    other => panic!("C{} expected numeric cache, got {other:?}", row + 1),
+                }
+            }
+            other => panic!("C{} expected Formula, got {other:?}", row + 1),
+        }
+    }
+
+    cleanup_fixture(&fixture);
+}
+
+#[test]
+fn test_xls_cse_array_formula() {
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+
+        for (i, v) in [2.0, 3.0, 4.0].iter().enumerate() {
+            let cell = format!("A{}", i + 1);
+            wb.set_cell_value(&cell, *v).expect("set A");
+        }
+        for (i, v) in [5.0, 6.0, 7.0].iter().enumerate() {
+            let cell = format!("B{}", i + 1);
+            wb.set_cell_value(&cell, *v).expect("set B");
+        }
+
+        let h = wb.handle();
+        excel
+            .set(
+                h,
+                vec![
+                    SheetRef::Index(0).to_chain_step(),
+                    ChainStep::Indexed("Range".to_string(), serde_json::Value::from("C1")),
+                ],
+                "FormulaArray",
+                serde_json::Value::from("=SUM(A1:A3*B1:B3)"),
+            )
+            .expect("set array formula");
+
+        wb.save(&fixture.vm_path).expect("save xls");
+        wb.close().expect("close");
+    }
+
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+
+    match sheet.get_value_at(0, 2) {
+        CellValue::Formula {
+            text, cached_value, ..
+        } => {
+            assert!(text.starts_with("{="), "C1 should be CSE formula: {text}");
+            assert!(text.ends_with('}'), "C1 should end with }}: {text}");
+            assert!(text.contains("SUM"), "C1 should contain SUM: {text}");
+            assert!(text.contains("A1:A3"), "C1 should contain A1:A3: {text}");
+            assert!(text.contains("B1:B3"), "C1 should contain B1:B3: {text}");
+
+            let cached = cached_value.as_ref().expect("C1 missing cached value");
+            match cached.as_ref() {
+                CellValue::Number(n) => assert_eq!(*n, 56.0, "C1 cached value"),
+                other => panic!("C1 expected numeric cache, got {other:?}"),
+            }
+        }
+        other => panic!("C1 expected Formula, got {other:?}"),
+    }
+
+    cleanup_fixture(&fixture);
+}
+
+#[test]
+fn test_xls_data_table_formula() {
+    // Range.Table() requires Range objects as arguments.  The bridge now
+    // supports {"$ref": handle} in invoke args to pass stored COM objects.
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+
+        wb.set_cell_value("A1", "Input").expect("header");
+        wb.set_cell_formula("D1", "=A1*2").expect("master formula");
+        for (i, v) in [1.0, 2.0, 3.0, 4.0, 5.0].iter().enumerate() {
+            let cell = format!("A{}", i + 2);
+            wb.set_cell_value(&cell, *v).expect("set input");
+        }
+
+        let h = wb.handle();
+
+        // Get a handle to Range("A1") — the column-input cell for the data table.
+        // Use navigate() to walk the chain and store the endpoint as a handle.
+        let a1_handle = excel
+            .navigate(
+                h,
+                vec![
+                    SheetRef::Index(0).to_chain_step(),
+                    ChainStep::Indexed("Range".to_string(), serde_json::Value::from("A1")),
+                ],
+            )
+            .expect("navigate to Range A1");
+
+        // Call Range("A1:D6").Table(RowInput:=Nothing, ColumnInput:=Range("A1"))
+        // using {"$ref": handle} to pass the Range object
+        excel
+            .invoke(
+                h,
+                vec![
+                    SheetRef::Index(0).to_chain_step(),
+                    ChainStep::Indexed("Range".to_string(), serde_json::Value::from("A1:D6")),
+                ],
+                "Table",
+                vec![
+                    serde_json::Value::Null,
+                    serde_json::json!({"$ref": a1_handle}),
+                ],
+            )
+            .expect("create data table");
+
+        // Release the Range handle
+        let _ = excel.release(a1_handle);
+
+        wb.save(&fixture.vm_path).expect("save xls");
+        wb.close().expect("close");
+    }
+
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+
+    let expected = [2.0, 4.0, 6.0, 8.0, 10.0];
+    for (i, expected_value) in expected.iter().enumerate() {
+        let row = (i + 1) as u32;
+        match sheet.get_value_at(row, 3) {
+            CellValue::Formula {
+                text, cached_value, ..
+            } => {
+                let formula_upper = text.to_ascii_uppercase();
+                assert!(
+                    formula_upper.contains("TABLE"),
+                    "D{} should contain TABLE formula text: {}",
+                    i + 2,
+                    text
+                );
+
+                let cached = cached_value
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("D{} missing cached value", i + 2));
+                match cached.as_ref() {
+                    CellValue::Number(n) => {
+                        assert_eq!(*n, *expected_value, "D{} cached value", i + 2);
+                    }
+                    other => panic!("D{} expected numeric cache, got {other:?}", i + 2),
+                }
+            }
+            other => panic!("D{} expected Formula, got {other:?}", i + 2),
+        }
+    }
+
+    cleanup_fixture(&fixture);
+}
+
 /// Helper: build the chain to a cell's Interior object.
 fn interior_chain(cell: &str) -> Vec<ChainStep> {
     vec![
