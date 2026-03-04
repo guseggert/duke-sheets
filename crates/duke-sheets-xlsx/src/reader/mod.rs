@@ -25,7 +25,9 @@ use duke_sheets_core::validation::DataValidation;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue, Hyperlink, PageBreak, SplitPanes, Workbook,
 };
-use formulas::{parse_cell_formula_state, resolve_cell_formula, SharedFormulaMaster};
+use formulas::{
+    parse_cell_formula_state, resolve_cell_formula, CellFormulaKind, SharedFormulaMaster,
+};
 use theme::{read_theme_palette, resolve_style_theme_colors};
 
 mod comments;
@@ -333,6 +335,17 @@ impl XlsxReader {
         let mut inline_run_text = String::new();
         let mut inline_run_font: Option<duke_sheets_core::RunFont> = None;
         let mut shared_formula_masters: HashMap<u32, SharedFormulaMaster> = HashMap::new();
+
+        // Pending array/dataTable formulas with ref ranges — post-processed after all cells.
+        // Each entry: (anchor_cell_ref, ref_range, kind, formula_text, r1, r2)
+        let mut pending_array_formulas: Vec<(
+            String,
+            String,
+            CellFormulaKind,
+            String,
+            Option<String>,
+            Option<String>,
+        )> = Vec::new();
 
         // Data validation state
         let mut in_data_validation = false;
@@ -991,6 +1004,25 @@ impl XlsxReader {
                                         shared_strings,
                                         cell_styles,
                                     )?;
+                                }
+                            }
+                            // Record array/dataTable formulas with ref for post-processing
+                            if let Some(ref cell_ref) = current_cell_ref {
+                                if let Some(ref array_ref) = current_formula_state.array_ref {
+                                    if current_formula_state.kind == CellFormulaKind::Array
+                                        || current_formula_state.kind == CellFormulaKind::DataTable
+                                    {
+                                        let formula_text =
+                                            current_formula.clone().unwrap_or_default();
+                                        pending_array_formulas.push((
+                                            cell_ref.clone(),
+                                            array_ref.clone(),
+                                            current_formula_state.kind,
+                                            formula_text,
+                                            current_formula_state.data_table_input1_ref.clone(),
+                                            current_formula_state.data_table_input2_ref.clone(),
+                                        ));
+                                    }
                                 }
                             }
                             in_cell = false;
@@ -2019,6 +2051,94 @@ impl XlsxReader {
                 _ => {}
             }
             buf.clear();
+        }
+
+        // Post-process array/dataTable formulas: replicate formula to all
+        // cells in the ref range and build array_result on the anchor cell.
+        for (anchor_ref, ref_range, kind, formula_text, r1, r2) in pending_array_formulas {
+            let anchor = match CellAddress::parse(&anchor_ref) {
+                Ok(a) => a,
+                Err(_) => continue,
+            };
+            let range = match CellRange::parse(&ref_range) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            let formula_for_cells = match kind {
+                CellFormulaKind::Array => {
+                    let f = if formula_text.starts_with('=') {
+                        formula_text.clone()
+                    } else {
+                        format!("={}", formula_text)
+                    };
+                    f
+                }
+                CellFormulaKind::DataTable => {
+                    let arg1 = r1.as_deref().unwrap_or("");
+                    let arg2 = r2.as_deref().unwrap_or("");
+                    format!("=TABLE({},{})", arg1, arg2)
+                }
+                _ => continue,
+            };
+
+            // Collect cached values from the ref range into a 2D array.
+            let num_rows = (range.end.row - range.start.row + 1) as usize;
+            let num_cols = (range.end.col - range.start.col + 1) as usize;
+            let mut array_result: Vec<Vec<CellValue>> = Vec::with_capacity(num_rows);
+
+            for r in range.start.row..=range.end.row {
+                let mut row_values: Vec<CellValue> = Vec::with_capacity(num_cols);
+                for c in range.start.col..=range.end.col {
+                    // Extract the current cached value from the cell
+                    let cached = match worksheet.get_value_at(r, c) {
+                        CellValue::Formula { cached_value, .. } => {
+                            cached_value.map(|b| *b).unwrap_or(CellValue::Empty)
+                        }
+                        other => other,
+                    };
+                    row_values.push(cached);
+                }
+                array_result.push(row_values);
+            }
+
+            // For array formulas: set array_result on anchor, replicate formula to non-anchor cells.
+            // For dataTable: replicate TABLE formula to all cells in range.
+            for r in range.start.row..=range.end.row {
+                for c in range.start.col..=range.end.col {
+                    let is_anchor = r == anchor.row && c == anchor.col;
+                    let row_offset = (r - range.start.row) as usize;
+                    let col_offset = (c - range.start.col) as usize;
+                    let cached = array_result[row_offset][col_offset].clone();
+
+                    if is_anchor {
+                        // Update anchor: set array_result (for array formulas only)
+                        if kind == CellFormulaKind::Array {
+                            let _ = worksheet.set_cell_value_at(
+                                r,
+                                c,
+                                CellValue::Formula {
+                                    text: formula_for_cells.clone(),
+                                    cached_value: Some(Box::new(cached)),
+                                    array_result: Some(array_result.clone()),
+                                },
+                            );
+                        }
+                        // DataTable anchor already has the formula from initial parse
+                    } else {
+                        // Non-anchor: give it the formula with its own cached value
+                        let _ = worksheet.set_cell_value_at(
+                            r,
+                            c,
+                            CellValue::Formula {
+                                text: formula_for_cells.clone(),
+                                cached_value: Some(Box::new(cached)),
+                                array_result: None,
+                            },
+                        );
+                    }
+                }
+            }
         }
 
         Ok(())
