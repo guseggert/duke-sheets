@@ -2,6 +2,9 @@ use crate::{
     cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm, temp_fixture_xls,
 };
 use duke_sheets_core::cell::CellValue;
+use duke_sheets_core::style::PatternType;
+use duke_sheets_core::FillStyle;
+use duke_sheets_excel_com::{ChainStep, SheetRef};
 use duke_sheets_xls::XlsReader;
 
 #[test]
@@ -251,4 +254,180 @@ fn test_xls_print_titles_columns() {
     let repeat = sheet.repeat_cols().expect("should have repeat_cols");
     assert_eq!(repeat, (0, 1), "repeat_cols should be (0, 1)");
     cleanup_fixture(&fixture);
+}
+
+/// Helper: build the chain to a cell's Interior object.
+fn interior_chain(cell: &str) -> Vec<ChainStep> {
+    vec![
+        SheetRef::Index(0).to_chain_step(),
+        ChainStep::Indexed("Range".to_string(), serde_json::Value::from(cell)),
+        ChainStep::Property("Interior".to_string()),
+    ]
+}
+
+/// Helper: convert RGB (0xRRGGBB) to BGR for Excel COM Interior properties.
+fn rgb_to_bgr(rgb: u32) -> u32 {
+    let r = (rgb >> 16) & 0xFF;
+    let g = (rgb >> 8) & 0xFF;
+    let b = rgb & 0xFF;
+    (b << 16) | (g << 8) | r
+}
+
+#[test]
+fn test_xls_pattern_fills() {
+    // Test multiple pattern fill types with distinct foreground/background colors.
+    // Excel COM: Interior.Pattern = xlPattern constant
+    //            Interior.PatternColor = pattern line color (→ BIFF icv_fore → our foreground)
+    //            Interior.Color = background color (→ BIFF icv_back → our background)
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+
+    // (cell, xlPattern constant, pattern_rgb, bg_rgb, expected PatternType)
+    let cases: &[(&str, i64, u32, u32, PatternType)] = &[
+        // xlPatternGray50 = -4125 → BIFF 2 → MediumGray
+        ("A1", -4125, 0xFF0000, 0x0000FF, PatternType::MediumGray),
+        // xlPatternGray75 = -4126 → BIFF 3 → DarkGray
+        ("A2", -4126, 0x00FF00, 0xFFFF00, PatternType::DarkGray),
+        // xlPatternGray25 = -4124 → BIFF 4 → LightGray
+        ("A3", -4124, 0x0000FF, 0xFF00FF, PatternType::LightGray),
+        // xlPatternHorizontal = -4128 → BIFF 5 → DarkHorizontal
+        ("A4", -4128, 0x800000, 0x008080, PatternType::DarkHorizontal),
+        // xlPatternVertical = -4166 → BIFF 6 → DarkVertical
+        ("A5", -4166, 0x808000, 0x800080, PatternType::DarkVertical),
+    ];
+
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+
+        for &(cell, xl_pattern, pattern_rgb, bg_rgb, _) in cases {
+            wb.set_cell_value(cell, format!("Pattern {cell}"))
+                .expect("set value");
+
+            let h = wb.handle();
+            // Set pattern type
+            excel
+                .set(
+                    h,
+                    interior_chain(cell),
+                    "Pattern",
+                    serde_json::Value::from(xl_pattern),
+                )
+                .unwrap_or_else(|e| panic!("{cell} set Pattern: {e}"));
+
+            // Set pattern line color (foreground in BIFF terms)
+            excel
+                .set(
+                    h,
+                    interior_chain(cell),
+                    "PatternColor",
+                    serde_json::Value::from(rgb_to_bgr(pattern_rgb)),
+                )
+                .unwrap_or_else(|e| panic!("{cell} set PatternColor: {e}"));
+
+            // Set background color
+            excel
+                .set(
+                    h,
+                    interior_chain(cell),
+                    "Color",
+                    serde_json::Value::from(rgb_to_bgr(bg_rgb)),
+                )
+                .unwrap_or_else(|e| panic!("{cell} set Color: {e}"));
+        }
+
+        wb.save(&fixture.vm_path).expect("save xls");
+        wb.close().expect("close");
+    }
+
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+
+    for (i, &(cell, _, pattern_rgb, bg_rgb, expected_pattern)) in cases.iter().enumerate() {
+        let row = i as u32;
+        let style = sheet
+            .cell_style_at(row, 0)
+            .unwrap_or_else(|| panic!("{cell} should have a style"));
+
+        match &style.fill {
+            FillStyle::Pattern {
+                pattern,
+                foreground,
+                background,
+            } => {
+                assert_eq!(
+                    *pattern, expected_pattern,
+                    "{cell}: wrong PatternType — got {pattern:?}, expected {expected_pattern:?}"
+                );
+
+                // Verify foreground (pattern line) color
+                let (pr, pg, pb) = expected_rgb(pattern_rgb);
+                let (fr, fg, fb) = foreground.to_rgb();
+                assert!(
+                    close(fr, pr) && close(fg, pg) && close(fb, pb),
+                    "{cell}: foreground expected ~({pr},{pg},{pb}), got ({fr},{fg},{fb})"
+                );
+
+                // Verify background color
+                let (br_e, bg_e, bb_e) = expected_rgb(bg_rgb);
+                let (br, bg_a, bb) = background.to_rgb();
+                assert!(
+                    close(br, br_e) && close(bg_a, bg_e) && close(bb, bb_e),
+                    "{cell}: background expected ~({br_e},{bg_e},{bb_e}), got ({br},{bg_a},{bb})"
+                );
+            }
+            other => panic!("{cell}: expected Pattern fill, got {other:?}"),
+        }
+    }
+
+    cleanup_fixture(&fixture);
+}
+
+#[test]
+fn test_xls_solid_fill() {
+    // Verify solid fill round-trips through real Excel as XLS.
+    let bridge = excel_bridge();
+    let fixture = temp_fixture_xls();
+    {
+        let excel = bridge.lock().unwrap();
+        ensure_vm_temp_dir();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", "Red solid").expect("set value");
+        wb.set_fill_color("A1", 0xFF0000).expect("set fill");
+        wb.save(&fixture.vm_path).expect("save xls");
+        wb.close().expect("close");
+    }
+
+    pull_file_from_vm(&fixture);
+    let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
+    let sheet = workbook.worksheet(0).expect("worksheet");
+    let style = sheet.cell_style_at(0, 0).expect("A1 should have style");
+    match &style.fill {
+        FillStyle::Solid { color } => {
+            let (r, g, b) = color.to_rgb();
+            assert!(
+                r > 200 && g < 50 && b < 50,
+                "Expected red solid fill, got ({r}, {g}, {b})"
+            );
+        }
+        other => panic!("Expected Solid fill, got {other:?}"),
+    }
+
+    cleanup_fixture(&fixture);
+}
+
+/// Break an 0xRRGGBB u32 into (r, g, b).
+fn expected_rgb(rgb: u32) -> (u8, u8, u8) {
+    (
+        ((rgb >> 16) & 0xFF) as u8,
+        ((rgb >> 8) & 0xFF) as u8,
+        (rgb & 0xFF) as u8,
+    )
+}
+
+/// Allow ±2 tolerance for palette rounding.
+fn close(a: u8, b: u8) -> bool {
+    (a as i16 - b as i16).unsigned_abs() <= 2
 }
