@@ -148,6 +148,9 @@ wb2 = duke_sheets.Workbook.open("existing.xlsx")
 
 ## Node.js/TypeScript Bindings
 
+See the [main project README](../README.md) for full Node.js documentation
+including async API, read-only accessors, and usage examples.
+
 ### Installation (Development)
 
 ```bash
@@ -155,90 +158,15 @@ cd bindings/nodejs
 npm install
 npm run build              # Build native addon (release)
 npm run build:debug        # Build native addon (debug)
+npm test                   # Run tests (119 tests)
 ```
 
-### Usage
+### Package: `@duke-sheets/node`
 
-```typescript
-import { Workbook } from 'duke-sheets';
-
-// Create a new workbook
-const wb = new Workbook();
-const sheet = wb.getSheet(0);
-
-// Set cell values
-sheet.setCell('A1', 10);
-sheet.setCell('A2', 20);
-sheet.setCell('B1', 'Hello');
-sheet.setCell('C1', true);
-
-// Set a formula
-sheet.setFormula('A3', '=A1+A2');
-
-// Calculate all formulas
-const stats = wb.calculate();
-console.log(`Calculated ${stats.cellsCalculated} cells`);
-
-// Get calculated value
-const result = sheet.getCalculatedValue('A3');
-console.log(`A3 = ${result.asNumber()}`); // 30
-
-// Save to file
-wb.save('output.xlsx');
-
-// Open existing file
-const wb2 = Workbook.open('existing.xlsx');
-```
-
-### API Reference
-
-#### Workbook
-
-| Method | Description |
-|--------|-------------|
-| `new Workbook()` | Create new empty workbook |
-| `Workbook.open(path)` | Open from file (.xlsx, .xls, .csv) |
-| `Workbook.fromXlsxBytes(data)` | Load from Buffer/Uint8Array |
-| `Workbook.fromCsvString(csv)` | Load from CSV string |
-| `save(path)` | Save to file |
-| `saveCsvString()` | Save as CSV string |
-| `sheetCount` | Number of worksheets |
-| `sheetNames` | Array of sheet names |
-| `getSheet(indexOrName)` | Get worksheet by index or name |
-| `addSheet(name)` | Add new worksheet |
-| `removeSheet(index)` | Remove worksheet |
-| `calculate()` | Calculate all formulas |
-| `calculateWithOptions(...)` | Calculate with custom settings |
-| `defineName(name, refersTo)` | Define named range |
-| `getNamedRange(name)` | Get named range definition |
-
-#### Worksheet
-
-| Method | Description |
-|--------|-------------|
-| `name` | Worksheet name |
-| `setCell(address, value)` | Set cell value |
-| `setFormula(address, formula)` | Set cell formula |
-| `getCell(address)` | Get raw cell value |
-| `getCalculatedValue(address)` | Get calculated value |
-| `usedRange` | Object `{ minRow, minCol, maxRow, maxCol }` or null |
-| `setRowHeight(row, height)` | Set row height |
-| `setColumnWidth(col, width)` | Set column width |
-| `getRowHeight(row)` | Get row height |
-| `getColumnWidth(col)` | Get column width |
-| `mergeCells(range)` | Merge cells |
-| `unmergeCells(range)` | Unmerge cells |
-
-#### CellValue
-
-| Property/Method | Description |
-|-----------------|-------------|
-| `isEmpty`, `isNumber`, `isText`, etc. | Type checking |
-| `asNumber()`, `asText()`, `asBoolean()` | Type conversion |
-| `toJs()` | Convert to JS native (number \| string \| boolean \| null) |
-| `toString()` | String representation |
-| `formulaText()` | Get formula string |
-
+- **Async API**: `openAsync()`, `calculateAsync()`, `saveAsync()` — run on libuv thread pool
+- **Read-only accessors**: 50+ methods for inspecting styles, comments, hyperlinks, tables, etc.
+- **Multi-platform CI**: GitHub Actions builds for Linux, macOS, and Windows
+- **Consumable from GitHub Releases** without publishing to npm
 ---
 
 ## WASM Bindings
@@ -391,12 +319,18 @@ bindings/
 │       └── test_calculation.py
 ├── nodejs/
 │   ├── Cargo.toml      # Rust crate config
-│   ├── package.json    # npm package config
+│   ├── package.json    # @duke-sheets/node package config
 │   ├── build.rs        # napi-build setup
 │   ├── src/
-│   │   └── lib.rs      # NAPI-RS bindings
+│   │   ├── lib.rs      # NAPI-RS bindings + async tasks
+│   │   ├── types.rs    # NAPI object types (30+ structs)
+│   │   ├── workbook_read.rs  # Read-only Workbook methods
+│   │   └── worksheet_read.rs # Read-only Worksheet methods
+│   ├── npm/            # Platform-specific packages (5 targets)
 │   └── __test__/
-│       └── index.spec.ts
+│       ├── index.spec.ts    # CRUD tests
+│       ├── readonly.spec.ts # Read-only API tests
+│       └── async.spec.ts    # Async API tests
 └── wasm/
     ├── Cargo.toml      # Rust crate config
     ├── src/
