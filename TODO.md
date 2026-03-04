@@ -148,7 +148,7 @@
 
 ### Array Formulas
 - [x] Array literals (`{1,2,3}`)
-- [ ] Array formula entry (`Ctrl+Shift+Enter` style) in XLSX reader
+- [x] Array formula entry (`Ctrl+Shift+Enter` style) in XLSX reader — post-processing resolves `ref` ranges for `t="array"` and `t="dataTable"` formulas, replicating formula text and building `array_result` on anchor cells
 - [x] Dynamic array spilling in evaluator — SpillTarget value resolution, `#` (spill range) operator, `@` (implicit intersection) operator, two-pass calculation for spill-dependent formulas, #SPILL! error on blocked ranges
 - [x] XLSX dynamic array metadata (`cm` attribute, `xl/metadata.xml`) — writer emits `cm="1"` on anchor cells, `cm="2"` on ghost cells, writes `xl/metadata.xml` with XLDAPR structure; reader parses `cm` attribute
 - [x] Element-wise array binary operators — `=SEQUENCE(3)>1` produces `{FALSE,TRUE,TRUE}`, all arithmetic/comparison/concatenation operators lift to arrays with broadcasting
@@ -170,7 +170,7 @@
 
 #### XLSX Reader Gaps
 - [x] **Theme colors** — reader now parses `xl/theme/theme1.xml` (`clrScheme`) and resolves theme+tint colors in styles/CF
-- [ ] **Shared/array/dataTable formulas** — shared + array anchor parsed; `dataTable` now mapped to `=TABLE(r1,r2)` placeholder using OOXML attrs, but full behavior remains incomplete
+- [x] **Shared/array/dataTable formulas** — shared formulas parsed + translated; CSE array formulas (`t="array"`) resolve `ref` ranges to replicate formula text to all cells and build `array_result` on anchor; `dataTable` formulas resolve `ref` ranges to `=TABLE(r1,r2)` for non-anchor cells
 - [x] **Theme/indexed colors in CF** — `parse_color_element()` now handles `rgb`/`theme`/`indexed`/`tint`/`auto` and resolves with workbook theme palette
 - [x] **`cellStyleXfs` / named cell styles** — reader parses `cellStyleXfs` inheritance and `cellStyles`; writer preserves parsed `cellStyleXfs` + named styles on roundtrip (via roundtrip data registry)
 - [x] **Font scheme/family/charset** — modeled in `FontStyle`, parsed from XLSX fonts, and emitted by writer when present
@@ -345,34 +345,6 @@ or cell-level metadata not available in standalone evaluation):
 - [ ] Complete FFI bindings
 - [ ] Python bindings via FFI
 - [ ] Documentation
-
----
-
-## Testing Status
-
-| Test Suite | Count | Status |
-|------------|-------|--------|
-| Core (cell, workbook, worksheet) | 41 | ✅ |
-| Cell display formatting (CellView) | 51 | ✅ |
-| Formula parser | 43 | ✅ |
-| Formula evaluator + functions | 519 | ✅ |
-| Calculation engine | 46 | ✅ |
-| XLSX roundtrip | 58 | ✅ |
-| XLSX style roundtrip | 10 | ✅ |
-| XLSX escape decoding | 9 | ✅ |
-| Formula E2E | 10 | ✅ |
-| XLS unit (BIFF parser, strings, styles, formula decompiler, reader) | 166 | ✅ |
-| XLS E2E (data types, styles, merged cells, dimensions, sheet props, formulas, comments, CF, DV) | 68 | ✅ |
-| XLS real-file integration | 2 | ✅ |
-| E2E XLSX reader integration (LO + handcrafted OOXML) | 63 | ✅ |
-| E2E via Excel COM — reader (XLSX) | 62 | ✅ |
-| E2E via Excel COM — reader (XLS) | 13 | ✅ |
-| E2E via Excel COM — writer (XLSX) | 35 | ✅ |
-| XLSX formatting roundtrip | 17 | ✅ |
-| Shared string reader | 9 | ✅ |
-| Rich text unit tests | 4 | ✅ |
-| Other (unit, doc, integration) | 261 | ✅ |
-| **Total** | **1349** | ✅ |
 
 ---
 

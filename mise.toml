@@ -106,6 +106,10 @@ mkdir -p /tmp/duke-sheets-urp /tmp/duke-sheets-excel
 cargo test "$@"
 """
 
+[tasks."test:report"]
+alias = "tr"
+description = "Run all Rust tests and print a per-crate summary report"
+run = "bash tools/test-report.sh"
 
 # =============================================================================
 # Clean Tasks
