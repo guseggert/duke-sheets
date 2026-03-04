@@ -12,9 +12,7 @@ use duke_sheets_core::{
 };
 use duke_sheets_xlsx::XlsxReader;
 
-// =============================================================================
 // Error Conversion
-// =============================================================================
 
 fn to_js_error(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
@@ -35,9 +33,7 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
     }
 }
 
-// =============================================================================
 // CellValue - JavaScript wrapper for cell values
-// =============================================================================
 
 /// Represents a cell value in a spreadsheet.
 #[wasm_bindgen]
@@ -157,9 +153,7 @@ impl CellValue {
     }
 }
 
-// =============================================================================
 // Worksheet - JavaScript wrapper
-// =============================================================================
 
 #[wasm_bindgen]
 pub struct Worksheet {
@@ -267,9 +261,7 @@ impl Worksheet {
     }
 }
 
-// =============================================================================
 // Workbook - JavaScript wrapper
-// =============================================================================
 
 #[wasm_bindgen]
 pub struct Workbook {
@@ -410,9 +402,7 @@ impl Default for Workbook {
     }
 }
 
-// =============================================================================
 // Helper functions
-// =============================================================================
 
 fn js_to_cell_value(value: JsValue) -> Result<CoreCellValue, JsError> {
     if value.is_null() || value.is_undefined() {

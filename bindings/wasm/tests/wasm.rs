@@ -11,9 +11,7 @@ use duke_sheets_wasm::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
-// =============================================================================
 // Workbook Tests
-// =============================================================================
 
 #[wasm_bindgen_test]
 fn test_workbook_new() {
@@ -74,9 +72,7 @@ fn test_workbook_invalid_sheet_index() {
     assert!(result.is_err());
 }
 
-// =============================================================================
 // Worksheet Tests
-// =============================================================================
 
 #[wasm_bindgen_test]
 fn test_worksheet_set_get_number() {
@@ -156,9 +152,7 @@ fn test_worksheet_used_range_with_data() {
     assert!(!range.is_null());
 }
 
-// =============================================================================
 // Formula Tests
-// =============================================================================
 
 #[wasm_bindgen_test]
 fn test_formula_simple() {
@@ -223,9 +217,7 @@ fn test_formula_nested() {
     );
 }
 
-// =============================================================================
 // Calculation Tests
-// =============================================================================
 
 #[wasm_bindgen_test]
 fn test_calculation_stats() {
@@ -254,9 +246,7 @@ fn test_calculation_with_options() {
     assert_eq!(stats.formula_count, 1);
 }
 
-// =============================================================================
 // Named Range Tests
-// =============================================================================
 
 #[wasm_bindgen_test]
 fn test_named_range_constant() {
@@ -276,9 +266,7 @@ fn test_named_range_undefined() {
     assert_eq!(result, None);
 }
 
-// =============================================================================
 // CellValue Tests
-// =============================================================================
 
 #[wasm_bindgen_test]
 fn test_cell_value_to_js_number() {
@@ -338,9 +326,7 @@ fn test_cell_value_to_string() {
     assert_eq!(value.to_string_js(), "42");
 }
 
-// =============================================================================
 // CSV Tests
-// =============================================================================
 
 #[wasm_bindgen_test]
 fn test_csv_roundtrip() {
@@ -362,9 +348,7 @@ fn test_csv_roundtrip() {
     assert_eq!(sheet2.get_cell("A1").unwrap().as_number(), Some(1.0));
 }
 
-// =============================================================================
 // Row/Column Dimension Tests
-// =============================================================================
 
 #[wasm_bindgen_test]
 fn test_row_height() {
@@ -384,9 +368,7 @@ fn test_column_width() {
     // Setting succeeds
 }
 
-// =============================================================================
 // Merge Cell Tests
-// =============================================================================
 
 #[wasm_bindgen_test]
 fn test_merge_cells() {

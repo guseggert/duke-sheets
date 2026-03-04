@@ -1210,8 +1210,6 @@ mod tests {
         );
     }
 
-    // ==================== Dynamic Array Spilling Tests ====================
-
     #[test]
     fn test_spill_value_resolution_get_value_at() {
         // get_value_at resolves SpillTarget cells, but anchor cell is still Formula.
@@ -1580,8 +1578,6 @@ mod tests {
             Some(&CellValue::Number(21.0))
         );
     }
-
-    // ==================== Array Binary Operators ====================
 
     #[test]
     fn test_array_comparison_greater_than() {

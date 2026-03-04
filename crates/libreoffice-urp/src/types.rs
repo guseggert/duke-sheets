@@ -357,9 +357,7 @@ pub struct UnoException {
     // is sufficient.
 }
 
-// ============================================================================
 // Well-known UNO type names
-// ============================================================================
 
 pub mod type_names {
     pub const X_INTERFACE: &str = "com.sun.star.uno.XInterface";

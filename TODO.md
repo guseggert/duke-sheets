@@ -128,6 +128,7 @@
 - [x] `duke sheets` — list sheets in workbook
 - [x] Formula calculation flag (`-c`)
 - [x] Custom delimiter support
+- [x] `duke to-html` — convert spreadsheet to HTML with style preservation (fonts, fills, borders, alignment, merged cells)
 
 ---
 
@@ -157,6 +158,15 @@
 - [x] Core financial function implementations added in `crates/duke-sheets-formula/src/functions/financial.rs` (PMT, FV, PV, NPER, RATE, IPMT, PPMT, CUMIPMT, CUMPRINC, NPV, IRR, MIRR, XNPV, SLN, SYD, DB, DDB, EFFECT, NOMINAL, PDURATION)
 - [x] Wire `financial.rs` into `functions/mod.rs` registry entries (module + function registration)
 
+### Node.js/TypeScript Bindings (NAPI-RS)
+- [x] Initial scaffold — Workbook, Worksheet, CellValue, CalculationStats classes with basic CRUD + formula calculation (40 tests)
+- [x] `#[napi(object)]` type wrappers for all core types — Style, Color, Font, Fill, Border, Alignment, NumberFormat, Hyperlink, Comment, Table, AutoFilter, DataValidation, ConditionalFormatRule, RichTextRun, etc. (~30 structs in `types.rs`)
+- [x] Read-only Workbook methods — isEmpty, activeSheet, sheetIndex, settings, namedRanges
+- [x] Read-only Worksheet methods (~50) — properties, cell styles, formatted values, row/col metadata, freeze/split panes, hyperlinks, comments, tables, data validation, conditional formatting, auto-filter, protection, page setup, formulas, spill info, merged regions
+- [x] TypeScript definitions auto-generated (`index.d.ts`, 771 lines)
+- [x] Test suite — 110 tests (40 CRUD + 70 read-only API)
+- [ ] Read-only tests with real XLSX fixtures (comments, hyperlinks, tables, conditional formatting, data validation)
+- [ ] Write API coverage (styles, hyperlinks, comments, tables, etc.)
 ---
 
 ## Not Started
@@ -276,6 +286,14 @@ or cell-level metadata not available in standalone evaluation):
 - [x] **Print areas / titles** — read `_xlnm.Print_Area` and `_xlnm.Print_Titles` defined names
 - [x] **XLS reader** — resolve `Print_Area` / `Print_Titles` NAME formula bodies into PageSetup
 
+#### XLSB Reader (Binary Spreadsheet)
+- [ ] BRT record stream decoder (variable-length type + LEB128 length framing)
+- [ ] Shared string table (`sharedStrings.bin` — `BrtSSTItem` records, UTF-16LE strings)
+- [ ] Style records (`styles.bin` — `BrtFmt`/`BrtXF` for number formats and date detection)
+- [ ] Workbook records (`workbook.bin` — sheet list, date1904 flag, named ranges)
+- [ ] Worksheet cell reader (`sheet*.bin` — row headers, cell records, RK value decoding)
+- [ ] Formula support (reuse existing BIFF8 Ptg token parser — encoding is identical)
+- [ ] Integrate into `WorkbookExt::open()` for `.xlsb` extension
 #### Large File Support
 - [ ] Streaming XLSX reader (SAX-style, low memory)
 - [ ] Streaming XLSX writer
@@ -370,6 +388,7 @@ duke-sheets/
 ├── duke-sheets-xls         # XLS reader (BIFF8, read-only)
 ├── duke-sheets-csv         # CSV read/write
 ├── duke-sheets-chart       # Chart support (stub)
+├── duke-sheets-html        # HTML export
 ├── duke-sheets-ffi         # C FFI bindings
 ├── duke-sheets-cli         # CLI tool
 ├── duke-sheets-libreoffice # LibreOffice URP bridge (E2E testing)

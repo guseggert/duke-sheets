@@ -17,9 +17,7 @@ use crate::biff::parser::{read_u16, read_u32};
 use crate::biff::strings::{read_short_string, read_unicode_string};
 use crate::error::{XlsError, XlsResult};
 
-// ============================================================================
 // Default BIFF8 color palette (56 entries, indices 8–63)
-// ============================================================================
 
 /// The standard BIFF8 color palette.  Indices 8–63 in the workbook map to
 /// entries 0–55 here.  A PALETTE record can override individual entries.
@@ -82,9 +80,7 @@ pub(crate) const DEFAULT_PALETTE: [(u8, u8, u8); 56] = [
     (51, 51, 51),    // 63: 80% Gray
 ];
 
-// ============================================================================
 // Intermediate BIFF types
-// ============================================================================
 
 /// Parsed FONT record data.
 #[derive(Debug, Clone)]
@@ -442,9 +438,7 @@ impl StyleContext {
     }
 }
 
-// ============================================================================
 // Record parsers
-// ============================================================================
 
 /// Parse a FONT record (0x0031).
 ///
@@ -638,9 +632,7 @@ pub(crate) fn apply_palette(data: &[u8], palette: &mut [(u8, u8, u8); 56]) -> Xl
     Ok(())
 }
 
-// ============================================================================
 // Mapping helpers
-// ============================================================================
 
 /// Map a BIFF border line code (0–13) to a `BorderLineStyle`.
 fn border_line_from_biff(code: u8) -> BorderLineStyle {
@@ -689,9 +681,7 @@ fn pattern_from_biff(code: u8) -> PatternType {
     }
 }
 
-// ============================================================================
 // Unit tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

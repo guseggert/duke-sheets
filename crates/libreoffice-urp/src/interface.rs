@@ -66,10 +66,8 @@ impl ParamType {
     }
 }
 
-// ============================================================================
 // XInterface (base of everything)
 // Methods: queryInterface(0), acquire(1), release(2)
-// ============================================================================
 
 pub fn query_interface() -> MethodDef {
     MethodDef {
@@ -91,7 +89,6 @@ pub fn release() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XProtocolProperties (special, used for negotiation)
 // Extends XInterface (0-2)
 // Methods: queryInterface(0), acquire(1), release(2), ???(3),
@@ -102,7 +99,6 @@ pub fn release() -> MethodDef {
 // XProtocolProperties adds: requestChange(3), commitChange(4)
 // BUT the spec uses IDs 4 and 5 — this is because there's an intermediate
 // interface. Looking at the LO source, the IDs are hardcoded as 4 and 5.
-// ============================================================================
 
 pub fn request_change() -> MethodDef {
     MethodDef {
@@ -124,11 +120,9 @@ pub fn commit_change() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XComponentContext
 // Extends XInterface (0-2)
 // Methods: getValueByName(3), getServiceManager(4)
-// ============================================================================
 
 pub fn get_service_manager() -> MethodDef {
     MethodDef {
@@ -140,11 +134,9 @@ pub fn get_service_manager() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XMultiComponentFactory
 // Extends XInterface (0-2)
 // Methods: createInstanceWithContext(3), createInstanceWithArgumentsAndContext(4)
-// ============================================================================
 
 pub fn create_instance_with_context() -> MethodDef {
     MethodDef {
@@ -159,11 +151,9 @@ pub fn create_instance_with_context() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XComponentLoader
 // Extends XInterface (0-2)
 // Methods: loadComponentFromURL(3)
-// ============================================================================
 
 pub fn load_component_from_url() -> MethodDef {
     MethodDef {
@@ -180,7 +170,6 @@ pub fn load_component_from_url() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XSpreadsheetDocument
 // Extends XInterface via XModel (complex chain, but getSheets is at a known index)
 //
@@ -197,7 +186,6 @@ pub fn load_component_from_url() -> MethodDef {
 // The method index for getSheets on XSpreadsheetDocument (which directly extends
 // XInterface in its IDL, NOT XModel) is:
 // XInterface(0,1,2), getSheets(3)
-// ============================================================================
 
 pub fn get_sheets() -> MethodDef {
     MethodDef {
@@ -209,12 +197,10 @@ pub fn get_sheets() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XIndexAccess
 // Extends XElementAccess which extends XInterface
 // XElementAccess: getElementType(3), hasElements(4)
 // XIndexAccess: getCount(5), getByIndex(6)
-// ============================================================================
 
 pub fn get_by_index() -> MethodDef {
     MethodDef {
@@ -236,7 +222,6 @@ pub fn get_count() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XSpreadsheet
 // Extends XSheetCellRange -> XCellRange -> XInterface
 // XCellRange: getCellByPosition(3), getCellRangeByPosition(4), getCellRangeByName(5)
@@ -247,7 +232,6 @@ pub fn get_count() -> MethodDef {
 // We primarily need getCellByPosition which comes from XCellRange.
 // XCellRange extends XInterface:
 //   getCellByPosition(3), getCellRangeByPosition(4), getCellRangeByName(5)
-// ============================================================================
 
 pub fn get_cell_by_position() -> MethodDef {
     MethodDef {
@@ -259,11 +243,9 @@ pub fn get_cell_by_position() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XCell
 // Extends XInterface
 // Methods: getFormula(3), setFormula(4), getValue(5), setValue(6), getType(7), getError(8)
-// ============================================================================
 
 pub fn cell_get_formula() -> MethodDef {
     MethodDef {
@@ -315,7 +297,6 @@ pub fn cell_get_type() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XText / XSimpleText / XTextRange — for setting string cell values
 // XTextRange extends XInterface: getString(3), setString(4)
 // XSimpleText extends XTextRange: createTextCursor(5), ...
@@ -327,7 +308,6 @@ pub fn cell_get_type() -> MethodDef {
 //
 // XTextRange extends XInterface:
 //   getText(3), getStart(4), getEnd(5), getString(6), setString(7)
-// ============================================================================
 
 pub fn text_range_get_string() -> MethodDef {
     MethodDef {
@@ -349,12 +329,10 @@ pub fn text_range_set_string() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XStorable
 // Extends XInterface
 // Methods: hasLocation(3), getLocation(4), isReadonly(5), store(6),
 //          storeAsURL(7), storeToURL(8)
-// ============================================================================
 
 pub fn store_to_url() -> MethodDef {
     MethodDef {
@@ -369,12 +347,10 @@ pub fn store_to_url() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XCloseable
 // Extends XInterface (actually extends XCloseBroadcaster which extends XInterface)
 // XCloseBroadcaster: addCloseListener(3), removeCloseListener(4)
 // XCloseable: close(5)
-// ============================================================================
 
 pub fn closeable_close() -> MethodDef {
     MethodDef {
@@ -386,13 +362,11 @@ pub fn closeable_close() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XPropertySet
 // Extends XInterface
 // Methods: getPropertySetInfo(3), setPropertyValue(4), getPropertyValue(5),
 //          addPropertyChangeListener(6), removePropertyChangeListener(7),
 //          addVetoableChangeListener(8), removeVetoableChangeListener(9)
-// ============================================================================
 
 pub fn set_property_value() -> MethodDef {
     MethodDef {
@@ -414,14 +388,12 @@ pub fn get_property_value() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XNameContainer / XNameAccess (for XSpreadsheets which extends both)
 // XNameAccess extends XElementAccess -> XInterface
 // XElementAccess: getElementType(3), hasElements(4)
 // XNameAccess: getByName(5), getElementNames(6), hasByName(7)
 // XNameReplace extends XNameAccess: replaceByName(8)
 // XNameContainer extends XNameReplace: insertByName(9), removeByName(10)
-// ============================================================================
 
 pub fn insert_new_by_name() -> MethodDef {
     // This is on XSpreadsheets specifically, not XNameContainer.
@@ -455,11 +427,9 @@ pub fn insert_new_by_name() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XCellRange — getCellRangeByName
 // Extends XInterface (0-2)
 // Methods: getCellByPosition(3), getCellRangeByPosition(4), getCellRangeByName(5)
-// ============================================================================
 
 pub fn get_cell_range_by_name() -> MethodDef {
     MethodDef {
@@ -471,11 +441,9 @@ pub fn get_cell_range_by_name() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XMergeable
 // Extends XInterface (0-2)
 // Methods: merge(3), getIsMerged(4)
-// ============================================================================
 
 pub fn merge() -> MethodDef {
     MethodDef {
@@ -487,11 +455,9 @@ pub fn merge() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XSheetAnnotationsSupplier
 // Extends XInterface (0-2)
 // Methods: getAnnotations(3)
-// ============================================================================
 
 pub fn get_annotations() -> MethodDef {
     MethodDef {
@@ -503,13 +469,11 @@ pub fn get_annotations() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XSheetAnnotations
 // Extends XInterface -> XElementAccess -> XIndexAccess -> XSheetAnnotations
 // XElementAccess: getElementType(3), hasElements(4)
 // XIndexAccess: getCount(5), getByIndex(6)
 // XSheetAnnotations: insertNew(7), removeByIndex(8)
-// ============================================================================
 
 pub fn annotations_insert_new() -> MethodDef {
     MethodDef {
@@ -524,11 +488,9 @@ pub fn annotations_insert_new() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XColumnRowRange
 // Extends XInterface (0-2)
 // Methods: getColumns(3), getRows(4)
-// ============================================================================
 
 pub fn get_columns() -> MethodDef {
     MethodDef {
@@ -550,11 +512,9 @@ pub fn get_rows() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XNamed
 // Extends XInterface (0-2)
 // Methods: getName(3), setName(4)
-// ============================================================================
 
 pub fn set_name() -> MethodDef {
     MethodDef {
@@ -566,11 +526,9 @@ pub fn set_name() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XNumberFormatsSupplier
 // Extends XInterface (0-2)
 // Methods: getNumberFormatSettings(3), getNumberFormats(4)
-// ============================================================================
 
 pub fn get_number_formats() -> MethodDef {
     MethodDef {
@@ -582,11 +540,9 @@ pub fn get_number_formats() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XNumberFormats
 // Extends XInterface (0-2)
 // Methods: getByKey(3), queryKeys(4), queryKey(5), addNew(6), ...
-// ============================================================================
 
 pub fn number_formats_query_key() -> MethodDef {
     MethodDef {
@@ -615,11 +571,9 @@ pub fn number_formats_add_new() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XNameAccess
 // Extends XInterface -> XElementAccess (3,4) -> XNameAccess
 // Methods: getByName(5), getElementNames(6), hasByName(7)
-// ============================================================================
 
 pub fn get_by_name() -> MethodDef {
     MethodDef {
@@ -631,11 +585,9 @@ pub fn get_by_name() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XNameContainer
 // Extends XNameAccess -> XNameReplace(8) -> XNameContainer
 // Methods: insertByName(9), removeByName(10)
-// ============================================================================
 
 pub fn insert_by_name() -> MethodDef {
     MethodDef {
@@ -647,11 +599,9 @@ pub fn insert_by_name() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XMultiServiceFactory (on the document, NOT the global ServiceManager)
 // Extends XInterface (0-2)
 // Methods: createInstance(3), createInstanceWithArguments(4), getAvailableServiceNames(5)
-// ============================================================================
 
 pub fn doc_create_instance() -> MethodDef {
     MethodDef {
@@ -663,11 +613,9 @@ pub fn doc_create_instance() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XSheetConditionalEntries
 // Extends XInterface -> XElementAccess -> XIndexAccess -> XSheetConditionalEntries
 // Methods: addNew(7), removeByIndex(8), clear(9)
-// ============================================================================
 
 pub fn conditional_entries_add_new() -> MethodDef {
     MethodDef {
@@ -679,11 +627,9 @@ pub fn conditional_entries_add_new() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XStyleFamiliesSupplier
 // Extends XInterface (0-2)
 // Methods: getStyleFamilies(3)
-// ============================================================================
 
 pub fn get_style_families() -> MethodDef {
     MethodDef {
@@ -695,14 +641,12 @@ pub fn get_style_families() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XModel — com.sun.star.frame.XModel
 // Extends XComponent(3..5) extends XInterface(0..2)
 // Methods: attachResource(6), getURL(7), getArgs(8), connectController(9),
 //          disconnectController(10), lock(11), unlock(12),
 //          hasControllersLocked(13), getCurrentController(14),
 //          getCurrentSelection(15)
-// ============================================================================
 
 pub fn get_current_controller() -> MethodDef {
     MethodDef {
@@ -714,11 +658,9 @@ pub fn get_current_controller() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XSpreadsheetView — com.sun.star.sheet.XSpreadsheetView
 // Extends XInterface(0..2)
 // Methods: getActiveSheet(3), setActiveSheet(4)
-// ============================================================================
 
 pub fn get_active_sheet() -> MethodDef {
     MethodDef {
@@ -740,11 +682,9 @@ pub fn set_active_sheet() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XProtectable — com.sun.star.util.XProtectable
 // Extends XInterface(0..2)
 // Methods: protect(3), unprotect(4), isProtected(5)
-// ============================================================================
 
 pub fn protectable_protect() -> MethodDef {
     MethodDef {
@@ -776,20 +716,16 @@ pub fn protectable_is_protected() -> MethodDef {
     }
 }
 
-// ============================================================================
 // XNamedRanges — com.sun.star.sheet.XNamedRanges
 // Extends XNameAccess -> XElementAccess -> XInterface
 // XElementAccess: getElementType(3), hasElements(4)
 // XNameAccess: getByName(5), getElementNames(6), hasByName(7)
 // XNamedRanges: addNewByName(8), addNewFromTitles(9), removeByName(10),
 //               outputList(11)
-// ============================================================================
 
-// ============================================================================
 // XArrayFormulaRange — com.sun.star.sheet.XArrayFormulaRange
 // Extends XInterface (3 base methods)
 // getArrayFormula(3), setArrayFormula(4), getArrayTokens(5), setArrayTokens(6)
-// ============================================================================
 
 pub fn set_array_formula() -> MethodDef {
     MethodDef {

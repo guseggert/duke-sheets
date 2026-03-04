@@ -214,8 +214,6 @@ impl Workbook {
         &mut self.settings
     }
 
-    // ==================== Named Ranges ====================
-
     /// Define a new workbook-scoped named range
     ///
     /// # Example

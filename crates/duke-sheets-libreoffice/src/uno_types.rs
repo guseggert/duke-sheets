@@ -9,9 +9,7 @@
 
 use libreoffice_urp::types::UnoValue;
 
-// ============================================================================
 // UNO Structs
-// ============================================================================
 
 /// `com.sun.star.table.CellAddress` — identifies a single cell by sheet, column, row.
 ///
@@ -126,9 +124,7 @@ impl Locale {
     }
 }
 
-// ============================================================================
 // UNO Enum Constants
-// ============================================================================
 
 /// `com.sun.star.awt.FontWeight` — font weight constants.
 ///
@@ -442,9 +438,7 @@ pub mod gradient_type_names {
     pub const AWT_GRADIENT: &str = "com.sun.star.awt.Gradient";
 }
 
-// ============================================================================
 // UNO type name constants (struct/service names used in URP calls)
-// ============================================================================
 
 /// Fully-qualified UNO type names for structs used in this crate.
 pub mod struct_type_names {
@@ -455,9 +449,7 @@ pub mod struct_type_names {
     pub const CELL_STYLE: &str = "com.sun.star.style.CellStyle";
 }
 
-// ============================================================================
 // StyleSpec — Rust port of Python's StyleSpec dataclass
-// ============================================================================
 
 /// Specification for cell/range styling, mirroring the Python `StyleSpec` dataclass.
 ///
@@ -516,9 +508,7 @@ pub struct StyleSpec {
     pub reading_order: Option<String>,
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

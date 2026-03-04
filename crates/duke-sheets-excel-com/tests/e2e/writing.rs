@@ -14,9 +14,7 @@ use duke_sheets_core::{
     CellRange, Color, ConditionalFormatRule, DataValidation, Style, ValidationOperator, Workbook,
 };
 
-// =========================================================================
 // Font tests
-// =========================================================================
 
 #[test]
 fn test_write_font_bold() {
@@ -159,9 +157,7 @@ fn test_write_font_combination() {
     );
 }
 
-// =========================================================================
 // Fill tests
-// =========================================================================
 
 #[test]
 fn test_write_solid_fill() {
@@ -219,9 +215,7 @@ fn test_write_fill_with_font_color() {
     );
 }
 
-// =========================================================================
 // Border tests
-// =========================================================================
 
 #[test]
 fn test_write_border_thin_all() {
@@ -297,9 +291,7 @@ fn test_write_border_individual() {
     );
 }
 
-// =========================================================================
 // Alignment tests
-// =========================================================================
 
 #[test]
 fn test_write_alignment_horizontal_center() {
@@ -415,9 +407,7 @@ fn test_write_alignment_indent() {
     assert_eq!(st.alignment.indent, 2);
 }
 
-// =========================================================================
 // Number format tests
-// =========================================================================
 
 #[test]
 fn test_write_number_format_percent() {
@@ -498,9 +488,7 @@ fn test_write_number_format_custom() {
     );
 }
 
-// =========================================================================
 // Dimension tests
-// =========================================================================
 
 #[test]
 fn test_write_row_height() {
@@ -549,9 +537,7 @@ fn test_write_hidden_row() {
     assert!(s.is_row_hidden(1), "Row 1 should be hidden");
 }
 
-// =========================================================================
 // Merged cells
-// =========================================================================
 
 #[test]
 fn test_write_merged_cells() {
@@ -576,9 +562,7 @@ fn test_write_merged_cells() {
     );
 }
 
-// =========================================================================
 // Conditional formatting
-// =========================================================================
 
 #[test]
 fn test_write_conditional_format() {
@@ -602,9 +586,7 @@ fn test_write_conditional_format() {
     );
 }
 
-// =========================================================================
 // Data validation
-// =========================================================================
 
 #[test]
 fn test_write_data_validation_list() {
@@ -640,9 +622,7 @@ fn test_write_data_validation_number() {
     assert!(!dvs.is_empty(), "Should have at least one data validation");
 }
 
-// =========================================================================
 // Page setup / header-footer tests
-// =========================================================================
 
 #[test]
 fn test_write_header_footer_even_first_and_flags() {

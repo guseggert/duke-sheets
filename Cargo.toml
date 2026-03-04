@@ -14,11 +14,13 @@ members = [
     "crates/duke-sheets-excel-com",
     "crates/libreoffice-urp",
     "crates/duke-sheets-libreoffice",
+    "crates/duke-sheets-html",
 ]
 # Bindings are excluded from the default workspace build
 exclude = [
     "bindings/python",
     "bindings/wasm",
+    "bindings/nodejs",
 ]
 
 [workspace.package]
@@ -36,6 +38,7 @@ duke-sheets-xlsx = { path = "crates/duke-sheets-xlsx" }
 duke-sheets-xls = { path = "crates/duke-sheets-xls" }
 duke-sheets-csv = { path = "crates/duke-sheets-csv" }
 duke-sheets-chart = { path = "crates/duke-sheets-chart" }
+duke-sheets-html = { path = "crates/duke-sheets-html" }
 
 # Error handling
 thiserror = "1.0"

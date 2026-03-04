@@ -573,8 +573,6 @@ impl CellStorage {
         &mut self.style_pool
     }
 
-    // ==================== Spill Management ====================
-
     /// Check if a range can be used for spilling
     ///
     /// A range can be spilled to if all cells in the range (except the source) are either:

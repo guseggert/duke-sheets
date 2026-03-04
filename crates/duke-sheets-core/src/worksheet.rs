@@ -339,8 +339,6 @@ impl Worksheet {
         self.locale = locale;
     }
 
-    // === Cell Access ===
-
     /// Get a cell value by address string (e.g., "A1")
     pub fn cell(&self, address: &str) -> Result<Option<&CellData>> {
         let addr = CellAddress::parse(address)?;
@@ -423,8 +421,6 @@ impl Worksheet {
         Ok(self.cell_style_at(addr.row, addr.col))
     }
 
-    // === Cell View & Formatting ===
-
     /// Get a [`CellView`] for the cell at the given row and column.
     ///
     /// The view provides access to the cell's value, style, and a
@@ -469,8 +465,6 @@ impl Worksheet {
         let addr = CellAddress::parse(address)?;
         Ok(self.formatted_value_at(addr.row, addr.col))
     }
-
-    // === Cell Modification ===
 
     /// Set a cell value by address string
     pub fn set_cell_value<V: Into<CellValue>>(&mut self, address: &str, value: V) -> Result<()> {
@@ -537,8 +531,6 @@ impl Worksheet {
         self.cells.remove(row, col);
     }
 
-    // === Range Operations ===
-
     /// Get the used range (bounds of all non-empty cells)
     pub fn used_range(&self) -> Option<CellRange> {
         self.cells
@@ -568,8 +560,6 @@ impl Worksheet {
         }
         Ok(())
     }
-
-    // === Row/Column Operations ===
 
     /// Get row height
     pub fn row_height(&self, row: u32) -> f64 {
@@ -711,8 +701,6 @@ impl Worksheet {
         self.cells.column_collapsed()
     }
 
-    // === Merged Cells ===
-
     /// Get merged regions
     pub fn merged_regions(&self) -> &[CellRange] {
         self.cells.merged_regions()
@@ -747,8 +735,6 @@ impl Worksheet {
             false
         }
     }
-
-    // === Freeze Panes ===
 
     /// Get freeze pane settings
     pub fn freeze_panes(&self) -> Option<&FreezePanes> {
@@ -788,8 +774,6 @@ impl Worksheet {
         self.split_panes = None;
     }
 
-    // === Hyperlinks ===
-
     /// Set a hyperlink on a cell by address string.
     pub fn set_hyperlink(&mut self, cell: &str, hyperlink: Hyperlink) -> Result<()> {
         let addr = CellAddress::parse(cell)?;
@@ -820,8 +804,6 @@ impl Worksheet {
     pub fn hyperlink_count(&self) -> usize {
         self.hyperlinks.len()
     }
-
-    // === Cell Comments ===
 
     /// Set a comment on a cell by address string
     ///
@@ -907,8 +889,6 @@ impl Worksheet {
         self.comment_authors.clear();
     }
 
-    // === Data Validation ===
-
     /// Add a data validation rule
     ///
     /// # Example
@@ -961,8 +941,6 @@ impl Worksheet {
         self.data_validations.clear();
     }
 
-    // === Tables (ListObjects) ===
-
     /// Add a table to this worksheet.
     pub fn add_table(&mut self, table: Table) {
         self.tables.push(table);
@@ -988,8 +966,6 @@ impl Worksheet {
         self.tables.len()
     }
 
-    // === Auto-Filter ===
-
     /// Set the standalone auto-filter for this worksheet.
     pub fn set_auto_filter(&mut self, auto_filter: Option<AutoFilter>) {
         self.auto_filter = auto_filter;
@@ -1004,8 +980,6 @@ impl Worksheet {
     pub fn auto_filter_mut(&mut self) -> &mut Option<AutoFilter> {
         &mut self.auto_filter
     }
-
-    // === Conditional Formatting ===
 
     /// Add a conditional formatting rule
     ///
@@ -1062,8 +1036,6 @@ impl Worksheet {
         self.conditional_formats.clear();
     }
 
-    // === Internal ===
-
     /// Get cell storage (internal use)
     #[allow(dead_code)]
     pub(crate) fn cells(&self) -> &CellStorage {
@@ -1101,8 +1073,6 @@ impl Worksheet {
     pub fn iter_cells(&self) -> impl Iterator<Item = (u32, u16, &CellData)> {
         self.cells.iter()
     }
-
-    // === Formula calculation support ===
 
     /// Iterate over all formula cells: (row, col, formula_text)
     pub fn formula_cells(&self) -> impl Iterator<Item = (u32, u16, &str)> {
@@ -1223,8 +1193,6 @@ impl Worksheet {
             None
         }
     }
-
-    // ==================== Dynamic Array Spill Support ====================
 
     /// Set the result of a dynamic array formula, spilling to adjacent cells
     ///

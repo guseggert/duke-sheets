@@ -47,9 +47,7 @@ pub struct Workbook<'a> {
     doc: UnoProxy,
 }
 
-// ============================================================================
 // Helper: construct a UNO PropertyValue struct
-// ============================================================================
 
 /// Build a `com.sun.star.beans.PropertyValue` as a `UnoValue::Struct`.
 ///
@@ -78,9 +76,7 @@ impl<'a> Workbook<'a> {
         &self.doc
     }
 
-    // ========================================================================
     // Internal helpers: proxy acquisition
-    // ========================================================================
 
     /// Query interface on the document itself.
     async fn doc_qi(&mut self, type_name: &str) -> Result<UnoProxy> {
@@ -163,9 +159,7 @@ impl<'a> Workbook<'a> {
             .unwrap_or(raw))
     }
 
-    // ========================================================================
     // Cell access
-    // ========================================================================
 
     /// Get a cell proxy by its position (column, row) on the first sheet.
     async fn get_cell(&mut self, col: i32, row: i32) -> Result<UnoProxy> {
@@ -220,9 +214,7 @@ impl<'a> Workbook<'a> {
         Ok((col, row))
     }
 
-    // ========================================================================
     // Cell data (existing API, unchanged)
-    // ========================================================================
 
     /// Set a cell's value (number, string, formula, or empty).
     pub async fn set_cell_value(
@@ -321,9 +313,7 @@ impl<'a> Workbook<'a> {
         }
     }
 
-    // ========================================================================
     // Sheet management
-    // ========================================================================
 
     /// Set the name of a sheet by index.
     pub async fn set_sheet_name(&mut self, sheet_index: i32, name: &str) -> Result<()> {
@@ -375,9 +365,7 @@ impl<'a> Workbook<'a> {
         }
     }
 
-    // ========================================================================
     // Named ranges
-    // ========================================================================
 
     /// Add a named range to the document.
     ///
@@ -422,9 +410,7 @@ impl<'a> Workbook<'a> {
         Ok(())
     }
 
-    // ========================================================================
     // Property access (XPropertySet)
-    // ========================================================================
 
     /// Set a property on a proxy object (via XPropertySet::setPropertyValue).
     pub async fn set_property(
@@ -455,9 +441,7 @@ impl<'a> Workbook<'a> {
             .map_err(|e| e.into())
     }
 
-    // ========================================================================
     // Cell range operations
-    // ========================================================================
 
     /// Get a cell range by A1 notation on a sheet (e.g., "A1:B5").
     pub async fn get_cell_range_by_name(
@@ -508,9 +492,7 @@ impl<'a> Workbook<'a> {
         Ok(())
     }
 
-    // ========================================================================
     // Comments / Annotations
-    // ========================================================================
 
     /// Add a comment (annotation) to a cell.
     ///
@@ -551,9 +533,7 @@ impl<'a> Workbook<'a> {
         Ok(())
     }
 
-    // ========================================================================
     // Row / Column dimensions
-    // ========================================================================
 
     /// Set the height of a row on a sheet (height in points).
     pub async fn set_row_height(
@@ -721,9 +701,7 @@ impl<'a> Workbook<'a> {
         Ok(())
     }
 
-    // ========================================================================
     // Number formats
-    // ========================================================================
 
     /// Look up or register a number format string, returning its format ID.
     ///
@@ -781,9 +759,7 @@ impl<'a> Workbook<'a> {
         }
     }
 
-    // ========================================================================
     // Cell styling
-    // ========================================================================
 
     /// Apply a `StyleSpec` to a cell or range proxy.
     ///
@@ -1132,9 +1108,7 @@ impl<'a> Workbook<'a> {
         self.apply_style(&range, spec).await
     }
 
-    // ========================================================================
     // Conditional formatting
-    // ========================================================================
 
     /// Create a named cell style for conditional formatting and return its name.
     async fn create_cf_style(&mut self, style_name: &str, spec: &StyleSpec) -> Result<String> {
@@ -1263,9 +1237,7 @@ impl<'a> Workbook<'a> {
         Ok(())
     }
 
-    // ========================================================================
     // Data validation
-    // ========================================================================
 
     /// Add data validation to a range on a sheet.
     ///
@@ -1460,9 +1432,7 @@ impl<'a> Workbook<'a> {
         Ok(())
     }
 
-    // ========================================================================
     // Save / Close
-    // ========================================================================
 
     /// Save the workbook as XLSX to the given file path.
     pub async fn save(&mut self, path: &str) -> Result<()> {

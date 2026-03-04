@@ -10,9 +10,7 @@ use crate::error::{Result, UrpError};
 use crate::protocol::LruCache;
 use crate::types::{Any, Type, TypeClass, UnoException, UnoValue};
 
-// ============================================================================
 // Compressed number encoding
-// ============================================================================
 
 /// Write a compressed u32. Values < 255 use 1 byte; >= 255 use 5 bytes.
 pub fn write_compressed(buf: &mut BytesMut, value: u32) {
@@ -44,9 +42,7 @@ pub fn read_compressed(buf: &mut Bytes) -> Result<u32> {
     }
 }
 
-// ============================================================================
 // String encoding
-// ============================================================================
 
 /// Write a UTF-8 string with compressed length prefix.
 pub fn write_string(buf: &mut BytesMut, s: &str) {
@@ -69,9 +65,7 @@ pub fn read_string(buf: &mut Bytes) -> Result<String> {
         .map_err(|e| UrpError::Marshal(format!("invalid UTF-8 in string: {e}")))
 }
 
-// ============================================================================
 // Type encoding
-// ============================================================================
 
 /// Write a UNO Type to the buffer.
 ///
@@ -145,9 +139,7 @@ pub fn read_type(buf: &mut Bytes) -> Result<(Type, u16, bool)> {
     }
 }
 
-// ============================================================================
 // Value encoding
-// ============================================================================
 
 /// Write a UNO value, given its expected type.
 /// Uses no OID caching for interface references (always sends full OID + 0xFFFF).
@@ -410,9 +402,7 @@ pub fn read_value_cached(
     }
 }
 
-// ============================================================================
 // Helpers
-// ============================================================================
 
 fn ensure_remaining(buf: &Bytes, needed: usize, what: &str) -> Result<()> {
     if buf.remaining() < needed {
@@ -517,9 +507,7 @@ pub fn write_protocol_property(
     write_value(buf, value, value_type);
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

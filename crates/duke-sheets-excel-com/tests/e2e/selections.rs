@@ -18,9 +18,7 @@ fn extract_value(data: Option<ResponseData>) -> serde_json::Value {
     }
 }
 
-// =========================================================================
 // Writer E2E: our XLSX → Excel → verify COM → re-save → read back
-// =========================================================================
 
 /// Write a workbook with freeze panes and two selections (topLeft + bottomRight),
 /// open in Excel, verify Excel sees freeze panes and the active selection,
@@ -205,9 +203,7 @@ fn test_write_freeze_panes_and_multi_selection() {
     crate::cleanup_fixture(&output);
 }
 
-// =========================================================================
 // Reader E2E: create freeze panes + selection in Excel → read with our code
-// =========================================================================
 
 /// Create a workbook in Excel with freeze panes and a selection, save it,
 /// and verify our reader correctly parses the freeze pane state and
