@@ -13,5 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 duke-sheets = { path = "../duke-sheets", features = ["full"] }
+duke-sheets-html.workspace = true
 anyhow.workspace = true
 clap.workspace = true

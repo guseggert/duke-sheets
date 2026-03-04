@@ -1,0 +1,11 @@
+[package]
+name = "duke-sheets-html"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "HTML export for duke-sheets workbooks"
+
+[dependencies]
+duke-sheets-core.workspace = true
