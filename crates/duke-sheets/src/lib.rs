@@ -168,7 +168,7 @@ impl WorkbookExt for Workbook {
             .map(|e| e.to_lowercase());
 
         match extension.as_deref() {
-            Some("xlsx") | Some("xlsm") => {
+            Some("xlsx") | Some("xlsm") | Some("xltx") | Some("xltm") => {
                 XlsxReader::read_file(path).map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
