@@ -8,8 +8,6 @@ use std::sync::Mutex;
 /// Opaque handle type
 pub type Handle = u64;
 
-/// Null handle constant
-pub const HANDLE_NULL: Handle = 0;
 
 /// Global context for managing FFI objects
 pub struct FfiContext {
@@ -36,6 +34,7 @@ impl FfiContext {
         self.workbooks.get(&handle)
     }
 
+    #[allow(dead_code)]
     pub fn get_workbook_mut(&mut self, handle: Handle) -> Option<&mut Workbook> {
         self.workbooks.get_mut(&handle)
     }

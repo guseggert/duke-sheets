@@ -1,10 +1,9 @@
 //! Workbook FFI functions
 
-use std::ffi::CStr;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::c_int;
 
 use crate::error::*;
-use crate::handles::{Handle, CONTEXT};
+use crate::handles::Handle;
 use crate::with_context;
 use duke_sheets::Workbook;
 

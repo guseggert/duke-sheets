@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use crate::error::{CsvError, CsvResult};
+use crate::error::CsvResult;
 use crate::options::CsvReadOptions;
 use duke_sheets_core::{CellValue, Worksheet};
 
