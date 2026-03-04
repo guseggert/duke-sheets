@@ -59,6 +59,12 @@ enum FormulaResult {
         master_row: u16,
         master_col: u16,
     },
+    TablePending {
+        cell_row: u32,
+        cell_col: u16,
+        master_row: u16,
+        master_col: u16,
+    },
 }
 
 enum DoperValue {
@@ -425,9 +431,14 @@ impl XlsReader {
         // Array formula support: stores (top_left_row, top_left_col) → (token_data, extra_data)
         let mut array_formulas: std::collections::HashMap<(u16, u16), (Vec<u8>, Vec<u8>)> =
             std::collections::HashMap::new();
+        // Data table support: stores (master_row, master_col) → (input1_ref, input2_ref)
+        let mut data_tables: std::collections::HashMap<(u16, u16), (String, String)> =
+            std::collections::HashMap::new();
         // Master cell that appeared before its SHAREDFMLA or ARRAY record.
         // (cell_row, cell_col, master_row, master_col)
         let mut pending_shared: Option<(u32, u16, u16, u16)> = None;
+        // Cells with PTG_TBL whose TABLE record hasn't been seen yet.
+        let mut pending_table_cells: Vec<(u32, u16, u16, u16)> = Vec::new();
 
         // Comment support: OBJ → TXO → NOTE correlation
         let mut last_obj_id: Option<u16> = None;
@@ -485,6 +496,7 @@ impl XlsReader {
                         formula_ctx,
                         &shared_formulas,
                         &array_formulas,
+                        &data_tables,
                     )?;
                     match result {
                         FormulaResult::Done(string_pending) => {
@@ -497,6 +509,15 @@ impl XlsReader {
                             master_col,
                         } => {
                             pending_shared = Some((cell_row, cell_col, master_row, master_col));
+                            pending_formula_cell = None;
+                        }
+                        FormulaResult::TablePending {
+                            cell_row,
+                            cell_col,
+                            master_row,
+                            master_col,
+                        } => {
+                            pending_table_cells.push((cell_row, cell_col, master_row, master_col));
                             pending_formula_cell = None;
                         }
                     }
@@ -552,6 +573,24 @@ impl XlsReader {
                                 )?;
                             }
                         }
+                    }
+                }
+                records::TABLE => {
+                    if let Some((master_row, master_col, input1, input2)) =
+                        Self::parse_table_record(&rec.data)
+                    {
+                        data_tables
+                            .insert((master_row, master_col), (input1.clone(), input2.clone()));
+                        // Backfill all pending cells for this table
+                        let text = format!("=TABLE({},{})", input1, input2);
+                        pending_table_cells.retain(|&(cell_row, cell_col, mr, mc)| {
+                            if mr == master_row && mc == master_col {
+                                Self::backfill_table_formula(ws, cell_row, cell_col, &text).ok();
+                                false
+                            } else {
+                                true
+                            }
+                        });
                     }
                 }
                 records::MERGECELLS => {
@@ -1104,6 +1143,7 @@ impl XlsReader {
         formula_ctx: &FormulaContext,
         shared_formulas: &std::collections::HashMap<(u16, u16), Vec<u8>>,
         array_formulas: &std::collections::HashMap<(u16, u16), (Vec<u8>, Vec<u8>)>,
+        data_tables: &std::collections::HashMap<(u16, u16), (String, String)>,
     ) -> XlsResult<FormulaResult> {
         if data.len() < 20 {
             return Err(XlsError::Parse("FORMULA record too short".into()));
@@ -1221,6 +1261,32 @@ impl XlsReader {
                             styles,
                         )?;
                         return Ok(FormulaResult::SharedPending {
+                            cell_row: row,
+                            cell_col: col,
+                            master_row: *master_row,
+                            master_col: *master_col,
+                        });
+                    }
+                } else if let Some(ParsedToken::Table {
+                    row: master_row,
+                    col: master_col,
+                }) = tokens.first()
+                {
+                    // Data table formula (tTbl)
+                    if let Some((input1, input2)) = data_tables.get(&(*master_row, *master_col)) {
+                        format!("=TABLE({},{})", input1, input2)
+                    } else {
+                        // TABLE record not seen yet — write cell with empty text
+                        Self::write_formula_cell(
+                            ws,
+                            row,
+                            col,
+                            xf_idx,
+                            result_bytes,
+                            String::new(),
+                            styles,
+                        )?;
+                        return Ok(FormulaResult::TablePending {
                             cell_row: row,
                             cell_col: col,
                             master_row: *master_row,
@@ -1396,6 +1462,49 @@ impl XlsReader {
         Some((first_row, first_col, token_data))
     }
 
+    /// TABLE record (0x0236): data table metadata.
+    ///
+    /// Format: rwFirst(2) + rwLast(2) + colFirst(1) + colLast(1) + flags(2)
+    ///       + rwInpRw(2) + colInpRw(2) + rwInpCol(2) + colInpCol(2)
+    ///
+    /// Total: 16 bytes.
+    /// Returns (master_row, master_col, input1_ref, input2_ref).
+    fn parse_table_record(data: &[u8]) -> Option<(u16, u16, String, String)> {
+        if data.len() < 16 {
+            return None;
+        }
+        let first_row = u16::from_le_bytes([data[0], data[1]]);
+        let _last_row = u16::from_le_bytes([data[2], data[3]]);
+        let first_col = data[4] as u16;
+        let _last_col = data[5];
+        let flags = u16::from_le_bytes([data[6], data[7]]);
+        let _f_always_calc = (flags & 0x0001) != 0;
+        let f_rw = (flags & 0x0002) != 0;
+        let f_tbl2 = (flags & 0x0004) != 0;
+
+        let rw_inp_rw = u16::from_le_bytes([data[8], data[9]]);
+        let col_inp_rw = u16::from_le_bytes([data[10], data[11]]);
+        let rw_inp_col = u16::from_le_bytes([data[12], data[13]]);
+        let col_inp_col = u16::from_le_bytes([data[14], data[15]]);
+
+        let (input1, input2) = if f_tbl2 {
+            // Two-variable table: row input + column input
+            let r1 = duke_sheets_core::CellAddress::new(rw_inp_rw as u32, col_inp_rw).to_string();
+            let r2 = duke_sheets_core::CellAddress::new(rw_inp_col as u32, col_inp_col).to_string();
+            (r1, r2)
+        } else if f_rw {
+            // One-variable row input table
+            let r1 = duke_sheets_core::CellAddress::new(rw_inp_rw as u32, col_inp_rw).to_string();
+            (r1, String::new())
+        } else {
+            // One-variable column input table
+            let r1 = duke_sheets_core::CellAddress::new(rw_inp_col as u32, col_inp_col).to_string();
+            (String::new(), r1)
+        };
+
+        Some((first_row, first_col, input1, input2))
+    }
+
     /// Backfill a cell's formula text after its SHAREDFMLA record is found.
     fn backfill_shared_formula(
         ws: &mut duke_sheets_core::Worksheet,
@@ -1433,6 +1542,33 @@ impl XlsReader {
             cell_col,
             CellValue::Formula {
                 text: formula_text,
+                cached_value: cached,
+                array_result: array,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Backfill a cell's formula text after its TABLE record is found.
+    fn backfill_table_formula(
+        ws: &mut duke_sheets_core::Worksheet,
+        cell_row: u32,
+        cell_col: u16,
+        table_text: &str,
+    ) -> XlsResult<()> {
+        let (cached, array) = match ws.get_value_at(cell_row, cell_col) {
+            CellValue::Formula {
+                cached_value,
+                array_result,
+                ..
+            } => (cached_value.clone(), array_result.clone()),
+            _ => (None, None),
+        };
+        ws.set_cell_value_at(
+            cell_row,
+            cell_col,
+            CellValue::Formula {
+                text: table_text.to_string(),
                 cached_value: cached,
                 array_result: array,
             },
@@ -3957,5 +4093,65 @@ mod tests {
         assert!(runs[0].font.is_none()); // leading text inherits cell style
         assert_eq!(runs[1].text, "World");
         assert_eq!(runs[1].font.as_ref().unwrap().bold, Some(true));
+    }
+
+    #[test]
+    fn test_parse_table_record_two_variable() {
+        // TABLE record: range A1:C3, flags=fTbl2, row input=D1, col input=E1
+        let mut data = vec![0u8; 16];
+        data[0..2].copy_from_slice(&0u16.to_le_bytes()); // first_row=0
+        data[2..4].copy_from_slice(&2u16.to_le_bytes()); // last_row=2
+        data[4] = 0; // first_col=0
+        data[5] = 2; // last_col=2
+        data[6..8].copy_from_slice(&0x0004u16.to_le_bytes()); // flags: fTbl2=1
+        data[8..10].copy_from_slice(&0u16.to_le_bytes()); // rwInpRw=0
+        data[10..12].copy_from_slice(&3u16.to_le_bytes()); // colInpRw=3 -> D1
+        data[12..14].copy_from_slice(&0u16.to_le_bytes()); // rwInpCol=0
+        data[14..16].copy_from_slice(&4u16.to_le_bytes()); // colInpCol=4 -> E1
+        let result = XlsReader::parse_table_record(&data);
+        assert!(result.is_some());
+        let (mr, mc, input1, input2) = result.unwrap();
+        assert_eq!(mr, 0);
+        assert_eq!(mc, 0);
+        assert_eq!(input1, "D1");
+        assert_eq!(input2, "E1");
+    }
+
+    #[test]
+    fn test_parse_table_record_row_input() {
+        let mut data = vec![0u8; 16];
+        data[0..2].copy_from_slice(&0u16.to_le_bytes());
+        data[2..4].copy_from_slice(&4u16.to_le_bytes());
+        data[4] = 0;
+        data[5] = 0;
+        data[6..8].copy_from_slice(&0x0002u16.to_le_bytes()); // flags: fRw=1
+        data[8..10].copy_from_slice(&0u16.to_le_bytes()); // rwInpRw=0
+        data[10..12].copy_from_slice(&2u16.to_le_bytes()); // colInpRw=2 -> C1
+        let result = XlsReader::parse_table_record(&data);
+        let (_, _, input1, input2) = result.unwrap();
+        assert_eq!(input1, "C1");
+        assert_eq!(input2, "");
+    }
+
+    #[test]
+    fn test_parse_table_record_col_input() {
+        let mut data = vec![0u8; 16];
+        data[0..2].copy_from_slice(&0u16.to_le_bytes());
+        data[2..4].copy_from_slice(&4u16.to_le_bytes());
+        data[4] = 0;
+        data[5] = 0;
+        data[6..8].copy_from_slice(&0x0000u16.to_le_bytes()); // flags: fRw=0, fTbl2=0
+        data[12..14].copy_from_slice(&1u16.to_le_bytes()); // rwInpCol=1
+        data[14..16].copy_from_slice(&0u16.to_le_bytes()); // colInpCol=0 -> A2
+        let result = XlsReader::parse_table_record(&data);
+        let (_, _, input1, input2) = result.unwrap();
+        assert_eq!(input1, "");
+        assert_eq!(input2, "A2");
+    }
+
+    #[test]
+    fn test_parse_table_record_too_short() {
+        let data = vec![0u8; 10]; // less than 16
+        assert!(XlsReader::parse_table_record(&data).is_none());
     }
 }
