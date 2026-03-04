@@ -217,6 +217,15 @@ impl ExcelBridge {
         })
     }
 
+    /// Navigate a chain from a stored handle and store the endpoint as a new handle.
+    ///
+    /// Returns the handle of the navigated COM object. Useful for obtaining
+    /// a reference to pass via `{"$ref": handle}` in invoke args.
+    pub fn navigate(&self, handle: u64, chain: Vec<ChainStep>) -> Result<u64, BridgeError> {
+        let data = self.send_command(Command::Navigate { handle, chain })?;
+        extract_handle(data)
+    }
+
     /// Release a stored COM object handle on the server.
     pub fn release(&self, handle: u64) -> Result<(), BridgeError> {
         self.send_command(Command::Release { handle })?;

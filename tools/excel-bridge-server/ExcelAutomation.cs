@@ -124,6 +124,17 @@ public sealed class ComObjectStore : IDisposable
         }
     }
 
+    /// <summary>
+    /// Store a COM object and return its handle.
+    /// Used by Navigate command to expose chain endpoints.
+    /// </summary>
+    public ulong StoreAndReturnHandle(dynamic obj)
+    {
+        var h = _nextHandle++;
+        _handles[h] = obj;
+        return h;
+    }
+
     // -- Internals --
 
     private (bool isHandle, ulong handle, object? value) WrapResult(object? result)

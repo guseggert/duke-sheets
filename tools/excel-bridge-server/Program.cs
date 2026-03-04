@@ -87,7 +87,7 @@ class Program
     }
 
     // -----------------------------------------------------------------------
-    // Command dispatch — just 5 cases, all generic
+    // Command dispatch — just 6 cases, all generic
     // -----------------------------------------------------------------------
 
     static (Response resp, bool shutdown) Dispatch(ComObjectStore store, Request req)
@@ -140,7 +140,16 @@ class Program
                         && argsEl.ValueKind == JsonValueKind.Array)
                     {
                         invokeArgs = argsEl.EnumerateArray()
-                            .Select(ProtocolHelpers.JsonToComValue)
+                            .Select(el => {
+                                // Handle references: {"$ref": <handle_id>} resolves to stored COM object
+                                if (el.ValueKind == JsonValueKind.Object
+                                    && el.TryGetProperty("$ref", out var refEl)
+                                    && refEl.ValueKind == JsonValueKind.Number)
+                                {
+                                    return (object?)store.Navigate(refEl.GetUInt64(), null);
+                                }
+                                return ProtocolHelpers.JsonToComValue(el);
+                            })
                             .Select(a => a ?? System.Reflection.Missing.Value)
                             .ToArray();
                     }
@@ -152,6 +161,16 @@ class Program
                     object? data = result.isHandle ? new HandleData(result.handle) : result.value != null ? new ValueData(result.value) : null;
                     return (Response.Ok(id, data), false);
                 }
+
+                case "Navigate":
+                {
+                    var handle = p!.Value.GetProperty("handle").GetUInt64();
+                    var chain = p.Value.TryGetProperty("chain", out var c) ? (JsonElement?)c : null;
+                    var target = store.Navigate(handle, chain);
+                    var result = store.StoreAndReturnHandle(target);
+                    return (Response.Ok(id, new HandleData(result)), false);
+                }
+
 
                 case "Release":
                 {
