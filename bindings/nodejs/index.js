@@ -580,3 +580,5 @@ module.exports.CalculationStats = nativeBinding.CalculationStats
 module.exports.CellValue = nativeBinding.CellValue
 module.exports.Workbook = nativeBinding.Workbook
 module.exports.Worksheet = nativeBinding.Worksheet
+module.exports.fromXlsxBytesAsync = nativeBinding.fromXlsxBytesAsync
+module.exports.openAsync = nativeBinding.openAsync

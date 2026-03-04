@@ -681,3 +681,161 @@ impl Workbook {
         Ok(wb.get_named_range(&name, 0).map(|nr| nr.refers_to.clone()))
     }
 }
+
+pub struct OpenTask {
+    path: PathBuf,
+}
+
+impl Task for OpenTask {
+    type Output = CoreWorkbook;
+    type JsValue = Workbook;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        CoreWorkbook::open(&self.path)
+            .map_err(|e| napi::Error::from_reason(format!("Failed to open file: {}", e)))
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(Workbook {
+            inner: Arc::new(RwLock::new(output)),
+        })
+    }
+}
+
+pub struct OpenBytesTask {
+    data: Vec<u8>,
+}
+
+impl Task for OpenBytesTask {
+    type Output = CoreWorkbook;
+    type JsValue = Workbook;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let cursor = Cursor::new(&self.data);
+        duke_sheets_xlsx::XlsxReader::read(cursor)
+            .map_err(|e| napi::Error::from_reason(format!("Failed to read XLSX: {}", e)))
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(Workbook {
+            inner: Arc::new(RwLock::new(output)),
+        })
+    }
+}
+
+pub struct SaveTask {
+    workbook: Arc<RwLock<CoreWorkbook>>,
+    path: PathBuf,
+}
+
+impl Task for SaveTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let wb = self.workbook.read().map_err(to_napi_err)?;
+        wb.save(&self.path)
+            .map_err(|e| napi::Error::from_reason(format!("Failed to save: {}", e)))
+    }
+
+    fn resolve(&mut self, _env: Env, _output: Self::Output) -> Result<Self::JsValue> {
+        Ok(())
+    }
+}
+
+pub struct CalculateTask {
+    workbook: Arc<RwLock<CoreWorkbook>>,
+    options: Option<CalculationOptions>,
+}
+
+impl Task for CalculateTask {
+    type Output = CoreCalculationStats;
+    type JsValue = CalculationStats;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let mut wb = self.workbook.write().map_err(to_napi_err)?;
+        match &self.options {
+            Some(opts) => wb.calculate_with_options(opts).map_err(to_napi_err),
+            None => wb.calculate().map_err(to_napi_err),
+        }
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(CalculationStats { inner: output })
+    }
+}
+
+/// Open a workbook from a file asynchronously (non-blocking).
+///
+    /// Runs file I/O and parsing on the libuv thread pool so the
+    /// Node.js event loop is not blocked.
+    ///
+    /// @param path - Path to the file
+    /// @returns Promise<Workbook>
+    #[napi]
+    pub fn open_async(path: String) -> AsyncTask<OpenTask> {
+    AsyncTask::new(OpenTask {
+        path: PathBuf::from(path),
+    })
+            }
+
+    /// Load a workbook from XLSX bytes asynchronously (non-blocking).
+///
+    /// @param data - The XLSX file content as a Buffer
+    /// @returns Promise<Workbook>
+    #[napi]
+    pub fn from_xlsx_bytes_async(data: Buffer) -> AsyncTask<OpenBytesTask> {
+    AsyncTask::new(OpenBytesTask {
+        data: data.to_vec(),
+    })
+            }
+
+    #[napi]
+impl Workbook {
+    /// Save the workbook to a file asynchronously (non-blocking).
+    ///
+    /// @param path - Path to save to
+    /// @returns Promise<void>
+    #[napi]
+    pub fn save_async(&self, path: String) -> AsyncTask<SaveTask> {
+        AsyncTask::new(SaveTask {
+            workbook: Arc::clone(&self.inner),
+            path: PathBuf::from(path),
+        })
+    }
+
+    /// Calculate all formulas asynchronously (non-blocking).
+    ///
+    /// @returns Promise<CalculationStats>
+    #[napi]
+    pub fn calculate_async(&self) -> AsyncTask<CalculateTask> {
+        AsyncTask::new(CalculateTask {
+            workbook: Arc::clone(&self.inner),
+            options: None,
+        })
+    }
+
+    /// Calculate with custom options asynchronously (non-blocking).
+    ///
+    /// @param iterative - Enable iterative calculation for circular references
+    /// @param maxIterations - Maximum iterations (default 100)
+    /// @param maxChange - Convergence threshold (default 0.001)
+    /// @returns Promise<CalculationStats>
+    #[napi]
+    pub fn calculate_with_options_async(
+        &self,
+        iterative: Option<bool>,
+        max_iterations: Option<u32>,
+        max_change: Option<f64>,
+    ) -> AsyncTask<CalculateTask> {
+        AsyncTask::new(CalculateTask {
+            workbook: Arc::clone(&self.inner),
+            options: Some(CalculationOptions {
+                iterative: iterative.unwrap_or(false),
+                max_iterations: max_iterations.unwrap_or(100),
+                max_change: max_change.unwrap_or(0.001),
+                ..Default::default()
+            }),
+        })
+    }
+}

@@ -174,6 +174,28 @@ export declare class Workbook {
    * @returns The refers_to string, or null if not found
    */
   getNamedRange(name: string): string | null
+  /**
+   * Save the workbook to a file asynchronously (non-blocking).
+   *
+   * @param path - Path to save to
+   * @returns Promise<void>
+   */
+  saveAsync(path: string): Promise<unknown>
+  /**
+   * Calculate all formulas asynchronously (non-blocking).
+   *
+   * @returns Promise<CalculationStats>
+   */
+  calculateAsync(): Promise<unknown>
+  /**
+   * Calculate with custom options asynchronously (non-blocking).
+   *
+   * @param iterative - Enable iterative calculation for circular references
+   * @param maxIterations - Maximum iterations (default 100)
+   * @param maxChange - Convergence threshold (default 0.001)
+   * @returns Promise<CalculationStats>
+   */
+  calculateWithOptionsAsync(iterative?: boolean | undefined | null, maxIterations?: number | undefined | null, maxChange?: number | undefined | null): Promise<unknown>
 }
 
 /**
@@ -335,6 +357,14 @@ export declare class Worksheet {
   /** Unmerge cells in a range */
   unmergeCells(rangeStr: string): boolean
 }
+
+/**
+ * Load a workbook from XLSX bytes asynchronously (non-blocking).
+ *
+ * @param data - The XLSX file content as a Buffer
+ * @returns Promise<Workbook>
+ */
+export declare function fromXlsxBytesAsync(data: Buffer): Promise<unknown>
 
 /** Text alignment settings. */
 export interface JsAlignment {
@@ -758,6 +788,17 @@ export interface JsWorkbookSettings {
   calcOnOpen: boolean
   theme?: string
 }
+
+/**
+ * Open a workbook from a file asynchronously (non-blocking).
+ *
+ * Runs file I/O and parsing on the libuv thread pool so the
+ * Node.js event loop is not blocked.
+ *
+ * @param path - Path to the file
+ * @returns Promise<Workbook>
+ */
+export declare function openAsync(path: string): Promise<unknown>
 
 /**
  * The used range of a worksheet, describing the bounding box of all cells
