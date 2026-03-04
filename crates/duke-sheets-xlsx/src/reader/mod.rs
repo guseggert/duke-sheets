@@ -1,6 +1,6 @@
 //! XLSX reader
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
@@ -346,6 +346,11 @@ impl XlsxReader {
             Option<String>,
             Option<String>,
         )> = Vec::new();
+
+        // Dynamic array tracking: cm="1" anchors and cm="2" ghost cells.
+        // Anchor: (row, col). Ghost: set of (row, col) positions.
+        let mut dynamic_array_anchors: Vec<(u32, u16)> = Vec::new();
+        let mut dynamic_array_ghosts: HashSet<(u32, u16)> = HashSet::new();
 
         // Data validation state
         let mut in_data_validation = false;
@@ -986,7 +991,13 @@ impl XlsxReader {
                                     has_inline_runs = false;
                                 } else {
                                     if let Some(cm) = current_cell_cm {
-                                        log::trace!("Cell {} has cm={}", cell_ref, cm);
+                                        if let Ok(addr) = CellAddress::parse(cell_ref) {
+                                            match cm {
+                                                1 => dynamic_array_anchors.push((addr.row, addr.col)),
+                                                2 => { dynamic_array_ghosts.insert((addr.row, addr.col)); },
+                                                _ => {}
+                                            }
+                                        }
                                     }
                                     let resolved_formula = resolve_cell_formula(
                                         cell_ref,
@@ -2137,6 +2148,89 @@ impl XlsxReader {
                             },
                         );
                     }
+                }
+            }
+        }
+
+        // Post-process dynamic array formulas (cm="1" anchors + cm="2" ghosts).
+        // For each anchor, determine the spill rectangle by scanning the ghost set,
+        // build array_result from cached values, then create SpillTarget cells.
+        for &(anchor_row, anchor_col) in &dynamic_array_anchors {
+            // Determine the spill rectangle dimensions by scanning ghosts.
+            // The anchor occupies (anchor_row, anchor_col). Ghosts extend right and down.
+            let mut num_cols: u16 = 1;
+            while dynamic_array_ghosts.contains(&(anchor_row, anchor_col + num_cols)) {
+                num_cols += 1;
+            }
+            let mut num_rows: u32 = 1;
+            'row_scan: while dynamic_array_ghosts.contains(&(anchor_row + num_rows, anchor_col)) {
+                for c in 1..num_cols {
+                    if !dynamic_array_ghosts.contains(&(anchor_row + num_rows, anchor_col + c)) {
+                        break 'row_scan;
+                    }
+                }
+                num_rows += 1;
+            }
+
+            // Extract the anchor formula's text and cached value, then rebuild with array_result.
+            let anchor_val = worksheet.get_value_at(anchor_row, anchor_col);
+            let (formula_text, cached_value) = match anchor_val {
+                CellValue::Formula {
+                    text,
+                    cached_value,
+                    ..
+                } => (text, cached_value),
+                _ => continue,
+            };
+
+            let mut array_result: Vec<Vec<CellValue>> = Vec::with_capacity(num_rows as usize);
+            for r in 0..num_rows {
+                let mut row_values: Vec<CellValue> = Vec::with_capacity(num_cols as usize);
+                for c in 0..num_cols {
+                    let cell_row = anchor_row + r;
+                    let cell_col = anchor_col + c;
+                    let val = if r == 0 && c == 0 {
+                        cached_value
+                            .as_ref()
+                            .map(|b| *b.clone())
+                            .unwrap_or(CellValue::Empty)
+                    } else {
+                        worksheet.get_value_at(cell_row, cell_col)
+                    };
+                    row_values.push(val);
+                }
+                array_result.push(row_values);
+            }
+
+            // Re-write anchor with array_result populated.
+            let _ = worksheet.set_cell_value_at(
+                anchor_row,
+                anchor_col,
+                CellValue::Formula {
+                    text: formula_text,
+                    cached_value: cached_value.clone(),
+                    array_result: Some(array_result),
+                },
+            );
+
+            // Replace ghost cells with SpillTarget values.
+            for r in 0..num_rows {
+                for c in 0..num_cols {
+                    if r == 0 && c == 0 {
+                        continue;
+                    }
+                    let cell_row = anchor_row + r;
+                    let cell_col = anchor_col + c;
+                    let _ = worksheet.set_cell_value_at(
+                        cell_row,
+                        cell_col,
+                        CellValue::SpillTarget {
+                            source_row: anchor_row,
+                            source_col: anchor_col,
+                            offset_row: r,
+                            offset_col: c,
+                        },
+                    );
                 }
             }
         }
