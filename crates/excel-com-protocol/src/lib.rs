@@ -106,6 +106,16 @@ pub enum Command {
     /// Handle 0 (Excel.Application) cannot be released — use `Shutdown` instead.
     Release { handle: u64 },
 
+    /// Navigate a chain from a stored handle and store the endpoint as a new handle.
+    ///
+    /// This is useful when you need a reference to a COM object obtained through
+    /// chain navigation (e.g., to pass it as an argument to `Invoke` via `{"$ref": handle}`).
+    Navigate {
+        handle: u64,
+        #[serde(default)]
+        chain: Vec<ChainStep>,
+    },
+
     /// Shut down: release all handles, quit Excel, uninitialize COM.
     Shutdown,
 }
