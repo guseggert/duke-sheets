@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use duke_sheets_core::CellAddress;
 
-#[derive(Debug, Clone, Copy, Default)]
-enum CellFormulaKind {
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(super) enum CellFormulaKind {
     #[default]
     Normal,
     Shared,
@@ -13,10 +13,12 @@ enum CellFormulaKind {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CellFormulaState {
-    kind: CellFormulaKind,
+    pub(super) kind: CellFormulaKind,
     shared_index: Option<u32>,
-    data_table_input1_ref: Option<String>,
-    data_table_input2_ref: Option<String>,
+    /// The `ref` attribute on array/dataTable formulas (e.g., "A1:A3").
+    pub(super) array_ref: Option<String>,
+    pub(super) data_table_input1_ref: Option<String>,
+    pub(super) data_table_input2_ref: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +53,9 @@ pub(super) fn parse_cell_formula_state(e: &quick_xml::events::BytesStart<'_>) ->
             }
             b"r2" => {
                 state.data_table_input2_ref = attr.unescape_value().ok().map(|s| s.to_string());
+            }
+            b"ref" => {
+                state.array_ref = attr.unescape_value().ok().map(|s| s.to_string());
             }
             _ => {}
         }
@@ -370,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_array_formula_anchor() {
+    fn test_read_array_formula_anchor_and_spill() {
         let sheet_xml = r#"<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
@@ -386,19 +391,128 @@ mod tests {
         let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let sheet = workbook.worksheet(0).unwrap();
 
+        // Anchor cell: has formula, array_result populated
+        let a1 = sheet.get_value("A1").unwrap();
+        assert_eq!(a1.formula_text(), Some("=ROW(A1:A3)"));
+        assert!(a1.is_array_formula(), "A1 should be an array formula");
+        assert_eq!(a1.as_number(), Some(1.0));
+
+        // Non-anchor cells: replicated formula with their own cached values
+        let a2 = sheet.get_value("A2").unwrap();
         assert_eq!(
-            sheet.get_value("A1").unwrap().formula_text(),
-            Some("=ROW(A1:A3)")
+            a2.formula_text(),
+            Some("=ROW(A1:A3)"),
+            "A2 should have the array formula"
         );
+        assert_eq!(a2.as_number(), Some(2.0));
+
+        let a3 = sheet.get_value("A3").unwrap();
+        assert_eq!(
+            a3.formula_text(),
+            Some("=ROW(A1:A3)"),
+            "A3 should have the array formula"
+        );
+        assert_eq!(a3.as_number(), Some(3.0));
     }
 
     #[test]
-    fn test_read_datatable_formula_placeholder() {
+    fn test_read_array_formula_2d() {
+        // 2D array formula spanning A1:B2
         let sheet_xml = r#"<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
     <row r="1">
-      <c r="A1"><f t="dataTable" ref="A1:B2" r1="C1" r2="C2"/><v>42</v></c>
+      <c r="A1"><f t="array" ref="A1:B2">A1:B2*2</f><v>10</v></c>
+      <c r="B1"><v>20</v></c>
+    </row>
+    <row r="2">
+      <c r="A2"><v>30</v></c>
+      <c r="B2"><v>40</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        // Anchor has array_result with all 4 values
+        let a1 = sheet.get_value("A1").unwrap();
+        assert!(a1.is_array_formula(), "A1 should have array_result");
+        assert_eq!(a1.as_number(), Some(10.0));
+
+        // All cells have formula + their own cached value
+        assert_eq!(
+            sheet.get_value("B1").unwrap().formula_text(),
+            Some("=A1:B2*2")
+        );
+        assert_eq!(sheet.get_value("B1").unwrap().as_number(), Some(20.0));
+        assert_eq!(
+            sheet.get_value("A2").unwrap().formula_text(),
+            Some("=A1:B2*2")
+        );
+        assert_eq!(sheet.get_value("A2").unwrap().as_number(), Some(30.0));
+        assert_eq!(
+            sheet.get_value("B2").unwrap().formula_text(),
+            Some("=A1:B2*2")
+        );
+        assert_eq!(sheet.get_value("B2").unwrap().as_number(), Some(40.0));
+    }
+
+    #[test]
+    fn test_read_datatable_formula_ref_range() {
+        // DataTable with ref range: anchor + non-anchor cells
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1"><f t="dataTable" ref="A1:A3" r1="C1"/><v>42</v></c>
+    </row>
+    <row r="2"><c r="A2"><v>84</v></c></row>
+    <row r="3"><c r="A3"><v>126</v></c></row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        // Anchor: TABLE formula
+        let a1 = sheet.get_value("A1").unwrap();
+        assert_eq!(a1.formula_text(), Some("=TABLE(C1,)"));
+        assert_eq!(a1.as_number(), Some(42.0));
+
+        // Non-anchor cells: replicated TABLE formula with their own cached values
+        let a2 = sheet.get_value("A2").unwrap();
+        assert_eq!(
+            a2.formula_text(),
+            Some("=TABLE(C1,)"),
+            "A2 should have TABLE formula"
+        );
+        assert_eq!(a2.as_number(), Some(84.0));
+
+        let a3 = sheet.get_value("A3").unwrap();
+        assert_eq!(
+            a3.formula_text(),
+            Some("=TABLE(C1,)"),
+            "A3 should have TABLE formula"
+        );
+        assert_eq!(a3.as_number(), Some(126.0));
+    }
+
+    #[test]
+    fn test_read_datatable_formula_two_inputs() {
+        // DataTable with both r1 and r2
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="B2"><f t="dataTable" ref="B2:C3" r1="A1" r2="A2"/><v>10</v></c>
+      <c r="C2"><v>20</v></c>
+    </row>
+    <row r="2">
+      <c r="B3"><v>30</v></c>
+      <c r="C3"><v>40</v></c>
     </row>
   </sheetData>
 </worksheet>"#;
@@ -408,9 +522,48 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
 
         assert_eq!(
-            sheet.get_value("A1").unwrap().formula_text(),
-            Some("=TABLE(C1,C2)")
+            sheet.get_value("B2").unwrap().formula_text(),
+            Some("=TABLE(A1,A2)")
         );
-        assert_eq!(sheet.get_value("A1").unwrap().as_number(), Some(42.0));
+        assert_eq!(
+            sheet.get_value("C2").unwrap().formula_text(),
+            Some("=TABLE(A1,A2)")
+        );
+        assert_eq!(
+            sheet.get_value("B3").unwrap().formula_text(),
+            Some("=TABLE(A1,A2)")
+        );
+        assert_eq!(
+            sheet.get_value("C3").unwrap().formula_text(),
+            Some("=TABLE(A1,A2)")
+        );
+
+        assert_eq!(sheet.get_value("B2").unwrap().as_number(), Some(10.0));
+        assert_eq!(sheet.get_value("C2").unwrap().as_number(), Some(20.0));
+        assert_eq!(sheet.get_value("B3").unwrap().as_number(), Some(30.0));
+        assert_eq!(sheet.get_value("C3").unwrap().as_number(), Some(40.0));
+    }
+
+    #[test]
+    fn test_read_array_formula_single_cell_ref() {
+        // Array formula with ref=single cell — no spill targets needed
+        let sheet_xml = r#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1"><f t="array" ref="A1">SUM(B1:B5)</f><v>15</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#;
+
+        let bytes = build_single_sheet_xlsx(sheet_xml);
+        let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let sheet = workbook.worksheet(0).unwrap();
+
+        let a1 = sheet.get_value("A1").unwrap();
+        assert_eq!(a1.formula_text(), Some("=SUM(B1:B5)"));
+        assert_eq!(a1.as_number(), Some(15.0));
+        // Single-cell array formula: anchor has array_result with one element
+        assert!(a1.is_array_formula());
     }
 }
