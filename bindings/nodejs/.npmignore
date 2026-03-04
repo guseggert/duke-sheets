@@ -1,0 +1,11 @@
+target/
+src/
+Cargo.toml
+Cargo.lock
+build.rs
+__test__/
+tsconfig.json
+.cargo/
+npm/
+artifacts/
+*.node

@@ -49,7 +49,7 @@ echo "  mise run build:wasm     # Build WASM bindings only"
 
 [tasks.build]
 description = "Build all bindings"
-depends = ["build:python", "build:wasm"]
+depends = ["build:python", "build:wasm", "build:nodejs"]
 
 [tasks."build:python"]
 description = "Build Python bindings"
@@ -61,6 +61,10 @@ description = "Build WASM bindings"
 dir = "bindings/wasm"
 run = "wasm-pack build --target web --dev"
 
+[tasks."build:nodejs"]
+description = "Build Node.js/TypeScript bindings"
+dir = "bindings/nodejs"
+run = "npm run build"
 [tasks."build:wasm:release"]
 description = "Build WASM bindings (release)"
 dir = "bindings/wasm"
@@ -72,7 +76,7 @@ run = "wasm-pack build --target web --release"
 
 [tasks.test]
 description = "Build and test all bindings"
-depends = ["test:python", "test:wasm"]
+depends = ["test:python", "test:wasm", "test:nodejs"]
 
 [tasks."test:python"]
 description = "Test Python bindings"
@@ -90,6 +94,11 @@ description = "Test WASM bindings (Node.js)"
 dir = "bindings/wasm"
 run = "wasm-pack test --node"
 
+[tasks."test:nodejs"]
+description = "Test Node.js/TypeScript bindings"
+dir = "bindings/nodejs"
+depends = ["build:nodejs"]
+run = "npx vitest run"
 [tasks."test:bindings"]
 alias = "tb"
 description = "Alias for 'mise run test'"

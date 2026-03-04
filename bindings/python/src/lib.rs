@@ -12,9 +12,7 @@ use std::sync::{Arc, RwLock};
 use duke_sheets::prelude::*;
 use duke_sheets_core::{CellError, CellValue as CoreCellValue};
 
-// =============================================================================
 // Error Conversion
-// =============================================================================
 
 fn to_py_err(e: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
@@ -35,9 +33,7 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
     }
 }
 
-// =============================================================================
 // CellValue - Python wrapper for cell values
-// =============================================================================
 
 /// Represents a cell value in a spreadsheet.
 ///
@@ -170,9 +166,7 @@ impl PyCellValue {
     }
 }
 
-// =============================================================================
 // CalculationStats - Statistics from workbook calculation
-// =============================================================================
 
 /// Statistics from calculating a workbook.
 #[pyclass(name = "CalculationStats")]
@@ -229,9 +223,7 @@ impl From<CalculationStats> for PyCalculationStats {
     }
 }
 
-// =============================================================================
 // Worksheet - Python wrapper
-// =============================================================================
 
 /// A worksheet within a workbook.
 ///
@@ -427,9 +419,7 @@ impl PyWorksheet {
     }
 }
 
-// =============================================================================
 // Workbook - Python wrapper
-// =============================================================================
 
 /// A workbook containing one or more worksheets.
 ///
@@ -647,9 +637,7 @@ impl PyWorkbook {
     }
 }
 
-// =============================================================================
 // Helper functions
-// =============================================================================
 
 /// Convert a Python value to a CellValue
 fn python_to_cell_value(value: &Bound<'_, PyAny>) -> PyResult<CoreCellValue> {
@@ -670,9 +658,7 @@ fn python_to_cell_value(value: &Bound<'_, PyAny>) -> PyResult<CoreCellValue> {
     }
 }
 
-// =============================================================================
 // Module definition
-// =============================================================================
 
 /// duke_sheets - High-performance Excel file library for Python
 ///

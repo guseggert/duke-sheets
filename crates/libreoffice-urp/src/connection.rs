@@ -62,9 +62,7 @@ impl UrpConnection {
         format!("tid-{n}").into_bytes()
     }
 
-    // ========================================================================
     // Protocol negotiation
-    // ========================================================================
 
     /// Perform the URP protocol properties negotiation.
     ///
@@ -279,9 +277,7 @@ impl UrpConnection {
         }
     }
 
-    // ========================================================================
     // Method invocation
-    // ========================================================================
 
     /// Call a method on a remote UNO object.
     pub async fn call(
@@ -427,9 +423,7 @@ impl UrpConnection {
         Ok(())
     }
 
-    // ========================================================================
     // Bootstrap helpers
-    // ========================================================================
 
     /// Get the initial object from the bridge.
     ///

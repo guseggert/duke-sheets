@@ -12,9 +12,7 @@ use duke_sheets_core::rich_text::{RichTextRun, RunFont};
 use duke_sheets_core::{Color, Workbook};
 use duke_sheets_xlsx::XlsxReader;
 
-// =========================================================================
 // Writer E2E: duke-sheets writes rich text → Excel opens + re-saves → read back
-// =========================================================================
 
 /// Verify Excel accepts our inline rich text and preserves it on re-save.
 ///
@@ -114,9 +112,7 @@ fn test_write_rich_text_roundtrip() {
     }
 }
 
-// =========================================================================
 // Reader E2E: Excel COM creates rich text → duke-sheets reads it
-// =========================================================================
 
 /// Have Excel create per-character formatting via Characters API,
 /// save to XLSX, and verify our reader parses the rich text runs.

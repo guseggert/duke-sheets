@@ -12,9 +12,7 @@ use crate::error::{Result, UrpError};
 use crate::marshal;
 use crate::types::Type;
 
-// ============================================================================
 // Header flag constants
-// ============================================================================
 
 const FLAG_LONGHEADER: u8 = 0x80;
 const FLAG_REQUEST: u8 = 0x40;
@@ -46,9 +44,7 @@ pub const FN_REQUEST_CHANGE: u16 = 4;
 /// Function ID for commitChange (on XProtocolProperties).
 pub const FN_COMMIT_CHANGE: u16 = 5;
 
-// ============================================================================
 // Parsed message types
-// ============================================================================
 
 /// A parsed URP request message.
 #[derive(Debug, Clone)]
@@ -80,9 +76,7 @@ pub enum UrpMessage {
     Reply(UrpReply),
 }
 
-// ============================================================================
 // Reader-side cache state
-// ============================================================================
 
 /// Reader-side cache state for decoding incoming messages.
 pub struct ReaderState {
@@ -329,9 +323,7 @@ impl ReaderState {
     }
 }
 
-// ============================================================================
 // Writer-side cache + message encoding
-// ============================================================================
 
 /// Writer-side state for encoding outgoing messages.
 pub struct WriterState {
@@ -514,9 +506,7 @@ impl WriterState {
     }
 }
 
-// ============================================================================
 // Simple 256-entry LRU cache
-// ============================================================================
 
 /// A 256-entry cache with simple round-robin eviction.
 /// Used by the writer side to track what values the reader has cached.
