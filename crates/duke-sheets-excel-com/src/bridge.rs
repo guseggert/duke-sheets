@@ -298,6 +298,17 @@ impl ExcelBridge {
         self.set(workbook, chain, "Formula", serde_json::Value::from(formula))
     }
 
+    pub(crate) fn set_cell_formula2(
+        &self,
+        workbook: u64,
+        sheet: SheetRef,
+        cell: &str,
+        formula: &str,
+    ) -> Result<(), BridgeError> {
+        let chain = vec![sheet.to_chain_step(), cs_idx("Range", cell)];
+        self.set(workbook, chain, "Formula2", serde_json::Value::from(formula))
+    }
+
     pub(crate) fn get_cell_value(
         &self,
         workbook: u64,

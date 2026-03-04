@@ -70,6 +70,12 @@ impl<'a> Workbook<'a> {
             .set_cell_formula(self.handle, self.active_sheet.clone(), cell, formula)
     }
 
+    /// Set a dynamic array formula (uses Formula2 property for spill support).
+    pub fn set_cell_formula2(&self, cell: &str, formula: &str) -> Result<(), BridgeError> {
+        self.bridge
+            .set_cell_formula2(self.handle, self.active_sheet.clone(), cell, formula)
+    }
+
     /// Get a cell's computed value from the active sheet.
     pub fn get_cell_value(&self, cell: &str) -> Result<CellValue, BridgeError> {
         self.bridge
@@ -669,9 +675,7 @@ impl<'a> Workbook<'a> {
     }
 }
 
-// =============================================================================
 // FormatCondition — handle to a CF rule for styling
-// =============================================================================
 
 /// A handle to a FormatCondition COM object, used to style a conditional
 /// formatting rule after creation.
