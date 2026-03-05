@@ -21,6 +21,10 @@ serde-wasm-bindgen = "0.6"
 # For WASM random number generation
 getrandom = { version = "0.2", features = ["js"] }
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+# Enable chrono's wasmbind feature so Local::now()/Utc::now() use js_sys::Date
+# instead of SystemTime::now() (which panics on wasm32-unknown-unknown).
+# This makes NOW() and TODAY() formulas work in WASM.
+chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
