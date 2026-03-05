@@ -35,7 +35,7 @@ pub(crate) fn read_table<R: Read + Seek>(
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
-                b"table" => {
+                b"table" if table.is_none() => {
                     table = Some(parse_table_attrs(&e)?);
                 }
                 b"tableColumn" => {
@@ -52,7 +52,7 @@ pub(crate) fn read_table<R: Read + Seek>(
                 _ => {}
             },
             Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
-                b"table" => {
+                b"table" if table.is_none() => {
                     table = Some(parse_table_attrs(&e)?);
                 }
                 b"tableColumn" => {
