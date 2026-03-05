@@ -347,9 +347,12 @@ pub fn read_value_cached(
                 let cache_index = buf.get_u16();
                 // Resolve via OID cache (same logic as Interface arm)
                 if !context_oid_str.is_empty() && cache_index != 0xFFFF {
-                    oid_cache[cache_index as usize] = Some(context_oid_str);
+                    let idx = cache_index as usize;
+                    if idx < oid_cache.len() {
+                        oid_cache[idx] = Some(context_oid_str);
+                    }
+                    }
                 }
-            }
             Ok(UnoValue::Exception(UnoException {
                 type_name: ty.name.clone(),
                 message,
@@ -389,11 +392,19 @@ pub fn read_value_cached(
 
             let resolved = if oid_str.is_empty() && cache_index != 0xFFFF {
                 // Empty string means read from cache
-                oid_cache[cache_index as usize].clone().unwrap_or_default()
+                let idx = cache_index as usize;
+                if idx < oid_cache.len() {
+                    oid_cache[idx].clone().unwrap_or_default()
+                } else {
+                    String::new()
+                }
             } else {
-                // New OID — populate cache if index is valid
+                // New OID — populate cache if index is valid and in-bounds
                 if cache_index != 0xFFFF && !oid_str.is_empty() {
-                    oid_cache[cache_index as usize] = Some(oid_str.clone());
+                    let idx = cache_index as usize;
+                    if idx < oid_cache.len() {
+                        oid_cache[idx] = Some(oid_str.clone());
+                    }
                 }
                 oid_str
             };

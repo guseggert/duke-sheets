@@ -235,14 +235,25 @@ impl ReaderState {
 
             let resolved = if oid_str.is_empty() && cache_index != 0xFFFF {
                 // Read from cache
-                self.oid_cache[cache_index as usize]
-                    .clone()
-                    .ok_or_else(|| {
-                        UrpError::Cache(format!("OID cache miss at index {cache_index}"))
-                    })?
+                let idx = cache_index as usize;
+                if idx < self.oid_cache.len() {
+                    self.oid_cache[idx]
+                        .clone()
+                        .ok_or_else(|| {
+                            UrpError::Cache(format!("OID cache miss at index {cache_index}"))
+                        })?
+                } else {
+                    return Err(UrpError::Cache(format!(
+                        "OID cache index {cache_index} out of bounds (max {})",
+                        self.oid_cache.len()
+                    )));
+                }
             } else {
                 if cache_index != 0xFFFF && !oid_str.is_empty() {
-                    self.oid_cache[cache_index as usize] = Some(oid_str.clone());
+                    let idx = cache_index as usize;
+                    if idx < self.oid_cache.len() {
+                        self.oid_cache[idx] = Some(oid_str.clone());
+                    }
                 }
                 oid_str
             };

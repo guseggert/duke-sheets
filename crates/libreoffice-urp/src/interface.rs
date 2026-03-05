@@ -751,3 +751,55 @@ pub fn named_ranges_add_new_by_name() -> MethodDef {
         one_way: false,
     }
 }
+
+// XCellRange — getCellRangeByPosition
+// Index 4 on XCellRange (extends XInterface: 0-2, getCellByPosition=3, getCellRangeByPosition=4)
+
+pub fn get_cell_range_by_position() -> MethodDef {
+    MethodDef {
+        name: "getCellRangeByPosition",
+        index: 4,
+        params: &[
+            ParamType::Long, // nLeft (start column)
+            ParamType::Long, // nTop (start row)
+            ParamType::Long, // nRight (end column)
+            ParamType::Long, // nBottom (end row)
+        ],
+        return_type: Type::interface("com.sun.star.table.XCellRange"),
+        one_way: false,
+    }
+}
+
+// XCellRangeData — getDataArray / setDataArray
+// Extends XInterface (0-2)
+// Methods: getDataArray(3), setDataArray(4)
+//
+// getDataArray returns sequence<sequence<any>> where each any is either
+// a Double (number) or String (text/empty).
+
+pub fn get_data_array() -> MethodDef {
+    MethodDef {
+        name: "getDataArray",
+        index: 3,
+        params: &[],
+        return_type: Type::sequence("[]any"), // sequence<sequence<any>>
+        one_way: false,
+    }
+}
+
+// XCellRangeFormula — getFormulaArray / setFormulaArray
+// Extends XInterface (0-2)
+// Methods: getFormulaArray(3), setFormulaArray(4)
+//
+// getFormulaArray returns sequence<sequence<string>> — the formula strings.
+// For non-formula cells, it returns the display value as a string.
+
+pub fn get_formula_array() -> MethodDef {
+    MethodDef {
+        name: "getFormulaArray",
+        index: 3,
+        params: &[],
+        return_type: Type::sequence("[]string"), // sequence<sequence<string>>
+        one_way: false,
+    }
+}
