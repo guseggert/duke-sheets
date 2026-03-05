@@ -150,7 +150,6 @@ jobs:
             (cd "$dir" && npm pack)
           done
           # Pack root package
-          npx napi prepublish -t npm
           npm pack
 
       - name: Upload to GitHub Release
