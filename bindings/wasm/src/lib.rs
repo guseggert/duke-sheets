@@ -1,21 +1,27 @@
-//! WebAssembly bindings for duke-sheets
-//!
-//! This module provides wasm-bindgen-based WebAssembly bindings for the duke-sheets library,
-//! allowing JavaScript/TypeScript code to create and manipulate spreadsheets in the browser.
-
 use std::io::Cursor;
 use std::sync::{Arc, RwLock};
+
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
 use duke_sheets_core::{
-    CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
+    CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
-use duke_sheets_xlsx::XlsxReader;
+use duke_sheets_xlsx::{XlsxReader, XlsxWriter};
 
-// Error Conversion
+mod types;
+mod workbook_read;
+mod worksheet_read;
 
-fn to_js_error(e: impl std::fmt::Display) -> JsError {
+pub use types::*;
+
+pub(crate) fn to_js_error(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
+}
+
+pub(crate) fn to_js_value<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
+    serde_wasm_bindgen::to_value(value).map_err(to_js_error)
 }
 
 fn cell_error_to_string(e: &CellError) -> &'static str {
@@ -33,9 +39,32 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
     }
 }
 
-// CellValue - JavaScript wrapper for cell values
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmCalculationStats {
+    formula_count: u32,
+    cells_calculated: u32,
+    errors: u32,
+    circular_references: u32,
+    volatile_cells: u32,
+    converged: bool,
+    iterations: u32,
+}
 
-/// Represents a cell value in a spreadsheet.
+impl From<&duke_sheets::CalculationStats> for WasmCalculationStats {
+    fn from(stats: &duke_sheets::CalculationStats) -> Self {
+        Self {
+            formula_count: stats.formula_count as u32,
+            cells_calculated: stats.cells_calculated as u32,
+            errors: stats.errors as u32,
+            circular_references: stats.circular_references as u32,
+            volatile_cells: stats.volatile_cells as u32,
+            converged: stats.converged,
+            iterations: stats.iterations as u32,
+        }
+    }
+}
+
 #[wasm_bindgen]
 pub struct CellValue {
     inner: CoreCellValue,
@@ -124,17 +153,18 @@ impl CellValue {
             CoreCellValue::Formula {
                 cached_value: Some(v),
                 ..
-            } => {
-                // Return the cached value
-                match v.as_ref() {
-                    CoreCellValue::Number(n) => JsValue::from_f64(*n),
-                    CoreCellValue::String(s) => JsValue::from_str(&s.to_string()),
-                    CoreCellValue::Boolean(b) => JsValue::from_bool(*b),
-                    CoreCellValue::Error(e) => JsValue::from_str(cell_error_to_string(e)),
-                    _ => JsValue::NULL,
-                }
-            }
+            } => match v.as_ref() {
+                CoreCellValue::Number(n) => JsValue::from_f64(*n),
+                CoreCellValue::String(s) => JsValue::from_str(&s.to_string()),
+                CoreCellValue::Boolean(b) => JsValue::from_bool(*b),
+                CoreCellValue::Error(e) => JsValue::from_str(cell_error_to_string(e)),
+                _ => JsValue::NULL,
+            },
             CoreCellValue::Formula { text, .. } => JsValue::from_str(text),
+            CoreCellValue::RichText(runs) => {
+                let text: String = runs.iter().map(|r| r.text.as_str()).collect();
+                JsValue::from_str(&text)
+            }
             CoreCellValue::SpillTarget { .. } => JsValue::NULL,
         }
     }
@@ -148,12 +178,11 @@ impl CellValue {
             CoreCellValue::Boolean(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
             CoreCellValue::Error(e) => cell_error_to_string(e).to_string(),
             CoreCellValue::Formula { text, .. } => text.clone(),
+            CoreCellValue::RichText(runs) => runs.iter().map(|r| r.text.as_str()).collect(),
             CoreCellValue::SpillTarget { .. } => String::new(),
         }
     }
 }
-
-// Worksheet - JavaScript wrapper
 
 #[wasm_bindgen]
 pub struct Worksheet {
@@ -177,11 +206,9 @@ impl Worksheet {
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-
         let cell_value = js_to_cell_value(value)?;
-        let addr = duke_sheets_core::CellAddress::parse(address)
+        let addr = CellAddress::parse(address)
             .map_err(|e| JsError::new(&format!("Invalid cell address: {}", e)))?;
-
         ws.set_cell_value_at(addr.row, addr.col, cell_value)
             .map_err(to_js_error)
     }
@@ -192,7 +219,6 @@ impl Worksheet {
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-
         ws.set_cell_formula(address, formula).map_err(to_js_error)
     }
 
@@ -202,12 +228,11 @@ impl Worksheet {
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-
-        let addr = duke_sheets_core::CellAddress::parse(address)
+        let addr = CellAddress::parse(address)
             .map_err(|e| JsError::new(&format!("Invalid cell address: {}", e)))?;
-
-        let value = ws.get_value_at(addr.row, addr.col);
-        Ok(CellValue { inner: value })
+        Ok(CellValue {
+            inner: ws.get_value_at(addr.row, addr.col),
+        })
     }
 
     #[wasm_bindgen(js_name = getCalculatedValue)]
@@ -216,15 +241,12 @@ impl Worksheet {
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-
-        let addr = duke_sheets_core::CellAddress::parse(address)
+        let addr = CellAddress::parse(address)
             .map_err(|e| JsError::new(&format!("Invalid cell address: {}", e)))?;
-
         let value = ws
             .get_calculated_value_at(addr.row, addr.col)
             .cloned()
             .unwrap_or(CoreCellValue::Empty);
-
         Ok(CellValue { inner: value })
     }
 
@@ -234,7 +256,6 @@ impl Worksheet {
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-
         match ws.used_range() {
             Some(range) => {
                 let arr = js_sys::Array::new();
@@ -248,24 +269,70 @@ impl Worksheet {
         }
     }
 
+    #[wasm_bindgen(js_name = setRowHeight)]
+    pub fn set_row_height(&self, row: u32, height: f64) -> Result<(), JsError> {
+        let mut wb = self.workbook.write().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.set_row_height(row, height);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setColumnWidth)]
+    pub fn set_column_width(&self, col: u32, width: f64) -> Result<(), JsError> {
+        let mut wb = self.workbook.write().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.set_column_width(col as u16, width);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = getRowHeight)]
+    pub fn get_row_height(&self, row: u32) -> Result<Option<f64>, JsError> {
+        let wb = self.workbook.read().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws.custom_row_heights().get(&row).copied())
+    }
+
+    #[wasm_bindgen(js_name = getColumnWidth)]
+    pub fn get_column_width(&self, col: u32) -> Result<Option<f64>, JsError> {
+        let wb = self.workbook.read().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws.custom_column_widths().get(&(col as u16)).copied())
+    }
+
     #[wasm_bindgen(js_name = mergeCells)]
     pub fn merge_cells(&self, range_str: &str) -> Result<(), JsError> {
         let mut wb = self.workbook.write().map_err(to_js_error)?;
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-
         let range = CellRange::parse(range_str)
             .map_err(|e| JsError::new(&format!("Invalid range: {}", e)))?;
         ws.merge_cells(&range).map_err(to_js_error)
     }
-}
 
-// Workbook - JavaScript wrapper
+    #[wasm_bindgen(js_name = unmergeCells)]
+    pub fn unmerge_cells(&self, range_str: &str) -> Result<bool, JsError> {
+        let mut wb = self.workbook.write().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let range = CellRange::parse(range_str)
+            .map_err(|e| JsError::new(&format!("Invalid range: {}", e)))?;
+        Ok(ws.unmerge_cells(&range))
+    }
+}
 
 #[wasm_bindgen]
 pub struct Workbook {
-    inner: Arc<RwLock<CoreWorkbook>>,
+    pub(crate) inner: Arc<RwLock<CoreWorkbook>>,
 }
 
 #[wasm_bindgen]
@@ -277,14 +344,59 @@ impl Workbook {
         }
     }
 
-    /// Load a workbook from .xlsx file bytes (Uint8Array in JS)
     #[wasm_bindgen(js_name = fromXlsxBytes)]
     pub fn from_xlsx_bytes(data: &[u8]) -> Result<Workbook, JsError> {
-        let cursor = Cursor::new(data);
-        let wb = XlsxReader::read(cursor).map_err(to_js_error)?;
-        Ok(Workbook {
+        let wb = XlsxReader::read(Cursor::new(data)).map_err(to_js_error)?;
+        Ok(Self {
             inner: Arc::new(RwLock::new(wb)),
         })
+    }
+
+    #[wasm_bindgen(js_name = loadXlsxBytes)]
+    pub fn load_xlsx_bytes(data: &[u8]) -> Result<Workbook, JsError> {
+        Self::from_xlsx_bytes(data)
+    }
+
+    #[wasm_bindgen(js_name = loadCsvString)]
+    pub fn load_csv_string(csv: &str) -> Result<Workbook, JsError> {
+        let reader = Cursor::new(csv.as_bytes());
+        let ws =
+            duke_sheets_csv::CsvReader::read(reader, &duke_sheets_csv::CsvReadOptions::default())
+                .map_err(to_js_error)?;
+        let mut wb = CoreWorkbook::empty();
+        wb.add_existing_worksheet(ws).map_err(to_js_error)?;
+        Ok(Self {
+            inner: Arc::new(RwLock::new(wb)),
+        })
+    }
+
+    #[wasm_bindgen(js_name = fromCsvString)]
+    pub fn from_csv_string(csv: &str) -> Result<Workbook, JsError> {
+        Self::load_csv_string(csv)
+    }
+
+    #[wasm_bindgen(js_name = saveXlsxBytes)]
+    pub fn save_xlsx_bytes(&self) -> Result<Vec<u8>, JsError> {
+        let wb = self.inner.read().map_err(to_js_error)?;
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
+        Ok(buf)
+    }
+
+    #[wasm_bindgen(js_name = saveCsvString)]
+    pub fn save_csv_string(&self) -> Result<String, JsError> {
+        let wb = self.inner.read().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet(0)
+            .ok_or_else(|| JsError::new("No worksheets to save"))?;
+        let mut buf = Vec::new();
+        duke_sheets_csv::CsvWriter::write(
+            ws,
+            &mut buf,
+            &duke_sheets_csv::CsvWriteOptions::default(),
+        )
+        .map_err(to_js_error)?;
+        String::from_utf8(buf).map_err(to_js_error)
     }
 
     #[wasm_bindgen(getter, js_name = sheetCount)]
@@ -308,7 +420,19 @@ impl Workbook {
             return Err(JsError::new(&format!("Sheet index {} out of range", index)));
         }
         drop(wb);
+        Ok(Worksheet {
+            workbook: Arc::clone(&self.inner),
+            sheet_index: index,
+        })
+    }
 
+    #[wasm_bindgen(js_name = getSheetByName)]
+    pub fn get_sheet_by_name(&self, name: &str) -> Result<Worksheet, JsError> {
+        let wb = self.inner.read().map_err(to_js_error)?;
+        let index = wb
+            .sheet_index(name)
+            .ok_or_else(|| JsError::new(&format!("Sheet '{}' not found", name)))?;
+        drop(wb);
         Ok(Worksheet {
             workbook: Arc::clone(&self.inner),
             sheet_index: index,
@@ -321,78 +445,46 @@ impl Workbook {
         wb.add_worksheet_with_name(name).map_err(to_js_error)
     }
 
-    /// Calculate all formulas in the workbook
-    pub fn calculate(&self) -> Result<JsValue, JsError> {
-        use duke_sheets_formula::evaluator::{evaluate, EvaluationContext};
-        use duke_sheets_formula::parser::parse_formula;
-
+    #[wasm_bindgen(js_name = removeSheet)]
+    pub fn remove_sheet(&self, index: usize) -> Result<(), JsError> {
         let mut wb = self.inner.write().map_err(to_js_error)?;
-        let mut cells_calculated = 0;
-        let mut errors = 0;
+        wb.remove_worksheet(index).map(|_| ()).map_err(to_js_error)
+    }
 
-        // Collect all formula cells
-        let sheet_count = wb.sheet_count();
-        let mut formulas: Vec<(usize, u32, u16, String)> = Vec::new();
+    pub fn calculate(&self) -> Result<JsValue, JsError> {
+        let mut wb = self.inner.write().map_err(to_js_error)?;
+        let stats = wb.calculate().map_err(to_js_error)?;
+        to_js_value(&WasmCalculationStats::from(&stats))
+    }
 
-        for sheet_idx in 0..sheet_count {
-            if let Some(ws) = wb.worksheet(sheet_idx) {
-                if let Some(range) = ws.used_range() {
-                    for row in range.start.row..=range.end.row {
-                        for col in range.start.col..=range.end.col {
-                            let val = ws.get_value_at(row, col);
-                            if let CoreCellValue::Formula { text, .. } = val {
-                                formulas.push((sheet_idx, row, col, text));
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    #[wasm_bindgen(js_name = calculateWithOptions)]
+    pub fn calculate_with_options(
+        &self,
+        iterative: bool,
+        max_iterations: u32,
+        max_change: f64,
+    ) -> Result<JsValue, JsError> {
+        let mut wb = self.inner.write().map_err(to_js_error)?;
+        let options = CalculationOptions {
+            iterative,
+            max_iterations,
+            max_change,
+            ..Default::default()
+        };
+        let stats = wb.calculate_with_options(&options).map_err(to_js_error)?;
+        to_js_value(&WasmCalculationStats::from(&stats))
+    }
 
-        // Evaluate each formula
-        for (sheet_idx, row, col, formula_text) in formulas {
-            cells_calculated += 1;
+    #[wasm_bindgen(js_name = defineName)]
+    pub fn define_name(&self, name: &str, refers_to: &str) -> Result<(), JsError> {
+        let mut wb = self.inner.write().map_err(to_js_error)?;
+        wb.define_name(name, refers_to).map_err(to_js_error)
+    }
 
-            let result = parse_formula(&formula_text)
-                .map_err(|e| format!("{:?}", e))
-                .and_then(|ast| {
-                    let ctx = EvaluationContext::new(Some(&*wb), sheet_idx, row, col);
-                    evaluate(&ast, &ctx).map_err(|e| format!("{:?}", e))
-                });
-
-            if let Some(ws) = wb.worksheet_mut(sheet_idx) {
-                let cached: CoreCellValue = match result {
-                    Ok(val) => val.into(),
-                    Err(_) => {
-                        errors += 1;
-                        CoreCellValue::Error(CellError::Calc)
-                    }
-                };
-
-                let current = ws.get_value_at(row, col);
-                if let CoreCellValue::Formula { text, .. } = current {
-                    let _ = ws.set_cell_value_at(
-                        row,
-                        col,
-                        CoreCellValue::Formula {
-                            text,
-                            cached_value: Some(Box::new(cached)),
-                            array_result: None,
-                        },
-                    );
-                }
-            }
-        }
-
-        let stats = js_sys::Object::new();
-        js_sys::Reflect::set(
-            &stats,
-            &"cellsCalculated".into(),
-            &JsValue::from(cells_calculated),
-        )
-        .ok();
-        js_sys::Reflect::set(&stats, &"errors".into(), &JsValue::from(errors)).ok();
-        Ok(stats.into())
+    #[wasm_bindgen(js_name = getNamedRange)]
+    pub fn get_named_range(&self, name: &str) -> Result<Option<String>, JsError> {
+        let wb = self.inner.read().map_err(to_js_error)?;
+        Ok(wb.get_named_range(name, 0).map(|nr| nr.refers_to.clone()))
     }
 }
 
@@ -401,8 +493,6 @@ impl Default for Workbook {
         Self::new()
     }
 }
-
-// Helper functions
 
 fn js_to_cell_value(value: JsValue) -> Result<CoreCellValue, JsError> {
     if value.is_null() || value.is_undefined() {
