@@ -297,7 +297,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
 
             // ---- tAttr (0x19) — sub-types ----
             ptg::PTG_ATTR => {
-                if pos + 2 > data.len() {
+                if pos + 3 > data.len() {
                     break;
                 }
                 let flags = data[pos];

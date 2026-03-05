@@ -174,7 +174,13 @@ impl CellAddress {
                     c
                 )));
             }
-            col = col * 26 + (c.to_ascii_uppercase() as u32 - 'A' as u32 + 1);
+            let val = c.to_ascii_uppercase() as u32 - 'A' as u32 + 1;
+            col = col.checked_mul(26)
+                .and_then(|v| v.checked_add(val))
+                .ok_or_else(|| Error::InvalidAddress(format!(
+                    "column '{}' is too wide",
+                    letters
+                )))?;
         }
 
         let col = col - 1; // Convert to 0-based

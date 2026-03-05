@@ -50,3 +50,7 @@ tools/excel-bridge-server/obj/
 node_modules/
 bindings/nodejs/*.node
 bindings/nodejs/artifacts/
+
+# Fuzz testing artifacts
+fuzz/artifacts/
+fuzz/corpus/
