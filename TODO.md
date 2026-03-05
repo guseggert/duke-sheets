@@ -165,6 +165,7 @@
 - [x] Read-only Worksheet methods (~50) — properties, cell styles, formatted values, row/col metadata, freeze/split panes, hyperlinks, comments, tables, data validation, conditional formatting, auto-filter, protection, page setup, formulas, spill info, merged regions
 - [x] TypeScript definitions auto-generated (`index.d.ts`, 771 lines)
 - [x] Test suite — 110 tests (40 CRUD + 70 read-only API)
+- [x] Panic protection (`catch_unwind`) — all `Result`-returning NAPI functions wrapped so Rust panics become JS exceptions instead of crashing the Node process
 - [ ] Read-only tests with real XLSX fixtures (comments, hyperlinks, tables, conditional formatting, data validation)
 - [ ] Write API coverage (styles, hyperlinks, comments, tables, etc.)
 ---
