@@ -198,7 +198,6 @@ pub fn parse_sst_entries(data: &[u8], continue_offsets: &[usize]) -> XlsResult<V
             }
         }
     }
-
     Ok(entries)
 }
 
@@ -231,7 +230,7 @@ impl<'a> ContinueReader<'a> {
     /// data if no more boundaries ahead.
     fn bytes_to_next_boundary(&self) -> usize {
         for &b in self.boundaries {
-            if b > self.pos {
+            if b >= self.pos {
                 return b - self.pos;
             }
         }
@@ -822,5 +821,69 @@ mod tests {
             }
             other => panic!("Expected Rich, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_sst_continue_header_ends_at_boundary() {
+        // Regression test: string header ends exactly at a CONTINUE boundary,
+        // so read_chars() starts with pos == boundary. The flags byte at the
+        // boundary must be consumed, not read as character data.
+        //
+        // Layout:
+        //   seg0: SST header (8 bytes) + string "AB" (5 bytes) = 13 bytes
+        //         + string "04/02/2023" header (3 bytes) = 16 bytes total
+        //   seg1: flags(0x00) + "04/02/2023" char data (10 bytes)
+        //
+        // The CONTINUE boundary is at offset 16 — exactly where char data starts.
+        let mut seg0 = Vec::new();
+        seg0.extend_from_slice(&2u32.to_le_bytes()); // total
+        seg0.extend_from_slice(&2u32.to_le_bytes()); // unique = 2
+
+        // String 0: "AB" (header 3 + data 2 = 5 bytes)
+        seg0.extend_from_slice(&2u16.to_le_bytes()); // char_count = 2
+        seg0.push(0x00); // flags: compressed
+        seg0.extend_from_slice(b"AB");
+
+        // String 1: "04/02/2023" — header only (char data in CONTINUE)
+        seg0.extend_from_slice(&10u16.to_le_bytes()); // char_count = 10
+        seg0.push(0x00); // flags: compressed
+        // No char data in seg0 — boundary falls exactly here
+
+        // CONTINUE: flags byte + char data
+        let mut seg1 = Vec::new();
+        seg1.push(0x00); // flags: still compressed
+        seg1.extend_from_slice(b"04/02/2023");
+
+        let (data, offsets) = build_sst_segments(&[&seg0, &seg1]);
+        assert_eq!(offsets, vec![16]); // boundary at offset 16
+        let strings = parse_sst_continued(&data, &offsets).unwrap();
+        assert_eq!(strings, vec!["AB", "04/02/2023"]);
+    }
+
+    #[test]
+    fn test_sst_continue_header_ends_at_boundary_wide() {
+        // Same as above but the continued string uses wide (UTF-16LE) encoding.
+        // The flags byte 0x01 at the boundary must NOT be read as char data.
+        let mut seg0 = Vec::new();
+        seg0.extend_from_slice(&2u32.to_le_bytes()); // total
+        seg0.extend_from_slice(&2u32.to_le_bytes()); // unique = 2
+
+        // String 0: "AB"
+        seg0.extend_from_slice(&2u16.to_le_bytes());
+        seg0.push(0x00);
+        seg0.extend_from_slice(b"AB");
+
+        // String 1: "Hi" (wide) — header only, char data in CONTINUE
+        seg0.extend_from_slice(&2u16.to_le_bytes()); // char_count = 2
+        seg0.push(0x01); // flags: wide
+        // No char data — boundary falls here
+
+        let mut seg1 = Vec::new();
+        seg1.push(0x01); // flags: wide
+        seg1.extend_from_slice(&[b'H', 0x00, b'i', 0x00]); // "Hi" UTF-16LE
+
+        let (data, offsets) = build_sst_segments(&[&seg0, &seg1]);
+        let strings = parse_sst_continued(&data, &offsets).unwrap();
+        assert_eq!(strings, vec!["AB", "Hi"]);
     }
 }
