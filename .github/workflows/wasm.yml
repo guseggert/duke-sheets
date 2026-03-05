@@ -65,6 +65,15 @@ jobs:
             ${{ env.WORKING_DIR }}/duke-sheets-wasm-*.tgz
           if-no-files-found: error
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-web
+          path: |
+            ${{ env.WORKING_DIR }}/pkg-web/duke_sheets_wasm.js
+            ${{ env.WORKING_DIR }}/pkg-web/duke_sheets_wasm_bg.wasm
+            ${{ env.WORKING_DIR }}/pkg-web/duke_sheets_wasm.d.ts
+          if-no-files-found: error
+
   test:
     name: Test
     needs: [build]
@@ -109,3 +118,49 @@ jobs:
           files: dist/*
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
+
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    if: startsWith(github.ref, 'refs/tags/wasm-v')
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-web
+          path: site/
+
+      - name: Add index.html
+        run: |
+          cat > site/index.html << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html>
+          <head><title>Duke Sheets WASM</title></head>
+          <body>
+          <h1>Duke Sheets WASM</h1>
+          <p>Import in your HTML:</p>
+          <pre>&lt;script type="module"&gt;
+          import init, { Workbook } from 'https://guseggert.github.io/duke-sheets/duke_sheets_wasm.js';
+          await init();
+          const wb = new Workbook();
+          &lt;/script&gt;</pre>
+          <p>Files: <a href="duke_sheets_wasm.js">JS</a> | <a href="duke_sheets_wasm_bg.wasm">WASM</a> | <a href="duke_sheets_wasm.d.ts">TypeScript defs</a></p>
+          </body>
+          </html>
+          HTMLEOF
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
