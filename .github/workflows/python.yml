@@ -51,6 +51,10 @@ jobs:
           target: ${{ matrix.settings.target }}
           manylinux: ${{ matrix.settings.manylinux || 'auto' }}
           sccache: 'true'
+          # Ensure Python 3.9+ is used inside manylinux Docker containers
+          # so maturin produces abi3 wheels (the default Python 3.8 is too old).
+          before-script-linux: |
+            export PATH=/opt/python/cp39-cp39/bin:$PATH
           args: >-
             --release
             --strip
