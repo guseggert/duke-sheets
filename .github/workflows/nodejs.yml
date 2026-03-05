@@ -31,12 +31,10 @@ jobs:
             build: npx napi build --platform --release --js index.js --dts index.d.ts --target aarch64-unknown-linux-gnu --use-napi-cross
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
-            build: npx napi build --platform --release --js index.js --dts index.d.ts --target x86_64-unknown-linux-musl
+            build: npx napi build --platform --release --js index.js --dts index.d.ts --target x86_64-unknown-linux-musl -x
           - host: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
-            build: set -e && rustup target add aarch64-unknown-linux-musl && npx napi build --platform --release --js index.js --dts index.d.ts --target aarch64-unknown-linux-musl
+            build: npx napi build --platform --release --js index.js --dts index.d.ts --target aarch64-unknown-linux-musl -x
           - host: macos-latest
             target: x86_64-apple-darwin
             build: npx napi build --platform --release --js index.js --dts index.d.ts --target x86_64-apple-darwin
@@ -67,20 +65,21 @@ jobs:
         with:
           key: ${{ matrix.settings.target }}
 
+      - uses: mlugg/setup-zig@v2
+        if: ${{ contains(matrix.settings.target, 'musl') }}
+        with:
+          version: 0.14.1
+
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        if: ${{ contains(matrix.settings.target, 'musl') }}
+        with:
+          tool: cargo-zigbuild
+
       - run: npm install
 
       - run: ${{ matrix.settings.build }}
-        if: ${{ !matrix.settings.docker }}
         shell: bash
-
-      - name: Build (Docker)
-        uses: addnab/docker-run-action@v3
-        if: ${{ matrix.settings.docker }}
-        with:
-          image: ${{ matrix.settings.docker }}
-          options: '--user 0:0 -v ${{ github.workspace }}/.cargo-cache/git/db:/usr/local/cargo/git/db -v ${{ github.workspace }}/.cargo/registry/cache:/usr/local/cargo/registry/cache -v ${{ github.workspace }}/.cargo/registry/index:/usr/local/cargo/registry/index -v ${{ github.workspace }}:/build -w /build/${{ env.WORKING_DIR }}'
-          run: ${{ matrix.settings.build }}
-
       - uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.settings.target }}
