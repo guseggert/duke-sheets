@@ -309,7 +309,7 @@ impl XlsxReader {
 
         let reader = BufReader::new(file);
         let mut xml_reader = Reader::from_reader(reader);
-        xml_reader.config_mut().trim_text(true);
+        xml_reader.config_mut().trim_text(false);
 
         let mut buf = Vec::new();
 
@@ -845,8 +845,6 @@ impl XlsxReader {
                     }
                     b"t" if in_inline_r && !in_inline_rpr => {
                         in_inline_run_t = true;
-                        // Disable trim to preserve significant whitespace
-                        xml_reader.config_mut().trim_text(false);
                     }
                     b"t" if in_inline_str && !in_inline_r => {
                         in_inline_text = true;
@@ -1049,7 +1047,6 @@ impl XlsxReader {
                         }
                         b"t" if in_inline_run_t => {
                             in_inline_run_t = false;
-                            xml_reader.config_mut().trim_text(true);
                         }
                         b"r" if in_inline_r => {
                             // Finish current run — mirrors SST parser
@@ -2467,23 +2464,30 @@ impl XlsxReader {
 
         // Apply formula or value
         if let Some(f) = formula {
-            // Parse cached value (if any) from the <v> element
-            let cached = value.and_then(|v| match cell_type {
-                Some("b") => Some(CellValue::Boolean(
-                    v == "1" || v.eq_ignore_ascii_case("true"),
-                )),
-                Some("e") => CellError::from_str(v).map(CellValue::Error),
-                Some("s") => {
-                    let idx: usize = v.parse().ok()?;
-                    shared_strings.get(idx).map(|entry| match entry {
-                        SharedStringEntry::Plain(s) => CellValue::String(s.clone().into()),
-                        SharedStringEntry::Rich(runs) => CellValue::RichText(runs.clone()),
-                    })
-                }
-                Some("str") | Some("inlineStr") => Some(CellValue::String(v.to_string().into())),
-                None | Some("n") => v.parse::<f64>().ok().map(CellValue::Number),
-                Some(_) => Some(CellValue::String(v.to_string().into())),
-            });
+            // Parse cached value (if any) from the <v> element.
+            // For str/inlineStr types, an absent or empty <v/> means "".
+            let cached = match (value, cell_type) {
+                (Some(v), _) => match cell_type {
+                    Some("b") => Some(CellValue::Boolean(
+                        v == "1" || v.eq_ignore_ascii_case("true"),
+                    )),
+                    Some("e") => CellError::from_str(v).map(CellValue::Error),
+                    Some("s") => {
+                        v.parse::<usize>().ok().and_then(|idx| {
+                            shared_strings.get(idx).map(|entry| match entry {
+                                SharedStringEntry::Plain(s) => CellValue::String(s.clone().into()),
+                                SharedStringEntry::Rich(runs) => CellValue::RichText(runs.clone()),
+                            })
+                        })
+                    }
+                    Some("str") | Some("inlineStr") => Some(CellValue::String(v.to_string().into())),
+                    None | Some("n") => v.parse::<f64>().ok().map(CellValue::Number),
+                    Some(_) => Some(CellValue::String(v.to_string().into())),
+                },
+                // Empty <v/> with string type → cached value is ""
+                (None, Some("str") | Some("inlineStr")) => Some(CellValue::String("".into())),
+                (None, _) => None,
+            };
 
             // Ensure formula starts with '='
             let formula_text = if f.starts_with('=') {
@@ -2555,6 +2559,16 @@ impl XlsxReader {
             };
 
             if let Err(e) = worksheet.set_cell_value_at(addr.row, addr.col, cell_value) {
+                log::warn!("Skipping cell {}: {}", cell_ref, e);
+                return Ok(());
+            }
+        } else if matches!(cell_type, Some("str") | Some("inlineStr")) {
+            // Empty <v/> or <is><t/></is> with string type → empty string, not Empty
+            if let Err(e) = worksheet.set_cell_value_at(
+                addr.row,
+                addr.col,
+                CellValue::String("".into()),
+            ) {
                 log::warn!("Skipping cell {}: {}", cell_ref, e);
                 return Ok(());
             }
