@@ -55,16 +55,9 @@ jobs:
         with:
           targets: ${{ matrix.settings.target }}
 
-      - uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            bindings/nodejs/target/
-          key: ${{ matrix.settings.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ matrix.settings.target }}-cargo-
+          key: ${{ matrix.settings.target }}
 
       - run: npm install
 

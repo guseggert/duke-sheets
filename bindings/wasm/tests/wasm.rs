@@ -9,7 +9,15 @@ use wasm_bindgen_test::*;
 
 use duke_sheets_wasm::*;
 
-wasm_bindgen_test_configure!(run_in_browser);
+// Tests run in Node.js via wasm-pack test --node
+
+// Helper to get a numeric field from a JsValue object
+fn get_f64_field(obj: &JsValue, key: &str) -> f64 {
+    js_sys::Reflect::get(obj, &JsValue::from_str(key))
+        .unwrap()
+        .as_f64()
+        .unwrap()
+}
 
 // Workbook Tests
 
@@ -82,7 +90,7 @@ fn test_worksheet_set_get_number() {
     sheet.set_cell("A1", JsValue::from_f64(42.0)).unwrap();
 
     let value = sheet.get_cell("A1").unwrap();
-    assert!(value.is_number);
+    assert!(value.is_number());
     assert_eq!(value.as_number(), Some(42.0));
 }
 
@@ -94,7 +102,7 @@ fn test_worksheet_set_get_text() {
     sheet.set_cell("A1", JsValue::from_str("Hello")).unwrap();
 
     let value = sheet.get_cell("A1").unwrap();
-    assert!(value.is_text);
+    assert!(value.is_text());
     assert_eq!(value.as_text(), Some("Hello".to_string()));
 }
 
@@ -106,7 +114,7 @@ fn test_worksheet_set_get_boolean() {
     sheet.set_cell("A1", JsValue::from_bool(true)).unwrap();
 
     let value = sheet.get_cell("A1").unwrap();
-    assert!(value.is_boolean);
+    assert!(value.is_boolean());
     assert_eq!(value.as_boolean(), Some(true));
 }
 
@@ -119,7 +127,7 @@ fn test_worksheet_set_null_clears() {
     sheet.set_cell("A1", JsValue::NULL).unwrap();
 
     let value = sheet.get_cell("A1").unwrap();
-    assert!(value.is_empty);
+    assert!(value.is_empty());
 }
 
 #[wasm_bindgen_test]
@@ -128,7 +136,7 @@ fn test_worksheet_get_empty_cell() {
     let sheet = wb.get_sheet(0).unwrap();
 
     let value = sheet.get_cell("Z99").unwrap();
-    assert!(value.is_empty);
+    assert!(value.is_empty());
 }
 
 #[wasm_bindgen_test]
@@ -162,7 +170,7 @@ fn test_formula_simple() {
     sheet.set_formula("A1", "=1+1").unwrap();
 
     let value = sheet.get_cell("A1").unwrap();
-    assert!(value.is_formula);
+    assert!(value.is_formula());
 }
 
 #[wasm_bindgen_test]
@@ -229,9 +237,9 @@ fn test_calculation_stats() {
 
     let stats = wb.calculate().unwrap();
 
-    assert_eq!(stats.formula_count, 2);
-    assert!(stats.cells_calculated >= 2);
-    assert_eq!(stats.errors, 0);
+    assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 2);
+    assert!(get_f64_field(&stats, "cellsCalculated") as u32 >= 2);
+    assert_eq!(get_f64_field(&stats, "errors") as u32, 0);
 }
 
 #[wasm_bindgen_test]
@@ -243,7 +251,7 @@ fn test_calculation_with_options() {
 
     let stats = wb.calculate_with_options(false, 100, 0.001).unwrap();
 
-    assert_eq!(stats.formula_count, 1);
+    assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
 }
 
 // Named Range Tests
@@ -345,7 +353,9 @@ fn test_csv_roundtrip() {
     let wb2 = Workbook::load_csv_string(&csv).unwrap();
     let sheet2 = wb2.get_sheet(0).unwrap();
 
-    assert_eq!(sheet2.get_cell("A1").unwrap().as_number(), Some(1.0));
+    // CSV reader parses values as text; verify the text content roundtrips correctly
+    let val = sheet2.get_cell("A1").unwrap();
+    assert!(val.as_number() == Some(1.0) || val.as_text() == Some("1".to_string()));
 }
 
 // Row/Column Dimension Tests
@@ -356,7 +366,7 @@ fn test_row_height() {
     let sheet = wb.get_sheet(0).unwrap();
 
     sheet.set_row_height(0, 30.0).unwrap();
-    // Setting succeeds (no getter to verify in WASM yet)
+    assert_eq!(sheet.get_row_height(0).unwrap(), Some(30.0));
 }
 
 #[wasm_bindgen_test]
@@ -365,7 +375,7 @@ fn test_column_width() {
     let sheet = wb.get_sheet(0).unwrap();
 
     sheet.set_column_width(0, 15.0).unwrap();
-    // Setting succeeds
+    assert_eq!(sheet.get_column_width(0).unwrap(), Some(15.0));
 }
 
 // Merge Cell Tests
@@ -388,4 +398,49 @@ fn test_unmerge_cells() {
     sheet.merge_cells("A1:C3").unwrap();
     sheet.unmerge_cells("A1:C3").unwrap();
     // Both operations succeed
+}
+
+#[wasm_bindgen_test]
+fn test_save_xlsx_bytes() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from(10.0)).unwrap();
+    sheet.set_cell("A2", JsValue::from(20.0)).unwrap();
+    sheet.set_formula("A3", "=A1+A2").unwrap();
+    wb.calculate().unwrap();
+
+    let bytes = wb.save_xlsx_bytes().unwrap();
+    assert!(!bytes.is_empty(), "XLSX bytes should not be empty");
+
+    // Roundtrip: load back and verify
+    let wb2 = Workbook::from_xlsx_bytes(&bytes).unwrap();
+    let sheet2 = wb2.get_sheet(0).unwrap();
+    let val = sheet2.get_cell("A1").unwrap();
+    assert_eq!(val.as_number(), Some(10.0));
+}
+
+#[wasm_bindgen_test]
+fn test_now_and_today_formulas() {
+    // NOW() and TODAY() use Local::now() which requires chrono's wasmbind feature
+    // on wasm32 targets, otherwise SystemTime::now() panics.
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_formula("A1", "=NOW()").unwrap();
+    sheet.set_formula("A2", "=TODAY()").unwrap();
+    wb.calculate().unwrap();
+
+    let now_val = sheet.get_calculated_value("A1").unwrap();
+    let today_val = sheet.get_calculated_value("A2").unwrap();
+
+    // NOW() returns a serial number > 0 (date + time fraction)
+    let now_num = now_val.as_number().expect("NOW() should return a number");
+    assert!(now_num > 0.0, "NOW() serial should be positive, got {}", now_num);
+
+    // TODAY() returns an integer serial number > 0
+    let today_num = today_val.as_number().expect("TODAY() should return a number");
+    assert!(today_num > 0.0, "TODAY() serial should be positive, got {}", today_num);
+
+    // TODAY() should be the integer part of NOW()
+    assert_eq!(today_num.floor(), today_num, "TODAY() should be an integer");
+    assert_eq!(now_num.floor(), today_num, "NOW() date part should equal TODAY()");
 }

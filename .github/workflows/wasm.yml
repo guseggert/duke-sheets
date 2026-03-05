@@ -1,0 +1,166 @@
+name: WebAssembly Bindings
+
+on:
+  push:
+    tags:
+      - 'wasm-v*'
+  pull_request:
+    paths:
+      - 'bindings/wasm/**'
+      - 'crates/**'
+      - '.github/workflows/wasm.yml'
+  workflow_dispatch:
+
+env:
+  WORKING_DIR: bindings/wasm
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
+
+      # Build all three targets into separate output dirs
+      - name: Build (bundler)
+        run: wasm-pack build --release --target bundler --out-dir pkg-bundler
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Build (web)
+        run: wasm-pack build --release --target web --out-dir pkg-web
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Build (nodejs)
+        run: wasm-pack build --release --target nodejs --out-dir pkg-nodejs
+        working-directory: ${{ env.WORKING_DIR }}
+
+      # Pack each target as an npm-compatible tarball
+      - name: Pack tarballs
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          cd pkg-bundler && npm pack && mv *.tgz ../duke-sheets-wasm-bundler.tgz && cd ..
+          cd pkg-web     && npm pack && mv *.tgz ../duke-sheets-wasm-web.tgz     && cd ..
+          cd pkg-nodejs  && npm pack && mv *.tgz ../duke-sheets-wasm-nodejs.tgz  && cd ..
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-packages
+          path: |
+            ${{ env.WORKING_DIR }}/duke-sheets-wasm-*.tgz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-web
+          path: |
+            ${{ env.WORKING_DIR }}/pkg-web/duke_sheets_wasm.js
+            ${{ env.WORKING_DIR }}/pkg-web/duke_sheets_wasm_bg.wasm
+            ${{ env.WORKING_DIR }}/pkg-web/duke_sheets_wasm.d.ts
+          if-no-files-found: error
+
+  test:
+    name: Test
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-test
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
+
+      - name: Run tests
+        run: wasm-pack test --node
+        working-directory: ${{ env.WORKING_DIR }}
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/wasm-v')
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-packages
+          path: dist
+
+      - name: List artifacts
+        run: ls -lh dist/
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    if: startsWith(github.ref, 'refs/tags/wasm-v')
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-web
+          path: site/
+
+      - name: Add index.html
+        run: |
+          cat > site/index.html << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html>
+          <head><title>Duke Sheets WASM</title></head>
+          <body>
+          <h1>Duke Sheets WASM</h1>
+          <p>Import in your HTML:</p>
+          <pre>&lt;script type="module"&gt;
+          import init, { Workbook } from 'https://guseggert.github.io/duke-sheets/duke_sheets_wasm.js';
+          await init();
+          const wb = new Workbook();
+          &lt;/script&gt;</pre>
+          <p>Files: <a href="duke_sheets_wasm.js">JS</a> | <a href="duke_sheets_wasm_bg.wasm">WASM</a> | <a href="duke_sheets_wasm.d.ts">TypeScript defs</a></p>
+          </body>
+          </html>
+          HTMLEOF
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

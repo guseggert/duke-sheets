@@ -423,29 +423,29 @@ impl Worksheet {
         })
     }
 
-    /// Get the row height in points
+    /// Get the row height in points, or null if not explicitly set
     #[napi]
-    pub fn get_row_height(&self, row: u32) -> Result<f64> {
+    pub fn get_row_height(&self, row: u32) -> Result<Option<f64>> {
         catch_panic(|| {
             let wb = self.workbook.read().map_err(to_napi_err)?;
             let ws = wb
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-            Ok(ws.row_height(row))
+            Ok(ws.custom_row_heights().get(&row).copied())
         })
     }
 
-    /// Get the column width in character units
+    /// Get the column width in character units, or null if not explicitly set
     #[napi]
-    pub fn get_column_width(&self, col: u32) -> Result<f64> {
+    pub fn get_column_width(&self, col: u32) -> Result<Option<f64>> {
         catch_panic(|| {
             let wb = self.workbook.read().map_err(to_napi_err)?;
             let ws = wb
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-            Ok(ws.column_width(col as u16))
+            Ok(ws.custom_column_widths().get(&(col as u16)).copied())
         })
     }
 
