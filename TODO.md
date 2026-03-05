@@ -354,11 +354,12 @@ or cell-level metadata not available in standalone evaluation):
 - [ ] Comparative benchmarks vs calamine, umya-spreadsheet, rust_xlsxwriter, excelize, openpyxl
 
 #### Fuzz Testing
-- [ ] Fuzz XLSX reader (`cargo-fuzz` / `libFuzzer`) — malformed ZIP, corrupt XML, truncated streams
-- [ ] Fuzz XLS reader — malformed BIFF8 records, bad CONTINUE boundaries, corrupt SST
-- [ ] Fuzz formula parser — arbitrary expression strings
-- [ ] Fuzz CSV reader — malformed delimiters, encoding edge cases
-
+- [x] Fuzz XLSX reader (`cargo-fuzz` / `libFuzzer`) — malformed ZIP, corrupt XML, truncated streams
+- [x] Fuzz XLS reader — malformed BIFF8 records, bad CONTINUE boundaries, corrupt SST
+- [x] Fuzz formula parser — `Arbitrary`-generated structured expressions + raw strings
+- [x] Fuzz CSV reader — `Arbitrary`-generated CSV content + options
+- [x] Fuzz BIFF8 token parser + decompiler — `Arbitrary`-generated token bytes + context
+- [x] Fuzz XLSX roundtrip — `Arbitrary`-generated workbooks → write → read-back
 #### C FFI
 - [ ] Complete FFI bindings
 - [ ] Python bindings via FFI

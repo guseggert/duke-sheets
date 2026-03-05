@@ -1,0 +1,57 @@
+[package]
+name = "duke-sheets-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+arbitrary = { version = "1", features = ["derive"] }
+
+# Target crates
+duke-sheets-xlsx = { path = "../crates/duke-sheets-xlsx" }
+duke-sheets-xls = { path = "../crates/duke-sheets-xls" }
+duke-sheets-csv = { path = "../crates/duke-sheets-csv" }
+duke-sheets-formula = { path = "../crates/duke-sheets-formula" }
+duke-sheets-core = { path = "../crates/duke-sheets-core" }
+
+[workspace]
+members = ["."]
+
+# Prevent this from being detected as a workspace member of the parent
+[patch.crates-io]
+
+# --- Fuzz targets ---
+
+[[bin]]
+name = "xlsx_reader"
+path = "fuzz_targets/xlsx_reader.rs"
+doc = false
+
+[[bin]]
+name = "xls_reader"
+path = "fuzz_targets/xls_reader.rs"
+doc = false
+
+[[bin]]
+name = "formula_parser"
+path = "fuzz_targets/formula_parser.rs"
+doc = false
+
+[[bin]]
+name = "csv_reader"
+path = "fuzz_targets/csv_reader.rs"
+doc = false
+
+[[bin]]
+name = "biff_tokens"
+path = "fuzz_targets/biff_tokens.rs"
+doc = false
+
+[[bin]]
+name = "xlsx_roundtrip"
+path = "fuzz_targets/xlsx_roundtrip.rs"
+doc = false
