@@ -50,6 +50,7 @@ jobs:
         with:
           target: ${{ matrix.settings.target }}
           manylinux: ${{ matrix.settings.manylinux || 'auto' }}
+          sccache: 'true'
           args: >-
             --release
             --strip

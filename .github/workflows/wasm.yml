@@ -28,16 +28,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            bindings/wasm/target/
-          key: wasm32-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            wasm32-cargo-
+          key: wasm32
 
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
@@ -83,16 +76,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            bindings/wasm/target/
-          key: wasm32-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            wasm32-cargo-
+          key: wasm32-test
 
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
