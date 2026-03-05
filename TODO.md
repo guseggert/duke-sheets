@@ -231,8 +231,9 @@ or cell-level metadata not available in standalone evaluation):
 #### CI
 - [ ] `cargo test` on every push (GitHub Actions)
 - [ ] Excel COM E2E on self-hosted runner with KVM
-- [ ] Nightly job for slow tasks: fuzz corpus, benchmarks, real-world file corpus
+- [ ] Nightly job for slow tasks: fuzz corpus, real-world file corpus
 - [ ] Clippy + `cargo fmt --check` gate
+- [x] Benchmark CI workflow (push to `main` → run benches → update README)
 
 ### Medium Priority
 
@@ -346,13 +347,14 @@ or cell-level metadata not available in standalone evaluation):
 - [ ] **Gradient fill path attributes** — `left`/`right`/`top`/`bottom` for path gradients not read
 
 #### Performance Benchmarks
-- [ ] Criterion benchmarks for XLSX read (small, medium, large files)
-- [ ] Criterion benchmarks for XLSX write
-- [ ] Criterion benchmarks for XLS read
-- [ ] Formula parser benchmarks (throughput, complex expressions)
-- [ ] Calculation engine benchmarks (large dependency graphs)
+- [x] Criterion benchmarks for XLSX read (small, medium, large files) — vs calamine, umya-spreadsheet
+- [x] Criterion benchmarks for XLSX write — serialize-only + full create+write, vs rust_xlsxwriter, umya-spreadsheet
+- [x] Criterion benchmarks for XLS read — real fixtures, vs calamine
+- [x] CSV read/write benchmarks (duke-sheets only)
+- [x] Formula parser benchmarks (throughput: simple, medium, complex, 1000-formula corpus)
+- [x] Calculation engine benchmarks (linear chain, fan-out, cross-sheet, mixed workbooks)
 - [ ] Memory usage profiling / tracking for large workbooks
-- [ ] Comparative benchmarks vs calamine, umya-spreadsheet, rust_xlsxwriter, excelize, openpyxl
+- [x] Comparative benchmarks vs calamine, umya-spreadsheet, rust_xlsxwriter
 
 #### Fuzz Testing
 - [x] Fuzz XLSX reader (`cargo-fuzz` / `libFuzzer`) — malformed ZIP, corrupt XML, truncated streams

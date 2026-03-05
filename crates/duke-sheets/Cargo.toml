@@ -22,6 +22,10 @@ thiserror.workspace = true
 tempfile.workspace = true
 pretty_assertions.workspace = true
 zip.workspace = true
+criterion.workspace = true
+calamine = "0.26"
+umya-spreadsheet = "2.3"
+rust_xlsxwriter = "0.82"
 
 [features]
 default = ["xlsx", "csv"]
@@ -29,3 +33,24 @@ xlsx = []
 xls = ["dep:duke-sheets-xls"]
 csv = []
 full = ["xlsx", "xls", "csv"]
+
+[[bench]]
+name = "xlsx_read"
+harness = false
+
+[[bench]]
+name = "xlsx_write"
+harness = false
+
+
+[[bench]]
+name = "csv_roundtrip"
+harness = false
+
+[[bench]]
+name = "formula_parser"
+harness = false
+
+[[bench]]
+name = "calculation"
+harness = false
