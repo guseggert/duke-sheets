@@ -57,21 +57,24 @@ conditional formatting, data validations, merged regions, page setup, and more.
 
 ## Python
 
-Install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases) (pick the wheel for your platform):
+Install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases):
 
 ```bash
-# macOS Apple Silicon
-pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp39-abi3-macosx_11_0_arm64.whl
-
-# macOS Intel
-pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp39-abi3-macosx_10_12_x86_64.whl
-
-# Linux x86_64
-pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-
-# Windows x64
-pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp39-abi3-win_amd64.whl
+pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
+
+Wheels are available for Linux (x86_64, aarch64), macOS (x86_64, ARM), and Windows (x64).
+Pick the one matching your platform from the release assets.
+
+Or use as an inline script dependency with [uv](https://docs.astral.sh/uv/):
+
+```python
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#     "duke-sheets @ https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+# ]
+# ///
 
 ```python
 import duke_sheets
