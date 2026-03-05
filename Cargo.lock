@@ -674,12 +674,15 @@ dependencies = [
  "duke-sheets-core",
  "duke-sheets-csv",
  "duke-sheets-formula",
+ "duke-sheets-libreoffice",
  "duke-sheets-xls",
  "duke-sheets-xlsx",
+ "libreoffice-urp",
  "pretty_assertions",
  "rust_xlsxwriter",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
  "umya-spreadsheet",
  "zip",
 ]
@@ -793,7 +796,6 @@ dependencies = [
 name = "duke-sheets-xls"
 version = "0.1.0"
 dependencies = [
- "cfb",
  "chrono",
  "duke-sheets-chart",
  "duke-sheets-core",

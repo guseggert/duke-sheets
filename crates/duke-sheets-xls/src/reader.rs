@@ -87,7 +87,7 @@ impl XlsReader {
     /// Read an XLS file from any `Read + Seek` source.
     pub fn read<R: Read + Seek>(reader: R) -> XlsResult<Workbook> {
         // Open CFB container
-        let mut cfb = cfb::CompoundFile::open(reader)?;
+        let cfb = crate::cfb::CompoundFile::open(reader).map_err(std::io::Error::from)?;
 
         // Read the "Workbook" stream (some files use "Book" for BIFF5)
         let stream_path = if cfb.exists("/Workbook") {
@@ -100,11 +100,7 @@ impl XlsReader {
             ));
         };
 
-        let mut stream_data = Vec::new();
-        {
-            let mut stream = cfb.open_stream(stream_path)?;
-            stream.read_to_end(&mut stream_data)?;
-        }
+        let stream_data = cfb.read_stream(stream_path).map_err(std::io::Error::from)?;
 
         // Parse all BIFF records from the stream
         let mut cursor = Cursor::new(&stream_data);

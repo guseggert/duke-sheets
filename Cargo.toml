@@ -56,9 +56,6 @@ quick-xml = "0.37"
 # which panics on wasm32-unknown-unknown. Without it, zip uses a fixed date (1980-01-01).
 zip = { version = "2.1", default-features = false, features = ["deflate"] }
 
-# Compound File Binary (for XLS)
-cfb = "0.10"
-
 # CSV handling
 csv = "1.3"
 

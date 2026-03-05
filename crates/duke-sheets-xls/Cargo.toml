@@ -12,7 +12,6 @@ duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
 duke-sheets-chart.workspace = true
 thiserror.workspace = true
-cfb.workspace = true
 chrono.workspace = true
 log.workspace = true
 
