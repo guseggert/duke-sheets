@@ -51,16 +51,16 @@ jobs:
           target: ${{ matrix.settings.target }}
           manylinux: ${{ matrix.settings.manylinux || 'auto' }}
           sccache: 'true'
+          working-directory: bindings/python
           args: >-
             --release
             --strip
             --out dist
-            --manifest-path bindings/python/Cargo.toml
 
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.settings.host }}-${{ matrix.settings.target }}
-          path: dist/*.whl
+          path: bindings/python/dist/*.whl
           if-no-files-found: error
 
   sdist:
@@ -73,14 +73,13 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: >-
-            --out dist
-            --manifest-path bindings/python/Cargo.toml
+          working-directory: bindings/python
+          args: --out dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-sdist
-          path: dist/*.tar.gz
+          path: bindings/python/dist/*.tar.gz
           if-no-files-found: error
 
   test:
@@ -113,9 +112,11 @@ jobs:
           path: dist
 
       - name: Install wheel and test dependencies
+        shell: bash
         run: |
           pip install pytest
-          pip install --find-links dist --no-index duke-sheets
+          ls dist/
+          pip install dist/*.whl
 
       - name: Run tests
         run: pytest bindings/python/tests/ -v
