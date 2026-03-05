@@ -348,10 +348,10 @@ export declare class Worksheet {
   setRowHeight(row: number, height: number): void
   /** Set the width of a column in character units */
   setColumnWidth(col: number, width: number): void
-  /** Get the row height in points */
-  getRowHeight(row: number): number
-  /** Get the column width in character units */
-  getColumnWidth(col: number): number
+  /** Get the row height in points, or null if not explicitly set */
+  getRowHeight(row: number): number | null
+  /** Get the column width in character units, or null if not explicitly set */
+  getColumnWidth(col: number): number | null
   /** Merge cells in a range (e.g., "A1:C3") */
   mergeCells(rangeStr: string): void
   /** Unmerge cells in a range */

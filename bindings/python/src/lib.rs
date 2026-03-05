@@ -12,9 +12,14 @@ use std::sync::{Arc, RwLock};
 use duke_sheets::prelude::*;
 use duke_sheets_core::{CellError, CellValue as CoreCellValue};
 
+mod types;
+pub use types::*;
+mod workbook_read;
+mod worksheet_read;
+
 // Error Conversion
 
-fn to_py_err(e: impl std::fmt::Display) -> PyErr {
+pub(crate) fn to_py_err(e: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
 
@@ -137,6 +142,11 @@ impl PyCellValue {
             CoreCellValue::Boolean(b) => b.into_py(py),
             CoreCellValue::Error(e) => cell_error_to_string(e).into_py(py),
             CoreCellValue::Formula { text, .. } => text.into_py(py),
+            CoreCellValue::RichText(runs) => runs
+                .iter()
+                .map(|r| r.text.as_str())
+                .collect::<String>()
+                .into_py(py),
             CoreCellValue::SpillTarget { .. } => py.None(), // Spill targets appear empty
         }
     }
@@ -149,6 +159,10 @@ impl PyCellValue {
             CoreCellValue::Boolean(b) => format!("CellValue(Boolean({}))", b),
             CoreCellValue::Error(e) => format!("CellValue(Error({}))", cell_error_to_string(e)),
             CoreCellValue::Formula { text, .. } => format!("CellValue(Formula({:?}))", text),
+            CoreCellValue::RichText(runs) => {
+                let text = runs.iter().map(|r| r.text.as_str()).collect::<String>();
+                format!("CellValue(RichText({:?}))", text)
+            }
             CoreCellValue::SpillTarget { .. } => "CellValue(SpillTarget)".to_string(),
         }
     }
@@ -161,6 +175,7 @@ impl PyCellValue {
             CoreCellValue::Boolean(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
             CoreCellValue::Error(e) => cell_error_to_string(e).to_string(),
             CoreCellValue::Formula { text, .. } => text.clone(),
+            CoreCellValue::RichText(runs) => runs.iter().map(|r| r.text.as_str()).collect(),
             CoreCellValue::SpillTarget { .. } => "".to_string(),
         }
     }
@@ -391,26 +406,26 @@ impl PyWorksheet {
         Ok(ws.unmerge_cells(&range))
     }
 
-    /// Get the row height in points
+    /// Get the row height in points, or None if not explicitly set
     #[pyo3(signature = (row))]
-    fn get_row_height(&self, row: u32) -> PyResult<f64> {
+    fn get_row_height(&self, row: u32) -> PyResult<Option<f64>> {
         let wb = self.workbook.read().map_err(to_py_err)?;
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
 
-        Ok(ws.row_height(row))
+        Ok(ws.custom_row_heights().get(&row).copied())
     }
 
-    /// Get the column width in character units
+    /// Get the column width in character units, or None if not explicitly set
     #[pyo3(signature = (col))]
-    fn get_column_width(&self, col: u16) -> PyResult<f64> {
+    fn get_column_width(&self, col: u16) -> PyResult<Option<f64>> {
         let wb = self.workbook.read().map_err(to_py_err)?;
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
 
-        Ok(ws.column_width(col))
+        Ok(ws.custom_column_widths().get(&col).copied())
     }
 
     fn __repr__(&self) -> PyResult<String> {
@@ -680,5 +695,38 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWorksheet>()?;
     m.add_class::<PyCellValue>()?;
     m.add_class::<PyCalculationStats>()?;
+    m.add_class::<PyColor>()?;
+    m.add_class::<PyFontStyle>()?;
+    m.add_class::<PyGradientStop>()?;
+    m.add_class::<PyFillStyle>()?;
+    m.add_class::<PyBorderEdge>()?;
+    m.add_class::<PyBorderStyle>()?;
+    m.add_class::<PyAlignment>()?;
+    m.add_class::<PyNumberFormat>()?;
+    m.add_class::<PyCellProtection>()?;
+    m.add_class::<PyStyle>()?;
+    m.add_class::<PyHyperlink>()?;
+    m.add_class::<PyComment>()?;
+    m.add_class::<PyCommentEntry>()?;
+    m.add_class::<PyFreezePanes>()?;
+    m.add_class::<PySplitPanes>()?;
+    m.add_class::<PySelection>()?;
+    m.add_class::<PySheetProtection>()?;
+    m.add_class::<PyPageSetup>()?;
+    m.add_class::<PyPageBreak>()?;
+    m.add_class::<PyWorkbookSettings>()?;
+    m.add_class::<PyNamedRange>()?;
+    m.add_class::<PyTable>()?;
+    m.add_class::<PyTableColumn>()?;
+    m.add_class::<PyTableStyleInfo>()?;
+    m.add_class::<PyAutoFilter>()?;
+    m.add_class::<PyFilterColumn>()?;
+    m.add_class::<PyDataValidation>()?;
+    m.add_class::<PyConditionalFormatRule>()?;
+    m.add_class::<PyRichTextRun>()?;
+    m.add_class::<PyRunFont>()?;
+    m.add_class::<PyHyperlinkEntry>()?;
+    m.add_class::<PyFormulaCell>()?;
+    m.add_class::<PySpillSource>()?;
     Ok(())
 }

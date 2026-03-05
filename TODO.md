@@ -168,6 +168,22 @@
 - [x] Panic protection (`catch_unwind`) — all `Result`-returning NAPI functions wrapped so Rust panics become JS exceptions instead of crashing the Node process
 - [ ] Read-only tests with real XLSX fixtures (comments, hyperlinks, tables, conditional formatting, data validation)
 - [ ] Write API coverage (styles, hyperlinks, comments, tables, etc.)
+
+### Python Bindings (PyO3)
+- [x] Initial scaffold — Workbook, Worksheet, CellValue, CalculationStats classes with basic CRUD + formula calculation (86 tests)
+- [x] Full API parity with Node.js NAPI bindings — module split (types.rs, workbook_read.rs, worksheet_read.rs), all 33 type structs, all ~50 read-only worksheet methods, read-only workbook methods, factory methods (from_xlsx_bytes, from_csv_string, save_csv_string)
+- [ ] Read-only tests with real XLSX fixtures
+- [ ] Write API coverage
+
+### WebAssembly Bindings (wasm-bindgen)
+- [x] Initial scaffold — Workbook, Worksheet, CellValue with basic CRUD
+- [x] Full API parity with Node.js NAPI bindings — module split (types.rs, workbook_read.rs, worksheet_read.rs), all 33 type structs (via serde-wasm-bindgen), all ~50 read-only worksheet methods, read-only workbook methods, factory methods (loadCsvString, saveCsvString, saveXlsxBytes)
+- [x] Fixed calculate() — replaced hand-rolled formula evaluation with real CalculationEngine (WorkbookCalculationExt), added calculateWithOptions()
+- [x] Added missing Workbook methods — removeSheet, getSheetByName, defineName, getNamedRange
+- [x] Added missing Worksheet methods — unmergeCells, setRowHeight, setColumnWidth, getRowHeight, getColumnWidth
+- [ ] Read-only tests with real XLSX fixtures
+- [ ] Write API coverage
+
 ---
 
 ## Not Started
