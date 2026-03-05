@@ -52,7 +52,9 @@ tracing = "0.1"
 quick-xml = "0.37"
 
 # ZIP handling (for XLSX) - only deflate needed; bzip2/lzma/zstd use C deps that break WASM
-zip = { version = "2.1", default-features = false, features = ["deflate", "time"] }
+# `time` feature removed: it calls SystemTime::now() via DateTime::default_for_write(),
+# which panics on wasm32-unknown-unknown. Without it, zip uses a fixed date (1980-01-01).
+zip = { version = "2.1", default-features = false, features = ["deflate"] }
 
 # Compound File Binary (for XLS)
 cfb = "0.10"

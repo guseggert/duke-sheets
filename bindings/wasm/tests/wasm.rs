@@ -399,3 +399,48 @@ fn test_unmerge_cells() {
     sheet.unmerge_cells("A1:C3").unwrap();
     // Both operations succeed
 }
+
+#[wasm_bindgen_test]
+fn test_save_xlsx_bytes() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from(10.0)).unwrap();
+    sheet.set_cell("A2", JsValue::from(20.0)).unwrap();
+    sheet.set_formula("A3", "=A1+A2").unwrap();
+    wb.calculate().unwrap();
+
+    let bytes = wb.save_xlsx_bytes().unwrap();
+    assert!(!bytes.is_empty(), "XLSX bytes should not be empty");
+
+    // Roundtrip: load back and verify
+    let wb2 = Workbook::from_xlsx_bytes(&bytes).unwrap();
+    let sheet2 = wb2.get_sheet(0).unwrap();
+    let val = sheet2.get_cell("A1").unwrap();
+    assert_eq!(val.as_number(), Some(10.0));
+}
+
+#[wasm_bindgen_test]
+fn test_now_and_today_formulas() {
+    // NOW() and TODAY() use Local::now() which requires chrono's wasmbind feature
+    // on wasm32 targets, otherwise SystemTime::now() panics.
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_formula("A1", "=NOW()").unwrap();
+    sheet.set_formula("A2", "=TODAY()").unwrap();
+    wb.calculate().unwrap();
+
+    let now_val = sheet.get_calculated_value("A1").unwrap();
+    let today_val = sheet.get_calculated_value("A2").unwrap();
+
+    // NOW() returns a serial number > 0 (date + time fraction)
+    let now_num = now_val.as_number().expect("NOW() should return a number");
+    assert!(now_num > 0.0, "NOW() serial should be positive, got {}", now_num);
+
+    // TODAY() returns an integer serial number > 0
+    let today_num = today_val.as_number().expect("TODAY() should return a number");
+    assert!(today_num > 0.0, "TODAY() serial should be positive, got {}", today_num);
+
+    // TODAY() should be the integer part of NOW()
+    assert_eq!(today_num.floor(), today_num, "TODAY() should be an integer");
+    assert_eq!(now_num.floor(), today_num, "NOW() date part should equal TODAY()");
+}
