@@ -7,11 +7,6 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-mod types;
-pub use types::*;
-mod workbook_read;
-mod worksheet_read;
-
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -21,14 +16,39 @@ use duke_sheets::{
     WorkbookExt,
 };
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue as CoreCellValue,
-    Workbook as CoreWorkbook,
+    CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
-
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
     napi::Error::from_reason(e.to_string())
 }
+
+/// Catch Rust panics at the FFI boundary and convert them to napi::Error.
+///
+/// Without this, a panic (e.g. integer overflow, index out of bounds) would
+/// unwind across the FFI boundary into Node.js, which is undefined behavior
+/// and kills the process. With this wrapper, panics become JS exceptions that
+/// callers can catch normally.
+pub(crate) fn catch_panic<T>(f: impl FnOnce() -> napi::Result<T>) -> napi::Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown error".to_string()
+            };
+            Err(napi::Error::from_reason(format!("Internal error: {}", msg)))
+        }
+    }
+}
+
+mod types;
+pub use types::*;
+mod workbook_read;
+mod worksheet_read;
 
 fn cell_error_to_string(e: &CellError) -> &'static str {
     match e {
@@ -44,7 +64,6 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
         CellError::Calc => "#CALC!",
     }
 }
-
 
 /// Represents a cell value in a spreadsheet.
 ///
@@ -182,7 +201,6 @@ impl CellValue {
     }
 }
 
-
 /// Statistics from calculating a workbook.
 #[napi]
 pub struct CalculationStats {
@@ -234,7 +252,6 @@ impl CalculationStats {
     }
 }
 
-
 /// The used range of a worksheet, describing the bounding box of all cells
 /// that contain data.
 #[napi(object)]
@@ -244,7 +261,6 @@ pub struct UsedRange {
     pub max_row: u32,
     pub max_col: u32,
 }
-
 
 /// A worksheet within a workbook.
 ///
@@ -261,10 +277,12 @@ impl Worksheet {
     /// Get the worksheet name
     #[napi(getter)]
     pub fn name(&self) -> Result<String> {
-        let wb = self.workbook.read().map_err(to_napi_err)?;
-        wb.worksheet(self.sheet_index)
-            .map(|ws| ws.name().to_string())
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            wb.worksheet(self.sheet_index)
+                .map(|ws| ws.name().to_string())
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))
+        })
     }
 
     /// Set a cell value by address (e.g., "A1", "B2")
@@ -280,23 +298,25 @@ impl Worksheet {
         address: String,
         value: Option<Either3<f64, String, bool>>,
     ) -> Result<()> {
-        let mut wb = self.workbook.write().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet_mut(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        let cell_value = match value {
-            None => CoreCellValue::Empty,
-            Some(Either3::A(n)) => CoreCellValue::Number(n),
-            Some(Either3::B(s)) => CoreCellValue::string(s),
-            Some(Either3::C(b)) => CoreCellValue::Boolean(b),
-        };
+            let cell_value = match value {
+                None => CoreCellValue::Empty,
+                Some(Either3::A(n)) => CoreCellValue::Number(n),
+                Some(Either3::B(s)) => CoreCellValue::string(s),
+                Some(Either3::C(b)) => CoreCellValue::Boolean(b),
+            };
 
-        let addr = CellAddress::parse(&address)
-            .map_err(|e| napi::Error::from_reason(format!("Invalid cell address: {}", e)))?;
+            let addr = CellAddress::parse(&address)
+                .map_err(|e| napi::Error::from_reason(format!("Invalid cell address: {}", e)))?;
 
-        ws.set_cell_value_at(addr.row, addr.col, cell_value)
-            .map_err(to_napi_err)
+            ws.set_cell_value_at(addr.row, addr.col, cell_value)
+                .map_err(to_napi_err)
+        })
     }
 
     /// Set a formula in a cell
@@ -305,27 +325,31 @@ impl Worksheet {
     /// @param formula - Formula string (e.g., "=SUM(A1:A10)")
     #[napi]
     pub fn set_formula(&self, address: String, formula: String) -> Result<()> {
-        let mut wb = self.workbook.write().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet_mut(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        ws.set_cell_formula(&address, &formula).map_err(to_napi_err)
+            ws.set_cell_formula(&address, &formula).map_err(to_napi_err)
+        })
     }
 
     /// Get the raw cell value (not calculated)
     #[napi]
     pub fn get_cell(&self, address: String) -> Result<CellValue> {
-        let wb = self.workbook.read().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        let addr = CellAddress::parse(&address)
-            .map_err(|e| napi::Error::from_reason(format!("Invalid cell address: {}", e)))?;
+            let addr = CellAddress::parse(&address)
+                .map_err(|e| napi::Error::from_reason(format!("Invalid cell address: {}", e)))?;
 
-        let value = ws.get_value_at(addr.row, addr.col);
-        Ok(CellValue { inner: value })
+            let value = ws.get_value_at(addr.row, addr.col);
+            Ok(CellValue { inner: value })
+        })
     }
 
     /// Get the calculated value of a cell
@@ -334,112 +358,127 @@ impl Worksheet {
     /// For regular values, returns the value itself.
     #[napi]
     pub fn get_calculated_value(&self, address: String) -> Result<CellValue> {
-        let wb = self.workbook.read().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        let addr = CellAddress::parse(&address)
-            .map_err(|e| napi::Error::from_reason(format!("Invalid cell address: {}", e)))?;
+            let addr = CellAddress::parse(&address)
+                .map_err(|e| napi::Error::from_reason(format!("Invalid cell address: {}", e)))?;
 
-        let value = ws
-            .get_calculated_value_at(addr.row, addr.col)
-            .cloned()
-            .unwrap_or(CoreCellValue::Empty);
+            let value = ws
+                .get_calculated_value_at(addr.row, addr.col)
+                .cloned()
+                .unwrap_or(CoreCellValue::Empty);
 
-        Ok(CellValue { inner: value })
+            Ok(CellValue { inner: value })
+        })
     }
 
     /// Get the used range as `{ minRow, minCol, maxRow, maxCol }` or null
     /// if the worksheet is empty.
     #[napi(getter)]
     pub fn used_range(&self) -> Result<Option<UsedRange>> {
-        let wb = self.workbook.read().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        Ok(ws.used_range().map(|r| UsedRange {
-            min_row: r.start.row,
-            min_col: r.start.col as u32,
-            max_row: r.end.row,
-            max_col: r.end.col as u32,
-        }))
+            Ok(ws.used_range().map(|r| UsedRange {
+                min_row: r.start.row,
+                min_col: r.start.col as u32,
+                max_row: r.end.row,
+                max_col: r.end.col as u32,
+            }))
+        })
     }
 
     /// Set the height of a row in points
     #[napi]
     pub fn set_row_height(&self, row: u32, height: f64) -> Result<()> {
-        let mut wb = self.workbook.write().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet_mut(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        ws.set_row_height(row, height);
-        Ok(())
+            ws.set_row_height(row, height);
+            Ok(())
+        })
     }
 
     /// Set the width of a column in character units
     #[napi]
     pub fn set_column_width(&self, col: u32, width: f64) -> Result<()> {
-        let mut wb = self.workbook.write().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet_mut(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        ws.set_column_width(col as u16, width);
-        Ok(())
+            ws.set_column_width(col as u16, width);
+            Ok(())
+        })
     }
 
     /// Get the row height in points
     #[napi]
     pub fn get_row_height(&self, row: u32) -> Result<f64> {
-        let wb = self.workbook.read().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        Ok(ws.row_height(row))
+            Ok(ws.row_height(row))
+        })
     }
 
     /// Get the column width in character units
     #[napi]
     pub fn get_column_width(&self, col: u32) -> Result<f64> {
-        let wb = self.workbook.read().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        Ok(ws.column_width(col as u16))
+            Ok(ws.column_width(col as u16))
+        })
     }
 
     /// Merge cells in a range (e.g., "A1:C3")
     #[napi]
     pub fn merge_cells(&self, range_str: String) -> Result<()> {
-        let mut wb = self.workbook.write().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet_mut(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        let range = CellRange::parse(&range_str)
-            .map_err(|e| napi::Error::from_reason(format!("Invalid range: {}", e)))?;
-        ws.merge_cells(&range).map_err(to_napi_err)
+            let range = CellRange::parse(&range_str)
+                .map_err(|e| napi::Error::from_reason(format!("Invalid range: {}", e)))?;
+            ws.merge_cells(&range).map_err(to_napi_err)
+        })
     }
 
     /// Unmerge cells in a range
     #[napi]
     pub fn unmerge_cells(&self, range_str: String) -> Result<bool> {
-        let mut wb = self.workbook.write().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet_mut(self.sheet_index)
-            .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-        let range = CellRange::parse(&range_str)
-            .map_err(|e| napi::Error::from_reason(format!("Invalid range: {}", e)))?;
-        Ok(ws.unmerge_cells(&range))
+            let range = CellRange::parse(&range_str)
+                .map_err(|e| napi::Error::from_reason(format!("Invalid range: {}", e)))?;
+            Ok(ws.unmerge_cells(&range))
+        })
     }
 }
-
 
 /// A workbook containing one or more worksheets.
 ///
@@ -480,12 +519,14 @@ impl Workbook {
     /// @param path - Path to the file
     #[napi(factory)]
     pub fn open(path: String) -> Result<Self> {
-        let path = PathBuf::from(path);
-        let wb = CoreWorkbook::open(&path)
-            .map_err(|e| napi::Error::from_reason(format!("Failed to open file: {}", e)))?;
+        catch_panic(|| {
+            let path = PathBuf::from(path);
+            let wb = CoreWorkbook::open(&path)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to open file: {}", e)))?;
 
-        Ok(Self {
-            inner: Arc::new(RwLock::new(wb)),
+            Ok(Self {
+                inner: Arc::new(RwLock::new(wb)),
+            })
         })
     }
 
@@ -494,12 +535,14 @@ impl Workbook {
     /// @param data - The XLSX file content as a Buffer
     #[napi(factory)]
     pub fn from_xlsx_bytes(data: Buffer) -> Result<Self> {
-        let cursor = Cursor::new(data.as_ref());
-        let wb = duke_sheets_xlsx::XlsxReader::read(cursor)
-            .map_err(|e| napi::Error::from_reason(format!("Failed to read XLSX: {}", e)))?;
+        catch_panic(|| {
+            let cursor = Cursor::new(data.as_ref());
+            let wb = duke_sheets_xlsx::XlsxReader::read(cursor)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to read XLSX: {}", e)))?;
 
-        Ok(Self {
-            inner: Arc::new(RwLock::new(wb)),
+            Ok(Self {
+                inner: Arc::new(RwLock::new(wb)),
+            })
         })
     }
 
@@ -508,16 +551,20 @@ impl Workbook {
     /// @param csv - The CSV content as a string
     #[napi(factory)]
     pub fn from_csv_string(csv: String) -> Result<Self> {
-        let reader = Cursor::new(csv.into_bytes());
-        let ws =
-            duke_sheets_csv::CsvReader::read(reader, &duke_sheets_csv::CsvReadOptions::default())
-                .map_err(|e| napi::Error::from_reason(format!("Failed to read CSV: {}", e)))?;
+        catch_panic(|| {
+            let reader = Cursor::new(csv.into_bytes());
+            let ws = duke_sheets_csv::CsvReader::read(
+                reader,
+                &duke_sheets_csv::CsvReadOptions::default(),
+            )
+            .map_err(|e| napi::Error::from_reason(format!("Failed to read CSV: {}", e)))?;
 
-        let mut wb = CoreWorkbook::empty();
-        wb.add_existing_worksheet(ws).map_err(to_napi_err)?;
+            let mut wb = CoreWorkbook::empty();
+            wb.add_existing_worksheet(ws).map_err(to_napi_err)?;
 
-        Ok(Self {
-            inner: Arc::new(RwLock::new(wb)),
+            Ok(Self {
+                inner: Arc::new(RwLock::new(wb)),
+            })
         })
     }
 
@@ -530,46 +577,54 @@ impl Workbook {
     /// @param path - Path to save to
     #[napi]
     pub fn save(&self, path: String) -> Result<()> {
-        let wb = self.inner.read().map_err(to_napi_err)?;
-        let path = PathBuf::from(path);
-        wb.save(&path)
-            .map_err(|e| napi::Error::from_reason(format!("Failed to save: {}", e)))
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            let path = PathBuf::from(path);
+            wb.save(&path)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to save: {}", e)))
+        })
     }
 
     /// Save the workbook as a CSV string (first sheet only)
     #[napi]
     pub fn save_csv_string(&self) -> Result<String> {
-        let wb = self.inner.read().map_err(to_napi_err)?;
-        let ws = wb
-            .worksheet(0)
-            .ok_or_else(|| napi::Error::from_reason("No worksheets to save"))?;
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(0)
+                .ok_or_else(|| napi::Error::from_reason("No worksheets to save"))?;
 
-        let mut buf = Vec::new();
-        duke_sheets_csv::CsvWriter::write(
-            ws,
-            &mut buf,
-            &duke_sheets_csv::CsvWriteOptions::default(),
-        )
-        .map_err(|e| napi::Error::from_reason(format!("Failed to write CSV: {}", e)))?;
+            let mut buf = Vec::new();
+            duke_sheets_csv::CsvWriter::write(
+                ws,
+                &mut buf,
+                &duke_sheets_csv::CsvWriteOptions::default(),
+            )
+            .map_err(|e| napi::Error::from_reason(format!("Failed to write CSV: {}", e)))?;
 
-        String::from_utf8(buf)
-            .map_err(|e| napi::Error::from_reason(format!("Invalid UTF-8: {}", e)))
+            String::from_utf8(buf)
+                .map_err(|e| napi::Error::from_reason(format!("Invalid UTF-8: {}", e)))
+        })
     }
 
     /// Get the number of worksheets
     #[napi(getter)]
     pub fn sheet_count(&self) -> Result<u32> {
-        let wb = self.inner.read().map_err(to_napi_err)?;
-        Ok(wb.sheet_count() as u32)
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.sheet_count() as u32)
+        })
     }
 
     /// Get a list of all worksheet names
     #[napi(getter)]
     pub fn sheet_names(&self) -> Result<Vec<String>> {
-        let wb = self.inner.read().map_err(to_napi_err)?;
-        Ok((0..wb.sheet_count())
-            .filter_map(|i| wb.worksheet(i).map(|ws| ws.name().to_string()))
-            .collect())
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok((0..wb.sheet_count())
+                .filter_map(|i| wb.worksheet(i).map(|ws| ws.name().to_string()))
+                .collect())
+        })
     }
 
     /// Get a worksheet by index (number) or name (string)
@@ -578,30 +633,32 @@ impl Workbook {
     /// @throws Error if index out of range or name not found
     #[napi]
     pub fn get_sheet(&self, index_or_name: Either<u32, String>) -> Result<Worksheet> {
-        let wb = self.inner.read().map_err(to_napi_err)?;
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
 
-        let sheet_index = match index_or_name {
-            Either::A(idx) => {
-                let idx = idx as usize;
-                if idx >= wb.sheet_count() {
-                    return Err(napi::Error::from_reason(format!(
-                        "Sheet index {} out of range (0..{})",
-                        idx,
-                        wb.sheet_count()
-                    )));
+            let sheet_index = match index_or_name {
+                Either::A(idx) => {
+                    let idx = idx as usize;
+                    if idx >= wb.sheet_count() {
+                        return Err(napi::Error::from_reason(format!(
+                            "Sheet index {} out of range (0..{})",
+                            idx,
+                            wb.sheet_count()
+                        )));
+                    }
+                    idx
                 }
-                idx
-            }
-            Either::B(name) => wb
-                .sheet_index(&name)
-                .ok_or_else(|| napi::Error::from_reason(format!("Sheet '{}' not found", name)))?,
-        };
+                Either::B(name) => wb.sheet_index(&name).ok_or_else(|| {
+                    napi::Error::from_reason(format!("Sheet '{}' not found", name))
+                })?,
+            };
 
-        drop(wb);
+            drop(wb);
 
-        Ok(Worksheet {
-            workbook: Arc::clone(&self.inner),
-            sheet_index,
+            Ok(Worksheet {
+                workbook: Arc::clone(&self.inner),
+                sheet_index,
+            })
         })
     }
 
@@ -611,10 +668,12 @@ impl Workbook {
     /// @returns Index of the new worksheet
     #[napi]
     pub fn add_sheet(&self, name: String) -> Result<u32> {
-        let mut wb = self.inner.write().map_err(to_napi_err)?;
-        wb.add_worksheet_with_name(&name)
-            .map(|idx| idx as u32)
-            .map_err(to_napi_err)
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            wb.add_worksheet_with_name(&name)
+                .map(|idx| idx as u32)
+                .map_err(to_napi_err)
+        })
     }
 
     /// Remove a worksheet by index
@@ -622,10 +681,12 @@ impl Workbook {
     /// @param index - Zero-based index of the worksheet to remove
     #[napi]
     pub fn remove_sheet(&self, index: u32) -> Result<()> {
-        let mut wb = self.inner.write().map_err(to_napi_err)?;
-        wb.remove_worksheet(index as usize)
-            .map(|_| ())
-            .map_err(to_napi_err)
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            wb.remove_worksheet(index as usize)
+                .map(|_| ())
+                .map_err(to_napi_err)
+        })
     }
 
     /// Calculate all formulas in the workbook
@@ -633,9 +694,11 @@ impl Workbook {
     /// @returns Statistics about the calculation
     #[napi]
     pub fn calculate(&self) -> Result<CalculationStats> {
-        let mut wb = self.inner.write().map_err(to_napi_err)?;
-        let stats = wb.calculate().map_err(to_napi_err)?;
-        Ok(CalculationStats { inner: stats })
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            let stats = wb.calculate().map_err(to_napi_err)?;
+            Ok(CalculationStats { inner: stats })
+        })
     }
 
     /// Calculate with custom options for iterative calculation
@@ -650,15 +713,17 @@ impl Workbook {
         max_iterations: Option<u32>,
         max_change: Option<f64>,
     ) -> Result<CalculationStats> {
-        let mut wb = self.inner.write().map_err(to_napi_err)?;
-        let options = CalculationOptions {
-            iterative: iterative.unwrap_or(false),
-            max_iterations: max_iterations.unwrap_or(100),
-            max_change: max_change.unwrap_or(0.001),
-            ..Default::default()
-        };
-        let stats = wb.calculate_with_options(&options).map_err(to_napi_err)?;
-        Ok(CalculationStats { inner: stats })
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            let options = CalculationOptions {
+                iterative: iterative.unwrap_or(false),
+                max_iterations: max_iterations.unwrap_or(100),
+                max_change: max_change.unwrap_or(0.001),
+                ..Default::default()
+            };
+            let stats = wb.calculate_with_options(&options).map_err(to_napi_err)?;
+            Ok(CalculationStats { inner: stats })
+        })
     }
 
     /// Define a named range
@@ -667,8 +732,10 @@ impl Workbook {
     /// @param refersTo - What the name refers to (e.g., "Sheet1!$A$1" or "0.05")
     #[napi]
     pub fn define_name(&self, name: String, refers_to: String) -> Result<()> {
-        let mut wb = self.inner.write().map_err(to_napi_err)?;
-        wb.define_name(&name, &refers_to).map_err(to_napi_err)
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            wb.define_name(&name, &refers_to).map_err(to_napi_err)
+        })
     }
 
     /// Get a named range definition
@@ -677,8 +744,10 @@ impl Workbook {
     /// @returns The refers_to string, or null if not found
     #[napi]
     pub fn get_named_range(&self, name: String) -> Result<Option<String>> {
-        let wb = self.inner.read().map_err(to_napi_err)?;
-        Ok(wb.get_named_range(&name, 0).map(|nr| nr.refers_to.clone()))
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.get_named_range(&name, 0).map(|nr| nr.refers_to.clone()))
+        })
     }
 }
 
@@ -691,8 +760,10 @@ impl Task for OpenTask {
     type JsValue = Workbook;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        CoreWorkbook::open(&self.path)
-            .map_err(|e| napi::Error::from_reason(format!("Failed to open file: {}", e)))
+        catch_panic(|| {
+            CoreWorkbook::open(&self.path)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to open file: {}", e)))
+        })
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -711,9 +782,11 @@ impl Task for OpenBytesTask {
     type JsValue = Workbook;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let cursor = Cursor::new(&self.data);
-        duke_sheets_xlsx::XlsxReader::read(cursor)
-            .map_err(|e| napi::Error::from_reason(format!("Failed to read XLSX: {}", e)))
+        catch_panic(|| {
+            let cursor = Cursor::new(&self.data);
+            duke_sheets_xlsx::XlsxReader::read(cursor)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to read XLSX: {}", e)))
+        })
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -733,9 +806,11 @@ impl Task for SaveTask {
     type JsValue = ();
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let wb = self.workbook.read().map_err(to_napi_err)?;
-        wb.save(&self.path)
-            .map_err(|e| napi::Error::from_reason(format!("Failed to save: {}", e)))
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            wb.save(&self.path)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to save: {}", e)))
+        })
     }
 
     fn resolve(&mut self, _env: Env, _output: Self::Output) -> Result<Self::JsValue> {
@@ -753,11 +828,13 @@ impl Task for CalculateTask {
     type JsValue = CalculationStats;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let mut wb = self.workbook.write().map_err(to_napi_err)?;
-        match &self.options {
-            Some(opts) => wb.calculate_with_options(opts).map_err(to_napi_err),
-            None => wb.calculate().map_err(to_napi_err),
-        }
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            match &self.options {
+                Some(opts) => wb.calculate_with_options(opts).map_err(to_napi_err),
+                None => wb.calculate().map_err(to_napi_err),
+            }
+        })
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -767,30 +844,30 @@ impl Task for CalculateTask {
 
 /// Open a workbook from a file asynchronously (non-blocking).
 ///
-    /// Runs file I/O and parsing on the libuv thread pool so the
-    /// Node.js event loop is not blocked.
-    ///
-    /// @param path - Path to the file
-    /// @returns Promise<Workbook>
-    #[napi]
-    pub fn open_async(path: String) -> AsyncTask<OpenTask> {
+/// Runs file I/O and parsing on the libuv thread pool so the
+/// Node.js event loop is not blocked.
+///
+/// @param path - Path to the file
+/// @returns Promise<Workbook>
+#[napi]
+pub fn open_async(path: String) -> AsyncTask<OpenTask> {
     AsyncTask::new(OpenTask {
         path: PathBuf::from(path),
     })
-            }
+}
 
-    /// Load a workbook from XLSX bytes asynchronously (non-blocking).
+/// Load a workbook from XLSX bytes asynchronously (non-blocking).
 ///
-    /// @param data - The XLSX file content as a Buffer
-    /// @returns Promise<Workbook>
-    #[napi]
-    pub fn from_xlsx_bytes_async(data: Buffer) -> AsyncTask<OpenBytesTask> {
+/// @param data - The XLSX file content as a Buffer
+/// @returns Promise<Workbook>
+#[napi]
+pub fn from_xlsx_bytes_async(data: Buffer) -> AsyncTask<OpenBytesTask> {
     AsyncTask::new(OpenBytesTask {
         data: data.to_vec(),
     })
-            }
+}
 
-    #[napi]
+#[napi]
 impl Workbook {
     /// Save the workbook to a file asynchronously (non-blocking).
     ///
