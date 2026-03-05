@@ -51,16 +51,16 @@ jobs:
           target: ${{ matrix.settings.target }}
           manylinux: ${{ matrix.settings.manylinux || 'auto' }}
           sccache: 'true'
-          working-directory: bindings/python
           args: >-
             --release
             --strip
             --out dist
+            --manifest-path bindings/python/Cargo.toml
 
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.settings.host }}-${{ matrix.settings.target }}
-          path: bindings/python/dist/*.whl
+          path: dist/*.whl
           if-no-files-found: error
 
   sdist:
@@ -73,13 +73,14 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          working-directory: bindings/python
-          args: --out dist
+          args: >-
+            --out dist
+            --manifest-path bindings/python/Cargo.toml
 
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-sdist
-          path: bindings/python/dist/*.tar.gz
+          path: dist/*.tar.gz
           if-no-files-found: error
 
   test:
