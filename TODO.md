@@ -166,12 +166,15 @@
 - [x] TypeScript definitions auto-generated (`index.d.ts`, 771 lines)
 - [x] Test suite — 110 tests (40 CRUD + 70 read-only API)
 - [x] Panic protection (`catch_unwind`) — all `Result`-returning NAPI functions wrapped so Rust panics become JS exceptions instead of crashing the Node process
+- [x] CI release workflow — multi-platform builds on `node-v*` tags, GitHub release assets (.tgz)
 - [ ] Read-only tests with real XLSX fixtures (comments, hyperlinks, tables, conditional formatting, data validation)
 - [ ] Write API coverage (styles, hyperlinks, comments, tables, etc.)
 
 ### Python Bindings (PyO3)
 - [x] Initial scaffold — Workbook, Worksheet, CellValue, CalculationStats classes with basic CRUD + formula calculation (86 tests)
 - [x] Full API parity with Node.js NAPI bindings — module split (types.rs, workbook_read.rs, worksheet_read.rs), all 33 type structs, all ~50 read-only worksheet methods, read-only workbook methods, factory methods (from_xlsx_bytes, from_csv_string, save_csv_string)
+- [x] abi3-py39 — single wheel per platform (Python 3.9+), reduces release matrix from 25 to 5 wheels
+- [x] CI release workflow — maturin-action build matrix (5 platforms), test on 3 OSes, GitHub release assets (.whl) on `python-v*` tags
 - [ ] Read-only tests with real XLSX fixtures
 - [ ] Write API coverage
 
@@ -181,6 +184,7 @@
 - [x] Fixed calculate() — replaced hand-rolled formula evaluation with real CalculationEngine (WorkbookCalculationExt), added calculateWithOptions()
 - [x] Added missing Workbook methods — removeSheet, getSheetByName, defineName, getNamedRange
 - [x] Added missing Worksheet methods — unmergeCells, setRowHeight, setColumnWidth, getRowHeight, getColumnWidth
+- [x] CI release workflow — wasm-pack build for 3 targets (bundler/web/nodejs), GitHub release assets (.tgz) on `wasm-v*` tags
 - [ ] Read-only tests with real XLSX fixtures
 - [ ] Write API coverage
 
@@ -250,6 +254,9 @@ or cell-level metadata not available in standalone evaluation):
 - [ ] Nightly job for slow tasks: fuzz corpus, real-world file corpus
 - [ ] Clippy + `cargo fmt --check` gate
 - [x] Benchmark CI workflow (push to `main` → run benches → update README)
+- [x] Node.js release workflow (`node-v*` tag → build 5 platforms → test → GitHub release)
+- [x] Python release workflow (`python-v*` tag → maturin abi3 wheels for 5 platforms → test → GitHub release)
+- [x] WASM release workflow (`wasm-v*` tag → wasm-pack 3 targets → test → GitHub release)
 
 ### Medium Priority
 

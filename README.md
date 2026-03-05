@@ -13,14 +13,14 @@ A Rust library for reading, writing, and manipulating Excel spreadsheets with fu
 
 ## Node.js / TypeScript
 
+Install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases):
+
 ```bash
-npm install @duke-sheets/node
+npm install https://github.com/guseggert/duke-sheets/releases/download/node-v0.1.0/duke-sheets-node-0.1.0.tgz
 ```
-
 ```typescript
-import { Workbook, openAsync } from '@duke-sheets/node';
+import { Workbook } from '@duke-sheets/node';
 
-// Create a new workbook
 const wb = new Workbook();
 const sheet = wb.getSheet(0);
 
@@ -34,10 +34,15 @@ console.log(sheet.getCalculatedValue('A3').asNumber()); // 30
 wb.save('output.xlsx');
 ```
 
-### Async API
+Open existing files from disk, bytes, or CSV strings:
 
-For servers and event-loop-sensitive code, async versions run on the
-libuv thread pool and return Promises:
+```typescript
+const wb = Workbook.open('input.xlsx');
+const wb2 = Workbook.fromXlsxBytes(buffer);
+const wb3 = Workbook.fromCsvString('a,b,c\n1,2,3');
+```
+
+Async versions run on the libuv thread pool so the event loop stays free:
 
 ```typescript
 import { openAsync } from '@duke-sheets/node';
@@ -47,53 +52,96 @@ await wb.calculateAsync();
 await wb.saveAsync('output.xlsx');
 ```
 
-### Read-Only Accessors
+50+ read-only accessors for styles, comments, hyperlinks, tables,
+conditional formatting, data validations, merged regions, page setup, and more.
 
-50+ read-only methods for inspecting workbook contents without modification:
+## Python
 
-```typescript
+Install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases) (pick the wheel for your platform):
+
+```bash
+# macOS Apple Silicon
+pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp39-abi3-macosx_11_0_arm64.whl
+
+# macOS Intel
+pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp39-abi3-macosx_10_12_x86_64.whl
+
+# Linux x86_64
+pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+
+# Windows x64
+pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp39-abi3-win_amd64.whl
+```
+
+```python
+import duke_sheets
+
+wb = duke_sheets.Workbook()
+sheet = wb.get_sheet(0)
+
+sheet.set_cell("A1", 10)
+sheet.set_cell("A2", 20)
+sheet.set_formula("A3", "=A1+A2")
+
+wb.calculate()
+print(sheet.get_calculated_value("A3").as_number())  # 30.0
+
+wb.save("output.xlsx")
+```
+
+Open existing files:
+
+```python
+wb = duke_sheets.Workbook.open("input.xlsx")
+wb = duke_sheets.Workbook.from_xlsx_bytes(data)
+wb = duke_sheets.Workbook.from_csv_string("a,b,c\n1,2,3")
+```
+
+Same 50+ read-only accessors as the Node.js API: cell styles, formatted
+values, comments, hyperlinks, tables, freeze panes, page setup, etc.
+
+## WebAssembly
+
+Install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases):
+
+```bash
+# For webpack/vite (bundler target)
+npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/duke-sheets-wasm-bundler.tgz
+
+# For <script type="module"> (web target)
+npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/duke-sheets-wasm-web.tgz
+
+# For Node.js via WASM
+npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/duke-sheets-wasm-nodejs.tgz
+```
+
+```javascript
+import { Workbook } from 'duke-sheets-wasm';
+
+const wb = new Workbook();
 const sheet = wb.getSheet(0);
 
-// Cell styles
-const style = sheet.getCellStyle('A1');
-console.log(style?.font.bold, style?.font.name);
+sheet.setCell('A1', 10);
+sheet.setCell('A2', 20);
+sheet.setFormula('A3', '=A1+A2');
 
-// Formatted values (applies number formats)
-sheet.getFormattedValue('B2'); // "1,500.00"
-
-// Comments, hyperlinks, tables
-sheet.commentCount;    // number
-sheet.hyperlinkCount;  // number
-sheet.tables;          // JsTable[]
-
-// Page setup, protection, freeze panes
-sheet.pageSetup;       // JsPageSetup
-sheet.protection;      // JsSheetProtection | null
-sheet.freezePanes;     // JsFreezePanes | null
-
-// Formulas, merged regions, conditional formatting
-sheet.formulaCells;         // JsFormulaCell[]
-sheet.mergedRegions;        // string[]
-sheet.conditionalFormats;   // JsConditionalFormatRule[]
-sheet.dataValidations;      // JsDataValidation[]
+const stats = wb.calculate();
+console.log(sheet.getCalculatedValue('A3').asNumber()); // 30
 ```
 
-### Opening Files
+Load files from bytes or CSV:
 
-```typescript
-import { Workbook, openAsync } from '@duke-sheets/node';
+```javascript
+const wb = Workbook.fromXlsxBytes(uint8Array);
+const wb2 = Workbook.loadCsvString('a,b,c\n1,2,3');
 
-// Sync
-const wb = Workbook.open('input.xlsx');
-
-// From bytes
-const wb2 = Workbook.fromXlsxBytes(readFileSync('input.xlsx'));
-
-// From CSV
-const wb3 = Workbook.fromCsvString('a,b,c\n1,2,3');
+// Export back out
+const xlsxBytes = wb.saveXlsxBytes();   // Uint8Array
+const csvString = wb.saveCsvString();    // string
 ```
 
-Supports `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xls`, and `.csv`.
+Full API parity with the Node.js bindings, including all read-only
+accessors (returned as plain JS objects via structured serialization).
 
 ## Rust
 
