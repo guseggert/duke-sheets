@@ -6,7 +6,7 @@ use napi_derive::napi;
 use super::{
     catch_panic, to_napi_err, JsAutoFilter, JsColor, JsComment, JsCommentEntry,
     JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
-    JsHyperlinkEntry, JsPageBreak, JsPageSetup, JsSelection, JsSheetProtection, JsSpillSource,
+    JsHyperlinkEntry, JsMergedRegion, JsMergeSpan, JsPageBreak, JsPageSetup, JsSelection, JsSheetProtection, JsSpillSource,
     JsSplitPanes, JsStyle, JsTable, Worksheet,
 };
 
@@ -288,6 +288,18 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             Ok(ws.hyperlink(&address).map(JsHyperlink::from))
+        })
+    }
+
+    /// Get the hyperlink on a cell by row/col (0-based), or null if none.
+    #[napi]
+    pub fn get_hyperlink_at(&self, row: u32, col: u32) -> Result<Option<JsHyperlink>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.hyperlink_at(row, col as u16).map(JsHyperlink::from))
         })
     }
 
@@ -708,15 +720,54 @@ impl Worksheet {
 
     // Merged Regions (read — supplements existing mergeCells/unmergeCells)
 
-    /// Get all merged regions as an array of range strings (e.g., `["A1:C3", "D5:F10"]`).
+    /// Get all merged regions as structured objects with start/end row/col.
     #[napi(getter)]
-    pub fn merged_regions(&self) -> Result<Vec<String>> {
+    pub fn merged_regions(&self) -> Result<Vec<JsMergedRegion>> {
         catch_panic(|| {
             let wb = self.workbook.read().map_err(to_napi_err)?;
             let ws = wb
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            Ok(ws.merged_regions().iter().map(|r| r.to_string()).collect())
+            Ok(ws
+                .merged_regions()
+                .iter()
+                .map(|r| JsMergedRegion {
+                    start_row: r.start.row,
+                    start_col: r.start.col as u32,
+                    end_row: r.end.row,
+                    end_col: r.end.col as u32,
+                    range: r.to_string(),
+                })
+                .collect())
+        })
+    }
+
+    /// Get the merge span for a cell if it is the top-left origin of a merged region.
+    ///
+    /// Returns `{ rowSpan, colSpan }` if the cell is a merge origin, or null otherwise.
+    #[napi]
+    pub fn get_merge_span(&self, row: u32, col: u32) -> Result<Option<JsMergeSpan>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.get_merge_span(row, col as u16).map(|(rs, cs)| JsMergeSpan {
+                row_span: rs,
+                col_span: cs as u32,
+            }))
+        })
+    }
+
+    /// Whether a cell is a non-origin member of a merged region (should be skipped when rendering).
+    #[napi]
+    pub fn is_merged_secondary(&self, row: u32, col: u32) -> Result<bool> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.is_merged_secondary(row, col as u16))
         })
     }
 }

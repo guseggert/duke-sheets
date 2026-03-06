@@ -111,6 +111,14 @@ export declare class Workbook {
    */
   static fromCsvString(csv: string): Workbook
   /**
+   * Load a workbook from bytes (Buffer/Uint8Array), auto-detecting the format.
+   *
+   * Supports XLSX and XLS formats. The format is detected from magic bytes.
+   *
+   * @param data - The file content as a Buffer
+   */
+  static fromBytes(data: Buffer): Workbook
+  /**
    * Save the workbook to a file
    *
    * The format is determined by the file extension:
@@ -206,7 +214,7 @@ export declare class Workbook {
  */
 export declare class Worksheet {
   /** Sheet visibility: "visible", "hidden", or "veryHidden". */
-  get visibility(): "visible" | "hidden" | "veryHidden"
+  get visibility(): string
   /** Whether the worksheet is selected. */
   get isSelected(): boolean
   /** Zoom scale percentage, or null if default. */
@@ -249,6 +257,8 @@ export declare class Worksheet {
   get splitPanes(): JsSplitPanes | null
   /** Get the hyperlink on a cell, or null if none. */
   getHyperlink(address: string): JsHyperlink | null
+  /** Get the hyperlink on a cell by row/col (0-based), or null if none. */
+  getHyperlinkAt(row: number, col: number): JsHyperlink | null
   /** Number of hyperlinks in the worksheet. */
   get hyperlinkCount(): number
   /** Get all hyperlinks as an array of `{ address, hyperlink }`. */
@@ -309,8 +319,16 @@ export declare class Worksheet {
   getSpillSource(row: number, col: number): JsSpillSource | null
   /** Whether the worksheet uses the 1904 date system. */
   get date1904(): boolean
-  /** Get all merged regions as an array of range strings (e.g., `["A1:C3", "D5:F10"]`). */
-  get mergedRegions(): Array<string>
+  /** Get all merged regions as structured objects with start/end row/col. */
+  get mergedRegions(): Array<JsMergedRegion>
+  /**
+   * Get the merge span for a cell if it is the top-left origin of a merged region.
+   *
+   * Returns `{ rowSpan, colSpan }` if the cell is a merge origin, or null otherwise.
+   */
+  getMergeSpan(row: number, col: number): JsMergeSpan | null
+  /** Whether a cell is a non-origin member of a merged region (should be skipped when rendering). */
+  isMergedSecondary(row: number, col: number): boolean
   /** Get the worksheet name */
   get name(): string
   /**
@@ -332,6 +350,8 @@ export declare class Worksheet {
   setFormula(address: string, formula: string): void
   /** Get the raw cell value (not calculated) */
   getCell(address: string): CellValue
+  /** Get the raw cell value by row/col (0-based). */
+  getCellAt(row: number, col: number): CellValue
   /**
    * Get the calculated value of a cell
    *
@@ -339,6 +359,8 @@ export declare class Worksheet {
    * For regular values, returns the value itself.
    */
   getCalculatedValue(address: string): CellValue
+  /** Get the calculated value of a cell by row/col (0-based). */
+  getCalculatedValueAt(row: number, col: number): CellValue
   /**
    * Get the used range as `{ minRow, minCol, maxRow, maxCol }` or null
    * if the worksheet is empty.
@@ -601,6 +623,22 @@ export interface JsHyperlink {
 export interface JsHyperlinkEntry {
   address: string
   hyperlink: JsHyperlink
+}
+
+/** A merged cell region with structured coordinates. */
+export interface JsMergedRegion {
+  startRow: number
+  startCol: number
+  endRow: number
+  endCol: number
+  /** The range as an A1-style string (e.g., "A1:C3"). */
+  range: string
+}
+
+/** The row/column span of a merged region's origin cell. */
+export interface JsMergeSpan {
+  rowSpan: number
+  colSpan: number
 }
 
 /** A named range definition. */

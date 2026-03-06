@@ -1285,3 +1285,22 @@ pub struct JsSpillSource {
     pub row: u32,
     pub col: u32,
 }
+
+
+/// A merged cell region with structured coordinates.
+#[napi(object)]
+pub struct JsMergedRegion {
+    pub start_row: u32,
+    pub start_col: u32,
+    pub end_row: u32,
+    pub end_col: u32,
+    /// The range as an A1-style string (e.g., "A1:C3").
+    pub range: String,
+}
+
+/// The row/column span of a merged region's origin cell.
+#[napi(object)]
+pub struct JsMergeSpan {
+    pub row_span: u32,
+    pub col_span: u32,
+}

@@ -352,6 +352,20 @@ impl Worksheet {
         })
     }
 
+    /// Get the raw cell value by row/col (0-based).
+    #[napi]
+    pub fn get_cell_at(&self, row: u32, col: u32) -> Result<CellValue> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+
+            let value = ws.get_value_at(row, col as u16);
+            Ok(CellValue { inner: value })
+        })
+    }
+
     /// Get the calculated value of a cell
     ///
     /// For formulas, this returns the computed result.
@@ -369,6 +383,24 @@ impl Worksheet {
 
             let value = ws
                 .get_calculated_value_at(addr.row, addr.col)
+                .cloned()
+                .unwrap_or(CoreCellValue::Empty);
+
+            Ok(CellValue { inner: value })
+        })
+    }
+
+    /// Get the calculated value of a cell by row/col (0-based).
+    #[napi]
+    pub fn get_calculated_value_at(&self, row: u32, col: u32) -> Result<CellValue> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+
+            let value = ws
+                .get_calculated_value_at(row, col as u16)
                 .cloned()
                 .unwrap_or(CoreCellValue::Empty);
 
@@ -561,6 +593,24 @@ impl Workbook {
 
             let mut wb = CoreWorkbook::empty();
             wb.add_existing_worksheet(ws).map_err(to_napi_err)?;
+
+            Ok(Self {
+                inner: Arc::new(RwLock::new(wb)),
+            })
+        })
+    }
+
+    /// Load a workbook from bytes (Buffer/Uint8Array), auto-detecting the format.
+    ///
+    /// Supports XLSX and XLS formats. The format is detected from magic bytes.
+    ///
+    /// @param data - The file content as a Buffer
+    #[napi(factory)]
+    pub fn from_bytes(data: Buffer) -> Result<Self> {
+        catch_panic(|| {
+            use duke_sheets::WorkbookExt;
+            let wb = duke_sheets_core::Workbook::from_bytes(data.as_ref())
+                .map_err(|e| napi::Error::from_reason(format!("Failed to read file: {}", e)))?;
 
             Ok(Self {
                 inner: Arc::new(RwLock::new(wb)),
