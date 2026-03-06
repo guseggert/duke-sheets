@@ -148,12 +148,40 @@ pub use duke_sheets_csv::{CsvError, CsvReadOptions, CsvReader, CsvWriteOptions, 
 pub use duke_sheets_xls::{XlsError, XlsReader};
 pub use duke_sheets_xlsx::{XlsxError, XlsxReader, XlsxWriter};
 
+use std::io::Cursor;
 use std::path::Path;
+
+/// Detected file format from magic bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileFormat {
+    /// XLSX / Office Open XML (ZIP container starting with PK\x03\x04)
+    Xlsx,
+    /// XLS / BIFF8 (CFB container starting with \xD0\xCF\x11\xE0)
+    Xls,
+    /// Unknown format
+    Unknown,
+}
+
+/// Sniff the first few bytes of a buffer to determine its file format.
+pub fn detect_format(bytes: &[u8]) -> FileFormat {
+    if bytes.len() >= 4 && bytes[0..4] == [0x50, 0x4B, 0x03, 0x04] {
+        FileFormat::Xlsx
+    } else if bytes.len() >= 8
+        && bytes[0..8] == [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
+    {
+        FileFormat::Xls
+    } else {
+        FileFormat::Unknown
+    }
+}
 
 /// Extension trait for Workbook to add file I/O
 pub trait WorkbookExt {
     /// Open a workbook from a file
     fn open<P: AsRef<Path>>(path: P) -> Result<Workbook>;
+
+    /// Open a workbook from bytes, auto-detecting the format (XLSX or XLS)
+    fn from_bytes(bytes: &[u8]) -> Result<Workbook>;
 
     /// Save the workbook to a file
     fn save<P: AsRef<Path>>(&self, path: P) -> Result<()>;
@@ -185,6 +213,27 @@ impl WorkbookExt for Workbook {
                 "Unsupported file format: {}",
                 path.display()
             ))),
+        }
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Workbook> {
+        match detect_format(bytes) {
+            FileFormat::Xlsx => {
+                let cursor = Cursor::new(bytes);
+                XlsxReader::read(cursor).map_err(|e| Error::other(e.to_string()))
+            }
+            #[cfg(feature = "xls")]
+            FileFormat::Xls => {
+                let cursor = Cursor::new(bytes);
+                XlsReader::read(cursor).map_err(|e| Error::other(e.to_string()))
+            }
+            #[cfg(not(feature = "xls"))]
+            FileFormat::Xls => Err(Error::other(
+                "XLS format detected but the 'xls' feature is not enabled",
+            )),
+            FileFormat::Unknown => Err(Error::other(
+                "Unable to detect file format from bytes (expected XLSX or XLS magic bytes)",
+            )),
         }
     }
 

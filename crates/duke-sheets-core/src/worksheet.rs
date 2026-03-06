@@ -719,6 +719,40 @@ impl Worksheet {
         self.cells.merged_regions()
     }
 
+    /// Get the merge span for a cell if it is the top-left origin of a merged region.
+    ///
+    /// Returns `Some((row_span, col_span))` if the cell at `(row, col)` is the
+    /// top-left corner of a merged region. Returns `None` if the cell is not
+    /// a merge origin (including cells that are "secondary" members of a merge).
+    pub fn get_merge_span(&self, row: u32, col: u16) -> Option<(u32, u16)> {
+        for region in self.cells.merged_regions() {
+            if region.start.row == row && region.start.col == col {
+                let row_span = region.end.row - region.start.row + 1;
+                let col_span = region.end.col - region.start.col + 1;
+                return Some((row_span, col_span));
+            }
+        }
+        None
+    }
+
+    /// Check whether a cell is a non-origin ("secondary") member of a merged region.
+    ///
+    /// Returns `true` if the cell at `(row, col)` is covered by a merged region
+    /// but is NOT the top-left origin cell. These cells should typically be
+    /// skipped when rendering (the origin cell spans over them).
+    pub fn is_merged_secondary(&self, row: u32, col: u16) -> bool {
+        let addr = CellAddress::new(row, col);
+        for region in self.cells.merged_regions() {
+            if region.contains(&addr) {
+                // It's in this region — check if it's NOT the origin
+                if region.start.row != row || region.start.col != col {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Merge cells
     pub fn merge_cells(&mut self, range: &CellRange) -> Result<()> {
         // Check for overlap with existing merged regions
@@ -799,6 +833,12 @@ impl Worksheet {
         CellAddress::parse(cell)
             .ok()
             .and_then(|addr| self.hyperlinks.get(&addr))
+    }
+
+    /// Get a hyperlink from a cell by row and column indices.
+    pub fn hyperlink_at(&self, row: u32, col: u16) -> Option<&Hyperlink> {
+        let addr = CellAddress::new(row, col);
+        self.hyperlinks.get(&addr)
     }
 
     /// Get a mutable reference to a hyperlink by address string.

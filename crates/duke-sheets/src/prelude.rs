@@ -40,6 +40,8 @@ pub use crate::{
     // Error types
     Error,
     FillStyle,
+    // Format detection
+    FileFormat,
     FontStyle,
     HorizontalAlignment,
     Hyperlink,

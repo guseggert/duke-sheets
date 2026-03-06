@@ -26,6 +26,9 @@ criterion.workspace = true
 calamine = "0.26"
 umya-spreadsheet = "2.3"
 rust_xlsxwriter = "0.82"
+duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
+libreoffice-urp = { path = "../libreoffice-urp" }
+tokio = { version = "1", features = ["full", "test-util"] }
 
 [features]
 default = ["xlsx", "csv"]
