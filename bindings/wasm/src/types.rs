@@ -1204,3 +1204,21 @@ pub struct WasmSpillSource {
     pub row: u32,
     pub col: u32,
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmMergedRegion {
+    pub start_row: u32,
+    pub start_col: u32,
+    pub end_row: u32,
+    pub end_col: u32,
+    /// The range as an A1-style string (e.g., "A1:C3").
+    pub range: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmMergeSpan {
+    pub row_span: u32,
+    pub col_span: u32,
+}

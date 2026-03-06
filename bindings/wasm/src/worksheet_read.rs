@@ -5,7 +5,7 @@ use crate::{
     types::{
         WasmAutoFilter, WasmColor, WasmComment, WasmCommentEntry, WasmConditionalFormatRule,
         WasmDataValidation, WasmFormulaCell, WasmFreezePanes, WasmHyperlink, WasmHyperlinkEntry,
-        WasmPageBreak, WasmPageSetup, WasmSelection, WasmSheetProtection, WasmSpillSource,
+        WasmMergedRegion, WasmMergeSpan, WasmPageBreak, WasmPageSetup, WasmSelection, WasmSheetProtection, WasmSpillSource,
         WasmSplitPanes, WasmStyle, WasmTable,
     },
     Worksheet,
@@ -231,6 +231,18 @@ impl Worksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         match ws.hyperlink(address) {
+            Some(v) => to_js_value(&WasmHyperlink::from(v)),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = getHyperlinkAt)]
+    pub fn get_hyperlink_at(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
+        let wb = self.workbook.read().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        match ws.hyperlink_at(row, col as u16) {
             Some(v) => to_js_value(&WasmHyperlink::from(v)),
             None => Ok(JsValue::NULL),
         }
@@ -566,11 +578,46 @@ impl Worksheet {
     }
 
     #[wasm_bindgen(getter, js_name = mergedRegions)]
-    pub fn merged_regions(&self) -> Result<Vec<String>, JsError> {
+    pub fn merged_regions(&self) -> Result<JsValue, JsError> {
         let wb = self.workbook.read().map_err(to_js_error)?;
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        Ok(ws.merged_regions().iter().map(|r| r.to_string()).collect())
+        let regions: Vec<WasmMergedRegion> = ws
+            .merged_regions()
+            .iter()
+            .map(|r| WasmMergedRegion {
+                start_row: r.start.row,
+                start_col: r.start.col as u32,
+                end_row: r.end.row,
+                end_col: r.end.col as u32,
+                range: r.to_string(),
+            })
+            .collect();
+        to_js_value(&regions)
+}
+
+    #[wasm_bindgen(js_name = getMergeSpan)]
+    pub fn get_merge_span(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
+        let wb = self.workbook.read().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        match ws.get_merge_span(row, col as u16) {
+            Some((rs, cs)) => to_js_value(&WasmMergeSpan {
+                row_span: rs,
+                col_span: cs as u32,
+            }),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = isMergedSecondary)]
+    pub fn is_merged_secondary(&self, row: u32, col: u32) -> Result<bool, JsError> {
+        let wb = self.workbook.read().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws.is_merged_secondary(row, col as u16))
     }
 }

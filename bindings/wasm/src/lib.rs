@@ -235,6 +235,17 @@ impl Worksheet {
         })
     }
 
+    #[wasm_bindgen(js_name = getCellAt)]
+    pub fn get_cell_at(&self, row: u32, col: u32) -> Result<CellValue, JsError> {
+        let wb = self.workbook.read().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(CellValue {
+            inner: ws.get_value_at(row, col as u16),
+        })
+    }
+
     #[wasm_bindgen(js_name = getCalculatedValue)]
     pub fn get_calculated_value(&self, address: &str) -> Result<CellValue, JsError> {
         let wb = self.workbook.read().map_err(to_js_error)?;
@@ -245,6 +256,19 @@ impl Worksheet {
             .map_err(|e| JsError::new(&format!("Invalid cell address: {}", e)))?;
         let value = ws
             .get_calculated_value_at(addr.row, addr.col)
+            .cloned()
+            .unwrap_or(CoreCellValue::Empty);
+        Ok(CellValue { inner: value })
+    }
+
+    #[wasm_bindgen(js_name = getCalculatedValueAt)]
+    pub fn get_calculated_value_at(&self, row: u32, col: u32) -> Result<CellValue, JsError> {
+        let wb = self.workbook.read().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let value = ws
+            .get_calculated_value_at(row, col as u16)
             .cloned()
             .unwrap_or(CoreCellValue::Empty);
         Ok(CellValue { inner: value })
@@ -373,6 +397,17 @@ impl Workbook {
     #[wasm_bindgen(js_name = fromCsvString)]
     pub fn from_csv_string(csv: &str) -> Result<Workbook, JsError> {
         Self::load_csv_string(csv)
+    }
+
+    /// Load a workbook from bytes, auto-detecting the format (XLSX or XLS).
+    #[wasm_bindgen(js_name = fromBytes)]
+    pub fn from_bytes(data: &[u8]) -> Result<Workbook, JsError> {
+        use duke_sheets::WorkbookExt;
+        let wb = duke_sheets_core::Workbook::from_bytes(data)
+            .map_err(|e| JsError::new(&format!("Failed to read file: {}", e)))?;
+        Ok(Self {
+            inner: Arc::new(RwLock::new(wb)),
+        })
     }
 
     #[wasm_bindgen(js_name = saveXlsxBytes)]
