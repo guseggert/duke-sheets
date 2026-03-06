@@ -7,10 +7,11 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
 use crate::error::{XlsxError, XlsxResult};
+use duke_sheets_core::SheetVisibility;
 
 /// Parsed workbook properties from workbook.xml
 pub(super) struct WorkbookProps {
-    pub(super) sheets: Vec<(String, String)>,
+    pub(super) sheets: Vec<SheetEntry>,
     pub(super) date_1904: bool,
     pub(super) named_ranges: Vec<duke_sheets_core::named_range::NamedRange>,
 }
@@ -24,6 +25,12 @@ pub(super) struct WorkbookRels {
 pub(super) struct SheetRelationship {
     pub(super) rel_type: String,
     pub(super) target: String,
+}
+
+pub(super) struct SheetEntry {
+    pub(super) name: String,
+    pub(super) r_id: String,
+    pub(super) visibility: SheetVisibility,
 }
 
 /// Read workbook.xml to get sheet names, rIds, workbook properties,
@@ -126,9 +133,10 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     })
 }
 
-fn parse_sheet_element(e: &quick_xml::events::BytesStart<'_>, sheets: &mut Vec<(String, String)>) {
+fn parse_sheet_element(e: &quick_xml::events::BytesStart<'_>, sheets: &mut Vec<SheetEntry>) {
     let mut name = None;
     let mut r_id = None;
+    let mut visibility = SheetVisibility::Visible;
 
     for attr in e.attributes().flatten() {
         match attr.key.local_name().as_ref() {
@@ -138,12 +146,21 @@ fn parse_sheet_element(e: &quick_xml::events::BytesStart<'_>, sheets: &mut Vec<(
             b"id" => {
                 r_id = attr.unescape_value().ok().map(|s| s.to_string());
             }
+            b"state" => {
+                if let Ok(val) = attr.unescape_value() {
+                    visibility = match val.as_ref() {
+                        "hidden" => SheetVisibility::Hidden,
+                        "veryHidden" => SheetVisibility::VeryHidden,
+                        _ => SheetVisibility::Visible,
+                    };
+                }
+            }
             _ => {}
         }
     }
 
     if let (Some(name), Some(r_id)) = (name, r_id) {
-        sheets.push((name, r_id));
+        sheets.push(SheetEntry { name, r_id, visibility });
     }
 }
 

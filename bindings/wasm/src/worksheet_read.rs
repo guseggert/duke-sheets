@@ -13,13 +13,17 @@ use crate::{
 
 #[wasm_bindgen]
 impl Worksheet {
-    #[wasm_bindgen(getter, js_name = isVisible)]
-    pub fn is_visible(&self) -> Result<bool, JsError> {
+    #[wasm_bindgen(getter)]
+    pub fn visibility(&self) -> Result<String, JsError> {
         let wb = self.workbook.read().map_err(to_js_error)?;
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        Ok(ws.is_visible())
+        Ok(match ws.visibility() {
+            duke_sheets_core::SheetVisibility::Visible => "visible".to_string(),
+            duke_sheets_core::SheetVisibility::Hidden => "hidden".to_string(),
+            duke_sheets_core::SheetVisibility::VeryHidden => "veryHidden".to_string(),
+        })
     }
 
     #[wasm_bindgen(getter, js_name = isSelected)]

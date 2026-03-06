@@ -165,13 +165,17 @@ impl XlsxReader {
         let date_1904 = wb_props.date_1904;
 
         // Read each worksheet
-        for (idx, (name, r_id)) in sheet_info.iter().enumerate() {
-            if let Some(path) = sheet_paths.get(r_id) {
-                let sheet_idx = workbook.add_worksheet_with_name(name)?;
+        for (idx, sheet_entry) in sheet_info.iter().enumerate() {
+            if let Some(path) = sheet_paths.get(&sheet_entry.r_id) {
+                let sheet_idx = workbook.add_worksheet_with_name(&sheet_entry.name)?;
                 workbook
                     .worksheet_mut(sheet_idx)
                     .unwrap()
                     .set_date_1904(date_1904);
+                workbook
+                    .worksheet_mut(sheet_idx)
+                    .unwrap()
+                    .set_visibility(sheet_entry.visibility);
                 let sheet_rels = read_sheet_rels(&mut archive, path)?;
                 Self::read_worksheet(
                     &mut archive,

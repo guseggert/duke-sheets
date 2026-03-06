@@ -15,6 +15,19 @@ use crate::table::Table;
 use crate::validation::DataValidation;
 use crate::{MAX_COLS, MAX_ROWS};
 
+/// Sheet visibility state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SheetVisibility {
+    /// Sheet tab is visible (default).
+    #[default]
+    Visible,
+    /// Hidden via the UI — users can right-click to unhide.
+    Hidden,
+    /// Very hidden — only accessible through the VBA editor.
+    VeryHidden,
+}
+
+
 /// A worksheet (single sheet in a workbook)
 #[derive(Debug)]
 pub struct Worksheet {
@@ -22,8 +35,8 @@ pub struct Worksheet {
     name: String,
     /// Cell storage
     cells: CellStorage,
-    /// Sheet is visible
-    visible: bool,
+    /// Sheet visibility
+    visibility: SheetVisibility,
     /// Sheet is selected
     selected: bool,
     /// Sheet view zoom scale (percent)
@@ -75,7 +88,7 @@ impl Worksheet {
         Self {
             name: name.into(),
             cells: CellStorage::new(),
-            visible: true,
+            visibility: SheetVisibility::Visible,
             selected: false,
             zoom_scale: None,
             selections: Vec::new(),
@@ -109,14 +122,14 @@ impl Worksheet {
         self.name = name.into();
     }
 
-    /// Check if the sheet is visible
-    pub fn is_visible(&self) -> bool {
-        self.visible
+    /// Get sheet visibility.
+    pub fn visibility(&self) -> SheetVisibility {
+        self.visibility
     }
 
-    /// Set sheet visibility
-    pub fn set_visible(&mut self, visible: bool) {
-        self.visible = visible;
+    /// Set sheet visibility.
+    pub fn set_visibility(&mut self, visibility: SheetVisibility) {
+        self.visibility = visibility;
     }
 
     /// Check if the sheet is selected
@@ -1539,7 +1552,7 @@ mod tests {
     fn test_new_worksheet() {
         let ws = Worksheet::new("Test");
         assert_eq!(ws.name(), "Test");
-        assert!(ws.is_visible());
+        assert_eq!(ws.visibility(), SheetVisibility::Visible);
         assert!(ws.is_empty());
     }
 

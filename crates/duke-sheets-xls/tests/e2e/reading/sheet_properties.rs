@@ -31,11 +31,11 @@ fn test_xls_hidden_sheet() {
     let workbook = XlsReader::read_file(&path).unwrap();
 
     let sheet0 = workbook.worksheet(0).unwrap();
-    assert!(sheet0.is_visible(), "Sheet 0 should be visible");
+    assert_eq!(sheet0.visibility(), duke_sheets_core::SheetVisibility::Visible, "Sheet 0 should be visible");
 
     let sheet1 = workbook.worksheet(1).unwrap();
     assert_eq!(sheet1.name(), "Hidden");
-    assert!(!sheet1.is_visible(), "Sheet 1 should be hidden");
+    assert_eq!(sheet1.visibility(), duke_sheets_core::SheetVisibility::Hidden, "Sheet 1 should be hidden");
 
     cleanup_fixture(&path);
 }

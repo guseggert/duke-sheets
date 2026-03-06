@@ -65,8 +65,8 @@ pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
 pub use workbook::{Workbook, WorkbookSettings};
 pub use worksheet::{
-    FreezePanes, PageBreak, PageOrientation, PageSetup, Selection, SheetProtection, SplitPanes,
-    Worksheet,
+    FreezePanes, PageBreak, PageOrientation, PageSetup, Selection, SheetProtection, SheetVisibility,
+    SplitPanes, Worksheet,
 };
 
 // Re-export all style types for convenience

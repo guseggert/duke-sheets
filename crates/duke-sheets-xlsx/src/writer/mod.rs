@@ -717,8 +717,14 @@ impl XlsxWriter {
                     .create_element("sheet")
                     .with_attribute(("name", sheet.name()))
                     .with_attribute(("sheetId", sheet_id.as_str()));
-                if !sheet.is_visible() {
-                    el = el.with_attribute(("state", "hidden"));
+                match sheet.visibility() {
+                    duke_sheets_core::SheetVisibility::Hidden => {
+                        el = el.with_attribute(("state", "hidden"));
+                    }
+                    duke_sheets_core::SheetVisibility::VeryHidden => {
+                        el = el.with_attribute(("state", "veryHidden"));
+                    }
+                    duke_sheets_core::SheetVisibility::Visible => {}
                 }
                 el.with_attribute(("r:id", rid.as_str())).write_empty()?;
             }

@@ -305,9 +305,12 @@ impl XlsReader {
             ws.set_date_1904(date_mode_1904);
 
             // Apply sheet visibility (0 = visible, 1 = hidden, 2 = very hidden)
-            if info.visibility != 0 {
-                ws.set_visible(false);
-            }
+            let visibility = match info.visibility {
+                1 => duke_sheets_core::SheetVisibility::Hidden,
+                2 => duke_sheets_core::SheetVisibility::VeryHidden,
+                _ => duke_sheets_core::SheetVisibility::Visible,
+            };
+            ws.set_visibility(visibility);
 
             // Get this sheet's records (indexed by BIFF order, not wb order)
             if let Some(sheet_records) = sheet_record_groups.get(biff_idx) {

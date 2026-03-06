@@ -11,12 +11,16 @@ use crate::{
 #[pymethods]
 impl PyWorksheet {
     #[getter]
-    fn is_visible(&self) -> PyResult<bool> {
+    fn visibility(&self) -> PyResult<String> {
         let wb = self.workbook.read().map_err(to_py_err)?;
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        Ok(ws.is_visible())
+        Ok(match ws.visibility() {
+            duke_sheets_core::SheetVisibility::Visible => "visible".to_string(),
+            duke_sheets_core::SheetVisibility::Hidden => "hidden".to_string(),
+            duke_sheets_core::SheetVisibility::VeryHidden => "veryHidden".to_string(),
+        })
     }
 
     #[getter]

@@ -205,8 +205,8 @@ export declare class Workbook {
  * contain a value (number, text, boolean) or a formula.
  */
 export declare class Worksheet {
-  /** Whether the worksheet is visible. */
-  get isVisible(): boolean
+  /** Sheet visibility: "visible", "hidden", or "veryHidden". */
+  get visibility(): "visible" | "hidden" | "veryHidden"
   /** Whether the worksheet is selected. */
   get isSelected(): boolean
   /** Zoom scale percentage, or null if default. */

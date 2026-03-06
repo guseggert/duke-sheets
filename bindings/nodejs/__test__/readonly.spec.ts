@@ -56,10 +56,10 @@ describe("Workbook read-only", () => {
 });
 
 describe("Worksheet read-only properties", () => {
-  it("isVisible is true by default", () => {
+  it("visibility is 'visible' by default", () => {
     const wb = new Workbook();
     const sheet = wb.getSheet(0);
-    expect(sheet.isVisible).toBe(true);
+    expect(sheet.visibility).toBe("visible");
   });
 
   it("isSelected returns a boolean", () => {

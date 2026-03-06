@@ -14,15 +14,19 @@ use super::{
 impl Worksheet {
     // Sheet Properties
 
-    /// Whether the worksheet is visible.
+    /// Sheet visibility: "visible", "hidden", or "veryHidden".
     #[napi(getter)]
-    pub fn is_visible(&self) -> Result<bool> {
+    pub fn visibility(&self) -> Result<String> {
         catch_panic(|| {
             let wb = self.workbook.read().map_err(to_napi_err)?;
             let ws = wb
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            Ok(ws.is_visible())
+            Ok(match ws.visibility() {
+                duke_sheets_core::SheetVisibility::Visible => "visible".to_string(),
+                duke_sheets_core::SheetVisibility::Hidden => "hidden".to_string(),
+                duke_sheets_core::SheetVisibility::VeryHidden => "veryHidden".to_string(),
+            })
         })
     }
 
