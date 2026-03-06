@@ -498,7 +498,7 @@ describe("Worksheet merged regions read-only", () => {
     sheet.mergeCells("A1:C3");
     const regions = sheet.mergedRegions;
     expect(regions.length).toBe(1);
-    expect(regions[0]).toBe("A1:C3");
+    expect(regions[0]).toEqual({ startRow: 0, startCol: 0, endRow: 2, endCol: 2, range: "A1:C3" });
   });
 
   it("mergedRegions reflects multiple merges", () => {
@@ -508,8 +508,10 @@ describe("Worksheet merged regions read-only", () => {
     sheet.mergeCells("D4:F6");
     const regions = sheet.mergedRegions;
     expect(regions.length).toBe(2);
-    expect(regions).toContain("A1:B2");
-    expect(regions).toContain("D4:F6");
+    expect(regions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ range: "A1:B2" }),
+      expect.objectContaining({ range: "D4:F6" }),
+    ]));
   });
 });
 
@@ -564,7 +566,7 @@ describe("Read-only API with XLSX roundtrip", () => {
       const sheet2 = wb2.getSheet(0);
       const regions = sheet2.mergedRegions;
       expect(regions.length).toBe(1);
-      expect(regions[0]).toBe("A1:D1");
+      expect(regions[0]).toEqual({ startRow: 0, startCol: 0, endRow: 0, endCol: 3, range: "A1:D1" });
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
