@@ -5,7 +5,6 @@ use std::fs::File;
 use std::io::{Cursor, Seek, Write};
 use std::path::Path;
 
-use quick_xml::escape::escape;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
@@ -714,10 +713,9 @@ impl XlsxWriter {
             for (i, sheet) in workbook.worksheets().enumerate() {
                 let sheet_id = (i + 1).to_string();
                 let rid = format!("rId{}", i + 1);
-                let name = escape(sheet.name());
                 let mut el = w
                     .create_element("sheet")
-                    .with_attribute(("name", &*name))
+                    .with_attribute(("name", sheet.name()))
                     .with_attribute(("sheetId", sheet_id.as_str()));
                 if !sheet.is_visible() {
                     el = el.with_attribute(("state", "hidden"));
@@ -864,10 +862,9 @@ impl XlsxWriter {
         w: &mut XmlWriter,
         nr: &duke_sheets_core::named_range::NamedRange,
     ) -> XlsxResult<()> {
-        let name_esc = escape(&nr.name);
         let mut el = w
             .create_element("definedName")
-            .with_attribute(("name", &*name_esc));
+            .with_attribute(("name", nr.name.as_str()));
         let scope_str;
         if let duke_sheets_core::named_range::NameScope::Sheet(idx) = nr.scope {
             scope_str = idx.to_string();
@@ -877,8 +874,7 @@ impl XlsxWriter {
             el = el.with_attribute(("hidden", "1"));
         }
         if let Some(ref comment) = nr.comment {
-            let c = escape(comment.as_str());
-            el = el.with_attribute(("comment", &*c));
+            el = el.with_attribute(("comment", comment.as_str()));
         }
         el.write_text_content(BytesText::new(&nr.refers_to))?;
         Ok(())

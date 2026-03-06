@@ -1,4 +1,3 @@
-use quick_xml::escape::escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 
 use super::{XlsxResult, XmlWriter};
@@ -75,20 +74,16 @@ pub(super) fn write_data_validations(
         }
 
         if let Some(ref t) = validation.error_title {
-            let v = escape(t.as_str());
-            tag.push_attribute(("errorTitle", &*v));
+            tag.push_attribute(("errorTitle", t.as_str()));
         }
         if let Some(ref m) = validation.error_message {
-            let v = escape(m.as_str());
-            tag.push_attribute(("error", &*v));
+            tag.push_attribute(("error", m.as_str()));
         }
         if let Some(ref t) = validation.input_title {
-            let v = escape(t.as_str());
-            tag.push_attribute(("promptTitle", &*v));
+            tag.push_attribute(("promptTitle", t.as_str()));
         }
         if let Some(ref m) = validation.input_message {
-            let v = escape(m.as_str());
-            tag.push_attribute(("prompt", &*v));
+            tag.push_attribute(("prompt", m.as_str()));
         }
 
         tag.push_attribute(("sqref", sqref.as_str()));

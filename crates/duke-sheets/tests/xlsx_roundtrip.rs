@@ -336,6 +336,27 @@ fn test_roundtrip_special_sheet_names() {
     assert_eq!(wb2.worksheet(2).unwrap().name(), "Sales-Summary");
 }
 
+/// Test roundtrip with XML-special characters in sheet names
+#[test]
+fn test_roundtrip_xml_special_chars_in_sheet_names() {
+    let mut wb = Workbook::empty();
+    wb.add_worksheet_with_name("Test<Sheet>").unwrap();
+    wb.add_worksheet_with_name("Sales & Marketing").unwrap();
+    wb.add_worksheet_with_name("He said \"hi\"").unwrap();
+    wb.add_worksheet_with_name("It's a test").unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    assert_eq!(wb2.sheet_count(), 4);
+    assert_eq!(wb2.worksheet(0).unwrap().name(), "Test<Sheet>");
+    assert_eq!(wb2.worksheet(1).unwrap().name(), "Sales & Marketing");
+    assert_eq!(wb2.worksheet(2).unwrap().name(), "He said \"hi\"");
+    assert_eq!(wb2.worksheet(3).unwrap().name(), "It's a test");
+}
+
 /// Test row heights and column widths roundtrip
 #[test]
 fn test_roundtrip_row_heights_column_widths() {

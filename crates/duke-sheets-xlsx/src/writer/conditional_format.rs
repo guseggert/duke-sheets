@@ -1,4 +1,3 @@
-use quick_xml::escape::escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 
 use crate::styles::XlsxStyleTable;
@@ -224,8 +223,7 @@ pub(super) fn write_conditional_formatting(
                 let mut tag = BytesStart::new("cfRule");
                 tag.push_attribute(("type", rule_type));
                 tag.push_attribute(("priority", priority_s.as_str()));
-                let text_esc = escape(text.as_str());
-                tag.push_attribute(("text", &*text_esc));
+                tag.push_attribute(("text", text.as_str()));
                 push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
                 w.write_event(Event::Start(tag))?;
 
@@ -244,8 +242,7 @@ pub(super) fn write_conditional_formatting(
                 let mut tag = BytesStart::new("cfRule");
                 tag.push_attribute(("type", rule_type));
                 tag.push_attribute(("priority", priority_s.as_str()));
-                let text_esc = escape(text.as_str());
-                tag.push_attribute(("text", &*text_esc));
+                tag.push_attribute(("text", text.as_str()));
                 push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
                 w.write_event(Event::Start(tag))?;
 
@@ -271,8 +268,7 @@ pub(super) fn write_conditional_formatting(
                 let mut tag = BytesStart::new("cfRule");
                 tag.push_attribute(("type", rule_type));
                 tag.push_attribute(("priority", priority_s.as_str()));
-                let text_esc = escape(text.as_str());
-                tag.push_attribute(("text", &*text_esc));
+                tag.push_attribute(("text", text.as_str()));
                 push_dxf_and_stop(&mut tag, dxf_id, rule.stop_if_true);
                 w.write_event(Event::Start(tag))?;
 
