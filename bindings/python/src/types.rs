@@ -1379,3 +1379,28 @@ pub struct PySpillSource {
     #[pyo3(get)]
     pub col: u32,
 }
+
+#[pyclass(name = "MergedRegion")]
+#[derive(Clone)]
+pub struct PyMergedRegion {
+    #[pyo3(get)]
+    pub start_row: u32,
+    #[pyo3(get)]
+    pub start_col: u32,
+    #[pyo3(get)]
+    pub end_row: u32,
+    #[pyo3(get)]
+    pub end_col: u32,
+    /// The range as an A1-style string (e.g., "A1:C3").
+    #[pyo3(get)]
+    pub range: String,
+}
+
+#[pyclass(name = "MergeSpan")]
+#[derive(Clone)]
+pub struct PyMergeSpan {
+    #[pyo3(get)]
+    pub row_span: u32,
+    #[pyo3(get)]
+    pub col_span: u32,
+}

@@ -35,6 +35,20 @@ impl PyWorkbook {
         })
     }
 
+    /// Load a workbook from bytes, auto-detecting the format.
+    ///
+    /// Supports XLSX and XLS formats. The format is detected from magic bytes.
+    #[staticmethod]
+    fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        use duke_sheets::WorkbookExt;
+        let wb = Workbook::from_bytes(data)
+            .map_err(|e| PyValueError::new_err(format!("Failed to read file: {}", e)))?;
+
+        Ok(Self {
+            inner: Arc::new(RwLock::new(wb)),
+        })
+    }
+
     fn save_csv_string(&self) -> PyResult<String> {
         let wb = self.inner.read().map_err(to_py_err)?;
         let ws = wb

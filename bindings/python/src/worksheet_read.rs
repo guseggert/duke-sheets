@@ -3,10 +3,20 @@ use pyo3::prelude::*;
 
 use crate::{
     to_py_err, PyAutoFilter, PyColor, PyComment, PyCommentEntry, PyConditionalFormatRule,
-    PyDataValidation, PyFormulaCell, PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyPageBreak,
-    PyPageSetup, PySelection, PySheetProtection, PySpillSource, PySplitPanes, PyStyle, PyTable,
-    PyWorksheet,
+    PyDataValidation, PyFormulaCell, PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergedRegion,
+    PyMergeSpan, PyPageBreak, PyPageSetup, PySelection, PySheetProtection, PySpillSource,
+    PySplitPanes, PyStyle, PyTable, PyWorksheet,
 };
+
+
+
+
+
+
+
+
+
+
 
 #[pymethods]
 impl PyWorksheet {
@@ -200,6 +210,15 @@ impl PyWorksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
         Ok(ws.hyperlink(&address).map(PyHyperlink::from))
+    }
+
+    /// Get the hyperlink on a cell by row/col (0-based), or None if none.
+    fn get_hyperlink_at(&self, row: u32, col: u32) -> PyResult<Option<PyHyperlink>> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws.hyperlink_at(row, col as u16).map(PyHyperlink::from))
     }
 
     #[getter]
@@ -498,12 +517,52 @@ impl PyWorksheet {
         Ok(ws.date_1904())
     }
 
+
     #[getter]
-    fn merged_regions(&self) -> PyResult<Vec<String>> {
+    fn merged_regions(&self) -> PyResult<Vec<PyMergedRegion>> {
         let wb = self.workbook.read().map_err(to_py_err)?;
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
-        Ok(ws.merged_regions().iter().map(|r| r.to_string()).collect())
+        Ok(ws
+            .merged_regions()
+            .iter()
+            .map(|r| PyMergedRegion {
+                start_row: r.start.row,
+                start_col: r.start.col as u32,
+                end_row: r.end.row,
+                end_col: r.end.col as u32,
+                range: r.to_string(),
+            })
+            .collect())
     }
+    /// Get the merge span for a cell if it is the top-left origin of a merged region.
+    ///
+    /// Returns a MergeSpan with row_span/col_span if the cell is a merge origin, or None.
+    fn get_merge_span(&self, row: u32, col: u32) -> PyResult<Option<PyMergeSpan>> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws
+            .get_merge_span(row, col as u16)
+            .map(|(rs, cs)| PyMergeSpan {
+                row_span: rs,
+                col_span: cs as u32,
+            }))
+    }
+
+    /// Whether a cell is a non-origin member of a merged region.
+    fn is_merged_secondary(&self, row: u32, col: u32) -> PyResult<bool> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws.is_merged_secondary(row, col as u16))
+    }
+
+
+
+
+
 }

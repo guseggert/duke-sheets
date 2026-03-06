@@ -316,6 +316,18 @@ impl PyWorksheet {
         Ok(PyCellValue { inner: value })
     }
 
+    /// Get the raw cell value by row/col (0-based).
+    #[pyo3(signature = (row, col))]
+    fn get_cell_at(&self, row: u32, col: u32) -> PyResult<PyCellValue> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+
+        let value = ws.get_value_at(row, col as u16);
+        Ok(PyCellValue { inner: value })
+    }
+
     /// Get the calculated value of a cell
     ///
     /// For formulas, this returns the computed result.
@@ -332,6 +344,22 @@ impl PyWorksheet {
 
         let value = ws
             .get_calculated_value_at(addr.row, addr.col)
+            .cloned()
+            .unwrap_or(CoreCellValue::Empty);
+
+        Ok(PyCellValue { inner: value })
+    }
+
+    /// Get the calculated value of a cell by row/col (0-based).
+    #[pyo3(signature = (row, col))]
+    fn get_calculated_value_at(&self, row: u32, col: u32) -> PyResult<PyCellValue> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+
+        let value = ws
+            .get_calculated_value_at(row, col as u16)
             .cloned()
             .unwrap_or(CoreCellValue::Empty);
 
@@ -728,5 +756,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyHyperlinkEntry>()?;
     m.add_class::<PyFormulaCell>()?;
     m.add_class::<PySpillSource>()?;
+    m.add_class::<PyMergedRegion>()?;
+    m.add_class::<PyMergeSpan>()?;
     Ok(())
 }
