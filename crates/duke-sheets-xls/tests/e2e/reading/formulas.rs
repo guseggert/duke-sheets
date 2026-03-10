@@ -7,12 +7,10 @@ use crate::{cleanup_fixture, lo_bridge, runtime, skip_if_no_lo, temp_fixture_pat
 use duke_sheets_core::CellValue;
 use duke_sheets_xls::XlsReader;
 
-/// Helper to extract formula text from a cell value.
-fn formula_text(val: &CellValue) -> &str {
-    match val {
-        CellValue::Formula { text, .. } => text.as_str(),
-        other => panic!("Expected Formula, got {:?}", other),
-    }
+fn formula_text(sheet: &duke_sheets_core::Worksheet, row: u32, col: u16) -> &str {
+    sheet
+        .get_formula_at(row, col)
+        .unwrap_or_else(|| panic!("Expected formula at ({row}, {col})"))
 }
 
 #[test]
@@ -41,17 +39,10 @@ fn test_xls_formula_simple_arithmetic() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
 
-    let c1 = sheet.get_value_at(0, 2);
-    assert_eq!(formula_text(&c1), "=A1+B1", "C1 formula");
-
-    let d1 = sheet.get_value_at(0, 3);
-    assert_eq!(formula_text(&d1), "=A1*B1", "D1 formula");
-
-    let e1 = sheet.get_value_at(0, 4);
-    assert_eq!(formula_text(&e1), "=A1-B1", "E1 formula");
-
-    let f1 = sheet.get_value_at(0, 5);
-    assert_eq!(formula_text(&f1), "=A1/B1", "F1 formula");
+    assert_eq!(formula_text(sheet, 0, 2), "=A1+B1", "C1 formula");
+    assert_eq!(formula_text(sheet, 0, 3), "=A1*B1", "D1 formula");
+    assert_eq!(formula_text(sheet, 0, 4), "=A1-B1", "E1 formula");
+    assert_eq!(formula_text(sheet, 0, 5), "=A1/B1", "F1 formula");
 
     cleanup_fixture(&path);
 }
@@ -86,11 +77,11 @@ fn test_xls_formula_functions() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
 
-    assert_eq!(formula_text(&sheet.get_value_at(0, 1)), "=SUM(A1:A5)");
-    assert_eq!(formula_text(&sheet.get_value_at(1, 1)), "=AVERAGE(A1:A5)");
-    assert_eq!(formula_text(&sheet.get_value_at(2, 1)), "=MAX(A1:A5)");
-    assert_eq!(formula_text(&sheet.get_value_at(3, 1)), "=MIN(A1:A5)");
-    assert_eq!(formula_text(&sheet.get_value_at(4, 1)), "=COUNT(A1:A5)");
+    assert_eq!(formula_text(sheet, 0, 1), "=SUM(A1:A5)");
+    assert_eq!(formula_text(sheet, 1, 1), "=AVERAGE(A1:A5)");
+    assert_eq!(formula_text(sheet, 2, 1), "=MAX(A1:A5)");
+    assert_eq!(formula_text(sheet, 3, 1), "=MIN(A1:A5)");
+    assert_eq!(formula_text(sheet, 4, 1), "=COUNT(A1:A5)");
 
     cleanup_fixture(&path);
 }
@@ -121,9 +112,9 @@ fn test_xls_formula_if_and_comparison() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
 
-    assert_eq!(formula_text(&sheet.get_value_at(0, 1)), "=IF(A1>5,1,0)");
+    assert_eq!(formula_text(sheet, 0, 1), "=IF(A1>5,1,0)");
     assert_eq!(
-        formula_text(&sheet.get_value_at(0, 2)),
+        formula_text(sheet, 0, 2),
         "=IF(A1<>0,\"yes\",\"no\")"
     );
 
@@ -152,7 +143,7 @@ fn test_xls_formula_string_concat() {
     let sheet = workbook.worksheet(0).unwrap();
 
     assert_eq!(
-        formula_text(&sheet.get_value_at(0, 1)),
+        formula_text(sheet, 0, 1),
         "=CONCATENATE(A1,\" world\")"
     );
 
@@ -182,9 +173,9 @@ fn test_xls_formula_nested_functions() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
 
-    assert_eq!(formula_text(&sheet.get_value_at(0, 1)), "=LEN(A1)");
-    assert_eq!(formula_text(&sheet.get_value_at(0, 2)), "=LEFT(A1,3)");
-    assert_eq!(formula_text(&sheet.get_value_at(0, 3)), "=MID(A1,2,3)");
+    assert_eq!(formula_text(sheet, 0, 1), "=LEN(A1)");
+    assert_eq!(formula_text(sheet, 0, 2), "=LEFT(A1,3)");
+    assert_eq!(formula_text(sheet, 0, 3), "=MID(A1,2,3)");
 
     cleanup_fixture(&path);
 }
@@ -213,16 +204,15 @@ fn test_xls_formula_constants_and_unary() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
 
-    assert_eq!(formula_text(&sheet.get_value_at(0, 0)), "=100");
-    assert_eq!(formula_text(&sheet.get_value_at(0, 1)), "=3.14");
+    assert_eq!(formula_text(sheet, 0, 0), "=100");
+    assert_eq!(formula_text(sheet, 0, 1), "=3.14");
     // TRUE() in BIFF8 is stored as tFuncV for TRUE (idx 34) with 0 args
-    let c1_val = sheet.get_value_at(0, 2);
-    let c1_text = formula_text(&c1_val);
+    let c1_text = formula_text(sheet, 0, 2);
     assert!(
         c1_text == "=TRUE()" || c1_text == "=TRUE",
         "C1 should be =TRUE() or =TRUE, got {c1_text}"
     );
-    assert_eq!(formula_text(&sheet.get_value_at(0, 3)), "=-A1");
+    assert_eq!(formula_text(sheet, 0, 3), "=-A1");
 
     cleanup_fixture(&path);
 }
@@ -248,7 +238,7 @@ fn test_xls_formula_parentheses() {
     let workbook = XlsReader::read_file(&path).unwrap();
     let sheet = workbook.worksheet(0).unwrap();
 
-    assert_eq!(formula_text(&sheet.get_value_at(0, 3)), "=(A1+B1)*C1");
+    assert_eq!(formula_text(sheet, 0, 3), "=(A1+B1)*C1");
 
     cleanup_fixture(&path);
 }
@@ -274,23 +264,11 @@ fn test_xls_formula_cached_values() {
     let sheet = workbook.worksheet(0).unwrap();
 
     let val = sheet.get_value_at(0, 1);
-    match &val {
-        CellValue::Formula {
-            text, cached_value, ..
-        } => {
-            assert_eq!(text, "=SUM(A1:A2)", "formula text");
-            match cached_value.as_deref() {
-                Some(CellValue::Number(n)) => {
-                    assert!(
-                        (*n - 30.0).abs() < f64::EPSILON,
-                        "cached value should be 30.0, got {n}"
-                    );
-                }
-                other => panic!("Expected cached Number(30.0), got {:?}", other),
-            }
-        }
-        other => panic!("Expected Formula, got {:?}", other),
-    }
+    assert_eq!(formula_text(sheet, 0, 1), "=SUM(A1:A2)", "formula text");
+    assert!(
+        matches!(val, CellValue::Number(n) if (n - 30.0).abs() < f64::EPSILON),
+        "cached value should be 30.0, got {val:?}"
+    );
 
     cleanup_fixture(&path);
 }
@@ -324,23 +302,15 @@ fn test_xls_formula_cross_sheet_ref() {
     let sheet = workbook.worksheet(0).unwrap();
 
     let b1 = sheet.get_value_at(0, 1);
-    let text = formula_text(&b1);
+    let text = formula_text(sheet, 0, 1);
     // The decompiler should produce "=Data!A1" (Excel-style ! separator)
     assert_eq!(text, "=Data!A1", "cross-sheet ref formula");
 
     // Verify cached value is 42
-    match &b1 {
-        CellValue::Formula { cached_value, .. } => match cached_value.as_deref() {
-            Some(CellValue::Number(n)) => {
-                assert!(
-                    (*n - 42.0).abs() < f64::EPSILON,
-                    "cached value should be 42.0, got {n}"
-                );
-            }
-            other => panic!("Expected cached Number(42.0), got {:?}", other),
-        },
-        _ => unreachable!(),
-    }
+    assert!(
+        matches!(b1, CellValue::Number(n) if (n - 42.0).abs() < f64::EPSILON),
+        "cached value should be 42.0, got {b1:?}"
+    );
 
     cleanup_fixture(&path);
 }
@@ -373,8 +343,7 @@ fn test_xls_formula_cross_sheet_quoted_name() {
     assert_eq!(workbook.worksheet(0).unwrap().name(), "My Sheet");
     let sheet = workbook.worksheet(0).unwrap();
 
-    let b1 = sheet.get_value_at(0, 1);
-    let text = formula_text(&b1);
+    let text = formula_text(sheet, 0, 1);
     assert_eq!(text, "=Other!A1", "cross-sheet ref to plain-named sheet");
 
     cleanup_fixture(&path);
@@ -408,22 +377,14 @@ fn test_xls_formula_named_range() {
     let sheet = workbook.worksheet(0).unwrap();
 
     let b1 = sheet.get_value_at(0, 1);
-    let text = formula_text(&b1);
+    let text = formula_text(sheet, 0, 1);
     assert_eq!(text, "=SUM(MyData)", "named range in formula");
 
     // Cached value should be 15 (1+2+3+4+5)
-    match &b1 {
-        CellValue::Formula { cached_value, .. } => match cached_value.as_deref() {
-            Some(CellValue::Number(n)) => {
-                assert!(
-                    (*n - 15.0).abs() < f64::EPSILON,
-                    "cached value should be 15.0, got {n}"
-                );
-            }
-            other => panic!("Expected cached Number(15.0), got {:?}", other),
-        },
-        _ => unreachable!(),
-    }
+    assert!(
+        matches!(b1, CellValue::Number(n) if (n - 15.0).abs() < f64::EPSILON),
+        "cached value should be 15.0, got {b1:?}"
+    );
 
     cleanup_fixture(&path);
 }
@@ -453,22 +414,14 @@ fn test_xls_formula_named_range_in_expression() {
     let sheet = workbook.worksheet(0).unwrap();
 
     let b1 = sheet.get_value_at(0, 1);
-    let text = formula_text(&b1);
+    let text = formula_text(sheet, 0, 1);
     assert_eq!(text, "=A1*TaxRate", "named range in expression");
 
     // Cached value should be 1.5 (10 * 0.15)
-    match &b1 {
-        CellValue::Formula { cached_value, .. } => match cached_value.as_deref() {
-            Some(CellValue::Number(n)) => {
-                assert!(
-                    (*n - 1.5).abs() < f64::EPSILON,
-                    "cached value should be 1.5, got {n}"
-                );
-            }
-            other => panic!("Expected cached Number(1.5), got {:?}", other),
-        },
-        _ => unreachable!(),
-    }
+    assert!(
+        matches!(b1, CellValue::Number(n) if (n - 1.5).abs() < f64::EPSILON),
+        "cached value should be 1.5, got {b1:?}"
+    );
 
     cleanup_fixture(&path);
 }
@@ -496,31 +449,22 @@ fn test_xls_formula_array_constant() {
     let ws = wb.worksheet(0).unwrap();
 
     let val = ws.get_value_at(0, 0);
-    let text = formula_text(&val);
+    let text = formula_text(ws, 0, 0);
     // BIFF8 decompiles with commas between columns and semicolons between rows.
     // LO stores this as a 1-row × 3-column array → "SUM({1,2,3})"
     assert_eq!(text, "=SUM({1,2,3})", "array constant formula");
 
     // Cached value should be 6.0
-    match &val {
-        CellValue::Formula { cached_value, .. } => match cached_value.as_deref() {
-            Some(CellValue::Number(n)) => {
-                assert!(
-                    (*n - 6.0).abs() < f64::EPSILON,
-                    "expected cached 6.0, got {n}"
-                );
-            }
-            other => panic!("Expected cached Number(6.0), got {:?}", other),
-        },
-        _ => unreachable!(),
-    }
+    assert!(
+        matches!(val, CellValue::Number(n) if (n - 6.0).abs() < f64::EPSILON),
+        "expected cached 6.0, got {val:?}"
+    );
 
     cleanup_fixture(&path);
 }
 
 /// Phase 3: CSE array formula — entered with Ctrl+Shift+Enter.
 /// LO stores these as FORMULA records with tExp + ARRAY record.
-/// The decompiled text should be wrapped in `{=...}`.
 #[test]
 fn test_xls_formula_cse_array_formula() {
     skip_if_no_lo!();
@@ -549,22 +493,14 @@ fn test_xls_formula_cse_array_formula() {
     let ws = wb.worksheet(0).unwrap();
 
     let val = ws.get_value_at(0, 2); // C1
-    let text = formula_text(&val);
+    let text = formula_text(ws, 0, 2);
     assert_eq!(text, "{=SUM(A1:A3*B1:B3)}", "CSE array formula");
 
     // Cached value should be 1*10 + 2*20 + 3*30 = 140
-    match &val {
-        CellValue::Formula { cached_value, .. } => match cached_value.as_deref() {
-            Some(CellValue::Number(n)) => {
-                assert!(
-                    (*n - 140.0).abs() < f64::EPSILON,
-                    "expected cached 140.0, got {n}"
-                );
-            }
-            other => panic!("Expected cached Number(140.0), got {:?}", other),
-        },
-        _ => unreachable!(),
-    }
+    assert!(
+        matches!(val, CellValue::Number(n) if (n - 140.0).abs() < f64::EPSILON),
+        "expected cached 140.0, got {val:?}"
+    );
 
     cleanup_fixture(&path);
 }
@@ -603,27 +539,18 @@ fn test_xls_formula_shared_formula() {
     // All 5 cells should have correct formula text with adjusted refs
     for i in 1u32..=5 {
         let val = ws.get_value_at(i - 1, 1);
-        let text = formula_text(&val);
+        let text = formula_text(ws, i - 1, 1);
         let expected = format!("=A{}*2", i);
         assert_eq!(text, expected, "shared formula at B{}", i);
 
         // Cached value should be i*10*2
-        match &val {
-            CellValue::Formula { cached_value, .. } => {
-                let expected_val = i as f64 * 10.0 * 2.0;
-                match cached_value.as_deref() {
-                    Some(CellValue::Number(n)) => {
-                        assert!(
-                            (*n - expected_val).abs() < f64::EPSILON,
-                            "B{}: expected cached {expected_val}, got {n}",
-                            i
-                        );
-                    }
-                    other => panic!("B{}: expected cached Number, got {:?}", i, other),
-                }
-            }
-            _ => unreachable!(),
-        }
+        let expected_val = i as f64 * 10.0 * 2.0;
+        assert!(
+            matches!(val, CellValue::Number(n) if (n - expected_val).abs() < f64::EPSILON),
+            "B{}: expected cached {expected_val}, got {:?}",
+            i,
+            val
+        );
     }
 
     cleanup_fixture(&path);

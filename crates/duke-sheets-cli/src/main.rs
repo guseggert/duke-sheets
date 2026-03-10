@@ -124,7 +124,15 @@ fn main() -> Result<()> {
             raw,
             fragment,
             title,
-        } => to_html(&input, output.as_deref(), sheet, !no_calculate, raw, fragment, title),
+        } => to_html(
+            &input,
+            output.as_deref(),
+            sheet,
+            !no_calculate,
+            raw,
+            fragment,
+            title,
+        ),
     }
 }
 
@@ -161,12 +169,9 @@ fn to_csv(
         .with_context(|| format!("Sheet index {} not found", sheet_idx))?;
 
     // Get the used range
-    let used_range = match sheet.used_range() {
-        Some(range) => range,
-        None => {
-            eprintln!("Warning: Sheet appears to be empty");
-            return Ok(());
-        }
+    let Some(used_range) = sheet.used_range() else {
+        eprintln!("Warning: Sheet appears to be empty");
+        return Ok(());
     };
 
     let max_row = used_range.end.row;
@@ -193,10 +198,9 @@ fn to_csv(
                 } else {
                     Some(&sheet.get_value_at(row, col))
                 };
-                match value {
-                    Some(val) => cell_value_to_csv_string(val, delimiter),
-                    None => String::new(),
-                }
+                value
+                    .map(|val| cell_value_to_csv_string(val, delimiter))
+                    .unwrap_or_default()
             };
             csv_output.push_str(&text);
         }
@@ -242,12 +246,6 @@ fn cell_value_to_csv_string(value: &CellValue, delimiter: char) -> String {
         CellValue::RichText(runs) => duke_sheets::rich_text_to_plain(runs),
         CellValue::Boolean(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
         CellValue::Error(e) => e.to_string(),
-        CellValue::Formula { cached_value, .. } => {
-            if let Some(v) = cached_value {
-                return cell_value_to_csv_string(v, delimiter);
-            }
-            String::new()
-        }
         CellValue::SpillTarget { .. } => {
             // SpillTarget cells would need to look up the source formula's array result
             // For CSV export, we output empty for now

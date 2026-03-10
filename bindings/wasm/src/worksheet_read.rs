@@ -5,8 +5,8 @@ use crate::{
     types::{
         WasmAutoFilter, WasmColor, WasmComment, WasmCommentEntry, WasmConditionalFormatRule,
         WasmDataValidation, WasmFormulaCell, WasmFreezePanes, WasmHyperlink, WasmHyperlinkEntry,
-        WasmMergedRegion, WasmMergeSpan, WasmPageBreak, WasmPageSetup, WasmSelection, WasmSheetProtection, WasmSpillSource,
-        WasmSplitPanes, WasmStyle, WasmTable,
+        WasmMergeSpan, WasmMergedRegion, WasmPageBreak, WasmPageSetup, WasmSelection,
+        WasmSheetProtection, WasmSpillSource, WasmSplitPanes, WasmStyle, WasmTable,
     },
     Worksheet,
 };
@@ -595,7 +595,7 @@ impl Worksheet {
             })
             .collect();
         to_js_value(&regions)
-}
+    }
 
     #[wasm_bindgen(js_name = getMergeSpan)]
     pub fn get_merge_span(&self, row: u32, col: u32) -> Result<JsValue, JsError> {

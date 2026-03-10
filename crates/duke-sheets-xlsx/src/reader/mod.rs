@@ -948,25 +948,31 @@ impl XlsxReader {
                                             &current_formula_state,
                                             &mut shared_formula_masters,
                                         );
-                                        let cell_value = if let Some(f) = resolved_formula {
+                                        if let Some(f) = resolved_formula {
                                             let formula_text = if f.starts_with('=') {
                                                 f
                                             } else {
                                                 format!("={}", f)
                                             };
-                                            CellValue::Formula {
-                                                text: formula_text,
-                                                cached_value: Some(Box::new(CellValue::RichText(
-                                                    runs,
-                                                ))),
-                                                array_result: None,
+                                            if let Err(e) = worksheet
+                                                .set_formula_with_cached_value_at(
+                                                    addr.row,
+                                                    addr.col,
+                                                    &formula_text,
+                                                    CellValue::rich_text(runs),
+                                                )
+                                            {
+                                                log::warn!(
+                                                    "Skipping rich text formula {}: {}",
+                                                    cell_ref,
+                                                    e
+                                                );
                                             }
-                                        } else {
-                                            CellValue::RichText(runs)
-                                        };
-                                        if let Err(e) = worksheet
-                                            .set_cell_value_at(addr.row, addr.col, cell_value)
-                                        {
+                                        } else if let Err(e) = worksheet.set_cell_value_at(
+                                            addr.row,
+                                            addr.col,
+                                            CellValue::rich_text(runs),
+                                        ) {
                                             log::warn!(
                                                 "Skipping rich text cell {}: {}",
                                                 cell_ref,
@@ -995,8 +1001,13 @@ impl XlsxReader {
                                     if let Some(cm) = current_cell_cm {
                                         if let Ok(addr) = CellAddress::parse(cell_ref) {
                                             match cm {
-                                                1 => dynamic_array_anchors.push((addr.row, addr.col)),
-                                                2 => { dynamic_array_ghosts.insert((addr.row, addr.col)); },
+                                                1 => {
+                                                    dynamic_array_anchors.push((addr.row, addr.col))
+                                                }
+                                                2 => {
+                                                    dynamic_array_ghosts
+                                                        .insert((addr.row, addr.col));
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -2103,12 +2114,7 @@ impl XlsxReader {
                 let mut row_values: Vec<CellValue> = Vec::with_capacity(num_cols);
                 for c in range.start.col..=range.end.col {
                     // Extract the current cached value from the cell
-                    let cached = match worksheet.get_value_at(r, c) {
-                        CellValue::Formula { cached_value, .. } => {
-                            cached_value.map(|b| *b).unwrap_or(CellValue::Empty)
-                        }
-                        other => other,
-                    };
+                    let cached = worksheet.get_value_at(r, c);
                     row_values.push(cached);
                 }
                 array_result.push(row_values);
@@ -2123,31 +2129,16 @@ impl XlsxReader {
                     let col_offset = (c - range.start.col) as usize;
                     let cached = array_result[row_offset][col_offset].clone();
 
-                    if is_anchor {
-                        // Update anchor: set array_result (for array formulas only)
-                        if kind == CellFormulaKind::Array {
-                            let _ = worksheet.set_cell_value_at(
-                                r,
-                                c,
-                                CellValue::Formula {
-                                    text: formula_for_cells.clone(),
-                                    cached_value: Some(Box::new(cached)),
-                                    array_result: Some(array_result.clone()),
-                                },
-                            );
+                    let _ = worksheet.set_formula_with_cached_value_at(
+                        r,
+                        c,
+                        &formula_for_cells,
+                        cached,
+                    );
+                    if is_anchor && kind == CellFormulaKind::Array {
+                        if let Some(formula) = worksheet.formula_data_at_mut(r, c) {
+                            formula.array_result = Some(array_result.clone());
                         }
-                        // DataTable anchor already has the formula from initial parse
-                    } else {
-                        // Non-anchor: give it the formula with its own cached value
-                        let _ = worksheet.set_cell_value_at(
-                            r,
-                            c,
-                            CellValue::Formula {
-                                text: formula_for_cells.clone(),
-                                cached_value: Some(Box::new(cached)),
-                                array_result: None,
-                            },
-                        );
                     }
                 }
             }
@@ -2173,16 +2164,11 @@ impl XlsxReader {
                 num_rows += 1;
             }
 
-            // Extract the anchor formula's text and cached value, then rebuild with array_result.
-            let anchor_val = worksheet.get_value_at(anchor_row, anchor_col);
-            let (formula_text, cached_value) = match anchor_val {
-                CellValue::Formula {
-                    text,
-                    cached_value,
-                    ..
-                } => (text, cached_value),
-                _ => continue,
-            };
+            if !worksheet.has_formula_at(anchor_row, anchor_col) {
+                continue;
+            }
+
+            let anchor_cached = worksheet.get_value_at(anchor_row, anchor_col);
 
             let mut array_result: Vec<Vec<CellValue>> = Vec::with_capacity(num_rows as usize);
             for r in 0..num_rows {
@@ -2191,10 +2177,7 @@ impl XlsxReader {
                     let cell_row = anchor_row + r;
                     let cell_col = anchor_col + c;
                     let val = if r == 0 && c == 0 {
-                        cached_value
-                            .as_ref()
-                            .map(|b| *b.clone())
-                            .unwrap_or(CellValue::Empty)
+                        anchor_cached.clone()
                     } else {
                         worksheet.get_value_at(cell_row, cell_col)
                     };
@@ -2203,16 +2186,9 @@ impl XlsxReader {
                 array_result.push(row_values);
             }
 
-            // Re-write anchor with array_result populated.
-            let _ = worksheet.set_cell_value_at(
-                anchor_row,
-                anchor_col,
-                CellValue::Formula {
-                    text: formula_text,
-                    cached_value: cached_value.clone(),
-                    array_result: Some(array_result),
-                },
-            );
+            if let Some(formula) = worksheet.formula_data_at_mut(anchor_row, anchor_col) {
+                formula.array_result = Some(array_result);
+            }
 
             // Replace ghost cells with SpillTarget values.
             for r in 0..num_rows {
@@ -2476,15 +2452,15 @@ impl XlsxReader {
                         v == "1" || v.eq_ignore_ascii_case("true"),
                     )),
                     Some("e") => CellError::from_str(v).map(CellValue::Error),
-                    Some("s") => {
-                        v.parse::<usize>().ok().and_then(|idx| {
-                            shared_strings.get(idx).map(|entry| match entry {
-                                SharedStringEntry::Plain(s) => CellValue::String(s.clone().into()),
-                                SharedStringEntry::Rich(runs) => CellValue::RichText(runs.clone()),
-                            })
+                    Some("s") => v.parse::<usize>().ok().and_then(|idx| {
+                        shared_strings.get(idx).map(|entry| match entry {
+                            SharedStringEntry::Plain(s) => CellValue::String(s.clone().into()),
+                            SharedStringEntry::Rich(runs) => CellValue::rich_text(runs.clone()),
                         })
+                    }),
+                    Some("str") | Some("inlineStr") => {
+                        Some(CellValue::String(v.to_string().into()))
                     }
-                    Some("str") | Some("inlineStr") => Some(CellValue::String(v.to_string().into())),
                     None | Some("n") => v.parse::<f64>().ok().map(CellValue::Number),
                     Some(_) => Some(CellValue::String(v.to_string().into())),
                 },
@@ -2500,16 +2476,13 @@ impl XlsxReader {
                 format!("={}", f)
             };
 
-            if let Err(e) = worksheet.set_cell_value_at(
+            if let Err(e) = worksheet.set_formula_with_cached_value_at(
                 addr.row,
                 addr.col,
-                CellValue::Formula {
-                    text: formula_text,
-                    cached_value: cached.map(Box::new),
-                    array_result: None,
-                },
+                &formula_text,
+                cached.unwrap_or(CellValue::Empty),
             ) {
-                log::warn!("Skipping cell {}: {}", cell_ref, e);
+                log::warn!("Skipping formula cell {}: {}", cell_ref, e);
                 return Ok(());
             }
         } else if let Some(value) = value {
@@ -2519,7 +2492,7 @@ impl XlsxReader {
                 Some("s") => match value.parse::<usize>() {
                     Ok(idx) => match shared_strings.get(idx) {
                         Some(SharedStringEntry::Plain(s)) => CellValue::String(s.clone().into()),
-                        Some(SharedStringEntry::Rich(runs)) => CellValue::RichText(runs.clone()),
+                        Some(SharedStringEntry::Rich(runs)) => CellValue::rich_text(runs.clone()),
                         None => {
                             log::warn!(
                                 "Cell {}: shared string index {} out of bounds (max {}), using #REF!",
@@ -2568,11 +2541,9 @@ impl XlsxReader {
             }
         } else if matches!(cell_type, Some("str") | Some("inlineStr")) {
             // Empty <v/> or <is><t/></is> with string type → empty string, not Empty
-            if let Err(e) = worksheet.set_cell_value_at(
-                addr.row,
-                addr.col,
-                CellValue::String("".into()),
-            ) {
+            if let Err(e) =
+                worksheet.set_cell_value_at(addr.row, addr.col, CellValue::String("".into()))
+            {
                 log::warn!("Skipping cell {}: {}", cell_ref, e);
                 return Ok(());
             }

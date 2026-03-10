@@ -3,20 +3,10 @@ use pyo3::prelude::*;
 
 use crate::{
     to_py_err, PyAutoFilter, PyColor, PyComment, PyCommentEntry, PyConditionalFormatRule,
-    PyDataValidation, PyFormulaCell, PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergedRegion,
-    PyMergeSpan, PyPageBreak, PyPageSetup, PySelection, PySheetProtection, PySpillSource,
+    PyDataValidation, PyFormulaCell, PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergeSpan,
+    PyMergedRegion, PyPageBreak, PyPageSetup, PySelection, PySheetProtection, PySpillSource,
     PySplitPanes, PyStyle, PyTable, PyWorksheet,
 };
-
-
-
-
-
-
-
-
-
-
 
 #[pymethods]
 impl PyWorksheet {
@@ -517,7 +507,6 @@ impl PyWorksheet {
         Ok(ws.date_1904())
     }
 
-
     #[getter]
     fn merged_regions(&self) -> PyResult<Vec<PyMergedRegion>> {
         let wb = self.workbook.read().map_err(to_py_err)?;
@@ -560,9 +549,4 @@ impl PyWorksheet {
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
         Ok(ws.is_merged_secondary(row, col as u16))
     }
-
-
-
-
-
 }

@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use super::{CellValue, StringPool};
+use super::{CellValue, FormulaData, StringPool};
 use crate::style::StylePool;
 
 /// Storage mode for cell data
@@ -150,6 +150,11 @@ pub struct CellStorage {
     /// Spill sources: maps source cell (row, col) to spill info
     /// This tracks which cells have active spill ranges
     spill_sources: HashMap<(u32, u16), SpillInfo>,
+
+    /// Formula side table: maps (row, col) to formula data.
+    /// Formula cells store their cached result value in the cell grid
+    /// as a regular CellValue; the formula text and array results live here.
+    formulas: HashMap<(u32, u16), FormulaData>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -181,6 +186,7 @@ impl CellStorage {
             mode: StorageMode::InMemory,
             cached_bounds: None,
             spill_sources: HashMap::new(),
+            formulas: HashMap::new(),
         }
     }
 
@@ -259,6 +265,8 @@ impl CellStorage {
         self.invalidate_bounds();
 
         let result = self.rows.get_mut(&row).and_then(|r| r.remove(&col));
+        // Also remove any formula for this cell
+        self.formulas.remove(&(row, col));
 
         // Clean up empty rows
         if let Some(row_map) = self.rows.get(&row) {
@@ -274,6 +282,7 @@ impl CellStorage {
     pub fn clear(&mut self) {
         self.rows.clear();
         self.merged_regions.clear();
+        self.formulas.clear();
         self.invalidate_bounds();
     }
 
@@ -683,6 +692,46 @@ impl CellStorage {
     /// Get all spill sources
     pub fn spill_sources(&self) -> impl Iterator<Item = ((u32, u16), &SpillInfo)> {
         self.spill_sources.iter().map(|(k, v)| (*k, v))
+    }
+
+    // ---------------------------------------------------------------
+    // Formula side table
+    // ---------------------------------------------------------------
+
+    /// Check if a cell has a formula.
+    pub fn has_formula(&self, row: u32, col: u16) -> bool {
+        self.formulas.contains_key(&(row, col))
+    }
+
+    /// Get the formula data for a cell.
+    pub fn get_formula(&self, row: u32, col: u16) -> Option<&FormulaData> {
+        self.formulas.get(&(row, col))
+    }
+
+    /// Get mutable formula data for a cell.
+    pub fn get_formula_mut(&mut self, row: u32, col: u16) -> Option<&mut FormulaData> {
+        self.formulas.get_mut(&(row, col))
+    }
+
+    /// Set a formula for a cell. The cell's value in the grid represents
+    /// the cached result (Empty if not yet calculated).
+    pub fn set_formula(&mut self, row: u32, col: u16, formula: FormulaData) {
+        self.formulas.insert((row, col), formula);
+    }
+
+    /// Remove the formula from a cell (keeps the cell value).
+    pub fn remove_formula(&mut self, row: u32, col: u16) -> Option<FormulaData> {
+        self.formulas.remove(&(row, col))
+    }
+
+    /// Iterate over all formula cells: (row, col, formula_data).
+    pub fn iter_formulas(&self) -> impl Iterator<Item = ((u32, u16), &FormulaData)> {
+        self.formulas.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// Get the number of formula cells.
+    pub fn formula_count(&self) -> usize {
+        self.formulas.len()
     }
 
     /// Invalidate cached bounds

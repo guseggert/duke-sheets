@@ -40,8 +40,6 @@ export declare class CellValue {
   get isBoolean(): boolean
   /** Check if the cell contains an error */
   get isError(): boolean
-  /** Check if the cell contains a formula */
-  get isFormula(): boolean
   /** Get the value as a number, or null if not a number */
   asNumber(): number | null
   /** Get the value as text, or null if not text */
@@ -50,8 +48,6 @@ export declare class CellValue {
   asBoolean(): boolean | null
   /** Get the error string, or null if not an error */
   asError(): string | null
-  /** Get the formula text, or null if not a formula */
-  formulaText(): string | null
   /** Convert to a JavaScript native value (number, string, boolean, or null) */
   toJs(): number | string | boolean | null
   /** Get string representation of the cell value */

@@ -305,17 +305,25 @@ pub enum CellValue {
     /// Error value (#VALUE!, #REF!, etc.)
     Error(CellError),
     
-    /// Formula with cached result
-    Formula {
-        /// Original formula text (e.g., "=SUM(A1:A10)")
-        text: String,
-        /// Parsed AST (lazy, computed on first calculation)
-        ast: Option<Box<FormulaExpr>>,
-        /// Last calculated value
-        cached_value: Box<CellValue>,
-        /// Whether recalculation is needed
-        needs_recalc: bool,
+    /// A spilled cell that points back to an array-formula source cell.
+    SpillTarget {
+        source_row: u32,
+        source_col: u16,
+        offset_row: u32,
+        offset_col: u16,
     },
+
+    /// Rich text with per-run formatting.
+    RichText(Box<Vec<RichTextRun>>),
+}
+
+/// Formula metadata stored outside the cell grid.
+#[derive(Debug, Clone)]
+pub struct FormulaData {
+    /// Original formula text (e.g., "=SUM(A1:A10)")
+    text: String,
+    /// Full array result for array and dynamic-array formulas.
+    array_result: Option<Vec<Vec<CellValue>>>,
 }
 
 /// Excel error values

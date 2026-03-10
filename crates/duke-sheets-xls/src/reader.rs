@@ -910,7 +910,7 @@ impl XlsReader {
                             }
                         }
                     }
-                    ws.set_cell_value_at(row, col, CellValue::RichText(rich_runs))?;
+                    ws.set_cell_value_at(row, col, CellValue::rich_text(rich_runs))?;
                 }
             }
         }
@@ -1330,33 +1330,11 @@ impl XlsReader {
         formula_text: String,
         styles: &[Style],
     ) -> XlsResult<()> {
-        if result_bytes[6] == 0xFF && result_bytes[7] == 0xFF {
+        let cached_value = if result_bytes[6] == 0xFF && result_bytes[7] == 0xFF {
             let result_type = result_bytes[0];
             match result_type {
-                0x00 => {
-                    // String — actual value comes in following STRING record
-                    ws.set_cell_value_at(
-                        row,
-                        col,
-                        CellValue::Formula {
-                            text: formula_text,
-                            cached_value: None,
-                            array_result: None,
-                        },
-                    )?;
-                }
-                0x01 => {
-                    let bool_val = result_bytes[2] != 0;
-                    ws.set_cell_value_at(
-                        row,
-                        col,
-                        CellValue::Formula {
-                            text: formula_text,
-                            cached_value: Some(Box::new(CellValue::Boolean(bool_val))),
-                            array_result: None,
-                        },
-                    )?;
-                }
+                0x00 => CellValue::Empty,
+                0x01 => CellValue::Boolean(result_bytes[2] != 0),
                 0x02 => {
                     let err = match result_bytes[2] {
                         0x00 => CellError::Null,
@@ -1368,40 +1346,15 @@ impl XlsReader {
                         0x2A => CellError::Na,
                         _ => CellError::Value,
                     };
-                    ws.set_cell_value_at(
-                        row,
-                        col,
-                        CellValue::Formula {
-                            text: formula_text,
-                            cached_value: Some(Box::new(CellValue::Error(err))),
-                            array_result: None,
-                        },
-                    )?;
+                    CellValue::Error(err)
                 }
-                _ => {
-                    ws.set_cell_value_at(
-                        row,
-                        col,
-                        CellValue::Formula {
-                            text: formula_text,
-                            cached_value: None,
-                            array_result: None,
-                        },
-                    )?;
-                }
+                _ => CellValue::Empty,
             }
         } else {
-            let value = f64::from_le_bytes(result_bytes.try_into().unwrap());
-            ws.set_cell_value_at(
-                row,
-                col,
-                CellValue::Formula {
-                    text: formula_text,
-                    cached_value: Some(Box::new(CellValue::Number(value))),
-                    array_result: None,
-                },
-            )?;
-        }
+            CellValue::Number(f64::from_le_bytes(result_bytes.try_into().unwrap()))
+        };
+
+        ws.set_formula_with_cached_value_at(row, col, &formula_text, cached_value)?;
         Self::apply_style(ws, row, col, xf_idx, styles)?;
         Ok(())
     }
@@ -1419,22 +1372,12 @@ impl XlsReader {
         let mut off = 0;
         let string_val = read_unicode_string(data, &mut off)?;
 
-        // Preserve the formula text that was already decompiled from the
-        // FORMULA record's token bytes.
-        let existing_text = match ws.get_value_at(row, col) {
-            CellValue::Formula { text, .. } => text.to_string(),
-            _ => String::new(),
-        };
-
-        ws.set_cell_value_at(
-            row,
-            col,
-            CellValue::Formula {
-                text: existing_text,
-                cached_value: Some(Box::new(CellValue::String(SharedString::new(&string_val)))),
-                array_result: None,
-            },
-        )?;
+        let value = CellValue::String(SharedString::new(&string_val));
+        if ws.has_formula_at(row, col) {
+            ws.set_formula_result(row, col, value)?;
+        } else {
+            ws.set_cell_value_at(row, col, value)?;
+        }
         Ok(())
     }
 
@@ -1527,24 +1470,12 @@ impl XlsReader {
             format!("={}", text)
         };
 
-        // Get the existing cached value and replace the formula text
-        let (cached, array) = match ws.get_value_at(cell_row, cell_col) {
-            CellValue::Formula {
-                cached_value,
-                array_result,
-                ..
-            } => (cached_value.clone(), array_result.clone()),
-            _ => (None, None),
-        };
-        ws.set_cell_value_at(
-            cell_row,
-            cell_col,
-            CellValue::Formula {
-                text: formula_text,
-                cached_value: cached,
-                array_result: array,
-            },
-        )?;
+        if let Some(formula) = ws.formula_data_at_mut(cell_row, cell_col) {
+            formula.text = formula_text;
+        } else {
+            let cached = ws.get_value_at(cell_row, cell_col);
+            ws.set_formula_with_cached_value_at(cell_row, cell_col, &formula_text, cached)?;
+        }
         Ok(())
     }
 
@@ -1555,23 +1486,12 @@ impl XlsReader {
         cell_col: u16,
         table_text: &str,
     ) -> XlsResult<()> {
-        let (cached, array) = match ws.get_value_at(cell_row, cell_col) {
-            CellValue::Formula {
-                cached_value,
-                array_result,
-                ..
-            } => (cached_value.clone(), array_result.clone()),
-            _ => (None, None),
-        };
-        ws.set_cell_value_at(
-            cell_row,
-            cell_col,
-            CellValue::Formula {
-                text: table_text.to_string(),
-                cached_value: cached,
-                array_result: array,
-            },
-        )?;
+        if let Some(formula) = ws.formula_data_at_mut(cell_row, cell_col) {
+            formula.text = table_text.to_string();
+        } else {
+            let cached = ws.get_value_at(cell_row, cell_col);
+            ws.set_formula_with_cached_value_at(cell_row, cell_col, table_text, cached)?;
+        }
         Ok(())
     }
 
@@ -1616,24 +1536,12 @@ impl XlsReader {
             format!("{{={}}}", text)
         };
 
-        // Get the existing cached value and replace the formula text
-        let (cached, array) = match ws.get_value_at(cell_row, cell_col) {
-            CellValue::Formula {
-                cached_value,
-                array_result,
-                ..
-            } => (cached_value.clone(), array_result.clone()),
-            _ => (None, None),
-        };
-        ws.set_cell_value_at(
-            cell_row,
-            cell_col,
-            CellValue::Formula {
-                text: formula_text,
-                cached_value: cached,
-                array_result: array,
-            },
-        )?;
+        if let Some(formula) = ws.formula_data_at_mut(cell_row, cell_col) {
+            formula.text = formula_text;
+        } else {
+            let cached = ws.get_value_at(cell_row, cell_col);
+            ws.set_formula_with_cached_value_at(cell_row, cell_col, &formula_text, cached)?;
+        }
         Ok(())
     }
 

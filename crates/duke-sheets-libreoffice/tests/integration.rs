@@ -167,24 +167,13 @@ async fn test_save_and_read_back_with_duke_sheets() {
     // Check that the formulas exist (they may be stored as computed values or formulas)
     // A3 = A1*10 = 31.4, row=2, col=0
     let a3 = sheet.get_value_at(2, 0);
+    assert!(sheet.get_formula_at(2, 0).is_some(), "A3 should retain its formula");
     match &a3 {
         CellValue::Number(n) => {
             assert!(
                 (n - 31.4).abs() < 1e-10,
                 "A3 should be 31.4 (=A1*10), got {n}"
             );
-        }
-        CellValue::Formula { cached_value, .. } => {
-            // If stored as formula, check the cached value
-            if let Some(cached) = cached_value {
-                if let CellValue::Number(n) = cached.as_ref() {
-                    assert!(
-                        (n - 31.4).abs() < 1e-10,
-                        "A3 cached value should be 31.4, got {n}"
-                    );
-                }
-            }
-            eprintln!("A3 stored as formula with cached value (OK)");
         }
         other => {
             eprintln!("A3 value: {other:?} (may vary depending on LO behavior)");
@@ -193,23 +182,13 @@ async fn test_save_and_read_back_with_duke_sheets() {
 
     // B3 = SUM(B1:B2) = 300, row=2, col=1
     let b3 = sheet.get_value_at(2, 1);
+    assert!(sheet.get_formula_at(2, 1).is_some(), "B3 should retain its formula");
     match &b3 {
         CellValue::Number(n) => {
             assert!(
                 (n - 300.0).abs() < 1e-10,
                 "B3 should be 300.0 (=SUM(B1:B2)), got {n}"
             );
-        }
-        CellValue::Formula { cached_value, .. } => {
-            if let Some(cached) = cached_value {
-                if let CellValue::Number(n) = cached.as_ref() {
-                    assert!(
-                        (n - 300.0).abs() < 1e-10,
-                        "B3 cached value should be 300.0, got {n}"
-                    );
-                }
-            }
-            eprintln!("B3 stored as formula with cached value (OK)");
         }
         other => {
             eprintln!("B3 value: {other:?}");

@@ -132,34 +132,10 @@ fn test_xls_boolean_values() {
 
     // TRUE()/FALSE() formulas have boolean cached results
     let a1 = sheet.get_value_at(0, 0);
-    match &a1 {
-        CellValue::Boolean(true) => {}
-        CellValue::Formula {
-            cached_value: Some(cv),
-            ..
-        } => {
-            assert!(
-                matches!(cv.as_ref(), CellValue::Boolean(true)),
-                "A1 formula should cache TRUE, got {cv:?}"
-            );
-        }
-        other => panic!("A1 should be TRUE or formula with TRUE cache, got {other:?}"),
-    }
+    assert!(matches!(a1, CellValue::Boolean(true)), "A1 should be TRUE, got {a1:?}");
 
     let b1 = sheet.get_value_at(0, 1);
-    match &b1 {
-        CellValue::Boolean(false) => {}
-        CellValue::Formula {
-            cached_value: Some(cv),
-            ..
-        } => {
-            assert!(
-                matches!(cv.as_ref(), CellValue::Boolean(false)),
-                "B1 formula should cache FALSE, got {cv:?}"
-            );
-        }
-        other => panic!("B1 should be FALSE or formula with FALSE cache, got {other:?}"),
-    }
+    assert!(matches!(b1, CellValue::Boolean(false)), "B1 should be FALSE, got {b1:?}");
 
     cleanup_fixture(&path);
 }
@@ -190,18 +166,10 @@ fn test_xls_formula_values() {
     );
 
     let c1 = sheet.get_value_at(0, 2);
-    match &c1 {
-        CellValue::Formula {
-            cached_value: Some(cv),
-            ..
-        } => {
-            assert!(
-                matches!(cv.as_ref(), CellValue::Number(n) if (*n - 30.0).abs() < f64::EPSILON),
-                "C1 formula cached value should be 30, got {cv:?}"
-            );
-        }
-        other => panic!("C1 should be a formula with cached value 30, got {other:?}"),
-    }
+    assert!(
+        matches!(c1, CellValue::Number(n) if (n - 30.0).abs() < f64::EPSILON),
+        "C1 should be 30, got {c1:?}"
+    );
 
     cleanup_fixture(&path);
 }
@@ -225,50 +193,16 @@ fn test_xls_error_values() {
     let sheet = workbook.worksheet(0).unwrap();
 
     let a1 = sheet.get_value_at(0, 0);
-    match &a1 {
-        CellValue::Error(e) => {
-            assert!(
-                matches!(e, duke_sheets_core::CellError::Div0),
-                "A1 should be #DIV/0!, got {e:?}"
-            );
-        }
-        CellValue::Formula {
-            cached_value: Some(cv),
-            ..
-        } => {
-            assert!(
-                matches!(
-                    cv.as_ref(),
-                    CellValue::Error(duke_sheets_core::CellError::Div0)
-                ),
-                "A1 formula cached value should be #DIV/0!, got {cv:?}"
-            );
-        }
-        other => panic!("A1 should be #DIV/0!, got {other:?}"),
-    }
+    assert!(
+        matches!(a1, CellValue::Error(duke_sheets_core::CellError::Div0)),
+        "A1 should be #DIV/0!, got {a1:?}"
+    );
 
     let b1 = sheet.get_value_at(0, 1);
-    match &b1 {
-        CellValue::Error(e) => {
-            assert!(
-                matches!(e, duke_sheets_core::CellError::Na),
-                "B1 should be #N/A, got {e:?}"
-            );
-        }
-        CellValue::Formula {
-            cached_value: Some(cv),
-            ..
-        } => {
-            assert!(
-                matches!(
-                    cv.as_ref(),
-                    CellValue::Error(duke_sheets_core::CellError::Na)
-                ),
-                "B1 formula cached value should be #N/A, got {cv:?}"
-            );
-        }
-        other => panic!("B1 should be #N/A, got {other:?}"),
-    }
+    assert!(
+        matches!(b1, CellValue::Error(duke_sheets_core::CellError::Na)),
+        "B1 should be #N/A, got {b1:?}"
+    );
 
     cleanup_fixture(&path);
 }

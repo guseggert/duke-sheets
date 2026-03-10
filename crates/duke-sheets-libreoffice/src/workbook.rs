@@ -216,7 +216,7 @@ impl<'a> Workbook<'a> {
 
     // Cell data (existing API, unchanged)
 
-    /// Set a cell's value (number, string, formula, or empty).
+    /// Set a cell's value (number, string, or empty).
     pub async fn set_cell_value(
         &mut self,
         cell_ref: &str,
@@ -243,17 +243,17 @@ impl<'a> Workbook<'a> {
                     .call(&text_proxy, &method, &[UnoValue::String(s)])
                     .await?;
             }
-            CellValue::Formula(f) => {
-                let method = interface::cell_set_formula();
-                self.conn
-                    .call(cell, &method, &[UnoValue::String(f)])
-                    .await?;
-            }
             CellValue::Empty => {
                 let method = interface::cell_set_formula();
                 self.conn
                     .call(cell, &method, &[UnoValue::String(String::new())])
                     .await?;
+            }
+            other => {
+                return Err(BridgeError::OperationFailed(format!(
+                    "unsupported cell value for LibreOffice bridge: {:?}",
+                    other
+                )));
             }
         }
         Ok(())

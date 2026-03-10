@@ -14,5 +14,5 @@ pub(crate) mod view;
 
 pub use address::{CellAddress, CellRange};
 pub use storage::{CellData, CellStorage, SpillInfo, StorageMode};
-pub use value::{CellError, CellValue, SharedString, StringPool};
+pub use value::{CellError, CellValue, FormulaData, SharedString, StringPool};
 pub use view::{format_cell_value, CellView};

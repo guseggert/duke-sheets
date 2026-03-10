@@ -19,7 +19,7 @@ Example:
 Classes:
     Workbook: A workbook containing one or more worksheets
     Worksheet: A worksheet within a workbook
-    CellValue: Represents a cell value (number, text, boolean, error, formula)
+    CellValue: Represents a cell value (number, text, boolean, error, or cached formula result)
     CalculationStats: Statistics from calculating a workbook
 """
 

@@ -12,12 +12,10 @@ use duke_sheets_core::{
         Alignment as CoreAlignment, BorderEdge as CoreBorderEdge,
         BorderLineStyle as CoreBorderLineStyle, BorderStyle as CoreBorderStyle, Color as CoreColor,
         DiagonalDirection, FillStyle as CoreFillStyle, FontStyle as CoreFontStyle,
-        FontVerticalAlign, GradientType, HorizontalAlignment,
-        NumberFormat as CoreNumberFormat, PatternType, ReadingOrder, Style as CoreStyle, Underline,
-        VerticalAlignment,
+        FontVerticalAlign, GradientType, HorizontalAlignment, NumberFormat as CoreNumberFormat,
+        PatternType, ReadingOrder, Style as CoreStyle, Underline, VerticalAlignment,
     },
 };
-
 
 /// Color representation. The `colorType` field indicates the variant:
 /// `"auto"`, `"rgb"`, `"argb"`, `"theme"`, or `"indexed"`.
@@ -102,7 +100,6 @@ impl From<&CoreColor> for JsColor {
     }
 }
 
-
 /// Font style settings.
 #[napi(object)]
 pub struct JsFontStyle {
@@ -156,7 +153,6 @@ impl From<&CoreFontStyle> for JsFontStyle {
         }
     }
 }
-
 
 /// Gradient color stop.
 #[napi(object)]
@@ -279,7 +275,6 @@ impl From<&CoreFillStyle> for JsFillStyle {
     }
 }
 
-
 fn border_line_style_to_string(s: &CoreBorderLineStyle) -> &'static str {
     match s {
         CoreBorderLineStyle::None => "none",
@@ -349,7 +344,6 @@ impl From<&CoreBorderStyle> for JsBorderStyle {
     }
 }
 
-
 fn horizontal_alignment_to_string(a: &HorizontalAlignment) -> &'static str {
     match a {
         HorizontalAlignment::General => "general",
@@ -408,7 +402,6 @@ impl From<&CoreAlignment> for JsAlignment {
     }
 }
 
-
 /// Number format. The `formatType` field indicates the variant:
 /// `"general"`, `"builtin"`, or `"custom"`.
 #[napi(object)]
@@ -441,14 +434,12 @@ impl From<&CoreNumberFormat> for JsNumberFormat {
     }
 }
 
-
 /// Cell protection settings.
 #[napi(object)]
 pub struct JsCellProtection {
     pub locked: bool,
     pub hidden: bool,
 }
-
 
 /// Complete cell style including font, fill, border, alignment, number format,
 /// and protection settings.
@@ -478,7 +469,6 @@ impl From<&CoreStyle> for JsStyle {
     }
 }
 
-
 /// A hyperlink attached to a cell.
 #[napi(object)]
 pub struct JsHyperlink {
@@ -503,7 +493,6 @@ impl From<&core::Hyperlink> for JsHyperlink {
     }
 }
 
-
 /// A cell comment/note.
 #[napi(object)]
 pub struct JsComment {
@@ -522,7 +511,6 @@ impl From<&core::CellComment> for JsComment {
     }
 }
 
-
 /// A comment with its cell address.
 #[napi(object)]
 pub struct JsCommentEntry {
@@ -530,7 +518,6 @@ pub struct JsCommentEntry {
     pub col: u32,
     pub comment: JsComment,
 }
-
 
 /// Freeze pane settings.
 #[napi(object)]
@@ -572,7 +559,6 @@ impl From<&core::SplitPanes> for JsSplitPanes {
     }
 }
 
-
 /// A selection within a sheet view.
 #[napi(object)]
 pub struct JsSelection {
@@ -590,7 +576,6 @@ impl From<&core::Selection> for JsSelection {
         }
     }
 }
-
 
 /// Sheet protection settings.
 #[napi(object)]
@@ -631,7 +616,6 @@ impl From<&core::SheetProtection> for JsSheetProtection {
         }
     }
 }
-
 
 /// Page setup / print settings.
 #[napi(object)]
@@ -720,7 +704,6 @@ impl From<&core::PageBreak> for JsPageBreak {
     }
 }
 
-
 /// Workbook-level settings.
 #[napi(object)]
 pub struct JsWorkbookSettings {
@@ -744,7 +727,6 @@ impl From<&core::WorkbookSettings> for JsWorkbookSettings {
     }
 }
 
-
 /// A named range definition.
 #[napi(object)]
 pub struct JsNamedRange {
@@ -758,7 +740,6 @@ pub struct JsNamedRange {
     pub comment: Option<String>,
     pub hidden: bool,
 }
-
 
 /// An Excel table (ListObject).
 #[napi(object)]
@@ -839,7 +820,6 @@ impl From<&core::TableStyleInfo> for JsTableStyleInfo {
     }
 }
 
-
 /// A standalone auto-filter on a worksheet.
 #[napi(object)]
 pub struct JsAutoFilter {
@@ -890,7 +870,6 @@ impl From<&core::FilterColumn> for JsFilterColumn {
         }
     }
 }
-
 
 /// A data validation rule.
 #[napi(object)]
@@ -1034,7 +1013,6 @@ impl From<&core::DataValidation> for JsDataValidation {
         }
     }
 }
-
 
 /// A conditional formatting rule.
 #[napi(object)]
@@ -1213,7 +1191,6 @@ impl From<&core::ConditionalFormatRule> for JsConditionalFormatRule {
     }
 }
 
-
 /// A single run of rich text.
 #[napi(object)]
 pub struct JsRichTextRun {
@@ -1261,14 +1238,12 @@ impl From<&core::RunFont> for JsRunFont {
     }
 }
 
-
 /// A hyperlink with its cell address.
 #[napi(object)]
 pub struct JsHyperlinkEntry {
     pub address: String,
     pub hyperlink: JsHyperlink,
 }
-
 
 /// A formula cell with address.
 #[napi(object)]
@@ -1278,14 +1253,12 @@ pub struct JsFormulaCell {
     pub formula: String,
 }
 
-
 /// A cell with address and value.
 #[napi(object)]
 pub struct JsSpillSource {
     pub row: u32,
     pub col: u32,
 }
-
 
 /// A merged cell region with structured coordinates.
 #[napi(object)]

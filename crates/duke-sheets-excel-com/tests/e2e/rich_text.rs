@@ -36,7 +36,7 @@ fn test_write_rich_text_roundtrip() {
         ),
     ];
     sheet
-        .set_cell_value_at(0, 0, CellValue::RichText(runs))
+        .set_cell_value_at(0, 0, CellValue::rich_text(runs))
         .unwrap();
 
     // Cell A2: "Red" (red, italic) + " and " (plain) + "Blue" (blue, bold)
@@ -60,7 +60,7 @@ fn test_write_rich_text_roundtrip() {
         ),
     ];
     sheet
-        .set_cell_value_at(1, 0, CellValue::RichText(runs2))
+        .set_cell_value_at(1, 0, CellValue::rich_text(runs2))
         .unwrap();
 
     let result = roundtrip_through_excel(&wb);

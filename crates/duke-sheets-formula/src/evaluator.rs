@@ -108,9 +108,6 @@ impl From<CellValue> for FormulaValue {
             CellValue::String(s) => FormulaValue::String(s.as_str().to_string()),
             CellValue::Boolean(b) => FormulaValue::Boolean(b),
             CellValue::Error(e) => FormulaValue::Error(e),
-            CellValue::Formula { cached_value, .. } => cached_value
-                .map(|v| (*v).into())
-                .unwrap_or(FormulaValue::Empty),
             // SpillTarget values should be resolved by looking up the source cell
             // In this simple conversion, we return Empty - proper resolution
             // happens in the worksheet's get_value methods

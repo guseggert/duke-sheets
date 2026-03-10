@@ -65,7 +65,6 @@ impl<'a> CellView<'a> {
     /// - Date serial numbers are converted to human-readable dates when the
     ///   format is a date/time format
     /// - Strings, booleans, and errors display as-is
-    /// - Formulas display their cached value (or the formula text if no cache)
     /// - Empty cells return an empty string
     pub fn formatted(&self) -> String {
         format_cell_value_inner(
@@ -123,8 +122,6 @@ fn format_cell_value_inner(
         }
         CellValue::Error(e) => e.to_string(),
         CellValue::Empty => String::new(),
-        // Formula without cached value — show formula text
-        CellValue::Formula { text, .. } => text.clone(),
         CellValue::SpillTarget { .. } => String::new(),
         CellValue::RichText(runs) => crate::rich_text::rich_text_to_plain(runs),
     }
@@ -568,60 +565,35 @@ mod tests {
         assert_eq!(fmt(&CellValue::Empty, &NumberFormat::General, false), "");
     }
 
-    // ---------------------------------------------------------------
-    // Formula cells
-    // ---------------------------------------------------------------
-
     #[test]
-    fn formula_with_cached_number() {
-        let val = CellValue::Formula {
-            text: "=SUM(A1:A10)".to_string(),
-            cached_value: Some(Box::new(CellValue::Number(42.0))),
-            array_result: None,
-        };
+    fn cached_formula_number_formats_as_number() {
+        let val = CellValue::Number(42.0);
         assert_eq!(fmt(&val, &NumberFormat::General, false), "42");
     }
 
     #[test]
-    fn formula_with_cached_number_formatted() {
-        let val = CellValue::Formula {
-            text: "=A1*B1".to_string(),
-            cached_value: Some(Box::new(CellValue::Number(0.85))),
-            array_result: None,
-        };
+    fn cached_formula_number_uses_cell_format() {
+        let val = CellValue::Number(0.85);
         let fmt_code = NumberFormat::BuiltIn(9); // "0%"
         assert_eq!(fmt(&val, &fmt_code, false), "85%");
     }
 
     #[test]
-    fn formula_with_cached_string() {
-        let val = CellValue::Formula {
-            text: "=IF(A1,\"yes\",\"no\")".to_string(),
-            cached_value: Some(Box::new(CellValue::string("yes"))),
-            array_result: None,
-        };
+    fn cached_formula_string_formats_as_string() {
+        let val = CellValue::string("yes");
         assert_eq!(fmt(&val, &NumberFormat::General, false), "yes");
     }
 
     #[test]
-    fn formula_with_cached_error() {
-        let val = CellValue::Formula {
-            text: "=1/0".to_string(),
-            cached_value: Some(Box::new(CellValue::Error(CellError::Div0))),
-            array_result: None,
-        };
+    fn cached_formula_error_formats_as_error() {
+        let val = CellValue::Error(CellError::Div0);
         assert_eq!(fmt(&val, &NumberFormat::General, false), "#DIV/0!");
     }
 
     #[test]
-    fn formula_without_cached_value() {
-        let val = CellValue::Formula {
-            text: "=SUM(A1:A10)".to_string(),
-            cached_value: None,
-            array_result: None,
-        };
-        // Falls through to formula text since no cached value
-        assert_eq!(fmt(&val, &NumberFormat::General, false), "=SUM(A1:A10)");
+    fn uncached_formula_formats_as_empty_cell_value() {
+        let val = CellValue::Empty;
+        assert_eq!(fmt(&val, &NumberFormat::General, false), "");
     }
 
     // ---------------------------------------------------------------

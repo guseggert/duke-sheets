@@ -315,9 +315,8 @@ describe("Formulas", () => {
     const sheet = wb.getSheet(0);
 
     sheet.setFormula("A1", "=1+1");
-    const value = sheet.getCell("A1");
 
-    expect(value.isFormula).toBe(true);
+    expect(sheet.getFormulaAt(0, 0)).toBe("=1+1");
   });
 
   it("calculates cell references", () => {

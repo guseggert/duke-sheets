@@ -12,28 +12,29 @@ class TestSetFormula:
         """Should set a simple formula."""
         sheet = workbook.get_sheet(0)
         sheet.set_formula("A1", "=1+1")
-        
+
         value = sheet.get_cell("A1")
-        assert value.is_formula
-        assert "1+1" in value.formula_text()
+        assert value.is_empty
+        assert sheet.get_formula_at(0, 0) == "=1+1"
 
     def test_set_formula_with_cell_ref(self, workbook):
         """Should set formula with cell reference."""
         sheet = workbook.get_sheet(0)
         sheet.set_cell("A1", 10.0)
         sheet.set_formula("A2", "=A1*2")
-        
+
         value = sheet.get_cell("A2")
-        assert value.is_formula
+        assert value.is_empty
+        assert sheet.get_formula_at(1, 0) == "=A1*2"
 
     def test_set_formula_with_function(self, workbook):
         """Should set formula with function."""
         sheet = workbook.get_sheet(0)
         sheet.set_formula("A1", "=SUM(1,2,3)")
-        
+
         value = sheet.get_cell("A1")
-        assert value.is_formula
-        assert "SUM" in value.formula_text()
+        assert value.is_empty
+        assert "SUM" in sheet.get_formula_at(0, 0)
 
     def test_set_formula_without_equals(self, workbook):
         """Formula without = should be treated as text or error."""
@@ -55,9 +56,9 @@ class TestFormulaCalculation:
         """Should calculate simple addition."""
         sheet = workbook.get_sheet(0)
         sheet.set_formula("A1", "=1+2")
-        
+
         workbook.calculate()
-        
+
         value = sheet.get_calculated_value("A1")
         assert value.as_number() == 3.0
 
@@ -67,9 +68,9 @@ class TestFormulaCalculation:
         sheet.set_cell("A1", 10.0)
         sheet.set_cell("A2", 20.0)
         sheet.set_formula("A3", "=A1+A2")
-        
+
         workbook.calculate()
-        
+
         value = sheet.get_calculated_value("A3")
         assert value.as_number() == 30.0
 
@@ -81,9 +82,9 @@ class TestFormulaCalculation:
         sheet.set_cell("A3", 3.0)
         sheet.set_cell("A4", 4.0)
         sheet.set_formula("A5", "=SUM(A1:A4)")
-        
+
         workbook.calculate()
-        
+
         value = sheet.get_calculated_value("A5")
         assert value.as_number() == 10.0
 
@@ -94,9 +95,9 @@ class TestFormulaCalculation:
         sheet.set_cell("A2", 20.0)
         sheet.set_cell("A3", 30.0)
         sheet.set_formula("A4", "=AVERAGE(A1:A3)")
-        
+
         workbook.calculate()
-        
+
         value = sheet.get_calculated_value("A4")
         assert value.as_number() == 20.0
 
@@ -104,10 +105,10 @@ class TestFormulaCalculation:
         """Should calculate IF function."""
         sheet = workbook.get_sheet(0)
         sheet.set_cell("A1", 10.0)
-        sheet.set_formula("A2", "=IF(A1>5, \"Yes\", \"No\")")
-        
+        sheet.set_formula("A2", '=IF(A1>5, "Yes", "No")')
+
         workbook.calculate()
-        
+
         value = sheet.get_calculated_value("A2")
         assert value.as_text() == "Yes"
 
@@ -115,12 +116,12 @@ class TestFormulaCalculation:
         """Should calculate nested formulas."""
         sheet = workbook.get_sheet(0)
         sheet.set_cell("A1", 5.0)
-        sheet.set_formula("A2", "=A1*2")      # 10
-        sheet.set_formula("A3", "=A2+A1")     # 15
-        sheet.set_formula("A4", "=SUM(A1:A3)") # 30
-        
+        sheet.set_formula("A2", "=A1*2")  # 10
+        sheet.set_formula("A3", "=A2+A1")  # 15
+        sheet.set_formula("A4", "=SUM(A1:A3)")  # 30
+
         workbook.calculate()
-        
+
         assert sheet.get_calculated_value("A2").as_number() == 10.0
         assert sheet.get_calculated_value("A3").as_number() == 15.0
         assert sheet.get_calculated_value("A4").as_number() == 30.0
@@ -132,34 +133,34 @@ class TestNamedRangesInFormulas:
     def test_named_constant_in_formula(self, workbook):
         """Should use named constant in formula."""
         sheet = workbook.get_sheet(0)
-        
+
         # Define a constant
         workbook.define_name("TaxRate", "0.1")
-        
+
         # Use in formula
         sheet.set_cell("A1", 100.0)
         sheet.set_formula("A2", "=A1*TaxRate")
-        
+
         workbook.calculate()
-        
+
         value = sheet.get_calculated_value("A2")
         assert value.as_number() == pytest.approx(10.0)
 
     def test_named_cell_in_formula(self, workbook):
         """Should use named cell reference in formula."""
         sheet = workbook.get_sheet(0)
-        
+
         # Set up data
         sheet.set_cell("A1", 50.0)
-        
+
         # Define name pointing to cell
         workbook.define_name("Price", "Sheet1!$A$1")
-        
+
         # Use in formula
         sheet.set_formula("B1", "=Price*2")
-        
+
         workbook.calculate()
-        
+
         value = sheet.get_calculated_value("B1")
         assert value.as_number() == 100.0
 
@@ -171,9 +172,9 @@ class TestFormulaErrors:
         """Should return #DIV/0! error."""
         sheet = workbook.get_sheet(0)
         sheet.set_formula("A1", "=1/0")
-        
+
         workbook.calculate()
-        
+
         value = sheet.get_calculated_value("A1")
         assert value.is_error
         assert "#DIV/0!" in value.as_error()
@@ -183,9 +184,9 @@ class TestFormulaErrors:
         sheet = workbook.get_sheet(0)
         # Reference to non-existent sheet
         sheet.set_formula("A1", "=NonExistentSheet!A1")
-        
+
         workbook.calculate()
-        
+
         value = sheet.get_calculated_value("A1")
         # Should be some kind of error
         assert value.is_error or value.as_number() is None

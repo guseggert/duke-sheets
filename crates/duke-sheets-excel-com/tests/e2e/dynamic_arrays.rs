@@ -27,11 +27,17 @@ fn test_xlsx_dynamic_array_sequence() {
     // Anchor cell: Formula with array_result
     let a1 = sheet.get_value("A1").unwrap();
     assert!(
-        a1.formula_text().is_some(),
+        sheet.get_formula_at(0, 0).is_some(),
         "A1 should be a formula, got {:?}",
         a1
     );
-    assert!(a1.is_array_formula(), "A1 should have array_result");
+    assert!(
+        sheet
+            .formula_data_at(0, 0)
+            .map(|formula| formula.is_array_formula())
+            .unwrap_or(false),
+        "A1 should have array_result"
+    );
     assert_eq!(a1.as_number(), Some(1.0));
 
     // Ghost cells: SpillTarget
@@ -78,8 +84,13 @@ fn test_xlsx_dynamic_array_2d() {
     let sheet = workbook.worksheet(0).expect("worksheet");
 
     // Anchor
-    let a1 = sheet.get_value("A1").unwrap();
-    assert!(a1.is_array_formula(), "A1 should have array_result");
+    assert!(
+        sheet
+            .formula_data_at(0, 0)
+            .map(|formula| formula.is_array_formula())
+            .unwrap_or(false),
+        "A1 should have array_result"
+    );
 
     // All non-anchor cells are SpillTarget
     for cell_ref in ["B1", "C1", "A2", "B2", "C2"] {
@@ -128,9 +139,17 @@ fn test_xlsx_dynamic_array_unique_strings() {
     let sheet = workbook.worksheet(0).expect("worksheet");
 
     // Anchor with formula
-    let b1 = sheet.get_value("B1").unwrap();
-    assert!(b1.formula_text().is_some(), "B1 should have formula");
-    assert!(b1.is_array_formula(), "B1 should have array_result");
+    assert!(
+        sheet.get_formula_at(0, 1).is_some(),
+        "B1 should have formula"
+    );
+    assert!(
+        sheet
+            .formula_data_at(0, 1)
+            .map(|formula| formula.is_array_formula())
+            .unwrap_or(false),
+        "B1 should have array_result"
+    );
 
     // Ghost cells are SpillTarget
     assert!(sheet.get_value("B2").unwrap().is_spill_target());

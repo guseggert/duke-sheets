@@ -160,7 +160,11 @@ fn parse_sheet_element(e: &quick_xml::events::BytesStart<'_>, sheets: &mut Vec<S
     }
 
     if let (Some(name), Some(r_id)) = (name, r_id) {
-        sheets.push(SheetEntry { name, r_id, visibility });
+        sheets.push(SheetEntry {
+            name,
+            r_id,
+            visibility,
+        });
     }
 }
 
