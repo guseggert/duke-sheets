@@ -1,3 +1,3 @@
-# `@duke-sheets/node-darwin-x64`
+# `@dukelib/sheets-darwin-x64`
 
-This is the **x86_64-apple-darwin** binary for `@duke-sheets/node`
+This is the **x86_64-apple-darwin** binary for `@dukelib/sheets`

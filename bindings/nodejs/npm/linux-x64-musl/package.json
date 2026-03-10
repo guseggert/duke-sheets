@@ -1,5 +1,5 @@
 {
-  "name": "@duke-sheets/node-linux-x64-musl",
+  "name": "@dukelib/sheets-linux-x64-musl",
   "version": "0.1.3",
   "cpu": [
     "x64"

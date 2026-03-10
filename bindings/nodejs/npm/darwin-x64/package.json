@@ -1,5 +1,5 @@
 {
-  "name": "@duke-sheets/node-darwin-x64",
+  "name": "@dukelib/sheets-darwin-x64",
   "version": "0.1.3",
   "cpu": [
     "x64"

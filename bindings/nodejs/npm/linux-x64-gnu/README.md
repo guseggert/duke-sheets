@@ -1,3 +1,3 @@
-# `@duke-sheets/node-linux-x64-gnu`
+# `@dukelib/sheets-linux-x64-gnu`
 
-This is the **x86_64-unknown-linux-gnu** binary for `@duke-sheets/node`
+This is the **x86_64-unknown-linux-gnu** binary for `@dukelib/sheets`

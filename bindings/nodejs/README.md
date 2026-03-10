@@ -1,4 +1,4 @@
-# @duke-sheets/node
+# @dukelib/sheets
 
 High-performance Excel file library for Node.js, powered by Rust.
 

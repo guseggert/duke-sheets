@@ -1,3 +1,3 @@
-# `@duke-sheets/node-linux-arm64-musl`
+# `@dukelib/sheets-linux-arm64-musl`
 
-This is the **aarch64-unknown-linux-musl** binary for `@duke-sheets/node`
+This is the **aarch64-unknown-linux-musl** binary for `@dukelib/sheets`
