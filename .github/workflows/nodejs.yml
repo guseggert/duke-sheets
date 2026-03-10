@@ -152,7 +152,7 @@ jobs:
         run: npx napi artifacts
 
       - name: Prepare npm packages
-        run: npx napi pre-publish --no-gh-release
+        run: npx napi pre-publish --no-gh-release --skip-optional-publish
 
       - name: List packages
         run: |
