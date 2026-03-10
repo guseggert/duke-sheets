@@ -254,12 +254,54 @@ fn test_calculation_stats() {
 fn test_calculation_with_options() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();
-
     sheet.set_formula("A1", "=1+1").unwrap();
 
-    let stats = wb.calculate_with_options(false, 100, 0.001).unwrap();
-
+    let stats = wb.calculate_with_options(false, 100, 0.001, "auto", 50000).unwrap();
     assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
+}
+
+#[wasm_bindgen_test]
+fn test_calculation_exact_mode() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_formula("A1", "=1+1").unwrap();
+
+    let stats = wb.calculate_with_options(false, 100, 0.001, "exact", 50000).unwrap();
+    assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
+    assert_eq!(sheet.get_calculated_value("A1").unwrap().as_number().unwrap(), 2.0);
+}
+
+#[wasm_bindgen_test]
+fn test_calculation_multipass_mode() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_formula("A1", "=1+1").unwrap();
+
+    let stats = wb.calculate_with_options(false, 100, 0.001, "multipass", 50000).unwrap();
+    assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
+    assert_eq!(sheet.get_calculated_value("A1").unwrap().as_number().unwrap(), 2.0);
+}
+
+#[wasm_bindgen_test]
+fn test_calculation_auto_threshold() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_formula("A1", "=1+1").unwrap();
+
+    let stats = wb.calculate_with_options(false, 100, 0.001, "auto", 1).unwrap();
+    assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
+}
+
+#[wasm_bindgen_test]
+fn test_worksheet_formula_count() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    assert_eq!(sheet.formula_count().unwrap(), 0);
+    sheet.set_formula("A1", "=1+1").unwrap();
+    sheet.set_formula("B1", "=2+2").unwrap();
+    sheet.set_cell("C1", JsValue::from_f64(42.0)).unwrap();
+    assert_eq!(sheet.formula_count().unwrap(), 2);
 }
 
 // Named Range Tests

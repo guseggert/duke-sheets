@@ -27,7 +27,7 @@ export declare class CalculationStats {
  * - Text (string)
  * - Boolean
  * - Error (like "#DIV/0!")
- * - Formula (has formula text and calculated result)
+ * - Formula cached results are exposed as regular cell values; formula text lives on Worksheet accessors
  */
 export declare class CellValue {
   /** Check if the cell is empty */
@@ -162,8 +162,10 @@ export declare class Workbook {
    * @param iterative - Enable iterative calculation for circular references
    * @param maxIterations - Maximum iterations (default 100)
    * @param maxChange - Convergence threshold (default 0.001)
+   * @param mode - Calculation mode: "exact", "multipass", or "auto" (default "auto")
+   * @param autoThreshold - Formula count threshold for auto mode (default 50000)
    */
-  calculateWithOptions(iterative?: boolean | undefined | null, maxIterations?: number | undefined | null, maxChange?: number | undefined | null): CalculationStats
+  calculateWithOptions(iterative?: boolean | undefined | null, maxIterations?: number | undefined | null, maxChange?: number | undefined | null, mode?: string | undefined | null, autoThreshold?: number | undefined | null): CalculationStats
   /**
    * Define a named range
    *
@@ -199,7 +201,7 @@ export declare class Workbook {
    * @param maxChange - Convergence threshold (default 0.001)
    * @returns Promise<CalculationStats>
    */
-  calculateWithOptionsAsync(iterative?: boolean | undefined | null, maxIterations?: number | undefined | null, maxChange?: number | undefined | null): Promise<unknown>
+  calculateWithOptionsAsync(iterative?: boolean | undefined | null, maxIterations?: number | undefined | null, maxChange?: number | undefined | null, mode?: string | undefined | null, autoThreshold?: number | undefined | null): Promise<unknown>
 }
 
 /**
@@ -305,6 +307,8 @@ export declare class Worksheet {
   get colBreaks(): Array<JsPageBreak>
   /** Get the formula text of a cell by row/col (0-based), or null if not a formula cell. */
   getFormulaAt(row: number, col: number): string | null
+  /** Get the number of formula cells in this worksheet. */
+  get formulaCount(): number
   /** Get all formula cells as an array of `{ row, col, formula }`. */
   get formulaCells(): Array<JsFormulaCell>
   /** Whether a cell is a spill target (receives a spilled value from a dynamic array formula). */

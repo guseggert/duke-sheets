@@ -389,6 +389,55 @@ describe("Calculation", () => {
     const stats = wb.calculateWithOptions(false, 100, 0.001);
     expect(stats.formulaCount).toBe(1);
   });
+
+  it("calculates with exact mode", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", "=1+1");
+
+    const stats = wb.calculateWithOptions(false, 100, 0.001, "exact");
+    expect(stats.formulaCount).toBe(1);
+    expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
+  });
+
+  it("calculates with multipass mode", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", "=1+1");
+
+    const stats = wb.calculateWithOptions(false, 100, 0.001, "multipass");
+    expect(stats.formulaCount).toBe(1);
+    expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
+  });
+
+  it("calculates with auto mode and custom threshold", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", "=1+1");
+
+    const stats = wb.calculateWithOptions(false, 100, 0.001, "auto", 100);
+    expect(stats.formulaCount).toBe(1);
+    expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
+  });
+
+  it("rejects invalid mode", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", "=1+1");
+
+    expect(() => wb.calculateWithOptions(false, 100, 0.001, "bogus")).toThrow();
+  });
+
+  it("worksheet formulaCount getter", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+
+    expect(sheet.formulaCount).toBe(0);
+    sheet.setFormula("A1", "=1+1");
+    sheet.setFormula("B1", "=2+2");
+    sheet.setCell("C1", 42);
+    expect(sheet.formulaCount).toBe(2);
+  });
 });
 
 // CellValue Tests
