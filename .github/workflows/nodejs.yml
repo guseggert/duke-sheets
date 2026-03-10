@@ -181,7 +181,7 @@ jobs:
       - name: Publish to npm
         run: |
           for dir in npm/*/; do
-            (cd "$dir" && npm publish --access public --provenance)
+            (cd "$dir" && npm publish --access public --provenance) || true
           done
           npm publish --access public --provenance
         env:
