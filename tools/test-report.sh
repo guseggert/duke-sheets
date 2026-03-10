@@ -29,6 +29,10 @@ for pkg in duke-sheets duke-sheets-xlsx duke-sheets-xls duke-sheets-excel-com du
     run cargo test -p "$pkg" --lib || true
 done
 
+run mise run test:nodejs || true
+    run mise run test:python || true
+run mise run test:wasm:node || true
+
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  TEST REPORT"
@@ -71,8 +75,37 @@ while IFS= read -r line; do
             echo ""
         fi
     fi
+    # Match vitest: Tests  N passed | N failed (N)
+    if [[ "$line" =~ Tests\ +([0-9]+)\ passed ]]; then
+        vpass="${BASH_REMATCH[1]}"
+        vfail=0
+        if [[ "$line" =~ ([0-9]+)\ failed ]]; then vfail="${BASH_REMATCH[1]}"; fi
+        TOTAL_PASS=$((TOTAL_PASS + vpass))
+        TOTAL_FAIL=$((TOTAL_FAIL + vfail))
+        if [ "$vfail" -gt 0 ]; then
+            ANY_FAIL=true
+            printf "  ❌  %-45s %4d passed, %d failed\n" "nodejs (vitest)" "$vpass" "$vfail"
+        else
+            printf "  ✅  %-45s %4d passed\n" "nodejs (vitest)" "$vpass"
+        fi
+    fi
+    # Match pytest: N passed, M failed / N passed
+    if [[ "$line" =~ ([0-9]+)\ passed ]]; then
+        if [[ "$line" =~ ^=+ ]] && [[ "$line" =~ =+$ ]]; then
+            ppass="${BASH_REMATCH[1]}"
+            pfail=0
+            if [[ "$line" =~ ([0-9]+)\ failed ]]; then pfail="${BASH_REMATCH[1]}"; fi
+            TOTAL_PASS=$((TOTAL_PASS + ppass))
+            TOTAL_FAIL=$((TOTAL_FAIL + pfail))
+            if [ "$pfail" -gt 0 ]; then
+                ANY_FAIL=true
+                printf "  ❌  %-45s %4d passed, %d failed\n" "python (pytest)" "$ppass" "$pfail"
+            else
+                printf "  ✅  %-45s %4d passed\n" "python (pytest)" "$ppass"
+            fi
+        fi
+    fi
 done < "$LOGFILE"
-
 echo ""
 echo "───────────────────────────────────────────────────────────"
 if [ "$ANY_FAIL" = true ]; then
