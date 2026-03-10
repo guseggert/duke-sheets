@@ -167,7 +167,7 @@ impl XlsxReader {
         // Read each worksheet
         for (idx, sheet_entry) in sheet_info.iter().enumerate() {
             if let Some(path) = sheet_paths.get(&sheet_entry.r_id) {
-                let sheet_idx = workbook.add_worksheet_with_name(&sheet_entry.name)?;
+                let sheet_idx = workbook.add_worksheet_with_name_unchecked(&sheet_entry.name);
                 workbook
                     .worksheet_mut(sheet_idx)
                     .unwrap()

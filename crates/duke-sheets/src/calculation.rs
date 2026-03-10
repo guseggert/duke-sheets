@@ -27,7 +27,7 @@ use crate::{
 use duke_sheets_formula::dependency::{CellKey, DependencyGraph};
 use duke_sheets_formula::functions::FunctionRegistry;
 use duke_sheets_formula::{StructuredRefSpecifier, StructuredReference};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
 
 /// Global function registry for volatile function lookup
@@ -37,9 +37,36 @@ fn get_function_registry() -> &'static FunctionRegistry {
     FUNCTION_REGISTRY.get_or_init(FunctionRegistry::new)
 }
 
+/// How the calculation engine determines evaluation order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CalculationMode {
+    /// Build dependency graph with topological sort.
+    /// Exact ordering, but O(V+E) where E can be hundreds of millions
+    /// for large workbooks with dense range references.
+    Exact,
+    /// Evaluate in row-major order, re-evaluate until convergence.
+    /// Scales to millions of formulas but may need multiple passes.
+    Multipass,
+    /// Choose automatically based on formula count (default).
+    /// Uses `Exact` when formula count ≤ `auto_threshold`,
+    /// otherwise falls back to `Multipass`.
+    Auto,
+}
+
+impl Default for CalculationMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
 /// Options for workbook calculation
 #[derive(Debug, Clone)]
 pub struct CalculationOptions {
+    /// How to determine evaluation order (default: Auto)
+    pub mode: CalculationMode,
+    /// Formula count threshold for `CalculationMode::Auto` (default: 50_000).
+    /// Workbooks with more formulas than this use multipass evaluation.
+    pub auto_threshold: usize,
     /// Enable iterative calculation for circular references
     pub iterative: bool,
     /// Maximum iterations for circular references (default: 100)
@@ -50,16 +77,22 @@ pub struct CalculationOptions {
     pub force_full_calculation: bool,
     /// Include volatile functions in calculation (NOW, TODAY, RAND, etc.)
     pub calculate_volatile: bool,
+    /// Only calculate these sheets (and their transitive cross-sheet dependencies).
+    /// If empty, calculate all sheets (default).
+    pub sheets: Vec<usize>,
 }
 
 impl Default for CalculationOptions {
     fn default() -> Self {
         Self {
+            mode: CalculationMode::default(),
+            auto_threshold: 50_000,
             iterative: false,
             max_iterations: 100,
             max_change: 0.001,
             force_full_calculation: true,
             calculate_volatile: true,
+            sheets: vec![],
         }
     }
 }
@@ -90,6 +123,9 @@ pub trait WorkbookCalculationExt {
 
     /// Calculate all formulas with custom options
     fn calculate_with_options(&mut self, options: &CalculationOptions) -> Result<CalculationStats>;
+
+    /// Calculate only the specified sheets (and their transitive cross-sheet dependencies)
+    fn calculate_sheets(&mut self, sheets: &[usize]) -> Result<CalculationStats>;
 }
 
 impl WorkbookCalculationExt for Workbook {
@@ -100,6 +136,14 @@ impl WorkbookCalculationExt for Workbook {
     fn calculate_with_options(&mut self, options: &CalculationOptions) -> Result<CalculationStats> {
         let mut engine = CalculationEngine::new(options.clone());
         engine.calculate_all(self)
+    }
+
+    fn calculate_sheets(&mut self, sheets: &[usize]) -> Result<CalculationStats> {
+        let options = CalculationOptions {
+            sheets: sheets.to_vec(),
+            ..Default::default()
+        };
+        self.calculate_with_options(&options)
     }
 }
 
@@ -116,6 +160,8 @@ struct CalculationEngine {
     circular_cells: HashSet<CellKey>,
 }
 
+type FormulaCellIndex = HashMap<usize, BTreeMap<u32, Vec<u16>>>;
+
 impl CalculationEngine {
     fn new(options: CalculationOptions) -> Self {
         Self {
@@ -128,44 +174,62 @@ impl CalculationEngine {
     }
 
     /// Calculate all formulas in the workbook
+
     fn calculate_all(&mut self, workbook: &mut Workbook) -> Result<CalculationStats> {
         let mut stats = CalculationStats::default();
 
-        // Phase 1: Collect and parse all formulas, build dependency graph
-        self.collect_formulas(workbook, &mut stats)?;
+        // Phase 1: Parse formulas (sheet-scoped when options.sheets is set)
+        self.parse_formulas(workbook, &mut stats)?;
 
         if stats.formula_count == 0 {
             return Ok(stats);
         }
 
-        // Phase 2: Detect circular references
-        self.detect_circular_references();
-        stats.circular_references = self.circular_cells.len();
+        let use_multipass = match self.options.mode {
+            CalculationMode::Exact => false,
+            CalculationMode::Multipass => true,
+            CalculationMode::Auto => stats.formula_count > self.options.auto_threshold,
+        };
 
-        // Phase 3: Get calculation order (topological sort)
-        let calc_order = self.get_calculation_order();
-
-        // Phase 4: Calculate cells in order
-        if self.circular_cells.is_empty() || !self.options.iterative {
-            // Simple case: no circular references or iterative calculation disabled
-            self.calculate_cells_simple(workbook, &calc_order, &mut stats)?;
+        if use_multipass {
+            self.calculate_multipass(workbook, &mut stats)?;
         } else {
-            // Iterative calculation for circular references
-            self.calculate_cells_iterative(workbook, &calc_order, &mut stats)?;
+            self.build_dependency_graph(workbook, &mut stats);
+
+            self.detect_circular_references();
+            stats.circular_references = self.circular_cells.len();
+
+            let calc_order = self.get_calculation_order();
+
+            if self.circular_cells.is_empty() || !self.options.iterative {
+                self.calculate_cells_simple(workbook, &calc_order, &mut stats)?;
+            } else {
+                self.calculate_cells_iterative(workbook, &calc_order, &mut stats)?;
+            }
         }
 
         Ok(stats)
     }
 
-    /// Collect all formulas from the workbook and build the dependency graph
-    fn collect_formulas(
-        &mut self,
-        workbook: &Workbook,
-        stats: &mut CalculationStats,
-    ) -> Result<()> {
+    /// Parse all formulas and store ASTs. Does NOT build the dependency graph.
+    /// When `options.sheets` is set, discovers cross-sheet refs on-the-fly
+    /// so each formula is parsed exactly once.
+    fn parse_formulas(&mut self, workbook: &Workbook, stats: &mut CalculationStats) -> Result<()> {
         let sheet_count = workbook.sheet_count();
 
-        for sheet_idx in 0..sheet_count {
+        let scoped = !self.options.sheets.is_empty();
+        let mut included: HashSet<usize> = if scoped {
+            self.options.sheets.iter().copied().collect()
+        } else {
+            (0..sheet_count).collect()
+        };
+        let mut queue: Vec<usize> = included.iter().copied().collect();
+        queue.sort_unstable();
+
+        while let Some(sheet_idx) = queue.pop() {
+            if sheet_idx >= sheet_count {
+                continue;
+            }
             let sheet = workbook
                 .worksheet(sheet_idx)
                 .ok_or_else(|| Error::other(format!("Sheet {} not found", sheet_idx)))?;
@@ -173,29 +237,26 @@ impl CalculationEngine {
             for (row, col, formula_text) in sheet.formula_cells() {
                 let cell_key = CellKey::new(sheet_idx, row, col);
 
-                // Parse the formula
                 let ast = match parse_formula(formula_text) {
                     Ok(ast) => ast,
-                    Err(e) => {
-                        // Store a placeholder for unparseable formulas
-                        eprintln!(
-                            "Warning: Failed to parse formula at ({}, {}): {}",
-                            row, col, e
-                        );
+                    Err(_e) => {
                         stats.errors += 1;
                         continue;
                     }
                 };
 
-                // Check for volatile functions
-                if self.options.calculate_volatile && contains_volatile_function(&ast) {
-                    self.volatile_cells.insert(cell_key);
+                if scoped {
+                    let sheet_refs = extract_sheet_refs(&ast, workbook);
+                    for ref_sheet in sheet_refs {
+                        if !included.contains(&ref_sheet) {
+                            included.insert(ref_sheet);
+                            queue.push(ref_sheet);
+                        }
+                    }
                 }
 
-                // Extract references and add to dependency graph
-                let references = extract_references(&ast, sheet_idx, workbook);
-                for ref_key in references {
-                    self.dependency_graph.add_dependency(ref_key, cell_key);
+                if self.options.calculate_volatile && contains_volatile_function(&ast) {
+                    self.volatile_cells.insert(cell_key);
                 }
 
                 self.parsed_formulas.insert(cell_key, ast);
@@ -207,13 +268,88 @@ impl CalculationEngine {
         Ok(())
     }
 
-    /// Detect cells involved in circular references
-    fn detect_circular_references(&mut self) {
-        for &cell_key in self.parsed_formulas.keys() {
-            if self.dependency_graph.has_circular_reference(cell_key) {
-                self.circular_cells.insert(cell_key);
+    /// Build the dependency graph from parsed formulas.
+    /// Only used for small workbooks (< GRAPH_FORMULA_LIMIT).
+    fn build_dependency_graph(&mut self, workbook: &Workbook, _stats: &mut CalculationStats) {
+        let formula_cell_set: HashSet<CellKey> = self.parsed_formulas.keys().copied().collect();
+        let formula_cell_index = build_formula_cell_index(&formula_cell_set);
+
+        for (cell_key, ast) in &self.parsed_formulas {
+            let references = extract_references(
+                ast,
+                cell_key.sheet,
+                workbook,
+                &formula_cell_set,
+                &formula_cell_index,
+            );
+            for ref_key in references {
+                self.dependency_graph.add_dependency(ref_key, *cell_key);
             }
         }
+    }
+
+    /// Multi-pass row-major evaluation for large workbooks.
+    ///
+    /// Evaluates all formulas in sheet-row-col order, repeating until
+    /// no values change (convergence) or max iterations reached.
+    /// Financial models mostly flow top-down/left-to-right, so this
+    /// typically converges in 2-3 passes.
+    fn calculate_multipass(
+        &self,
+        workbook: &mut Workbook,
+        stats: &mut CalculationStats,
+    ) -> Result<()> {
+        // Build sorted formula list: sheet → row → col order
+        let mut formula_order: Vec<CellKey> = self.parsed_formulas.keys().copied().collect();
+        formula_order.sort_unstable_by(|a, b| {
+            a.sheet
+                .cmp(&b.sheet)
+                .then(a.row.cmp(&b.row))
+                .then(a.col.cmp(&b.col))
+        });
+
+        let max_passes = 20;
+        let mut pass = 0;
+
+        // First pass: always evaluate everything
+        for &cell_key in &formula_order {
+            self.evaluate_and_store(workbook, cell_key, stats);
+        }
+        pass += 1;
+
+        // Subsequent passes: re-evaluate and check for convergence
+        // Track changed cells to narrow scope each pass
+        loop {
+            if pass >= max_passes {
+                break;
+            }
+            let mut changed = false;
+
+            for &cell_key in &formula_order {
+                let old_value = get_cell_numeric(workbook, cell_key);
+                self.evaluate_and_store_silent(workbook, cell_key);
+                let new_value = get_cell_numeric(workbook, cell_key);
+
+                if !values_equal(old_value, new_value) {
+                    changed = true;
+                }
+            }
+
+            pass += 1;
+
+            if !changed {
+                stats.converged = true;
+                break;
+            }
+        }
+
+        stats.iterations = pass;
+        Ok(())
+    }
+
+    /// Detect cells involved in circular references (batch via Tarjan's SCC)
+    fn detect_circular_references(&mut self) {
+        self.circular_cells = self.dependency_graph.find_circular_cells();
     }
 
     /// Get the calculation order via topological sort
@@ -424,18 +560,79 @@ impl CalculationEngine {
         stats.converged = converged;
         Ok(())
     }
+
+    /// Evaluate a formula without tracking stats or checking circular refs.
+    /// Used in multipass convergence loops.
+    fn evaluate_and_store_silent(&self, workbook: &mut Workbook, cell_key: CellKey) {
+        let ast = match self.parsed_formulas.get(&cell_key) {
+            Some(ast) => ast,
+            None => return,
+        };
+
+        if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
+            sheet.clear_spill(cell_key.row, cell_key.col);
+        }
+
+        let ctx =
+            EvaluationContext::new(Some(workbook), cell_key.sheet, cell_key.row, cell_key.col);
+
+        let result = match evaluate(ast, &ctx) {
+            Ok(value) => value,
+            Err(_) => FormulaValue::Error(duke_sheets_core::CellError::Value),
+        };
+
+        if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
+            match result {
+                FormulaValue::Array(array) => {
+                    let cell_array: Vec<Vec<CellValue>> = array
+                        .into_iter()
+                        .map(|row| row.into_iter().map(|v| v.into()).collect())
+                        .collect();
+                    let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
+                }
+                _ => {
+                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, result.into());
+                }
+            }
+        }
+    }
 }
 
-/// Extract cell references from a formula AST
-///
-/// Returns a set of CellKey values representing all cells that the formula depends on.
+/// Get numeric value of a cell for convergence comparison.
+/// Returns None for non-numeric or missing cells.
+fn get_cell_numeric(workbook: &Workbook, cell_key: CellKey) -> Option<f64> {
+    let sheet = workbook.worksheet(cell_key.sheet)?;
+    match sheet.get_value_at(cell_key.row, cell_key.col) {
+        CellValue::Number(n) => Some(n),
+        _ => None,
+    }
+}
+
+/// Compare two optional numeric values for convergence.
+fn values_equal(a: Option<f64>, b: Option<f64>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => (a - b).abs() < 1e-10,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 fn extract_references(
     expr: &FormulaExpr,
     current_sheet: usize,
     workbook: &Workbook,
+    formula_cells: &HashSet<CellKey>,
+    formula_cell_index: &FormulaCellIndex,
 ) -> Vec<CellKey> {
     let mut refs = Vec::new();
-    extract_references_recursive(expr, current_sheet, workbook, &mut refs);
+    extract_references_recursive(
+        expr,
+        current_sheet,
+        workbook,
+        formula_cells,
+        formula_cell_index,
+        &mut refs,
+    );
     refs
 }
 
@@ -443,6 +640,8 @@ fn extract_references_recursive(
     expr: &FormulaExpr,
     current_sheet: usize,
     workbook: &Workbook,
+    formula_cells: &HashSet<CellKey>,
+    formula_cell_index: &FormulaCellIndex,
     refs: &mut Vec<CellKey>,
 ) {
     match expr {
@@ -453,11 +652,11 @@ fn extract_references_recursive(
                 .and_then(|name| workbook.sheet_index(name))
                 .unwrap_or(current_sheet);
 
-            refs.push(CellKey::new(
-                sheet_idx,
-                cell_ref.address.row,
-                cell_ref.address.col,
-            ));
+            let key = CellKey::new(sheet_idx, cell_ref.address.row, cell_ref.address.col);
+            // Only track deps on formula cells — static cells never change
+            if formula_cells.contains(&key) {
+                refs.push(key);
+            }
         }
         FormulaExpr::RangeRef(range_ref) => {
             let sheet_idx = range_ref
@@ -466,29 +665,72 @@ fn extract_references_recursive(
                 .and_then(|name| workbook.sheet_index(name))
                 .unwrap_or(current_sheet);
 
-            // Add all cells in the range
-            for row in range_ref.range.start.row..=range_ref.range.end.row {
-                for col in range_ref.range.start.col..=range_ref.range.end.col {
-                    refs.push(CellKey::new(sheet_idx, row, col));
-                }
-            }
+            let start_row = range_ref.range.start.row;
+            let end_row = range_ref.range.end.row;
+            let start_col = range_ref.range.start.col;
+            let end_col = range_ref.range.end.col;
+            push_range_references(
+                sheet_idx,
+                start_row,
+                end_row,
+                start_col,
+                end_col,
+                formula_cells,
+                formula_cell_index,
+                refs,
+            );
         }
         FormulaExpr::BinaryOp { left, right, .. } => {
-            extract_references_recursive(left, current_sheet, workbook, refs);
-            extract_references_recursive(right, current_sheet, workbook, refs);
+            extract_references_recursive(
+                left,
+                current_sheet,
+                workbook,
+                formula_cells,
+                formula_cell_index,
+                refs,
+            );
+            extract_references_recursive(
+                right,
+                current_sheet,
+                workbook,
+                formula_cells,
+                formula_cell_index,
+                refs,
+            );
         }
         FormulaExpr::UnaryOp { operand, .. } => {
-            extract_references_recursive(operand, current_sheet, workbook, refs);
+            extract_references_recursive(
+                operand,
+                current_sheet,
+                workbook,
+                formula_cells,
+                formula_cell_index,
+                refs,
+            );
         }
         FormulaExpr::Function { args, .. } => {
             for arg in args {
-                extract_references_recursive(arg, current_sheet, workbook, refs);
+                extract_references_recursive(
+                    arg,
+                    current_sheet,
+                    workbook,
+                    formula_cells,
+                    formula_cell_index,
+                    refs,
+                );
             }
         }
         FormulaExpr::Array(rows) => {
             for row in rows {
                 for cell in row {
-                    extract_references_recursive(cell, current_sheet, workbook, refs);
+                    extract_references_recursive(
+                        cell,
+                        current_sheet,
+                        workbook,
+                        formula_cells,
+                        formula_cell_index,
+                        refs,
+                    );
                 }
             }
         }
@@ -500,10 +742,128 @@ fn extract_references_recursive(
         | FormulaExpr::NameRef(_)
         | FormulaExpr::ExternalRef(_)
         | FormulaExpr::Empty => {}
-        // Structured table references — resolve to dependent cell range.
         FormulaExpr::StructuredRef(sr) => {
-            extract_structured_ref_deps(sr, current_sheet, workbook, refs);
+            extract_structured_ref_deps(
+                sr,
+                current_sheet,
+                workbook,
+                formula_cells,
+                formula_cell_index,
+                refs,
+            );
         }
+    }
+}
+
+fn build_formula_cell_index(formula_cells: &HashSet<CellKey>) -> FormulaCellIndex {
+    let mut index = FormulaCellIndex::new();
+
+    for &cell in formula_cells {
+        index
+            .entry(cell.sheet)
+            .or_default()
+            .entry(cell.row)
+            .or_default()
+            .push(cell.col);
+    }
+
+    for rows in index.values_mut() {
+        for cols in rows.values_mut() {
+            cols.sort_unstable();
+            cols.dedup();
+        }
+    }
+
+    index
+}
+
+fn push_range_references(
+    sheet_idx: usize,
+    row_start: u32,
+    row_end: u32,
+    col_start: u16,
+    col_end: u16,
+    formula_cells: &HashSet<CellKey>,
+    formula_cell_index: &FormulaCellIndex,
+    refs: &mut Vec<CellKey>,
+) {
+    let Some(rows) = formula_cell_index.get(&sheet_idx) else {
+        return;
+    };
+
+    for (&row, cols) in rows.range(row_start..=row_end) {
+        let start = cols.partition_point(|&col| col < col_start);
+        let end = cols.partition_point(|&col| col <= col_end);
+
+        for &col in &cols[start..end] {
+            let cell_key = CellKey::new(sheet_idx, row, col);
+            debug_assert!(formula_cells.contains(&cell_key));
+            refs.push(cell_key);
+        }
+    }
+}
+
+/// Extract sheet indices referenced by cross-sheet formulas in an AST.
+/// Used for discovering transitive sheet dependencies.
+fn extract_sheet_refs(expr: &FormulaExpr, workbook: &Workbook) -> HashSet<usize> {
+    let mut sheets = HashSet::new();
+    extract_sheet_refs_recursive(expr, workbook, &mut sheets);
+    sheets
+}
+
+fn extract_sheet_refs_recursive(
+    expr: &FormulaExpr,
+    workbook: &Workbook,
+    sheets: &mut HashSet<usize>,
+) {
+    match expr {
+        FormulaExpr::CellRef(cell_ref) => {
+            if let Some(name) = &cell_ref.sheet {
+                if let Some(idx) = workbook.sheet_index(name) {
+                    sheets.insert(idx);
+                }
+            }
+        }
+        FormulaExpr::RangeRef(range_ref) => {
+            if let Some(name) = &range_ref.sheet {
+                if let Some(idx) = workbook.sheet_index(name) {
+                    sheets.insert(idx);
+                }
+            }
+        }
+        FormulaExpr::BinaryOp { left, right, .. } => {
+            extract_sheet_refs_recursive(left, workbook, sheets);
+            extract_sheet_refs_recursive(right, workbook, sheets);
+        }
+        FormulaExpr::UnaryOp { operand, .. } => {
+            extract_sheet_refs_recursive(operand, workbook, sheets);
+        }
+        FormulaExpr::Function { args, .. } => {
+            for arg in args {
+                extract_sheet_refs_recursive(arg, workbook, sheets);
+            }
+        }
+        FormulaExpr::Array(rows) => {
+            for row in rows {
+                for cell in row {
+                    extract_sheet_refs_recursive(cell, workbook, sheets);
+                }
+            }
+        }
+        FormulaExpr::StructuredRef(sr) => {
+            // If the structured ref names a table, find which sheet owns it
+            if let Some(table_name) = &sr.table {
+                for idx in 0..workbook.sheet_count() {
+                    if let Some(ws) = workbook.worksheet(idx) {
+                        if ws.table_by_name(table_name).is_some() {
+                            sheets.insert(idx);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -511,10 +871,13 @@ fn extract_references_recursive(
 ///
 /// Resolves the structured ref to a concrete cell range using the workbook's
 /// table definitions and adds all cells in that range to the dependency list.
+/// For large ranges, prunes to formula cells only.
 fn extract_structured_ref_deps(
     sr: &StructuredReference,
     current_sheet: usize,
     workbook: &Workbook,
+    formula_cells: &HashSet<CellKey>,
+    formula_cell_index: &FormulaCellIndex,
     refs: &mut Vec<CellKey>,
 ) {
     // Find the table and its sheet index.
@@ -612,12 +975,16 @@ fn extract_structured_ref_deps(
         (data_start, data_end)
     };
 
-    // Add all cells in the resolved range.
-    for row in row_start..=row_end {
-        for col in col_start..=col_end {
-            refs.push(CellKey::new(sheet_idx, row, col));
-        }
-    }
+    push_range_references(
+        sheet_idx,
+        row_start,
+        row_end,
+        col_start,
+        col_end,
+        formula_cells,
+        formula_cell_index,
+        refs,
+    );
 }
 
 /// Check if a formula contains any volatile functions
@@ -820,21 +1187,38 @@ mod tests {
     fn test_extract_references() {
         let workbook = Workbook::new();
 
+        // Build a formula_cells set containing the cells we expect to reference.
+        // extract_references only returns deps on formula cells (static cells
+        // are skipped since they never change during calculation).
+        let mut formula_cells: HashSet<CellKey> = HashSet::new();
+        // A1, A2, A3 for the range test; B2, C3 for the multi-ref test
+        formula_cells.insert(CellKey::new(0, 0, 0)); // A1
+        formula_cells.insert(CellKey::new(0, 1, 0)); // A2
+        formula_cells.insert(CellKey::new(0, 2, 0)); // A3
+        formula_cells.insert(CellKey::new(0, 1, 1)); // B2
+        formula_cells.insert(CellKey::new(0, 2, 2)); // C3
+        let index = build_formula_cell_index(&formula_cells);
+
         // Simple cell reference
         let ast = parse_formula("=A1").unwrap();
-        let refs = extract_references(&ast, 0, &workbook);
+        let refs = extract_references(&ast, 0, &workbook, &formula_cells, &index);
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0], CellKey::new(0, 0, 0));
 
         // Range reference
         let ast = parse_formula("=SUM(A1:A3)").unwrap();
-        let refs = extract_references(&ast, 0, &workbook);
+        let refs = extract_references(&ast, 0, &workbook, &formula_cells, &index);
         assert_eq!(refs.len(), 3);
 
         // Multiple references
         let ast = parse_formula("=A1+B2*C3").unwrap();
-        let refs = extract_references(&ast, 0, &workbook);
+        let refs = extract_references(&ast, 0, &workbook, &formula_cells, &index);
         assert_eq!(refs.len(), 3);
+
+        // Reference to a non-formula cell returns nothing
+        let ast = parse_formula("=D4").unwrap();
+        let refs = extract_references(&ast, 0, &workbook, &formula_cells, &index);
+        assert_eq!(refs.len(), 0);
     }
 
     #[test]
@@ -963,9 +1347,8 @@ mod tests {
                 // Alternative: implementation may allow partial spill or overwrite
                 // This depends on the exact implementation
             }
-            other => {
+            _ => {
                 // For now, accept either error or the value (implementation detail)
-                eprintln!("Note: Spill blocked test got {:?}", other);
             }
         }
 

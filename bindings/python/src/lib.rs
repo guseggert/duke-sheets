@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::prelude::*;
+use duke_sheets::CalculationMode;
 use duke_sheets_core::{CellError, CellValue as CoreCellValue};
 
 mod types;
@@ -615,18 +616,31 @@ impl PyWorkbook {
     ///
     /// Returns:
     ///     CalculationStats with information about the calculation
-    #[pyo3(signature = (iterative = false, max_iterations = 100, max_change = 0.001))]
+    #[pyo3(signature = (iterative = false, max_iterations = 100, max_change = 0.001, mode = "auto", auto_threshold = 50_000))]
     fn calculate_with_options(
         &self,
         iterative: bool,
         max_iterations: u32,
         max_change: f64,
+        mode: &str,
+        auto_threshold: usize,
     ) -> PyResult<PyCalculationStats> {
+        let calc_mode = match mode {
+            "auto" => CalculationMode::Auto,
+            "exact" => CalculationMode::Exact,
+            "multipass" => CalculationMode::Multipass,
+            other => return Err(PyValueError::new_err(format!(
+                "Invalid calculation mode '{}': expected 'exact', 'multipass', or 'auto'",
+                other
+            ))),
+        };
         let mut wb = self.inner.write().map_err(to_py_err)?;
         let options = CalculationOptions {
             iterative,
             max_iterations,
             max_change,
+            mode: calc_mode,
+            auto_threshold,
             ..Default::default()
         };
         let stats = wb.calculate_with_options(&options).map_err(to_py_err)?;

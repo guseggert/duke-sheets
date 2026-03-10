@@ -104,6 +104,8 @@ fn test_string_values() {
         other => panic!("Expected String, got {other:?}"),
     }
 
+    // LO may save mixed-script strings as RichText (different fonts for
+    // ASCII vs CJK characters), so accept both String and RichText.
     let cell = sheet.cell_at(2, 0).expect("A3 should exist");
     match &cell.value {
         duke_sheets_core::CellValue::String(s) => {
@@ -112,7 +114,14 @@ fn test_string_values() {
                 "Expected Japanese text, got {s}"
             );
         }
-        other => panic!("Expected String, got {other:?}"),
+        duke_sheets_core::CellValue::RichText(runs) => {
+            let plain = duke_sheets_core::rich_text_to_plain(runs);
+            assert!(
+                plain.contains("\u{65e5}\u{672c}\u{8a9e}"),
+                "Expected Japanese text in RichText, got {plain}"
+            );
+        }
+        other => panic!("Expected String or RichText, got {other:?}"),
     }
 
     cleanup_fixture(&path);

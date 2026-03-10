@@ -148,18 +148,23 @@ fn to_csv(
     let mut workbook =
         Workbook::open(input).with_context(|| format!("Failed to open '{}'", input.display()))?;
 
-    // Calculate formulas if requested
+    // Calculate formulas if requested (only for the target sheet + its dependencies)
     if calculate {
         let stats = workbook
             .calculate_with_options(&CalculationOptions {
                 force_full_calculation: true,
+                sheets: vec![sheet_idx],
                 ..Default::default()
             })
             .context("Failed to calculate formulas")?;
 
         eprintln!(
-            "Calculated {} formulas ({} errors)",
-            stats.cells_calculated, stats.errors
+            "Calculated {} formulas in {} pass{} ({} errors{})",
+            stats.formula_count,
+            stats.iterations,
+            if stats.iterations == 1 { "" } else { "es" },
+            stats.errors,
+            if stats.converged { "" } else { ", did not converge" },
         );
     }
 
@@ -321,6 +326,7 @@ fn to_html(
         let stats = workbook
             .calculate_with_options(&CalculationOptions {
                 force_full_calculation: true,
+                sheets: vec![sheet_idx],
                 ..Default::default()
             })
             .context("Failed to calculate formulas")?;

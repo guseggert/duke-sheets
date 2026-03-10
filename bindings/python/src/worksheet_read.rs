@@ -469,6 +469,16 @@ impl PyWorksheet {
             .collect())
     }
 
+    /// Get the number of formula cells in this worksheet.
+    #[getter]
+    fn formula_count(&self) -> PyResult<u32> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws.formula_cells().count() as u32)
+    }
+
     fn is_spill_target(&self, row: u32, col: u32) -> PyResult<bool> {
         let wb = self.workbook.read().map_err(to_py_err)?;
         let ws = wb

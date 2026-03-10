@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
+use duke_sheets::{CalculationMode, CalculationOptions, WorkbookCalculationExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
@@ -473,12 +473,25 @@ impl Workbook {
         iterative: bool,
         max_iterations: u32,
         max_change: f64,
+        mode: &str,
+        auto_threshold: u32,
     ) -> Result<JsValue, JsError> {
+        let calc_mode = match mode {
+            "auto" => CalculationMode::Auto,
+            "exact" => CalculationMode::Exact,
+            "multipass" => CalculationMode::Multipass,
+            other => return Err(JsError::new(&format!(
+                "Invalid calculation mode '{}': expected 'exact', 'multipass', or 'auto'",
+                other
+            ))),
+        };
         let mut wb = self.inner.write().map_err(to_js_error)?;
         let options = CalculationOptions {
             iterative,
             max_iterations,
             max_change,
+            mode: calc_mode,
+            auto_threshold: auto_threshold as usize,
             ..Default::default()
         };
         let stats = wb.calculate_with_options(&options).map_err(to_js_error)?;

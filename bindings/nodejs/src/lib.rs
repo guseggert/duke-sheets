@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::{
-    CalculationOptions, CalculationStats as CoreCalculationStats, WorkbookCalculationExt,
+    CalculationMode, CalculationOptions, CalculationStats as CoreCalculationStats, WorkbookCalculationExt,
     WorkbookExt,
 };
 use duke_sheets_core::{
@@ -42,6 +42,18 @@ pub(crate) fn catch_panic<T>(f: impl FnOnce() -> napi::Result<T>) -> napi::Resul
             };
             Err(napi::Error::from_reason(format!("Internal error: {}", msg)))
         }
+    }
+}
+
+fn parse_calculation_mode(mode: Option<&str>) -> napi::Result<CalculationMode> {
+    match mode {
+        None | Some("auto") => Ok(CalculationMode::Auto),
+        Some("exact") => Ok(CalculationMode::Exact),
+        Some("multipass") => Ok(CalculationMode::Multipass),
+        Some(other) => Err(napi::Error::from_reason(format!(
+            "Invalid calculation mode '{}': expected 'exact', 'multipass', or 'auto'",
+            other
+        ))),
     }
 }
 
@@ -733,12 +745,16 @@ impl Workbook {
     /// @param iterative - Enable iterative calculation for circular references
     /// @param maxIterations - Maximum iterations (default 100)
     /// @param maxChange - Convergence threshold (default 0.001)
+    /// @param mode - Calculation mode: "exact", "multipass", or "auto" (default "auto")
+    /// @param autoThreshold - Formula count threshold for auto mode (default 50000)
     #[napi]
     pub fn calculate_with_options(
         &self,
         iterative: Option<bool>,
         max_iterations: Option<u32>,
         max_change: Option<f64>,
+        mode: Option<String>,
+        auto_threshold: Option<u32>,
     ) -> Result<CalculationStats> {
         catch_panic(|| {
             let mut wb = self.inner.write().map_err(to_napi_err)?;
@@ -746,6 +762,8 @@ impl Workbook {
                 iterative: iterative.unwrap_or(false),
                 max_iterations: max_iterations.unwrap_or(100),
                 max_change: max_change.unwrap_or(0.001),
+                mode: parse_calculation_mode(mode.as_deref())?,
+                auto_threshold: auto_threshold.unwrap_or(50_000) as usize,
                 ..Default::default()
             };
             let stats = wb.calculate_with_options(&options).map_err(to_napi_err)?;
@@ -932,15 +950,19 @@ impl Workbook {
         iterative: Option<bool>,
         max_iterations: Option<u32>,
         max_change: Option<f64>,
-    ) -> AsyncTask<CalculateTask> {
-        AsyncTask::new(CalculateTask {
+        mode: Option<String>,
+        auto_threshold: Option<u32>,
+    ) -> Result<AsyncTask<CalculateTask>> {
+        Ok(AsyncTask::new(CalculateTask {
             workbook: Arc::clone(&self.inner),
             options: Some(CalculationOptions {
                 iterative: iterative.unwrap_or(false),
                 max_iterations: max_iterations.unwrap_or(100),
                 max_change: max_change.unwrap_or(0.001),
+                mode: parse_calculation_mode(mode.as_deref())?,
+                auto_threshold: auto_threshold.unwrap_or(50_000) as usize,
                 ..Default::default()
             }),
-        })
+        }))
     }
 }

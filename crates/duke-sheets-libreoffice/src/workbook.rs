@@ -142,6 +142,12 @@ impl<'a> Workbook<'a> {
             .await
     }
 
+    /// Get a public sheet proxy typed as XCellRange (for external batch reading).
+    pub async fn get_sheet_proxy(&mut self, sheet_index: i32) -> Result<UnoProxy> {
+        self.get_sheet_proxy_as(sheet_index, type_names::X_CELL_RANGE)
+            .await
+    }
+
     /// Extract an interface OID from a return value, or error.
     fn require_oid(value: &UnoValue, context: &str) -> Result<String> {
         proxy::extract_oid_from_return(value)

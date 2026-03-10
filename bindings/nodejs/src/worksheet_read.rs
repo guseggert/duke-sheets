@@ -642,6 +642,18 @@ impl Worksheet {
         })
     }
 
+    /// Get the number of formula cells in this worksheet.
+    #[napi(getter)]
+    pub fn formula_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.formula_cells().count() as u32)
+        })
+    }
+
     /// Get all formula cells as an array of `{ row, col, formula }`.
     #[napi(getter)]
     pub fn formula_cells(&self) -> Result<Vec<JsFormulaCell>> {

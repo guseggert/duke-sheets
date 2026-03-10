@@ -134,6 +134,9 @@
 
 ## In Progress / Partial
 
+### Calculation Performance
+- [ ] Optimize formula calculation graph building and sheet-scoped execution (Tarjan SCC cycle detection, large-range dependency pruning, single-sheet CLI calculation)
+
 ### Workspace Build Compatibility
 - [x] Update remaining crates and tests for the `CellValue` formula side table and boxed rich text refactor so `cargo test --workspace` compiles
 

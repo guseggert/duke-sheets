@@ -297,9 +297,7 @@ impl XlsReader {
             }
 
             // Add the sheet to the workbook
-            workbook
-                .add_worksheet_with_name(&info.name)
-                .map_err(|e| XlsError::Core(e))?;
+            workbook.add_worksheet_with_name_unchecked(&info.name);
 
             let ws = workbook.worksheet_mut(wb_sheet_idx).unwrap();
             ws.set_date_1904(date_mode_1904);
@@ -2680,7 +2678,7 @@ impl XlsReader {
         };
 
         let rule_type = match ct {
-            1 => {
+            0 | 1 => {
                 // CellIs — map CP to CfOperator
                 let operator = match cp {
                     1 => CfOperator::Between,

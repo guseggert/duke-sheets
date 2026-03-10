@@ -535,6 +535,16 @@ impl Worksheet {
         to_js_value(&formulas)
     }
 
+    /// Get the number of formula cells in this worksheet.
+    #[wasm_bindgen(getter, js_name = formulaCount)]
+    pub fn formula_count(&self) -> Result<u32, JsError> {
+        let wb = self.workbook.read().map_err(to_js_error)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws.formula_cells().count() as u32)
+    }
+
     #[wasm_bindgen(js_name = isSpillTarget)]
     pub fn is_spill_target(&self, row: u32, col: u32) -> Result<bool, JsError> {
         let wb = self.workbook.read().map_err(to_js_error)?;

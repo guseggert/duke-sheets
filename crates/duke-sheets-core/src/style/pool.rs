@@ -113,7 +113,7 @@ impl Default for StylePool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::{Color, FillStyle};
+    use crate::style::{Color, FillStyle, fill::{GradientStop, PatternType}};
 
     #[test]
     fn test_default_style() {
@@ -152,5 +152,73 @@ mod tests {
         let idx = pool.get_or_insert(style.clone());
         assert!(idx > 0);
         assert_eq!(pool.get(idx), Some(&style));
+    }
+
+    #[test]
+    fn test_fill_style_deduplication() {
+        let mut pool = StylePool::new();
+
+        // Two styles that differ only by fill type
+        let solid = Style::new().fill_color(Color::RED);
+        let mut pattern = Style::new();
+        *pattern.fill_mut() = FillStyle::pattern(
+            PatternType::DarkGray,
+            Color::RED,
+            Color::rgb(0, 0, 255),
+        );
+
+        let idx_solid = pool.get_or_insert(solid.clone());
+        let idx_pattern = pool.get_or_insert(pattern.clone());
+        assert_ne!(idx_solid, idx_pattern, "different fills must get different indices");
+
+        // Same pattern fill deduplicates
+        let mut pattern2 = Style::new();
+        *pattern2.fill_mut() = FillStyle::pattern(
+            PatternType::DarkGray,
+            Color::RED,
+            Color::rgb(0, 0, 255),
+        );
+        let idx_pattern2 = pool.get_or_insert(pattern2);
+        assert_eq!(idx_pattern, idx_pattern2, "identical pattern fills must deduplicate");
+    }
+
+    #[test]
+    fn test_gradient_fill_deduplication() {
+        let mut pool = StylePool::new();
+
+        let mut style1 = Style::new();
+        *style1.fill_mut() = FillStyle::linear_gradient(
+            90.0,
+            vec![
+                GradientStop::new(0.0, Color::RED),
+                GradientStop::new(1.0, Color::rgb(0, 0, 255)),
+            ],
+        );
+
+        let mut style2 = Style::new();
+        *style2.fill_mut() = FillStyle::linear_gradient(
+            90.0,
+            vec![
+                GradientStop::new(0.0, Color::RED),
+                GradientStop::new(1.0, Color::rgb(0, 0, 255)),
+            ],
+        );
+
+        // Same gradient deduplicates
+        let idx1 = pool.get_or_insert(style1);
+        let idx2 = pool.get_or_insert(style2);
+        assert_eq!(idx1, idx2, "identical gradients must deduplicate");
+
+        // Different angle → different index
+        let mut style3 = Style::new();
+        *style3.fill_mut() = FillStyle::linear_gradient(
+            45.0,
+            vec![
+                GradientStop::new(0.0, Color::RED),
+                GradientStop::new(1.0, Color::rgb(0, 0, 255)),
+            ],
+        );
+        let idx3 = pool.get_or_insert(style3);
+        assert_ne!(idx1, idx3, "different gradient angles must get different indices");
     }
 }

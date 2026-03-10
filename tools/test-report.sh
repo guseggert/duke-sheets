@@ -1,15 +1,34 @@
 #!/bin/bash
-# Run all Rust tests and print a per-crate summary report.
-# Usage: mise run test:report
-#        bash tools/test-report.sh
+# Run unit/lib/doc Rust tests and print a per-crate summary report.
+# Skips e2e tests (LO/COM) and corpus tests by default.
+# Use 'mise run test:all' or 'mise run test:e2e' for e2e coverage.
 set -euo pipefail
 
 mkdir -p /tmp/duke-sheets-urp /tmp/duke-sheets-excel
 
-OUTPUT=$(cargo test --workspace 2>&1) || true
+LOGFILE=$(mktemp /tmp/duke-sheets-test-report.XXXXXX)
+trap 'rm -f "$LOGFILE"' EXIT
 
-echo "$OUTPUT"
-echo "$OUTPUT"
+# Helper: run a command, tee live to stdout, append to log.
+run() { "$@" 2>&1 | tee -a "$LOGFILE"; }
+
+# Phase 1: Unit tests, doc-tests, and non-e2e integration tests.
+# Exclude crates whose test targets need external services or corpus
+# data — those deadlock or take too long for a quick report.
+#   - duke-sheets-xlsx/xls/excel-com/libreoffice: e2e needs LO/COM
+#   - duke-sheets: corpus tests are slow and need excel_samples/
+run cargo test --workspace \
+    --exclude duke-sheets \
+    --exclude duke-sheets-xlsx \
+    --exclude duke-sheets-xls \
+    --exclude duke-sheets-excel-com \
+    --exclude duke-sheets-libreoffice || true
+
+# Still run the unit tests (--lib) for the excluded crates.
+for pkg in duke-sheets duke-sheets-xlsx duke-sheets-xls duke-sheets-excel-com duke-sheets-libreoffice; do
+    run cargo test -p "$pkg" --lib || true
+done
+
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  TEST REPORT"
@@ -52,7 +71,7 @@ while IFS= read -r line; do
             echo ""
         fi
     fi
-done <<< "$OUTPUT"
+done < "$LOGFILE"
 
 echo ""
 echo "───────────────────────────────────────────────────────────"
