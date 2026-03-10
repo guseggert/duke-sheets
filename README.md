@@ -16,10 +16,10 @@ A Rust library for reading, writing, and manipulating Excel spreadsheets with fu
 Install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases):
 
 ```bash
-npm install https://github.com/guseggert/duke-sheets/releases/download/node-v0.1.0/duke-sheets-node-0.1.0.tgz
+npm install https://github.com/guseggert/duke-sheets/releases/download/node-v0.1.0/dukelib-sheets-0.1.0.tgz
 ```
 ```typescript
-import { Workbook } from '@duke-sheets/node';
+import { Workbook } from '@dukelib/sheets';
 
 const wb = new Workbook();
 const sheet = wb.getSheet(0);
@@ -45,7 +45,7 @@ const wb3 = Workbook.fromCsvString('a,b,c\n1,2,3');
 Async versions run on the libuv thread pool so the event loop stays free:
 
 ```typescript
-import { openAsync } from '@duke-sheets/node';
+import { openAsync } from '@dukelib/sheets';
 
 const wb = await openAsync('large-file.xlsx');
 await wb.calculateAsync();
@@ -109,17 +109,17 @@ Install from a [GitHub release](https://github.com/guseggert/duke-sheets/release
 
 ```bash
 # For webpack/vite (bundler target)
-npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/duke-sheets-wasm-bundler.tgz
+npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/dukelib-sheets-wasm-bundler.tgz
 
 # For <script type="module"> (web target)
-npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/duke-sheets-wasm-web.tgz
+npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/dukelib-sheets-wasm-web.tgz
 
 # For Node.js via WASM
-npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/duke-sheets-wasm-nodejs.tgz
+npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/dukelib-sheets-wasm-nodejs.tgz
 ```
 
 ```javascript
-import { Workbook } from 'duke-sheets-wasm';
+import { Workbook } from '@dukelib/sheets-wasm';
 
 const wb = new Workbook();
 const sheet = wb.getSheet(0);

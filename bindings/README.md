@@ -162,7 +162,7 @@ npm run build:debug        # Build native addon (debug)
 npm test                   # Run tests (119 tests)
 ```
 
-### Package: `@duke-sheets/node`
+### Package: `@dukelib/sheets`
 
 - **Async API**: `openAsync()`, `calculateAsync()`, `saveAsync()` — run on libuv thread pool
 - **Read-only accessors**: 50+ methods for inspecting styles, comments, hyperlinks, tables, etc.
@@ -321,7 +321,7 @@ bindings/
 │       └── test_calculation.py
 ├── nodejs/
 │   ├── Cargo.toml      # Rust crate config
-│   ├── package.json    # @duke-sheets/node package config
+│   ├── package.json    # @dukelib/sheets package config
 │   ├── build.rs        # napi-build setup
 │   ├── src/
 │   │   ├── lib.rs      # NAPI-RS bindings + async tasks

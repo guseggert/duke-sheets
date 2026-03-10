@@ -16,6 +16,7 @@ env:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build:
@@ -134,8 +135,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          registry-url: https://registry.npmjs.org
 
       - run: npm install
+
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
 
       - run: npx napi create-npm-dirs
 
@@ -145,6 +150,9 @@ jobs:
 
       - name: Move artifacts into platform packages
         run: npx napi artifacts
+
+      - name: Prepare npm packages
+        run: npx napi prepublish -t npm --skip-gh-release
 
       - name: List packages
         run: |
@@ -169,3 +177,12 @@ jobs:
             bindings/nodejs/npm/*/*.tgz
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
+
+      - name: Publish to npm
+        run: |
+          for dir in npm/*/; do
+            (cd "$dir" && npm publish --access public --provenance)
+          done
+          npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

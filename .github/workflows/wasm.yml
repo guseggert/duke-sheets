@@ -16,6 +16,7 @@ env:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build:
@@ -50,19 +51,27 @@ jobs:
         run: wasm-pack build --release --target nodejs --out-dir pkg-nodejs
         working-directory: ${{ env.WORKING_DIR }}
 
+      - name: Rename packages to @dukelib/sheets-wasm
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          for dir in pkg-bundler pkg-web pkg-nodejs; do
+            jq '.name = "@dukelib/sheets-wasm"' "$dir/package.json" > "$dir/package.json.tmp"
+            mv "$dir/package.json.tmp" "$dir/package.json"
+          done
+
       # Pack each target as an npm-compatible tarball
       - name: Pack tarballs
         working-directory: ${{ env.WORKING_DIR }}
         run: |
-          cd pkg-bundler && npm pack && mv *.tgz ../duke-sheets-wasm-bundler.tgz && cd ..
-          cd pkg-web     && npm pack && mv *.tgz ../duke-sheets-wasm-web.tgz     && cd ..
-          cd pkg-nodejs  && npm pack && mv *.tgz ../duke-sheets-wasm-nodejs.tgz  && cd ..
+          cd pkg-bundler && npm pack && mv *.tgz ../dukelib-sheets-wasm-bundler.tgz && cd ..
+          cd pkg-web     && npm pack && mv *.tgz ../dukelib-sheets-wasm-web.tgz     && cd ..
+          cd pkg-nodejs  && npm pack && mv *.tgz ../dukelib-sheets-wasm-nodejs.tgz  && cd ..
 
       - uses: actions/upload-artifact@v4
         with:
           name: wasm-packages
           path: |
-            ${{ env.WORKING_DIR }}/duke-sheets-wasm-*.tgz
+            ${{ env.WORKING_DIR }}/dukelib-sheets-wasm-*.tgz
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -104,6 +113,14 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
+
       - uses: actions/download-artifact@v4
         with:
           name: wasm-packages
@@ -118,6 +135,15 @@ jobs:
           files: dist/*
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
+
+      - name: Publish to npm
+        run: |
+          # Publish the bundler target as the default package
+          cd dist
+          tar xzf dukelib-sheets-wasm-bundler.tgz
+          cd package && npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   deploy-pages:
     name: Deploy to GitHub Pages
