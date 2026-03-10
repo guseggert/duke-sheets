@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
+use duke_sheets::{CalculationMode, CalculationOptions, WorkbookCalculationExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
@@ -97,11 +97,6 @@ impl CellValue {
         matches!(self.inner, CoreCellValue::Error(_))
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn is_formula(&self) -> bool {
-        matches!(self.inner, CoreCellValue::Formula { .. })
-    }
-
     #[wasm_bindgen(js_name = asNumber)]
     pub fn as_number(&self) -> Option<f64> {
         match &self.inner {
@@ -134,14 +129,6 @@ impl CellValue {
         }
     }
 
-    #[wasm_bindgen(js_name = formulaText)]
-    pub fn formula_text(&self) -> Option<String> {
-        match &self.inner {
-            CoreCellValue::Formula { text, .. } => Some(text.clone()),
-            _ => None,
-        }
-    }
-
     #[wasm_bindgen(js_name = toJs)]
     pub fn to_js(&self) -> JsValue {
         match &self.inner {
@@ -150,17 +137,6 @@ impl CellValue {
             CoreCellValue::String(s) => JsValue::from_str(&s.to_string()),
             CoreCellValue::Boolean(b) => JsValue::from_bool(*b),
             CoreCellValue::Error(e) => JsValue::from_str(cell_error_to_string(e)),
-            CoreCellValue::Formula {
-                cached_value: Some(v),
-                ..
-            } => match v.as_ref() {
-                CoreCellValue::Number(n) => JsValue::from_f64(*n),
-                CoreCellValue::String(s) => JsValue::from_str(&s.to_string()),
-                CoreCellValue::Boolean(b) => JsValue::from_bool(*b),
-                CoreCellValue::Error(e) => JsValue::from_str(cell_error_to_string(e)),
-                _ => JsValue::NULL,
-            },
-            CoreCellValue::Formula { text, .. } => JsValue::from_str(text),
             CoreCellValue::RichText(runs) => {
                 let text: String = runs.iter().map(|r| r.text.as_str()).collect();
                 JsValue::from_str(&text)
@@ -177,7 +153,6 @@ impl CellValue {
             CoreCellValue::String(s) => s.to_string(),
             CoreCellValue::Boolean(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
             CoreCellValue::Error(e) => cell_error_to_string(e).to_string(),
-            CoreCellValue::Formula { text, .. } => text.clone(),
             CoreCellValue::RichText(runs) => runs.iter().map(|r| r.text.as_str()).collect(),
             CoreCellValue::SpillTarget { .. } => String::new(),
         }
@@ -498,12 +473,25 @@ impl Workbook {
         iterative: bool,
         max_iterations: u32,
         max_change: f64,
+        mode: &str,
+        auto_threshold: u32,
     ) -> Result<JsValue, JsError> {
+        let calc_mode = match mode {
+            "auto" => CalculationMode::Auto,
+            "exact" => CalculationMode::Exact,
+            "multipass" => CalculationMode::Multipass,
+            other => return Err(JsError::new(&format!(
+                "Invalid calculation mode '{}': expected 'exact', 'multipass', or 'auto'",
+                other
+            ))),
+        };
         let mut wb = self.inner.write().map_err(to_js_error)?;
         let options = CalculationOptions {
             iterative,
             max_iterations,
             max_change,
+            mode: calc_mode,
+            auto_threshold: auto_threshold as usize,
             ..Default::default()
         };
         let stats = wb.calculate_with_options(&options).map_err(to_js_error)?;

@@ -1,6 +1,6 @@
 //! XLSX writer — generates OOXML SpreadsheetML using quick-xml Writer API.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Cursor, Seek, Write};
 use std::path::Path;
@@ -991,14 +991,18 @@ impl XlsxWriter {
 
     fn has_dynamic_arrays(workbook: &Workbook) -> bool {
         for sheet in workbook.worksheets() {
+            for (row, col, _) in sheet.formula_cells() {
+                if sheet
+                    .formula_data_at(row, col)
+                    .and_then(|formula| formula.array_result.as_ref())
+                    .is_some()
+                {
+                    return true;
+                }
+            }
             for (_, _, cell) in sheet.iter_cells() {
-                match &cell.value {
-                    duke_sheets_core::CellValue::Formula {
-                        array_result: Some(_),
-                        ..
-                    } => return true,
-                    duke_sheets_core::CellValue::SpillTarget { .. } => return true,
-                    _ => {}
+                if matches!(&cell.value, duke_sheets_core::CellValue::SpillTarget { .. }) {
+                    return true;
                 }
             }
         }
@@ -1462,12 +1466,11 @@ impl XlsxWriter {
     ) -> XlsxResult<()> {
         w.write_event(Event::Start(BytesStart::new("sheetData")))?;
 
-        // Metadata-only rows (custom height / hidden, no cells).
         let custom_heights = sheet.custom_row_heights();
         let hidden_rows_map = sheet.hidden_rows();
         let row_outline = sheet.row_outline_levels();
         let row_collapsed = sheet.collapsed_rows();
-        let mut meta_only_rows: std::collections::BTreeSet<u32> = Default::default();
+        let mut meta_only_rows: BTreeSet<u32> = Default::default();
         for &r in custom_heights.keys() {
             meta_only_rows.insert(r);
         }
@@ -1481,80 +1484,114 @@ impl XlsxWriter {
             meta_only_rows.insert(r);
         }
 
-        let mut meta_iter = meta_only_rows.iter().copied().peekable();
-        let mut current_row: Option<u32> = None;
-        let mut written_rows: std::collections::HashSet<u32> = Default::default();
+        let mut row_cells: BTreeMap<u32, BTreeSet<u16>> = BTreeMap::new();
+        for (row, col, _) in sheet.iter_cells() {
+            row_cells.entry(row).or_default().insert(col);
+        }
 
-        for (row, col, cell) in sheet.iter_cells() {
-            if current_row != Some(row) {
-                // Close previous row
-                if current_row.is_some() {
-                    w.write_event(Event::End(BytesEnd::new("row")))?;
-                }
-
-                // Emit metadata-only rows that come before this data row
-                while let Some(&mr) = meta_iter.peek() {
-                    if mr >= row {
-                        break;
-                    }
-                    if !written_rows.contains(&mr) {
-                        Self::write_meta_row(
-                            w,
-                            mr,
-                            custom_heights.get(&mr).copied(),
-                            hidden_rows_map.get(&mr).copied().unwrap_or(false),
-                            row_outline.get(&mr).copied().unwrap_or(0),
-                            row_collapsed.get(&mr).copied().unwrap_or(false),
-                        )?;
-                        written_rows.insert(mr);
-                    }
-                    meta_iter.next();
-                }
-
-                // Open new row
-                let r = (row + 1).to_string();
-                let mut row_tag = BytesStart::new("row");
-                row_tag.push_attribute(("r", r.as_str()));
-                if let Some(&ht) = custom_heights.get(&row) {
-                    let ht_s = format!("{:.2}", ht);
-                    row_tag.push_attribute(("ht", ht_s.as_str()));
-                    row_tag.push_attribute(("customHeight", "1"));
-                }
-                if sheet.is_row_hidden(row) {
-                    row_tag.push_attribute(("hidden", "1"));
-                }
-                let row_outline_level = row_outline.get(&row).copied().unwrap_or(0);
-                if row_outline_level > 0 {
-                    let s = row_outline_level.to_string();
-                    row_tag.push_attribute(("outlineLevel", s.as_str()));
-                }
-                if row_collapsed.get(&row).copied().unwrap_or(false) {
-                    row_tag.push_attribute(("collapsed", "1"));
-                }
-                w.write_event(Event::Start(row_tag))?;
-                current_row = Some(row);
-                written_rows.insert(row);
+        let mut formula_only_cells: BTreeMap<u32, BTreeSet<u16>> = BTreeMap::new();
+        for (row, col, _) in sheet.formula_cells() {
+            if sheet.cell_at(row, col).is_none() {
+                formula_only_cells.entry(row).or_default().insert(col);
             }
-
-            Self::write_cell(w, row, col, cell, sheet_index, style_table, sst, sheet)?;
         }
 
-        if current_row.is_some() {
-            w.write_event(Event::End(BytesEnd::new("row")))?;
-        }
+        let mut all_rows = meta_only_rows.clone();
+        all_rows.extend(row_cells.keys().copied());
+        all_rows.extend(formula_only_cells.keys().copied());
 
-        // Emit remaining metadata-only rows after all data rows
-        for mr in meta_iter {
-            if !written_rows.contains(&mr) {
+        for row in all_rows {
+            let grid_cols = row_cells.get(&row);
+            let formula_only_cols = formula_only_cells.get(&row);
+            if grid_cols.is_none() && formula_only_cols.is_none() {
                 Self::write_meta_row(
                     w,
-                    mr,
-                    custom_heights.get(&mr).copied(),
-                    hidden_rows_map.get(&mr).copied().unwrap_or(false),
-                    row_outline.get(&mr).copied().unwrap_or(0),
-                    row_collapsed.get(&mr).copied().unwrap_or(false),
+                    row,
+                    custom_heights.get(&row).copied(),
+                    hidden_rows_map.get(&row).copied().unwrap_or(false),
+                    row_outline.get(&row).copied().unwrap_or(0),
+                    row_collapsed.get(&row).copied().unwrap_or(false),
                 )?;
+                continue;
             }
+
+            let r = (row + 1).to_string();
+            let mut row_tag = BytesStart::new("row");
+            row_tag.push_attribute(("r", r.as_str()));
+            if let Some(&ht) = custom_heights.get(&row) {
+                let ht_s = format!("{:.2}", ht);
+                row_tag.push_attribute(("ht", ht_s.as_str()));
+                row_tag.push_attribute(("customHeight", "1"));
+            }
+            if sheet.is_row_hidden(row) {
+                row_tag.push_attribute(("hidden", "1"));
+            }
+            let row_outline_level = row_outline.get(&row).copied().unwrap_or(0);
+            if row_outline_level > 0 {
+                let s = row_outline_level.to_string();
+                row_tag.push_attribute(("outlineLevel", s.as_str()));
+            }
+            if row_collapsed.get(&row).copied().unwrap_or(false) {
+                row_tag.push_attribute(("collapsed", "1"));
+            }
+            w.write_event(Event::Start(row_tag))?;
+
+            let empty_cell = duke_sheets_core::CellData::empty();
+            match (grid_cols, formula_only_cols) {
+                (Some(cols), None) | (None, Some(cols)) => {
+                    for col in cols {
+                        let cell = sheet.cell_at(row, *col).unwrap_or(&empty_cell);
+                        Self::write_cell(w, row, *col, cell, sheet_index, style_table, sst, sheet)?;
+                    }
+                }
+                (Some(grid_cols), Some(formula_only_cols)) => {
+                    let mut grid_iter = grid_cols.iter().peekable();
+                    let mut formula_iter = formula_only_cols.iter().peekable();
+
+                    loop {
+                        let next_col =
+                            match (grid_iter.peek().copied(), formula_iter.peek().copied()) {
+                                (Some(&grid_col), Some(&formula_col)) if grid_col < formula_col => {
+                                    grid_iter.next();
+                                    grid_col
+                                }
+                                (Some(&grid_col), Some(&formula_col)) if formula_col < grid_col => {
+                                    formula_iter.next();
+                                    formula_col
+                                }
+                                (Some(&grid_col), Some(_)) => {
+                                    grid_iter.next();
+                                    formula_iter.next();
+                                    grid_col
+                                }
+                                (Some(&grid_col), None) => {
+                                    grid_iter.next();
+                                    grid_col
+                                }
+                                (None, Some(&formula_col)) => {
+                                    formula_iter.next();
+                                    formula_col
+                                }
+                                (None, None) => break,
+                            };
+
+                        let cell = sheet.cell_at(row, next_col).unwrap_or(&empty_cell);
+                        Self::write_cell(
+                            w,
+                            row,
+                            next_col,
+                            cell,
+                            sheet_index,
+                            style_table,
+                            sst,
+                            sheet,
+                        )?;
+                    }
+                }
+                (None, None) => unreachable!(),
+            }
+
+            w.write_event(Event::End(BytesEnd::new("row")))?;
         }
 
         w.write_event(Event::End(BytesEnd::new("sheetData")))?;
@@ -1608,6 +1645,60 @@ impl XlsxWriter {
         let xf_id = style_table.xf_id_for(sheet_index, cell.style_index);
         let xf_str = xf_id.to_string();
 
+        if let Some(formula) = worksheet.formula_data_at(row, col) {
+            let formula_text = if formula.text.starts_with('=') {
+                &formula.text[1..]
+            } else {
+                formula.text.as_str()
+            };
+            let mut c = BytesStart::new("c");
+            c.push_attribute(("r", cell_ref.as_str()));
+            if xf_id != 0 {
+                c.push_attribute(("s", xf_str.as_str()));
+            }
+            match &cell.value {
+                duke_sheets_core::CellValue::String(_)
+                | duke_sheets_core::CellValue::RichText(_) => c.push_attribute(("t", "str")),
+                duke_sheets_core::CellValue::Boolean(_) => c.push_attribute(("t", "b")),
+                duke_sheets_core::CellValue::Error(_) => c.push_attribute(("t", "e")),
+                _ => {}
+            }
+            if formula.array_result.is_some() {
+                c.push_attribute(("cm", "1"));
+            }
+            w.write_event(Event::Start(c))?;
+            w.create_element("f")
+                .write_text_content(BytesText::new(formula_text))?;
+            match &cell.value {
+                duke_sheets_core::CellValue::Number(n) => {
+                    let v = n.to_string();
+                    w.create_element("v")
+                        .write_text_content(BytesText::new(&v))?;
+                }
+                duke_sheets_core::CellValue::String(s) => {
+                    w.create_element("v")
+                        .write_text_content(BytesText::new(s.as_str()))?;
+                }
+                duke_sheets_core::CellValue::RichText(runs) => {
+                    let text = duke_sheets_core::rich_text_to_plain(runs);
+                    w.create_element("v")
+                        .write_text_content(BytesText::new(&text))?;
+                }
+                duke_sheets_core::CellValue::Boolean(b) => {
+                    w.create_element("v")
+                        .write_text_content(BytesText::new(if *b { "1" } else { "0" }))?;
+                }
+                duke_sheets_core::CellValue::Error(e) => {
+                    w.create_element("v")
+                        .write_text_content(BytesText::new(e.as_str()))?;
+                }
+                duke_sheets_core::CellValue::Empty
+                | duke_sheets_core::CellValue::SpillTarget { .. } => {}
+            }
+            w.write_event(Event::End(BytesEnd::new("c")))?;
+            return Ok(());
+        }
+
         match &cell.value {
             duke_sheets_core::CellValue::Number(n) => {
                 let mut c = BytesStart::new("c");
@@ -1654,63 +1745,6 @@ impl XlsxWriter {
                 w.write_event(Event::Start(c))?;
                 w.create_element("v")
                     .write_text_content(BytesText::new(if *b { "1" } else { "0" }))?;
-                w.write_event(Event::End(BytesEnd::new("c")))?;
-            }
-            duke_sheets_core::CellValue::Formula {
-                text,
-                cached_value,
-                array_result,
-            } => {
-                let formula_text = if text.starts_with('=') {
-                    &text[1..]
-                } else {
-                    text.as_str()
-                };
-                let mut c = BytesStart::new("c");
-                c.push_attribute(("r", cell_ref.as_str()));
-                if xf_id != 0 {
-                    c.push_attribute(("s", xf_str.as_str()));
-                }
-                // Determine type attribute from cached value
-                match cached_value.as_deref() {
-                    Some(duke_sheets_core::CellValue::String(_)) => {
-                        c.push_attribute(("t", "str"));
-                    }
-                    Some(duke_sheets_core::CellValue::Boolean(_)) => {
-                        c.push_attribute(("t", "b"));
-                    }
-                    Some(duke_sheets_core::CellValue::Error(_)) => {
-                        c.push_attribute(("t", "e"));
-                    }
-                    _ => {}
-                }
-                if array_result.is_some() {
-                    c.push_attribute(("cm", "1"));
-                }
-                w.write_event(Event::Start(c))?;
-                w.create_element("f")
-                    .write_text_content(BytesText::new(formula_text))?;
-                // Write cached value
-                match cached_value.as_deref() {
-                    Some(duke_sheets_core::CellValue::Number(n)) => {
-                        let v = n.to_string();
-                        w.create_element("v")
-                            .write_text_content(BytesText::new(&v))?;
-                    }
-                    Some(duke_sheets_core::CellValue::String(s)) => {
-                        w.create_element("v")
-                            .write_text_content(BytesText::new(s.as_str()))?;
-                    }
-                    Some(duke_sheets_core::CellValue::Boolean(b)) => {
-                        w.create_element("v")
-                            .write_text_content(BytesText::new(if *b { "1" } else { "0" }))?;
-                    }
-                    Some(duke_sheets_core::CellValue::Error(e)) => {
-                        w.create_element("v")
-                            .write_text_content(BytesText::new(e.as_str()))?;
-                    }
-                    _ => {}
-                }
                 w.write_event(Event::End(BytesEnd::new("c")))?;
             }
             duke_sheets_core::CellValue::Error(e) => {

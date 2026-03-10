@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::prelude::*;
+use duke_sheets::CalculationMode;
 use duke_sheets_core::{CellError, CellValue as CoreCellValue};
 
 mod types;
@@ -48,7 +49,7 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
 /// - Text (str)
 /// - Boolean (bool)
 /// - Error (str like "#DIV/0!")
-/// - Formula (has formula text and calculated result)
+/// - Formula cached results are exposed as regular cell values; formula text lives on Worksheet accessors
 #[pyclass(name = "CellValue")]
 #[derive(Clone)]
 pub struct PyCellValue {
@@ -87,12 +88,6 @@ impl PyCellValue {
         matches!(self.inner, CoreCellValue::Error(_))
     }
 
-    /// Check if the cell contains a formula
-    #[getter]
-    fn is_formula(&self) -> bool {
-        matches!(self.inner, CoreCellValue::Formula { .. })
-    }
-
     /// Get the value as a number, or None if not a number
     fn as_number(&self) -> Option<f64> {
         match &self.inner {
@@ -125,14 +120,6 @@ impl PyCellValue {
         }
     }
 
-    /// Get the formula text, or None if not a formula
-    fn formula_text(&self) -> Option<String> {
-        match &self.inner {
-            CoreCellValue::Formula { text, .. } => Some(text.clone()),
-            _ => None,
-        }
-    }
-
     /// Convert to a Python object (None, float, str, bool)
     fn to_python(&self, py: Python<'_>) -> PyObject {
         match &self.inner {
@@ -141,7 +128,6 @@ impl PyCellValue {
             CoreCellValue::String(s) => s.to_string().into_py(py),
             CoreCellValue::Boolean(b) => b.into_py(py),
             CoreCellValue::Error(e) => cell_error_to_string(e).into_py(py),
-            CoreCellValue::Formula { text, .. } => text.into_py(py),
             CoreCellValue::RichText(runs) => runs
                 .iter()
                 .map(|r| r.text.as_str())
@@ -158,7 +144,6 @@ impl PyCellValue {
             CoreCellValue::String(s) => format!("CellValue(Text({:?}))", s.to_string()),
             CoreCellValue::Boolean(b) => format!("CellValue(Boolean({}))", b),
             CoreCellValue::Error(e) => format!("CellValue(Error({}))", cell_error_to_string(e)),
-            CoreCellValue::Formula { text, .. } => format!("CellValue(Formula({:?}))", text),
             CoreCellValue::RichText(runs) => {
                 let text = runs.iter().map(|r| r.text.as_str()).collect::<String>();
                 format!("CellValue(RichText({:?}))", text)
@@ -174,7 +159,6 @@ impl PyCellValue {
             CoreCellValue::String(s) => s.to_string(),
             CoreCellValue::Boolean(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
             CoreCellValue::Error(e) => cell_error_to_string(e).to_string(),
-            CoreCellValue::Formula { text, .. } => text.clone(),
             CoreCellValue::RichText(runs) => runs.iter().map(|r| r.text.as_str()).collect(),
             CoreCellValue::SpillTarget { .. } => "".to_string(),
         }
@@ -632,18 +616,31 @@ impl PyWorkbook {
     ///
     /// Returns:
     ///     CalculationStats with information about the calculation
-    #[pyo3(signature = (iterative = false, max_iterations = 100, max_change = 0.001))]
+    #[pyo3(signature = (iterative = false, max_iterations = 100, max_change = 0.001, mode = "auto", auto_threshold = 50_000))]
     fn calculate_with_options(
         &self,
         iterative: bool,
         max_iterations: u32,
         max_change: f64,
+        mode: &str,
+        auto_threshold: usize,
     ) -> PyResult<PyCalculationStats> {
+        let calc_mode = match mode {
+            "auto" => CalculationMode::Auto,
+            "exact" => CalculationMode::Exact,
+            "multipass" => CalculationMode::Multipass,
+            other => return Err(PyValueError::new_err(format!(
+                "Invalid calculation mode '{}': expected 'exact', 'multipass', or 'auto'",
+                other
+            ))),
+        };
         let mut wb = self.inner.write().map_err(to_py_err)?;
         let options = CalculationOptions {
             iterative,
             max_iterations,
             max_change,
+            mode: calc_mode,
+            auto_threshold,
             ..Default::default()
         };
         let stats = wb.calculate_with_options(&options).map_err(to_py_err)?;

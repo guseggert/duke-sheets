@@ -27,16 +27,8 @@ fn test_roundtrip_no_repair() {
         sheet.set_cell_value("A1", "Hello").unwrap();
         sheet.set_cell_value("A2", 42.0).unwrap();
         sheet.set_cell_value("A3", true).unwrap();
-        sheet
-            .set_cell_value(
-                "A4",
-                CellValue::Formula {
-                    text: "=1+1".into(),
-                    cached_value: Some(Box::new(CellValue::Number(2.0))),
-                    array_result: None,
-                },
-            )
-            .unwrap();
+        sheet.set_cell_value("A4", CellValue::Number(2.0)).unwrap();
+        sheet.set_cell_formula("A4", "=1+1").unwrap();
 
         // Styled cell: bold, red font, yellow fill
         let bold_style = Style::new()

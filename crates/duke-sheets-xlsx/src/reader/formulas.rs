@@ -281,7 +281,7 @@ mod tests {
     use std::io::{Cursor, Write};
 
     use crate::reader::XlsxReader;
-    use duke_sheets_core::CellValue;
+    use duke_sheets_core::{CellAddress, CellValue};
 
     fn build_single_sheet_xlsx(sheet_xml: &str) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -311,6 +311,22 @@ mod tests {
         buf
     }
 
+    fn formula_text_at<'a>(
+        sheet: &'a duke_sheets_core::Worksheet,
+        address: &str,
+    ) -> Option<&'a str> {
+        let addr = CellAddress::parse(address).unwrap();
+        sheet.get_formula_at(addr.row, addr.col)
+    }
+
+    fn is_array_formula_at(sheet: &duke_sheets_core::Worksheet, address: &str) -> bool {
+        let addr = CellAddress::parse(address).unwrap();
+        sheet
+            .formula_data_at(addr.row, addr.col)
+            .map(|formula| formula.is_array_formula())
+            .unwrap_or(false)
+    }
+
     #[test]
     fn test_read_shared_formula_master_and_follower() {
         let sheet_xml = r#"<?xml version="1.0"?>
@@ -333,14 +349,8 @@ mod tests {
         let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let sheet = workbook.worksheet(0).unwrap();
 
-        assert_eq!(
-            sheet.get_value("C1").unwrap().formula_text(),
-            Some("=A1+B1")
-        );
-        assert_eq!(
-            sheet.get_value("C2").unwrap().formula_text(),
-            Some("=A2+B2")
-        );
+        assert_eq!(formula_text_at(sheet, "C1"), Some("=A1+B1"));
+        assert_eq!(formula_text_at(sheet, "C2"), Some("=A2+B2"));
     }
 
     #[test]
@@ -366,11 +376,11 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
 
         assert_eq!(
-            sheet.get_value("D1").unwrap().formula_text(),
+            formula_text_at(sheet, "D1"),
             Some("=SUM($A$1:B1)+LEN(\"A1\")")
         );
         assert_eq!(
-            sheet.get_value("D2").unwrap().formula_text(),
+            formula_text_at(sheet, "D2"),
             Some("=SUM($A$1:B2)+LEN(\"A1\")")
         );
     }
@@ -394,14 +404,17 @@ mod tests {
 
         // Anchor cell: has formula, array_result populated
         let a1 = sheet.get_value("A1").unwrap();
-        assert_eq!(a1.formula_text(), Some("=ROW(A1:A3)"));
-        assert!(a1.is_array_formula(), "A1 should be an array formula");
+        assert_eq!(formula_text_at(sheet, "A1"), Some("=ROW(A1:A3)"));
+        assert!(
+            is_array_formula_at(sheet, "A1"),
+            "A1 should be an array formula"
+        );
         assert_eq!(a1.as_number(), Some(1.0));
 
         // Non-anchor cells: replicated formula with their own cached values
         let a2 = sheet.get_value("A2").unwrap();
         assert_eq!(
-            a2.formula_text(),
+            formula_text_at(sheet, "A2"),
             Some("=ROW(A1:A3)"),
             "A2 should have the array formula"
         );
@@ -409,7 +422,7 @@ mod tests {
 
         let a3 = sheet.get_value("A3").unwrap();
         assert_eq!(
-            a3.formula_text(),
+            formula_text_at(sheet, "A3"),
             Some("=ROW(A1:A3)"),
             "A3 should have the array formula"
         );
@@ -439,24 +452,18 @@ mod tests {
 
         // Anchor has array_result with all 4 values
         let a1 = sheet.get_value("A1").unwrap();
-        assert!(a1.is_array_formula(), "A1 should have array_result");
+        assert!(
+            is_array_formula_at(sheet, "A1"),
+            "A1 should have array_result"
+        );
         assert_eq!(a1.as_number(), Some(10.0));
 
         // All cells have formula + their own cached value
-        assert_eq!(
-            sheet.get_value("B1").unwrap().formula_text(),
-            Some("=A1:B2*2")
-        );
+        assert_eq!(formula_text_at(sheet, "B1"), Some("=A1:B2*2"));
         assert_eq!(sheet.get_value("B1").unwrap().as_number(), Some(20.0));
-        assert_eq!(
-            sheet.get_value("A2").unwrap().formula_text(),
-            Some("=A1:B2*2")
-        );
+        assert_eq!(formula_text_at(sheet, "A2"), Some("=A1:B2*2"));
         assert_eq!(sheet.get_value("A2").unwrap().as_number(), Some(30.0));
-        assert_eq!(
-            sheet.get_value("B2").unwrap().formula_text(),
-            Some("=A1:B2*2")
-        );
+        assert_eq!(formula_text_at(sheet, "B2"), Some("=A1:B2*2"));
         assert_eq!(sheet.get_value("B2").unwrap().as_number(), Some(40.0));
     }
 
@@ -480,13 +487,13 @@ mod tests {
 
         // Anchor: TABLE formula
         let a1 = sheet.get_value("A1").unwrap();
-        assert_eq!(a1.formula_text(), Some("=TABLE(C1,)"));
+        assert_eq!(formula_text_at(sheet, "A1"), Some("=TABLE(C1,)"));
         assert_eq!(a1.as_number(), Some(42.0));
 
         // Non-anchor cells: replicated TABLE formula with their own cached values
         let a2 = sheet.get_value("A2").unwrap();
         assert_eq!(
-            a2.formula_text(),
+            formula_text_at(sheet, "A2"),
             Some("=TABLE(C1,)"),
             "A2 should have TABLE formula"
         );
@@ -494,7 +501,7 @@ mod tests {
 
         let a3 = sheet.get_value("A3").unwrap();
         assert_eq!(
-            a3.formula_text(),
+            formula_text_at(sheet, "A3"),
             Some("=TABLE(C1,)"),
             "A3 should have TABLE formula"
         );
@@ -522,22 +529,10 @@ mod tests {
         let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let sheet = workbook.worksheet(0).unwrap();
 
-        assert_eq!(
-            sheet.get_value("B2").unwrap().formula_text(),
-            Some("=TABLE(A1,A2)")
-        );
-        assert_eq!(
-            sheet.get_value("C2").unwrap().formula_text(),
-            Some("=TABLE(A1,A2)")
-        );
-        assert_eq!(
-            sheet.get_value("B3").unwrap().formula_text(),
-            Some("=TABLE(A1,A2)")
-        );
-        assert_eq!(
-            sheet.get_value("C3").unwrap().formula_text(),
-            Some("=TABLE(A1,A2)")
-        );
+        assert_eq!(formula_text_at(sheet, "B2"), Some("=TABLE(A1,A2)"));
+        assert_eq!(formula_text_at(sheet, "C2"), Some("=TABLE(A1,A2)"));
+        assert_eq!(formula_text_at(sheet, "B3"), Some("=TABLE(A1,A2)"));
+        assert_eq!(formula_text_at(sheet, "C3"), Some("=TABLE(A1,A2)"));
 
         assert_eq!(sheet.get_value("B2").unwrap().as_number(), Some(10.0));
         assert_eq!(sheet.get_value("C2").unwrap().as_number(), Some(20.0));
@@ -562,10 +557,9 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
 
         let a1 = sheet.get_value("A1").unwrap();
-        assert_eq!(a1.formula_text(), Some("=SUM(B1:B5)"));
+        assert_eq!(formula_text_at(sheet, "A1"), Some("=SUM(B1:B5)"));
         assert_eq!(a1.as_number(), Some(15.0));
-        // Single-cell array formula: anchor has array_result with one element
-        assert!(a1.is_array_formula());
+        assert!(is_array_formula_at(sheet, "A1"));
     }
 
     #[test]
@@ -587,8 +581,11 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
 
         let a1 = sheet.get_value("A1").unwrap();
-        assert_eq!(a1.formula_text(), Some("=SEQUENCE(3)"));
-        assert!(a1.is_array_formula(), "anchor should have array_result");
+        assert_eq!(formula_text_at(sheet, "A1"), Some("=SEQUENCE(3)"));
+        assert!(
+            is_array_formula_at(sheet, "A1"),
+            "anchor should have array_result"
+        );
         assert_eq!(a1.as_number(), Some(1.0));
 
         let a2 = sheet.get_value("A2").unwrap();
@@ -628,7 +625,10 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
 
         let a1 = sheet.get_value("A1").unwrap();
-        assert!(a1.is_array_formula(), "anchor should have array_result");
+        assert!(
+            is_array_formula_at(sheet, "A1"),
+            "anchor should have array_result"
+        );
         assert_eq!(a1.as_number(), Some(1.0));
 
         // All non-anchor cells are SpillTargets
@@ -641,7 +641,11 @@ mod tests {
         ] {
             let val = sheet.get_value(cell_ref).unwrap();
             assert!(val.is_spill_target(), "{cell_ref} should be SpillTarget");
-            assert_eq!(val.spill_source(), Some(expected_source), "{cell_ref} source");
+            assert_eq!(
+                val.spill_source(),
+                Some(expected_source),
+                "{cell_ref} source"
+            );
         }
 
         // Resolution gives correct values
@@ -669,9 +673,11 @@ mod tests {
         let sheet = workbook.worksheet(0).unwrap();
 
         let a1 = sheet.get_value("A1").unwrap();
-        assert_eq!(a1.formula_text(), Some("=TODAY()"));
-        // Single-cell anchor: array_result with 1x1 grid
-        assert!(a1.is_array_formula(), "single-cell anchor should have array_result");
+        assert_eq!(formula_text_at(sheet, "A1"), Some("=TODAY()"));
+        assert!(
+            is_array_formula_at(sheet, "A1"),
+            "single-cell anchor should have array_result"
+        );
         assert_eq!(a1.as_number(), Some(45000.0));
     }
 
@@ -693,8 +699,7 @@ mod tests {
         let workbook = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let sheet = workbook.worksheet(0).unwrap();
 
-        let a1 = sheet.get_value("A1").unwrap();
-        assert!(a1.is_array_formula());
+        assert!(is_array_formula_at(sheet, "A1"));
 
         let a2 = sheet.get_value("A2").unwrap();
         assert!(a2.is_spill_target());

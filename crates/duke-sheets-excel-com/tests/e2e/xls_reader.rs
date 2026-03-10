@@ -298,40 +298,33 @@ fn test_xls_shared_formula() {
 
     let expected = [11.0, 22.0, 33.0, 44.0, 55.0];
     for (row, expected_value) in expected.iter().enumerate() {
-        match sheet.get_value_at(row as u32, 2) {
-            CellValue::Formula {
-                text, cached_value, ..
-            } => {
-                if row == 0 {
-                    assert!(
-                        text.contains("A1") && text.contains("B1"),
-                        "C1 formula: {text}"
-                    );
-                }
-                if row == 1 {
-                    assert!(
-                        text.contains("A2") && text.contains("B2"),
-                        "C2 formula: {text}"
-                    );
-                }
-                if row == 4 {
-                    assert!(
-                        text.contains("A5") && text.contains("B5"),
-                        "C5 formula: {text}"
-                    );
-                }
+        let formula = sheet
+            .get_formula_at(row as u32, 2)
+            .unwrap_or_else(|| panic!("C{} expected formula", row + 1));
+        if row == 0 {
+            assert!(
+                formula.contains("A1") && formula.contains("B1"),
+                "C1 formula: {formula}"
+            );
+        }
+        if row == 1 {
+            assert!(
+                formula.contains("A2") && formula.contains("B2"),
+                "C2 formula: {formula}"
+            );
+        }
+        if row == 4 {
+            assert!(
+                formula.contains("A5") && formula.contains("B5"),
+                "C5 formula: {formula}"
+            );
+        }
 
-                let cached = cached_value
-                    .as_ref()
-                    .unwrap_or_else(|| panic!("C{} missing cached value", row + 1));
-                match cached.as_ref() {
-                    CellValue::Number(n) => {
-                        assert_eq!(*n, *expected_value, "C{} cached value", row + 1);
-                    }
-                    other => panic!("C{} expected numeric cache, got {other:?}", row + 1),
-                }
+        match sheet.get_value_at(row as u32, 2) {
+            CellValue::Number(n) => {
+                assert_eq!(n, *expected_value, "C{} cached value", row + 1);
             }
-            other => panic!("C{} expected Formula, got {other:?}", row + 1),
+            other => panic!("C{} expected numeric value, got {other:?}", row + 1),
         }
     }
 
@@ -377,23 +370,14 @@ fn test_xls_cse_array_formula() {
     let workbook = XlsReader::read_file(&fixture.host_path).expect("XlsReader");
     let sheet = workbook.worksheet(0).expect("worksheet");
 
+    let text = sheet.get_formula_at(0, 2).expect("C1 expected formula");
+    assert_eq!(
+        text, "{=SUM(A1:A3*B1:B3)}",
+        "C1 should preserve CSE formula text"
+    );
     match sheet.get_value_at(0, 2) {
-        CellValue::Formula {
-            text, cached_value, ..
-        } => {
-            assert!(text.starts_with("{="), "C1 should be CSE formula: {text}");
-            assert!(text.ends_with('}'), "C1 should end with }}: {text}");
-            assert!(text.contains("SUM"), "C1 should contain SUM: {text}");
-            assert!(text.contains("A1:A3"), "C1 should contain A1:A3: {text}");
-            assert!(text.contains("B1:B3"), "C1 should contain B1:B3: {text}");
-
-            let cached = cached_value.as_ref().expect("C1 missing cached value");
-            match cached.as_ref() {
-                CellValue::Number(n) => assert_eq!(*n, 56.0, "C1 cached value"),
-                other => panic!("C1 expected numeric cache, got {other:?}"),
-            }
-        }
-        other => panic!("C1 expected Formula, got {other:?}"),
+        CellValue::Number(n) => assert_eq!(n, 56.0, "C1 cached value"),
+        other => panic!("C1 expected numeric value, got {other:?}"),
     }
 
     cleanup_fixture(&fixture);
@@ -462,29 +446,22 @@ fn test_xls_data_table_formula() {
     let expected = [2.0, 4.0, 6.0, 8.0, 10.0];
     for (i, expected_value) in expected.iter().enumerate() {
         let row = (i + 1) as u32;
-        match sheet.get_value_at(row, 3) {
-            CellValue::Formula {
-                text, cached_value, ..
-            } => {
-                let formula_upper = text.to_ascii_uppercase();
-                assert!(
-                    formula_upper.contains("TABLE"),
-                    "D{} should contain TABLE formula text: {}",
-                    i + 2,
-                    text
-                );
+        let text = sheet
+            .get_formula_at(row, 3)
+            .unwrap_or_else(|| panic!("D{} expected formula", i + 2));
+        let formula_upper = text.to_ascii_uppercase();
+        assert!(
+            formula_upper.contains("TABLE"),
+            "D{} should contain TABLE formula text: {}",
+            i + 2,
+            text
+        );
 
-                let cached = cached_value
-                    .as_ref()
-                    .unwrap_or_else(|| panic!("D{} missing cached value", i + 2));
-                match cached.as_ref() {
-                    CellValue::Number(n) => {
-                        assert_eq!(*n, *expected_value, "D{} cached value", i + 2);
-                    }
-                    other => panic!("D{} expected numeric cache, got {other:?}", i + 2),
-                }
+        match sheet.get_value_at(row, 3) {
+            CellValue::Number(n) => {
+                assert_eq!(n, *expected_value, "D{} cached value", i + 2);
             }
-            other => panic!("D{} expected Formula, got {other:?}", i + 2),
+            other => panic!("D{} expected numeric value, got {other:?}", i + 2),
         }
     }
 

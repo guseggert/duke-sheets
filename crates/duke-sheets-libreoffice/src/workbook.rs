@@ -142,6 +142,12 @@ impl<'a> Workbook<'a> {
             .await
     }
 
+    /// Get a public sheet proxy typed as XCellRange (for external batch reading).
+    pub async fn get_sheet_proxy(&mut self, sheet_index: i32) -> Result<UnoProxy> {
+        self.get_sheet_proxy_as(sheet_index, type_names::X_CELL_RANGE)
+            .await
+    }
+
     /// Extract an interface OID from a return value, or error.
     fn require_oid(value: &UnoValue, context: &str) -> Result<String> {
         proxy::extract_oid_from_return(value)
@@ -216,7 +222,7 @@ impl<'a> Workbook<'a> {
 
     // Cell data (existing API, unchanged)
 
-    /// Set a cell's value (number, string, formula, or empty).
+    /// Set a cell's value (number, string, or empty).
     pub async fn set_cell_value(
         &mut self,
         cell_ref: &str,
@@ -243,17 +249,17 @@ impl<'a> Workbook<'a> {
                     .call(&text_proxy, &method, &[UnoValue::String(s)])
                     .await?;
             }
-            CellValue::Formula(f) => {
-                let method = interface::cell_set_formula();
-                self.conn
-                    .call(cell, &method, &[UnoValue::String(f)])
-                    .await?;
-            }
             CellValue::Empty => {
                 let method = interface::cell_set_formula();
                 self.conn
                     .call(cell, &method, &[UnoValue::String(String::new())])
                     .await?;
+            }
+            other => {
+                return Err(BridgeError::OperationFailed(format!(
+                    "unsupported cell value for LibreOffice bridge: {:?}",
+                    other
+                )));
             }
         }
         Ok(())

@@ -184,8 +184,13 @@ run = "docker build -t duke-sheets-pyuno tests/fixtures/pyuno"
 # =============================================================================
 
 [tasks."test:e2e"]
-description = "Run E2E tests for XLSX reader (requires LibreOffice via urp:start)"
-run = "cargo test -p duke-sheets-xlsx --test e2e -- --test-threads=1 --nocapture"
+description = "Run E2E tests for XLSX and XLS readers (requires LibreOffice via urp:start)"
+run = """
+#!/bin/bash
+set -e
+cargo test -p duke-sheets-xlsx --test e2e -- --test-threads=1 --nocapture
+cargo test -p duke-sheets-xls --test e2e -- --test-threads=1 --nocapture
+"""
 
 [tasks."test:excel"]
 description = "Run Excel COM E2E tests (requires vm:start + vm:deploy-bridge)"
@@ -238,6 +243,7 @@ fi
 
 cargo test -p duke-sheets-libreoffice --test integration -- --nocapture
 cargo test -p duke-sheets-xlsx --test e2e -- --test-threads=1 --nocapture
+cargo test -p duke-sheets-xls --test e2e -- --test-threads=1 --nocapture
 
 if [ "$STARTED_LO" = true ]; then
     echo "Stopping LibreOffice..."

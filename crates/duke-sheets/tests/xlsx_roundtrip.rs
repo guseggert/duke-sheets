@@ -7,9 +7,23 @@ use duke_sheets::{
 };
 use duke_sheets_core::style::Underline;
 use duke_sheets_core::{
-    PageOrientation, Selection, SplitPanes, Table, TableColumn, TableStyleInfo, TotalsRowFunction,
+    CellAddress, PageOrientation, Selection, SplitPanes, Table, TableColumn, TableStyleInfo,
+    TotalsRowFunction,
 };
 use std::io::Cursor;
+
+fn formula_text_at<'a>(sheet: &'a duke_sheets_core::Worksheet, address: &str) -> Option<&'a str> {
+    let addr = CellAddress::parse(address).expect("valid cell address");
+    sheet.get_formula_at(addr.row, addr.col)
+}
+
+fn is_array_formula_at(sheet: &duke_sheets_core::Worksheet, address: &str) -> bool {
+    let addr = CellAddress::parse(address).expect("valid cell address");
+    sheet
+        .formula_data_at(addr.row, addr.col)
+        .map(|formula| formula.is_array_formula())
+        .unwrap_or(false)
+}
 
 /// Test basic roundtrip with numeric values
 #[test]
@@ -125,17 +139,10 @@ fn test_roundtrip_formulas() {
     let sheet2 = wb2.worksheet(0).unwrap();
 
     // Verify formulas are preserved
-    assert!(sheet2.get_value("A3").unwrap().is_formula());
+    assert_eq!(formula_text_at(sheet2, "A3"), Some("=SUM(A1:A2)"));
+    assert_eq!(formula_text_at(sheet2, "B1"), Some("=A1*2"));
     assert_eq!(
-        sheet2.get_value("A3").unwrap().formula_text(),
-        Some("=SUM(A1:A2)")
-    );
-    assert_eq!(
-        sheet2.get_value("B1").unwrap().formula_text(),
-        Some("=A1*2")
-    );
-    assert_eq!(
-        sheet2.get_value("C1").unwrap().formula_text(),
+        formula_text_at(sheet2, "C1"),
         Some("=IF(A1>5,\"Yes\",\"No\")")
     );
 }
@@ -239,7 +246,7 @@ fn test_roundtrip_mixed_types() {
     assert_eq!(sheet2.get_value("A1").unwrap().as_string(), Some("Name"));
     assert_eq!(sheet2.get_value("B2").unwrap().as_number(), Some(42.5));
     assert_eq!(sheet2.get_value("C2").unwrap().as_bool(), Some(true));
-    assert!(sheet2.get_value("B3").unwrap().is_formula());
+    assert!(formula_text_at(sheet2, "B3").is_some());
 }
 
 /// Test roundtrip with large row/column indices
@@ -991,16 +998,9 @@ fn test_roundtrip_formula_cached_number() {
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
 
+    sheet.set_cell_formula_at(0, 0, "=1+2").unwrap();
     sheet
-        .set_cell_value_at(
-            0,
-            0,
-            CellValue::Formula {
-                text: "=1+2".to_string(),
-                cached_value: Some(Box::new(CellValue::Number(3.0))),
-                array_result: None,
-            },
-        )
+        .set_formula_result(0, 0, CellValue::Number(3.0))
         .unwrap();
 
     let mut buf = Vec::new();
@@ -1009,7 +1009,7 @@ fn test_roundtrip_formula_cached_number() {
     let sheet2 = wb2.worksheet(0).unwrap();
 
     let val = sheet2.get_value("A1").unwrap();
-    assert_eq!(val.formula_text(), Some("=1+2"));
+    assert_eq!(formula_text_at(sheet2, "A1"), Some("=1+2"));
     match val.effective_value() {
         CellValue::Number(n) => assert!((n - 3.0).abs() < 1e-10),
         other => panic!("Expected Number(3.0), got {:?}", other),
@@ -1023,15 +1023,10 @@ fn test_roundtrip_formula_cached_string() {
     let sheet = wb.worksheet_mut(0).unwrap();
 
     sheet
-        .set_cell_value_at(
-            0,
-            0,
-            CellValue::Formula {
-                text: "=CONCAT(\"hello\")".to_string(),
-                cached_value: Some(Box::new(CellValue::string("hello"))),
-                array_result: None,
-            },
-        )
+        .set_cell_formula_at(0, 0, "=CONCAT(\"hello\")")
+        .unwrap();
+    sheet
+        .set_formula_result(0, 0, CellValue::string("hello"))
         .unwrap();
 
     let mut buf = Vec::new();
@@ -1040,7 +1035,7 @@ fn test_roundtrip_formula_cached_string() {
     let sheet2 = wb2.worksheet(0).unwrap();
 
     let val = sheet2.get_value("A1").unwrap();
-    assert_eq!(val.formula_text(), Some("=CONCAT(\"hello\")"));
+    assert_eq!(formula_text_at(sheet2, "A1"), Some("=CONCAT(\"hello\")"));
     match val.effective_value() {
         CellValue::String(s) => assert_eq!(s.as_str(), "hello"),
         other => panic!("Expected String(\"hello\"), got {:?}", other),
@@ -1053,16 +1048,9 @@ fn test_roundtrip_formula_cached_boolean() {
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
 
+    sheet.set_cell_formula_at(0, 0, "=TRUE()").unwrap();
     sheet
-        .set_cell_value_at(
-            0,
-            0,
-            CellValue::Formula {
-                text: "=TRUE()".to_string(),
-                cached_value: Some(Box::new(CellValue::Boolean(true))),
-                array_result: None,
-            },
-        )
+        .set_formula_result(0, 0, CellValue::Boolean(true))
         .unwrap();
 
     let mut buf = Vec::new();
@@ -1071,7 +1059,7 @@ fn test_roundtrip_formula_cached_boolean() {
     let sheet2 = wb2.worksheet(0).unwrap();
 
     let val = sheet2.get_value("A1").unwrap();
-    assert_eq!(val.formula_text(), Some("=TRUE()"));
+    assert_eq!(formula_text_at(sheet2, "A1"), Some("=TRUE()"));
     match val.effective_value() {
         CellValue::Boolean(b) => assert!(*b),
         other => panic!("Expected Boolean(true), got {:?}", other),
@@ -1084,16 +1072,9 @@ fn test_roundtrip_formula_cached_error() {
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
 
+    sheet.set_cell_formula_at(0, 0, "=1/0").unwrap();
     sheet
-        .set_cell_value_at(
-            0,
-            0,
-            CellValue::Formula {
-                text: "=1/0".to_string(),
-                cached_value: Some(Box::new(CellValue::Error(CellError::Div0))),
-                array_result: None,
-            },
-        )
+        .set_formula_result(0, 0, CellValue::Error(CellError::Div0))
         .unwrap();
 
     let mut buf = Vec::new();
@@ -1102,7 +1083,7 @@ fn test_roundtrip_formula_cached_error() {
     let sheet2 = wb2.worksheet(0).unwrap();
 
     let val = sheet2.get_value("A1").unwrap();
-    assert_eq!(val.formula_text(), Some("=1/0"));
+    assert_eq!(formula_text_at(sheet2, "A1"), Some("=1/0"));
     match val.effective_value() {
         CellValue::Error(e) => assert_eq!(e.as_str(), "#DIV/0!"),
         other => panic!("Expected Error(Div0), got {:?}", other),
@@ -1115,17 +1096,7 @@ fn test_roundtrip_formula_no_cached_value() {
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
 
-    sheet
-        .set_cell_value_at(
-            0,
-            0,
-            CellValue::Formula {
-                text: "=SUM(B1:B10)".to_string(),
-                cached_value: None,
-                array_result: None,
-            },
-        )
-        .unwrap();
+    sheet.set_cell_formula_at(0, 0, "=SUM(B1:B10)").unwrap();
 
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -1133,13 +1104,12 @@ fn test_roundtrip_formula_no_cached_value() {
     let sheet2 = wb2.worksheet(0).unwrap();
 
     let val = sheet2.get_value("A1").unwrap();
-    assert_eq!(val.formula_text(), Some("=SUM(B1:B10)"));
-    // No cached value expected — effective_value is the formula itself
-    assert!(val.is_formula());
-    match val {
-        CellValue::Formula { cached_value, .. } => assert!(cached_value.is_none()),
-        _ => panic!("Expected Formula variant"),
-    }
+    assert_eq!(formula_text_at(sheet2, "A1"), Some("=SUM(B1:B10)"));
+    assert_eq!(val, CellValue::Empty);
+    assert_eq!(
+        sheet2.get_calculated_value_at(0, 0),
+        Some(&CellValue::Empty)
+    );
 }
 
 /// Test roundtrip of named ranges (definedNames)
@@ -1323,13 +1293,13 @@ fn test_roundtrip_rich_text() {
         ),
     ];
     sheet
-        .set_cell_value_at(0, 0, CellValue::RichText(runs.clone()))
+        .set_cell_value_at(0, 0, CellValue::rich_text(runs.clone()))
         .unwrap();
 
     // Cell with a single plain run (no formatting)
     let plain_runs = vec![RichTextRun::plain("Just plain text")];
     sheet
-        .set_cell_value_at(1, 0, CellValue::RichText(plain_runs.clone()))
+        .set_cell_value_at(1, 0, CellValue::rich_text(plain_runs.clone()))
         .unwrap();
 
     // Cell with many font properties
@@ -1347,7 +1317,7 @@ fn test_roundtrip_rich_text() {
         },
     )];
     sheet
-        .set_cell_value_at(2, 0, CellValue::RichText(fancy_runs.clone()))
+        .set_cell_value_at(2, 0, CellValue::rich_text(fancy_runs.clone()))
         .unwrap();
 
     // Write to buffer
@@ -1691,27 +1661,30 @@ fn roundtrip_dynamic_array_sequence() {
     let ws2 = wb2.worksheet(0).unwrap();
 
     // A1 should still be a formula
-    match ws2.get_value("A1").unwrap() {
-        duke_sheets_core::CellValue::Formula {
-            text, cached_value, ..
-        } => {
-            assert!(
-                text.contains("SEQUENCE"),
-                "formula text should contain SEQUENCE"
-            );
-            // Cached value should be 1.0 (top-left of sequence)
-            if let Some(cv) = cached_value {
-                assert_eq!(cv.as_number(), Some(1.0));
-            }
-        }
-        other => panic!("A1 should be a formula, got {:?}", other),
-    }
+    let a1_formula = ws2.formula_data_at(0, 0).expect("A1 should be a formula");
+    assert!(
+        a1_formula.text.contains("SEQUENCE"),
+        "formula text should contain SEQUENCE"
+    );
+    assert!(
+        a1_formula.is_array_formula(),
+        "A1 should remain an array formula"
+    );
+    assert_eq!(ws2.get_value("A1").unwrap().as_number(), Some(1.0));
 
     // Ghost cells should now be SpillTarget (reader reconstructs dynamic array)
     let a2 = ws2.get_value("A2").unwrap();
-    assert!(a2.is_spill_target(), "A2 should be SpillTarget, got {:?}", a2);
+    assert!(
+        a2.is_spill_target(),
+        "A2 should be SpillTarget, got {:?}",
+        a2
+    );
     let a3 = ws2.get_value("A3").unwrap();
-    assert!(a3.is_spill_target(), "A3 should be SpillTarget, got {:?}", a3);
+    assert!(
+        a3.is_spill_target(),
+        "A3 should be SpillTarget, got {:?}",
+        a3
+    );
     // Resolved values match
     assert_eq!(ws2.get_value_at(1, 0).as_number(), Some(2.0), "A2 resolved");
     assert_eq!(ws2.get_value_at(2, 0).as_number(), Some(3.0), "A3 resolved");
@@ -1740,12 +1713,9 @@ fn roundtrip_dynamic_array_sequence_2d() {
     let ws2 = wb2.worksheet(0).unwrap();
 
     // Anchor cell keeps formula
-    match ws2.get_value("A1").unwrap() {
-        duke_sheets_core::CellValue::Formula { text, .. } => {
-            assert!(text.contains("SEQUENCE"));
-        }
-        other => panic!("A1 should be formula, got {:?}", other),
-    }
+    let a1_formula = ws2.formula_data_at(0, 0).expect("A1 should be formula");
+    assert!(a1_formula.text.contains("SEQUENCE"));
+    assert!(a1_formula.is_array_formula());
 
     // Ghost cells are now SpillTarget; resolved values match
     assert!(ws2.get_value("B1").unwrap().is_spill_target());
@@ -1869,7 +1839,7 @@ fn roundtrip_dynamic_array_unique_strings() {
     let ws2 = wb2.worksheet(0).unwrap();
 
     // Anchor keeps formula
-    assert!(ws2.get_value("B1").unwrap().formula_text().is_some());
+    assert!(formula_text_at(ws2, "B1").is_some());
     // Ghost cells are now SpillTarget; resolved values match
     assert!(ws2.get_value("B2").unwrap().is_spill_target());
     assert!(ws2.get_value("B3").unwrap().is_spill_target());
@@ -1898,13 +1868,7 @@ fn roundtrip_dynamic_array_boolean_spill() {
     let _a1 = ws.get_calculated_value_at(0, 0);
     // Result depends on whether the engine produces a spill array from comparison
     // or a single scalar. Check what we got:
-    let is_array = matches!(
-        ws.get_value("A1").unwrap(),
-        duke_sheets_core::CellValue::Formula {
-            array_result: Some(_),
-            ..
-        }
-    );
+    let is_array = is_array_formula_at(ws, "A1");
 
     if is_array {
         // Full array spill: write and read back
@@ -1912,7 +1876,7 @@ fn roundtrip_dynamic_array_boolean_spill() {
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
         let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
         let ws2 = wb2.worksheet(0).unwrap();
-        assert!(ws2.get_value("A1").unwrap().formula_text().is_some());
+        assert!(formula_text_at(ws2, "A1").is_some());
     } else {
         // Engine produces scalar (implicit intersection) — single cached value
         // Still verify roundtrip works without crash
@@ -1961,24 +1925,18 @@ fn roundtrip_dynamic_array_spill_error() {
 
     // Formula should survive roundtrip
     let a1 = ws2.get_value("A1").unwrap();
-    assert!(a1.formula_text().is_some(), "A1 should still be a formula");
-    // Cached value should be the #SPILL! error
-    match &a1 {
-        duke_sheets_core::CellValue::Formula {
-            cached_value: Some(cv),
-            ..
-        } => {
-            assert!(
-                matches!(
-                    cv.as_ref(),
-                    duke_sheets_core::CellValue::Error(duke_sheets_core::CellError::Spill)
-                ),
-                "cached value should be #SPILL!, got {:?}",
-                cv
-            );
-        }
-        _ => panic!("A1 should be formula with cached error, got {:?}", a1),
-    }
+    assert!(
+        formula_text_at(ws2, "A1").is_some(),
+        "A1 should still be a formula"
+    );
+    assert!(
+        matches!(
+            a1,
+            duke_sheets_core::CellValue::Error(duke_sheets_core::CellError::Spill)
+        ),
+        "cached value should be #SPILL!, got {:?}",
+        a1
+    );
     // A2 original value preserved
     assert_eq!(ws2.get_value("A2").unwrap().as_number(), Some(999.0));
 }
@@ -2023,8 +1981,8 @@ fn roundtrip_dynamic_array_multiple_on_same_sheet() {
     let ws2 = wb2.worksheet(0).unwrap();
 
     // Both formulas survive
-    assert!(ws2.get_value("A1").unwrap().formula_text().is_some());
-    assert!(ws2.get_value("C1").unwrap().formula_text().is_some());
+    assert!(formula_text_at(ws2, "A1").is_some());
+    assert!(formula_text_at(ws2, "C1").is_some());
     // Ghost cells are SpillTarget; resolved values match
     assert!(ws2.get_value("A2").unwrap().is_spill_target());
     assert!(ws2.get_value("A3").unwrap().is_spill_target());
@@ -2063,13 +2021,13 @@ fn roundtrip_dynamic_array_multi_sheet() {
 
     // Sheet1: A1 formula, A2 SpillTarget
     let s1 = wb2.worksheet(0).unwrap();
-    assert!(s1.get_value("A1").unwrap().formula_text().is_some());
+    assert!(formula_text_at(s1, "A1").is_some());
     assert!(s1.get_value("A2").unwrap().is_spill_target());
     assert_eq!(s1.get_value_at(1, 0).as_number(), Some(2.0));
 
     // Sheet2: A1 formula, A2-A3 SpillTarget
     let s2 = wb2.worksheet(1).unwrap();
-    assert!(s2.get_value("A1").unwrap().formula_text().is_some());
+    assert!(formula_text_at(s2, "A1").is_some());
     assert!(s2.get_value("A2").unwrap().is_spill_target());
     assert!(s2.get_value("A3").unwrap().is_spill_target());
     assert_eq!(s2.get_value_at(1, 0).as_number(), Some(2.0));
@@ -2174,7 +2132,7 @@ fn roundtrip_dynamic_array_sort_strings() {
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
     let ws2 = wb2.worksheet(0).unwrap();
 
-    assert!(ws2.get_value("B1").unwrap().formula_text().is_some());
+    assert!(formula_text_at(ws2, "B1").is_some());
     assert!(ws2.get_value("B2").unwrap().is_spill_target());
     assert!(ws2.get_value("B3").unwrap().is_spill_target());
     assert_eq!(ws2.get_value_at(1, 1).as_string(), Some("banana"));
@@ -2194,13 +2152,7 @@ fn roundtrip_dynamic_array_comparison_boolean() {
     let ws = wb.worksheet(0).unwrap();
     // Verify the engine produced an array result
     assert!(
-        matches!(
-            ws.get_value("A1").unwrap(),
-            duke_sheets_core::CellValue::Formula {
-                array_result: Some(_),
-                ..
-            }
-        ),
+        is_array_formula_at(ws, "A1"),
         "A1 should be a formula with array_result"
     );
     assert_eq!(
@@ -2268,8 +2220,10 @@ fn roundtrip_dynamic_array_comparison_boolean() {
     let ws2 = wb2.worksheet(0).unwrap();
 
     // Formula should survive
-    let a1 = ws2.get_value("A1").unwrap();
-    assert!(a1.formula_text().is_some(), "A1 should still be a formula");
+    assert!(
+        formula_text_at(ws2, "A1").is_some(),
+        "A1 should still be a formula"
+    );
 
     // Ghost cells are SpillTarget; resolved values are booleans
     assert!(ws2.get_value("A2").unwrap().is_spill_target());

@@ -203,21 +203,6 @@ fn write_cell(
 fn cell_display_text(sheet: &Worksheet, row: u32, col: u16, options: &HtmlOptions) -> String {
     let value = sheet.get_value_at(row, col);
 
-    // For formulas, always prefer the cached value over formula text.
-    if let CellValue::Formula { cached_value, .. } = &value {
-        return match cached_value {
-            Some(v) => {
-                if options.formatted {
-                    // Re-format the cached value through the cell's number format
-                    sheet.formatted_value_at(row, col)
-                } else {
-                    cell_value_to_string(v)
-                }
-            }
-            None => String::new(),
-        };
-    }
-
     if options.formatted {
         return sheet.formatted_value_at(row, col);
     }
@@ -239,10 +224,6 @@ fn cell_value_to_string(value: &CellValue) -> String {
         CellValue::RichText(runs) => duke_sheets_core::rich_text_to_plain(runs),
         CellValue::Boolean(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
         CellValue::Error(e) => e.to_string(),
-        CellValue::Formula { cached_value, .. } => match cached_value {
-            Some(v) => cell_value_to_string(v),
-            None => String::new(),
-        },
         CellValue::SpillTarget { .. } => String::new(),
     }
 }
@@ -293,7 +274,7 @@ fn run_font_to_css(font: &duke_sheets_core::RunFont) -> String {
     }
     if let Some(color) = &font.color {
         if !color.is_auto() && color.to_rgb() != (0, 0, 0) {
-            let _ = write!(css, "color:#{};" , css_hex(color));
+            let _ = write!(css, "color:#{};", css_hex(color));
         }
     }
     if let Some(FontVerticalAlign::Superscript) = font.vertical_align {
@@ -347,7 +328,7 @@ fn font_to_css(css: &mut String, font: &FontStyle) {
         let _ = write!(css, "font-family:{};", escape_html(&font.name));
     }
     if !font.color.is_auto() && font.color.to_rgb() != (0, 0, 0) {
-        let _ = write!(css, "color:#{};" , css_hex(&font.color));
+        let _ = write!(css, "color:#{};", css_hex(&font.color));
     }
     if matches!(font.vertical_align, FontVerticalAlign::Superscript) {
         css.push_str("vertical-align:super;font-size:smaller;");
@@ -360,7 +341,7 @@ fn font_to_css(css: &mut String, font: &FontStyle) {
 fn fill_to_css(css: &mut String, fill: &FillStyle) {
     match fill {
         FillStyle::Solid { color } if !color.is_auto() => {
-            let _ = write!(css, "background-color:#{};" , css_hex(color));
+            let _ = write!(css, "background-color:#{};", css_hex(color));
         }
         FillStyle::Pattern {
             foreground,
@@ -369,9 +350,9 @@ fn fill_to_css(css: &mut String, fill: &FillStyle) {
         } => {
             // Use foreground as background-color (closest HTML approximation)
             if !foreground.is_auto() {
-                let _ = write!(css, "background-color:#{};" , css_hex(foreground));
+                let _ = write!(css, "background-color:#{};", css_hex(foreground));
             } else if !background.is_auto() {
-                let _ = write!(css, "background-color:#{};" , css_hex(background));
+                let _ = write!(css, "background-color:#{};", css_hex(background));
             }
         }
         _ => {}

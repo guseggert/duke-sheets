@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::Write;
 
 use crate::{cleanup_fixture, temp_fixture_path};
+use duke_sheets_core::{CellAddress, CellError};
 use duke_sheets_xlsx::XlsxReader;
 
 fn write_single_sheet_fixture(path: &std::path::Path, sheet_xml: &str) {
@@ -37,6 +38,11 @@ fn write_single_sheet_fixture(path: &std::path::Path, sheet_xml: &str) {
     zip.finish().expect("finish zip");
 }
 
+fn formula_text_at<'a>(sheet: &'a duke_sheets_core::Worksheet, address: &str) -> Option<&'a str> {
+    let addr = CellAddress::parse(address).expect("valid address");
+    sheet.get_formula_at(addr.row, addr.col)
+}
+
 #[test]
 fn test_shared_formula_follower_materialized() {
     let path = temp_fixture_path();
@@ -61,11 +67,11 @@ fn test_shared_formula_follower_materialized() {
     let sheet = workbook.worksheet(0).expect("sheet exists");
 
     assert_eq!(
-        sheet.get_value("D1").unwrap().formula_text(),
+        formula_text_at(sheet, "D1"),
         Some("=SUM($A$1:B1)+LEN(\"A1\")")
     );
     assert_eq!(
-        sheet.get_value("D2").unwrap().formula_text(),
+        formula_text_at(sheet, "D2"),
         Some("=SUM($A$1:B2)+LEN(\"A1\")")
     );
 
@@ -88,10 +94,7 @@ fn test_datatable_formula_placeholder_and_cached_value() {
     let workbook = XlsxReader::read_file(&path).expect("read workbook");
     let sheet = workbook.worksheet(0).expect("sheet exists");
 
-    assert_eq!(
-        sheet.get_value("A1").unwrap().formula_text(),
-        Some("=TABLE(C1,C2)")
-    );
+    assert_eq!(formula_text_at(sheet, "A1"), Some("=TABLE(C1,C2)"));
     assert_eq!(sheet.get_value("A1").unwrap().as_number(), Some(42.0));
 
     cleanup_fixture(&path);
@@ -158,10 +161,7 @@ fn test_reader_parses_cm_attribute() {
     let sheet = workbook.worksheet(0).expect("sheet exists");
 
     // A1 is a formula (anchor cell with cm=1)
-    assert_eq!(
-        sheet.get_value("A1").unwrap().formula_text(),
-        Some("=SEQUENCE(3,1)")
-    );
+    assert_eq!(formula_text_at(sheet, "A1"), Some("=SEQUENCE(3,1)"));
     assert_eq!(sheet.get_value("A1").unwrap().as_number(), Some(1.0));
 
     // Ghost cells are now SpillTarget (reader reconstructs dynamic array)
@@ -198,10 +198,7 @@ fn test_reader_parses_cm_attribute_string_ghost() {
     let sheet = workbook.worksheet(0).expect("sheet exists");
 
     // A1 is formula with string cached value
-    assert_eq!(
-        sheet.get_value("A1").unwrap().formula_text(),
-        Some("=UNIQUE(B1:B3)")
-    );
+    assert_eq!(formula_text_at(sheet, "A1"), Some("=UNIQUE(B1:B3)"));
 
     // Ghost cells are SpillTarget; resolved values are strings
     assert!(sheet.get_value("A2").unwrap().is_spill_target());
@@ -234,23 +231,11 @@ fn test_reader_parses_cm_attribute_error_anchor() {
 
     // A1 is formula with #SPILL! cached error
     let a1 = sheet.get_value("A1").unwrap();
-    assert!(a1.formula_text().is_some());
-    match &a1 {
-        duke_sheets_core::CellValue::Formula {
-            cached_value: Some(cv),
-            ..
-        } => {
-            assert!(
-                matches!(
-                    cv.as_ref(),
-                    duke_sheets_core::CellValue::Error(duke_sheets_core::CellError::Spill)
-                ),
-                "should be #SPILL! error, got {:?}",
-                cv
-            );
-        }
-        _ => panic!("expected formula with cached error, got {:?}", a1),
-    }
+    assert!(formula_text_at(sheet, "A1").is_some());
+    assert!(matches!(
+        a1,
+        duke_sheets_core::CellValue::Error(CellError::Spill)
+    ));
 
     // A2 is the blocker value
     assert_eq!(sheet.get_value("A2").unwrap().as_number(), Some(999.0));

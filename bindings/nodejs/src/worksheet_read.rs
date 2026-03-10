@@ -6,8 +6,8 @@ use napi_derive::napi;
 use super::{
     catch_panic, to_napi_err, JsAutoFilter, JsColor, JsComment, JsCommentEntry,
     JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
-    JsHyperlinkEntry, JsMergedRegion, JsMergeSpan, JsPageBreak, JsPageSetup, JsSelection, JsSheetProtection, JsSpillSource,
-    JsSplitPanes, JsStyle, JsTable, Worksheet,
+    JsHyperlinkEntry, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsSelection,
+    JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle, JsTable, Worksheet,
 };
 
 #[napi]
@@ -642,6 +642,18 @@ impl Worksheet {
         })
     }
 
+    /// Get the number of formula cells in this worksheet.
+    #[napi(getter)]
+    pub fn formula_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.formula_cells().count() as u32)
+        })
+    }
+
     /// Get all formula cells as an array of `{ row, col, formula }`.
     #[napi(getter)]
     pub fn formula_cells(&self) -> Result<Vec<JsFormulaCell>> {
@@ -752,10 +764,12 @@ impl Worksheet {
             let ws = wb
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
-            Ok(ws.get_merge_span(row, col as u16).map(|(rs, cs)| JsMergeSpan {
-                row_span: rs,
-                col_span: cs as u32,
-            }))
+            Ok(ws
+                .get_merge_span(row, col as u16)
+                .map(|(rs, cs)| JsMergeSpan {
+                    row_span: rs,
+                    col_span: cs as u32,
+                }))
         })
     }
 

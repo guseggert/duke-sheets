@@ -105,6 +105,17 @@ impl Workbook {
         Ok(index)
     }
 
+    /// Add a new worksheet with the exact name from a file, skipping validation.
+    ///
+    /// Real-world files can have empty names or names >31 chars. Readers must
+    /// preserve them as-is; validation only applies to user-facing APIs.
+    pub fn add_worksheet_with_name_unchecked(&mut self, name: &str) -> usize {
+        let index = self.worksheets.len();
+        let worksheet = Worksheet::new(name);
+        self.worksheets.push(worksheet);
+        index
+    }
+
     /// Insert a worksheet at a specific index
     pub fn insert_worksheet(&mut self, index: usize, name: &str) -> Result<()> {
         if index > self.worksheets.len() {

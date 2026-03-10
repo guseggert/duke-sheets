@@ -170,7 +170,15 @@ fn test_formula_simple() {
     sheet.set_formula("A1", "=1+1").unwrap();
 
     let value = sheet.get_cell("A1").unwrap();
-    assert!(value.is_formula());
+    assert!(value.is_empty());
+    assert_eq!(
+        sheet.get_formula_at(0, 0).unwrap(),
+        Some("=1+1".to_string())
+    );
+
+    wb.calculate().unwrap();
+    let calculated = sheet.get_calculated_value("A1").unwrap();
+    assert_eq!(calculated.as_number(), Some(2.0));
 }
 
 #[wasm_bindgen_test]
@@ -246,12 +254,54 @@ fn test_calculation_stats() {
 fn test_calculation_with_options() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();
-
     sheet.set_formula("A1", "=1+1").unwrap();
 
-    let stats = wb.calculate_with_options(false, 100, 0.001).unwrap();
-
+    let stats = wb.calculate_with_options(false, 100, 0.001, "auto", 50000).unwrap();
     assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
+}
+
+#[wasm_bindgen_test]
+fn test_calculation_exact_mode() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_formula("A1", "=1+1").unwrap();
+
+    let stats = wb.calculate_with_options(false, 100, 0.001, "exact", 50000).unwrap();
+    assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
+    assert_eq!(sheet.get_calculated_value("A1").unwrap().as_number().unwrap(), 2.0);
+}
+
+#[wasm_bindgen_test]
+fn test_calculation_multipass_mode() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_formula("A1", "=1+1").unwrap();
+
+    let stats = wb.calculate_with_options(false, 100, 0.001, "multipass", 50000).unwrap();
+    assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
+    assert_eq!(sheet.get_calculated_value("A1").unwrap().as_number().unwrap(), 2.0);
+}
+
+#[wasm_bindgen_test]
+fn test_calculation_auto_threshold() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_formula("A1", "=1+1").unwrap();
+
+    let stats = wb.calculate_with_options(false, 100, 0.001, "auto", 1).unwrap();
+    assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
+}
+
+#[wasm_bindgen_test]
+fn test_worksheet_formula_count() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    assert_eq!(sheet.formula_count().unwrap(), 0);
+    sheet.set_formula("A1", "=1+1").unwrap();
+    sheet.set_formula("B1", "=2+2").unwrap();
+    sheet.set_cell("C1", JsValue::from_f64(42.0)).unwrap();
+    assert_eq!(sheet.formula_count().unwrap(), 2);
 }
 
 // Named Range Tests
@@ -434,13 +484,27 @@ fn test_now_and_today_formulas() {
 
     // NOW() returns a serial number > 0 (date + time fraction)
     let now_num = now_val.as_number().expect("NOW() should return a number");
-    assert!(now_num > 0.0, "NOW() serial should be positive, got {}", now_num);
+    assert!(
+        now_num > 0.0,
+        "NOW() serial should be positive, got {}",
+        now_num
+    );
 
     // TODAY() returns an integer serial number > 0
-    let today_num = today_val.as_number().expect("TODAY() should return a number");
-    assert!(today_num > 0.0, "TODAY() serial should be positive, got {}", today_num);
+    let today_num = today_val
+        .as_number()
+        .expect("TODAY() should return a number");
+    assert!(
+        today_num > 0.0,
+        "TODAY() serial should be positive, got {}",
+        today_num
+    );
 
     // TODAY() should be the integer part of NOW()
     assert_eq!(today_num.floor(), today_num, "TODAY() should be an integer");
-    assert_eq!(now_num.floor(), today_num, "NOW() date part should equal TODAY()");
+    assert_eq!(
+        now_num.floor(),
+        today_num,
+        "NOW() date part should equal TODAY()"
+    );
 }

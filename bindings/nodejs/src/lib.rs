@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::{
-    CalculationOptions, CalculationStats as CoreCalculationStats, WorkbookCalculationExt,
+    CalculationMode, CalculationOptions, CalculationStats as CoreCalculationStats, WorkbookCalculationExt,
     WorkbookExt,
 };
 use duke_sheets_core::{
@@ -45,6 +45,18 @@ pub(crate) fn catch_panic<T>(f: impl FnOnce() -> napi::Result<T>) -> napi::Resul
     }
 }
 
+fn parse_calculation_mode(mode: Option<&str>) -> napi::Result<CalculationMode> {
+    match mode {
+        None | Some("auto") => Ok(CalculationMode::Auto),
+        Some("exact") => Ok(CalculationMode::Exact),
+        Some("multipass") => Ok(CalculationMode::Multipass),
+        Some(other) => Err(napi::Error::from_reason(format!(
+            "Invalid calculation mode '{}': expected 'exact', 'multipass', or 'auto'",
+            other
+        ))),
+    }
+}
+
 mod types;
 pub use types::*;
 mod workbook_read;
@@ -73,7 +85,7 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
 /// - Text (string)
 /// - Boolean
 /// - Error (like "#DIV/0!")
-/// - Formula (has formula text and calculated result)
+/// - Formula cached results are exposed as regular cell values; formula text lives on Worksheet accessors
 #[napi]
 pub struct CellValue {
     inner: CoreCellValue,
@@ -109,12 +121,6 @@ impl CellValue {
     #[napi(getter)]
     pub fn is_error(&self) -> bool {
         matches!(self.inner, CoreCellValue::Error(_))
-    }
-
-    /// Check if the cell contains a formula
-    #[napi(getter)]
-    pub fn is_formula(&self) -> bool {
-        matches!(self.inner, CoreCellValue::Formula { .. })
     }
 
     /// Get the value as a number, or null if not a number
@@ -153,15 +159,6 @@ impl CellValue {
         }
     }
 
-    /// Get the formula text, or null if not a formula
-    #[napi]
-    pub fn formula_text(&self) -> Option<String> {
-        match &self.inner {
-            CoreCellValue::Formula { text, .. } => Some(text.clone()),
-            _ => None,
-        }
-    }
-
     /// Convert to a JavaScript native value (number, string, boolean, or null)
     #[napi(js_name = "toJs")]
     pub fn to_js(&self) -> Either4<f64, String, bool, Null> {
@@ -171,17 +168,6 @@ impl CellValue {
             CoreCellValue::String(s) => Either4::B(s.to_string()),
             CoreCellValue::Boolean(b) => Either4::C(*b),
             CoreCellValue::Error(e) => Either4::B(cell_error_to_string(e).to_string()),
-            CoreCellValue::Formula {
-                cached_value: Some(v),
-                ..
-            } => match v.as_ref() {
-                CoreCellValue::Number(n) => Either4::A(*n),
-                CoreCellValue::String(s) => Either4::B(s.to_string()),
-                CoreCellValue::Boolean(b) => Either4::C(*b),
-                CoreCellValue::Error(e) => Either4::B(cell_error_to_string(e).to_string()),
-                _ => Either4::D(Null),
-            },
-            CoreCellValue::Formula { text, .. } => Either4::B(text.clone()),
             _ => Either4::D(Null),
         }
     }
@@ -195,7 +181,6 @@ impl CellValue {
             CoreCellValue::String(s) => s.to_string(),
             CoreCellValue::Boolean(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
             CoreCellValue::Error(e) => cell_error_to_string(e).to_string(),
-            CoreCellValue::Formula { text, .. } => text.clone(),
             _ => String::new(),
         }
     }
@@ -304,11 +289,14 @@ impl Worksheet {
                 .worksheet_mut(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-            let cell_value = match value {
-                None => CoreCellValue::Empty,
-                Some(Either3::A(n)) => CoreCellValue::Number(n),
-                Some(Either3::B(s)) => CoreCellValue::string(s),
-                Some(Either3::C(b)) => CoreCellValue::Boolean(b),
+            let cell_value = if let Some(value) = value {
+                match value {
+                    Either3::A(n) => CoreCellValue::Number(n),
+                    Either3::B(s) => CoreCellValue::string(s),
+                    Either3::C(b) => CoreCellValue::Boolean(b),
+                }
+            } else {
+                CoreCellValue::Empty
             };
 
             let addr = CellAddress::parse(&address)
@@ -662,7 +650,8 @@ impl Workbook {
     pub fn sheet_count(&self) -> Result<u32> {
         catch_panic(|| {
             let wb = self.inner.read().map_err(to_napi_err)?;
-            Ok(wb.sheet_count() as u32)
+            let count = u32::try_from(wb.sheet_count()).map_err(to_napi_err)?;
+            Ok(count)
         })
     }
 
@@ -756,12 +745,16 @@ impl Workbook {
     /// @param iterative - Enable iterative calculation for circular references
     /// @param maxIterations - Maximum iterations (default 100)
     /// @param maxChange - Convergence threshold (default 0.001)
+    /// @param mode - Calculation mode: "exact", "multipass", or "auto" (default "auto")
+    /// @param autoThreshold - Formula count threshold for auto mode (default 50000)
     #[napi]
     pub fn calculate_with_options(
         &self,
         iterative: Option<bool>,
         max_iterations: Option<u32>,
         max_change: Option<f64>,
+        mode: Option<String>,
+        auto_threshold: Option<u32>,
     ) -> Result<CalculationStats> {
         catch_panic(|| {
             let mut wb = self.inner.write().map_err(to_napi_err)?;
@@ -769,6 +762,8 @@ impl Workbook {
                 iterative: iterative.unwrap_or(false),
                 max_iterations: max_iterations.unwrap_or(100),
                 max_change: max_change.unwrap_or(0.001),
+                mode: parse_calculation_mode(mode.as_deref())?,
+                auto_threshold: auto_threshold.unwrap_or(50_000) as usize,
                 ..Default::default()
             };
             let stats = wb.calculate_with_options(&options).map_err(to_napi_err)?;
@@ -880,9 +875,10 @@ impl Task for CalculateTask {
     fn compute(&mut self) -> Result<Self::Output> {
         catch_panic(|| {
             let mut wb = self.workbook.write().map_err(to_napi_err)?;
-            match &self.options {
-                Some(opts) => wb.calculate_with_options(opts).map_err(to_napi_err),
-                None => wb.calculate().map_err(to_napi_err),
+            if let Some(opts) = &self.options {
+                wb.calculate_with_options(opts).map_err(to_napi_err)
+            } else {
+                wb.calculate().map_err(to_napi_err)
             }
         })
     }
@@ -954,15 +950,19 @@ impl Workbook {
         iterative: Option<bool>,
         max_iterations: Option<u32>,
         max_change: Option<f64>,
-    ) -> AsyncTask<CalculateTask> {
-        AsyncTask::new(CalculateTask {
+        mode: Option<String>,
+        auto_threshold: Option<u32>,
+    ) -> Result<AsyncTask<CalculateTask>> {
+        Ok(AsyncTask::new(CalculateTask {
             workbook: Arc::clone(&self.inner),
             options: Some(CalculationOptions {
                 iterative: iterative.unwrap_or(false),
                 max_iterations: max_iterations.unwrap_or(100),
                 max_change: max_change.unwrap_or(0.001),
+                mode: parse_calculation_mode(mode.as_deref())?,
+                auto_threshold: auto_threshold.unwrap_or(50_000) as usize,
                 ..Default::default()
             }),
-        })
+        }))
     }
 }

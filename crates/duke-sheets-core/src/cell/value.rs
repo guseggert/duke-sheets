@@ -6,7 +6,39 @@ use std::sync::Arc;
 
 use crate::rich_text::{rich_text_to_plain, RichTextRun};
 
-/// Represents the value stored in a cell
+/// Formula data stored in a side table, separate from cell values.
+///
+/// Formula cells store their cached result directly in the cell grid as a
+/// regular `CellValue` (Number, String, Error, etc.). The formula text and
+/// array results live here, indexed by `(row, col)` in `CellStorage::formulas`.
+#[derive(Debug, Clone)]
+pub struct FormulaData {
+    /// Original formula text (e.g., "=SUM(A1:A10)")
+    pub text: String,
+    /// If this formula produces a dynamic array, the full result lives here.
+    /// The outer Vec is rows, inner Vec is columns.
+    pub array_result: Option<Vec<Vec<CellValue>>>,
+}
+
+impl FormulaData {
+    /// Create a new formula with no array result.
+    pub fn new<S: Into<String>>(text: S) -> Self {
+        Self {
+            text: text.into(),
+            array_result: None,
+        }
+    }
+
+    /// Check if this formula has a dynamic array result.
+    pub fn is_array_formula(&self) -> bool {
+        self.array_result.is_some()
+    }
+}
+
+/// Represents the value stored in a cell.
+///
+/// This enum holds only leaf values — no formula text or metadata.
+/// Formulas are stored separately in [`CellStorage`](super::CellStorage).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CellValue {
     /// Empty cell (no value)
@@ -24,20 +56,8 @@ pub enum CellValue {
     /// Error value (#VALUE!, #REF!, etc.)
     Error(CellError),
 
-    /// Formula with cached result
-    Formula {
-        /// Original formula text (e.g., "=SUM(A1:A10)")
-        text: String,
-        /// Last calculated value (if any)
-        /// For dynamic array formulas, this contains the top-left value
-        cached_value: Option<Box<CellValue>>,
-        /// If this formula produces an array, this contains all values
-        /// The outer Vec is rows, inner Vec is columns
-        array_result: Option<Vec<Vec<CellValue>>>,
-    },
-
-    /// A cell that receives a spilled value from a dynamic array formula
-    /// This cell cannot be edited directly - it displays a value from the source formula
+    /// A cell that receives a spilled value from a dynamic array formula.
+    /// This cell cannot be edited directly - it displays a value from the source formula.
     SpillTarget {
         /// Row of the source formula cell
         source_row: u32,
@@ -49,8 +69,8 @@ pub enum CellValue {
         offset_col: u16,
     },
 
-    /// Rich text with per-run character formatting
-    RichText(Vec<RichTextRun>),
+    /// Rich text with per-run character formatting (boxed to keep enum small)
+    RichText(Box<Vec<RichTextRun>>),
 }
 
 impl CellValue {
@@ -61,26 +81,12 @@ impl CellValue {
 
     /// Create a new rich text value from runs.
     pub fn rich_text(runs: Vec<RichTextRun>) -> Self {
-        CellValue::RichText(runs)
-    }
-
-    /// Create a new formula value
-    pub fn formula<S: Into<String>>(text: S) -> Self {
-        CellValue::Formula {
-            text: text.into(),
-            cached_value: None,
-            array_result: None,
-        }
+        CellValue::RichText(Box::new(runs))
     }
 
     /// Check if the cell is empty
     pub fn is_empty(&self) -> bool {
         matches!(self, CellValue::Empty)
-    }
-
-    /// Check if the cell contains a formula
-    pub fn is_formula(&self) -> bool {
-        matches!(self, CellValue::Formula { .. })
     }
 
     /// Check if the cell contains rich text
@@ -96,17 +102,6 @@ impl CellValue {
     /// Check if the cell is a spill target
     pub fn is_spill_target(&self) -> bool {
         matches!(self, CellValue::SpillTarget { .. })
-    }
-
-    /// Check if the cell contains a dynamic array formula
-    pub fn is_array_formula(&self) -> bool {
-        matches!(
-            self,
-            CellValue::Formula {
-                array_result: Some(_),
-                ..
-            }
-        )
     }
 
     /// Get the spill source coordinates if this is a spill target
@@ -127,10 +122,6 @@ impl CellValue {
             CellValue::Number(n) => Some(*n),
             CellValue::Boolean(true) => Some(1.0),
             CellValue::Boolean(false) => Some(0.0),
-            CellValue::Formula {
-                cached_value: Some(v),
-                ..
-            } => v.as_number(),
             _ => None,
         }
     }
@@ -140,10 +131,6 @@ impl CellValue {
         match self {
             CellValue::Boolean(b) => Some(*b),
             CellValue::Number(n) => Some(*n != 0.0),
-            CellValue::Formula {
-                cached_value: Some(v),
-                ..
-            } => v.as_bool(),
             _ => None,
         }
     }
@@ -152,32 +139,15 @@ impl CellValue {
     pub fn as_string(&self) -> Option<&str> {
         match self {
             CellValue::String(s) => Some(s.as_str()),
-            CellValue::RichText(_) => None,
-            CellValue::Formula {
-                cached_value: Some(v),
-                ..
-            } => v.as_string(),
             _ => None,
         }
     }
 
-    /// Get the formula text if this is a formula cell
-    pub fn formula_text(&self) -> Option<&str> {
-        match self {
-            CellValue::Formula { text, .. } => Some(text),
-            _ => None,
-        }
-    }
-
-    /// Get the effective value (cached value for formulas, value otherwise)
+    /// Get the effective value — for leaf values, returns self.
+    ///
+    /// (Formulas are now stored separately; this is identity for all variants.)
     pub fn effective_value(&self) -> &CellValue {
-        match self {
-            CellValue::Formula {
-                cached_value: Some(v),
-                ..
-            } => v.effective_value(),
-            _ => self,
-        }
+        self
     }
 
     /// Get the type name for error messages
@@ -189,7 +159,6 @@ impl CellValue {
             CellValue::String(_) => "string",
             CellValue::RichText(_) => "rich_text",
             CellValue::Error(_) => "error",
-            CellValue::Formula { .. } => "formula",
             CellValue::SpillTarget { .. } => "spill_target",
         }
     }
@@ -210,11 +179,6 @@ impl fmt::Display for CellValue {
             CellValue::String(s) => write!(f, "{}", s.as_str()),
             CellValue::RichText(runs) => write!(f, "{}", rich_text_to_plain(runs)),
             CellValue::Error(e) => write!(f, "{}", e),
-            CellValue::Formula {
-                cached_value: Some(v),
-                ..
-            } => write!(f, "{}", v),
-            CellValue::Formula { text, .. } => write!(f, "{}", text),
             // SpillTarget shows as empty - the actual value comes from looking up the source
             CellValue::SpillTarget { .. } => write!(f, ""),
         }
@@ -504,5 +468,19 @@ mod tests {
         assert!(!Arc::ptr_eq(&s1.0, &s3.0));
 
         assert_eq!(pool.len(), 2);
+    }
+
+    #[test]
+    fn test_formula_data() {
+        let f = FormulaData::new("=SUM(A1:A10)");
+        assert_eq!(f.text, "=SUM(A1:A10)");
+        assert!(!f.is_array_formula());
+
+        let mut f2 = FormulaData::new("=A1:A3");
+        f2.array_result = Some(vec![
+            vec![CellValue::Number(1.0)],
+            vec![CellValue::Number(2.0)],
+        ]);
+        assert!(f2.is_array_formula());
     }
 }

@@ -134,6 +134,15 @@
 
 ## In Progress / Partial
 
+### Calculation Performance
+- [ ] Optimize formula calculation graph building and sheet-scoped execution (Tarjan SCC cycle detection, large-range dependency pruning, single-sheet CLI calculation)
+
+### Workspace Build Compatibility
+- [x] Update remaining crates and tests for the `CellValue` formula side table and boxed rich text refactor so `cargo test --workspace` compiles
+
+### Formula Side-Table Follow-ups
+- [x] Tighten formula/value invariants after the compact `CellValue` refactor (clear stale cached values on public `set_formula`, use atomic reader imports, trim writer save-time indexing, and align binding/docs formula access with worksheet-level APIs)
+
 ### Database Functions
 - [x] Implemented all 12 D-functions in `crates/duke-sheets-formula/src/functions/database.rs` with shared criteria filtering and unit tests
 - [x] Wire `database.rs` into `functions/mod.rs` registry (module + function registrations)
@@ -401,6 +410,8 @@ or cell-level metadata not available in standalone evaluation):
 4. ~~**Theme colors not resolved**~~ — Fixed. XLSX reader parses `xl/theme/theme1.xml` and resolves theme+tint colors in styles and conditional formatting.
 5. ~~**XLS reader drops comments, hyperlinks, CF, DV**~~ — Fixed. XLS reader now parses NOTE/OBJ/TXO (comments), HLINK/HLINKTOOLTIP (hyperlinks), CONDFMT/CF (conditional formatting), and DVAL/DV (data validation)
 6. ~~**Comment VML not written**~~ — Fixed. Writer now emits VML note shapes, worksheet `legacyDrawing`, and VML/comment relationships.
+7. **XLS conditional-format E2E regressions** — `crates/duke-sheets-xls/tests/e2e/reading/conditional_format.rs` currently reports zero CF rules for LibreOffice-generated `.xls` fixtures in `test_xls_cf_cell_is_greater_than` and `test_xls_cf_multiple_rules`.
+8. **XLS fuzz OOM** — `cargo +nightly fuzz run xls_reader` finds OOM via crafted BIFF record (malloc 9GB+). XLS reader lacks size bounds on untrusted input.
 
 ---
 
@@ -431,7 +442,8 @@ duke-sheets/
 ### Key Types
 - `Workbook` - Container for worksheets
 - `Worksheet` - Grid of cells with metadata, locale, date system
-- `CellValue` - Number, String, Boolean, Error, Formula, RichText, SpillTarget, Empty
+- `CellValue` - Number, String, Boolean, Error, RichText, SpillTarget, Empty
+- `FormulaData` - Formula side-table entry (text + array_result)
 - `CellView` - Lightweight borrow wrapper with `formatted()` display
 - `Locale` - Formatting locale (decimal separators, month names, currency)
 - `FormulaExpr` - AST for parsed formulas

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::auto_filter::AutoFilter;
 use crate::cell::view::CellView;
-use crate::cell::{CellAddress, CellData, CellRange, CellStorage, CellValue};
+use crate::cell::{CellAddress, CellData, CellRange, CellStorage, CellValue, FormulaData};
 use crate::comment::CellComment;
 use crate::conditional_format::ConditionalFormatRule;
 use crate::error::{Error, Result};
@@ -26,7 +26,6 @@ pub enum SheetVisibility {
     /// Very hidden — only accessible through the VBA editor.
     VeryHidden,
 }
-
 
 /// A worksheet (single sheet in a workbook)
 #[derive(Debug)]
@@ -363,7 +362,11 @@ impl Worksheet {
         self.cells.get(row, col)
     }
 
-    /// Get a mutable cell by row and column indices
+    /// Get a mutable cell by row and column indices.
+    ///
+    /// Warning: mutating `CellData.value` directly can desynchronize the cell grid
+    /// from the formula side table. Prefer `set_cell_value_at`,
+    /// `set_cell_formula_at`, or `set_formula_result` for formula cells.
     pub fn cell_at_mut(&mut self, row: u32, col: u16) -> Option<&mut CellData> {
         self.cells.get_mut(row, col)
     }
@@ -493,6 +496,7 @@ impl Worksheet {
         value: V,
     ) -> Result<()> {
         self.validate_cell_position(row, col)?;
+        self.remove_formula_state(row, col);
         self.cells.set_value(row, col, value.into());
         Ok(())
     }
@@ -505,16 +509,36 @@ impl Worksheet {
 
     /// Set a cell formula by row and column indices
     pub fn set_cell_formula_at(&mut self, row: u32, col: u16, formula: &str) -> Result<()> {
+        self.set_formula_with_cached_value_at(row, col, formula, CellValue::Empty)
+    }
+
+    /// Set a cell formula together with a cached result value.
+    ///
+    /// This is intended for file readers/importers that already know the cached
+    /// value stored alongside the formula. Public callers that only want to set
+    /// a formula should use `set_cell_formula_at`, which clears any stale cached
+    /// grid value.
+    #[doc(hidden)]
+    pub fn set_formula_with_cached_value_at(
+        &mut self,
+        row: u32,
+        col: u16,
+        formula: &str,
+        cached_value: CellValue,
+    ) -> Result<()> {
         self.validate_cell_position(row, col)?;
 
-        // Ensure formula starts with '='
-        let formula = if formula.starts_with('=') {
-            formula.to_string()
-        } else {
-            format!("={}", formula)
-        };
+        let formula = Self::normalize_formula_text(formula);
 
-        self.cells.set_value(row, col, CellValue::formula(formula));
+        self.clear_spill(row, col);
+        let style_index = self
+            .cells
+            .get(row, col)
+            .map(|cell| cell.style_index)
+            .unwrap_or(0);
+        self.cells
+            .set(row, col, CellData::with_style(cached_value, style_index));
+        self.cells.set_formula(row, col, FormulaData::new(formula));
         Ok(())
     }
 
@@ -535,27 +559,41 @@ impl Worksheet {
     /// Clear a cell
     pub fn clear_cell(&mut self, address: &str) -> Result<()> {
         let addr = CellAddress::parse(address)?;
-        self.cells.remove(addr.row, addr.col);
+        self.clear_cell_at(addr.row, addr.col);
         Ok(())
     }
 
     /// Clear a cell by indices
     pub fn clear_cell_at(&mut self, row: u32, col: u16) {
+        self.remove_formula_state(row, col);
         self.cells.remove(row, col);
     }
 
     /// Get the used range (bounds of all non-empty cells)
     pub fn used_range(&self) -> Option<CellRange> {
-        self.cells
-            .used_bounds()
-            .map(|(min_row, min_col, max_row, max_col)| {
-                CellRange::from_indices(min_row, min_col, max_row, max_col)
-            })
+        let mut bounds = self.cells.used_bounds();
+
+        for ((row, col), _) in self.cells.iter_formulas() {
+            bounds = Some(match bounds {
+                Some((min_row, min_col, max_row, max_col)) => (
+                    min_row.min(row),
+                    min_col.min(col),
+                    max_row.max(row),
+                    max_col.max(col),
+                ),
+                None => (row, col, row, col),
+            });
+        }
+
+        bounds.map(|(min_row, min_col, max_row, max_col)| {
+            CellRange::from_indices(min_row, min_col, max_row, max_col)
+        })
     }
 
     /// Clear all cells in a range
     pub fn clear_range(&mut self, range: &CellRange) {
         for addr in range.cells() {
+            self.remove_formula_state(addr.row, addr.col);
             self.cells.remove(addr.row, addr.col);
         }
     }
@@ -569,6 +607,7 @@ impl Worksheet {
         let value = value.into();
         for addr in range.cells() {
             self.validate_cell_position(addr.row, addr.col)?;
+            self.remove_formula_state(addr.row, addr.col);
             self.cells.set_value(addr.row, addr.col, value.clone());
         }
         Ok(())
@@ -1112,14 +1151,36 @@ impl Worksheet {
         Ok(())
     }
 
+    fn remove_formula_state(&mut self, row: u32, col: u16) {
+        if self.cells.has_formula(row, col) {
+            self.clear_spill(row, col);
+            self.cells.remove_formula(row, col);
+        }
+    }
+
+    fn normalize_formula_text(formula: &str) -> String {
+        if formula.starts_with('=') || formula.starts_with("{=") {
+            formula.to_string()
+        } else if formula.is_empty() {
+            String::new()
+        } else {
+            format!("={}", formula)
+        }
+    }
+
     /// Get the number of non-empty cells
     pub fn cell_count(&self) -> usize {
         self.cells.cell_count()
+            + self
+                .cells
+                .iter_formulas()
+                .filter(|((row, col), _)| self.cells.get(*row, *col).is_none())
+                .count()
     }
 
     /// Check if the worksheet is empty
     pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
+        self.cells.is_empty() && self.cells.formula_count() == 0
     }
 
     /// Iterate over all non-empty cells
@@ -1129,62 +1190,67 @@ impl Worksheet {
 
     /// Iterate over all formula cells: (row, col, formula_text)
     pub fn formula_cells(&self) -> impl Iterator<Item = (u32, u16, &str)> {
-        self.cells.iter().filter_map(|(row, col, cell)| {
-            if let CellValue::Formula { text, .. } = &cell.value {
-                Some((row, col, text.as_str()))
-            } else {
-                None
-            }
-        })
+        self.cells
+            .iter_formulas()
+            .map(|((row, col), formula)| (row, col, formula.text.as_str()))
+    }
+
+    pub fn has_formula_at(&self, row: u32, col: u16) -> bool {
+        self.cells.has_formula(row, col)
+    }
+
+    pub fn formula_data_at(&self, row: u32, col: u16) -> Option<&FormulaData> {
+        self.cells.get_formula(row, col)
+    }
+
+    pub fn formula_data_at_mut(&mut self, row: u32, col: u16) -> Option<&mut FormulaData> {
+        self.cells.get_formula_mut(row, col)
     }
 
     /// Get the formula text at a cell position (if it's a formula)
     pub fn get_formula_at(&self, row: u32, col: u16) -> Option<&str> {
-        self.cells.get(row, col).and_then(|cell| {
-            if let CellValue::Formula { text, .. } = &cell.value {
-                Some(text.as_str())
-            } else {
-                None
-            }
-        })
+        self.cells
+            .get_formula(row, col)
+            .map(|formula| formula.text.as_str())
     }
 
     /// Set the cached result value of a formula cell
     /// Returns Ok(()) if the cell is a formula and was updated,
     /// or an error if the cell doesn't exist or isn't a formula
     pub fn set_formula_result(&mut self, row: u32, col: u16, value: CellValue) -> Result<()> {
-        let cell = self.cells.get_mut(row, col).ok_or_else(|| {
-            Error::InvalidAddress(format!("Cell at ({}, {}) not found", row, col))
-        })?;
-
-        match &mut cell.value {
-            CellValue::Formula {
-                cached_value,
-                array_result,
-                ..
-            } => {
-                *cached_value = Some(Box::new(value));
-                // Clear any stale array_result from a previous array evaluation
-                *array_result = None;
-                Ok(())
-            }
-            _ => Err(Error::InvalidAddress(format!(
+        if !self.cells.has_formula(row, col) {
+            return Err(Error::InvalidAddress(format!(
                 "Cell at ({}, {}) is not a formula",
                 row, col
-            ))),
+            )));
         }
+
+        let style_index = self
+            .cells
+            .get(row, col)
+            .map(|cell| cell.style_index)
+            .unwrap_or(0);
+        self.cells
+            .set(row, col, CellData::with_style(value, style_index));
+        if let Some(formula) = self.cells.get_formula_mut(row, col) {
+            formula.array_result = None;
+        }
+        Ok(())
     }
 
     /// Get the cached value of a formula cell, or the cell value directly if not a formula.
     ///
     /// SpillTarget cells are resolved: returns the actual spilled value by reference.
     pub fn get_calculated_value_at(&self, row: u32, col: u16) -> Option<&CellValue> {
-        let cell = self.cells.get(row, col)?;
+        let Some(cell) = self.cells.get(row, col) else {
+            return if self.cells.has_formula(row, col) {
+                Some(&CellValue::Empty)
+            } else {
+                None
+            };
+        };
+
         match &cell.value {
-            CellValue::Formula {
-                cached_value: Some(v),
-                ..
-            } => Some(v.as_ref()),
             CellValue::SpillTarget {
                 source_row,
                 source_col,
@@ -1207,19 +1273,12 @@ impl Worksheet {
         offset_col: u16,
     ) -> CellValue {
         self.cells
-            .get(source_row, source_col)
-            .and_then(|source| {
-                if let CellValue::Formula {
-                    array_result: Some(arr),
-                    ..
-                } = &source.value
-                {
-                    arr.get(offset_row as usize)
-                        .and_then(|r| r.get(offset_col as usize))
-                        .cloned()
-                } else {
-                    None
-                }
+            .get_formula(source_row, source_col)
+            .and_then(|formula| formula.array_result.as_ref())
+            .and_then(|arr| {
+                arr.get(offset_row as usize)
+                    .and_then(|r| r.get(offset_col as usize))
+                    .cloned()
             })
             .unwrap_or(CellValue::Empty)
     }
@@ -1234,17 +1293,13 @@ impl Worksheet {
         offset_row: u32,
         offset_col: u16,
     ) -> Option<&CellValue> {
-        let source = self.cells.get(source_row, source_col)?;
-        if let CellValue::Formula {
-            array_result: Some(arr),
-            ..
-        } = &source.value
-        {
-            arr.get(offset_row as usize)
-                .and_then(|r| r.get(offset_col as usize))
-        } else {
-            None
-        }
+        self.cells
+            .get_formula(source_row, source_col)
+            .and_then(|formula| formula.array_result.as_ref())
+            .and_then(|arr| {
+                arr.get(offset_row as usize)
+                    .and_then(|r| r.get(offset_col as usize))
+            })
     }
 
     /// Set the result of a dynamic array formula, spilling to adjacent cells
@@ -1268,6 +1323,13 @@ impl Worksheet {
         col: u16,
         array: Vec<Vec<CellValue>>,
     ) -> Result<()> {
+        if !self.cells.has_formula(row, col) {
+            return Err(Error::InvalidAddress(format!(
+                "Cell at ({}, {}) is not a formula",
+                row, col
+            )));
+        }
+
         let num_rows = array.len() as u32;
         let num_cols = array.first().map(|r| r.len() as u16).unwrap_or(0);
 
@@ -1293,11 +1355,7 @@ impl Worksheet {
         // Check if we can spill
         if !self.cells.can_spill_to(row, col, num_rows, num_cols) {
             // Cannot spill - set the source cell to #SPILL! error
-            if let Some(cell) = self.cells.get_mut(row, col) {
-                if let CellValue::Formula { cached_value, .. } = &mut cell.value {
-                    *cached_value = Some(Box::new(CellValue::Error(crate::CellError::Spill)));
-                }
-            }
+            let _ = self.set_formula_result(row, col, CellValue::Error(crate::CellError::Spill));
             return Err(Error::Other(
                 "Cannot spill: blocked by existing data".into(),
             ));
@@ -1311,16 +1369,18 @@ impl Worksheet {
         // SpillTarget cells only store coordinates; actual values are resolved through
         // the source cell's array_result via get_value_at() / get_calculated_value_at().
         let top_left_value = array[0][0].clone();
-        if let Some(cell) = self.cells.get_mut(row, col) {
-            if let CellValue::Formula {
-                cached_value,
-                array_result,
-                ..
-            } = &mut cell.value
-            {
-                *cached_value = Some(Box::new(top_left_value));
-                *array_result = Some(array);
-            }
+        let style_index = self
+            .cells
+            .get(row, col)
+            .map(|cell| cell.style_index)
+            .unwrap_or(0);
+        self.cells.set(
+            row,
+            col,
+            crate::cell::CellData::with_style(top_left_value, style_index),
+        );
+        if let Some(formula) = self.cells.get_formula_mut(row, col) {
+            formula.array_result = Some(array);
         }
 
         // Write SpillTarget cells for all non-anchor positions
@@ -1616,8 +1676,48 @@ mod tests {
         ws.set_cell_formula("A1", "=SUM(B1:B10)").unwrap();
 
         let value = ws.get_value("A1").unwrap();
-        assert!(value.is_formula());
-        assert_eq!(value.formula_text(), Some("=SUM(B1:B10)"));
+        assert_eq!(value, CellValue::Empty);
+        assert_eq!(ws.get_formula_at(0, 0), Some("=SUM(B1:B10)"));
+    }
+
+    #[test]
+    fn test_set_cell_formula_clears_stale_cached_value() {
+        let mut ws = Worksheet::new("Test");
+
+        ws.set_cell_value("A1", 42.0).unwrap();
+        ws.set_cell_formula("A1", "=1+1").unwrap();
+
+        assert_eq!(ws.get_value("A1").unwrap(), CellValue::Empty);
+        assert_eq!(ws.get_formula_at(0, 0), Some("=1+1"));
+    }
+
+    #[test]
+    fn test_set_formula_with_cached_value_replaces_formula_and_value_atomically() {
+        let mut ws = Worksheet::new("Test");
+
+        ws.set_formula_with_cached_value_at(0, 0, "=1+1", CellValue::Number(2.0))
+            .unwrap();
+        assert_eq!(ws.get_value_at(0, 0), CellValue::Number(2.0));
+        assert_eq!(ws.get_formula_at(0, 0), Some("=1+1"));
+
+        ws.set_formula_with_cached_value_at(0, 0, "=2+2", CellValue::Number(4.0))
+            .unwrap();
+        assert_eq!(ws.get_value_at(0, 0), CellValue::Number(4.0));
+        assert_eq!(ws.get_formula_at(0, 0), Some("=2+2"));
+    }
+
+    #[test]
+    fn test_formula_only_cells_count_toward_used_range_and_cell_count() {
+        let mut ws = Worksheet::new("Test");
+
+        ws.set_cell_formula("C5", "=1+1").unwrap();
+
+        let range = ws.used_range().unwrap();
+        assert_eq!(range.start.row, 4);
+        assert_eq!(range.start.col, 2);
+        assert_eq!(range.end.row, 4);
+        assert_eq!(range.end.col, 2);
+        assert_eq!(ws.cell_count(), 1);
     }
 
     #[test]

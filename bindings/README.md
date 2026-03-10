@@ -128,6 +128,7 @@ wb2 = duke_sheets.Workbook.open("existing.xlsx")
 | `set_formula(address, formula)` | Set cell formula |
 | `get_cell(address)` | Get raw cell value |
 | `get_calculated_value(address)` | Get calculated value |
+| `get_formula_at(row, col)` | Get formula text for a cell |
 | `used_range` | Tuple of (min_row, min_col, max_row, max_col) |
 | `set_row_height(row, height)` | Set row height |
 | `set_column_width(col, width)` | Set column width |
@@ -141,7 +142,7 @@ wb2 = duke_sheets.Workbook.open("existing.xlsx")
 | `is_empty`, `is_number`, `is_text`, etc. | Type checking |
 | `as_number()`, `as_text()`, `as_boolean()` | Type conversion |
 | `to_python()` | Convert to Python native type |
-| `formula_text()` | Get formula string |
+| Formula text lives on `Worksheet.get_formula_at(row, col)` | Formula metadata access |
 
 
 ---
@@ -276,6 +277,7 @@ TypeScript definitions are automatically generated in `pkg/duke_sheets_wasm.d.ts
 | `setFormula(address, formula)` | Set cell formula |
 | `getCell(address)` | Get raw cell value |
 | `getCalculatedValue(address)` | Get calculated value |
+| `getFormulaAt(row, col)` | Get formula text for a cell |
 | `usedRange()` | Array [minRow, minCol, maxRow, maxCol] or null |
 | `setRowHeight(row, height)` | Set row height |
 | `setColumnWidth(col, width)` | Set column width |
@@ -290,7 +292,7 @@ TypeScript definitions are automatically generated in `pkg/duke_sheets_wasm.d.ts
 | `asNumber()`, `asText()`, `asBoolean()` | Type conversion |
 | `toJs()` | Convert to JavaScript value |
 | `toString()` | String representation |
-| `formulaText()` | Get formula string |
+| Formula text lives on `Worksheet.getFormulaAt(row, col)` | Formula metadata access |
 
 ---
 
