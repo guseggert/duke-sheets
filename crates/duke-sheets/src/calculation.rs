@@ -445,11 +445,7 @@ impl CalculationEngine {
 
         let result = match evaluate(ast, &ctx) {
             Ok(value) => value,
-            Err(e) => {
-                eprintln!(
-                    "Warning: Evaluation error at ({}, {}, {}): {}",
-                    cell_key.sheet, cell_key.row, cell_key.col, e
-                );
+            Err(_e) => {
                 stats.errors += 1;
                 FormulaValue::Error(duke_sheets_core::CellError::Value)
             }

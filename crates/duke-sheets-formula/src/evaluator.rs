@@ -1059,8 +1059,16 @@ fn evaluate_function(
 ) -> FormulaResult<FormulaValue> {
     let registry = get_function_registry();
 
+    // Strip Excel future function prefixes — Excel stores newer functions
+    // like IFNA, IFS, SWITCH, TEXTJOIN with _xlfn. (or _xlws.) in XML.
+    let upper = name.to_uppercase();
+    let lookup_name = upper
+        .strip_prefix("_XLFN.")
+        .or_else(|| upper.strip_prefix("_XLWS."))
+        .unwrap_or(&upper);
+
     let func = registry
-        .get(name)
+        .get(lookup_name)
         .ok_or_else(|| FormulaError::UnknownFunction(name.to_string()))?;
 
     // Check argument count
