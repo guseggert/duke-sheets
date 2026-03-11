@@ -4,11 +4,11 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 
-// The async open/fromXlsxBytes are free functions, import them
+// The async open/fromBytes are free functions, import them
 const binding = require("../index.js");
 const openAsync: (path: string) => Promise<any> = binding.openAsync;
-const fromXlsxBytesAsync: (data: Buffer) => Promise<any> =
-  binding.fromXlsxBytesAsync;
+const fromBytesAsync: (data: Buffer) => Promise<any> =
+  binding.fromBytesAsync;
 
 describe("Async open", () => {
   it("openAsync loads a saved file", async () => {
@@ -40,8 +40,8 @@ describe("Async open", () => {
   });
 });
 
-describe("Async fromXlsxBytes", () => {
-  it("fromXlsxBytesAsync loads from buffer", async () => {
+describe("Async fromBytes", () => {
+  it("fromBytesAsync loads from buffer", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-async-"));
     const filePath = path.join(tmpDir, "test.xlsx");
 
@@ -52,7 +52,7 @@ describe("Async fromXlsxBytes", () => {
       wb.save(filePath);
 
       const buf = fs.readFileSync(filePath);
-      const wb2 = await fromXlsxBytesAsync(buf);
+      const wb2 = await fromBytesAsync(buf);
       expect(wb2).toBeDefined();
 
       const sheet2 = wb2.getSheet(0);
@@ -62,9 +62,9 @@ describe("Async fromXlsxBytes", () => {
     }
   });
 
-  it("fromXlsxBytesAsync rejects for invalid bytes", async () => {
+  it("fromBytesAsync rejects for invalid bytes", async () => {
     await expect(
-      fromXlsxBytesAsync(Buffer.from("not xlsx")),
+      fromBytesAsync(Buffer.from("not xlsx")),
     ).rejects.toThrow();
   });
 });

@@ -37,9 +37,9 @@ describe("error handling", () => {
       expect(() => Workbook.open("/nonexistent/path/file.xlsx")).toThrow();
     });
 
-    it("rejects invalid XLSX bytes", () => {
+    it("rejects invalid bytes", () => {
       const garbage = Buffer.from("this is not an xlsx file");
-      expect(() => Workbook.fromXlsxBytes(garbage)).toThrow();
+      expect(() => Workbook.fromBytes(garbage)).toThrow();
     });
 
     it("rejects saving to invalid path", () => {

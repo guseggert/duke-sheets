@@ -181,7 +181,7 @@
 
 ### Python Bindings (PyO3)
 - [x] Initial scaffold — Workbook, Worksheet, CellValue, CalculationStats classes with basic CRUD + formula calculation (86 tests)
-- [x] Full API parity with Node.js NAPI bindings — module split (types.rs, workbook_read.rs, worksheet_read.rs), all 33 type structs, all ~50 read-only worksheet methods, read-only workbook methods, factory methods (from_xlsx_bytes, from_csv_string, save_csv_string)
+- [x] Full API parity with Node.js NAPI bindings — module split (types.rs, workbook_read.rs, worksheet_read.rs), all 33 type structs, all ~50 read-only worksheet methods, read-only workbook methods, factory methods (from_bytes, from_csv_string, save_csv_string)
 - [x] abi3-py38 — single wheel per platform (Python 3.8+ ABI, requires-python >= 3.9), reduces release matrix from 25 to 5 wheels
 - [x] CI release workflow — maturin-action build matrix (5 platforms), test on 3 OSes, GitHub release assets (.whl) on `python-v*` tags
 - [ ] Read-only tests with real XLSX fixtures

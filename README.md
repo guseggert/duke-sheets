@@ -38,7 +38,7 @@ Open existing files from disk, bytes, or CSV strings:
 
 ```typescript
 const wb = Workbook.open('input.xlsx');
-const wb2 = Workbook.fromXlsxBytes(buffer);
+const wb2 = Workbook.fromBytes(buffer);
 const wb3 = Workbook.fromCsvString('a,b,c\n1,2,3');
 ```
 
@@ -96,7 +96,7 @@ Open existing files:
 
 ```python
 wb = duke_sheets.Workbook.open("input.xlsx")
-wb = duke_sheets.Workbook.from_xlsx_bytes(data)
+wb = duke_sheets.Workbook.from_bytes(data)
 wb = duke_sheets.Workbook.from_csv_string("a,b,c\n1,2,3")
 ```
 
@@ -135,7 +135,7 @@ console.log(sheet.getCalculatedValue('A3').asNumber()); // 30
 Load files from bytes or CSV:
 
 ```javascript
-const wb = Workbook.fromXlsxBytes(uint8Array);
+const wb = Workbook.fromBytes(uint8Array);
 const wb2 = Workbook.loadCsvString('a,b,c\n1,2,3');
 
 // Export back out

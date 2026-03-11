@@ -133,7 +133,7 @@ describe("Workbook", () => {
 
         // Load from bytes
         const bytes = fs.readFileSync(filePath);
-        const wb2 = Workbook.fromXlsxBytes(bytes);
+        const wb2 = Workbook.fromBytes(bytes);
         const sheet2 = wb2.getSheet(0);
         expect(sheet2.getCell("A1").asNumber()).toBe(42);
       } finally {

@@ -9,16 +9,6 @@ use crate::{to_py_err, PyNamedRange, PyWorkbook, PyWorkbookSettings};
 
 #[pymethods]
 impl PyWorkbook {
-    #[staticmethod]
-    fn from_xlsx_bytes(data: &[u8]) -> PyResult<Self> {
-        let cursor = Cursor::new(data);
-        let wb = duke_sheets_xlsx::XlsxReader::read(cursor)
-            .map_err(|e| PyValueError::new_err(format!("Failed to read XLSX: {}", e)))?;
-
-        Ok(Self {
-            inner: Arc::new(RwLock::new(wb)),
-        })
-    }
 
     #[staticmethod]
     fn from_csv_string(csv: &str) -> PyResult<Self> {

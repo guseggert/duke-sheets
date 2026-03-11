@@ -463,7 +463,7 @@ fn test_save_xlsx_bytes() {
     assert!(!bytes.is_empty(), "XLSX bytes should not be empty");
 
     // Roundtrip: load back and verify
-    let wb2 = Workbook::from_xlsx_bytes(&bytes).unwrap();
+    let wb2 = Workbook::from_bytes(&bytes).unwrap();
     let sheet2 = wb2.get_sheet(0).unwrap();
     let val = sheet2.get_cell("A1").unwrap();
     assert_eq!(val.as_number(), Some(10.0));

@@ -550,15 +550,17 @@ impl Workbook {
         })
     }
 
-    /// Load a workbook from XLSX bytes (Buffer/Uint8Array)
+    /// Load a workbook from bytes (Buffer/Uint8Array), auto-detecting the format.
     ///
-    /// @param data - The XLSX file content as a Buffer
+    /// Supports XLSX and XLS formats. The format is detected from magic bytes.
+    ///
+    /// @param data - The file content as a Buffer
     #[napi(factory)]
-    pub fn from_xlsx_bytes(data: Buffer) -> Result<Self> {
+    pub fn from_bytes(data: Buffer) -> Result<Self> {
         catch_panic(|| {
-            let cursor = Cursor::new(data.as_ref());
-            let wb = duke_sheets_xlsx::XlsxReader::read(cursor)
-                .map_err(|e| napi::Error::from_reason(format!("Failed to read XLSX: {}", e)))?;
+            use duke_sheets::WorkbookExt;
+            let wb = duke_sheets_core::Workbook::from_bytes(data.as_ref())
+                .map_err(|e| napi::Error::from_reason(format!("Failed to read file: {}", e)))?;
 
             Ok(Self {
                 inner: Arc::new(RwLock::new(wb)),
@@ -588,23 +590,6 @@ impl Workbook {
         })
     }
 
-    /// Load a workbook from bytes (Buffer/Uint8Array), auto-detecting the format.
-    ///
-    /// Supports XLSX and XLS formats. The format is detected from magic bytes.
-    ///
-    /// @param data - The file content as a Buffer
-    #[napi(factory)]
-    pub fn from_bytes(data: Buffer) -> Result<Self> {
-        catch_panic(|| {
-            use duke_sheets::WorkbookExt;
-            let wb = duke_sheets_core::Workbook::from_bytes(data.as_ref())
-                .map_err(|e| napi::Error::from_reason(format!("Failed to read file: {}", e)))?;
-
-            Ok(Self {
-                inner: Arc::new(RwLock::new(wb)),
-            })
-        })
-    }
 
     /// Save the workbook to a file
     ///
@@ -828,9 +813,9 @@ impl Task for OpenBytesTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         catch_panic(|| {
-            let cursor = Cursor::new(&self.data);
-            duke_sheets_xlsx::XlsxReader::read(cursor)
-                .map_err(|e| napi::Error::from_reason(format!("Failed to read XLSX: {}", e)))
+            use duke_sheets::WorkbookExt;
+            CoreWorkbook::from_bytes(&self.data)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to read file: {}", e)))
         })
     }
 
@@ -902,12 +887,14 @@ pub fn open_async(path: String) -> AsyncTask<OpenTask> {
     })
 }
 
-/// Load a workbook from XLSX bytes asynchronously (non-blocking).
+/// Load a workbook from bytes asynchronously (non-blocking).
 ///
-/// @param data - The XLSX file content as a Buffer
+/// Auto-detects format (XLSX or XLS) from magic bytes.
+///
+/// @param data - The file content as a Buffer
 /// @returns Promise<Workbook>
 #[napi]
-pub fn from_xlsx_bytes_async(data: Buffer) -> AsyncTask<OpenBytesTask> {
+pub fn from_bytes_async(data: Buffer) -> AsyncTask<OpenBytesTask> {
     AsyncTask::new(OpenBytesTask {
         data: data.to_vec(),
     })

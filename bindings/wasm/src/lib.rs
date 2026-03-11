@@ -8,7 +8,7 @@ use duke_sheets::{CalculationMode, CalculationOptions, WorkbookCalculationExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
-use duke_sheets_xlsx::{XlsxReader, XlsxWriter};
+use duke_sheets_xlsx::XlsxWriter;
 
 mod types;
 mod workbook_read;
@@ -343,18 +343,6 @@ impl Workbook {
         }
     }
 
-    #[wasm_bindgen(js_name = fromXlsxBytes)]
-    pub fn from_xlsx_bytes(data: &[u8]) -> Result<Workbook, JsError> {
-        let wb = XlsxReader::read(Cursor::new(data)).map_err(to_js_error)?;
-        Ok(Self {
-            inner: Arc::new(RwLock::new(wb)),
-        })
-    }
-
-    #[wasm_bindgen(js_name = loadXlsxBytes)]
-    pub fn load_xlsx_bytes(data: &[u8]) -> Result<Workbook, JsError> {
-        Self::from_xlsx_bytes(data)
-    }
 
     #[wasm_bindgen(js_name = loadCsvString)]
     pub fn load_csv_string(csv: &str) -> Result<Workbook, JsError> {

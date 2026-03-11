@@ -95,18 +95,6 @@ export declare class Workbook {
    */
   static open(path: string): Workbook
   /**
-   * Load a workbook from XLSX bytes (Buffer/Uint8Array)
-   *
-   * @param data - The XLSX file content as a Buffer
-   */
-  static fromXlsxBytes(data: Buffer): Workbook
-  /**
-   * Load a workbook from a CSV string
-   *
-   * @param csv - The CSV content as a string
-   */
-  static fromCsvString(csv: string): Workbook
-  /**
    * Load a workbook from bytes (Buffer/Uint8Array), auto-detecting the format.
    *
    * Supports XLSX and XLS formats. The format is detected from magic bytes.
@@ -114,6 +102,12 @@ export declare class Workbook {
    * @param data - The file content as a Buffer
    */
   static fromBytes(data: Buffer): Workbook
+  /**
+   * Load a workbook from a CSV string
+   *
+   * @param csv - The CSV content as a string
+   */
+  static fromCsvString(csv: string): Workbook
   /**
    * Save the workbook to a file
    *
@@ -381,12 +375,14 @@ export declare class Worksheet {
 }
 
 /**
- * Load a workbook from XLSX bytes asynchronously (non-blocking).
+ * Load a workbook from bytes asynchronously (non-blocking).
  *
- * @param data - The XLSX file content as a Buffer
+ * Auto-detects format (XLSX or XLS) from magic bytes.
+ *
+ * @param data - The file content as a Buffer
  * @returns Promise<Workbook>
  */
-export declare function fromXlsxBytesAsync(data: Buffer): Promise<unknown>
+export declare function fromBytesAsync(data: Buffer): Promise<unknown>
 
 /** Text alignment settings. */
 export interface JsAlignment {

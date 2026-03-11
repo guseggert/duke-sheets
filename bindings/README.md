@@ -231,7 +231,7 @@ Since browsers don't have filesystem access, use byte arrays:
 // Load from Uint8Array
 const response = await fetch('spreadsheet.xlsx');
 const bytes = new Uint8Array(await response.arrayBuffer());
-const wb = Workbook.loadXlsxBytes(bytes);
+const wb = Workbook.fromBytes(bytes);
 
 // Save to Uint8Array
 const outputBytes = wb.saveXlsxBytes();
@@ -253,7 +253,7 @@ TypeScript definitions are automatically generated in `pkg/duke_sheets_wasm.d.ts
 | Method | Description |
 |--------|-------------|
 | `new Workbook()` | Create new empty workbook |
-| `Workbook.loadXlsxBytes(data)` | Load from Uint8Array |
+| `Workbook.fromBytes(data)` | Load from Uint8Array (auto-detects XLSX/XLS) |
 | `Workbook.loadCsvString(csv)` | Load from CSV string |
 | `saveXlsxBytes()` | Save as Uint8Array |
 | `saveCsvString()` | Save as CSV string |
