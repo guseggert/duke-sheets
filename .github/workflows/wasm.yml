@@ -141,9 +141,10 @@ jobs:
 
       - name: Publish to npm
         run: |
-          # Publish the bundler target as the default package
+          # Publish the web target — uses init() to load wasm,
+          # compatible with webpack 5 / Next.js without special loaders
           cd dist
-          tar xzf dukelib-sheets-wasm-bundler.tgz
+          tar xzf dukelib-sheets-wasm-web.tgz
           cd package && npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
