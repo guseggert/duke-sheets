@@ -15,6 +15,7 @@ members = [
     "crates/libreoffice-urp",
     "crates/duke-sheets-libreoffice",
     "crates/duke-sheets-html",
+    "crates/ssfmt",
 ]
 # Bindings are excluded from the default workspace build
 exclude = [
@@ -66,7 +67,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 rust_decimal = "1.35"
 
 # Number format rendering (Excel-compatible ECMA-376 format codes)
-ssfmt = "0.1"
+ssfmt = { path = "crates/ssfmt" }
 
 # Regex (for formulas, number formats)
 regex = "1.10"
