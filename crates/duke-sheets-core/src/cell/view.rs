@@ -713,4 +713,15 @@ mod tests {
         // ssfmt with "@" format on a number typically returns the number as text
         assert!(!result.is_empty(), "expected non-empty for text format");
     }
+
+    #[test]
+    fn date_format_with_underscore_paren_no_trailing_paren() {
+        // Real-world Excel files often use formats like m/d/yyyy_) where _)
+        // means "pad with width of ')'". The ')' must NOT appear in output.
+        // Serial 46022 = 12/31/2025 in the 1900 date system.
+        let val = CellValue::Number(46022.0);
+        let fmt_code = NumberFormat::Custom("m/d/yyyy_)".to_string());
+        let result = fmt(&val, &fmt_code, false);
+        assert_eq!(result, "12/31/2025 ", "underscore-paren should produce a space, not a literal ')'");
+    }
 }
