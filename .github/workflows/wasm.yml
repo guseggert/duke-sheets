@@ -51,11 +51,14 @@ jobs:
         run: wasm-pack build --release --target nodejs --out-dir pkg-nodejs
         working-directory: ${{ env.WORKING_DIR }}
 
-      - name: Rename packages to @dukelib/sheets-wasm
+      - name: Patch package.json for npm
         working-directory: ${{ env.WORKING_DIR }}
         run: |
           for dir in pkg-bundler pkg-web pkg-nodejs; do
-            jq '.name = "@dukelib/sheets-wasm"' "$dir/package.json" > "$dir/package.json.tmp"
+            jq '
+              .name = "@dukelib/sheets-wasm" |
+              .repository = {"type": "git", "url": "https://github.com/guseggert/duke-sheets.git", "directory": "bindings/wasm"}
+            ' "$dir/package.json" > "$dir/package.json.tmp"
             mv "$dir/package.json.tmp" "$dir/package.json"
           done
 
