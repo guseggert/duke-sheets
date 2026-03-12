@@ -10,19 +10,16 @@ use crate::style::StylePool;
 
 /// Storage mode for cell data
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum StorageMode {
     /// Standard in-memory storage (default)
+    #[default]
     InMemory,
     /// Memory-optimized mode for large files
     /// Uses more CPU to reduce memory usage
     MemoryOptimized,
 }
 
-impl Default for StorageMode {
-    fn default() -> Self {
-        StorageMode::InMemory
-    }
-}
 
 /// Complete data for a single cell
 #[derive(Debug, Clone)]

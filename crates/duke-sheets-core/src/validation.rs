@@ -85,7 +85,7 @@ impl DataValidation {
     /// # Arguments
     ///
     /// * `source` - Either a comma-separated list of values (e.g., "Yes,No,Maybe")
-    ///              or a range reference (e.g., "Sheet1!$A$1:$A$10")
+    ///   or a range reference (e.g., "Sheet1!$A$1:$A$10")
     ///
     /// # Example
     ///
@@ -286,8 +286,10 @@ impl DataValidation {
 
 /// Types of data validation
 #[derive(Debug, Clone, PartialEq)]
+#[derive(Default)]
 pub enum ValidationType {
     /// No validation (any value allowed)
+    #[default]
     None,
 
     /// Must be a whole number
@@ -338,11 +340,6 @@ pub enum ValidationType {
     },
 }
 
-impl Default for ValidationType {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 impl ValidationType {
     /// Get the XLSX type string for this validation type

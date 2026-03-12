@@ -15,7 +15,7 @@ use crate::{
 impl Worksheet {
     #[wasm_bindgen(getter)]
     pub fn visibility(&self) -> Result<String, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -28,7 +28,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = isSelected)]
     pub fn is_selected(&self) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -37,7 +37,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = zoomScale)]
     pub fn zoom_scale(&self) -> Result<Option<u32>, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -46,7 +46,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = tabColor)]
     pub fn tab_color(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -58,7 +58,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = isEmpty)]
     pub fn ws_is_empty(&self) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -67,7 +67,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = cellCount)]
     pub fn cell_count(&self) -> Result<u32, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -76,7 +76,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = selections)]
     pub fn selections(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -87,7 +87,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getCellStyle)]
     pub fn get_cell_style(&self, address: &str) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -100,7 +100,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getCellStyleAt)]
     pub fn get_cell_style_at(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -112,7 +112,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getFormattedValue)]
     pub fn get_formatted_value(&self, address: &str) -> Result<String, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -121,7 +121,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getFormattedValueAt)]
     pub fn get_formatted_value_at(&self, row: u32, col: u32) -> Result<String, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -130,7 +130,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = defaultRowHeight)]
     pub fn default_row_height(&self) -> Result<f64, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -139,7 +139,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = defaultColumnWidth)]
     pub fn default_column_width(&self) -> Result<f64, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -148,7 +148,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = isRowHidden)]
     pub fn is_row_hidden(&self, row: u32) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -157,7 +157,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = isColumnHidden)]
     pub fn is_column_hidden(&self, col: u32) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -166,7 +166,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getRowOutlineLevel)]
     pub fn get_row_outline_level(&self, row: u32) -> Result<u32, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -175,7 +175,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getColumnOutlineLevel)]
     pub fn get_column_outline_level(&self, col: u32) -> Result<u32, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -184,7 +184,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = isRowCollapsed)]
     pub fn is_row_collapsed(&self, row: u32) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -193,7 +193,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = isColumnCollapsed)]
     pub fn is_column_collapsed(&self, col: u32) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -202,7 +202,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = freezePanes)]
     pub fn freeze_panes(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -214,7 +214,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = splitPanes)]
     pub fn split_panes(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -226,7 +226,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getHyperlink)]
     pub fn get_hyperlink(&self, address: &str) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -238,7 +238,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getHyperlinkAt)]
     pub fn get_hyperlink_at(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -250,7 +250,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = hyperlinkCount)]
     pub fn hyperlink_count(&self) -> Result<u32, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -259,7 +259,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = hyperlinks)]
     pub fn hyperlinks(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -276,7 +276,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getComment)]
     pub fn get_comment(&self, address: &str) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -289,7 +289,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getCommentAt)]
     pub fn get_comment_at(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -301,7 +301,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = hasComment)]
     pub fn has_comment(&self, address: &str) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -310,7 +310,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = hasCommentAt)]
     pub fn has_comment_at(&self, row: u32, col: u32) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -319,7 +319,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = commentCount)]
     pub fn comment_count(&self) -> Result<u32, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -328,7 +328,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = comments)]
     pub fn comments(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -345,7 +345,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = commentAuthors)]
     pub fn comment_authors(&self) -> Result<Vec<String>, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -354,7 +354,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = tables)]
     pub fn tables(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -364,7 +364,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getTableByName)]
     pub fn get_table_by_name(&self, name: &str) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -376,7 +376,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = tableCount)]
     pub fn table_count(&self) -> Result<u32, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -385,7 +385,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = dataValidations)]
     pub fn data_validations(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -399,7 +399,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = dataValidationCount)]
     pub fn data_validation_count(&self) -> Result<u32, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -408,7 +408,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = conditionalFormats)]
     pub fn conditional_formats(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -422,7 +422,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = conditionalFormatCount)]
     pub fn conditional_format_count(&self) -> Result<u32, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -431,7 +431,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = autoFilter)]
     pub fn auto_filter(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -443,7 +443,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = protection)]
     pub fn protection(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -455,7 +455,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = pageSetup)]
     pub fn page_setup(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -464,7 +464,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = printArea)]
     pub fn print_area(&self) -> Result<Option<String>, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -473,7 +473,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = repeatRows)]
     pub fn repeat_rows(&self) -> Result<Option<Vec<u32>>, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -482,7 +482,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = repeatCols)]
     pub fn repeat_cols(&self) -> Result<Option<Vec<u32>>, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -491,7 +491,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = rowBreaks)]
     pub fn row_breaks(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -501,7 +501,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = colBreaks)]
     pub fn col_breaks(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -511,7 +511,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getFormulaAt)]
     pub fn get_formula_at(&self, row: u32, col: u32) -> Result<Option<String>, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -520,7 +520,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = formulaCells)]
     pub fn formula_cells(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -538,7 +538,7 @@ impl Worksheet {
     /// Get the number of formula cells in this worksheet.
     #[wasm_bindgen(getter, js_name = formulaCount)]
     pub fn formula_count(&self) -> Result<u32, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -547,7 +547,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = isSpillTarget)]
     pub fn is_spill_target(&self, row: u32, col: u32) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -556,7 +556,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = isSpillSource)]
     pub fn is_spill_source(&self, row: u32, col: u32) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -565,7 +565,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getSpillSource)]
     pub fn get_spill_source(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -580,7 +580,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = date1904)]
     pub fn date_1904(&self) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -589,7 +589,7 @@ impl Worksheet {
 
     #[wasm_bindgen(getter, js_name = mergedRegions)]
     pub fn merged_regions(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -609,7 +609,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getMergeSpan)]
     pub fn get_merge_span(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -624,7 +624,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = isMergedSecondary)]
     pub fn is_merged_secondary(&self, row: u32, col: u32) -> Result<bool, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;

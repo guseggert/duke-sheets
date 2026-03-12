@@ -43,7 +43,7 @@ impl Default for CsvWriteOptions {
             delimiter: b',',
             quote: b'"',
             write_header: false,
-            line_terminator: LineTerminator::CRLF,
+            line_terminator: LineTerminator::Crlf,
         }
     }
 }
@@ -52,9 +52,9 @@ impl Default for CsvWriteOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineTerminator {
     /// Unix-style (LF)
-    LF,
+    Lf,
     /// Windows-style (CRLF)
-    CRLF,
+    Crlf,
     /// Mac classic (CR)
-    CR,
+    Cr,
 }

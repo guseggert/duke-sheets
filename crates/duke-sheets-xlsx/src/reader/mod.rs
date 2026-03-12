@@ -2451,7 +2451,7 @@ impl XlsxReader {
                     Some("b") => Some(CellValue::Boolean(
                         v == "1" || v.eq_ignore_ascii_case("true"),
                     )),
-                    Some("e") => CellError::from_str(v).map(CellValue::Error),
+                    Some("e") => CellError::parse(v).map(CellValue::Error),
                     Some("s") => v.parse::<usize>().ok().and_then(|idx| {
                         shared_strings.get(idx).map(|entry| match entry {
                             SharedStringEntry::Plain(s) => CellValue::String(s.clone().into()),
@@ -2515,7 +2515,7 @@ impl XlsxReader {
                 Some("b") => CellValue::Boolean(value == "1" || value.eq_ignore_ascii_case("true")),
 
                 // Error
-                Some("e") => CellError::from_str(value)
+                Some("e") => CellError::parse(value)
                     .map(CellValue::Error)
                     .unwrap_or_else(|| CellValue::String(value.to_string().into())),
 

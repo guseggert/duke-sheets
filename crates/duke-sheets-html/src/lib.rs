@@ -79,7 +79,7 @@ fn write_document_open(buf: &mut String, options: &HtmlOptions, sheet_name: &str
     buf.push_str("<meta charset=\"utf-8\">\n");
 
     let title = options.title.as_deref().unwrap_or(sheet_name);
-    let _ = write!(buf, "<title>{}</title>\n", escape_html(title));
+    let _ = writeln!(buf, "<title>{}</title>", escape_html(title));
 
     buf.push_str("<style>\n");
     buf.push_str("table { border-collapse: collapse; }\n");
@@ -115,7 +115,7 @@ fn write_table(buf: &mut String, sheet: &Worksheet, options: &HtmlOptions) {
         }
 
         let height = sheet.row_height(row);
-        let _ = write!(buf, "<tr style=\"height:{:.0}px\">\n", pt_to_px(height));
+        let _ = writeln!(buf, "<tr style=\"height:{:.0}px\">", pt_to_px(height));
 
         for col in 0..=used_range.end.col {
             if sheet.is_column_hidden(col) {
@@ -146,7 +146,7 @@ fn write_colgroup(buf: &mut String, sheet: &Worksheet, max_col: u16) {
             buf.push_str("<col style=\"display:none\">\n");
         } else {
             let width_px = col_width_to_px(sheet.column_width(col));
-            let _ = write!(buf, "<col style=\"width:{width_px}px\">\n");
+            let _ = writeln!(buf, "<col style=\"width:{width_px}px\">");
         }
     }
     buf.push_str("</colgroup>\n");
@@ -178,12 +178,12 @@ fn write_cell(
 
     // Inline styles from the cell style
     let style = sheet.cell_style_at(row, col);
-    let css = style.map(|s| style_to_css(s)).unwrap_or_default();
+    let css = style.map(style_to_css).unwrap_or_default();
     if !css.is_empty() {
         let _ = write!(buf, " style=\"{css}\"");
     }
 
-    buf.push_str(">");
+    buf.push('>');
 
     // Cell content
     let text = cell_display_text(sheet, row, col, options);

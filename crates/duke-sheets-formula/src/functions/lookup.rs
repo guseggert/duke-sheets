@@ -32,7 +32,7 @@ fn values_equal(a: &FormulaValue, b: &FormulaValue) -> bool {
     }
 }
 
-fn expect_array<'a>(v: &'a FormulaValue) -> Option<&'a Vec<Vec<FormulaValue>>> {
+fn expect_array(v: &FormulaValue) -> Option<&Vec<Vec<FormulaValue>>> {
     match v {
         FormulaValue::Array(a) => Some(a),
         _ => None,
@@ -149,7 +149,7 @@ pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         }
     }
 
-    let arr = match expect_array(args.get(0).unwrap()) {
+    let arr = match expect_array(args.first().unwrap()) {
         Some(a) => a,
         None => return Ok(FormulaValue::Error(CellError::Value)),
     };
@@ -183,7 +183,7 @@ pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 ///
 /// Currently supports exact match only (match_type = 0). Other match types return #N/A.
 pub fn fn_match(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let lookup_value = args.get(0).unwrap();
+    let lookup_value = args.first().unwrap();
     if let FormulaValue::Error(e) = lookup_value {
         return Ok(FormulaValue::Error(*e));
     }
@@ -223,7 +223,7 @@ pub fn fn_match(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         }
     } else if cols == 1 {
         for (i, row) in arr.iter().enumerate() {
-            let v = row.get(0).unwrap_or(&FormulaValue::Empty);
+            let v = row.first().unwrap_or(&FormulaValue::Empty);
             if values_equal(lookup_value, v) {
                 return Ok(FormulaValue::Number((i + 1) as f64));
             }
@@ -238,7 +238,7 @@ pub fn fn_match(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 /// ROWS(array) - Returns the number of rows in a reference or array
 /// Reference: LibreOffice ScInterpreter::ScRows, Microsoft ROWS function
 pub fn fn_rows(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let arg = args.get(0).unwrap_or(&FormulaValue::Empty);
+    let arg = args.first().unwrap_or(&FormulaValue::Empty);
 
     match arg {
         FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
@@ -254,7 +254,7 @@ pub fn fn_rows(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 /// COLUMNS(array) - Returns the number of columns in a reference or array
 /// Reference: LibreOffice ScInterpreter::ScColumns, Microsoft COLUMNS function
 pub fn fn_columns(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let arg = args.get(0).unwrap_or(&FormulaValue::Empty);
+    let arg = args.first().unwrap_or(&FormulaValue::Empty);
 
     match arg {
         FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
@@ -397,7 +397,7 @@ pub fn fn_vlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
         }
     }
 
-    let lookup_value = args.get(0).unwrap();
+    let lookup_value = args.first().unwrap();
     if matches!(lookup_value, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -421,14 +421,12 @@ pub fn fn_vlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     }
 
     // range_lookup (ignored for now; exact match only)
-    if let Some(v) = args.get(3) {
-        if let FormulaValue::Error(e) = v {
-            return Ok(FormulaValue::Error(*e));
-        }
+    if let Some(FormulaValue::Error(e)) = args.get(3) {
+        return Ok(FormulaValue::Error(*e));
     }
 
     for row in table {
-        let key = row.get(0).unwrap_or(&FormulaValue::Empty);
+        let key = row.first().unwrap_or(&FormulaValue::Empty);
         if values_equal(lookup_value, key) {
             return Ok(row.get(col_index0).cloned().unwrap_or(FormulaValue::Empty));
         }
@@ -444,7 +442,7 @@ pub fn fn_hlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
         }
     }
 
-    let lookup_value = args.get(0).unwrap();
+    let lookup_value = args.first().unwrap();
     if matches!(lookup_value, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -536,7 +534,7 @@ pub fn fn_xmatch(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         }
     }
 
-    let lookup_value = args.get(0).unwrap();
+    let lookup_value = args.first().unwrap();
     if matches!(lookup_value, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -635,7 +633,7 @@ pub fn fn_xlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
         }
     }
 
-    let lookup_value = args.get(0).unwrap().clone();
+    let lookup_value = args.first().unwrap().clone();
     let lookup_array = args.get(1).unwrap().clone();
     let return_arr = match expect_array(args.get(2).unwrap()).and_then(|a| vector_from_array(a)) {
         Some(v) => v,
@@ -690,7 +688,7 @@ pub fn fn_indirect(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaRes
         return Ok(FormulaValue::Error(CellError::Ref));
     }
 
-    let ref_text = args.get(0).unwrap();
+    let ref_text = args.first().unwrap();
     if matches!(ref_text, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -781,7 +779,7 @@ pub fn fn_sequence(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     }
 
     // rows (required)
-    let rows = match args.get(0) {
+    let rows = match args.first() {
         Some(v) => match to_i64_trunc(v) {
             Some(r) if r >= 1 => r as usize,
             Some(_) => return Ok(FormulaValue::Error(CellError::Value)),

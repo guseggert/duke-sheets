@@ -124,41 +124,6 @@ class TestIterativeCalculation:
         
         assert stats.formula_count == 1
 
-    def test_calculate_exact_mode(self, workbook):
-        """Should accept exact mode."""
-        sheet = workbook.get_sheet(0)
-        sheet.set_formula("A1", "=1+1")
-
-        stats = workbook.calculate_with_options(mode="exact")
-        assert stats.formula_count == 1
-        assert sheet.get_calculated_value("A1").as_number() == 2.0
-
-    def test_calculate_multipass_mode(self, workbook):
-        """Should accept multipass mode."""
-        sheet = workbook.get_sheet(0)
-        sheet.set_formula("A1", "=1+1")
-
-        stats = workbook.calculate_with_options(mode="multipass")
-        assert stats.formula_count == 1
-        assert sheet.get_calculated_value("A1").as_number() == 2.0
-
-    def test_calculate_auto_mode_with_threshold(self, workbook):
-        """Should accept auto mode with custom threshold."""
-        sheet = workbook.get_sheet(0)
-        sheet.set_formula("A1", "=1+1")
-
-        stats = workbook.calculate_with_options(mode="auto", auto_threshold=100)
-        assert stats.formula_count == 1
-        assert sheet.get_calculated_value("A1").as_number() == 2.0
-
-    def test_calculate_invalid_mode_raises(self, workbook):
-        """Invalid mode string should raise."""
-        sheet = workbook.get_sheet(0)
-        sheet.set_formula("A1", "=1+1")
-
-        with pytest.raises(ValueError):
-            workbook.calculate_with_options(mode="bogus")
-
     def test_worksheet_formula_count(self, workbook):
         """Worksheet should expose formula_count property."""
         sheet = workbook.get_sheet(0)

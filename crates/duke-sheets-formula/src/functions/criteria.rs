@@ -76,18 +76,18 @@ impl CriteriaMatcher {
 
     fn try_parse_comparison(s: &str) -> Option<CriteriaType> {
         // Check for comparison operators (order matters - check longer ones first)
-        let (op, rest) = if s.starts_with(">=") {
-            (ComparisonOp::GreaterEqual, &s[2..])
-        } else if s.starts_with("<=") {
-            (ComparisonOp::LessEqual, &s[2..])
-        } else if s.starts_with("<>") {
-            (ComparisonOp::NotEqual, &s[2..])
-        } else if s.starts_with('>') {
-            (ComparisonOp::GreaterThan, &s[1..])
-        } else if s.starts_with('<') {
-            (ComparisonOp::LessThan, &s[1..])
-        } else if s.starts_with('=') {
-            (ComparisonOp::Equal, &s[1..])
+        let (op, rest) = if let Some(rest) = s.strip_prefix(">=") {
+            (ComparisonOp::GreaterEqual, rest)
+        } else if let Some(rest) = s.strip_prefix("<=") {
+            (ComparisonOp::LessEqual, rest)
+        } else if let Some(rest) = s.strip_prefix("<>") {
+            (ComparisonOp::NotEqual, rest)
+        } else if let Some(rest) = s.strip_prefix('>') {
+            (ComparisonOp::GreaterThan, rest)
+        } else if let Some(rest) = s.strip_prefix('<') {
+            (ComparisonOp::LessThan, rest)
+        } else if let Some(rest) = s.strip_prefix('=') {
+            (ComparisonOp::Equal, rest)
         } else {
             return None;
         };

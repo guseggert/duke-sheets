@@ -605,7 +605,7 @@ pub fn fn_npv(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 
 pub fn fn_irr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let mut values = Vec::new();
-    if let Some(first) = args.get(0) {
+    if let Some(first) = args.first() {
         if let Err(e) = collect_numbers(first, &mut values) {
             return Ok(e);
         }
@@ -667,7 +667,7 @@ pub fn fn_irr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 
 pub fn fn_mirr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let mut values = Vec::new();
-    if let Some(first) = args.get(0) {
+    if let Some(first) = args.first() {
         if let Err(e) = collect_numbers(first, &mut values) {
             return Ok(e);
         }
@@ -828,8 +828,7 @@ pub fn fn_db(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<F
         || salvage < 0.0
         || life <= 0.0
         || period <= 0
-        || month < 1
-        || month > 12
+        || !(1..=12).contains(&month)
         || salvage > cost
     {
         return Ok(FormulaValue::Error(CellError::Num));

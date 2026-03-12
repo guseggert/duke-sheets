@@ -40,8 +40,10 @@ impl FormulaData {
 /// This enum holds only leaf values — no formula text or metadata.
 /// Formulas are stored separately in [`CellStorage`](super::CellStorage).
 #[derive(Debug, Clone, PartialEq)]
+#[derive(Default)]
 pub enum CellValue {
     /// Empty cell (no value)
+    #[default]
     Empty,
 
     /// Boolean value (TRUE/FALSE)
@@ -164,11 +166,6 @@ impl CellValue {
     }
 }
 
-impl Default for CellValue {
-    fn default() -> Self {
-        CellValue::Empty
-    }
-}
 
 impl fmt::Display for CellValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -269,8 +266,8 @@ impl CellError {
         }
     }
 
-    /// Parse an error string
-    pub fn from_str(s: &str) -> Option<Self> {
+    /// Parse an error string into a `CellError`.
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "#NULL!" => Some(CellError::Null),
             "#DIV/0!" => Some(CellError::Div0),
@@ -447,10 +444,10 @@ mod tests {
 
     #[test]
     fn test_cell_error_parse() {
-        assert_eq!(CellError::from_str("#DIV/0!"), Some(CellError::Div0));
-        assert_eq!(CellError::from_str("#VALUE!"), Some(CellError::Value));
-        assert_eq!(CellError::from_str("#n/a"), Some(CellError::Na)); // Case insensitive
-        assert_eq!(CellError::from_str("invalid"), None);
+        assert_eq!(CellError::parse("#DIV/0!"), Some(CellError::Div0));
+        assert_eq!(CellError::parse("#VALUE!"), Some(CellError::Value));
+        assert_eq!(CellError::parse("#n/a"), Some(CellError::Na)); // Case insensitive
+        assert_eq!(CellError::parse("invalid"), None);
     }
 
     #[test]

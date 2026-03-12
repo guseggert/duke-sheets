@@ -28,9 +28,7 @@ fn is_leap_gregorian(year: i32) -> bool {
 }
 
 fn days_in_year_excel1900(year: i32) -> i64 {
-    if year == 1900 {
-        366
-    } else if is_leap_gregorian(year) {
+    if year == 1900 || is_leap_gregorian(year) {
         366
     } else {
         365
@@ -288,7 +286,7 @@ pub fn fn_date(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<
         }
     }
 
-    let mut year = to_i32_trunc(args.get(0).unwrap()).unwrap_or(0);
+    let mut year = to_i32_trunc(args.first().unwrap()).unwrap_or(0);
     let month = to_i32_trunc(args.get(1).unwrap()).unwrap_or(0);
     let day = to_i32_trunc(args.get(2).unwrap()).unwrap_or(0);
 
@@ -298,7 +296,7 @@ pub fn fn_date(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<
     }
 
     // Basic bounds (Excel supports 0..9999 in DATE)
-    if year < 0 || year > 9999 {
+    if !(0..=9999).contains(&year) {
         return Ok(FormulaValue::Error(CellError::Num));
     }
 
@@ -330,7 +328,7 @@ pub fn fn_date(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<
 
 /// YEAR(serial)
 pub fn fn_year(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if let FormulaValue::Error(e) = v {
         return Ok(FormulaValue::Error(*e));
     }
@@ -360,7 +358,7 @@ pub fn fn_year(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<
 
 /// MONTH(serial)
 pub fn fn_month(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if let FormulaValue::Error(e) = v {
         return Ok(FormulaValue::Error(*e));
     }
@@ -390,7 +388,7 @@ pub fn fn_month(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
 
 /// DAY(serial)
 pub fn fn_day(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if let FormulaValue::Error(e) = v {
         return Ok(FormulaValue::Error(*e));
     }
@@ -419,7 +417,7 @@ pub fn fn_day(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<F
 }
 
 pub fn fn_time(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let hour = numeric_scalar(args.get(0).unwrap());
+    let hour = numeric_scalar(args.first().unwrap());
     let minute = numeric_scalar(args.get(1).unwrap());
     let second = numeric_scalar(args.get(2).unwrap());
 
@@ -438,7 +436,7 @@ pub fn fn_time(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 }
 
 pub fn fn_hour(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let n = match numeric_scalar(args.get(0).unwrap()) {
+    let n = match numeric_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -452,7 +450,7 @@ pub fn fn_hour(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 }
 
 pub fn fn_minute(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let n = match numeric_scalar(args.get(0).unwrap()) {
+    let n = match numeric_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -466,7 +464,7 @@ pub fn fn_minute(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 }
 
 pub fn fn_second(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let n = match numeric_scalar(args.get(0).unwrap()) {
+    let n = match numeric_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -480,7 +478,7 @@ pub fn fn_second(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 }
 
 pub fn fn_weekday(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let serial = match serial_scalar(args.get(0).unwrap()) {
+    let serial = match serial_scalar(args.first().unwrap()) {
         Ok(s) => s,
         Err(e) => return Ok(e),
     };
@@ -509,7 +507,7 @@ pub fn fn_weekday(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
 }
 
 pub fn fn_weeknum(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let serial = match serial_scalar(args.get(0).unwrap()) {
+    let serial = match serial_scalar(args.first().unwrap()) {
         Ok(s) => s,
         Err(e) => return Ok(e),
     };
@@ -565,7 +563,7 @@ pub fn fn_isoweeknum(
     args: &[FormulaValue],
     ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let serial = match serial_scalar(args.get(0).unwrap()) {
+    let serial = match serial_scalar(args.first().unwrap()) {
         Ok(s) => s,
         Err(e) => return Ok(e),
     };
@@ -585,7 +583,7 @@ pub fn fn_isoweeknum(
 }
 
 pub fn fn_edate(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let start_serial = match serial_scalar(args.get(0).unwrap()) {
+    let start_serial = match serial_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -615,7 +613,7 @@ pub fn fn_edate(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
 }
 
 pub fn fn_eomonth(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let start_serial = match serial_scalar(args.get(0).unwrap()) {
+    let start_serial = match serial_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -644,7 +642,7 @@ pub fn fn_eomonth(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
 }
 
 pub fn fn_days(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let end_date = match serial_scalar(args.get(0).unwrap()) {
+    let end_date = match serial_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -657,7 +655,7 @@ pub fn fn_days(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 }
 
 pub fn fn_days360(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let start_serial = match serial_scalar(args.get(0).unwrap()) {
+    let start_serial = match serial_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -696,7 +694,7 @@ pub fn fn_days360(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
 }
 
 pub fn fn_datedif(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let start_serial = match serial_scalar(args.get(0).unwrap()) {
+    let start_serial = match serial_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -793,7 +791,7 @@ pub fn fn_datedif(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
 }
 
 pub fn fn_yearfrac(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let start = match serial_scalar(args.get(0).unwrap()) {
+    let start = match serial_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -891,7 +889,7 @@ pub fn fn_yearfrac(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaRes
 }
 
 pub fn fn_datevalue(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = match string_scalar(args.get(0).unwrap()) {
+    let text = match string_scalar(args.first().unwrap()) {
         Ok(s) => s,
         Err(e) => return Ok(e),
     };
@@ -918,7 +916,7 @@ pub fn fn_timevalue(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let text = match string_scalar(args.get(0).unwrap()) {
+    let text = match string_scalar(args.first().unwrap()) {
         Ok(s) => s,
         Err(e) => return Ok(e),
     };
@@ -943,7 +941,7 @@ pub fn fn_networkdays(
     args: &[FormulaValue],
     ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let start = match serial_scalar(args.get(0).unwrap()) {
+    let start = match serial_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -978,7 +976,7 @@ pub fn fn_networkdays(
 }
 
 pub fn fn_workday(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let start = match serial_scalar(args.get(0).unwrap()) {
+    let start = match serial_scalar(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };

@@ -53,3 +53,44 @@ fn test_format_negative_section() {
     assert_eq!(fmt.format(42.0, &opts), "42");
     assert_eq!(fmt.format(-42.0, &opts), "-42");
 }
+
+#[test]
+fn test_three_section_format_zero_shows_text() {
+    // 3-section format: positive;negative;zero
+    // Zero values should use the 3rd section which is literal "--"
+    let fmt = NumberFormat::parse("$#,##0;($#,##0);\"--\"").unwrap();
+    let opts = FormatOptions::default();
+
+    assert_eq!(fmt.format(1234.0, &opts), "$1,234");
+    assert_eq!(fmt.format(-1234.0, &opts), "($1,234)");
+    assert_eq!(fmt.format(0.0, &opts), "--");
+}
+
+#[test]
+fn test_three_section_zero_with_underscore_paren() {
+    // Common accounting format with _) alignment spacers
+    let fmt = NumberFormat::parse("$#,##0_);($#,##0);\"--\"").unwrap();
+    let opts = FormatOptions::default();
+
+    assert_eq!(fmt.format(1234.0, &opts), "$1,234 ");
+    assert_eq!(fmt.format(-1234.0, &opts), "($1,234)");
+    assert_eq!(fmt.format(0.0, &opts), "--");
+}
+
+#[test]
+fn test_three_section_zero_with_locale_code() {
+    // Format with locale code prefix [$-409] (en-US)
+    let fmt = NumberFormat::parse("[$-409]$#,##0;($#,##0);\"--\"").unwrap();
+    let opts = FormatOptions::default();
+
+    assert_eq!(fmt.format(0.0, &opts), "--");
+}
+
+#[test]
+fn test_three_section_zero_unquoted_dashes() {
+    // Some files store the dashes without quotes
+    let fmt = NumberFormat::parse("$#,##0;($#,##0);--").unwrap();
+    let opts = FormatOptions::default();
+
+    assert_eq!(fmt.format(0.0, &opts), "--");
+}

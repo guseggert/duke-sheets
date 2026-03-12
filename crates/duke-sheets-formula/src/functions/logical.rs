@@ -6,7 +6,7 @@ use duke_sheets_core::CellError;
 
 /// IF function
 pub fn fn_if(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let condition = args.get(0).ok_or_else(|| {
+    let condition = args.first().ok_or_else(|| {
         crate::error::FormulaError::Argument("IF requires at least 2 arguments".into())
     })?;
 
@@ -91,8 +91,7 @@ pub fn fn_or(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<F
 
 /// NOT function
 pub fn fn_not(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let arg = args
-        .get(0)
+    let arg = args.first()
         .ok_or_else(|| crate::error::FormulaError::Argument("NOT requires 1 argument".into()))?;
 
     match arg {
@@ -106,7 +105,7 @@ pub fn fn_not(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 /// IFERROR(value, value_if_error) - Returns value_if_error if value is an error, otherwise returns value
 /// Reference: LibreOffice ScInterpreter::ScIfError
 pub fn fn_iferror(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let value = args.get(0).ok_or_else(|| {
+    let value = args.first().ok_or_else(|| {
         crate::error::FormulaError::Argument("IFERROR requires 2 arguments".into())
     })?;
 
@@ -125,8 +124,7 @@ pub fn fn_iferror(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 /// IFNA(value, value_if_na) - Returns value_if_na if value is #N/A error, otherwise returns value
 /// Similar to IFERROR but only catches #N/A errors
 pub fn fn_ifna(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let value = args
-        .get(0)
+    let value = args.first()
         .ok_or_else(|| crate::error::FormulaError::Argument("IFNA requires 2 arguments".into()))?;
 
     let value_if_na = args

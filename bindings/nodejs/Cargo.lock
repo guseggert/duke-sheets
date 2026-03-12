@@ -293,6 +293,7 @@ checksum = "f678cf4a922c215c63e0de95eb1ff08a958a81d47e485cf9da1e27bf6305cfa5"
 name = "duke-sheets"
 version = "0.1.0"
 dependencies = [
+ "ahash 0.8.12",
  "duke-sheets-chart",
  "duke-sheets-core",
  "duke-sheets-csv",
@@ -1042,8 +1043,6 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "ssfmt"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cafd85a137485737308ec6b94c19639833ca96bb83cbad2bc94a0e0eb763410"
 dependencies = [
  "chrono",
  "lru",

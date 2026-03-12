@@ -190,6 +190,7 @@ fn inverse_normal(p: f64) -> f64 {
         / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
 }
 
+#[allow(clippy::needless_range_loop)]
 fn solve_gaussian(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     let n = a.len();
     if n == 0 || b.len() != n {

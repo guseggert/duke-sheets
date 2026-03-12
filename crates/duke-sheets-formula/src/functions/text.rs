@@ -148,7 +148,7 @@ fn format_text_value(number: f64, format_text: &str) -> String {
 
 /// LEN(text)
 pub fn fn_len(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if let FormulaValue::Error(e) = v {
         return Ok(FormulaValue::Error(*e));
     }
@@ -161,7 +161,7 @@ pub fn fn_len(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 
 /// LEFT(text, [num_chars])
 pub fn fn_left(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = args.get(0).unwrap();
+    let text = args.first().unwrap();
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
@@ -189,7 +189,7 @@ pub fn fn_left(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 
 /// RIGHT(text, [num_chars])
 pub fn fn_right(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = args.get(0).unwrap();
+    let text = args.first().unwrap();
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
@@ -217,7 +217,7 @@ pub fn fn_right(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
 /// MID(text, start_num, num_chars)
 pub fn fn_mid(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = args.get(0).unwrap();
+    let text = args.first().unwrap();
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
@@ -252,7 +252,7 @@ pub fn fn_mid(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 
 /// LOWER(text)
 pub fn fn_lower(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = args.get(0).unwrap();
+    let text = args.first().unwrap();
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
@@ -264,7 +264,7 @@ pub fn fn_lower(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
 /// UPPER(text)
 pub fn fn_upper(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = args.get(0).unwrap();
+    let text = args.first().unwrap();
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
@@ -276,7 +276,7 @@ pub fn fn_upper(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
 /// TRIM(text)
 pub fn fn_trim(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = args.get(0).unwrap();
+    let text = args.first().unwrap();
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
@@ -319,7 +319,7 @@ pub fn fn_concat(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 /// Returns #VALUE! error if find_text is not found
 /// Reference: LibreOffice ScInterpreter::ScFind
 pub fn fn_find(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let find_text = match args.get(0) {
+    let find_text = match args.first() {
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => v.as_string(),
         None => return Ok(FormulaValue::Error(CellError::Value)),
@@ -365,7 +365,7 @@ pub fn fn_find(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 /// Similar to FIND but case-insensitive
 /// Reference: LibreOffice ScInterpreter::ScSearch
 pub fn fn_search(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let find_text = match args.get(0) {
+    let find_text = match args.first() {
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => v.as_string().to_lowercase(),
         None => return Ok(FormulaValue::Error(CellError::Value)),
@@ -405,7 +405,7 @@ pub fn fn_search(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 /// EXACT(text1, text2) - Checks whether two text strings are exactly the same (case-sensitive)
 /// Returns TRUE if they are identical, FALSE otherwise
 pub fn fn_exact(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text1 = match args.get(0) {
+    let text1 = match args.first() {
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => v.as_string(),
         None => return Ok(FormulaValue::Error(CellError::Value)),
@@ -422,7 +422,7 @@ pub fn fn_exact(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
 /// REPT(text, number_times) - Repeats text a given number of times
 pub fn fn_rept(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = match args.get(0) {
+    let text = match args.first() {
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => v.as_string(),
         None => return Ok(FormulaValue::Error(CellError::Value)),
@@ -454,7 +454,7 @@ pub fn fn_substitute(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let text = match args.get(0) {
+    let text = match args.first() {
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => v.as_string(),
         None => return Ok(FormulaValue::Error(CellError::Value)),
@@ -522,7 +522,7 @@ pub fn fn_substitute(
 
 /// PROPER(text) - Capitalizes the first letter in each word of a text value
 pub fn fn_proper(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = match args.get(0) {
+    let text = match args.first() {
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => v.as_string(),
         None => return Ok(FormulaValue::Error(CellError::Value)),
@@ -549,7 +549,7 @@ pub fn fn_proper(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 /// CHAR(number) - Returns the character specified by the code number
 /// Uses Unicode code points (Excel uses Windows-1252 for 128-255, but Unicode is more universal)
 pub fn fn_char(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n as u32,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => return Ok(FormulaValue::Error(CellError::Value)),
@@ -570,7 +570,7 @@ pub fn fn_char(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 /// CODE(text) - Returns a numeric code for the first character in a text string
 /// Returns the Unicode code point
 pub fn fn_code(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = match args.get(0) {
+    let text = match args.first() {
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => v.as_string(),
         None => return Ok(FormulaValue::Error(CellError::Value)),
@@ -587,7 +587,7 @@ pub fn fn_code(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 /// CLEAN(text) - Removes all nonprintable characters from text
 /// Removes characters with codes 0-31 (control characters)
 pub fn fn_clean(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = match args.get(0) {
+    let text = match args.first() {
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => v.as_string(),
         None => return Ok(FormulaValue::Error(CellError::Value)),
@@ -599,7 +599,7 @@ pub fn fn_clean(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
 /// VALUE(text) - Converts a text string that represents a number to a number
 pub fn fn_value(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = match args.get(0) {
+    let text = match args.first() {
         Some(FormulaValue::Number(n)) => return Ok(FormulaValue::Number(*n)), // Already a number
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => v.as_string(),
@@ -617,7 +617,7 @@ pub fn fn_value(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 /// T(value) - Returns the text referred to by value
 /// Returns empty string if value is not text
 pub fn fn_t(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::String(s)) => Ok(FormulaValue::String(s.clone())),
         Some(FormulaValue::Error(e)) => Ok(FormulaValue::Error(*e)),
         _ => Ok(FormulaValue::String(String::new())),
@@ -626,7 +626,7 @@ pub fn fn_t(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<Fo
 
 /// N(value) - Returns a value converted to a number
 pub fn fn_n(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => Ok(FormulaValue::Number(*n)),
         Some(FormulaValue::Boolean(true)) => Ok(FormulaValue::Number(1.0)),
         Some(FormulaValue::Boolean(false)) => Ok(FormulaValue::Number(0.0)),
@@ -636,7 +636,7 @@ pub fn fn_n(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<Fo
 }
 
 pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let value = args.get(0).unwrap();
+    let value = args.first().unwrap();
     if let FormulaValue::Error(e) = value {
         return Ok(FormulaValue::Error(*e));
     }
@@ -664,7 +664,7 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 }
 
 pub fn fn_textjoin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let delimiter = args.get(0).unwrap();
+    let delimiter = args.first().unwrap();
     if let FormulaValue::Error(e) = delimiter {
         return Ok(FormulaValue::Error(*e));
     }
@@ -723,7 +723,7 @@ pub fn fn_textjoin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 }
 
 pub fn fn_fixed(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number_arg = args.get(0).unwrap();
+    let number_arg = args.first().unwrap();
     if let FormulaValue::Error(e) = number_arg {
         return Ok(FormulaValue::Error(*e));
     }
@@ -771,7 +771,7 @@ pub fn fn_fixed(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 }
 
 pub fn fn_dollar(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number_arg = args.get(0).unwrap();
+    let number_arg = args.first().unwrap();
     if let FormulaValue::Error(e) = number_arg {
         return Ok(FormulaValue::Error(*e));
     }
@@ -809,7 +809,7 @@ pub fn fn_numbervalue(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let text_arg = args.get(0).unwrap();
+    let text_arg = args.first().unwrap();
     if let FormulaValue::Error(e) = text_arg {
         return Ok(FormulaValue::Error(*e));
     }

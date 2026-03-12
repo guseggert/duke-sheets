@@ -67,13 +67,13 @@ fn gregorian_to_jdn(year: i32, month: u32, day: u32) -> i32 {
     }
 
     // Calculate Julian Day Number
-    let jd = ((365.25 * (y + 4716) as f64).floor() as i32)
+    
+
+    ((365.25 * (y + 4716) as f64).floor() as i32)
         + ((30.6001 * (m + 1) as f64).floor() as i32)
         + day as i32
         + b
-        - 1524;
-
-    jd
+        - 1524
 }
 
 /// Convert Julian Day Number to Hijri date
@@ -117,7 +117,7 @@ fn jdn_to_hijri(jd: i32) -> (i32, u32, u32) {
     }
 
     // Clamp day to valid range (1-30)
-    let id = id.max(1).min(30);
+    let id = id.clamp(1, 30);
 
     (iy, im, id)
 }

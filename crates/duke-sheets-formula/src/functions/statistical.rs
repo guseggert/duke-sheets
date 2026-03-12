@@ -97,7 +97,7 @@ pub fn fn_countblank(
 /// - Wildcards: "*" matches any characters, "?" matches single character
 pub fn fn_countif(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     // Get the range (first argument)
-    let range = match args.get(0) {
+    let range = match args.first() {
         Some(FormulaValue::Array(arr)) => arr,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => {
@@ -148,7 +148,7 @@ pub fn fn_averageif(
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
     // Get the range (first argument)
-    let range = match args.get(0) {
+    let range = match args.first() {
         Some(FormulaValue::Array(arr)) => arr,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => {
@@ -267,7 +267,7 @@ pub fn fn_median(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 pub fn fn_large(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     // Get the array
     let mut numbers = Vec::new();
-    if let Some(arg) = args.get(0) {
+    if let Some(arg) = args.first() {
         if let Some(err) = collect_numbers(arg, &mut numbers) {
             return Ok(FormulaValue::Error(err));
         }
@@ -298,7 +298,7 @@ pub fn fn_large(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 pub fn fn_small(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     // Get the array
     let mut numbers = Vec::new();
-    if let Some(arg) = args.get(0) {
+    if let Some(arg) = args.first() {
         if let Some(err) = collect_numbers(arg, &mut numbers) {
             return Ok(FormulaValue::Error(err));
         }
@@ -1962,7 +1962,7 @@ pub fn fn_binom_dist(
     let Some(n) = to_nonneg_usize(trials) else {
         return Ok(FormulaValue::Error(CellError::Num));
     };
-    if p < 0.0 || p > 1.0 || k > n {
+    if !(0.0..=1.0).contains(&p) || k > n {
         return Ok(FormulaValue::Error(CellError::Num));
     }
 
@@ -2004,7 +2004,7 @@ pub fn fn_binom_dist_range(
     let Some(k2) = to_nonneg_usize(number_s2) else {
         return Ok(FormulaValue::Error(CellError::Num));
     };
-    if p < 0.0 || p > 1.0 || k1 > k2 || k2 > n {
+    if !(0.0..=1.0).contains(&p) || k1 > k2 || k2 > n {
         return Ok(FormulaValue::Error(CellError::Num));
     }
 
@@ -2032,7 +2032,7 @@ pub fn fn_binom_inv(
     let Some(n) = to_nonneg_usize(trials) else {
         return Ok(FormulaValue::Error(CellError::Num));
     };
-    if p < 0.0 || p > 1.0 || !(0.0..=1.0).contains(&alpha) {
+    if !(0.0..=1.0).contains(&p) || !(0.0..=1.0).contains(&alpha) {
         return Ok(FormulaValue::Error(CellError::Num));
     }
 
@@ -2158,7 +2158,7 @@ pub fn fn_chisq_test(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let actual = match args.get(0) {
+    let actual = match args.first() {
         Some(v) => match matrix_numbers(v) {
             Ok(m) => m,
             Err(e) => return Ok(e),
@@ -2327,7 +2327,7 @@ pub fn fn_t_test(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         Err(e) => return Ok(e),
     };
 
-    let Some(v1) = args.get(0) else {
+    let Some(v1) = args.first() else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
     let Some(v2) = args.get(1) else {
@@ -2531,7 +2531,7 @@ pub fn fn_f_inv_rt(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 pub fn fn_f_test(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let mut a = Vec::new();
     let mut b = Vec::new();
-    let Some(v1) = args.get(0) else {
+    let Some(v1) = args.first() else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
     let Some(v2) = args.get(1) else {
@@ -2825,7 +2825,7 @@ pub fn fn_negbinom_dist(
     let Some(r) = to_pos_usize(number_s) else {
         return Ok(FormulaValue::Error(CellError::Num));
     };
-    if p < 0.0 || p > 1.0 {
+    if !(0.0..=1.0).contains(&p) {
         return Ok(FormulaValue::Error(CellError::Num));
     }
 
@@ -3028,12 +3028,9 @@ fn extra_paired_numbers(
             return Err(FormulaValue::Error(*e));
         }
 
-        match (lv, rv) {
-            (FormulaValue::Number(x), FormulaValue::Number(y)) => {
-                left.push(*x);
-                right.push(*y);
-            }
-            _ => {}
+        if let (FormulaValue::Number(x), FormulaValue::Number(y)) = (lv, rv) {
+            left.push(*x);
+            right.push(*y);
         }
     }
 

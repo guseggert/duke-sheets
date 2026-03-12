@@ -3,7 +3,7 @@ use crate::evaluator::{EvaluationContext, FormulaValue};
 use duke_sheets_core::CellError;
 
 pub fn fn_iserr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -15,7 +15,7 @@ pub fn fn_iserr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 }
 
 pub fn fn_iseven(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -29,7 +29,7 @@ pub fn fn_iseven(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 }
 
 pub fn fn_isodd(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -46,7 +46,7 @@ pub fn fn_islogical(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -58,7 +58,7 @@ pub fn fn_isnontext(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -67,7 +67,7 @@ pub fn fn_isnontext(
 }
 
 pub fn fn_isref(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -79,7 +79,7 @@ pub fn fn_error_type(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     let n = match v {
         FormulaValue::Error(CellError::Null) => Some(1.0),
         FormulaValue::Error(CellError::Div0) => Some(2.0),
@@ -99,7 +99,7 @@ pub fn fn_error_type(
 }
 
 pub fn fn_type(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     let n = match v {
         FormulaValue::Number(_) => 1.0,
         FormulaValue::String(_) => 2.0,
@@ -136,7 +136,7 @@ pub fn fn_isformula(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -148,7 +148,7 @@ pub fn fn_isomitted(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }

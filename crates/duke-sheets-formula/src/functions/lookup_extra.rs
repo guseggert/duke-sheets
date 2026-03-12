@@ -46,6 +46,7 @@ fn array_dims(a: &[Vec<FormulaValue>]) -> (usize, usize) {
     (a.len(), a.first().map(|r| r.len()).unwrap_or(0))
 }
 
+#[allow(clippy::needless_range_loop)]
 fn flat_vector(a: &[Vec<FormulaValue>], by_col: bool) -> Vec<FormulaValue> {
     let (rows, cols) = array_dims(a);
     let mut out = Vec::new();
@@ -250,7 +251,7 @@ fn is_weekend_intl(
 
 /// ADDRESS(row_num, column_num, [abs_num], [a1], [sheet_text])
 pub fn fn_address(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let row = match scalar_i64(args.get(0).unwrap()) {
+    let row = match scalar_i64(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -326,7 +327,7 @@ pub fn fn_choosecols(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let array = as_array(args.get(0).unwrap());
+    let array = as_array(args.first().unwrap());
     let (rows, cols) = array_dims(&array);
     if rows == 0 || cols == 0 {
         return Ok(FormulaValue::Error(CellError::Value));
@@ -365,7 +366,7 @@ pub fn fn_chooserows(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let array = as_array(args.get(0).unwrap());
+    let array = as_array(args.first().unwrap());
     let (rows, _cols) = array_dims(&array);
     if rows == 0 {
         return Ok(FormulaValue::Error(CellError::Value));
@@ -392,7 +393,7 @@ pub fn fn_chooserows(
 
 /// DROP(array, rows, [columns])
 pub fn fn_drop(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let array = as_array(args.get(0).unwrap());
+    let array = as_array(args.first().unwrap());
     let (rows, cols) = array_dims(&array);
     let drop_rows = match scalar_i64(args.get(1).unwrap()) {
         Ok(v) => v,
@@ -442,7 +443,7 @@ pub fn fn_drop(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 
 /// EXPAND(array, rows, [columns], [pad_with])
 pub fn fn_expand(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let array = as_array(args.get(0).unwrap());
+    let array = as_array(args.first().unwrap());
     let (src_rows, src_cols) = array_dims(&array);
 
     let target_rows = match scalar_i64(args.get(1).unwrap()) {
@@ -478,7 +479,7 @@ pub fn fn_expand(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
 /// FILTER(array, include, [if_empty])
 pub fn fn_filter(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let array = as_array(args.get(0).unwrap());
+    let array = as_array(args.first().unwrap());
     let include_arr = as_array(args.get(1).unwrap());
     let (rows, _cols) = array_dims(&array);
 
@@ -558,7 +559,7 @@ pub fn fn_hstack(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
 /// LOOKUP(lookup_value, lookup_vector, [result_vector])
 pub fn fn_lookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let lookup_value = args.get(0).unwrap().clone();
+    let lookup_value = args.first().unwrap().clone();
     let lookup_array = as_array(args.get(1).unwrap());
     let lookup_vec = flat_vector(&lookup_array, false);
 
@@ -588,7 +589,7 @@ pub fn fn_lookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
 /// SORT(array, [sort_index], [sort_order], [by_col])
 pub fn fn_sort(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let mut arr = as_array(args.get(0).unwrap());
+    let mut arr = as_array(args.first().unwrap());
     let sort_index = match args.get(1) {
         Some(v) => match scalar_i64(v) {
             Ok(v) => v,
@@ -641,7 +642,7 @@ pub fn fn_sort(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 
 /// SORTBY(array, by_array1, [sort_order1], ...)
 pub fn fn_sortby(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let arr = as_array(args.get(0).unwrap());
+    let arr = as_array(args.first().unwrap());
     if arr.is_empty() {
         return Ok(FormulaValue::Array(arr));
     }
@@ -683,7 +684,7 @@ pub fn fn_sortby(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
 /// TAKE(array, rows, [columns])
 pub fn fn_take(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let arr = as_array(args.get(0).unwrap());
+    let arr = as_array(args.first().unwrap());
     let (rows, cols) = array_dims(&arr);
     let take_rows = match scalar_i64(args.get(1).unwrap()) {
         Ok(v) => v,
@@ -738,7 +739,7 @@ fn flatten_with_ignore(arr: &[Vec<FormulaValue>], ignore: i64, by_col: bool) -> 
 
 /// TOCOL(array, [ignore], [scan_by_column])
 pub fn fn_tocol(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let arr = as_array(args.get(0).unwrap());
+    let arr = as_array(args.first().unwrap());
     let ignore = match args.get(1) {
         Some(v) => match scalar_i64(v) {
             Ok(v) => v,
@@ -763,7 +764,7 @@ pub fn fn_tocol(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
 /// TOROW(array, [ignore], [scan_by_column])
 pub fn fn_torow(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let arr = as_array(args.get(0).unwrap());
+    let arr = as_array(args.first().unwrap());
     let ignore = match args.get(1) {
         Some(v) => match scalar_i64(v) {
             Ok(v) => v,
@@ -789,7 +790,7 @@ pub fn fn_transpose(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let arr = as_array(args.get(0).unwrap());
+    let arr = as_array(args.first().unwrap());
     let (rows, cols) = array_dims(&arr);
     let mut out = vec![vec![FormulaValue::Empty; rows]; cols];
     for (r, row) in arr.iter().enumerate() {
@@ -802,7 +803,7 @@ pub fn fn_transpose(
 
 /// UNIQUE(array, [by_col], [exactly_once])
 pub fn fn_unique(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let arr = as_array(args.get(0).unwrap());
+    let arr = as_array(args.first().unwrap());
     let by_col = match args.get(1) {
         Some(v) => match scalar_bool(v) {
             Ok(v) => v,
@@ -881,7 +882,7 @@ pub fn fn_vstack(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
 /// WRAPCOLS(vector, wrap_count, [pad_with])
 pub fn fn_wrapcols(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let vec_values = flat_vector(&as_array(args.get(0).unwrap()), false);
+    let vec_values = flat_vector(&as_array(args.first().unwrap()), false);
     let wrap_count = match scalar_i64(args.get(1).unwrap()) {
         Ok(v) if v > 0 => v as usize,
         Ok(_) => return Ok(FormulaValue::Error(CellError::Value)),
@@ -906,7 +907,7 @@ pub fn fn_wrapcols(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 
 /// WRAPROWS(vector, wrap_count, [pad_with])
 pub fn fn_wraprows(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let vec_values = flat_vector(&as_array(args.get(0).unwrap()), false);
+    let vec_values = flat_vector(&as_array(args.first().unwrap()), false);
     let wrap_count = match scalar_i64(args.get(1).unwrap()) {
         Ok(v) if v > 0 => v as usize,
         Ok(_) => return Ok(FormulaValue::Error(CellError::Value)),
@@ -934,7 +935,7 @@ pub fn fn_hyperlink(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let link = match scalar_string(args.get(0).unwrap()) {
+    let link = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -955,7 +956,7 @@ pub fn fn_networkdays_intl(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let start = match scalar_i64(args.get(0).unwrap()) {
+    let start = match scalar_i64(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -997,7 +998,7 @@ pub fn fn_workday_intl(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let start = match scalar_i64(args.get(0).unwrap()) {
+    let start = match scalar_i64(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -1041,7 +1042,7 @@ pub fn fn_encodeurl(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let text = match scalar_string(args.get(0).unwrap()) {
+    let text = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };

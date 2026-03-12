@@ -215,9 +215,11 @@ impl<'a> EvaluationContext<'a> {
             None => return FormulaValue::Error(CellError::Ref),
         };
 
-        let mut rows = Vec::new();
+        let num_rows = (end_row - start_row + 1) as usize;
+        let num_cols = (end_col - start_col + 1) as usize;
+        let mut rows = Vec::with_capacity(num_rows);
         for row in start_row..=end_row {
-            let mut cols = Vec::new();
+            let mut cols = Vec::with_capacity(num_cols);
             for col in start_col..=end_col {
                 cols.push(worksheet.get_value_at(row, col).into());
             }
@@ -820,22 +822,22 @@ fn apply_scalar_binary_op(
 
         // Comparison operators
         BinaryOperator::Equal => Ok(FormulaValue::Boolean(
-            compare_values(&left_val, &right_val) == 0,
+            compare_values(left_val, right_val) == 0,
         )),
         BinaryOperator::NotEqual => Ok(FormulaValue::Boolean(
-            compare_values(&left_val, &right_val) != 0,
+            compare_values(left_val, right_val) != 0,
         )),
         BinaryOperator::LessThan => Ok(FormulaValue::Boolean(
-            compare_values(&left_val, &right_val) < 0,
+            compare_values(left_val, right_val) < 0,
         )),
         BinaryOperator::LessEqual => Ok(FormulaValue::Boolean(
-            compare_values(&left_val, &right_val) <= 0,
+            compare_values(left_val, right_val) <= 0,
         )),
         BinaryOperator::GreaterThan => Ok(FormulaValue::Boolean(
-            compare_values(&left_val, &right_val) > 0,
+            compare_values(left_val, right_val) > 0,
         )),
         BinaryOperator::GreaterEqual => Ok(FormulaValue::Boolean(
-            compare_values(&left_val, &right_val) >= 0,
+            compare_values(left_val, right_val) >= 0,
         )),
 
         // Concatenation
@@ -1061,11 +1063,11 @@ fn evaluate_function(
 
     // Strip Excel future function prefixes — Excel stores newer functions
     // like IFNA, IFS, SWITCH, TEXTJOIN with _xlfn. (or _xlws.) in XML.
-    let upper = name.to_uppercase();
-    let lookup_name = upper
+    // Note: function names are already uppercased by the parser.
+    let lookup_name = name
         .strip_prefix("_XLFN.")
-        .or_else(|| upper.strip_prefix("_XLWS."))
-        .unwrap_or(&upper);
+        .or_else(|| name.strip_prefix("_XLWS."))
+        .unwrap_or(name);
 
     let func = registry
         .get(lookup_name)

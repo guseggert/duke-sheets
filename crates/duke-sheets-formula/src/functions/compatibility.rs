@@ -672,7 +672,7 @@ pub fn fn_chiinv(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 }
 
 pub fn fn_chitest(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let (actual, expected) = match (args.get(0), args.get(1)) {
+    let (actual, expected) = match (args.first(), args.get(1)) {
         (Some(a), Some(b)) => (a, b),
         _ => return Ok(FormulaValue::Error(CellError::Value)),
     };
@@ -740,7 +740,7 @@ pub fn fn_confidence(
 }
 
 pub fn fn_covar(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let (a, b) = match (args.get(0), args.get(1)) {
+    let (a, b) = match (args.first(), args.get(1)) {
         (Some(a), Some(b)) => (a, b),
         _ => return Ok(FormulaValue::Error(CellError::Value)),
     };
@@ -861,7 +861,7 @@ pub fn fn_finv(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 pub fn fn_ftest(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let mut a = Vec::new();
     let mut b = Vec::new();
-    if let Some(err) = collect_numbers(args.get(0).unwrap_or(&FormulaValue::Empty), &mut a) {
+    if let Some(err) = collect_numbers(args.first().unwrap_or(&FormulaValue::Empty), &mut a) {
         return Ok(FormulaValue::Error(err));
     }
     if let Some(err) = collect_numbers(args.get(1).unwrap_or(&FormulaValue::Empty), &mut b) {
@@ -1190,7 +1190,7 @@ pub fn fn_ttest(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
     let mut a = Vec::new();
     let mut b = Vec::new();
-    if let Some(err) = collect_numbers(args.get(0).unwrap_or(&FormulaValue::Empty), &mut a) {
+    if let Some(err) = collect_numbers(args.first().unwrap_or(&FormulaValue::Empty), &mut a) {
         return Ok(FormulaValue::Error(err));
     }
     if let Some(err) = collect_numbers(args.get(1).unwrap_or(&FormulaValue::Empty), &mut b) {
@@ -1303,7 +1303,7 @@ pub fn fn_weibull(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 
 pub fn fn_ztest(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let mut values = Vec::new();
-    if let Some(err) = collect_numbers(args.get(0).unwrap_or(&FormulaValue::Empty), &mut values) {
+    if let Some(err) = collect_numbers(args.first().unwrap_or(&FormulaValue::Empty), &mut values) {
         return Ok(FormulaValue::Error(err));
     }
     if values.is_empty() {

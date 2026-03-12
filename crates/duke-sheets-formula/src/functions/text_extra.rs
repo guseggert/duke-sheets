@@ -163,7 +163,7 @@ fn text_before_after(
 
 /// REPLACE(old_text, start_num, num_chars, new_text)
 pub fn fn_replace(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let old_text = match scalar_string(args.get(0).unwrap()) {
+    let old_text = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -208,7 +208,7 @@ pub fn fn_textbefore(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let text = match scalar_string(args.get(0).unwrap()) {
+    let text = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -259,7 +259,7 @@ pub fn fn_textafter(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let text = match scalar_string(args.get(0).unwrap()) {
+    let text = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -310,7 +310,7 @@ pub fn fn_textsplit(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let text = match scalar_string(args.get(0).unwrap()) {
+    let text = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -372,7 +372,7 @@ pub fn fn_textsplit(
 
 /// UNICHAR(number)
 pub fn fn_unichar(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number = match scalar_i64(args.get(0).unwrap()) {
+    let number = match scalar_i64(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -389,7 +389,7 @@ pub fn fn_unichar(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 
 /// UNICODE(text)
 pub fn fn_unicode(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = match scalar_string(args.get(0).unwrap()) {
+    let text = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -627,7 +627,7 @@ fn halfwidth_to_fullwidth(ch: char, next: Option<char>) -> (Option<char>, bool) 
 
 /// ASC(text) — Convert full-width characters to half-width.
 pub fn fn_asc(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = match scalar_string(args.get(0).unwrap()) {
+    let text = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -647,7 +647,7 @@ pub fn fn_asc(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 
 /// JIS(text) — Convert half-width characters to full-width.
 pub fn fn_jis(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let text = match scalar_string(args.get(0).unwrap()) {
+    let text = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
@@ -791,7 +791,7 @@ fn number_to_bahttext(value: f64) -> String {
 
 /// BAHTTEXT(number) — Convert a number to Thai Baht text.
 pub fn fn_bahttext(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let value = match args.get(0).unwrap() {
+    let value = match args.first().unwrap() {
         FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
         v => match v.as_number() {
             Some(n) => n,
@@ -812,7 +812,7 @@ pub fn fn_bahttext(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 /// not derivable from the text content. Would need EvaluationContext access to
 /// cell-level rich text metadata to implement fully.
 pub fn fn_phonetic(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0).unwrap() {
+    match args.first().unwrap() {
         FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
         _ => Ok(FormulaValue::String(String::new())),
     }

@@ -229,7 +229,7 @@ impl<'a> FormulaParser<'a> {
 
         // Number
         if c.is_ascii_digit()
-            || (c == '.' && self.peek_char_at(1).map_or(false, |c| c.is_ascii_digit()))
+            || (c == '.' && self.peek_char_at(1).is_some_and(|c| c.is_ascii_digit()))
         {
             return self.scan_number();
         }
@@ -353,25 +353,25 @@ impl<'a> FormulaParser<'a> {
         let start = self.pos;
 
         // Integer part
-        while self.peek_char().map_or(false, |c| c.is_ascii_digit()) {
+        while self.peek_char().is_some_and(|c| c.is_ascii_digit()) {
             self.advance();
         }
 
         // Decimal part
         if self.peek_char() == Some('.') {
             self.advance();
-            while self.peek_char().map_or(false, |c| c.is_ascii_digit()) {
+            while self.peek_char().is_some_and(|c| c.is_ascii_digit()) {
                 self.advance();
             }
         }
 
         // Exponent part
-        if self.peek_char().map_or(false, |c| c == 'e' || c == 'E') {
+        if self.peek_char().is_some_and(|c| c == 'e' || c == 'E') {
             self.advance();
-            if self.peek_char().map_or(false, |c| c == '+' || c == '-') {
+            if self.peek_char().is_some_and(|c| c == '+' || c == '-') {
                 self.advance();
             }
-            while self.peek_char().map_or(false, |c| c.is_ascii_digit()) {
+            while self.peek_char().is_some_and(|c| c.is_ascii_digit()) {
                 self.advance();
             }
         }
@@ -389,20 +389,20 @@ impl<'a> FormulaParser<'a> {
             // spill range operator (e.g., A1#)
             if !self
                 .peek_char_at(1)
-                .map_or(false, |c| c.is_ascii_alphabetic())
+                .is_some_and(|c| c.is_ascii_alphabetic())
             {
                 self.advance();
                 return Token::Hash;
             }
             let start = self.pos;
             self.advance();
-            while self.peek_char().map_or(false, |c| {
+            while self.peek_char().is_some_and(|c| {
                 c.is_ascii_alphanumeric() || c == '!' || c == '/' || c == '?'
             }) {
                 self.advance();
             }
             let error_str = &self.input[start..self.pos];
-            if let Some(err) = CellError::from_str(error_str) {
+            if let Some(err) = CellError::parse(error_str) {
                 return Token::Error(err);
             }
             // If not a valid error, treat as identifier
@@ -412,7 +412,7 @@ impl<'a> FormulaParser<'a> {
         let start = self.pos;
 
         // Scan identifier/reference
-        while self.peek_char().map_or(false, |c| {
+        while self.peek_char().is_some_and(|c| {
             c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.'
         }) {
             self.advance();
@@ -505,7 +505,7 @@ impl<'a> FormulaParser<'a> {
     }
 
     fn skip_whitespace(&mut self) {
-        while self.peek_char().map_or(false, |c| c.is_whitespace()) {
+        while self.peek_char().is_some_and(|c| c.is_whitespace()) {
             self.advance();
         }
     }
@@ -846,8 +846,7 @@ impl<'a> FormulaParser<'a> {
                     Token::Semicolon => {
                         self.consume();
                         rows.push(current_row);
-                        current_row = Vec::new();
-                        current_row.push(self.parse_expression()?);
+                        current_row = vec![self.parse_expression()?];
                     }
                     Token::RightBrace => break,
                     _ => {
@@ -1002,9 +1001,9 @@ impl<'a> FormulaParser<'a> {
                 let part = part.trim();
                 if part.starts_with('#') {
                     specifiers.push(Self::parse_specifier_keyword(part)?);
-                } else if part.starts_with('@') {
+                } else if let Some(stripped) = part.strip_prefix('@') {
                     specifiers.push(StructuredRefSpecifier::ThisRow);
-                    let col_name = part[1..].trim();
+                    let col_name = stripped.trim();
                     if !col_name.is_empty() {
                         column = Some(col_name.to_string());
                     }
@@ -1026,9 +1025,9 @@ impl<'a> FormulaParser<'a> {
                 column: None,
                 specifiers: vec![spec],
             }))
-        } else if content.starts_with('@') {
+        } else if let Some(stripped) = content.strip_prefix('@') {
             // This-row shorthand: [@Column1]
-            let col_name = content[1..].trim();
+            let col_name = stripped.trim();
             Ok(FormulaExpr::StructuredRef(StructuredReference {
                 table,
                 column: if col_name.is_empty() {

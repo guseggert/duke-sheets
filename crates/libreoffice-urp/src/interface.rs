@@ -46,7 +46,7 @@ pub enum ParamType {
 impl ParamType {
     pub fn to_type(&self) -> Type {
         match self {
-            ParamType::Type => Type::r#type(),
+            ParamType::Type => Type::type_class(),
             ParamType::String => Type::string(),
             ParamType::Long => Type::long(),
             ParamType::Short => Type::short(),

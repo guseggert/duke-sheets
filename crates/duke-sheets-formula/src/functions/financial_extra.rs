@@ -522,6 +522,7 @@ fn amordegrc_coeff(rate: f64) -> f64 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn amorlinc_like(
     cost: f64,
     date_purchased: i64,
@@ -1439,7 +1440,7 @@ pub fn fn_xirr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     let mut values = Vec::new();
     let mut dates = Vec::new();
 
-    let Some(v) = args.get(0) else {
+    let Some(v) = args.first() else {
         return Ok(FormulaValue::Error(CellError::Value));
     };
     let Some(d) = args.get(1) else {

@@ -6,7 +6,7 @@ use duke_sheets_core::CellError;
 
 /// ISBLANK(value)
 pub fn fn_isblank(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -15,7 +15,7 @@ pub fn fn_isblank(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 
 /// ISNUMBER(value)
 pub fn fn_isnumber(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -24,7 +24,7 @@ pub fn fn_isnumber(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 
 /// ISTEXT(value)
 pub fn fn_istext(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -33,7 +33,7 @@ pub fn fn_istext(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
 /// ISERROR(value)
 pub fn fn_iserror(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -42,7 +42,7 @@ pub fn fn_iserror(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 
 /// ISNA(value)
 pub fn fn_isna(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let v = args.get(0).unwrap();
+    let v = args.first().unwrap();
     if matches!(v, FormulaValue::Array(_)) {
         return Ok(FormulaValue::Error(CellError::Value));
     }

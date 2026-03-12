@@ -103,7 +103,7 @@ pub fn read_type(buf: &mut Bytes) -> Result<(Type, u16, bool)> {
     let cache_flag = byte & 0x80 != 0;
     let tc_byte = byte & 0x7F;
 
-    let tc = TypeClass::from_byte(tc_byte).ok_or_else(|| UrpError::UnknownTypeClass(tc_byte))?;
+    let tc = TypeClass::from_byte(tc_byte).ok_or(UrpError::UnknownTypeClass(tc_byte))?;
 
     if tc.is_simple() {
         Ok((

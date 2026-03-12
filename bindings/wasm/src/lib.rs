@@ -1,10 +1,11 @@
 use std::io::Cursor;
-use std::sync::{Arc, RwLock};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use duke_sheets::{CalculationMode, CalculationOptions, WorkbookCalculationExt};
+use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
@@ -161,7 +162,7 @@ impl CellValue {
 
 #[wasm_bindgen]
 pub struct Worksheet {
-    workbook: Arc<RwLock<CoreWorkbook>>,
+    workbook: Rc<RefCell<CoreWorkbook>>,
     sheet_index: usize,
 }
 
@@ -169,7 +170,7 @@ pub struct Worksheet {
 impl Worksheet {
     #[wasm_bindgen(getter)]
     pub fn name(&self) -> Result<String, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         wb.worksheet(self.sheet_index)
             .map(|ws| ws.name().to_string())
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))
@@ -177,7 +178,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = setCell)]
     pub fn set_cell(&self, address: &str, value: JsValue) -> Result<(), JsError> {
-        let mut wb = self.workbook.write().map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -190,7 +191,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = setFormula)]
     pub fn set_formula(&self, address: &str, formula: &str) -> Result<(), JsError> {
-        let mut wb = self.workbook.write().map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -199,7 +200,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getCell)]
     pub fn get_cell(&self, address: &str) -> Result<CellValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -212,7 +213,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getCellAt)]
     pub fn get_cell_at(&self, row: u32, col: u32) -> Result<CellValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -223,7 +224,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getCalculatedValue)]
     pub fn get_calculated_value(&self, address: &str) -> Result<CellValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -238,7 +239,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getCalculatedValueAt)]
     pub fn get_calculated_value_at(&self, row: u32, col: u32) -> Result<CellValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -251,7 +252,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = usedRange)]
     pub fn used_range(&self) -> Result<JsValue, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -270,7 +271,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = setRowHeight)]
     pub fn set_row_height(&self, row: u32, height: f64) -> Result<(), JsError> {
-        let mut wb = self.workbook.write().map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -280,7 +281,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = setColumnWidth)]
     pub fn set_column_width(&self, col: u32, width: f64) -> Result<(), JsError> {
-        let mut wb = self.workbook.write().map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -290,7 +291,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getRowHeight)]
     pub fn get_row_height(&self, row: u32) -> Result<Option<f64>, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -299,7 +300,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = getColumnWidth)]
     pub fn get_column_width(&self, col: u32) -> Result<Option<f64>, JsError> {
-        let wb = self.workbook.read().map_err(to_js_error)?;
+        let wb = self.workbook.borrow();
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -308,7 +309,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = mergeCells)]
     pub fn merge_cells(&self, range_str: &str) -> Result<(), JsError> {
-        let mut wb = self.workbook.write().map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -319,7 +320,7 @@ impl Worksheet {
 
     #[wasm_bindgen(js_name = unmergeCells)]
     pub fn unmerge_cells(&self, range_str: &str) -> Result<bool, JsError> {
-        let mut wb = self.workbook.write().map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
         let ws = wb
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
@@ -331,7 +332,7 @@ impl Worksheet {
 
 #[wasm_bindgen]
 pub struct Workbook {
-    pub(crate) inner: Arc<RwLock<CoreWorkbook>>,
+    pub(crate) inner: Rc<RefCell<CoreWorkbook>>,
 }
 
 #[wasm_bindgen]
@@ -339,7 +340,7 @@ impl Workbook {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(CoreWorkbook::new())),
+            inner: Rc::new(RefCell::new(CoreWorkbook::new())),
         }
     }
 
@@ -353,7 +354,7 @@ impl Workbook {
         let mut wb = CoreWorkbook::empty();
         wb.add_existing_worksheet(ws).map_err(to_js_error)?;
         Ok(Self {
-            inner: Arc::new(RwLock::new(wb)),
+            inner: Rc::new(RefCell::new(wb)),
         })
     }
 
@@ -369,13 +370,13 @@ impl Workbook {
         let wb = duke_sheets_core::Workbook::from_bytes(data)
             .map_err(|e| JsError::new(&format!("Failed to read file: {}", e)))?;
         Ok(Self {
-            inner: Arc::new(RwLock::new(wb)),
+            inner: Rc::new(RefCell::new(wb)),
         })
     }
 
     #[wasm_bindgen(js_name = saveXlsxBytes)]
     pub fn save_xlsx_bytes(&self) -> Result<Vec<u8>, JsError> {
-        let wb = self.inner.read().map_err(to_js_error)?;
+        let wb = self.inner.borrow();
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
         Ok(buf)
@@ -383,7 +384,7 @@ impl Workbook {
 
     #[wasm_bindgen(js_name = saveCsvString)]
     pub fn save_csv_string(&self) -> Result<String, JsError> {
-        let wb = self.inner.read().map_err(to_js_error)?;
+        let wb = self.inner.borrow();
         let ws = wb
             .worksheet(0)
             .ok_or_else(|| JsError::new("No worksheets to save"))?;
@@ -399,13 +400,13 @@ impl Workbook {
 
     #[wasm_bindgen(getter, js_name = sheetCount)]
     pub fn sheet_count(&self) -> Result<usize, JsError> {
-        let wb = self.inner.read().map_err(to_js_error)?;
+        let wb = self.inner.borrow();
         Ok(wb.sheet_count())
     }
 
     #[wasm_bindgen(getter, js_name = sheetNames)]
     pub fn sheet_names(&self) -> Result<Vec<String>, JsError> {
-        let wb = self.inner.read().map_err(to_js_error)?;
+        let wb = self.inner.borrow();
         Ok((0..wb.sheet_count())
             .filter_map(|i| wb.worksheet(i).map(|ws| ws.name().to_string()))
             .collect())
@@ -413,44 +414,44 @@ impl Workbook {
 
     #[wasm_bindgen(js_name = getSheet)]
     pub fn get_sheet(&self, index: usize) -> Result<Worksheet, JsError> {
-        let wb = self.inner.read().map_err(to_js_error)?;
+        let wb = self.inner.borrow();
         if index >= wb.sheet_count() {
             return Err(JsError::new(&format!("Sheet index {} out of range", index)));
         }
         drop(wb);
         Ok(Worksheet {
-            workbook: Arc::clone(&self.inner),
+            workbook: Rc::clone(&self.inner),
             sheet_index: index,
         })
     }
 
     #[wasm_bindgen(js_name = getSheetByName)]
     pub fn get_sheet_by_name(&self, name: &str) -> Result<Worksheet, JsError> {
-        let wb = self.inner.read().map_err(to_js_error)?;
+        let wb = self.inner.borrow();
         let index = wb
             .sheet_index(name)
             .ok_or_else(|| JsError::new(&format!("Sheet '{}' not found", name)))?;
         drop(wb);
         Ok(Worksheet {
-            workbook: Arc::clone(&self.inner),
+            workbook: Rc::clone(&self.inner),
             sheet_index: index,
         })
     }
 
     #[wasm_bindgen(js_name = addSheet)]
     pub fn add_sheet(&self, name: &str) -> Result<usize, JsError> {
-        let mut wb = self.inner.write().map_err(to_js_error)?;
+        let mut wb = self.inner.borrow_mut();
         wb.add_worksheet_with_name(name).map_err(to_js_error)
     }
 
     #[wasm_bindgen(js_name = removeSheet)]
     pub fn remove_sheet(&self, index: usize) -> Result<(), JsError> {
-        let mut wb = self.inner.write().map_err(to_js_error)?;
+        let mut wb = self.inner.borrow_mut();
         wb.remove_worksheet(index).map(|_| ()).map_err(to_js_error)
     }
 
     pub fn calculate(&self) -> Result<JsValue, JsError> {
-        let mut wb = self.inner.write().map_err(to_js_error)?;
+        let mut wb = self.inner.borrow_mut();
         let stats = wb.calculate().map_err(to_js_error)?;
         to_js_value(&WasmCalculationStats::from(&stats))
     }
@@ -461,25 +462,12 @@ impl Workbook {
         iterative: bool,
         max_iterations: u32,
         max_change: f64,
-        mode: &str,
-        auto_threshold: u32,
     ) -> Result<JsValue, JsError> {
-        let calc_mode = match mode {
-            "auto" => CalculationMode::Auto,
-            "exact" => CalculationMode::Exact,
-            "multipass" => CalculationMode::Multipass,
-            other => return Err(JsError::new(&format!(
-                "Invalid calculation mode '{}': expected 'exact', 'multipass', or 'auto'",
-                other
-            ))),
-        };
-        let mut wb = self.inner.write().map_err(to_js_error)?;
+        let mut wb = self.inner.borrow_mut();
         let options = CalculationOptions {
             iterative,
             max_iterations,
             max_change,
-            mode: calc_mode,
-            auto_threshold: auto_threshold as usize,
             ..Default::default()
         };
         let stats = wb.calculate_with_options(&options).map_err(to_js_error)?;
@@ -488,13 +476,13 @@ impl Workbook {
 
     #[wasm_bindgen(js_name = defineName)]
     pub fn define_name(&self, name: &str, refers_to: &str) -> Result<(), JsError> {
-        let mut wb = self.inner.write().map_err(to_js_error)?;
+        let mut wb = self.inner.borrow_mut();
         wb.define_name(name, refers_to).map_err(to_js_error)
     }
 
     #[wasm_bindgen(js_name = getNamedRange)]
     pub fn get_named_range(&self, name: &str) -> Result<Option<String>, JsError> {
-        let wb = self.inner.read().map_err(to_js_error)?;
+        let wb = self.inner.borrow();
         Ok(wb.get_named_range(name, 0).map(|nr| nr.refers_to.clone()))
     }
 }

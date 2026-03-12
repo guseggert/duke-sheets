@@ -89,6 +89,12 @@ pub struct ReaderState {
     pub last_tid: Option<Vec<u8>>,
 }
 
+impl Default for ReaderState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReaderState {
     pub fn new() -> Self {
         Self {
@@ -123,9 +129,8 @@ impl ReaderState {
 
     fn decode_short_request(&mut self, mut data: Bytes) -> Result<UrpMessage> {
         let first_byte = data.get_u8();
-        let function_id;
 
-        if first_byte & 0x40 != 0 {
+        let function_id = if first_byte & 0x40 != 0 {
             // FUNCTIONID14: 2-byte header
             let high = (first_byte & 0x3F) as u16;
             if data.remaining() < 1 {
@@ -134,11 +139,11 @@ impl ReaderState {
                 ));
             }
             let low = data.get_u8() as u16;
-            function_id = (high << 8) | low;
+            (high << 8) | low
         } else {
             // 1-byte header: bits 5..0 = function ID
-            function_id = (first_byte & 0x3F) as u16;
-        }
+            (first_byte & 0x3F) as u16
+        };
 
         // Uses first-level cache for type, OID, TID
         let type_name = self
@@ -347,6 +352,12 @@ pub struct WriterState {
     pub last_tid: Option<Vec<u8>>,
 }
 
+impl Default for WriterState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WriterState {
     pub fn new() -> Self {
         Self {
@@ -524,6 +535,12 @@ impl WriterState {
 pub struct LruCache<T: Clone + PartialEq> {
     entries: [Option<T>; 256],
     next_index: u16,
+}
+
+impl<T: Clone + PartialEq> Default for LruCache<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: Clone + PartialEq> LruCache<T> {

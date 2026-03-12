@@ -150,7 +150,7 @@ impl Type {
         }
     }
 
-    pub fn r#type() -> Self {
+    pub fn type_class() -> Self {
         Self {
             class: TypeClass::Type,
             name: String::new(),
@@ -327,7 +327,7 @@ impl UnoValue {
                 name: String::new(),
             },
             UnoValue::String(_) => Type::string(),
-            UnoValue::Type(_) => Type::r#type(),
+            UnoValue::Type(_) => Type::type_class(),
             UnoValue::Any(_) => Type::any(),
             UnoValue::Enum(_) => Type::r#enum(""),
             UnoValue::Struct(_) => Type::r#struct(""),

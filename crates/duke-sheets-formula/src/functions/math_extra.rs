@@ -905,6 +905,7 @@ pub fn fn_iso_ceiling(
     fn_ceiling_precise(args, _ctx)
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn fn_mdeterm(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let mut a = match parse_matrix(args.first().unwrap_or(&FormulaValue::Empty)) {
         Ok(m) => m,
@@ -940,6 +941,7 @@ pub fn fn_mdeterm(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     Ok(FormulaValue::Number(det))
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn fn_minverse(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let a = match parse_matrix(args.first().unwrap_or(&FormulaValue::Empty)) {
         Ok(m) => m,
@@ -995,6 +997,7 @@ pub fn fn_minverse(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     Ok(FormulaValue::Array(inv))
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn fn_mmult(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let a = match parse_matrix(args.first().unwrap_or(&FormulaValue::Empty)) {
         Ok(m) => m,
@@ -1427,7 +1430,7 @@ pub fn fn_subtotal(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
         &[
             FormulaValue::Number(normalized as f64),
             FormulaValue::Number(0.0),
-            FormulaValue::Array(args[1..].to_vec().into_iter().map(|v| vec![v]).collect()),
+            FormulaValue::Array(args[1..].iter().cloned().map(|v| vec![v]).collect()),
         ],
         _ctx,
     )

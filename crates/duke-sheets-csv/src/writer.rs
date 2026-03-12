@@ -29,9 +29,9 @@ impl CsvWriter {
         options: &CsvWriteOptions,
     ) -> CsvResult<()> {
         let terminator = match options.line_terminator {
-            LineTerminator::LF => csv::Terminator::Any(b'\n'),
-            LineTerminator::CRLF => csv::Terminator::CRLF,
-            LineTerminator::CR => csv::Terminator::Any(b'\r'),
+            LineTerminator::Lf => csv::Terminator::Any(b'\n'),
+            LineTerminator::Crlf => csv::Terminator::CRLF,
+            LineTerminator::Cr => csv::Terminator::Any(b'\r'),
         };
 
         let mut csv_writer = csv::WriterBuilder::new()

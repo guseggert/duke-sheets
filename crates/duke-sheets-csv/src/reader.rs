@@ -31,7 +31,7 @@ impl CsvReader {
 
         // Read headers if present
         if options.has_header {
-            if let Some(headers) = csv_reader.headers().ok() {
+            if let Ok(headers) = csv_reader.headers() {
                 for (col, value) in headers.iter().enumerate() {
                     worksheet.set_cell_value_at(row_idx, col as u16, value)?;
                 }

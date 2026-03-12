@@ -160,7 +160,7 @@ pub fn fn_randbetween(
 ) -> FormulaResult<FormulaValue> {
     use rand::Rng;
 
-    let bottom = match args.get(0) {
+    let bottom = match args.first() {
         Some(FormulaValue::Number(n)) => n.ceil() as i64,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         _ => return Ok(FormulaValue::Error(CellError::Value)),
@@ -184,7 +184,7 @@ pub fn fn_randbetween(
 /// ABS(number) - Returns the absolute value of a number
 /// Reference: LibreOffice ScInterpreter::ScAbs
 pub fn fn_abs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => Ok(FormulaValue::Number(n.abs())),
         Some(FormulaValue::Error(e)) => Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => Ok(FormulaValue::Number(0.0)), // Empty treated as 0
@@ -196,7 +196,7 @@ pub fn fn_abs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 /// Uses "round half away from zero" mode (standard Excel/LibreOffice rounding)
 /// Reference: LibreOffice ScInterpreter::ScRound with rtl_math_RoundingMode_Corrected
 pub fn fn_round(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -231,7 +231,7 @@ pub fn fn_round(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 /// The result has the same sign as the divisor (unlike Rust's % operator)
 /// Reference: LibreOffice ScInterpreter::ScMod
 pub fn fn_mod(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -273,7 +273,7 @@ pub fn fn_mod(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 /// Always rounds toward negative infinity (floor)
 /// Reference: LibreOffice ScInterpreter::ScInt uses approxFloor
 pub fn fn_int(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => Ok(FormulaValue::Number(n.floor())),
         Some(FormulaValue::Error(e)) => Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => Ok(FormulaValue::Number(0.0)),
@@ -285,7 +285,7 @@ pub fn fn_int(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 /// Unlike INT, TRUNC rounds toward zero
 /// Reference: LibreOffice ScInterpreter::ScTrunc
 pub fn fn_trunc(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -307,7 +307,7 @@ pub fn fn_trunc(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 /// SIGN(number) - Returns the sign of a number: 1 if positive, -1 if negative, 0 if zero
 /// Reference: LibreOffice ScInterpreter::ScSign
 pub fn fn_sign(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => {
             let sign = if *n > 0.0 {
                 1.0
@@ -328,7 +328,7 @@ pub fn fn_sign(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 /// Returns #NUM! error for negative numbers
 /// Reference: LibreOffice ScInterpreter::ScSqrt
 pub fn fn_sqrt(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => {
             if *n >= 0.0 {
                 Ok(FormulaValue::Number(n.sqrt()))
@@ -346,7 +346,7 @@ pub fn fn_sqrt(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 /// Equivalent to number^power
 /// Reference: LibreOffice ScInterpreter::ScPow
 pub fn fn_power(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -375,7 +375,7 @@ pub fn fn_power(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 /// Default base is 10
 /// Reference: LibreOffice ScInterpreter::ScLog
 pub fn fn_log(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => return Ok(FormulaValue::Error(CellError::Num)),
@@ -400,7 +400,7 @@ pub fn fn_log(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 /// LOG10(number) - Returns the base-10 logarithm of a number
 /// Reference: LibreOffice ScInterpreter::ScLog10
 pub fn fn_log10(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => {
             if *n > 0.0 {
                 Ok(FormulaValue::Number(n.log10()))
@@ -417,7 +417,7 @@ pub fn fn_log10(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 /// LN(number) - Returns the natural logarithm of a number
 /// Reference: LibreOffice ScInterpreter::ScLn
 pub fn fn_ln(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => {
             if *n > 0.0 {
                 Ok(FormulaValue::Number(n.ln()))
@@ -434,7 +434,7 @@ pub fn fn_ln(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<F
 /// EXP(number) - Returns e raised to the power of a given number
 /// Reference: LibreOffice ScInterpreter::ScExp
 pub fn fn_exp(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => {
             let result = n.exp();
             if result.is_infinite() {
@@ -457,7 +457,7 @@ pub fn fn_pi(_args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 /// SIN(number) - Returns the sine of an angle (in radians)
 /// Reference: LibreOffice ScInterpreter::ScSin
 pub fn fn_sin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => Ok(FormulaValue::Number(n.sin())),
         Some(FormulaValue::Error(e)) => Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => Ok(FormulaValue::Number(0.0)), // sin(0) = 0
@@ -468,7 +468,7 @@ pub fn fn_sin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 /// COS(number) - Returns the cosine of an angle (in radians)
 /// Reference: LibreOffice ScInterpreter::ScCos
 pub fn fn_cos(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => Ok(FormulaValue::Number(n.cos())),
         Some(FormulaValue::Error(e)) => Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => Ok(FormulaValue::Number(1.0)), // cos(0) = 1
@@ -479,7 +479,7 @@ pub fn fn_cos(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 /// TAN(number) - Returns the tangent of an angle (in radians)
 /// Reference: LibreOffice ScInterpreter::ScTan
 pub fn fn_tan(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => {
             let result = n.tan();
             if result.is_infinite() || result.is_nan() {
@@ -498,7 +498,7 @@ pub fn fn_tan(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 /// The result is between -PI/2 and PI/2
 /// Reference: LibreOffice ScInterpreter::ScArcSin
 pub fn fn_asin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => {
             if *n < -1.0 || *n > 1.0 {
                 Ok(FormulaValue::Error(CellError::Num))
@@ -516,7 +516,7 @@ pub fn fn_asin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 /// The result is between 0 and PI
 /// Reference: LibreOffice ScInterpreter::ScArcCos
 pub fn fn_acos(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => {
             if *n < -1.0 || *n > 1.0 {
                 Ok(FormulaValue::Error(CellError::Num))
@@ -534,7 +534,7 @@ pub fn fn_acos(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 /// The result is between -PI/2 and PI/2
 /// Reference: LibreOffice ScInterpreter::ScArcTan
 pub fn fn_atan(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => Ok(FormulaValue::Number(n.atan())),
         Some(FormulaValue::Error(e)) => Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => Ok(FormulaValue::Number(0.0)), // atan(0) = 0
@@ -547,7 +547,7 @@ pub fn fn_atan(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 /// Note: Excel's ATAN2(x,y) is equivalent to math atan2(y,x)
 /// Reference: LibreOffice ScInterpreter::ScArcTan2
 pub fn fn_atan2(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let x = match args.get(0) {
+    let x = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -572,7 +572,7 @@ pub fn fn_atan2(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 /// DEGREES(angle) - Converts radians to degrees
 /// Reference: LibreOffice ScInterpreter::ScDeg
 pub fn fn_degrees(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => Ok(FormulaValue::Number(n.to_degrees())),
         Some(FormulaValue::Error(e)) => Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => Ok(FormulaValue::Number(0.0)),
@@ -583,7 +583,7 @@ pub fn fn_degrees(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 /// RADIANS(angle) - Converts degrees to radians
 /// Reference: LibreOffice ScInterpreter::ScRad
 pub fn fn_radians(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    match args.get(0) {
+    match args.first() {
         Some(FormulaValue::Number(n)) => Ok(FormulaValue::Number(n.to_radians())),
         Some(FormulaValue::Error(e)) => Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => Ok(FormulaValue::Number(0.0)),
@@ -594,7 +594,7 @@ pub fn fn_radians(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 /// ROUNDUP(number, num_digits) - Rounds a number up, away from zero
 /// Reference: LibreOffice ScInterpreter::ScRoundUp
 pub fn fn_roundup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -626,7 +626,7 @@ pub fn fn_rounddown(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -654,7 +654,7 @@ pub fn fn_ceiling_math(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -696,7 +696,7 @@ pub fn fn_floor_math(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -734,7 +734,7 @@ pub fn fn_floor_math(
 
 /// ODD(number) - Rounds a number up to the nearest odd integer
 pub fn fn_odd(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -760,7 +760,7 @@ pub fn fn_odd(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 
 /// EVEN(number) - Rounds a number up to the nearest even integer
 pub fn fn_even(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let number = match args.get(0) {
+    let number = match args.first() {
         Some(FormulaValue::Number(n)) => *n,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(FormulaValue::Empty) => 0.0,
@@ -796,7 +796,7 @@ pub fn fn_sumif(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     use super::criteria::CriteriaMatcher;
 
     // Get the range (first argument)
-    let range = match args.get(0) {
+    let range = match args.first() {
         Some(FormulaValue::Array(arr)) => arr,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => {
