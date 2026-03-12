@@ -654,7 +654,9 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 
     let number = match value.as_number() {
         Some(n) => n,
-        None => return Ok(FormulaValue::Error(CellError::Value)),
+        // Excel returns string values as-is (the text section of any number
+        // format applies, which defaults to returning the string unchanged).
+        None => return Ok(FormulaValue::String(value.as_string())),
     };
 
     Ok(FormulaValue::String(format_text_value(
@@ -892,6 +894,25 @@ mod tests {
         assert_eq!(
             eval("=TEXT(0.126,\"0%\")").unwrap(),
             FormulaValue::String("13%".into())
+        );
+    }
+
+    #[test]
+    fn test_text_string_passthrough() {
+        // TEXT(string, "") returns the string as-is (Excel behaviour)
+        assert_eq!(
+            eval("=TEXT(\"September\",\"\")").unwrap(),
+            FormulaValue::String("September".into())
+        );
+        // Non-numeric string with a number format still returns the string
+        assert_eq!(
+            eval("=TEXT(\"hello\",\"0.00\")").unwrap(),
+            FormulaValue::String("hello".into())
+        );
+        // Numeric strings still parse and format as numbers
+        assert_eq!(
+            eval("=TEXT(\"1234.5\",\"0.00\")").unwrap(),
+            FormulaValue::String("1234.50".into())
         );
     }
 
