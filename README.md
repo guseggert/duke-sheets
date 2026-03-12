@@ -2,14 +2,19 @@
 
 A Rust library for reading, writing, and manipulating Excel spreadsheets with full formula evaluation.
 
+Includes bindings for:
+
+- Python
+- NodeJS
+- WebAssembly
+
 ## Features
 
 - **File Formats**: `.xlsx`, `.xlsm`, `.xltx`, `.xltm` (Excel 2007+), `.xls` (legacy), `.csv`
 - **Formula Engine**: Full evaluation of ~506 Excel functions
 - **Charts**: Create, read, and modify chart types
 - **Styling**: Fonts, colors, borders, number formats
-- **Large Files**: Streaming APIs for 1M+ cells
-- **Bindings**: Node.js/TypeScript, Python, WebAssembly
+- **High Performance**: Multi-threaded calculation engine, works in seconds on workbooks with millions of formulas
 
 ## Node.js / TypeScript
 
@@ -42,7 +47,7 @@ const wb2 = Workbook.fromBytes(buffer);
 const wb3 = Workbook.fromCsvString('a,b,c\n1,2,3');
 ```
 
-Async versions run on the libuv thread pool so the event loop stays free:
+Async versions run on separate threads so the event loop stays free:
 
 ```typescript
 import { openAsync } from '@dukelib/sheets';
@@ -57,7 +62,7 @@ conditional formatting, data validations, merged regions, page setup, and more.
 
 ## Python
 
-Install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases):
+I haven't publisehd to PyPI yet. You can install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases):
 
 ```bash
 pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.1/duke_sheets-0.1.1-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
