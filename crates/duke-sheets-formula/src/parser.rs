@@ -97,6 +97,7 @@ struct FormulaParser<'a> {
     input: &'a str,
     pos: usize,
     current_token: Option<Token>,
+    depth: usize,
 }
 
 impl<'a> FormulaParser<'a> {
@@ -105,6 +106,7 @@ impl<'a> FormulaParser<'a> {
             input,
             pos: 0,
             current_token: None,
+            depth: 0,
         };
         parser.advance_token();
         parser
@@ -549,7 +551,13 @@ impl<'a> FormulaParser<'a> {
     // 8. Primary: literals, references, function calls, parentheses
 
     fn parse_expression(&mut self) -> FormulaResult<FormulaExpr> {
-        self.parse_comparison()
+        self.depth += 1;
+        if self.depth > 256 {
+            return Err(FormulaError::Parse("formula nesting too deep".into()));
+        }
+        let result = self.parse_comparison();
+        self.depth -= 1;
+        result
     }
 
     fn parse_comparison(&mut self) -> FormulaResult<FormulaExpr> {

@@ -101,6 +101,14 @@ impl CompoundFile {
         }
 
         let total_fat_sectors = read_u32(&file_data, 44)? as usize;
+
+        // Sanity check: FAT sectors can't exceed the number of sectors in the file
+        let max_sectors = file_data.len() / sector_size;
+        if total_fat_sectors > max_sectors {
+            return Err(CfbError::InvalidFormat(format!(
+                "total FAT sectors ({total_fat_sectors}) exceeds file capacity ({max_sectors} sectors)"
+            )));
+        }
         let first_directory_sector = read_u32(&file_data, 48)?;
         let mini_stream_cutoff = read_u32(&file_data, 56)? as usize;
         let first_mini_fat_sector = read_u32(&file_data, 60)?;
