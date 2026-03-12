@@ -79,6 +79,9 @@ pub struct Worksheet {
     locale: Locale,
     /// Cached ssfmt locale (rebuilt on set_locale).
     ssfmt_locale: ssfmt::Locale,
+    /// Mutation generation counter — incremented on user-facing cell/formula edits.
+    /// The calculation engine uses this to detect stale caches.
+    mutation_count: u64,
 }
 
 impl Worksheet {
@@ -108,7 +111,14 @@ impl Worksheet {
             date_1904: false,
             locale: Locale::en_us(),
             ssfmt_locale: ssfmt::Locale::en_us(),
+            mutation_count: 0,
         }
+    }
+
+    /// Mutation generation counter — incremented on user-facing cell/formula edits.
+    /// The calculation engine uses this to detect stale caches.
+    pub fn mutation_count(&self) -> u64 {
+        self.mutation_count
     }
 
     /// Get the sheet name
@@ -498,6 +508,7 @@ impl Worksheet {
         self.validate_cell_position(row, col)?;
         self.remove_formula_state(row, col);
         self.cells.set_value(row, col, value.into());
+        self.mutation_count += 1;
         Ok(())
     }
 
@@ -539,6 +550,7 @@ impl Worksheet {
         self.cells
             .set(row, col, CellData::with_style(cached_value, style_index));
         self.cells.set_formula(row, col, FormulaData::new(formula));
+        self.mutation_count += 1;
         Ok(())
     }
 
@@ -567,6 +579,7 @@ impl Worksheet {
     pub fn clear_cell_at(&mut self, row: u32, col: u16) {
         self.remove_formula_state(row, col);
         self.cells.remove(row, col);
+        self.mutation_count += 1;
     }
 
     /// Get the used range (bounds of all non-empty cells)
@@ -596,6 +609,7 @@ impl Worksheet {
             self.remove_formula_state(addr.row, addr.col);
             self.cells.remove(addr.row, addr.col);
         }
+        self.mutation_count += 1;
     }
 
     /// Set the same value for all cells in a range
@@ -610,6 +624,7 @@ impl Worksheet {
             self.remove_formula_state(addr.row, addr.col);
             self.cells.set_value(addr.row, addr.col, value.clone());
         }
+        self.mutation_count += 1;
         Ok(())
     }
 

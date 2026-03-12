@@ -42,7 +42,7 @@ pub mod calculation;
 pub mod prelude;
 
 // Re-export calculation types
-pub use calculation::{CalculationMode, CalculationOptions, CalculationStats, WorkbookCalculationExt};
+pub use calculation::{CalculationOptions, CalculationStats, WorkbookCalculationExt};
 
 // Re-export core types
 pub use duke_sheets_core::auto_filter::{ColorFilter, DynamicFilter, DynamicFilterType};

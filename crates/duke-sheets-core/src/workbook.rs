@@ -1,5 +1,6 @@
 //! Workbook type - the main document structure
 
+use std::any::Any;
 use crate::error::{Error, Result};
 use crate::named_range::{NameScope, NamedRange, NamedRangeCollection};
 use crate::worksheet::Worksheet;
@@ -18,6 +19,13 @@ pub struct Workbook {
     active_sheet: usize,
     /// Named ranges (defined names)
     named_ranges: NamedRangeCollection,
+    /// Opaque calculation cache, populated and consumed by the calculation engine.
+    /// Stored as type-erased `Box<dyn Any>` so the core crate needs no dependency
+    /// on `duke-sheets-formula`.
+    calc_cache: Option<Box<dyn Any + Send + Sync>>,
+    /// Structural generation counter — incremented when sheets are added, removed,
+    /// reordered, or renamed. The calculation engine uses this to detect stale caches.
+    structural_generation: u64,
 }
 
 impl Workbook {
@@ -28,6 +36,8 @@ impl Workbook {
             settings: WorkbookSettings::default(),
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
+            calc_cache: None,
+            structural_generation: 0,
         };
         wb.add_worksheet_with_name("Sheet1").unwrap();
         wb
@@ -40,6 +50,8 @@ impl Workbook {
             settings: WorkbookSettings::default(),
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
+            calc_cache: None,
+            structural_generation: 0,
         }
     }
 
@@ -88,6 +100,22 @@ impl Workbook {
         self.worksheets.iter_mut()
     }
 
+    /// Structural generation counter — incremented when sheets are added,
+    /// removed, reordered, or renamed.
+    pub fn structural_generation(&self) -> u64 {
+        self.structural_generation
+    }
+
+    /// Take the calculation cache (moves it out of the workbook).
+    pub fn take_calc_cache(&mut self) -> Option<Box<dyn Any + Send + Sync>> {
+        self.calc_cache.take()
+    }
+
+    /// Store a calculation cache on the workbook.
+    pub fn set_calc_cache(&mut self, cache: Box<dyn Any + Send + Sync>) {
+        self.calc_cache = Some(cache);
+    }
+
     /// Add a new worksheet with default name
     pub fn add_worksheet(&mut self) -> Result<usize> {
         let name = self.generate_sheet_name();
@@ -101,7 +129,7 @@ impl Workbook {
         let index = self.worksheets.len();
         let worksheet = Worksheet::new(name);
         self.worksheets.push(worksheet);
-
+        self.structural_generation += 1;
         Ok(index)
     }
 
@@ -113,6 +141,7 @@ impl Workbook {
         let index = self.worksheets.len();
         let worksheet = Worksheet::new(name);
         self.worksheets.push(worksheet);
+        self.structural_generation += 1;
         index
     }
 
@@ -131,7 +160,7 @@ impl Workbook {
         if self.active_sheet >= index && !self.worksheets.is_empty() {
             self.active_sheet = self.active_sheet.saturating_add(1);
         }
-
+        self.structural_generation += 1;
         Ok(())
     }
 
@@ -140,6 +169,7 @@ impl Workbook {
         self.validate_sheet_name(worksheet.name())?;
         let index = self.worksheets.len();
         self.worksheets.push(worksheet);
+        self.structural_generation += 1;
         Ok(index)
     }
 
@@ -159,7 +189,7 @@ impl Workbook {
         } else {
             self.active_sheet = 0;
         }
-
+        self.structural_generation += 1;
         Ok(worksheet)
     }
 
@@ -183,7 +213,7 @@ impl Workbook {
         } else if from > self.active_sheet && to <= self.active_sheet {
             self.active_sheet = self.active_sheet.saturating_add(1);
         }
-
+        self.structural_generation += 1;
         Ok(())
     }
 
@@ -198,6 +228,7 @@ impl Workbook {
         self.validate_sheet_name_excluding(new_name, Some(index))?;
 
         self.worksheets[index].set_name(new_name);
+        self.structural_generation += 1;
         Ok(())
     }
 
@@ -248,7 +279,9 @@ impl Workbook {
         let range = NamedRange::new(name, refers_to, scope);
         self.named_ranges
             .define(range)
-            .map_err(|e| Error::InvalidName(e))
+            .map_err(Error::InvalidName)?;
+        self.structural_generation += 1;
+        Ok(())
     }
 
     /// Define a sheet-scoped named range
@@ -270,13 +303,21 @@ impl Workbook {
 
     /// Remove a workbook-scoped named range
     pub fn remove_name(&mut self, name: &str) -> Option<NamedRange> {
-        self.named_ranges.remove(name, &NameScope::Workbook)
+        let result = self.named_ranges.remove(name, &NameScope::Workbook);
+        if result.is_some() {
+            self.structural_generation += 1;
+        }
+        result
     }
 
     /// Remove a sheet-scoped named range
     pub fn remove_name_from_sheet(&mut self, name: &str, sheet_index: usize) -> Option<NamedRange> {
-        self.named_ranges
-            .remove(name, &NameScope::Sheet(sheet_index))
+        let result = self.named_ranges
+            .remove(name, &NameScope::Sheet(sheet_index));
+        if result.is_some() {
+            self.structural_generation += 1;
+        }
+        result
     }
 
     /// Get the named range collection (read-only)

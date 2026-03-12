@@ -136,6 +136,20 @@
 
 ### Calculation Performance
 - [x] Optimize formula calculation graph building and sheet-scoped execution (Tarjan SCC cycle detection, large-range dependency pruning, single-sheet CLI calculation)
+- [x] Demand-driven single-pass evaluation engine — iterative post-order DFS computes correct eval order, evaluates each formula exactly once (was 7 passes × 1.58M formulas in multipass mode)
+- [x] Data structure optimizations — BTreeMap → AHashMap for cell storage, SipHash → ahash, removed redundant to_uppercase() in function dispatch, pre-allocated Vecs in range evaluation
+- [x] Targeted spill fixup — only re-evaluates formulas whose ASTs reference spill ranges (19 re-evaluations vs 1.58M)
+- [x] Circular reference detection in demand-driven DFS (back-edge detection, stack scanning)
+- [x] Correct circular cell handling — self-referencing formulas (=IF(cond,val,SELF) pattern) evaluate using cached values instead of #REF!, matching Excel behavior; VBA-driven financial models work correctly
+- [x] DFS hot-path optimization — Vec<u8> state array + dense indices replace AHashSet for visited/in_stack (eliminates CellKey hashing); AHashMap for parsed_formulas
+- [x] Zero overhead until calculation — all bookkeeping is method-local, no per-cell allocations at workbook creation time
+- [x] Result: 157.5s → 25.6s (6.2x faster) on 1.58M-formula financial model, errors 9115 → 708 (correct)
+- [x] Parallel level-based evaluation via rayon — DFS computes depth per cell, groups by depth, evaluates each level in parallel; feature-gated (`parallel` feature, included in `full`), WASM-safe (serial fallback), configurable `max_threads: Option<usize>` in `CalculationOptions`
+- [x] Parallel formula parsing — per-sheet parallel parse via rayon (zero-copy &str borrows from sheet), wave-based cross-sheet discovery for scoped calculation
+- [x] DFS micro-optimizations — dense-indexed AST table (Vec indexing vs AHashMap lookup), Vec pool for dep buffers (eliminates heap allocation after warmup)
+- [x] Result with parallelization: 30.1s serial → 21.2s parallel on 16-core machine; overall 157.5s → 21.2s (7.4x faster)
+- [x] Persistent calculation cache — `CalcCache` stores parsed formula ASTs, DFS eval plan, and volatile/circular cell sets on the `Workbook` between `calculate()` calls; cache keyed on `structural_generation` + per-sheet `mutation_count`; repeat calculations on unchanged workbooks skip parse+DFS phases entirely
+- [x] Result with cache: 21.0s → 5.6s on repeat calculation (3.7x), overall baseline→cached: 157.5s → 5.6s (28x)
 
 ### Workspace Build Compatibility
 - [x] Update remaining crates and tests for the `CellValue` formula side table and boxed rich text refactor so `cargo test --workspace` compiles

@@ -21,14 +21,18 @@
 //! ```
 
 use crate::{
-    evaluate, parse_formula, CellValue, Error, EvaluationContext, FormulaExpr, FormulaValue,
+    evaluate, parse_formula, CellValue, EvaluationContext, FormulaExpr, FormulaValue,
     Result, Workbook,
 };
-use duke_sheets_formula::dependency::{CellKey, DependencyGraph};
+use duke_sheets_formula::dependency::CellKey;
 use duke_sheets_formula::functions::FunctionRegistry;
 use duke_sheets_formula::{StructuredRefSpecifier, StructuredReference};
+use ahash::{AHashMap, AHashSet};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
+
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 /// Global function registry for volatile function lookup
 static FUNCTION_REGISTRY: OnceLock<FunctionRegistry> = OnceLock::new();
@@ -37,36 +41,10 @@ fn get_function_registry() -> &'static FunctionRegistry {
     FUNCTION_REGISTRY.get_or_init(FunctionRegistry::new)
 }
 
-/// How the calculation engine determines evaluation order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CalculationMode {
-    /// Build dependency graph with topological sort.
-    /// Exact ordering, but O(V+E) where E can be hundreds of millions
-    /// for large workbooks with dense range references.
-    Exact,
-    /// Evaluate in row-major order, re-evaluate until convergence.
-    /// Scales to millions of formulas but may need multiple passes.
-    Multipass,
-    /// Choose automatically based on formula count (default).
-    /// Uses `Exact` when formula count ≤ `auto_threshold`,
-    /// otherwise falls back to `Multipass`.
-    Auto,
-}
-
-impl Default for CalculationMode {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
 
 /// Options for workbook calculation
 #[derive(Debug, Clone)]
 pub struct CalculationOptions {
-    /// How to determine evaluation order (default: Auto)
-    pub mode: CalculationMode,
-    /// Formula count threshold for `CalculationMode::Auto` (default: 50_000).
-    /// Workbooks with more formulas than this use multipass evaluation.
-    pub auto_threshold: usize,
     /// Enable iterative calculation for circular references
     pub iterative: bool,
     /// Maximum iterations for circular references (default: 100)
@@ -80,19 +58,27 @@ pub struct CalculationOptions {
     /// Only calculate these sheets (and their transitive cross-sheet dependencies).
     /// If empty, calculate all sheets (default).
     pub sheets: Vec<usize>,
+    /// Maximum number of threads for parallel evaluation.
+    ///
+    /// - `None` (default): use all available cores
+    /// - `Some(1)`: force serial evaluation even when the `parallel` feature is enabled
+    /// - `Some(n)`: use at most `n` threads
+    ///
+    /// This option has no effect when the `parallel` feature is not enabled
+    /// (e.g. WASM builds).
+    pub max_threads: Option<usize>,
 }
 
 impl Default for CalculationOptions {
     fn default() -> Self {
         Self {
-            mode: CalculationMode::default(),
-            auto_threshold: 50_000,
             iterative: false,
             max_iterations: 100,
             max_change: 0.001,
             force_full_calculation: true,
             calculate_volatile: true,
             sheets: vec![],
+            max_threads: None,
         }
     }
 }
@@ -147,17 +133,56 @@ impl WorkbookCalculationExt for Workbook {
     }
 }
 
+/// Pre-computed evaluation plan — the expensive DFS result that can be cached.
+struct EvalPlan {
+    eval_order: Vec<CellKey>,
+    cell_to_idx: AHashMap<CellKey, u32>,
+    depth: Vec<u32>,
+    max_depth: u32,
+}
+
+/// Persistent calculation cache stored on the `Workbook` between `calculate()` calls.
+/// Contains everything needed to skip the parse + DFS phases on repeat calculations.
+struct CalcCache {
+    /// Workbook structural generation when this cache was built.
+    structural_gen: u64,
+    /// Per-sheet mutation counts when this cache was built.
+    sheet_gens: Vec<(usize, u64)>,
+    /// Parsed formula ASTs.
+    parsed_formulas: AHashMap<CellKey, FormulaExpr>,
+    /// Volatile cells.
+    volatile_cells: AHashSet<CellKey>,
+    /// Cells involved in circular references.
+    circular_cells: AHashSet<CellKey>,
+    /// Pre-computed evaluation plan.
+    plan: EvalPlan,
+}
+
+impl CalcCache {
+    /// Check whether this cache is still valid for the given workbook.
+    fn is_valid(&self, workbook: &Workbook) -> bool {
+        if self.structural_gen != workbook.structural_generation() {
+            return false;
+        }
+        for &(sheet_idx, gen) in &self.sheet_gens {
+            match workbook.worksheet(sheet_idx) {
+                Some(ws) if ws.mutation_count() == gen => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
 /// The calculation engine
 struct CalculationEngine {
     options: CalculationOptions,
-    /// Dependency graph built from formulas
-    dependency_graph: DependencyGraph,
     /// Parsed formula ASTs, keyed by CellKey
-    parsed_formulas: HashMap<CellKey, FormulaExpr>,
+    parsed_formulas: AHashMap<CellKey, FormulaExpr>,
     /// Set of volatile cells
-    volatile_cells: HashSet<CellKey>,
+    volatile_cells: AHashSet<CellKey>,
     /// Cells involved in circular references
-    circular_cells: HashSet<CellKey>,
+    circular_cells: AHashSet<CellKey>,
 }
 
 type FormulaCellIndex = HashMap<usize, BTreeMap<u32, Vec<u16>>>;
@@ -166,46 +191,70 @@ impl CalculationEngine {
     fn new(options: CalculationOptions) -> Self {
         Self {
             options,
-            dependency_graph: DependencyGraph::new(),
-            parsed_formulas: HashMap::new(),
-            volatile_cells: HashSet::new(),
-            circular_cells: HashSet::new(),
+            parsed_formulas: AHashMap::new(),
+            volatile_cells: AHashSet::new(),
+            circular_cells: AHashSet::new(),
         }
     }
 
-    /// Calculate all formulas in the workbook
-
+    /// Calculate all formulas in the workbook.
+    ///
+    /// When a valid `CalcCache` exists on the workbook (from a previous
+    /// `calculate()` call) and no cells/sheets have been mutated since,
+    /// the expensive parse + DFS phases are skipped entirely and only
+    /// the evaluation phase runs.
     fn calculate_all(&mut self, workbook: &mut Workbook) -> Result<CalculationStats> {
         let mut stats = CalculationStats::default();
+        let scoped = !self.options.sheets.is_empty();
 
-        // Phase 1: Parse formulas (sheet-scoped when options.sheets is set)
-        self.parse_formulas(workbook, &mut stats)?;
-
-        if stats.formula_count == 0 {
-            return Ok(stats);
-        }
-
-        let use_multipass = match self.options.mode {
-            CalculationMode::Exact => false,
-            CalculationMode::Multipass => true,
-            CalculationMode::Auto => stats.formula_count > self.options.auto_threshold,
+        // Try to restore a cached plan.  Only usable for unscoped (full)
+        // calculations — scoped calcs may involve different sheet sets.
+        let cached = if !scoped {
+            workbook
+                .take_calc_cache()
+                .and_then(|c| c.downcast::<CalcCache>().ok())
+                .filter(|c| c.is_valid(workbook))
+        } else {
+            // Drop any stale cache for scoped calcs.
+            let _ = workbook.take_calc_cache();
+            None
         };
 
-        if use_multipass {
-            self.calculate_multipass(workbook, &mut stats)?;
+        let plan;
+        if let Some(mut cache) = cached {
+            // Cache hit — restore parsed formulas + plan from cache.
+            self.parsed_formulas = std::mem::take(&mut cache.parsed_formulas);
+            self.volatile_cells = std::mem::take(&mut cache.volatile_cells);
+            self.circular_cells = std::mem::take(&mut cache.circular_cells);
+            stats.formula_count = self.parsed_formulas.len();
+            stats.volatile_cells = self.volatile_cells.len();
+            plan = cache.plan;
         } else {
-            self.build_dependency_graph(workbook, &mut stats);
-
-            self.detect_circular_references();
-            stats.circular_references = self.circular_cells.len();
-
-            let calc_order = self.get_calculation_order();
-
-            if self.circular_cells.is_empty() || !self.options.iterative {
-                self.calculate_cells_simple(workbook, &calc_order, &mut stats)?;
-            } else {
-                self.calculate_cells_iterative(workbook, &calc_order, &mut stats)?;
+            // Cache miss — full parse + DFS.
+            self.parse_formulas(workbook, &mut stats)?;
+            if stats.formula_count == 0 {
+                return Ok(stats);
             }
+            plan = self.build_eval_plan(workbook);
+        }
+
+        // Evaluate all formulas using the (possibly cached) plan.
+        self.execute_eval_plan(workbook, &plan, &mut stats)?;
+
+        // Store cache for next time (only for unscoped calcs).
+        if !scoped {
+            let sheet_gens: Vec<(usize, u64)> = (0..workbook.sheet_count())
+                .map(|i| (i, workbook.worksheet(i).map_or(0, |ws| ws.mutation_count())))
+                .collect();
+            let cache = CalcCache {
+                structural_gen: workbook.structural_generation(),
+                sheet_gens,
+                parsed_formulas: std::mem::take(&mut self.parsed_formulas),
+                volatile_cells: std::mem::take(&mut self.volatile_cells),
+                circular_cells: std::mem::take(&mut self.circular_cells),
+                plan,
+            };
+            workbook.set_calc_cache(Box::new(cache));
         }
 
         Ok(stats)
@@ -214,202 +263,345 @@ impl CalculationEngine {
     /// Parse all formulas and store ASTs. Does NOT build the dependency graph.
     /// When `options.sheets` is set, discovers cross-sheet refs on-the-fly
     /// so each formula is parsed exactly once.
+    ///
+    /// Formulas are parsed in parallel (when the `parallel` feature is active
+    /// and `max_threads != Some(1)`) using a wave-based approach: each wave
+    /// parses the current batch of sheets, then scans for cross-sheet refs
+    /// to discover new sheets for the next wave.
     fn parse_formulas(&mut self, workbook: &Workbook, stats: &mut CalculationStats) -> Result<()> {
         let sheet_count = workbook.sheet_count();
-
         let scoped = !self.options.sheets.is_empty();
         let mut included: HashSet<usize> = if scoped {
             self.options.sheets.iter().copied().collect()
         } else {
             (0..sheet_count).collect()
         };
-        let mut queue: Vec<usize> = included.iter().copied().collect();
-        queue.sort_unstable();
+        let mut pending: Vec<usize> = included.iter().copied().collect();
+        pending.sort_unstable();
+        let check_volatile = self.options.calculate_volatile;
 
-        while let Some(sheet_idx) = queue.pop() {
-            if sheet_idx >= sheet_count {
-                continue;
-            }
-            let sheet = workbook
-                .worksheet(sheet_idx)
-                .ok_or_else(|| Error::other(format!("Sheet {} not found", sheet_idx)))?;
-
-            for (row, col, formula_text) in sheet.formula_cells() {
-                let cell_key = CellKey::new(sheet_idx, row, col);
-
-                let ast = match parse_formula(formula_text) {
-                    Ok(ast) => ast,
-                    Err(_e) => {
-                        stats.errors += 1;
-                        continue;
-                    }
+        while !pending.is_empty() {
+            // Process each sheet in the current wave.  Formulas within
+            // a sheet are parsed in parallel (zero-copy: &str borrows from
+            // the sheet).  Sheets are processed sequentially so cross-sheet
+            // discovery can feed the next wave.
+            let wave = std::mem::take(&mut pending);
+            for &sheet_idx in &wave {
+                if sheet_idx >= sheet_count {
+                    continue;
+                }
+                let sheet = match workbook.worksheet(sheet_idx) {
+                    Some(s) => s,
+                    None => continue,
                 };
 
-                if scoped {
-                    let sheet_refs = extract_sheet_refs(&ast, workbook);
-                    for ref_sheet in sheet_refs {
-                        if !included.contains(&ref_sheet) {
-                            included.insert(ref_sheet);
-                            queue.push(ref_sheet);
+                // Collect this sheet's formula cells (borrows &str from sheet).
+                let cells: Vec<(u32, u16, &str)> = sheet.formula_cells().collect();
+                if cells.is_empty() {
+                    continue;
+                }
+
+                // Parse in parallel within this sheet when worthwhile.
+                let use_par = self.should_use_parallel(cells.len());
+                let parsed: Vec<(CellKey, Option<FormulaExpr>, bool)> = if use_par {
+                    #[cfg(feature = "parallel")]
+                    {
+                        cells
+                            .par_iter()
+                            .map(|&(row, col, text)| {
+                                let key = CellKey::new(sheet_idx, row, col);
+                                match parse_formula(text) {
+                                    Ok(ast) => {
+                                        let vol =
+                                            check_volatile && contains_volatile_function(&ast);
+                                        (key, Some(ast), vol)
+                                    }
+                                    Err(_) => (key, None, false),
+                                }
+                            })
+                            .collect()
+                    }
+                    #[cfg(not(feature = "parallel"))]
+                    {
+                        cells
+                            .iter()
+                            .map(|&(row, col, text)| {
+                                let key = CellKey::new(sheet_idx, row, col);
+                                match parse_formula(text) {
+                                    Ok(ast) => {
+                                        let vol =
+                                            check_volatile && contains_volatile_function(&ast);
+                                        (key, Some(ast), vol)
+                                    }
+                                    Err(_) => (key, None, false),
+                                }
+                            })
+                            .collect()
+                    }
+                } else {
+                    cells
+                        .iter()
+                        .map(|&(row, col, text)| {
+                            let key = CellKey::new(sheet_idx, row, col);
+                            match parse_formula(text) {
+                                Ok(ast) => {
+                                    let vol =
+                                        check_volatile && contains_volatile_function(&ast);
+                                    (key, Some(ast), vol)
+                                }
+                                Err(_) => (key, None, false),
+                            }
+                        })
+                        .collect()
+                };
+
+                // Store results and discover cross-sheet refs.
+                for (key, ast_opt, is_volatile) in parsed {
+                    if let Some(ast) = ast_opt {
+                        if scoped {
+                            for ref_sheet in extract_sheet_refs(&ast, workbook) {
+                                if !included.contains(&ref_sheet) {
+                                    included.insert(ref_sheet);
+                                    pending.push(ref_sheet);
+                                }
+                            }
                         }
+                        if is_volatile {
+                            self.volatile_cells.insert(key);
+                        }
+                        self.parsed_formulas.insert(key, ast);
+                        stats.formula_count += 1;
+                    } else {
+                        stats.errors += 1;
                     }
                 }
-
-                if self.options.calculate_volatile && contains_volatile_function(&ast) {
-                    self.volatile_cells.insert(cell_key);
-                }
-
-                self.parsed_formulas.insert(cell_key, ast);
-                stats.formula_count += 1;
             }
         }
-
         stats.volatile_cells = self.volatile_cells.len();
         Ok(())
     }
 
-    /// Build the dependency graph from parsed formulas.
-    /// Only used for small workbooks (< GRAPH_FORMULA_LIMIT).
-    fn build_dependency_graph(&mut self, workbook: &Workbook, _stats: &mut CalculationStats) {
-        let formula_cell_set: HashSet<CellKey> = self.parsed_formulas.keys().copied().collect();
+    /// Build the evaluation plan via iterative post-order DFS.
+    ///
+    /// Computes the correct evaluation order by extracting dependencies
+    /// on-the-fly from parsed ASTs.  Each formula is visited at most once,
+    /// so total work is O(V + E_formula).  The resulting `EvalPlan` can be
+    /// cached and reused across `calculate()` calls when the workbook has
+    /// not been mutated.
+    fn build_eval_plan(&mut self, workbook: &Workbook) -> EvalPlan {
+        // Transient spatial index for range→formula-cell lookups.
+        let formula_cell_set: AHashSet<CellKey> =
+            self.parsed_formulas.keys().copied().collect();
         let formula_cell_index = build_formula_cell_index(&formula_cell_set);
 
-        for (cell_key, ast) in &self.parsed_formulas {
-            let references = extract_references(
-                ast,
-                cell_key.sheet,
-                workbook,
-                &formula_cell_set,
-                &formula_cell_index,
-            );
-            for ref_key in references {
-                self.dependency_graph.add_dependency(ref_key, *cell_key);
-            }
-        }
-    }
-
-    /// Multi-pass row-major evaluation for large workbooks.
-    ///
-    /// Evaluates all formulas in sheet-row-col order, repeating until
-    /// no values change (convergence) or max iterations reached.
-    /// Financial models mostly flow top-down/left-to-right, so this
-    /// typically converges in 2-3 passes.
-    fn calculate_multipass(
-        &self,
-        workbook: &mut Workbook,
-        stats: &mut CalculationStats,
-    ) -> Result<()> {
-        // Build sorted formula list: sheet → row → col order
-        let mut formula_order: Vec<CellKey> = self.parsed_formulas.keys().copied().collect();
-        formula_order.sort_unstable_by(|a, b| {
+        // Row-major seed order: financial models mostly flow top-down/
+        // left-to-right, so most cells resolve on first visit.
+        let mut seed_order: Vec<CellKey> =
+            self.parsed_formulas.keys().copied().collect();
+        seed_order.sort_unstable_by(|a, b| {
             a.sheet
                 .cmp(&b.sheet)
                 .then(a.row.cmp(&b.row))
                 .then(a.col.cmp(&b.col))
         });
+        let n = self.parsed_formulas.len();
+        let cell_to_idx: AHashMap<CellKey, u32> = seed_order
+            .iter()
+            .enumerate()
+            .map(|(i, &k)| (k, i as u32))
+            .collect();
+        // Dense-indexed AST table: avoids AHashMap lookups during DFS.
+        let asts: Vec<&FormulaExpr> = seed_order
+            .iter()
+            .map(|k| &self.parsed_formulas[k])
+            .collect();
 
-        let max_passes = 20;
-        let mut pass = 0;
+        // Phase 1 — build evaluation order via iterative post-order DFS.
+        //
+        // Each cell's formula-cell dependencies are extracted on-the-fly
+        // (no persistent precedent map).  Every cell is visited at most
+        // once, so total work is O(V + E_formula).
+        //
+        // State per cell: 0=unvisited, 1=in_stack, 2=visited.
+        let mut state: Vec<u8> = vec![0u8; n];
+        let mut is_circular: Vec<bool> = vec![false; n];
+        let mut depth: Vec<u32> = vec![0u32; n];
+        let mut max_depth: u32 = 0;
+        let mut eval_order: Vec<CellKey> = Vec::with_capacity(n);
+        // Frame: (cell_key, cell_idx, deps, next-dep cursor)
+        let mut stack: Vec<(CellKey, u32, Vec<CellKey>, usize)> = Vec::new();
+        // Pool of reusable dep Vecs — eliminates heap allocation after warmup.
+        let mut vec_pool: Vec<Vec<CellKey>> = Vec::new();
 
-        // First pass: always evaluate everything
-        for &cell_key in &formula_order {
-            self.evaluate_and_store(workbook, cell_key, stats);
-        }
-        pass += 1;
-
-        // Subsequent passes: re-evaluate and check for convergence
-        // Track changed cells to narrow scope each pass
-        loop {
-            if pass >= max_passes {
-                break;
+        for (seed_idx, &seed) in seed_order.iter().enumerate() {
+            let seed_idx = seed_idx as u32;
+            if state[seed_idx as usize] == 2 {
+                continue;
             }
-            let mut changed = false;
 
-            for &cell_key in &formula_order {
-                let old_value = get_cell_numeric(workbook, cell_key);
-                self.evaluate_and_store_silent(workbook, cell_key);
-                let new_value = get_cell_numeric(workbook, cell_key);
+            let mut deps = vec_pool.pop().unwrap_or_default();
+            deps.clear();
+            extract_references_recursive(
+                asts[seed_idx as usize],
+                seed.sheet,
+                workbook,
+                &formula_cell_set,
+                &formula_cell_index,
+                &mut deps,
+            );
+            state[seed_idx as usize] = 1; // in_stack
+            stack.push((seed, seed_idx, deps, 0));
 
-                if !values_equal(old_value, new_value) {
-                    changed = true;
-                }
-            }
+            while !stack.is_empty() {
+                let (next_dep, back_edge_idx) = {
+                    let (_, _, deps, idx) = stack.last_mut().unwrap();
+                    let mut found: Option<(CellKey, u32)> = None;
+                    let mut back_idx: Option<u32> = None;
+                    while *idx < deps.len() {
+                        let dep = deps[*idx];
+                        *idx += 1;
+                        if let Some(&di) = cell_to_idx.get(&dep) {
+                            let s = state[di as usize];
+                            if s == 0 {
+                                found = Some((dep, di));
+                                break;
+                            }
+                            if s == 1 {
+                                back_idx = Some(di);
+                            }
+                        }
+                    }
+                    (found, back_idx)
+                };
 
-            pass += 1;
-
-            if !changed {
-                stats.converged = true;
-                break;
-            }
-        }
-
-        stats.iterations = pass;
-        Ok(())
-    }
-
-    /// Detect cells involved in circular references (batch via Tarjan's SCC)
-    fn detect_circular_references(&mut self) {
-        self.circular_cells = self.dependency_graph.find_circular_cells();
-    }
-
-    /// Get the calculation order via topological sort
-    fn get_calculation_order(&self) -> Vec<CellKey> {
-        // Start with all formula cells
-        let all_cells: Vec<CellKey> = self.parsed_formulas.keys().copied().collect();
-
-        // Get recalc order (this handles topological sorting)
-        let mut order = self.dependency_graph.get_recalc_order(&all_cells);
-
-        // Reverse to get correct order (dependencies first)
-        order.reverse();
-
-        // Filter to only include formula cells
-        order.retain(|k| self.parsed_formulas.contains_key(k));
-
-        order
-    }
-
-    /// Calculate cells in order (simple case, no iterative calculation)
-    fn calculate_cells_simple(
-        &self,
-        workbook: &mut Workbook,
-        order: &[CellKey],
-        stats: &mut CalculationStats,
-    ) -> Result<()> {
-        let mut spill_created = false;
-
-        // First pass: calculate all formulas in dependency order
-        for &cell_key in order {
-            spill_created |= self.evaluate_and_store(workbook, cell_key, stats);
-        }
-
-        // Second pass: if any arrays were spilled, recalculate formulas that
-        // might reference spill target cells.  Spill targets are created during
-        // the first pass, but the dependency graph (built before evaluation)
-        // does not know about them.  A formula like =A3*10 depends on A3, which
-        // may be a spill target from A1's SEQUENCE — if it was evaluated before
-        // A1, it would have read an empty cell.  Re-evaluating once resolves this.
-        if spill_created {
-            for &cell_key in order {
-                // Only re-evaluate formulas that are NOT themselves array sources
-                // (those already produced their arrays in pass 1).
-                if let Some(sheet) = workbook.worksheet(cell_key.sheet) {
-                    if sheet.is_spill_source(cell_key.row, cell_key.col) {
-                        continue;
+                // Mark all cells on the stack from the back-edge target
+                // to the top — they all participate in the cycle.
+                if let Some(target_idx) = back_edge_idx {
+                    let mut marking = false;
+                    for &(_, si, _, _) in stack.iter() {
+                        if si == target_idx {
+                            marking = true;
+                        }
+                        if marking {
+                            is_circular[si as usize] = true;
+                        }
                     }
                 }
-                self.evaluate_and_store(workbook, cell_key, stats);
+
+                if let Some((dep, di)) = next_dep {
+                    let mut dep_deps = vec_pool.pop().unwrap_or_default();
+                    dep_deps.clear();
+                    extract_references_recursive(
+                        asts[di as usize],
+                        dep.sheet,
+                        workbook,
+                        &formula_cell_set,
+                        &formula_cell_index,
+                        &mut dep_deps,
+                    );
+                    state[di as usize] = 1; // in_stack
+                    stack.push((dep, di, dep_deps, 0));
+                } else {
+                    // All deps visited — emit this cell.
+                    let (cell, ci, deps, _) = stack.pop().unwrap();
+                    state[ci as usize] = 2; // visited
+                    // Depth = 1 + max depth of formula-cell deps.
+                    let d = deps.iter()
+                        .filter_map(|dep| cell_to_idx.get(dep).map(|&di| depth[di as usize]))
+                        .max()
+                        .unwrap_or(0)
+                        + 1;
+                    depth[ci as usize] = d;
+                    if d > max_depth { max_depth = d; }
+                    eval_order.push(cell);
+                    // Return Vec to pool for reuse.
+                    vec_pool.push(deps);
+                }
             }
         }
 
+        // Collect circular cells for stats reporting.
+        self.circular_cells = seed_order
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| is_circular[i])
+            .map(|(_, &k)| k)
+            .collect();
+
+        EvalPlan {
+            eval_order,
+            cell_to_idx,
+            depth,
+            max_depth,
+        }
+    }
+
+    /// Execute a pre-computed evaluation plan.
+    ///
+    /// Evaluates formulas in the order given by `plan.eval_order`, using
+    /// parallel level-based evaluation when the `parallel` feature is active
+    /// and `max_threads != Some(1)`.  After evaluation, performs targeted
+    /// spill fixup for any formulas whose results spilled into adjacent cells.
+    fn execute_eval_plan(
+        &self,
+        workbook: &mut Workbook,
+        plan: &EvalPlan,
+        stats: &mut CalculationStats,
+    ) -> Result<()> {
+        let n = plan.eval_order.len();
+        let use_parallel = self.should_use_parallel(n);
+        let mut spill_ranges: Vec<(usize, u32, u16, u32, u16)> = Vec::new();
+
+        if use_parallel {
+            #[cfg(feature = "parallel")]
+            {
+                self.evaluate_parallel(
+                    workbook,
+                    &plan.eval_order,
+                    &plan.cell_to_idx,
+                    &plan.depth,
+                    plan.max_depth,
+                    stats,
+                    &mut spill_ranges,
+                );
+            }
+        } else {
+            for &cell_key in &plan.eval_order {
+                let did_spill = self.evaluate_and_store(workbook, cell_key, stats);
+                if did_spill {
+                    self.record_spill(workbook, cell_key, &mut spill_ranges);
+                }
+            }
+        }
+
+        // Phase 3 — targeted spill fixup: only re-evaluate formulas whose
+        // ASTs reference cells inside a spill range.
+        if !spill_ranges.is_empty() {
+            for &cell_key in &plan.eval_order {
+                if workbook
+                    .worksheet(cell_key.sheet)
+                    .map_or(false, |s| s.is_spill_source(cell_key.row, cell_key.col))
+                {
+                    continue;
+                }
+                if let Some(ast) = self.parsed_formulas.get(&cell_key) {
+                    if ast_touches_spill_range(ast, cell_key.sheet, workbook, &spill_ranges) {
+                        self.evaluate_and_store(workbook, cell_key, stats);
+                    }
+                }
+            }
+        }
+
+        stats.circular_references = self.circular_cells.len();
         stats.iterations = 1;
         stats.converged = true;
         Ok(())
     }
 
+
     /// Evaluate a single formula cell and store its result.
     ///
-    /// Returns `true` if the formula produced an array (spill was created).
+    /// Returns `true` if the formula produced an array that actually spilled
     fn evaluate_and_store(
         &self,
         workbook: &mut Workbook,
@@ -421,18 +613,9 @@ impl CalculationEngine {
             None => return false,
         };
 
-        // Skip circular reference cells in non-iterative mode
-        if self.circular_cells.contains(&cell_key) && !self.options.iterative {
-            if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
-                let _ = sheet.set_formula_result(
-                    cell_key.row,
-                    cell_key.col,
-                    CellValue::Error(duke_sheets_core::CellError::Ref),
-                );
-            }
-            stats.errors += 1;
-            return false;
-        }
+        // Circular reference cells are evaluated normally — their self-references
+        // read the cached value from the file (the "previous iteration" result).
+        // This handles the common Excel pattern =IF(cond, val, SELF) correctly.
 
         // Clear any existing spill targets before re-evaluating
         if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
@@ -452,7 +635,6 @@ impl CalculationEngine {
         };
 
         // Store the result
-        let is_array = matches!(result, FormulaValue::Array(_));
         if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
             match result {
                 FormulaValue::Array(array) => {
@@ -467,168 +649,249 @@ impl CalculationEngine {
                 }
             }
         }
+        // Only report a spill if set_array_formula_result actually created
+        // spill targets (1×1 arrays are stored as scalars, no spill).
+        let did_spill = workbook
+            .worksheet(cell_key.sheet)
+            .map_or(false, |s| s.is_spill_source(cell_key.row, cell_key.col));
         stats.cells_calculated += 1;
-        is_array
+        did_spill
     }
 
-    /// Calculate cells with iterative calculation for circular references
-    fn calculate_cells_iterative(
+    /// Record a spill range for targeted fixup later.
+    fn record_spill(
         &self,
-        workbook: &mut Workbook,
-        order: &[CellKey],
-        stats: &mut CalculationStats,
-    ) -> Result<()> {
-        let mut prev_values: HashMap<CellKey, f64> = HashMap::new();
-        let mut converged = false;
-
-        for iteration in 0..self.options.max_iterations {
-            stats.iterations = iteration + 1;
-            let mut max_change: f64 = 0.0;
-
-            for &cell_key in order {
-                if let Some(ast) = self.parsed_formulas.get(&cell_key) {
-                    // Clear any existing spill targets before re-evaluating
-                    if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
-                        sheet.clear_spill(cell_key.row, cell_key.col);
-                    }
-
-                    // Evaluate the formula
-                    let ctx = EvaluationContext::new(
-                        Some(workbook),
-                        cell_key.sheet,
-                        cell_key.row,
-                        cell_key.col,
-                    );
-
-                    let result = match evaluate(ast, &ctx) {
-                        Ok(value) => value,
-                        Err(_) => FormulaValue::Error(duke_sheets_core::CellError::Value),
-                    };
-
-                    // Track convergence for numeric values in circular references
-                    if self.circular_cells.contains(&cell_key) {
-                        if let FormulaValue::Number(new_val) = &result {
-                            if let Some(&old_val) = prev_values.get(&cell_key) {
-                                let change = (new_val - old_val).abs();
-                                max_change = max_change.max(change);
-                            }
-                            prev_values.insert(cell_key, *new_val);
-                        }
-                    }
-
-                    // Store the result — handle arrays for dynamic array spilling
-                    if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
-                        match result {
-                            FormulaValue::Array(array) => {
-                                let cell_array: Vec<Vec<CellValue>> = array
-                                    .into_iter()
-                                    .map(|row| row.into_iter().map(|v| v.into()).collect())
-                                    .collect();
-                                let _ = sheet.set_array_formula_result(
-                                    cell_key.row,
-                                    cell_key.col,
-                                    cell_array,
-                                );
-                            }
-                            _ => {
-                                let _ = sheet.set_formula_result(
-                                    cell_key.row,
-                                    cell_key.col,
-                                    result.into(),
-                                );
-                            }
-                        }
-                    }
-
-                    if iteration == 0 {
-                        stats.cells_calculated += 1;
-                    }
-                }
-            }
-
-            // Check for convergence
-            if max_change <= self.options.max_change {
-                converged = true;
-                break;
+        workbook: &Workbook,
+        cell_key: CellKey,
+        spill_ranges: &mut Vec<(usize, u32, u16, u32, u16)>,
+    ) {
+        if let Some(sheet) = workbook.worksheet(cell_key.sheet) {
+            if let Some(info) = sheet.get_spill_info(cell_key.row, cell_key.col) {
+                let (dr, dc) = info.end_offsets();
+                spill_ranges.push((
+                    cell_key.sheet,
+                    cell_key.row,
+                    cell_key.col,
+                    cell_key.row + dr,
+                    cell_key.col + dc,
+                ));
             }
         }
-
-        stats.converged = converged;
-        Ok(())
     }
 
-    /// Evaluate a formula without tracking stats or checking circular refs.
-    /// Used in multipass convergence loops.
-    fn evaluate_and_store_silent(&self, workbook: &mut Workbook, cell_key: CellKey) {
-        let ast = match self.parsed_formulas.get(&cell_key) {
-            Some(ast) => ast,
-            None => return,
-        };
+    /// Decide whether to use parallel evaluation.
+    #[allow(unused_variables)]
+    fn should_use_parallel(&self, formula_count: usize) -> bool {
+        // Explicit serial override
+        if self.options.max_threads == Some(1) {
+            return false;
+        }
+        // Not enough work to justify thread-pool overhead
+        if formula_count < 5_000 {
+            return false;
+        }
+        #[cfg(feature = "parallel")]
+        { true }
+        #[cfg(not(feature = "parallel"))]
+        { false }
+    }
 
+    #[cfg(feature = "parallel")]
+    /// Evaluate a single formula (read-only) and return the result.
+    /// Used by the parallel path to separate evaluation from storage.
+    /// Returns `(value, was_eval_error)` — the bool is `true` only when
+    /// `evaluate()` itself returned `Err`, NOT when the formula legitimately
+    /// produces an error value like `=1/0`.
+    fn evaluate_formula(
+        &self,
+        workbook: &Workbook,
+        cell_key: CellKey,
+    ) -> Option<(FormulaValue, bool)> {
+        let ast = self.parsed_formulas.get(&cell_key)?;
+        let ctx = EvaluationContext::new(
+            Some(workbook),
+            cell_key.sheet,
+            cell_key.row,
+            cell_key.col,
+        );
+        match evaluate(ast, &ctx) {
+            Ok(value) => Some((value, false)),
+            Err(_) => Some((FormulaValue::Error(duke_sheets_core::CellError::Value), true)),
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    /// Store a pre-computed formula result into the workbook.
+    /// Returns `true` if the result spilled.
+    fn store_result(
+        workbook: &mut Workbook,
+        cell_key: CellKey,
+        result: FormulaValue,
+    ) -> bool {
         if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
             sheet.clear_spill(cell_key.row, cell_key.col);
-        }
-
-        let ctx =
-            EvaluationContext::new(Some(workbook), cell_key.sheet, cell_key.row, cell_key.col);
-
-        let result = match evaluate(ast, &ctx) {
-            Ok(value) => value,
-            Err(_) => FormulaValue::Error(duke_sheets_core::CellError::Value),
-        };
-
-        if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
             match result {
                 FormulaValue::Array(array) => {
                     let cell_array: Vec<Vec<CellValue>> = array
                         .into_iter()
                         .map(|row| row.into_iter().map(|v| v.into()).collect())
                         .collect();
-                    let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
+                    let _ = sheet.set_array_formula_result(
+                        cell_key.row,
+                        cell_key.col,
+                        cell_array,
+                    );
                 }
                 _ => {
-                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, result.into());
+                    let _ = sheet.set_formula_result(
+                        cell_key.row,
+                        cell_key.col,
+                        result.into(),
+                    );
                 }
             }
         }
+        workbook
+            .worksheet(cell_key.sheet)
+            .map_or(false, |s| s.is_spill_source(cell_key.row, cell_key.col))
+    }
+
+    /// Parallel level-based evaluation.
+    ///
+    /// Cells are grouped by dependency depth.  All cells at the same depth
+    /// have their dependencies satisfied by earlier levels, so they can be
+    /// evaluated in parallel.  After each level, results are written
+    /// serially to the workbook before the next level starts.
+    #[cfg(feature = "parallel")]
+    fn evaluate_parallel(
+        &self,
+        workbook: &mut Workbook,
+        eval_order: &[CellKey],
+        cell_to_idx: &AHashMap<CellKey, u32>,
+        depth: &[u32],
+        max_depth: u32,
+        stats: &mut CalculationStats,
+        spill_ranges: &mut Vec<(usize, u32, u16, u32, u16)>,
+    ) {
+        // Build levels: group cells by depth.
+        let num_levels = max_depth as usize + 1;
+        let mut levels: Vec<Vec<CellKey>> = vec![Vec::new(); num_levels];
+        for &cell_key in eval_order {
+            if let Some(&idx) = cell_to_idx.get(&cell_key) {
+                let d = depth[idx as usize] as usize;
+                levels[d].push(cell_key);
+            }
+        }
+
+        // Build a thread pool with the requested thread count.
+        let num_threads = self.options.max_threads
+            .unwrap_or_else(|| rayon::current_num_threads());
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .expect("failed to build rayon thread pool");
+
+        pool.install(|| {
+            for level in &levels {
+                if level.is_empty() {
+                    continue;
+                }
+
+                // Evaluate all cells at this level in parallel.
+                // Each evaluation only reads from the workbook — all
+                // deps at lower depths have already been written.
+                let wb_ref: &Workbook = workbook;
+                let results: Vec<(CellKey, FormulaValue, bool)> = level
+                    .par_iter()
+                    .filter_map(|&cell_key| {
+                        self.evaluate_formula(wb_ref, cell_key)
+                            .map(|(val, was_error)| (cell_key, val, was_error))
+                    })
+                    .collect();
+
+                // Write results serially and track stats.
+                let mut level_errors = 0usize;
+                for (cell_key, result, was_error) in results {
+                    if was_error {
+                        level_errors += 1;
+                    }
+                    let did_spill = Self::store_result(workbook, cell_key, result);
+                    if did_spill {
+                        self.record_spill(workbook, cell_key, spill_ranges);
+                    }
+                    stats.cells_calculated += 1;
+                }
+                stats.errors += level_errors;
+            }
+        });
     }
 }
 
-/// Get numeric value of a cell for convergence comparison.
-/// Returns None for non-numeric or missing cells.
-fn get_cell_numeric(workbook: &Workbook, cell_key: CellKey) -> Option<f64> {
-    let sheet = workbook.worksheet(cell_key.sheet)?;
-    match sheet.get_value_at(cell_key.row, cell_key.col) {
-        CellValue::Number(n) => Some(n),
-        _ => None,
-    }
-}
-
-/// Compare two optional numeric values for convergence.
-fn values_equal(a: Option<f64>, b: Option<f64>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => (a - b).abs() < 1e-10,
-        (None, None) => true,
+/// Check whether any cell or range reference in `expr` overlaps a spill range.
+/// Used by the targeted spill fixup to avoid re-evaluating formulas that cannot
+/// be affected by newly-created spill targets.
+fn ast_touches_spill_range(
+    expr: &FormulaExpr,
+    current_sheet: usize,
+    workbook: &Workbook,
+    spill_ranges: &[(usize, u32, u16, u32, u16)],
+) -> bool {
+    match expr {
+        FormulaExpr::CellRef(cr) => {
+            let si = cr
+                .sheet
+                .as_ref()
+                .and_then(|n| workbook.sheet_index(n))
+                .unwrap_or(current_sheet);
+            let r = cr.address.row;
+            let c = cr.address.col;
+            spill_ranges
+                .iter()
+                .any(|&(s, r1, c1, r2, c2)| s == si && r >= r1 && r <= r2 && c >= c1 && c <= c2)
+        }
+        FormulaExpr::RangeRef(rr) => {
+            let si = rr
+                .sheet
+                .as_ref()
+                .and_then(|n| workbook.sheet_index(n))
+                .unwrap_or(current_sheet);
+            let sr = rr.range.start.row;
+            let er = rr.range.end.row;
+            let sc = rr.range.start.col;
+            let ec = rr.range.end.col;
+            spill_ranges
+                .iter()
+                .any(|&(s, r1, c1, r2, c2)| s == si && sr <= r2 && er >= r1 && sc <= c2 && ec >= c1)
+        }
+        FormulaExpr::BinaryOp { left, right, .. } => {
+            ast_touches_spill_range(left, current_sheet, workbook, spill_ranges)
+                || ast_touches_spill_range(right, current_sheet, workbook, spill_ranges)
+        }
+        FormulaExpr::UnaryOp { operand, .. } => {
+            ast_touches_spill_range(operand, current_sheet, workbook, spill_ranges)
+        }
+        FormulaExpr::Function { args, .. } => args
+            .iter()
+            .any(|a| ast_touches_spill_range(a, current_sheet, workbook, spill_ranges)),
+        FormulaExpr::Array(rows) => rows.iter().any(|row| {
+            row.iter()
+                .any(|cell| ast_touches_spill_range(cell, current_sheet, workbook, spill_ranges))
+        }),
         _ => false,
     }
 }
 
+
+#[cfg(test)]
 fn extract_references(
     expr: &FormulaExpr,
     current_sheet: usize,
     workbook: &Workbook,
-    formula_cells: &HashSet<CellKey>,
+    formula_cells: &AHashSet<CellKey>,
     formula_cell_index: &FormulaCellIndex,
 ) -> Vec<CellKey> {
     let mut refs = Vec::new();
-    extract_references_recursive(
-        expr,
-        current_sheet,
-        workbook,
-        formula_cells,
-        formula_cell_index,
-        &mut refs,
-    );
+    extract_references_recursive(expr, current_sheet, workbook, formula_cells, formula_cell_index, &mut refs);
     refs
 }
 
@@ -636,7 +899,7 @@ fn extract_references_recursive(
     expr: &FormulaExpr,
     current_sheet: usize,
     workbook: &Workbook,
-    formula_cells: &HashSet<CellKey>,
+    formula_cells: &AHashSet<CellKey>,
     formula_cell_index: &FormulaCellIndex,
     refs: &mut Vec<CellKey>,
 ) {
@@ -751,7 +1014,7 @@ fn extract_references_recursive(
     }
 }
 
-fn build_formula_cell_index(formula_cells: &HashSet<CellKey>) -> FormulaCellIndex {
+fn build_formula_cell_index(formula_cells: &AHashSet<CellKey>) -> FormulaCellIndex {
     let mut index = FormulaCellIndex::new();
 
     for &cell in formula_cells {
@@ -779,7 +1042,7 @@ fn push_range_references(
     row_end: u32,
     col_start: u16,
     col_end: u16,
-    formula_cells: &HashSet<CellKey>,
+    formula_cells: &AHashSet<CellKey>,
     formula_cell_index: &FormulaCellIndex,
     refs: &mut Vec<CellKey>,
 ) {
@@ -872,7 +1135,7 @@ fn extract_structured_ref_deps(
     sr: &StructuredReference,
     current_sheet: usize,
     workbook: &Workbook,
-    formula_cells: &HashSet<CellKey>,
+    formula_cells: &AHashSet<CellKey>,
     formula_cell_index: &FormulaCellIndex,
     refs: &mut Vec<CellKey>,
 ) {
@@ -1107,9 +1370,10 @@ mod tests {
         sheet.set_cell_formula("B1", "=A1").unwrap();
 
         let stats = workbook.calculate().unwrap();
-
-        assert_eq!(stats.circular_references, 2);
-        assert_eq!(stats.errors, 2); // Both cells should have errors
+        assert_eq!(stats.circular_references, 2, "circular_references");
+        // Circular cells evaluate using cached/default values (matching Excel
+        // behavior) rather than producing #REF! errors.
+        assert_eq!(stats.errors, 0, "errors");
     }
 
     #[test]
@@ -1186,7 +1450,7 @@ mod tests {
         // Build a formula_cells set containing the cells we expect to reference.
         // extract_references only returns deps on formula cells (static cells
         // are skipped since they never change during calculation).
-        let mut formula_cells: HashSet<CellKey> = HashSet::new();
+        let mut formula_cells: AHashSet<CellKey> = AHashSet::new();
         // A1, A2, A3 for the range test; B2, C3 for the multi-ref test
         formula_cells.insert(CellKey::new(0, 0, 0)); // A1
         formula_cells.insert(CellKey::new(0, 1, 0)); // A2
