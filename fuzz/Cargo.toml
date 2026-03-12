@@ -17,6 +17,7 @@ duke-sheets-xls = { path = "../crates/duke-sheets-xls" }
 duke-sheets-csv = { path = "../crates/duke-sheets-csv" }
 duke-sheets-formula = { path = "../crates/duke-sheets-formula" }
 duke-sheets-core = { path = "../crates/duke-sheets-core" }
+duke-sheets = { path = "../crates/duke-sheets", features = ["full"] }
 
 [workspace]
 members = ["."]
@@ -54,4 +55,9 @@ doc = false
 [[bin]]
 name = "xlsx_roundtrip"
 path = "fuzz_targets/xlsx_roundtrip.rs"
+doc = false
+
+[[bin]]
+name = "formula_eval"
+path = "fuzz_targets/formula_eval.rs"
 doc = false
