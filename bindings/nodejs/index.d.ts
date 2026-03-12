@@ -177,20 +177,20 @@ export declare class Workbook {
    * @param path - Path to save to
    * @returns Promise<void>
    */
-  saveAsync(path: string): Promise<unknown>
+  saveAsync(path: string): Promise<void>
   /**
    * Calculate all formulas asynchronously (non-blocking).
    *
    * @returns Promise<CalculationStats>
    */
-  calculateAsync(): Promise<unknown>
+  calculateAsync(): Promise<CalculationStats>
   /**
    * Calculate with custom options asynchronously (non-blocking).
    *
    * @param options - Calculation options object
    * @returns Promise<CalculationStats>
    */
-  calculateWithOptionsAsync(options: JsCalculationOptions): Promise<unknown>
+  calculateWithOptionsAsync(options: JsCalculationOptions): Promise<CalculationStats>
 }
 
 /**
@@ -377,7 +377,7 @@ export declare class Worksheet {
  * @param data - The file content as a Buffer
  * @returns Promise<Workbook>
  */
-export declare function fromBytesAsync(data: Buffer): Promise<unknown>
+export declare function fromBytesAsync(data: Buffer): Promise<Workbook>
 
 /** Text alignment settings. */
 export interface JsAlignment {
@@ -857,7 +857,7 @@ export interface JsWorkbookSettings {
  * @param path - Path to the file
  * @returns Promise<Workbook>
  */
-export declare function openAsync(path: string): Promise<unknown>
+export declare function openAsync(path: string): Promise<Workbook>
 
 /**
  * The used range of a worksheet, describing the bounding box of all cells

@@ -898,7 +898,7 @@ impl Task for CalculateTask {
 ///
 /// @param path - Path to the file
 /// @returns Promise<Workbook>
-#[napi]
+#[napi(ts_return_type = "Promise<Workbook>")]
 pub fn open_async(path: String) -> AsyncTask<OpenTask> {
     AsyncTask::new(OpenTask {
         path: PathBuf::from(path),
@@ -911,7 +911,7 @@ pub fn open_async(path: String) -> AsyncTask<OpenTask> {
 ///
 /// @param data - The file content as a Buffer
 /// @returns Promise<Workbook>
-#[napi]
+#[napi(ts_return_type = "Promise<Workbook>")]
 pub fn from_bytes_async(data: Buffer) -> AsyncTask<OpenBytesTask> {
     AsyncTask::new(OpenBytesTask {
         data: data.to_vec(),
@@ -924,7 +924,7 @@ impl Workbook {
     ///
     /// @param path - Path to save to
     /// @returns Promise<void>
-    #[napi]
+    #[napi(ts_return_type = "Promise<void>")]
     pub fn save_async(&self, path: String) -> AsyncTask<SaveTask> {
         AsyncTask::new(SaveTask {
             workbook: Arc::clone(&self.inner),
@@ -935,7 +935,7 @@ impl Workbook {
     /// Calculate all formulas asynchronously (non-blocking).
     ///
     /// @returns Promise<CalculationStats>
-    #[napi]
+    #[napi(ts_return_type = "Promise<CalculationStats>")]
     pub fn calculate_async(&self) -> AsyncTask<CalculateTask> {
         AsyncTask::new(CalculateTask {
             workbook: Arc::clone(&self.inner),
@@ -947,7 +947,7 @@ impl Workbook {
     ///
     /// @param options - Calculation options object
     /// @returns Promise<CalculationStats>
-    #[napi]
+    #[napi(ts_return_type = "Promise<CalculationStats>")]
     pub fn calculate_with_options_async(
         &self,
         options: JsCalculationOptions,
