@@ -250,13 +250,51 @@ fn test_calculation_stats() {
     assert_eq!(get_f64_field(&stats, "errors") as u32, 0);
 }
 
+/// Helper to build a JS options object from key-value pairs
+fn make_options(entries: &[(&str, JsValue)]) -> JsValue {
+    let obj = js_sys::Object::new();
+    for (key, val) in entries {
+        js_sys::Reflect::set(&obj, &JsValue::from_str(key), val).unwrap();
+    }
+    obj.into()
+}
+
 #[wasm_bindgen_test]
 fn test_calculation_with_options() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();
     sheet.set_formula("A1", "=1+1").unwrap();
 
-    let stats = wb.calculate_with_options(false, 100, 0.001).unwrap();
+    let opts = make_options(&[
+        ("iterative", JsValue::from(false)),
+        ("maxIterations", JsValue::from(100)),
+        ("maxChange", JsValue::from(0.001)),
+    ]);
+    let stats = wb.calculate_with_options(opts).unwrap();
+    assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
+    assert_eq!(sheet.get_calculated_value("A1").unwrap().as_number().unwrap(), 2.0);
+}
+
+#[wasm_bindgen_test]
+fn test_calculation_with_empty_options() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_formula("A1", "=1+1").unwrap();
+
+    let opts = make_options(&[]);
+    let stats = wb.calculate_with_options(opts).unwrap();
+    assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
+    assert_eq!(sheet.get_calculated_value("A1").unwrap().as_number().unwrap(), 2.0);
+}
+
+#[wasm_bindgen_test]
+fn test_calculation_with_max_threads() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_formula("A1", "=1+1").unwrap();
+
+    let opts = make_options(&[("maxThreads", JsValue::from(1))]);
+    let stats = wb.calculate_with_options(opts).unwrap();
     assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
     assert_eq!(sheet.get_calculated_value("A1").unwrap().as_number().unwrap(), 2.0);
 }

@@ -175,6 +175,49 @@ impl CellValue {
     }
 }
 
+/// Options for workbook calculation.
+///
+/// All fields are optional and default to sensible values.
+#[napi(object)]
+pub struct JsCalculationOptions {
+    /// Enable iterative calculation for circular references (default: false)
+    pub iterative: Option<bool>,
+    /// Maximum iterations for circular references (default: 100)
+    pub max_iterations: Option<u32>,
+    /// Maximum change threshold for convergence (default: 0.001)
+    pub max_change: Option<f64>,
+    /// Force recalculation of all cells, even if not dirty (default: true)
+    pub force_full_calculation: Option<bool>,
+    /// Include volatile functions in calculation (NOW, TODAY, RAND, etc.) (default: true)
+    pub calculate_volatile: Option<bool>,
+    /// Only calculate these sheet indices (and their transitive cross-sheet dependencies).
+    /// If empty or omitted, calculate all sheets.
+    pub sheets: Option<Vec<u32>>,
+    /// Maximum number of threads for parallel evaluation.
+    /// - null/undefined: use all available cores
+    /// - 1: force serial evaluation
+    /// - n: use at most n threads
+    pub max_threads: Option<u32>,
+}
+
+impl JsCalculationOptions {
+    fn into_core(self) -> CalculationOptions {
+        CalculationOptions {
+            iterative: self.iterative.unwrap_or(false),
+            max_iterations: self.max_iterations.unwrap_or(100),
+            max_change: self.max_change.unwrap_or(0.001),
+            force_full_calculation: self.force_full_calculation.unwrap_or(true),
+            calculate_volatile: self.calculate_volatile.unwrap_or(true),
+            sheets: self.sheets
+                .unwrap_or_default()
+                .into_iter()
+                .map(|i| i as usize)
+                .collect(),
+            max_threads: self.max_threads.map(|n| n as usize),
+        }
+    }
+}
+
 /// Statistics from calculating a workbook.
 #[napi]
 pub struct CalculationStats {
@@ -714,27 +757,19 @@ impl Workbook {
         })
     }
 
-    /// Calculate with custom options for iterative calculation
+    /// Calculate with custom options.
     ///
-    /// @param iterative - Enable iterative calculation for circular references
-    /// @param maxIterations - Maximum iterations (default 100)
-    /// @param maxChange - Convergence threshold (default 0.001)
+    /// @param options - Calculation options object
+    /// @returns Statistics about the calculation
     #[napi]
     pub fn calculate_with_options(
         &self,
-        iterative: Option<bool>,
-        max_iterations: Option<u32>,
-        max_change: Option<f64>,
+        options: JsCalculationOptions,
     ) -> Result<CalculationStats> {
         catch_panic(|| {
             let mut wb = self.inner.write().map_err(to_napi_err)?;
-            let options = CalculationOptions {
-                iterative: iterative.unwrap_or(false),
-                max_iterations: max_iterations.unwrap_or(100),
-                max_change: max_change.unwrap_or(0.001),
-                ..Default::default()
-            };
-            let stats = wb.calculate_with_options(&options).map_err(to_napi_err)?;
+            let opts = options.into_core();
+            let stats = wb.calculate_with_options(&opts).map_err(to_napi_err)?;
             Ok(CalculationStats { inner: stats })
         })
     }
@@ -910,25 +945,16 @@ impl Workbook {
 
     /// Calculate with custom options asynchronously (non-blocking).
     ///
-    /// @param iterative - Enable iterative calculation for circular references
-    /// @param maxIterations - Maximum iterations (default 100)
-    /// @param maxChange - Convergence threshold (default 0.001)
+    /// @param options - Calculation options object
     /// @returns Promise<CalculationStats>
     #[napi]
     pub fn calculate_with_options_async(
         &self,
-        iterative: Option<bool>,
-        max_iterations: Option<u32>,
-        max_change: Option<f64>,
-    ) -> Result<AsyncTask<CalculateTask>> {
-        Ok(AsyncTask::new(CalculateTask {
+        options: JsCalculationOptions,
+    ) -> AsyncTask<CalculateTask> {
+        AsyncTask::new(CalculateTask {
             workbook: Arc::clone(&self.inner),
-            options: Some(CalculationOptions {
-                iterative: iterative.unwrap_or(false),
-                max_iterations: max_iterations.unwrap_or(100),
-                max_change: max_change.unwrap_or(0.001),
-                ..Default::default()
-            }),
-        }))
+            options: Some(options.into_core()),
+        })
     }
 }

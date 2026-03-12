@@ -151,15 +151,12 @@ export declare class Workbook {
    */
   calculate(): CalculationStats
   /**
-   * Calculate with custom options for iterative calculation
+   * Calculate with custom options.
    *
-   * @param iterative - Enable iterative calculation for circular references
-   * @param maxIterations - Maximum iterations (default 100)
-   * @param maxChange - Convergence threshold (default 0.001)
-   * @param mode - Calculation mode: "exact", "multipass", or "auto" (default "auto")
-   * @param autoThreshold - Formula count threshold for auto mode (default 50000)
+   * @param options - Calculation options object
+   * @returns Statistics about the calculation
    */
-  calculateWithOptions(iterative?: boolean | undefined | null, maxIterations?: number | undefined | null, maxChange?: number | undefined | null, mode?: string | undefined | null, autoThreshold?: number | undefined | null): CalculationStats
+  calculateWithOptions(options: JsCalculationOptions): CalculationStats
   /**
    * Define a named range
    *
@@ -190,12 +187,10 @@ export declare class Workbook {
   /**
    * Calculate with custom options asynchronously (non-blocking).
    *
-   * @param iterative - Enable iterative calculation for circular references
-   * @param maxIterations - Maximum iterations (default 100)
-   * @param maxChange - Convergence threshold (default 0.001)
+   * @param options - Calculation options object
    * @returns Promise<CalculationStats>
    */
-  calculateWithOptionsAsync(iterative?: boolean | undefined | null, maxIterations?: number | undefined | null, maxChange?: number | undefined | null, mode?: string | undefined | null, autoThreshold?: number | undefined | null): Promise<unknown>
+  calculateWithOptionsAsync(options: JsCalculationOptions): Promise<unknown>
 }
 
 /**
@@ -423,6 +418,36 @@ export interface JsBorderStyle {
   diagonal?: JsBorderEdge
   /** One of: `"none"`, `"down"`, `"up"`, `"both"`. */
   diagonalDirection: string
+}
+
+/**
+ * Options for workbook calculation.
+ *
+ * All fields are optional and default to sensible values.
+ */
+export interface JsCalculationOptions {
+  /** Enable iterative calculation for circular references (default: false) */
+  iterative?: boolean
+  /** Maximum iterations for circular references (default: 100) */
+  maxIterations?: number
+  /** Maximum change threshold for convergence (default: 0.001) */
+  maxChange?: number
+  /** Force recalculation of all cells, even if not dirty (default: true) */
+  forceFullCalculation?: boolean
+  /** Include volatile functions in calculation (NOW, TODAY, RAND, etc.) (default: true) */
+  calculateVolatile?: boolean
+  /**
+   * Only calculate these sheet indices (and their transitive cross-sheet dependencies).
+   * If empty or omitted, calculate all sheets.
+   */
+  sheets?: Array<number>
+  /**
+   * Maximum number of threads for parallel evaluation.
+   * - null/undefined: use all available cores
+   * - 1: force serial evaluation
+   * - n: use at most n threads
+   */
+  maxThreads?: number
 }
 
 /** Cell protection settings. */

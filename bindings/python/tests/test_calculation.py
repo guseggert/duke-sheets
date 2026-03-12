@@ -124,6 +124,44 @@ class TestIterativeCalculation:
         
         assert stats.formula_count == 1
 
+    def test_calculate_with_force_full_calculation(self, workbook):
+        """Should accept force_full_calculation option."""
+        sheet = workbook.get_sheet(0)
+        sheet.set_formula("A1", "=1+1")
+        
+        stats = workbook.calculate_with_options(force_full_calculation=True)
+        assert stats.formula_count == 1
+        assert sheet.get_calculated_value("A1").as_number() == 2.0
+
+    def test_calculate_with_calculate_volatile(self, workbook):
+        """Should accept calculate_volatile option."""
+        sheet = workbook.get_sheet(0)
+        sheet.set_formula("A1", "=1+1")
+        
+        stats = workbook.calculate_with_options(calculate_volatile=False)
+        assert stats.formula_count == 1
+
+    def test_calculate_specific_sheets(self, workbook):
+        """Should calculate only specified sheets."""
+        sheet0 = workbook.get_sheet(0)
+        sheet0.set_formula("A1", "=1+1")
+        workbook.add_sheet("Sheet2")
+        sheet1 = workbook.get_sheet(1)
+        sheet1.set_formula("A1", "=2+2")
+        
+        stats = workbook.calculate_with_options(sheets=[0])
+        assert stats.cells_calculated >= 1
+        assert sheet0.get_calculated_value("A1").as_number() == 2.0
+
+    def test_calculate_with_max_threads(self, workbook):
+        """Should accept max_threads option."""
+        sheet = workbook.get_sheet(0)
+        sheet.set_formula("A1", "=1+1")
+        
+        stats = workbook.calculate_with_options(max_threads=1)
+        assert stats.formula_count == 1
+        assert sheet.get_calculated_value("A1").as_number() == 2.0
+
     def test_worksheet_formula_count(self, workbook):
         """Worksheet should expose formula_count property."""
         sheet = workbook.get_sheet(0)

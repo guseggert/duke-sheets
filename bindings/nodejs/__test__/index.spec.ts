@@ -380,52 +380,67 @@ describe("Calculation", () => {
     expect(stats.errors).toBe(0);
   });
 
-  it("calculates with options", () => {
+  it("calculates with options object", () => {
     const wb = new Workbook();
     const sheet = wb.getSheet(0);
 
     sheet.setFormula("A1", "=1+1");
 
-    const stats = wb.calculateWithOptions(false, 100, 0.001);
-    expect(stats.formulaCount).toBe(1);
-  });
-
-  it("calculates with exact mode", () => {
-    const wb = new Workbook();
-    const sheet = wb.getSheet(0);
-    sheet.setFormula("A1", "=1+1");
-
-    const stats = wb.calculateWithOptions(false, 100, 0.001, "exact");
+    const stats = wb.calculateWithOptions({ iterative: false, maxIterations: 100, maxChange: 0.001 });
     expect(stats.formulaCount).toBe(1);
     expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
   });
 
-  it("calculates with multipass mode", () => {
+  it("calculates with empty options (all defaults)", () => {
     const wb = new Workbook();
     const sheet = wb.getSheet(0);
     sheet.setFormula("A1", "=1+1");
 
-    const stats = wb.calculateWithOptions(false, 100, 0.001, "multipass");
+    const stats = wb.calculateWithOptions({});
     expect(stats.formulaCount).toBe(1);
     expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
   });
 
-  it("calculates with auto mode and custom threshold", () => {
+  it("calculates with forceFullCalculation option", () => {
     const wb = new Workbook();
     const sheet = wb.getSheet(0);
     sheet.setFormula("A1", "=1+1");
 
-    const stats = wb.calculateWithOptions(false, 100, 0.001, "auto", 100);
+    const stats = wb.calculateWithOptions({ forceFullCalculation: true });
     expect(stats.formulaCount).toBe(1);
     expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
   });
 
-  it("rejects invalid mode", () => {
+  it("calculates with calculateVolatile option", () => {
     const wb = new Workbook();
     const sheet = wb.getSheet(0);
     sheet.setFormula("A1", "=1+1");
 
-    expect(() => wb.calculateWithOptions(false, 100, 0.001, "bogus")).toThrow();
+    const stats = wb.calculateWithOptions({ calculateVolatile: false });
+    expect(stats.formulaCount).toBe(1);
+  });
+
+  it("calculates specific sheets only", () => {
+    const wb = new Workbook();
+    const sheet0 = wb.getSheet(0);
+    sheet0.setFormula("A1", "=1+1");
+    wb.addSheet("Sheet2");
+    const sheet1 = wb.getSheet(1);
+    sheet1.setFormula("A1", "=2+2");
+
+    const stats = wb.calculateWithOptions({ sheets: [0] });
+    expect(stats.cellsCalculated).toBeGreaterThanOrEqual(1);
+    expect(sheet0.getCalculatedValue("A1").asNumber()).toBe(2);
+  });
+
+  it("calculates with maxThreads option", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", "=1+1");
+
+    const stats = wb.calculateWithOptions({ maxThreads: 1 });
+    expect(stats.formulaCount).toBe(1);
+    expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
   });
 
   it("worksheet formulaCount getter", () => {

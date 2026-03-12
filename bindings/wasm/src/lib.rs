@@ -2,7 +2,7 @@ use std::io::Cursor;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
@@ -16,6 +16,18 @@ mod workbook_read;
 mod worksheet_read;
 
 pub use types::*;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsCalculationOptions {
+    iterative: Option<bool>,
+    max_iterations: Option<u32>,
+    max_change: Option<f64>,
+    force_full_calculation: Option<bool>,
+    calculate_volatile: Option<bool>,
+    sheets: Option<Vec<usize>>,
+    max_threads: Option<usize>,
+}
 
 pub(crate) fn to_js_error(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
@@ -459,16 +471,19 @@ impl Workbook {
     #[wasm_bindgen(js_name = calculateWithOptions)]
     pub fn calculate_with_options(
         &self,
-        iterative: bool,
-        max_iterations: u32,
-        max_change: f64,
+        options: JsValue,
     ) -> Result<JsValue, JsError> {
+        let js_opts: JsCalculationOptions =
+            serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
         let mut wb = self.inner.borrow_mut();
         let options = CalculationOptions {
-            iterative,
-            max_iterations,
-            max_change,
-            ..Default::default()
+            iterative: js_opts.iterative.unwrap_or(false),
+            max_iterations: js_opts.max_iterations.unwrap_or(100),
+            max_change: js_opts.max_change.unwrap_or(0.001),
+            force_full_calculation: js_opts.force_full_calculation.unwrap_or(true),
+            calculate_volatile: js_opts.calculate_volatile.unwrap_or(true),
+            sheets: js_opts.sheets.unwrap_or_default(),
+            max_threads: js_opts.max_threads,
         };
         let stats = wb.calculate_with_options(&options).map_err(to_js_error)?;
         to_js_value(&WasmCalculationStats::from(&stats))

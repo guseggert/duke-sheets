@@ -607,28 +607,39 @@ impl PyWorkbook {
         Ok(stats.into())
     }
 
-    /// Calculate with custom options for iterative calculation
+    /// Calculate with custom options
     ///
     /// Args:
-    ///     iterative: Enable iterative calculation for circular references
-    ///     max_iterations: Maximum number of iterations (default 100)
-    ///     max_change: Convergence threshold (default 0.001)
+    ///     iterative: Enable iterative calculation for circular references (default: False)
+    ///     max_iterations: Maximum number of iterations (default: 100)
+    ///     max_change: Convergence threshold (default: 0.001)
+    ///     force_full_calculation: Force recalculation of all cells (default: True)
+    ///     calculate_volatile: Include volatile functions like NOW(), RAND() (default: True)
+    ///     sheets: Only calculate these sheet indices. Empty list means all sheets (default: [])
+    ///     max_threads: Maximum threads for parallel evaluation. None means all cores (default: None)
     ///
     /// Returns:
     ///     CalculationStats with information about the calculation
-    #[pyo3(signature = (iterative = false, max_iterations = 100, max_change = 0.001))]
+    #[pyo3(signature = (iterative=false, max_iterations=100, max_change=0.001, force_full_calculation=true, calculate_volatile=true, sheets=vec![], max_threads=None))]
     fn calculate_with_options(
         &self,
         iterative: bool,
         max_iterations: u32,
         max_change: f64,
+        force_full_calculation: bool,
+        calculate_volatile: bool,
+        sheets: Vec<usize>,
+        max_threads: Option<usize>,
     ) -> PyResult<PyCalculationStats> {
         let mut wb = self.inner.write().map_err(to_py_err)?;
         let options = CalculationOptions {
             iterative,
             max_iterations,
             max_change,
-            ..Default::default()
+            force_full_calculation,
+            calculate_volatile,
+            sheets,
+            max_threads,
         };
         let stats = wb.calculate_with_options(&options).map_err(to_py_err)?;
         Ok(stats.into())

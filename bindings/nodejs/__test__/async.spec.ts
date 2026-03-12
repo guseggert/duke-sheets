@@ -123,7 +123,7 @@ describe("Async calculate", () => {
     sheet.setCell("A1", 1);
     sheet.setFormula("A2", "=A1*2");
 
-    const stats = await wb.calculateWithOptionsAsync(false, 100, 0.001);
+    const stats = await wb.calculateWithOptionsAsync({ iterative: false, maxIterations: 100, maxChange: 0.001 });
     expect(stats).toBeDefined();
     expect(stats.formulaCount).toBeGreaterThanOrEqual(1);
 
