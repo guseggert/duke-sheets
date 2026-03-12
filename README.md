@@ -13,10 +13,10 @@ A Rust library for reading, writing, and manipulating Excel spreadsheets with fu
 
 ## Node.js / TypeScript
 
-Install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases):
+Install from [npm](https://www.npmjs.com/package/@dukelib/sheets):
 
 ```bash
-npm install https://github.com/guseggert/duke-sheets/releases/download/node-v0.1.0/dukelib-sheets-0.1.0.tgz
+npm install @dukelib/sheets
 ```
 ```typescript
 import { Workbook } from '@dukelib/sheets';
@@ -60,7 +60,7 @@ conditional formatting, data validations, merged regions, page setup, and more.
 Install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases):
 
 ```bash
-pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.1/duke_sheets-0.1.1-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
 
 Wheels are available for Linux (x86_64, aarch64), macOS (x86_64, ARM), and Windows (x64).
@@ -72,7 +72,7 @@ Or use as an inline script dependency with [uv](https://docs.astral.sh/uv/):
 # /// script
 # requires-python = ">=3.9"
 # dependencies = [
-#     "duke-sheets @ https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.0/duke_sheets-0.1.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+#     "duke-sheets @ https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.1/duke_sheets-0.1.1-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
 # ]
 # ///
 
@@ -105,17 +105,10 @@ values, comments, hyperlinks, tables, freeze panes, page setup, etc.
 
 ## WebAssembly
 
-Install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases):
+Install from [npm](https://www.npmjs.com/package/@dukelib/sheets-wasm):
 
 ```bash
-# For webpack/vite (bundler target)
-npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/dukelib-sheets-wasm-bundler.tgz
-
-# For <script type="module"> (web target)
-npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/dukelib-sheets-wasm-web.tgz
-
-# For Node.js via WASM
-npm install https://github.com/guseggert/duke-sheets/releases/download/wasm-v0.1.0/dukelib-sheets-wasm-nodejs.tgz
+npm install @dukelib/sheets-wasm
 ```
 
 ```javascript
