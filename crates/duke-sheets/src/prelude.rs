@@ -39,13 +39,15 @@ pub use crate::{
 
     // Error types
     Error,
-    FillStyle,
     // Format detection
     FileFormat,
+    FillStyle,
     FontStyle,
     HorizontalAlignment,
     Hyperlink,
     IconSetStyle,
+    ImageInfo,
+    ImageSizing,
     NumberFormat,
     Result,
 

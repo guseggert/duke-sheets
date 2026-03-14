@@ -769,6 +769,7 @@ dependencies = [
  "lazy-regex",
  "once_cell",
  "pretty_assertions",
+ "quick-xml 0.37.5",
  "rand",
  "regex",
  "rust_decimal",

@@ -7,7 +7,7 @@ use crate::ast::{
 };
 use crate::error::{FormulaError, FormulaResult};
 use crate::functions::FunctionRegistry;
-use duke_sheets_core::{CellError, CellValue, Table, Workbook};
+use duke_sheets_core::{CellError, CellValue, Table, Workbook, MAX_COLS, MAX_ROWS};
 use std::sync::OnceLock;
 
 /// Global function registry (lazily initialized)
@@ -132,6 +132,9 @@ impl From<FormulaValue> for CellValue {
     }
 }
 
+// Re-export ImageInfo/ImageSizing from core so existing imports keep working.
+pub use duke_sheets_core::{ImageInfo, ImageSizing};
+
 /// Context for formula evaluation
 pub struct EvaluationContext<'a> {
     /// Reference to the workbook for cell lookups
@@ -142,6 +145,12 @@ pub struct EvaluationContext<'a> {
     pub current_row: u32,
     /// Current cell column (for relative references)
     pub current_col: u16,
+    /// Optional WEBSERVICE callback.
+    pub web_service_fn: Option<&'a (dyn Fn(&str) -> Option<String> + Send + Sync)>,
+    /// Optional RTD callback.
+    pub rtd_fn: Option<&'a (dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync)>,
+    /// Optional IMAGE metadata sink.
+    pub image_sink: Option<&'a (dyn Fn(usize, u32, u16, ImageInfo) + Send + Sync)>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -152,6 +161,9 @@ impl<'a> EvaluationContext<'a> {
             current_sheet: sheet,
             current_row: row,
             current_col: col,
+            web_service_fn: None,
+            rtd_fn: None,
+            image_sink: None,
         }
     }
 
@@ -162,6 +174,9 @@ impl<'a> EvaluationContext<'a> {
             current_sheet: 0,
             current_row: 0,
             current_col: 0,
+            web_service_fn: None,
+            rtd_fn: None,
+            image_sink: None,
         }
     }
 
@@ -1092,6 +1107,19 @@ fn evaluate_function(
         }
     }
 
+    // Special case: AREAS needs the raw AST to count union branches.
+    if lookup_name == "AREAS" {
+        return evaluate_areas(args, ctx);
+    }
+
+    if lookup_name == "OFFSET" {
+        return evaluate_offset(args, ctx);
+    }
+
+    // Special case: FORMULATEXT needs the raw cell reference, not the evaluated value.
+    if lookup_name == "FORMULATEXT" {
+        return evaluate_formulatext(args, ctx);
+    }
     // Evaluate arguments
     let mut evaluated_args = Vec::with_capacity(args.len());
     for arg in args {
@@ -1100,6 +1128,216 @@ fn evaluate_function(
 
     // Call the function
     (func.implementation)(&evaluated_args, ctx)
+}
+
+/// FORMULATEXT requires special handling: it needs the raw cell reference
+/// expression to look up the formula text, not the evaluated cell value.
+fn evaluate_formulatext(
+    args: &[FormulaExpr],
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let arg = &args[0];
+
+    // Extract cell coordinates from the reference expression
+    let (sheet_name, row, col) = match arg {
+        FormulaExpr::CellRef(cell_ref) => (
+            cell_ref.sheet.as_deref(),
+            cell_ref.address.row,
+            cell_ref.address.col,
+        ),
+        FormulaExpr::RangeRef(range_ref) => {
+            // For ranges, use the upper-left cell (per Excel docs)
+            (
+                range_ref.sheet.as_deref(),
+                range_ref.range.start.row,
+                range_ref.range.start.col,
+            )
+        }
+        FormulaExpr::Error(e) => return Ok(FormulaValue::Error(*e)),
+        // For non-reference expressions, evaluate and propagate errors or return #N/A
+        _ => {
+            return match evaluate(arg, ctx)? {
+                FormulaValue::Error(e) => Ok(FormulaValue::Error(e)),
+                _ => Ok(FormulaValue::Error(CellError::Na)),
+            };
+        }
+    };
+
+    let workbook = match ctx.workbook {
+        Some(wb) => wb,
+        None => return Ok(FormulaValue::Error(CellError::Na)),
+    };
+
+    let sheet_idx = match sheet_name {
+        Some(name) => match workbook.sheet_index(name) {
+            Some(idx) => idx,
+            None => return Ok(FormulaValue::Error(CellError::Na)),
+        },
+        None => ctx.current_sheet,
+    };
+
+    let worksheet = match workbook.worksheet(sheet_idx) {
+        Some(ws) => ws,
+        None => return Ok(FormulaValue::Error(CellError::Na)),
+    };
+
+    match worksheet.get_formula_at(row, col) {
+        Some(formula) => Ok(FormulaValue::String(formula.to_string().into())),
+        None => Ok(FormulaValue::Error(CellError::Na)),
+    }
+}
+
+/// AREAS needs the raw AST to count how many separate reference areas the
+/// argument contains. A Union binary-op (`(A1:B2,C3:D4)`) contributes the sum
+/// of its children; all other reference-like nodes count as 1 area.
+fn evaluate_areas(args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    fn count_areas(expr: &FormulaExpr, ctx: &EvaluationContext) -> Result<u32, CellError> {
+        match expr {
+            FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::NameRef(_) => {
+                Ok(1)
+            }
+            FormulaExpr::BinaryOp {
+                op: BinaryOperator::Union,
+                left,
+                right,
+            } => Ok(count_areas(left, ctx)? + count_areas(right, ctx)?),
+            // Intersect and Range each produce a single contiguous area
+            FormulaExpr::BinaryOp {
+                op: BinaryOperator::Intersect | BinaryOperator::Range,
+                ..
+            } => Ok(1),
+            FormulaExpr::Error(e) => Err(*e),
+            other => {
+                // Evaluate and propagate errors; any non-error result is 1 area.
+                match evaluate(other, ctx) {
+                    Ok(FormulaValue::Error(e)) => Err(e),
+                    Err(_) => Ok(1),
+                    _ => Ok(1),
+                }
+            }
+        }
+    }
+
+    let arg = args.first().ok_or(FormulaError::ArgumentCount {
+        function: "AREAS".into(),
+        expected: "1".into(),
+        actual: 0,
+    })?;
+
+    match count_areas(arg, ctx) {
+        Ok(count) => Ok(FormulaValue::Number(f64::from(count))),
+        Err(e) => Ok(FormulaValue::Error(e)),
+    }
+}
+
+
+fn evaluate_offset(args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let to_i64_trunc = |value: &FormulaValue| value.as_number().map(|n| n.trunc() as i64);
+
+    let (sheet_name, base_row, base_col, base_height, base_width) = match &args[0] {
+        FormulaExpr::CellRef(cell_ref) => (
+            cell_ref.sheet.as_deref(),
+            i64::from(cell_ref.address.row),
+            i64::from(cell_ref.address.col),
+            1_i64,
+            1_i64,
+        ),
+        FormulaExpr::RangeRef(range_ref) => (
+            range_ref.sheet.as_deref(),
+            i64::from(range_ref.range.start.row),
+            i64::from(range_ref.range.start.col),
+            i64::from(range_ref.range.end.row - range_ref.range.start.row + 1),
+            i64::from(range_ref.range.end.col - range_ref.range.start.col + 1),
+        ),
+        FormulaExpr::Error(e) => return Ok(FormulaValue::Error(*e)),
+        arg => {
+            let mut evaluated_args = Vec::with_capacity(args.len());
+            evaluated_args.push(evaluate(arg, ctx)?);
+            for other_arg in &args[1..] {
+                evaluated_args.push(evaluate(other_arg, ctx)?);
+            }
+            return crate::functions::lookup::fn_offset(&evaluated_args, ctx);
+        }
+    };
+
+    let rows_offset = match evaluate(&args[1], ctx)? {
+        FormulaValue::Error(e) => return Ok(FormulaValue::Error(e)),
+        value => match to_i64_trunc(&value) {
+            Some(offset) => offset,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+    };
+    let cols_offset = match evaluate(&args[2], ctx)? {
+        FormulaValue::Error(e) => return Ok(FormulaValue::Error(e)),
+        value => match to_i64_trunc(&value) {
+            Some(offset) => offset,
+            None => return Ok(FormulaValue::Error(CellError::Value)),
+        },
+    };
+
+    let height = match args.get(3) {
+        None | Some(FormulaExpr::Empty) => base_height,
+        Some(arg) => match evaluate(arg, ctx)? {
+            FormulaValue::Error(e) => return Ok(FormulaValue::Error(e)),
+            value => match to_i64_trunc(&value) {
+                Some(height) if height >= 1 => height,
+                Some(_) => return Ok(FormulaValue::Error(CellError::Ref)),
+                None => return Ok(FormulaValue::Error(CellError::Value)),
+            },
+        },
+    };
+    let width = match args.get(4) {
+        None | Some(FormulaExpr::Empty) => base_width,
+        Some(arg) => match evaluate(arg, ctx)? {
+            FormulaValue::Error(e) => return Ok(FormulaValue::Error(e)),
+            value => match to_i64_trunc(&value) {
+                Some(width) if width >= 1 => width,
+                Some(_) => return Ok(FormulaValue::Error(CellError::Ref)),
+                None => return Ok(FormulaValue::Error(CellError::Value)),
+            },
+        },
+    };
+
+    let start_row = match base_row.checked_add(rows_offset) {
+        Some(row) if row >= 0 => row,
+        _ => return Ok(FormulaValue::Error(CellError::Ref)),
+    };
+    let start_col = match base_col.checked_add(cols_offset) {
+        Some(col) if col >= 0 => col,
+        _ => return Ok(FormulaValue::Error(CellError::Ref)),
+    };
+
+    let end_row = match start_row.checked_add(height - 1) {
+        Some(row) => row,
+        None => return Ok(FormulaValue::Error(CellError::Ref)),
+    };
+    let end_col = match start_col.checked_add(width - 1) {
+        Some(col) => col,
+        None => return Ok(FormulaValue::Error(CellError::Ref)),
+    };
+
+    if start_row >= i64::from(MAX_ROWS)
+        || start_col >= i64::from(MAX_COLS)
+        || end_row >= i64::from(MAX_ROWS)
+        || end_col >= i64::from(MAX_COLS)
+    {
+        return Ok(FormulaValue::Error(CellError::Ref));
+    }
+
+    let start_row = start_row as u32;
+    let start_col = start_col as u16;
+
+    if height == 1 && width == 1 {
+        return Ok(ctx.get_cell_value(sheet_name, start_row, start_col));
+    }
+
+    Ok(ctx.get_range_values(
+        sheet_name,
+        start_row,
+        start_col,
+        end_row as u32,
+        end_col as u16,
+    ))
 }
 
 #[cfg(test)]

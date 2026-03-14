@@ -1292,4 +1292,206 @@ mod tests {
             _ => panic!("Expected Array"),
         }
     }
+
+    // ===== DOCS-BASED TESTS =====
+
+    #[test]
+    fn test_lognorm_dist_docs() {
+        // Docs: x=4, mean=3.5, standard_dev=1.2
+        // =LOGNORM.DIST(4,3.5,1.2,TRUE) = 0.0390836
+        let result = eval("=LOGNORM.DIST(4,3.5,1.2,TRUE)").unwrap();
+        if let FormulaValue::Number(n) = result {
+            assert!((n - 0.0390836).abs() < 1e-6);
+        } else {
+            panic!("Expected Number");
+        }
+        // =LOGNORM.DIST(4,3.5,1.2,FALSE) = 0.0176176
+        let result = eval("=LOGNORM.DIST(4,3.5,1.2,FALSE)").unwrap();
+        if let FormulaValue::Number(n) = result {
+            assert!((n - 0.0176176).abs() < 1e-6);
+        } else {
+            panic!("Expected Number");
+        }
+    }
+
+    #[test]
+    fn test_lognorm_inv_docs() {
+        // Docs: probability=0.039084, mean=3.5, standard_dev=1.2
+        // =LOGNORM.INV(0.039084,3.5,1.2) = 4.0000252
+        let result = eval("=LOGNORM.INV(0.039084,3.5,1.2)").unwrap();
+        if let FormulaValue::Number(n) = result {
+            assert!((n - 4.0000252).abs() < 1e-4);
+        } else {
+            panic!("Expected Number");
+        }
+    }
+
+    #[test]
+    fn test_linest_docs() {
+        // --- Example 1: slope and y-intercept ---
+        // known_y={1,9,5,7}, known_x={0,4,2,3} -> slope=2, intercept=1
+        let result = eval("=LINEST({1,9,5,7},{0,4,2,3})").unwrap();
+        match result {
+            FormulaValue::Array(rows) => {
+                assert_eq!(rows.len(), 1);
+                if let FormulaValue::Number(slope) = rows[0][0] {
+                    assert!((slope - 2.0).abs() < 1e-8);
+                } else {
+                    panic!("Expected slope number");
+                }
+                if let FormulaValue::Number(intercept) = rows[0][1] {
+                    assert!((intercept - 1.0).abs() < 1e-8);
+                } else {
+                    panic!("Expected intercept number");
+                }
+            }
+            _ => panic!("Expected Array"),
+        }
+
+        // --- Example 2: simple linear regression ---
+        // months 1-6, sales {3100,4500,4400,5400,7500,8100}
+        // Docs: =SUM(LINEST(B1:B6,A1:A6)*{9,1}) = $11,000
+        let result = eval("=LINEST({3100,4500,4400,5400,7500,8100},{1,2,3,4,5,6})").unwrap();
+        match result {
+            FormulaValue::Array(rows) => {
+                if let (FormulaValue::Number(slope), FormulaValue::Number(intercept)) =
+                    (&rows[0][0], &rows[0][1])
+                {
+                    let predicted = slope * 9.0 + intercept;
+                    assert!((predicted - 11000.0).abs() < 1.0);
+                } else {
+                    panic!("Expected slope and intercept numbers");
+                }
+            }
+            _ => panic!("Expected Array"),
+        }
+
+        // --- Example 3: multiple linear regression with stats ---
+        // Docs first-column values: m4=-234.2371645, se4=13.26801148,
+        // r^2=0.996747993, F=459.7536742, ssreg=1732393319
+        let result = eval(concat!(
+            "=LINEST({142000;144000;151000;150000;139000;169000;126000;142900;163000;169000;149000},",
+            "{2310,2,2,20;2333,2,2,12;2356,3,1.5,33;2379,3,2,43;2402,2,3,53;",
+            "2425,4,2,23;2448,2,1.5,99;2471,2,2,34;2494,3,3,23;2517,4,4,55;2540,2,3,22},",
+            "TRUE,TRUE)"
+        ))
+        .unwrap();
+        match result {
+            FormulaValue::Array(rows) => {
+                assert_eq!(rows.len(), 5, "stats=TRUE should return 5 rows");
+                // m4 (age coefficient)
+                if let FormulaValue::Number(m4) = rows[0][0] {
+                    assert!((m4 - (-234.2371645)).abs() < 0.001);
+                } else {
+                    panic!("Expected m4 number");
+                }
+                // se4
+                if let FormulaValue::Number(se4) = rows[1][0] {
+                    assert!((se4 - 13.26801148).abs() < 0.001);
+                } else {
+                    panic!("Expected se4 number");
+                }
+                // r^2
+                if let FormulaValue::Number(r2) = rows[2][0] {
+                    assert!((r2 - 0.996747993).abs() < 1e-6);
+                } else {
+                    panic!("Expected r^2 number");
+                }
+                // F statistic
+                if let FormulaValue::Number(f) = rows[3][0] {
+                    assert!((f - 459.7536742).abs() < 0.001);
+                } else {
+                    panic!("Expected F number");
+                }
+                // ssreg
+                if let FormulaValue::Number(ssreg) = rows[4][0] {
+                    assert!((ssreg - 1732393319.0).abs() < 1.0);
+                } else {
+                    panic!("Expected ssreg number");
+                }
+            }
+            _ => panic!("Expected Array"),
+        }
+    }
+
+    #[test]
+    fn test_logest_docs() {
+        // Docs: single result (m) = 1.4633
+        // Data from GROWTH example: y={33100,...,220000}, x={11,...,16}
+        let result =
+            eval("=LOGEST({33100,47300,69000,102000,150000,220000},{11,12,13,14,15,16})").unwrap();
+        match result {
+            FormulaValue::Array(rows) => {
+                assert_eq!(rows.len(), 1);
+                if let FormulaValue::Number(m) = rows[0][0] {
+                    assert!((m - 1.4633).abs() < 0.001);
+                } else {
+                    panic!("Expected m number");
+                }
+            }
+            _ => panic!("Expected Array"),
+        }
+    }
+
+    #[test]
+    fn test_growth_docs() {
+        // --- Fitting example ---
+        // Docs: GROWTH(B2:B7,A2:A7) fitted values
+        // Month={11,...,16}, Units={33100,...,220000}
+        // Expected: {32618, 47729, 69841, 102197, 149542, 218822}
+        let result =
+            eval("=GROWTH({33100,47300,69000,102000,150000,220000},{11,12,13,14,15,16})").unwrap();
+        let expected_fit = [32618.0, 47729.0, 69841.0, 102197.0, 149542.0, 218822.0];
+        match result {
+            FormulaValue::Array(rows) => {
+                assert_eq!(rows.len(), expected_fit.len());
+                for (i, &exp) in expected_fit.iter().enumerate() {
+                    if let FormulaValue::Number(v) = rows[i][0] {
+                        assert!((v - exp).abs() < 1.0, "fit[{i}]: got {v}, expected {exp}");
+                    } else {
+                        panic!("Expected number at index {i}");
+                    }
+                }
+            }
+            _ => panic!("Expected Array"),
+        }
+
+        // --- Prediction example ---
+        // Docs: GROWTH(B2:B7,A2:A7,A9:A10) for months 17, 18
+        // Expected: {320197, 468536}
+        let result =
+            eval("=GROWTH({33100,47300,69000,102000,150000,220000},{11,12,13,14,15,16},{17,18})")
+                .unwrap();
+        let expected_pred = [320197.0, 468536.0];
+        match result {
+            FormulaValue::Array(rows) => {
+                assert_eq!(rows.len(), expected_pred.len());
+                for (i, &exp) in expected_pred.iter().enumerate() {
+                    if let FormulaValue::Number(v) = rows[i][0] {
+                        assert!((v - exp).abs() < 1.0, "pred[{i}]: got {v}, expected {exp}");
+                    } else {
+                        panic!("Expected number at index {i}");
+                    }
+                }
+            }
+            _ => panic!("Expected Array"),
+        }
+    }
+
+    #[test]
+    fn test_trend_docs() {
+        // From LINEST Example 2: months 1-6, sales {3100,4500,4400,5400,7500,8100}
+        // Docs: SUM(LINEST(...)*{9,1}) = $11,000 — TREND for month 9 must match
+        let result = eval("=TREND({3100,4500,4400,5400,7500,8100},{1,2,3,4,5,6},{9})").unwrap();
+        match result {
+            FormulaValue::Array(rows) => {
+                if let FormulaValue::Number(v) = rows[0][0] {
+                    assert!((v - 11000.0).abs() < 1.0);
+                } else {
+                    panic!("Expected number prediction");
+                }
+            }
+            _ => panic!("Expected Array"),
+        }
+    }
 }

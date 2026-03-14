@@ -4,6 +4,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
+use js_sys::{Function, Object, Reflect};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
@@ -13,11 +14,19 @@ use duke_sheets_wasm::*;
 
 // Helper to get a numeric field from a JsValue object
 fn get_f64_field(obj: &JsValue, key: &str) -> f64 {
-    js_sys::Reflect::get(obj, &JsValue::from_str(key))
+    Reflect::get(obj, &JsValue::from_str(key))
         .unwrap()
         .as_f64()
         .unwrap()
 }
+
+fn get_string_field(obj: &JsValue, key: &str) -> String {
+    Reflect::get(obj, &JsValue::from_str(key))
+        .unwrap()
+        .as_string()
+        .unwrap()
+}
+
 
 // Workbook Tests
 
@@ -176,7 +185,7 @@ fn test_formula_simple() {
         Some("=1+1".to_string())
     );
 
-    wb.calculate().unwrap();
+    wb.calculate(None).unwrap();
     let calculated = sheet.get_calculated_value("A1").unwrap();
     assert_eq!(calculated.as_number(), Some(2.0));
 }
@@ -190,7 +199,7 @@ fn test_formula_cell_reference() {
     sheet.set_cell("A2", JsValue::from_f64(20.0)).unwrap();
     sheet.set_formula("A3", "=A1+A2").unwrap();
 
-    wb.calculate().unwrap();
+    wb.calculate(None).unwrap();
 
     let value = sheet.get_calculated_value("A3").unwrap();
     assert_eq!(value.as_number(), Some(30.0));
@@ -206,7 +215,7 @@ fn test_formula_sum() {
     sheet.set_cell("A3", JsValue::from_f64(3.0)).unwrap();
     sheet.set_formula("A4", "=SUM(A1:A3)").unwrap();
 
-    wb.calculate().unwrap();
+    wb.calculate(None).unwrap();
 
     let value = sheet.get_calculated_value("A4").unwrap();
     assert_eq!(value.as_number(), Some(6.0));
@@ -221,7 +230,7 @@ fn test_formula_nested() {
     sheet.set_formula("A2", "=A1*2").unwrap(); // 10
     sheet.set_formula("A3", "=A2+A1").unwrap(); // 15
 
-    wb.calculate().unwrap();
+    wb.calculate(None).unwrap();
 
     assert_eq!(
         sheet.get_calculated_value("A2").unwrap().as_number(),
@@ -243,7 +252,7 @@ fn test_calculation_stats() {
     sheet.set_formula("A1", "=1+1").unwrap();
     sheet.set_formula("A2", "=2+2").unwrap();
 
-    let stats = wb.calculate().unwrap();
+    let stats = wb.calculate(None).unwrap();
 
     assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 2);
     assert!(get_f64_field(&stats, "cellsCalculated") as u32 >= 2);
@@ -252,9 +261,9 @@ fn test_calculation_stats() {
 
 /// Helper to build a JS options object from key-value pairs
 fn make_options(entries: &[(&str, JsValue)]) -> JsValue {
-    let obj = js_sys::Object::new();
+    let obj = Object::new();
     for (key, val) in entries {
-        js_sys::Reflect::set(&obj, &JsValue::from_str(key), val).unwrap();
+        Reflect::set(&obj, &JsValue::from_str(key), val).unwrap();
     }
     obj.into()
 }
@@ -270,9 +279,16 @@ fn test_calculation_with_options() {
         ("maxIterations", JsValue::from(100)),
         ("maxChange", JsValue::from(0.001)),
     ]);
-    let stats = wb.calculate_with_options(opts).unwrap();
+    let stats = wb.calculate(Some(opts)).unwrap();
     assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
-    assert_eq!(sheet.get_calculated_value("A1").unwrap().as_number().unwrap(), 2.0);
+    assert_eq!(
+        sheet
+            .get_calculated_value("A1")
+            .unwrap()
+            .as_number()
+            .unwrap(),
+        2.0
+    );
 }
 
 #[wasm_bindgen_test]
@@ -282,9 +298,16 @@ fn test_calculation_with_empty_options() {
     sheet.set_formula("A1", "=1+1").unwrap();
 
     let opts = make_options(&[]);
-    let stats = wb.calculate_with_options(opts).unwrap();
+    let stats = wb.calculate(Some(opts)).unwrap();
     assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
-    assert_eq!(sheet.get_calculated_value("A1").unwrap().as_number().unwrap(), 2.0);
+    assert_eq!(
+        sheet
+            .get_calculated_value("A1")
+            .unwrap()
+            .as_number()
+            .unwrap(),
+        2.0
+    );
 }
 
 #[wasm_bindgen_test]
@@ -294,9 +317,47 @@ fn test_calculation_with_max_threads() {
     sheet.set_formula("A1", "=1+1").unwrap();
 
     let opts = make_options(&[("maxThreads", JsValue::from(1))]);
-    let stats = wb.calculate_with_options(opts).unwrap();
+    let stats = wb.calculate(Some(opts)).unwrap();
     assert_eq!(get_f64_field(&stats, "formulaCount") as u32, 1);
-    assert_eq!(sheet.get_calculated_value("A1").unwrap().as_number().unwrap(), 2.0);
+    assert_eq!(
+        sheet
+            .get_calculated_value("A1")
+            .unwrap()
+            .as_number()
+            .unwrap(),
+        2.0
+    );
+}
+
+
+#[wasm_bindgen_test]
+fn test_calculation_image_metadata() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet
+        .set_formula(
+            "A1",
+            r#"=IMAGE("https://example.com/logo.png","Logo",3,48,96)"#,
+        )
+        .unwrap();
+    wb.calculate(None).unwrap();
+    assert_eq!(
+        sheet.get_calculated_value("A1").unwrap().as_text().unwrap(),
+        "Logo"
+    );
+    let image = sheet.get_image_at(0, 0).unwrap();
+    assert!(!image.is_null());
+    assert_eq!(
+        get_string_field(&image, "source"),
+        "https://example.com/logo.png"
+    );
+    assert_eq!(get_string_field(&image, "altText"), "Logo");
+    assert_eq!(get_f64_field(&image, "sizing") as u32, 3);
+    assert_eq!(get_f64_field(&image, "width"), 96.0);
+    assert_eq!(get_f64_field(&image, "height"), 48.0);
+    // Non-image cell returns null
+    let no_image = sheet.get_image_at(1, 0).unwrap();
+    assert!(no_image.is_null());
 }
 
 #[wasm_bindgen_test]
@@ -464,7 +525,7 @@ fn test_save_xlsx_bytes() {
     sheet.set_cell("A1", JsValue::from(10.0)).unwrap();
     sheet.set_cell("A2", JsValue::from(20.0)).unwrap();
     sheet.set_formula("A3", "=A1+A2").unwrap();
-    wb.calculate().unwrap();
+    wb.calculate(None).unwrap();
 
     let bytes = wb.save_xlsx_bytes().unwrap();
     assert!(!bytes.is_empty(), "XLSX bytes should not be empty");
@@ -484,7 +545,7 @@ fn test_now_and_today_formulas() {
     let sheet = wb.get_sheet(0).unwrap();
     sheet.set_formula("A1", "=NOW()").unwrap();
     sheet.set_formula("A2", "=TODAY()").unwrap();
-    wb.calculate().unwrap();
+    wb.calculate(None).unwrap();
 
     let now_val = sheet.get_calculated_value("A1").unwrap();
     let today_val = sheet.get_calculated_value("A2").unwrap();
@@ -514,4 +575,75 @@ fn test_now_and_today_formulas() {
         today_num,
         "NOW() date part should equal TODAY()"
     );
+}
+
+// JS callback function tests
+
+#[wasm_bindgen_test]
+fn test_calculation_with_web_service_fn() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet
+        .set_formula("A1", r#"=WEBSERVICE("https://example.com/api")"#)
+        .unwrap();
+
+    // JS function: (url) => "response:" + url
+    let js_fn = Function::new_with_args("url", "return 'response:' + url");
+
+    let opts = Object::new();
+    Reflect::set(&opts, &JsValue::from_str("webServiceFn"), &js_fn).unwrap();
+
+    wb.calculate(Some(opts.into())).unwrap();
+
+    assert_eq!(
+        sheet.get_calculated_value("A1").unwrap().as_text().unwrap(),
+        "response:https://example.com/api"
+    );
+}
+
+#[wasm_bindgen_test]
+fn test_calculation_with_rtd_fn() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet
+        .set_formula("A1", r#"=RTD("prog","srv","topic1")"#)
+        .unwrap();
+
+    // JS function: (progId, server, topics) => progId + ":" + server + ":" + topics.join(",")
+    let js_fn = Function::new_with_args(
+        "progId, server, topics",
+        "return progId + ':' + server + ':' + topics.join(',')"
+    );
+
+    let opts = Object::new();
+    Reflect::set(&opts, &JsValue::from_str("rtdFn"), &js_fn).unwrap();
+
+    wb.calculate(Some(opts.into())).unwrap();
+
+    assert_eq!(
+        sheet.get_calculated_value("A1").unwrap().as_text().unwrap(),
+        "prog:srv:topic1"
+    );
+}
+
+
+#[wasm_bindgen_test]
+fn test_web_service_fn_returning_null() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet
+        .set_formula("A1", r#"=WEBSERVICE("https://example.com/data")"#)
+        .unwrap();
+
+    // Callback returns null => should produce #N/A
+    let js_fn = Function::new_with_args("url", "return null");
+
+    let opts = Object::new();
+    Reflect::set(&opts, &JsValue::from_str("webServiceFn"), &js_fn).unwrap();
+
+    wb.calculate(Some(opts.into())).unwrap();
+
+    let val = sheet.get_calculated_value("A1").unwrap();
+    assert!(val.is_error());
+    assert_eq!(val.as_error().unwrap(), "#N/A");
 }

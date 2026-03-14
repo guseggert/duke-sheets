@@ -29,5 +29,5 @@ pub use ast::{
     StructuredRefSpecifier, StructuredReference, UnaryOperator,
 };
 pub use error::{FormulaError, FormulaResult};
-pub use evaluator::{evaluate, EvaluationContext, FormulaValue};
+pub use evaluator::{evaluate, EvaluationContext, FormulaValue, ImageInfo, ImageSizing};
 pub use parser::parse_formula;

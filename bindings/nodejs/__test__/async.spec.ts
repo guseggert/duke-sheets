@@ -117,13 +117,13 @@ describe("Async calculate", () => {
     expect(sheet.getCalculatedValue("A3").asNumber()).toBe(30);
   });
 
-  it("calculateWithOptionsAsync works with iterative", async () => {
+  it("calculateAsync works with options", async () => {
     const wb = new Workbook();
     const sheet = wb.getSheet(0);
     sheet.setCell("A1", 1);
     sheet.setFormula("A2", "=A1*2");
 
-    const stats = await wb.calculateWithOptionsAsync({ iterative: false, maxIterations: 100, maxChange: 0.001 });
+    const stats = await wb.calculateAsync({ iterative: false, maxIterations: 100, maxChange: 0.001 });
     expect(stats).toBeDefined();
     expect(stats.formulaCount).toBeGreaterThanOrEqual(1);
 

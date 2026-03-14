@@ -1,6 +1,7 @@
 //! Worksheet type
 
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 use crate::auto_filter::AutoFilter;
 use crate::cell::view::CellView;
@@ -82,6 +83,37 @@ pub struct Worksheet {
     /// Mutation generation counter — incremented on user-facing cell/formula edits.
     /// The calculation engine uses this to detect stale caches.
     mutation_count: u64,
+    /// Image metadata from IMAGE() formulas, populated during calculation.
+    /// Behind RwLock so the evaluator can write through a shared &Worksheet reference.
+    image_metadata: RwLock<HashMap<(u32, u16), ImageInfo>>,
+}
+
+/// Sizing mode for the IMAGE function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageSizing {
+    /// Fit the image inside the cell while preserving aspect ratio.
+    FitCell,
+    /// Fill the cell, allowing cropping if needed.
+    FillCell,
+    /// Use the image's original size.
+    OriginalSize,
+    /// Use an explicit custom width and height.
+    Custom,
+}
+
+/// Metadata emitted by an IMAGE formula during evaluation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageInfo {
+    /// Source URL or path passed to IMAGE().
+    pub source: String,
+    /// Alternate text passed to IMAGE().
+    pub alt_text: String,
+    /// Requested sizing behavior.
+    pub sizing: ImageSizing,
+    /// Optional custom width.
+    pub width: Option<f64>,
+    /// Optional custom height.
+    pub height: Option<f64>,
 }
 
 impl Worksheet {
@@ -112,6 +144,7 @@ impl Worksheet {
             locale: Locale::en_us(),
             ssfmt_locale: ssfmt::Locale::en_us(),
             mutation_count: 0,
+            image_metadata: RwLock::new(HashMap::new()),
         }
     }
 
@@ -119,6 +152,21 @@ impl Worksheet {
     /// The calculation engine uses this to detect stale caches.
     pub fn mutation_count(&self) -> u64 {
         self.mutation_count
+    }
+
+    /// Get image metadata for a cell, if any.
+    pub fn get_image_at(&self, row: u32, col: u16) -> Option<ImageInfo> {
+        self.image_metadata.read().unwrap().get(&(row, col)).cloned()
+    }
+
+    /// Store image metadata for a cell (called by the evaluator through a shared reference).
+    pub fn set_image_at(&self, row: u32, col: u16, info: ImageInfo) {
+        self.image_metadata.write().unwrap().insert((row, col), info);
+    }
+
+    /// Clear all image metadata (called before recalculation).
+    pub fn clear_image_metadata(&self) {
+        self.image_metadata.write().unwrap().clear();
     }
 
     /// Get the sheet name

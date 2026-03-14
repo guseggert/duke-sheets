@@ -1,11 +1,13 @@
-use std::io::Cursor;
 use std::cell::RefCell;
+use std::io::Cursor;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
-use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
+use duke_sheets::{CalculationOptions, ImageSizing, WorkbookCalculationExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
@@ -29,6 +31,28 @@ struct JsCalculationOptions {
     max_threads: Option<usize>,
 }
 
+/// Wrapper to make `js_sys::Function` implement Send + Sync.
+/// SAFETY: WASM is single-threaded, so Send + Sync are no-ops.
+struct SendSyncFunction(js_sys::Function);
+unsafe impl Send for SendSyncFunction {}
+unsafe impl Sync for SendSyncFunction {}
+
+impl SendSyncFunction {
+    fn call1(&self, this: &JsValue, arg: &JsValue) -> Result<JsValue, JsValue> {
+        self.0.call1(this, arg)
+    }
+
+    fn call3(
+        &self,
+        this: &JsValue,
+        arg1: &JsValue,
+        arg2: &JsValue,
+        arg3: &JsValue,
+    ) -> Result<JsValue, JsValue> {
+        self.0.call3(this, arg1, arg2, arg3)
+    }
+}
+
 pub(crate) fn to_js_error(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
 }
@@ -50,6 +74,16 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
         CellError::Spill => "#SPILL!",
         CellError::Calc => "#CALC!",
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmImageInfo {
+    source: String,
+    alt_text: String,
+    sizing: u32,
+    width: Option<f64>,
+    height: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -340,6 +374,33 @@ impl Worksheet {
             .map_err(|e| JsError::new(&format!("Invalid range: {}", e)))?;
         Ok(ws.unmerge_cells(&range))
     }
+
+    #[wasm_bindgen(js_name = getImageAt)]
+    pub fn get_image_at(&self, row: u32, col: u32) -> Result<JsValue, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+
+        match ws.get_image_at(row, col as u16) {
+            Some(info) => {
+                let wasm_info = WasmImageInfo {
+                    source: info.source,
+                    alt_text: info.alt_text,
+                    sizing: match info.sizing {
+                        ImageSizing::FitCell => 0,
+                        ImageSizing::FillCell => 1,
+                        ImageSizing::OriginalSize => 2,
+                        ImageSizing::Custom => 3,
+                    },
+                    width: info.width,
+                    height: info.height,
+                };
+                to_js_value(&wasm_info)
+            }
+            None => Ok(JsValue::NULL),
+        }
+    }
 }
 
 #[wasm_bindgen]
@@ -355,7 +416,6 @@ impl Workbook {
             inner: Rc::new(RefCell::new(CoreWorkbook::new())),
         }
     }
-
 
     #[wasm_bindgen(js_name = loadCsvString)]
     pub fn load_csv_string(csv: &str) -> Result<Workbook, JsError> {
@@ -462,28 +522,61 @@ impl Workbook {
         wb.remove_worksheet(index).map(|_| ()).map_err(to_js_error)
     }
 
-    pub fn calculate(&self) -> Result<JsValue, JsError> {
+    pub fn calculate(&self, options: Option<JsValue>) -> Result<JsValue, JsError> {
         let mut wb = self.inner.borrow_mut();
-        let stats = wb.calculate().map_err(to_js_error)?;
-        to_js_value(&WasmCalculationStats::from(&stats))
-    }
+        let options = if let Some(options) = options {
+            // Extract JS callback functions before serde deserialization (which consumes the JsValue).
+            // Serde can't deserialize JS functions, so we pull them out via Reflect::get.
+            let web_service_js_fn = js_sys::Reflect::get(&options, &JsValue::from_str("webServiceFn"))
+                .ok()
+                .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
+            let rtd_js_fn = js_sys::Reflect::get(&options, &JsValue::from_str("rtdFn"))
+                .ok()
+                .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
 
-    #[wasm_bindgen(js_name = calculateWithOptions)]
-    pub fn calculate_with_options(
-        &self,
-        options: JsValue,
-    ) -> Result<JsValue, JsError> {
-        let js_opts: JsCalculationOptions =
-            serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
-        let mut wb = self.inner.borrow_mut();
-        let options = CalculationOptions {
-            iterative: js_opts.iterative.unwrap_or(false),
-            max_iterations: js_opts.max_iterations.unwrap_or(100),
-            max_change: js_opts.max_change.unwrap_or(0.001),
-            force_full_calculation: js_opts.force_full_calculation.unwrap_or(true),
-            calculate_volatile: js_opts.calculate_volatile.unwrap_or(true),
-            sheets: js_opts.sheets.unwrap_or_default(),
-            max_threads: js_opts.max_threads,
+            let js_opts: JsCalculationOptions =
+                serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
+
+            // Build web_service_fn from callback
+            let web_service_fn = web_service_js_fn.map(|js_fn| {
+                let wrapper = SendSyncFunction(js_fn);
+                Arc::new(move |url: &str| -> Option<String> {
+                    let result = wrapper.call1(&JsValue::NULL, &JsValue::from_str(url)).ok()?;
+                    result.as_string()
+                }) as Arc<dyn Fn(&str) -> Option<String> + Send + Sync>
+            });
+
+            // Build rtd_fn from callback
+            let rtd_fn = rtd_js_fn.map(|js_fn| {
+                let wrapper = SendSyncFunction(js_fn);
+                Arc::new(move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
+                    let topics_arr = js_sys::Array::new();
+                    for t in topics {
+                        topics_arr.push(&JsValue::from_str(t));
+                    }
+                    let result = wrapper.call3(
+                        &JsValue::NULL,
+                        &JsValue::from_str(prog_id),
+                        &JsValue::from_str(server),
+                        &topics_arr.into(),
+                    ).ok()?;
+                    result.as_string()
+                }) as Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>
+            });
+
+            CalculationOptions {
+                iterative: js_opts.iterative.unwrap_or(false),
+                max_iterations: js_opts.max_iterations.unwrap_or(100),
+                max_change: js_opts.max_change.unwrap_or(0.001),
+                force_full_calculation: js_opts.force_full_calculation.unwrap_or(true),
+                calculate_volatile: js_opts.calculate_volatile.unwrap_or(true),
+                sheets: js_opts.sheets.unwrap_or_default(),
+                max_threads: js_opts.max_threads,
+                web_service_fn,
+                rtd_fn,
+            }
+        } else {
+            CalculationOptions::default()
         };
         let stats = wb.calculate_with_options(&options).map_err(to_js_error)?;
         to_js_value(&WasmCalculationStats::from(&stats))

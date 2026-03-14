@@ -5,12 +5,13 @@
 
 use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::prelude::*;
-use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
+use duke_sheets::{CalculationOptions, ImageSizing, WorkbookCalculationExt};
 use duke_sheets_core::{CellError, CellValue as CoreCellValue};
 
 mod types;
@@ -36,6 +37,15 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
         CellError::GettingData => "#GETTING_DATA",
         CellError::Spill => "#SPILL!",
         CellError::Calc => "#CALC!",
+    }
+}
+
+fn image_sizing_to_python(sizing: ImageSizing) -> &'static str {
+    match sizing {
+        ImageSizing::FitCell => "fit_cell",
+        ImageSizing::FillCell => "fill_cell",
+        ImageSizing::OriginalSize => "original_size",
+        ImageSizing::Custom => "custom",
     }
 }
 
@@ -167,6 +177,37 @@ impl PyCellValue {
 
 // CalculationStats - Statistics from workbook calculation
 
+/// IMAGE() metadata captured during workbook calculation.
+#[pyclass(name = "CalculationImage")]
+#[derive(Clone)]
+pub struct PyCalculationImage {
+    /// IMAGE source URL or path.
+    #[pyo3(get)]
+    pub source: String,
+    /// IMAGE alternate text.
+    #[pyo3(get)]
+    pub alt_text: String,
+    /// IMAGE sizing mode.
+    #[pyo3(get)]
+    pub sizing: String,
+    /// Optional custom width.
+    #[pyo3(get)]
+    pub width: Option<f64>,
+    /// Optional custom height.
+    #[pyo3(get)]
+    pub height: Option<f64>,
+}
+
+#[pymethods]
+impl PyCalculationImage {
+    fn __repr__(&self) -> String {
+        format!(
+            "CalculationImage(source={:?})",
+            self.source
+        )
+    }
+}
+
 /// Statistics from calculating a workbook.
 #[pyclass(name = "CalculationStats")]
 #[derive(Clone)]
@@ -196,6 +237,7 @@ pub struct PyCalculationStats {
 
 #[pymethods]
 impl PyCalculationStats {
+
     fn __repr__(&self) -> String {
         format!(
             "CalculationStats(formulas={}, calculated={}, errors={}, circular={}, converged={})",
@@ -440,6 +482,36 @@ impl PyWorksheet {
         Ok(ws.custom_column_widths().get(&col).copied())
     }
 
+
+    /// Get IMAGE() metadata for a cell, or None if no image.
+    ///
+    /// Args:
+    ///     row: Zero-based row index
+    ///     col: Zero-based column index
+    ///
+    /// Returns:
+    ///     Dict with keys: source, alt_text, sizing, width, height — or None
+    #[pyo3(signature = (row, col))]
+    fn get_image_at(&self, row: u32, col: u32, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+
+        match ws.get_image_at(row, col as u16) {
+            Some(info) => {
+                let dict = PyDict::new_bound(py);
+                dict.set_item("source", &info.source)?;
+                dict.set_item("alt_text", &info.alt_text)?;
+                dict.set_item("sizing", image_sizing_to_python(info.sizing))?;
+                dict.set_item("width", info.width)?;
+                dict.set_item("height", info.height)?;
+                Ok(Some(dict.into_any().unbind()))
+            }
+            None => Ok(None),
+        }
+    }
+
     fn __repr__(&self) -> PyResult<String> {
         let name = self.name()?;
         Ok(format!("Worksheet({:?})", name))
@@ -597,17 +669,7 @@ impl PyWorkbook {
         wb.remove_worksheet(index).map(|_| ()).map_err(to_py_err)
     }
 
-    /// Calculate all formulas in the workbook
-    ///
-    /// Returns:
-    ///     CalculationStats with information about the calculation
-    fn calculate(&self) -> PyResult<PyCalculationStats> {
-        let mut wb = self.inner.write().map_err(to_py_err)?;
-        let stats = wb.calculate().map_err(to_py_err)?;
-        Ok(stats.into())
-    }
-
-    /// Calculate with custom options
+    /// Calculate all formulas in the workbook.
     ///
     /// Args:
     ///     iterative: Enable iterative calculation for circular references (default: False)
@@ -617,11 +679,13 @@ impl PyWorkbook {
     ///     calculate_volatile: Include volatile functions like NOW(), RAND() (default: True)
     ///     sheets: Only calculate these sheet indices. Empty list means all sheets (default: [])
     ///     max_threads: Maximum threads for parallel evaluation. None means all cores (default: None)
+    ///     web_service_fn: Optional callable(url: str) -> Optional[str] for WEBSERVICE evaluation
+    ///     rtd_fn: Optional callable(prog_id: str, server: str, topics: list[str]) -> Optional[str] for RTD evaluation
     ///
     /// Returns:
     ///     CalculationStats with information about the calculation
-    #[pyo3(signature = (iterative=false, max_iterations=100, max_change=0.001, force_full_calculation=true, calculate_volatile=true, sheets=vec![], max_threads=None))]
-    fn calculate_with_options(
+    #[pyo3(signature = (*, iterative=false, max_iterations=100, max_change=0.001, force_full_calculation=true, calculate_volatile=true, sheets=vec![], max_threads=None, web_service_fn=None, rtd_fn=None))]
+    fn calculate(
         &self,
         iterative: bool,
         max_iterations: u32,
@@ -630,8 +694,33 @@ impl PyWorkbook {
         calculate_volatile: bool,
         sheets: Vec<usize>,
         max_threads: Option<usize>,
+        web_service_fn: Option<PyObject>,
+        rtd_fn: Option<PyObject>,
     ) -> PyResult<PyCalculationStats> {
         let mut wb = self.inner.write().map_err(to_py_err)?;
+        let web_service_fn_arc = web_service_fn.map(|py_fn| {
+            Arc::new(move |url: &str| -> Option<String> {
+                Python::with_gil(|py| {
+                    let result = py_fn.call1(py, (url,)).ok()?;
+                    if result.is_none(py) {
+                        return None;
+                    }
+                    result.extract::<String>(py).ok()
+                })
+            }) as Arc<dyn Fn(&str) -> Option<String> + Send + Sync>
+        });
+        let rtd_fn_arc = rtd_fn.map(|py_fn| {
+            Arc::new(move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
+                Python::with_gil(|py| {
+                    let topics_vec: Vec<String> = topics.to_vec();
+                    let result = py_fn.call1(py, (prog_id, server, topics_vec)).ok()?;
+                    if result.is_none(py) {
+                        return None;
+                    }
+                    result.extract::<String>(py).ok()
+                })
+            }) as Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>
+        });
         let options = CalculationOptions {
             iterative,
             max_iterations,
@@ -640,6 +729,8 @@ impl PyWorkbook {
             calculate_volatile,
             sheets,
             max_threads,
+            web_service_fn: web_service_fn_arc,
+            rtd_fn: rtd_fn_arc,
         };
         let stats = wb.calculate_with_options(&options).map_err(to_py_err)?;
         Ok(stats.into())
@@ -717,6 +808,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWorkbook>()?;
     m.add_class::<PyWorksheet>()?;
     m.add_class::<PyCellValue>()?;
+    m.add_class::<PyCalculationImage>()?;
     m.add_class::<PyCalculationStats>()?;
     m.add_class::<PyColor>()?;
     m.add_class::<PyFontStyle>()?;

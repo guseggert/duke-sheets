@@ -398,9 +398,10 @@ impl<'a> FormulaParser<'a> {
             }
             let start = self.pos;
             self.advance();
-            while self.peek_char().is_some_and(|c| {
-                c.is_ascii_alphanumeric() || c == '!' || c == '/' || c == '?'
-            }) {
+            while self
+                .peek_char()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '!' || c == '/' || c == '?')
+            {
                 self.advance();
             }
             let error_str = &self.input[start..self.pos];
@@ -414,9 +415,10 @@ impl<'a> FormulaParser<'a> {
         let start = self.pos;
 
         // Scan identifier/reference
-        while self.peek_char().is_some_and(|c| {
-            c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.'
-        }) {
+        while self
+            .peek_char()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.')
+        {
             self.advance();
         }
 

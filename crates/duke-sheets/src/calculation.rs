@@ -21,15 +21,16 @@
 //! ```
 
 use crate::{
-    evaluate, parse_formula, CellValue, EvaluationContext, FormulaExpr, FormulaValue,
+    evaluate, parse_formula, CellValue, EvaluationContext, FormulaExpr, FormulaValue, ImageInfo,
     Result, Workbook,
 };
+use ahash::{AHashMap, AHashSet};
 use duke_sheets_formula::dependency::CellKey;
 use duke_sheets_formula::functions::FunctionRegistry;
 use duke_sheets_formula::{StructuredRefSpecifier, StructuredReference};
-use ahash::{AHashMap, AHashSet};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::OnceLock;
+use std::fmt;
+use std::sync::{Arc, OnceLock};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -41,9 +42,8 @@ fn get_function_registry() -> &'static FunctionRegistry {
     FUNCTION_REGISTRY.get_or_init(FunctionRegistry::new)
 }
 
-
 /// Options for workbook calculation
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CalculationOptions {
     /// Enable iterative calculation for circular references
     pub iterative: bool,
@@ -67,6 +67,33 @@ pub struct CalculationOptions {
     /// This option has no effect when the `parallel` feature is not enabled
     /// (e.g. WASM builds).
     pub max_threads: Option<usize>,
+    /// Optional callback for WEBSERVICE(url).
+    ///
+    /// Returning `None` produces `#N/A`.
+    pub web_service_fn: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+    /// Optional callback for RTD(prog_id, server, topics...).
+    ///
+    /// Returning `None` produces `#N/A`.
+    pub rtd_fn: Option<Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>>,
+}
+
+impl fmt::Debug for CalculationOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CalculationOptions")
+            .field("iterative", &self.iterative)
+            .field("max_iterations", &self.max_iterations)
+            .field("max_change", &self.max_change)
+            .field("force_full_calculation", &self.force_full_calculation)
+            .field("calculate_volatile", &self.calculate_volatile)
+            .field("sheets", &self.sheets)
+            .field("max_threads", &self.max_threads)
+            .field(
+                "web_service_fn",
+                &self.web_service_fn.as_ref().map(|_| "<callback>"),
+            )
+            .field("rtd_fn", &self.rtd_fn.as_ref().map(|_| "<callback>"))
+            .finish()
+    }
 }
 
 impl Default for CalculationOptions {
@@ -79,6 +106,8 @@ impl Default for CalculationOptions {
             calculate_volatile: true,
             sheets: vec![],
             max_threads: None,
+            web_service_fn: None,
+            rtd_fn: None,
         }
     }
 }
@@ -136,8 +165,11 @@ impl WorkbookCalculationExt for Workbook {
 /// Pre-computed evaluation plan — the expensive DFS result that can be cached.
 struct EvalPlan {
     eval_order: Vec<CellKey>,
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
     cell_to_idx: AHashMap<CellKey, u32>,
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
     depth: Vec<u32>,
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
     max_depth: u32,
 }
 
@@ -236,6 +268,13 @@ impl CalculationEngine {
                 return Ok(stats);
             }
             plan = self.build_eval_plan(workbook);
+        }
+
+        // Clear stale image metadata before re-evaluating.
+        for i in 0..workbook.sheet_count() {
+            if let Some(ws) = workbook.worksheet(i) {
+                ws.clear_image_metadata();
+            }
         }
 
         // Evaluate all formulas using the (possibly cached) plan.
@@ -345,8 +384,7 @@ impl CalculationEngine {
                             let key = CellKey::new(sheet_idx, row, col);
                             match parse_formula(text) {
                                 Ok(ast) => {
-                                    let vol =
-                                        check_volatile && contains_volatile_function(&ast);
+                                    let vol = check_volatile && contains_volatile_function(&ast);
                                     (key, Some(ast), vol)
                                 }
                                 Err(_) => (key, None, false),
@@ -390,14 +428,12 @@ impl CalculationEngine {
     /// not been mutated.
     fn build_eval_plan(&mut self, workbook: &Workbook) -> EvalPlan {
         // Transient spatial index for range→formula-cell lookups.
-        let formula_cell_set: AHashSet<CellKey> =
-            self.parsed_formulas.keys().copied().collect();
+        let formula_cell_set: AHashSet<CellKey> = self.parsed_formulas.keys().copied().collect();
         let formula_cell_index = build_formula_cell_index(&formula_cell_set);
 
         // Row-major seed order: financial models mostly flow top-down/
         // left-to-right, so most cells resolve on first visit.
-        let mut seed_order: Vec<CellKey> =
-            self.parsed_formulas.keys().copied().collect();
+        let mut seed_order: Vec<CellKey> = self.parsed_formulas.keys().copied().collect();
         seed_order.sort_unstable_by(|a, b| {
             a.sheet
                 .cmp(&b.sheet)
@@ -505,14 +541,17 @@ impl CalculationEngine {
                     // All deps visited — emit this cell.
                     let (cell, ci, deps, _) = stack.pop().unwrap();
                     state[ci as usize] = 2; // visited
-                    // Depth = 1 + max depth of formula-cell deps.
-                    let d = deps.iter()
+                                            // Depth = 1 + max depth of formula-cell deps.
+                    let d = deps
+                        .iter()
                         .filter_map(|dep| cell_to_idx.get(dep).map(|&di| depth[di as usize]))
                         .max()
                         .unwrap_or(0)
                         + 1;
                     depth[ci as usize] = d;
-                    if d > max_depth { max_depth = d; }
+                    if d > max_depth {
+                        max_depth = d;
+                    }
                     eval_order.push(cell);
                     // Return Vec to pool for reuse.
                     vec_pool.push(deps);
@@ -598,7 +637,6 @@ impl CalculationEngine {
         Ok(())
     }
 
-
     /// Evaluate a single formula cell and store its result.
     ///
     /// Returns `true` if the formula produced an array that actually spilled
@@ -622,15 +660,26 @@ impl CalculationEngine {
             sheet.clear_spill(cell_key.row, cell_key.col);
         }
 
-        // Evaluate the formula
-        let ctx =
-            EvaluationContext::new(Some(workbook), cell_key.sheet, cell_key.row, cell_key.col);
+        // Evaluate in a block so immutable borrows drop before we mutably store results.
+        let result = {
+            let wb_ref: &Workbook = workbook;
+            let image_sink = |sheet: usize, row: u32, col: u16, info: ImageInfo| {
+                if let Some(ws) = wb_ref.worksheet(sheet) {
+                    ws.set_image_at(row, col, info);
+                }
+            };
+            let mut ctx =
+                EvaluationContext::new(Some(wb_ref), cell_key.sheet, cell_key.row, cell_key.col);
+            ctx.web_service_fn = self.options.web_service_fn.as_deref();
+            ctx.rtd_fn = self.options.rtd_fn.as_deref();
+            ctx.image_sink = Some(&image_sink);
 
-        let result = match evaluate(ast, &ctx) {
-            Ok(value) => value,
-            Err(_e) => {
-                stats.errors += 1;
-                FormulaValue::Error(duke_sheets_core::CellError::Value)
+            match evaluate(ast, &ctx) {
+                Ok(value) => value,
+                Err(_e) => {
+                    stats.errors += 1;
+                    FormulaValue::Error(duke_sheets_core::CellError::Value)
+                }
             }
         };
 
@@ -691,9 +740,13 @@ impl CalculationEngine {
             return false;
         }
         #[cfg(feature = "parallel")]
-        { true }
+        {
+            true
+        }
         #[cfg(not(feature = "parallel"))]
-        { false }
+        {
+            false
+        }
     }
 
     #[cfg(feature = "parallel")]
@@ -708,26 +761,29 @@ impl CalculationEngine {
         cell_key: CellKey,
     ) -> Option<(FormulaValue, bool)> {
         let ast = self.parsed_formulas.get(&cell_key)?;
-        let ctx = EvaluationContext::new(
-            Some(workbook),
-            cell_key.sheet,
-            cell_key.row,
-            cell_key.col,
-        );
+        let image_sink = |sheet: usize, row: u32, col: u16, info: ImageInfo| {
+            if let Some(ws) = workbook.worksheet(sheet) {
+                ws.set_image_at(row, col, info);
+            }
+        };
+        let mut ctx =
+            EvaluationContext::new(Some(workbook), cell_key.sheet, cell_key.row, cell_key.col);
+        ctx.web_service_fn = self.options.web_service_fn.as_deref();
+        ctx.rtd_fn = self.options.rtd_fn.as_deref();
+        ctx.image_sink = Some(&image_sink);
         match evaluate(ast, &ctx) {
             Ok(value) => Some((value, false)),
-            Err(_) => Some((FormulaValue::Error(duke_sheets_core::CellError::Value), true)),
+            Err(_) => Some((
+                FormulaValue::Error(duke_sheets_core::CellError::Value),
+                true,
+            )),
         }
     }
 
     #[cfg(feature = "parallel")]
     /// Store a pre-computed formula result into the workbook.
     /// Returns `true` if the result spilled.
-    fn store_result(
-        workbook: &mut Workbook,
-        cell_key: CellKey,
-        result: FormulaValue,
-    ) -> bool {
+    fn store_result(workbook: &mut Workbook, cell_key: CellKey, result: FormulaValue) -> bool {
         if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
             sheet.clear_spill(cell_key.row, cell_key.col);
             match result {
@@ -736,18 +792,10 @@ impl CalculationEngine {
                         .into_iter()
                         .map(|row| row.into_iter().map(|v| v.into()).collect())
                         .collect();
-                    let _ = sheet.set_array_formula_result(
-                        cell_key.row,
-                        cell_key.col,
-                        cell_array,
-                    );
+                    let _ = sheet.set_array_formula_result(cell_key.row, cell_key.col, cell_array);
                 }
                 _ => {
-                    let _ = sheet.set_formula_result(
-                        cell_key.row,
-                        cell_key.col,
-                        result.into(),
-                    );
+                    let _ = sheet.set_formula_result(cell_key.row, cell_key.col, result.into());
                 }
             }
         }
@@ -784,7 +832,9 @@ impl CalculationEngine {
         }
 
         // Build a thread pool with the requested thread count.
-        let num_threads = self.options.max_threads
+        let num_threads = self
+            .options
+            .max_threads
             .unwrap_or_else(|| rayon::current_num_threads());
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
@@ -881,7 +931,6 @@ fn ast_touches_spill_range(
     }
 }
 
-
 #[cfg(test)]
 fn extract_references(
     expr: &FormulaExpr,
@@ -891,7 +940,14 @@ fn extract_references(
     formula_cell_index: &FormulaCellIndex,
 ) -> Vec<CellKey> {
     let mut refs = Vec::new();
-    extract_references_recursive(expr, current_sheet, workbook, formula_cells, formula_cell_index, &mut refs);
+    extract_references_recursive(
+        expr,
+        current_sheet,
+        workbook,
+        formula_cells,
+        formula_cell_index,
+        &mut refs,
+    );
     refs
 }
 
@@ -1284,7 +1340,8 @@ fn contains_volatile_function(expr: &FormulaExpr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CellError;
+    use crate::{CellError, ImageInfo, ImageSizing};
+    use std::sync::Arc;
 
     #[test]
     fn test_simple_calculation() {
@@ -1397,6 +1454,84 @@ mod tests {
         let stats = workbook.calculate_with_options(&options).unwrap();
 
         assert!(stats.converged);
+    }
+
+    #[test]
+    fn test_webservice_callback_via_calculation_options() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet
+            .set_cell_formula("A1", r#"=WEBSERVICE("https://example.com/data")"#)
+            .unwrap();
+
+        let options = CalculationOptions {
+            web_service_fn: Some(Arc::new(|url| Some(format!("body:{}", url)))),
+            ..Default::default()
+        };
+
+        let stats = workbook.calculate_with_options(&options).unwrap();
+        assert_eq!(stats.errors, 0);
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::String("body:https://example.com/data".into()))
+        );
+    }
+
+    #[test]
+    fn test_rtd_callback_via_calculation_options() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet
+            .set_cell_formula("A1", r#"=RTD("prog","srv","topic1","topic2")"#)
+            .unwrap();
+
+        let options = CalculationOptions {
+            rtd_fn: Some(Arc::new(|prog_id, server, topics| {
+                Some(format!("{}|{}|{}", prog_id, server, topics.join("|")))
+            })),
+            ..Default::default()
+        };
+
+        let stats = workbook.calculate_with_options(&options).unwrap();
+        assert_eq!(stats.errors, 0);
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::String("prog|srv|topic1|topic2".into()))
+        );
+    }
+
+    #[test]
+    fn test_image_metadata_on_worksheet() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet
+            .set_cell_formula(
+                "A1",
+                r#"=IMAGE("https://example.com/logo.png","Logo",3,48,96)"#,
+            )
+            .unwrap();
+
+        let _stats = workbook.calculate().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::String("Logo".into()))
+        );
+        assert_eq!(
+            sheet.get_image_at(0, 0),
+            Some(ImageInfo {
+                source: "https://example.com/logo.png".to_string(),
+                alt_text: "Logo".to_string(),
+                sizing: ImageSizing::Custom,
+                width: Some(96.0),
+                height: Some(48.0),
+            })
+        );
     }
 
     #[test]

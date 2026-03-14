@@ -2111,4 +2111,521 @@ mod tests {
             FormulaValue::Error(CellError::Num)
         );
     }
+
+    // ===== Docs-based tests (from Microsoft docs examples) =====
+
+    fn s(x: &str) -> FormulaValue {
+        FormulaValue::String(x.to_string())
+    }
+
+    fn arr2d(rows: &[&[f64]]) -> FormulaValue {
+        FormulaValue::Array(
+            rows.iter()
+                .map(|row| row.iter().map(|v| FormulaValue::Number(*v)).collect())
+                .collect(),
+        )
+    }
+
+    // BETADIST docs: =BETADIST(2,8,10,1,3) = 0.6854706
+    #[test]
+    fn test_betadist_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_betadist(&[n(2.0), n(8.0), n(10.0), n(1.0), n(3.0)], &ctx).unwrap(),
+            0.6854706,
+            1e-5,
+        );
+    }
+
+    // BETADIST: default bounds (0,1)
+    #[test]
+    fn test_betadist_docs_default_bounds() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_betadist(&[n(0.5), n(2.0), n(3.0)], &ctx).unwrap(),
+            0.6875,
+            1e-6,
+        );
+    }
+
+    // BETAINV docs: =BETAINV(0.685470581,8,10,1,3) = 2
+    #[test]
+    fn test_betainv_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_betainv(&[n(0.685470581), n(8.0), n(10.0), n(1.0), n(3.0)], &ctx).unwrap(),
+            2.0,
+            1e-4,
+        );
+    }
+
+    // BINOMDIST docs: =BINOMDIST(6,10,0.5,FALSE) = 0.205078125
+    #[test]
+    fn test_binomdist_docs_pmf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_binomdist(&[n(6.0), n(10.0), n(0.5), b(false)], &ctx).unwrap(),
+            0.205078125,
+            1e-9,
+        );
+    }
+
+    // BINOMDIST docs: =BINOMDIST(6,10,0.5,TRUE) (CDF)
+    #[test]
+    fn test_binomdist_docs_cdf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_binomdist(&[n(6.0), n(10.0), n(0.5), b(true)], &ctx).unwrap(),
+            0.828125,
+            1e-6,
+        );
+    }
+
+    // CHIDIST docs: =CHIDIST(18.307,10) = 0.050001
+    #[test]
+    fn test_chidist_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_chidist(&[n(18.307), n(10.0)], &ctx).unwrap(),
+            0.050001,
+            1e-4,
+        );
+    }
+
+    // CHIINV docs: =CHIINV(0.050001,10) = 18.306973
+    #[test]
+    fn test_chiinv_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_chiinv(&[n(0.050001), n(10.0)], &ctx).unwrap(),
+            18.306973,
+            1e-3,
+        );
+    }
+
+    // CHITEST docs: observed vs expected, =CHITEST(actual,expected) = 0.000308
+    // Observed: [[58,11,10],[35,25,23]] Expected: [[43.35,17.56,16.09],[49.65,20.44,18.91]]
+    #[test]
+    fn test_chitest_docs() {
+        let ctx = EvaluationContext::simple();
+        let actual = arr2d(&[&[58.0, 11.0, 10.0], &[35.0, 25.0, 23.0]]);
+        let expected = arr2d(&[&[43.35, 17.56, 16.09], &[49.65, 20.44, 18.91]]);
+        assert_close(
+            fn_chitest(&[actual, expected], &ctx).unwrap(),
+            0.000308,
+            1e-4,
+        );
+    }
+
+    // CONFIDENCE docs: =CONFIDENCE(0.05,2.5,50) = 0.692952
+    #[test]
+    fn test_confidence_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_confidence(&[n(0.05), n(2.5), n(50.0)], &ctx).unwrap(),
+            0.692952,
+            1e-4,
+        );
+    }
+
+    // COVAR docs: =COVAR({3,2,4,5,6},{9,7,12,15,17}) = 5.2
+    #[test]
+    fn test_covar_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_covar(
+                &[
+                    arr(&[3.0, 2.0, 4.0, 5.0, 6.0]),
+                    arr(&[9.0, 7.0, 12.0, 15.0, 17.0]),
+                ],
+                &ctx,
+            )
+            .unwrap(),
+            5.2,
+            1e-9,
+        );
+    }
+
+    // CRITBINOM docs: =CRITBINOM(6,0.5,0.75) = 4
+    #[test]
+    fn test_critbinom_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_critbinom(&[n(6.0), n(0.5), n(0.75)], &ctx).unwrap(),
+            4.0,
+            1e-9,
+        );
+    }
+
+    // EXPONDIST docs: =EXPONDIST(0.2,10,TRUE) = 0.864665 (CDF)
+    #[test]
+    fn test_expondist_docs_cdf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_expondist(&[n(0.2), n(10.0), b(true)], &ctx).unwrap(),
+            0.864665,
+            1e-4,
+        );
+    }
+
+    // EXPONDIST docs: =EXPONDIST(0.2,10,FALSE) = 1.353353 (PDF)
+    #[test]
+    fn test_expondist_docs_pdf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_expondist(&[n(0.2), n(10.0), b(false)], &ctx).unwrap(),
+            1.353353,
+            1e-4,
+        );
+    }
+
+    // FDIST docs: =FDIST(15.20686486,6,4) = 0.01
+    #[test]
+    fn test_fdist_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_fdist(&[n(15.20686486), n(6.0), n(4.0)], &ctx).unwrap(),
+            0.01,
+            1e-4,
+        );
+    }
+
+    // FINV docs: =FINV(0.01,6,4) = 15.20686
+    #[test]
+    fn test_finv_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_finv(&[n(0.01), n(6.0), n(4.0)], &ctx).unwrap(),
+            15.20686,
+            1e-3,
+        );
+    }
+
+    // FTEST docs: =FTEST({6,7,9,15,21},{20,28,31,38,40}) = 0.6483
+    #[test]
+    fn test_ftest_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_ftest(
+                &[
+                    arr(&[6.0, 7.0, 9.0, 15.0, 21.0]),
+                    arr(&[20.0, 28.0, 31.0, 38.0, 40.0]),
+                ],
+                &ctx,
+            )
+            .unwrap(),
+            0.6483,
+            1e-3,
+        );
+    }
+
+    // GAMMADIST docs: =GAMMADIST(10.00001131,9,2,FALSE) (PDF) ≈ 0.032639
+    #[test]
+    fn test_gammadist_docs_pdf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_gammadist(&[n(10.00001131), n(9.0), n(2.0), b(false)], &ctx).unwrap(),
+            0.032639,
+            1e-4,
+        );
+    }
+
+    // GAMMADIST docs: =GAMMADIST(10.00001131,9,2,TRUE) (CDF) ≈ 0.068094
+    #[test]
+    fn test_gammadist_docs_cdf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_gammadist(&[n(10.00001131), n(9.0), n(2.0), b(true)], &ctx).unwrap(),
+            0.068094,
+            1e-4,
+        );
+    }
+
+    // GAMMAINV docs: =GAMMAINV(0.068094,9,2) = 10.0000112
+    #[test]
+    fn test_gammainv_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_gammainv(&[n(0.068094), n(9.0), n(2.0)], &ctx).unwrap(),
+            10.0000112,
+            1e-3,
+        );
+    }
+
+    // HYPGEOMDIST docs: =HYPGEOMDIST(1,4,8,20) = 0.3633
+    #[test]
+    fn test_hypgeomdist_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_hypgeomdist(&[n(1.0), n(4.0), n(8.0), n(20.0)], &ctx).unwrap(),
+            0.3633,
+            1e-3,
+        );
+    }
+
+    // LOGINV docs: =LOGINV(0.039084,3.5,1.2) = 4.000025
+    #[test]
+    fn test_loginv_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_loginv(&[n(0.039084), n(3.5), n(1.2)], &ctx).unwrap(),
+            4.000025,
+            1e-3,
+        );
+    }
+
+    // LOGNORMDIST docs: =LOGNORMDIST(4,3.5,1.2) = 0.039084
+    #[test]
+    fn test_lognormdist_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_lognormdist(&[n(4.0), n(3.5), n(1.2)], &ctx).unwrap(),
+            0.039084,
+            1e-4,
+        );
+    }
+
+    // NEGBINOMDIST docs: =NEGBINOMDIST(10,5,0.25) = 0.055049
+    #[test]
+    fn test_negbinomdist_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_negbinomdist(&[n(10.0), n(5.0), n(0.25)], &ctx).unwrap(),
+            0.055049,
+            1e-4,
+        );
+    }
+
+    // NORMDIST docs: =NORMDIST(42,40,1.5,TRUE) = 0.908789 (CDF)
+    #[test]
+    fn test_normdist_docs_cdf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_normdist(&[n(42.0), n(40.0), n(1.5), b(true)], &ctx).unwrap(),
+            0.908789,
+            1e-4,
+        );
+    }
+
+    // NORMDIST docs: =NORMDIST(42,40,1.5,FALSE) (PDF)
+    #[test]
+    fn test_normdist_docs_pdf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_normdist(&[n(42.0), n(40.0), n(1.5), b(false)], &ctx).unwrap(),
+            0.10934,
+            1e-4,
+        );
+    }
+
+    // NORMINV docs: =NORMINV(0.908789,40,1.5) ≈ 42
+    #[test]
+    fn test_norminv_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_norm_inv(&[n(0.908789), n(40.0), n(1.5)], &ctx).unwrap(),
+            42.0,
+            1e-2,
+        );
+    }
+
+    // NORMSDIST docs: =NORMSDIST(1.333333) = 0.908789
+    #[test]
+    fn test_normsdist_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(fn_normsdist(&[n(1.333333)], &ctx).unwrap(), 0.908789, 1e-4);
+    }
+
+    // NORMSINV docs: =NORMSINV(0.908789) ≈ 1.3333
+    #[test]
+    fn test_normsinv_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(fn_normsinv(&[n(0.908789)], &ctx).unwrap(), 1.3333, 1e-3);
+    }
+
+    // POISSON docs: =POISSON(2,5,TRUE) = 0.124652 (CDF)
+    #[test]
+    fn test_poisson_docs_cdf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_poisson(&[n(2.0), n(5.0), b(true)], &ctx).unwrap(),
+            0.124652,
+            1e-4,
+        );
+    }
+
+    // POISSON docs: =POISSON(2,5,FALSE) = 0.084224 (PMF)
+    #[test]
+    fn test_poisson_docs_pmf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_poisson(&[n(2.0), n(5.0), b(false)], &ctx).unwrap(),
+            0.084224,
+            1e-4,
+        );
+    }
+
+    // TDIST docs: =TDIST(1.96,60,2) ≈ 0.054645 (two-tailed)
+    #[test]
+    fn test_tdist_docs_two_tailed() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_tdist(&[n(1.959999998), n(60.0), n(2.0)], &ctx).unwrap(),
+            0.054645,
+            1e-4,
+        );
+    }
+
+    // TDIST docs: =TDIST(1.96,60,1) (one-tailed)
+    #[test]
+    fn test_tdist_docs_one_tailed() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_tdist(&[n(1.959999998), n(60.0), n(1.0)], &ctx).unwrap(),
+            0.027322,
+            1e-4,
+        );
+    }
+
+    // TINV docs: =TINV(0.054645,60) ≈ 1.96
+    #[test]
+    fn test_tinv_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(fn_tinv(&[n(0.054645), n(60.0)], &ctx).unwrap(), 1.96, 1e-2);
+    }
+
+    // TINV docs: =TINV(0.05,10) ≈ 2.228
+    #[test]
+    fn test_tinv_docs_2() {
+        let ctx = EvaluationContext::simple();
+        assert_close(fn_tinv(&[n(0.05), n(10.0)], &ctx).unwrap(), 2.228, 1e-2);
+    }
+
+    // TTEST docs: paired two-tailed
+    // =TTEST({3,4,5,8,9,1,2,4,5},{6,19,3,2,14,4,5,17,1},2,1) ≈ 0.196
+    #[test]
+    fn test_ttest_docs() {
+        let ctx = EvaluationContext::simple();
+        let a = arr(&[3.0, 4.0, 5.0, 8.0, 9.0, 1.0, 2.0, 4.0, 5.0]);
+        let b_arr = arr(&[6.0, 19.0, 3.0, 2.0, 14.0, 4.0, 5.0, 17.0, 1.0]);
+        assert_close(
+            fn_ttest(&[a, b_arr, n(2.0), n(1.0)], &ctx).unwrap(),
+            0.196,
+            1e-2,
+        );
+    }
+
+    // WEIBULL docs: =WEIBULL(105,20,100,TRUE) = 0.929581 (CDF)
+    #[test]
+    fn test_weibull_docs_cdf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_weibull(&[n(105.0), n(20.0), n(100.0), b(true)], &ctx).unwrap(),
+            0.929581,
+            1e-4,
+        );
+    }
+
+    // WEIBULL docs: =WEIBULL(105,20,100,FALSE) = 0.035589 (PDF)
+    #[test]
+    fn test_weibull_docs_pdf() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_weibull(&[n(105.0), n(20.0), n(100.0), b(false)], &ctx).unwrap(),
+            0.035589,
+            1e-4,
+        );
+    }
+
+    // ZTEST docs: =ZTEST({3,6,7,8,6,5,4,2,1,9},4) ≈ 0.090574
+    #[test]
+    fn test_ztest_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_close(
+            fn_ztest(
+                &[
+                    arr(&[3.0, 6.0, 7.0, 8.0, 6.0, 5.0, 4.0, 2.0, 1.0, 9.0]),
+                    n(4.0),
+                ],
+                &ctx,
+            )
+            .unwrap(),
+            0.090574,
+            1e-4,
+        );
+    }
+
+    // FLOOR docs: =FLOOR(3.7,2) = 2
+    #[test]
+    fn test_floor_docs_positive() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_floor(&[n(3.7), n(2.0)], &ctx).unwrap(),
+            FormulaValue::Number(2.0),
+        );
+    }
+
+    // FLOOR docs: =FLOOR(-2.5,-2) = -2
+    #[test]
+    fn test_floor_docs_negative() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_floor(&[n(-2.5), n(-2.0)], &ctx).unwrap(),
+            FormulaValue::Number(-2.0),
+        );
+    }
+
+    // FLOOR docs: =FLOOR(2.5,-2) = #NUM!
+    #[test]
+    fn test_floor_docs_num_error() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_floor(&[n(2.5), n(-2.0)], &ctx).unwrap(),
+            FormulaValue::Error(CellError::Num),
+        );
+    }
+
+    // CEILING docs: =CEILING(2.5,1) = 3
+    #[test]
+    fn test_ceiling_docs_basic() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_ceiling(&[n(2.5), n(1.0)], &ctx).unwrap(),
+            FormulaValue::Number(3.0),
+        );
+    }
+
+    // CEILING docs: =CEILING(-2.5,-2) = -4
+    #[test]
+    fn test_ceiling_docs_negative() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_ceiling(&[n(-2.5), n(-2.0)], &ctx).unwrap(),
+            FormulaValue::Number(-4.0),
+        );
+    }
+
+    // CEILING: mixed signs (negative number, positive significance) = #NUM! for compatibility CEILING
+    #[test]
+    fn test_ceiling_docs_neg_pos() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_ceiling(&[n(-2.5), n(2.0)], &ctx).unwrap(),
+            FormulaValue::Error(CellError::Num),
+        );
+    }
+
+    // CEILING docs: =CEILING(1.5,0.1) = 1.5
+    #[test]
+    fn test_ceiling_docs_decimal() {
+        let ctx = EvaluationContext::simple();
+        assert_close(fn_ceiling(&[n(1.5), n(0.1)], &ctx).unwrap(), 1.5, 1e-9);
+    }
+
+    // CEILING docs: =CEILING(0.234,0.01) = 0.24
+    #[test]
+    fn test_ceiling_docs_decimal2() {
+        let ctx = EvaluationContext::simple();
+        assert_close(fn_ceiling(&[n(0.234), n(0.01)], &ctx).unwrap(), 0.24, 1e-9);
+    }
 }

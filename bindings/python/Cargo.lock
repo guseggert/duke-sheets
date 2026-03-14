@@ -314,6 +314,7 @@ dependencies = [
  "duke-sheets-core",
  "lazy-regex",
  "once_cell",
+ "quick-xml",
  "rand",
  "regex",
  "rust_decimal",
@@ -322,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "duke-sheets-python"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "duke-sheets",
  "duke-sheets-core",

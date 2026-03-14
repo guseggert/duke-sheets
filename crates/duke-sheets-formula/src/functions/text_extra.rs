@@ -1233,4 +1233,286 @@ mod tests {
         assert_eq!(eval("=PHONETIC(\"hello\")").unwrap(), s(""));
         assert_eq!(eval("=PHONETIC(\"\")").unwrap(), s(""));
     }
+
+    // ========== Docs-based tests ==========
+
+    #[test]
+    fn test_replace_docs() {
+        assert_eq!(
+            eval("=REPLACE(\"abcdefghijk\", 6, 5, \"*\")").unwrap(),
+            s("abcde*k")
+        );
+        assert_eq!(eval("=REPLACE(\"2009\", 3, 2, \"10\")").unwrap(), s("2010"));
+        assert_eq!(
+            eval("=REPLACE(\"123456\", 1, 3, \"@\")").unwrap(),
+            s("@456")
+        );
+    }
+
+    #[test]
+    fn test_textbefore_docs() {
+        // Remarks: basic
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Red riding hood's, red hood", "hood")"#).unwrap(),
+            s("Red riding ")
+        );
+        // Remarks: empty delimiter (positive instance → empty result)
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Red riding hood's, red hood", "")"#).unwrap(),
+            s("")
+        );
+        // Remarks: empty delimiter (negative instance → entire text)
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Red riding hood's, red hood", "", -1)"#).unwrap(),
+            s("Red riding hood's, red hood")
+        );
+
+        // Example 1: case-sensitive match found
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Little Red Riding Hood's red hood", "Red")"#).unwrap(),
+            s("Little ")
+        );
+        // Example 1: case-sensitive, "Red" not found in lowercase text
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Little red Riding Hood's red hood", "Red")"#).unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        // Example 1: 2nd instance of "red"
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Little red Riding Hood's red hood", "red", 2)"#).unwrap(),
+            s("Little red Riding Hood's ")
+        );
+        // Example 1: -2 (2nd from end = 1st from front)
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Little red Riding Hood's red hood", "red", -2)"#).unwrap(),
+            s("Little ")
+        );
+        // Example 1: explicit case-sensitive via FALSE (use explicit instance_num=1; omitted arg passes Empty→0 which is #VALUE!)
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Little red Riding Hood's red hood", "Red", 1, FALSE)"#).unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        // Example 1: instance 3 but only 2 exist
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Little red Riding Hood's red hood", "red", 3)"#).unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+
+        // Example 2: match_end=1, space found
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Marcus Aurelius", " ", 1,, 1)"#).unwrap(),
+            s("Marcus")
+        );
+        // Example 2: match_end=0, no space in single word
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Socrates", " ", 1,, 0)"#).unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        // Example 2: match_end=1, no space → end-of-text acts as delimiter
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Socrates", " ", 1,, 1)"#).unwrap(),
+            s("Socrates")
+        );
+        // Example 2: match_end=1, space found
+        assert_eq!(
+            eval(r#"=TEXTBEFORE("Immanuel Kant", " ", 1,, 1)"#).unwrap(),
+            s("Immanuel")
+        );
+    }
+
+    #[test]
+    fn test_textafter_docs() {
+        // Remarks: basic
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Red riding hood's, red hood", "hood")"#).unwrap(),
+            s("'s, red hood")
+        );
+        // Remarks: empty delimiter (positive instance → entire text)
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Red riding hood's, red hood", "")"#).unwrap(),
+            s("Red riding hood's, red hood")
+        );
+        // Remarks: empty delimiter (negative instance → empty result)
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Red riding hood's, red hood", "", -1)"#).unwrap(),
+            s("")
+        );
+
+        // Example 1: basic after "Red"
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Little Red Riding Hood's red hood", "Red")"#).unwrap(),
+            s(" Riding Hood's red hood")
+        );
+        // Example 1: delimiter not in text
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Little Red Riding Hood's red hood", "basket")"#).unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        // Example 1: 2nd instance of "red"
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Little red Riding Hood's red hood", "red", 2)"#).unwrap(),
+            s(" hood")
+        );
+        // Example 1: -2 (2nd from end = 1st from front)
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Little red Riding Hood's red hood", "red", -2)"#).unwrap(),
+            s(" Riding Hood's red hood")
+        );
+        // Example 1: explicit case-sensitive via FALSE (use explicit instance_num=1; omitted arg passes Empty→0 which is #VALUE!)
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Little red Riding Hood's red hood", "Red", 1, FALSE)"#).unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        // Example 1: instance 3 but only 1 lowercase "red" in text
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Little Red Riding Hood's red hood", "red", 3)"#).unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+
+        // Example 2: match_end=1, space found
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Marcus Aurelius", " ", 1,, 1)"#).unwrap(),
+            s("Aurelius")
+        );
+        // Example 2: match_end=0, no space in single word
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Socrates", " ", 1,, 0)"#).unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+        // Example 2: match_end=1, no space → end-of-text acts as delimiter, empty result
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Socrates", " ", 1,, 1)"#).unwrap(),
+            s("")
+        );
+        // Example 2: match_end=1, space found
+        assert_eq!(
+            eval(r#"=TEXTAFTER("Immanuel Kant", " ", 1,, 1)"#).unwrap(),
+            s("Kant")
+        );
+    }
+
+    #[test]
+    fn test_textsplit_docs() {
+        let na = FormulaValue::Error(CellError::Na);
+
+        // Example 1: Split by space
+        match eval(r#"=TEXTSPLIT("Dakota Lennon Sanchez"," ")"#).unwrap() {
+            FormulaValue::Array(arr) => {
+                assert_eq!(arr, vec![vec![s("Dakota"), s("Lennon"), s("Sanchez")]]);
+            }
+            other => panic!("Expected array, got {:?}", other),
+        }
+
+        // Example 2: Split by col and row delimiters
+        match eval(r#"=TEXTSPLIT("1,2,3;4,5,6",",",";")"#).unwrap() {
+            FormulaValue::Array(arr) => {
+                assert_eq!(
+                    arr,
+                    vec![vec![s("1"), s("2"), s("3")], vec![s("4"), s("5"), s("6")],]
+                );
+            }
+            other => panic!("Expected array, got {:?}", other),
+        }
+
+        // Example 3: Split by "."
+        match eval(r#"=TEXTSPLIT("Do. Or do not. There is no try. -Anonymous",".")"#).unwrap() {
+            FormulaValue::Array(arr) => {
+                assert_eq!(
+                    arr,
+                    vec![vec![
+                        s("Do"),
+                        s(" Or do not"),
+                        s(" There is no try"),
+                        s(" -Anonymous"),
+                    ]]
+                );
+            }
+            other => panic!("Expected array, got {:?}", other),
+        }
+
+        // Example 7: col=" ", row=".", ignore_empty=TRUE
+        match eval(r#"=TEXTSPLIT("Do. Or do not. There is no try. -Anonymous"," ",".",TRUE)"#)
+            .unwrap()
+        {
+            FormulaValue::Array(arr) => {
+                assert_eq!(arr.len(), 4);
+                for row in &arr {
+                    assert_eq!(row.len(), 4);
+                }
+                assert_eq!(arr[0], vec![s("Do"), na.clone(), na.clone(), na.clone()]);
+                assert_eq!(arr[1], vec![s("Or"), s("do"), s("not"), na.clone()]);
+                assert_eq!(arr[2], vec![s("There"), s("is"), s("no"), s("try")]);
+                assert_eq!(
+                    arr[3],
+                    vec![s("-Anonymous"), na.clone(), na.clone(), na.clone()]
+                );
+            }
+            other => panic!("Expected array, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_unichar_docs() {
+        assert_eq!(eval("=UNICHAR(66)").unwrap(), s("B"));
+        assert_eq!(eval("=UNICHAR(32)").unwrap(), s(" "));
+        assert_eq!(
+            eval("=UNICHAR(0)").unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
+    }
+
+    #[test]
+    fn test_unicode_docs() {
+        assert_eq!(eval("=UNICODE(\" \")").unwrap(), FormulaValue::Number(32.0));
+        assert_eq!(eval("=UNICODE(\"B\")").unwrap(), FormulaValue::Number(66.0));
+    }
+
+    #[test]
+    fn test_asc_docs() {
+        // MS Docs: =ASC("EXCEL") — ASCII passes through unchanged
+        assert_eq!(eval("=ASC(\"EXCEL\")").unwrap(), s("EXCEL"));
+        // MS Docs: =ASC("エクセル") → "ｴｸｾﾙ"
+        assert_eq!(
+            eval("=ASC(\"\u{30A8}\u{30AF}\u{30BB}\u{30EB}\")").unwrap(),
+            s("\u{FF74}\u{FF78}\u{FF7E}\u{FF99}")
+        );
+        // Full-width Ａ → A
+        assert_eq!(eval("=ASC(\"\u{FF21}\")").unwrap(), s("A"));
+    }
+
+    #[test]
+    fn test_jis_docs() {
+        // MS Docs: =DBCS("EXCEL") → "ＥＸＣＥＬ"
+        assert_eq!(
+            eval("=JIS(\"EXCEL\")").unwrap(),
+            s("\u{FF25}\u{FF38}\u{FF23}\u{FF25}\u{FF2C}")
+        );
+        // MS Docs: =DBCS("ｴｸｾﾙ") → "エクセル"
+        assert_eq!(
+            eval("=JIS(\"\u{FF74}\u{FF78}\u{FF7E}\u{FF99}\")").unwrap(),
+            s("\u{30A8}\u{30AF}\u{30BB}\u{30EB}")
+        );
+    }
+
+    #[test]
+    fn test_dbcs_docs() {
+        // MS Docs: =DBCS("EXCEL") → "ＥＸＣＥＬ"
+        assert_eq!(
+            eval("=DBCS(\"EXCEL\")").unwrap(),
+            s("\u{FF25}\u{FF38}\u{FF23}\u{FF25}\u{FF2C}")
+        );
+        // MS Docs: =DBCS("ｴｸｾﾙ") → "エクセル"
+        assert_eq!(
+            eval("=DBCS(\"\u{FF74}\u{FF78}\u{FF7E}\u{FF99}\")").unwrap(),
+            s("\u{30A8}\u{30AF}\u{30BB}\u{30EB}")
+        );
+    }
+
+    #[test]
+    fn test_bahttext_docs() {
+        assert_eq!(
+            eval("=BAHTTEXT(1234)").unwrap(),
+            s("หนึ่งพันสองร้อยสามสิบสี่บาทถ้วน")
+        );
+    }
 }

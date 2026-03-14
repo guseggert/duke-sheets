@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::{
-    CalculationOptions, CalculationStats as CoreCalculationStats, WorkbookCalculationExt,
-    WorkbookExt,
+    CalculationOptions, CalculationStats as CoreCalculationStats, ImageSizing,
+    WorkbookCalculationExt, WorkbookExt,
 };
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
@@ -45,7 +45,6 @@ pub(crate) fn catch_panic<T>(f: impl FnOnce() -> napi::Result<T>) -> napi::Resul
     }
 }
 
-
 mod types;
 pub use types::*;
 mod workbook_read;
@@ -65,6 +64,25 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
         CellError::Calc => "#CALC!",
     }
 }
+
+/// Extract an optional property from a JS object.
+/// Returns `Ok(None)` if the property is missing, null, or undefined.
+fn try_get_property<'a, T: FromNapiValue + ValidateNapiValue>(
+    obj: &Object<'a>,
+    key: &str,
+    ) -> napi::Result<Option<T>> {
+    if !obj.has_named_property(key)? {
+        return Ok(None);
+    }
+    let val: Unknown<'_> = obj.get_named_property(key)?;
+    let val_type = val.get_type()?;
+    if val_type == ValueType::Null || val_type == ValueType::Undefined {
+        return Ok(None);
+    }
+    let v = obj.value();
+    unsafe { T::from_napi_value(v.env, val.raw()).map(Some) }
+}
+
 
 /// Represents a cell value in a spreadsheet.
 ///
@@ -198,7 +216,7 @@ pub struct JsCalculationOptions {
     /// - 1: force serial evaluation
     /// - n: use at most n threads
     pub max_threads: Option<u32>,
-}
+    }
 
 impl JsCalculationOptions {
     fn into_core(self) -> CalculationOptions {
@@ -208,14 +226,32 @@ impl JsCalculationOptions {
             max_change: self.max_change.unwrap_or(0.001),
             force_full_calculation: self.force_full_calculation.unwrap_or(true),
             calculate_volatile: self.calculate_volatile.unwrap_or(true),
-            sheets: self.sheets
+            sheets: self
+                .sheets
                 .unwrap_or_default()
                 .into_iter()
                 .map(|i| i as usize)
                 .collect(),
             max_threads: self.max_threads.map(|n| n as usize),
+            web_service_fn: None,
+            rtd_fn: None,
         }
     }
+}
+
+/// IMAGE() metadata captured during calculation.
+#[napi(object)]
+pub struct JsImageInfo {
+    /// IMAGE source URL or path.
+    pub source: String,
+    /// IMAGE alternate text.
+    pub alt_text: String,
+    /// 0=FitCell, 1=FillCell, 2=OriginalSize, 3=Custom
+    pub sizing: u32,
+    /// Optional custom width.
+    pub width: Option<f64>,
+    /// Optional custom height.
+    pub height: Option<f64>,
 }
 
 /// Statistics from calculating a workbook.
@@ -267,6 +303,7 @@ impl CalculationStats {
     pub fn iterations(&self) -> u32 {
         self.inner.iterations as u32
     }
+
 }
 
 /// The used range of a worksheet, describing the bounding box of all cells
@@ -447,6 +484,30 @@ impl Worksheet {
         })
     }
 
+    /// Get IMAGE() metadata for a cell, or null if no image.
+    #[napi(js_name = "getImageAt")]
+    pub fn get_image_at(&self, row: u32, col: u32) -> Result<Option<JsImageInfo>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+
+            Ok(ws.get_image_at(row, col as u16).map(|info| JsImageInfo {
+                source: info.source,
+                alt_text: info.alt_text,
+                sizing: match info.sizing {
+                    ImageSizing::FitCell => 0,
+                    ImageSizing::FillCell => 1,
+                    ImageSizing::OriginalSize => 2,
+                    ImageSizing::Custom => 3,
+                },
+                width: info.width,
+                height: info.height,
+            }))
+        })
+    }
+
     /// Set the height of a row in points
     #[napi]
     pub fn set_row_height(&self, row: u32, height: f64) -> Result<()> {
@@ -622,7 +683,6 @@ impl Workbook {
         })
     }
 
-
     /// Save the workbook to a file
     ///
     /// The format is determined by the file extension:
@@ -745,31 +805,25 @@ impl Workbook {
         })
     }
 
-    /// Calculate all formulas in the workbook
+    /// Calculate all formulas in the workbook.
     ///
+    /// Optionally accepts calculation options. Callbacks (`webServiceFn`, `rtdFn`)
+    /// are only supported on the async path via `calculateAsync`.
+    ///
+    /// @param options - Optional calculation options
     /// @returns Statistics about the calculation
     #[napi]
-    pub fn calculate(&self) -> Result<CalculationStats> {
-        catch_panic(|| {
-            let mut wb = self.inner.write().map_err(to_napi_err)?;
-            let stats = wb.calculate().map_err(to_napi_err)?;
-            Ok(CalculationStats { inner: stats })
-        })
-    }
-
-    /// Calculate with custom options.
-    ///
-    /// @param options - Calculation options object
-    /// @returns Statistics about the calculation
-    #[napi]
-    pub fn calculate_with_options(
+    pub fn calculate(
         &self,
-        options: JsCalculationOptions,
+        options: Option<JsCalculationOptions>,
     ) -> Result<CalculationStats> {
         catch_panic(|| {
             let mut wb = self.inner.write().map_err(to_napi_err)?;
-            let opts = options.into_core();
-            let stats = wb.calculate_with_options(&opts).map_err(to_napi_err)?;
+            let stats = if let Some(opts) = options {
+                wb.calculate_with_options(&opts.into_core()).map_err(to_napi_err)?
+            } else {
+                wb.calculate().map_err(to_napi_err)?
+            };
             Ok(CalculationStats { inner: stats })
         })
     }
@@ -934,27 +988,97 @@ impl Workbook {
 
     /// Calculate all formulas asynchronously (non-blocking).
     ///
-    /// @returns Promise<CalculationStats>
-    #[napi(ts_return_type = "Promise<CalculationStats>")]
-    pub fn calculate_async(&self) -> AsyncTask<CalculateTask> {
-        AsyncTask::new(CalculateTask {
-            workbook: Arc::clone(&self.inner),
-            options: None,
-        })
-    }
-
-    /// Calculate with custom options asynchronously (non-blocking).
+    /// Optionally accepts calculation options with callback functions:
+    /// - `webServiceFn`: called for each `WEBSERVICE(url)` evaluation
+    /// - `rtdFn`: called for each `RTD(progId, server, ...topics)` evaluation
     ///
-    /// @param options - Calculation options object
+    /// Callbacks must return a Promise. Use `async (url) => ...` or
+    /// wrap synchronous results: `async (url) => mySyncFn(url)`.
+    ///
+    /// @param options - Optional calculation options with optional callbacks
     /// @returns Promise<CalculationStats>
-    #[napi(ts_return_type = "Promise<CalculationStats>")]
-    pub fn calculate_with_options_async(
+    #[napi(
+        ts_args_type = "options?: JsCalculationOptions & { webServiceFn?: (url: string) => Promise<string | null | undefined>; rtdFn?: (progId: string, server: string, topics: string[]) => Promise<string | null | undefined> }",
+        ts_return_type = "Promise<CalculationStats>"
+    )]
+    pub fn calculate_async<'env>(
         &self,
-        options: JsCalculationOptions,
-    ) -> AsyncTask<CalculateTask> {
-        AsyncTask::new(CalculateTask {
+        options: Option<Object<'env>>,
+    ) -> Result<AsyncTask<CalculateTask>> {
+        let opts = if let Some(options) = options {
+            // Extract basic options from the JS object
+            let iterative: Option<bool> = try_get_property(&options, "iterative")?;
+            let max_iterations: Option<u32> = try_get_property(&options, "maxIterations")?;
+            let max_change: Option<f64> = try_get_property(&options, "maxChange")?;
+            let force_full_calculation: Option<bool> =
+                try_get_property(&options, "forceFullCalculation")?;
+            let calculate_volatile: Option<bool> =
+                try_get_property(&options, "calculateVolatile")?;
+            let sheets: Option<Vec<u32>> = try_get_property(&options, "sheets")?;
+            let max_threads: Option<u32> = try_get_property(&options, "maxThreads")?;
+
+            // Extract callback functions and build ThreadsafeFunctions
+            let web_service_js_fn: Option<Function<'env, String, Promise<Option<String>>>> =
+                try_get_property(&options, "webServiceFn")?;
+            let rtd_js_fn: Option<Function<'env, (String, String, Vec<String>), Promise<Option<String>>>> =
+                try_get_property(&options, "rtdFn")?;
+
+            let web_service_fn: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>> =
+                if let Some(js_fn) = web_service_js_fn {
+                    let tsfn = js_fn.build_threadsafe_function::<String>().build()?;
+                    let tsfn = Arc::new(tsfn);
+                    Some(Arc::new(move |url: &str| -> Option<String> {
+                        let url = url.to_string();
+                        let tsfn = Arc::clone(&tsfn);
+                        napi::bindgen_prelude::block_on(async move {
+                            let promise = tsfn.call_async(url).await.ok()?;
+                            promise.await.ok().flatten()
+                        })
+                    }))
+                } else {
+                    None
+                };
+
+            let rtd_fn: Option<Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>> =
+                if let Some(js_fn) = rtd_js_fn {
+                    let tsfn = js_fn
+                        .build_threadsafe_function::<(String, String, Vec<String>)>()
+                        .build_callback(|ctx| Ok(FnArgs { data: ctx.value }))?;
+                    let tsfn = Arc::new(tsfn);
+                    Some(Arc::new(move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
+                        let args = (prog_id.to_string(), server.to_string(), topics.to_vec());
+                        let tsfn = Arc::clone(&tsfn);
+                        napi::bindgen_prelude::block_on(async move {
+                            let promise = tsfn.call_async(args).await.ok()?;
+                            promise.await.ok().flatten()
+                        })
+                    }))
+                } else {
+                    None
+                };
+
+            Some(CalculationOptions {
+                iterative: iterative.unwrap_or(false),
+                max_iterations: max_iterations.unwrap_or(100),
+                max_change: max_change.unwrap_or(0.001),
+                force_full_calculation: force_full_calculation.unwrap_or(true),
+                calculate_volatile: calculate_volatile.unwrap_or(true),
+                sheets: sheets
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|i| i as usize)
+                    .collect(),
+                max_threads: max_threads.map(|n| n as usize),
+                web_service_fn,
+                rtd_fn,
+            })
+        } else {
+            None
+        };
+
+        Ok(AsyncTask::new(CalculateTask {
             workbook: Arc::clone(&self.inner),
-            options: Some(options.into_core()),
-        })
+            options: opts,
+        }))
     }
 }

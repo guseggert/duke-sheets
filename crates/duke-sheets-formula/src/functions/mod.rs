@@ -447,6 +447,13 @@ impl FunctionRegistry {
             volatile: false,
         });
         self.register(FunctionDef {
+            name: "ACOT",
+            min_args: 1,
+            max_args: Some(1),
+            implementation: math_extra::fn_acot,
+            volatile: false,
+        });
+        self.register(FunctionDef {
             name: "ACOTH",
             min_args: 1,
             max_args: Some(1),
@@ -724,6 +731,13 @@ impl FunctionRegistry {
             min_args: 2,
             max_args: None,
             implementation: math_extra::fn_subtotal,
+            volatile: false,
+        });
+        self.register(FunctionDef {
+            name: "PERCENTOF",
+            min_args: 2,
+            max_args: Some(2),
+            implementation: math_extra::fn_percentof,
             volatile: false,
         });
     }
@@ -1903,6 +1917,13 @@ impl FunctionRegistry {
             volatile: false,
         });
         self.register(FunctionDef {
+            name: "TRIMRANGE",
+            min_args: 1,
+            max_args: Some(3),
+            implementation: lookup_extra::fn_trimrange,
+            volatile: false,
+        });
+        self.register(FunctionDef {
             name: "TOCOL",
             min_args: 1,
             max_args: Some(3),
@@ -1975,7 +1996,7 @@ impl FunctionRegistry {
         self.register(FunctionDef {
             name: "IMAGE",
             min_args: 1,
-            max_args: Some(4),
+            max_args: Some(5),
             implementation: lookup_extra::fn_image,
             volatile: false,
         });

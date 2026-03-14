@@ -9,7 +9,6 @@ use crate::{to_py_err, PyNamedRange, PyWorkbook, PyWorkbookSettings};
 
 #[pymethods]
 impl PyWorkbook {
-
     #[staticmethod]
     fn from_csv_string(csv: &str) -> PyResult<Self> {
         let reader = Cursor::new(csv.as_bytes());

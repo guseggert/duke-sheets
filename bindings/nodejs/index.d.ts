@@ -145,18 +145,15 @@ export declare class Workbook {
    */
   removeSheet(index: number): void
   /**
-   * Calculate all formulas in the workbook
+   * Calculate all formulas in the workbook.
    *
+   * Optionally accepts calculation options. Callbacks (`webServiceFn`, `rtdFn`)
+   * are only supported on the async path via `calculateAsync`.
+   *
+   * @param options - Optional calculation options
    * @returns Statistics about the calculation
    */
-  calculate(): CalculationStats
-  /**
-   * Calculate with custom options.
-   *
-   * @param options - Calculation options object
-   * @returns Statistics about the calculation
-   */
-  calculateWithOptions(options: JsCalculationOptions): CalculationStats
+  calculate(options?: JsCalculationOptions | undefined | null): CalculationStats
   /**
    * Define a named range
    *
@@ -181,16 +178,17 @@ export declare class Workbook {
   /**
    * Calculate all formulas asynchronously (non-blocking).
    *
-   * @returns Promise<CalculationStats>
-   */
-  calculateAsync(): Promise<CalculationStats>
-  /**
-   * Calculate with custom options asynchronously (non-blocking).
+   * Optionally accepts calculation options with callback functions:
+   * - `webServiceFn`: called for each `WEBSERVICE(url)` evaluation
+   * - `rtdFn`: called for each `RTD(progId, server, ...topics)` evaluation
    *
-   * @param options - Calculation options object
+   * Callbacks must return a Promise. Use `async (url) => ...` or
+   * wrap synchronous results: `async (url) => mySyncFn(url)`.
+   *
+   * @param options - Optional calculation options with optional callbacks
    * @returns Promise<CalculationStats>
    */
-  calculateWithOptionsAsync(options: JsCalculationOptions): Promise<CalculationStats>
+  calculateAsync(options?: JsCalculationOptions & { webServiceFn?: (url: string) => Promise<string | null | undefined>; rtdFn?: (progId: string, server: string, topics: string[]) => Promise<string | null | undefined> }): Promise<CalculationStats>
 }
 
 /**
@@ -355,6 +353,8 @@ export declare class Worksheet {
    * if the worksheet is empty.
    */
   get usedRange(): UsedRange | null
+  /** Get IMAGE() metadata for a cell, or null if no image. */
+  getImageAt(row: number, col: number): JsImageInfo | null
   /** Set the height of a row in points */
   setRowHeight(row: number, height: number): void
   /** Set the width of a column in character units */
@@ -644,6 +644,20 @@ export interface JsHyperlink {
 export interface JsHyperlinkEntry {
   address: string
   hyperlink: JsHyperlink
+}
+
+/** IMAGE() metadata captured during calculation. */
+export interface JsImageInfo {
+  /** IMAGE source URL or path. */
+  source: string
+  /** IMAGE alternate text. */
+  altText: string
+  /** 0=FitCell, 1=FillCell, 2=OriginalSize, 3=Custom */
+  sizing: number
+  /** Optional custom width. */
+  width?: number
+  /** Optional custom height. */
+  height?: number
 }
 
 /** A merged cell region with structured coordinates. */

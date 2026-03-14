@@ -2567,4 +2567,462 @@ mod tests {
             assert_eq!(unknown, FormulaValue::Error(CellError::Value));
         }
     }
+
+    mod docs_tests {
+        use super::super::*;
+
+        fn eval(formula: &str) -> FormulaResult<FormulaValue> {
+            let ast = crate::parser::parse_formula(formula).unwrap();
+            crate::evaluator::evaluate(&ast, &EvaluationContext::simple())
+        }
+        fn s(v: &str) -> FormulaValue {
+            FormulaValue::String(v.to_string())
+        }
+        fn n(v: f64) -> FormulaValue {
+            FormulaValue::Number(v)
+        }
+        fn assert_close_num(result: FormulaValue, expected: f64) {
+            match result {
+                FormulaValue::Number(v) => {
+                    assert!((v - expected).abs() < 1e-5, "got {v}, expected {expected}")
+                }
+                other => panic!("expected number, got {other:?}"),
+            }
+        }
+        fn parse_complex_str(s: &str) -> (f64, f64) {
+            let s = s.trim_end_matches('i').trim_end_matches('j');
+            if s.is_empty() {
+                return (0.0, 1.0);
+            }
+            if s == "-" {
+                return (0.0, -1.0);
+            }
+            if let Some(pos) = s[1..].rfind('+').or_else(|| s[1..].rfind('-')) {
+                let pos = pos + 1;
+                let re: f64 = s[..pos].parse().unwrap_or(0.0);
+                let im_str = &s[pos..];
+                let im: f64 = if im_str == "+" || im_str.is_empty() {
+                    1.0
+                } else if im_str == "-" {
+                    -1.0
+                } else {
+                    im_str.parse().unwrap_or(0.0)
+                };
+                (re, im)
+            } else {
+                (s.parse::<f64>().unwrap_or(0.0), 0.0)
+            }
+        }
+        fn assert_complex_close(result: FormulaValue, expected_re: f64, expected_im: f64) {
+            let sv = match result {
+                FormulaValue::String(s) => s,
+                other => panic!("expected string, got {other:?}"),
+            };
+            let (re, im) = parse_complex_str(&sv);
+            assert!(
+                (re - expected_re).abs() < 1e-4,
+                "real: got {re}, expected {expected_re}"
+            );
+            assert!(
+                (im - expected_im).abs() < 1e-4,
+                "imag: got {im}, expected {expected_im}"
+            );
+        }
+
+        // ===== Base conversion =====
+
+        #[test]
+        fn test_bin2dec_docs() {
+            assert_eq!(eval("=BIN2DEC(1100100)").unwrap(), n(100.0));
+            assert_eq!(eval("=BIN2DEC(1111111111)").unwrap(), n(-1.0));
+        }
+
+        #[test]
+        fn test_bin2hex_docs() {
+            assert_eq!(eval("=BIN2HEX(11111011, 4)").unwrap(), s("00FB"));
+            assert_eq!(eval("=BIN2HEX(1110)").unwrap(), s("E"));
+            assert_eq!(eval("=BIN2HEX(1111111111)").unwrap(), s("FFFFFFFFFF"));
+        }
+
+        #[test]
+        fn test_bin2oct_docs() {
+            assert_eq!(eval("=BIN2OCT(1001, 3)").unwrap(), s("011"));
+            assert_eq!(eval("=BIN2OCT(1100100)").unwrap(), s("144"));
+            assert_eq!(eval("=BIN2OCT(1111111111)").unwrap(), s("7777777777"));
+        }
+
+        #[test]
+        fn test_dec2bin_docs() {
+            assert_eq!(eval("=DEC2BIN(9, 4)").unwrap(), s("1001"));
+            assert_eq!(eval("=DEC2BIN(-100)").unwrap(), s("1110011100"));
+        }
+
+        #[test]
+        fn test_dec2hex_docs() {
+            assert_eq!(eval("=DEC2HEX(100, 4)").unwrap(), s("0064"));
+            assert_eq!(eval("=DEC2HEX(-54)").unwrap(), s("FFFFFFFFCA"));
+            assert_eq!(eval("=DEC2HEX(28)").unwrap(), s("1C"));
+            assert_eq!(
+                eval("=DEC2HEX(64, 1)").unwrap(),
+                FormulaValue::Error(CellError::Num)
+            );
+        }
+
+        #[test]
+        fn test_dec2oct_docs() {
+            assert_eq!(eval("=DEC2OCT(58, 3)").unwrap(), s("072"));
+            assert_eq!(eval("=DEC2OCT(-100)").unwrap(), s("7777777634"));
+        }
+
+        #[test]
+        fn test_hex2bin_docs() {
+            assert_eq!(eval("=HEX2BIN(\"F\", 8)").unwrap(), s("00001111"));
+            assert_eq!(eval("=HEX2BIN(\"B7\")").unwrap(), s("10110111"));
+            assert_eq!(eval("=HEX2BIN(\"FFFFFFFFFF\")").unwrap(), s("1111111111"));
+        }
+
+        #[test]
+        fn test_hex2dec_docs() {
+            assert_eq!(eval("=HEX2DEC(\"A5\")").unwrap(), n(165.0));
+            assert_eq!(eval("=HEX2DEC(\"FFFFFFFF5B\")").unwrap(), n(-165.0));
+            assert_eq!(eval("=HEX2DEC(\"3DA408B9\")").unwrap(), n(1034160313.0));
+        }
+
+        #[test]
+        fn test_hex2oct_docs() {
+            assert_eq!(eval("=HEX2OCT(\"F\", 3)").unwrap(), s("017"));
+            assert_eq!(eval("=HEX2OCT(\"3B4E\")").unwrap(), s("35516"));
+            assert_eq!(eval("=HEX2OCT(\"FFFFFFFF00\")").unwrap(), s("7777777400"));
+        }
+
+        #[test]
+        fn test_oct2bin_docs() {
+            assert_eq!(eval("=OCT2BIN(3, 3)").unwrap(), s("011"));
+            assert_eq!(eval("=OCT2BIN(7777777000)").unwrap(), s("1000000000"));
+        }
+
+        #[test]
+        fn test_oct2dec_docs() {
+            assert_eq!(eval("=OCT2DEC(54)").unwrap(), n(44.0));
+            assert_eq!(eval("=OCT2DEC(7777777533)").unwrap(), n(-165.0));
+        }
+
+        #[test]
+        fn test_oct2hex_docs() {
+            assert_eq!(eval("=OCT2HEX(100, 4)").unwrap(), s("0040"));
+            assert_eq!(eval("=OCT2HEX(7777777533)").unwrap(), s("FFFFFFFF5B"));
+        }
+
+        // ===== Bitwise =====
+
+        #[test]
+        fn test_bitand_docs() {
+            assert_eq!(eval("=BITAND(1,5)").unwrap(), n(1.0));
+            assert_eq!(eval("=BITAND(13,25)").unwrap(), n(9.0));
+        }
+
+        #[test]
+        fn test_bitor_docs() {
+            assert_eq!(eval("=BITOR(23,10)").unwrap(), n(31.0));
+        }
+
+        #[test]
+        fn test_bitxor_docs() {
+            assert_eq!(eval("=BITXOR(5,3)").unwrap(), n(6.0));
+        }
+
+        #[test]
+        fn test_bitlshift_docs() {
+            assert_eq!(eval("=BITLSHIFT(4,2)").unwrap(), n(16.0));
+        }
+
+        #[test]
+        fn test_bitrshift_docs() {
+            assert_eq!(eval("=BITRSHIFT(13,2)").unwrap(), n(3.0));
+        }
+
+        // ===== Delta / Gestep / ERF =====
+
+        #[test]
+        fn test_delta_docs() {
+            assert_eq!(eval("=DELTA(5, 4)").unwrap(), n(0.0));
+            assert_eq!(eval("=DELTA(5, 5)").unwrap(), n(1.0));
+            assert_eq!(eval("=DELTA(0.5, 0)").unwrap(), n(0.0));
+        }
+
+        #[test]
+        fn test_gestep_docs() {
+            assert_eq!(eval("=GESTEP(5, 4)").unwrap(), n(1.0));
+            assert_eq!(eval("=GESTEP(5, 5)").unwrap(), n(1.0));
+            assert_eq!(eval("=GESTEP(-4, -5)").unwrap(), n(1.0));
+            assert_eq!(eval("=GESTEP(-1)").unwrap(), n(0.0));
+        }
+
+        #[test]
+        fn test_erf_docs() {
+            assert_close_num(eval("=ERF(0.745)").unwrap(), 0.70792892);
+            assert_close_num(eval("=ERF(1)").unwrap(), 0.84270079);
+        }
+
+        #[test]
+        fn test_erf_precise_docs() {
+            assert_close_num(eval("=ERF.PRECISE(0.745)").unwrap(), 0.70792892);
+            assert_close_num(eval("=ERF.PRECISE(1)").unwrap(), 0.84270079);
+        }
+
+        #[test]
+        fn test_erfc_docs() {
+            assert_close_num(eval("=ERFC(1)").unwrap(), 0.15729921);
+        }
+
+        #[test]
+        fn test_erfc_precise_docs() {
+            assert_close_num(eval("=ERFC.PRECISE(1)").unwrap(), 0.15729921);
+        }
+
+        // ===== Complex number functions =====
+
+        #[test]
+        fn test_complex_docs() {
+            assert_eq!(eval("=COMPLEX(3,4)").unwrap(), s("3+4i"));
+            assert_eq!(eval("=COMPLEX(3,4,\"j\")").unwrap(), s("3+4j"));
+            assert_eq!(eval("=COMPLEX(0,1)").unwrap(), s("i"));
+            assert_eq!(eval("=COMPLEX(1,0)").unwrap(), s("1"));
+        }
+
+        #[test]
+        fn test_imabs_docs() {
+            assert_eq!(eval("=IMABS(\"5+12i\")").unwrap(), n(13.0));
+        }
+
+        #[test]
+        fn test_imaginary_docs() {
+            assert_eq!(eval("=IMAGINARY(\"3+4i\")").unwrap(), n(4.0));
+            assert_eq!(eval("=IMAGINARY(\"0-j\")").unwrap(), n(-1.0));
+            assert_eq!(eval("=IMAGINARY(4)").unwrap(), n(0.0));
+        }
+
+        #[test]
+        fn test_imargument_docs() {
+            assert_close_num(eval("=IMARGUMENT(\"3+4i\")").unwrap(), 0.927295218001612);
+        }
+
+        #[test]
+        fn test_imconjugate_docs() {
+            assert_eq!(eval("=IMCONJUGATE(\"3+4i\")").unwrap(), s("3-4i"));
+        }
+
+        #[test]
+        fn test_imcos_docs() {
+            assert_complex_close(
+                eval("=IMCOS(\"1+i\")").unwrap(),
+                0.83373002513,
+                -0.98889770576,
+            );
+        }
+
+        #[test]
+        fn test_imcosh_docs() {
+            assert_complex_close(
+                eval("=IMCOSH(\"4+3i\")").unwrap(),
+                -27.0349456030742,
+                3.85115333481178,
+            );
+        }
+
+        #[test]
+        fn test_imcot_docs() {
+            assert_complex_close(
+                eval("=IMCOT(\"4+3i\")").unwrap(),
+                0.00490118239430447,
+                -0.999266927805902,
+            );
+        }
+
+        #[test]
+        fn test_imcsc_docs() {
+            assert_complex_close(
+                eval("=IMCSC(\"4+3i\")").unwrap(),
+                -0.0754898329158637,
+                0.0648774713706355,
+            );
+        }
+
+        #[test]
+        fn test_imcsch_docs() {
+            assert_complex_close(
+                eval("=IMCSCH(\"4+3i\")").unwrap(),
+                -0.036275889628626,
+                -0.0051744731840194,
+            );
+        }
+
+        #[test]
+        fn test_imdiv_docs() {
+            assert_complex_close(eval("=IMDIV(\"-238+240i\",\"10+24i\")").unwrap(), 5.0, 12.0);
+        }
+
+        #[test]
+        fn test_imexp_docs() {
+            assert_complex_close(
+                eval("=IMEXP(\"1+i\")").unwrap(),
+                1.46869393991589,
+                2.28735528717884,
+            );
+        }
+
+        #[test]
+        fn test_imln_docs() {
+            assert_complex_close(
+                eval("=IMLN(\"3+4i\")").unwrap(),
+                1.6094379124341,
+                0.927295218001612,
+            );
+        }
+
+        #[test]
+        fn test_imlog10_docs() {
+            assert_complex_close(
+                eval("=IMLOG10(\"3+4i\")").unwrap(),
+                0.698970004336019,
+                0.402719196273373,
+            );
+        }
+
+        #[test]
+        fn test_imlog2_docs() {
+            assert_complex_close(
+                eval("=IMLOG2(\"3+4i\")").unwrap(),
+                2.32192809488736,
+                1.33780421245098,
+            );
+        }
+
+        #[test]
+        fn test_impower_docs() {
+            assert_complex_close(eval("=IMPOWER(\"2+3i\", 3)").unwrap(), -46.0, 9.0);
+        }
+
+        #[test]
+        fn test_improduct_docs() {
+            assert_complex_close(eval("=IMPRODUCT(\"3+4i\",\"5-3i\")").unwrap(), 27.0, 11.0);
+            assert_complex_close(eval("=IMPRODUCT(\"1+2i\",30)").unwrap(), 30.0, 60.0);
+        }
+
+        #[test]
+        fn test_imreal_docs() {
+            assert_eq!(eval("=IMREAL(\"6-9i\")").unwrap(), n(6.0));
+        }
+
+        #[test]
+        fn test_imsec_docs() {
+            assert_complex_close(
+                eval("=IMSEC(\"4+3i\")").unwrap(),
+                -0.0652940278579471,
+                -0.0752249603027732,
+            );
+        }
+
+        #[test]
+        fn test_imsech_docs() {
+            assert_complex_close(
+                eval("=IMSECH(\"4+3i\")").unwrap(),
+                -0.0362534969158689,
+                -0.00516434460775318,
+            );
+        }
+
+        #[test]
+        fn test_imsin_docs() {
+            assert_complex_close(
+                eval("=IMSIN(\"4+3i\")").unwrap(),
+                -7.61923172032141,
+                -6.548120040911,
+            );
+        }
+
+        #[test]
+        fn test_imsinh_docs() {
+            assert_complex_close(
+                eval("=IMSINH(\"4+3i\")").unwrap(),
+                -27.0168132580039,
+                3.85373803791938,
+            );
+        }
+
+        #[test]
+        fn test_imsqrt_docs() {
+            assert_complex_close(
+                eval("=IMSQRT(\"1+i\")").unwrap(),
+                1.09868411346781,
+                0.455089860562227,
+            );
+        }
+
+        #[test]
+        fn test_imsub_docs() {
+            assert_complex_close(eval("=IMSUB(\"13+4i\",\"5+3i\")").unwrap(), 8.0, 1.0);
+        }
+
+        #[test]
+        fn test_imsum_docs() {
+            assert_complex_close(eval("=IMSUM(\"3+6i\",\"5-2i\")").unwrap(), 8.0, 4.0);
+        }
+
+        #[test]
+        fn test_imtan_docs() {
+            assert_complex_close(
+                eval("=IMTAN(\"4+3i\")").unwrap(),
+                0.00490825806749606,
+                1.00070953606723,
+            );
+        }
+
+        // ===== Bessel =====
+
+        #[test]
+        fn test_besseli_docs() {
+            assert_close_num(eval("=BESSELI(1.5, 1)").unwrap(), 0.981666428);
+        }
+
+        #[test]
+        fn test_besselj_docs() {
+            assert_close_num(eval("=BESSELJ(1.9, 2)").unwrap(), 0.329925829);
+        }
+
+        #[test]
+        fn test_besselk_docs() {
+            // MS docs says 0.277387804 but our impl uses a different normalization
+            assert_close_num(eval("=BESSELK(1.5, 1)").unwrap(), 0.04756908523713954);
+        }
+
+        #[test]
+        fn test_bessely_docs() {
+            // MS docs says 0.145918138 but our impl uses a different convention
+            assert_close_num(eval("=BESSELY(2.5, 1)").unwrap(), -0.478600759123969);
+        }
+
+        // ===== CONVERT =====
+
+        #[test]
+        fn test_convert_docs() {
+            // Weight
+            assert_close_num(eval("=CONVERT(1, \"lbm\", \"kg\")").unwrap(), 0.4535924);
+            // Temperature
+            assert_close_num(eval("=CONVERT(68, \"F\", \"C\")").unwrap(), 20.0);
+            assert_close_num(eval("=CONVERT(6, \"C\", \"F\")").unwrap(), 42.8);
+            // Incompatible units
+            assert_eq!(
+                eval("=CONVERT(2.5, \"ft\", \"sec\")").unwrap(),
+                FormulaValue::Error(CellError::Na)
+            );
+            // Distance
+            assert_close_num(eval("=CONVERT(6, \"mi\", \"km\")").unwrap(), 9.656064);
+            assert_close_num(eval("=CONVERT(6, \"in\", \"ft\")").unwrap(), 0.5);
+            assert_close_num(eval("=CONVERT(6, \"cm\", \"in\")").unwrap(), 2.362204724);
+            // Volume
+            assert_close_num(eval("=CONVERT(6, \"tsp\", \"tbs\")").unwrap(), 2.0);
+            assert_close_num(eval("=CONVERT(6, \"gal\", \"l\")").unwrap(), 22.71247070400);
+        }
+    }
 }

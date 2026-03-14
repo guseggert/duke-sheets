@@ -16,6 +16,7 @@ rust_decimal.workspace = true
 regex.workspace = true
 lazy-regex.workspace = true
 once_cell.workspace = true
+quick-xml.workspace = true
 rand = "0.8"
 
 [dev-dependencies]

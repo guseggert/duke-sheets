@@ -359,6 +359,84 @@ fn price_from_yield_core(
     Ok(pv - c * coup.a / coup.e)
 }
 
+fn odd_last_coupon_fractions(
+    settlement: i64,
+    maturity: i64,
+    last_interest: i64,
+    frequency: i64,
+    basis: i64,
+) -> Result<(f64, f64, f64), FormulaValue> {
+    if !matches!(frequency, 1 | 2 | 4) || !(0..=4).contains(&basis) {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+    if !(last_interest < settlement && settlement < maturity) {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    let accrued = yearfrac_basis(last_interest, settlement, basis)?;
+    let odd_period = yearfrac_basis(last_interest, maturity, basis)?;
+    let discount_period = yearfrac_basis(settlement, maturity, basis)?;
+
+    if accrued < 0.0 || odd_period <= 0.0 || discount_period <= 0.0 {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    Ok((accrued, odd_period, discount_period))
+}
+
+fn odd_last_price_core(
+    settlement: i64,
+    maturity: i64,
+    last_interest: i64,
+    rate: f64,
+    yld: f64,
+    redemption: f64,
+    frequency: i64,
+    basis: i64,
+) -> Result<f64, FormulaValue> {
+    if rate < 0.0 || yld < 0.0 || redemption <= 0.0 {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    let (accrued, odd_period, discount_period) =
+        odd_last_coupon_fractions(settlement, maturity, last_interest, frequency, basis)?;
+    let denom = 1.0 + yld * discount_period;
+    if !denom.is_finite() || denom <= 0.0 {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    Ok((redemption + 100.0 * rate * odd_period) / denom - 100.0 * rate * accrued)
+}
+
+fn odd_last_yield_core(
+    settlement: i64,
+    maturity: i64,
+    last_interest: i64,
+    rate: f64,
+    pr: f64,
+    redemption: f64,
+    frequency: i64,
+    basis: i64,
+) -> Result<f64, FormulaValue> {
+    if rate < 0.0 || pr <= 0.0 || redemption <= 0.0 {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    let (accrued, odd_period, discount_period) =
+        odd_last_coupon_fractions(settlement, maturity, last_interest, frequency, basis)?;
+    let denom = pr + 100.0 * rate * accrued;
+    if !denom.is_finite() || denom <= 0.0 {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    let yld = ((redemption + 100.0 * rate * odd_period) / denom - 1.0) / discount_period;
+    if !yld.is_finite() {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    Ok(yld)
+}
+
 fn duration_core(
     settlement: i64,
     maturity: i64,
@@ -399,6 +477,177 @@ fn duration_core(
     }
 
     Ok(weighted / pv_total)
+}
+
+fn odd_coupon_day_count(start: i64, end: i64, basis: i64) -> Result<f64, FormulaValue> {
+    match basis {
+        0 => day_count_days(start, end, 0),
+        4 => day_count_days(start, end, 4),
+        1..=3 => day_count_days(start, end, 1),
+        _ => Err(FormulaValue::Error(CellError::Num)),
+    }
+}
+
+fn coupon_add_months(date: NaiveDate, months: i32) -> Option<NaiveDate> {
+    let total = date.year() * 12 + date.month0() as i32 + months;
+    let year = total.div_euclid(12);
+    let month0 = total.rem_euclid(12) as u32;
+    let month = month0 + 1;
+    let last = last_day_of_month(year, month)?;
+    let source_last = date.day() == last_day_of_month(date.year(), date.month())?;
+    let day = if source_last {
+        last
+    } else {
+        date.day().min(last)
+    };
+    NaiveDate::from_ymd_opt(year, month, day)
+}
+
+fn odd_coupon_period_length(
+    start: NaiveDate,
+    end: NaiveDate,
+    frequency: i64,
+    basis: i64,
+) -> Result<f64, FormulaValue> {
+    match basis {
+        0 | 2 | 4 => Ok(360.0 / frequency as f64),
+        3 => Ok(365.0 / frequency as f64),
+        1 => odd_coupon_day_count(date_to_serial(start), date_to_serial(end), 1),
+        _ => Err(FormulaValue::Error(CellError::Num)),
+    }
+}
+
+fn regular_coupon_count(
+    first_coupon: NaiveDate,
+    maturity: NaiveDate,
+    frequency: i64,
+) -> Result<usize, FormulaValue> {
+    let months = (12 / frequency) as i32;
+    let mut date = first_coupon;
+    let mut count = 0usize;
+
+    while date < maturity {
+        date = coupon_add_months(date, months).ok_or(FormulaValue::Error(CellError::Num))?;
+        count += 1;
+        if date > maturity {
+            return Err(FormulaValue::Error(CellError::Num));
+        }
+    }
+
+    if date != maturity {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    Ok(count)
+}
+
+fn odd_first_price_core(
+    settlement: i64,
+    maturity: i64,
+    issue: i64,
+    first_coupon: i64,
+    rate: f64,
+    yld: f64,
+    redemption: f64,
+    frequency: i64,
+    basis: i64,
+) -> Result<f64, FormulaValue> {
+    if !matches!(frequency, 1 | 2 | 4) || !(0..=4).contains(&basis) {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+    if rate < 0.0 || redemption <= 0.0 {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+    if yld <= -(frequency as f64) {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+    if settlement >= maturity
+        || issue >= settlement
+        || first_coupon >= maturity
+        || first_coupon <= settlement
+    {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    let settlement_date = serial_to_date(settlement).ok_or(FormulaValue::Error(CellError::Num))?;
+    let maturity_date = serial_to_date(maturity).ok_or(FormulaValue::Error(CellError::Num))?;
+    let issue_date = serial_to_date(issue).ok_or(FormulaValue::Error(CellError::Num))?;
+    let first_coupon_date =
+        serial_to_date(first_coupon).ok_or(FormulaValue::Error(CellError::Num))?;
+
+    let months = (12 / frequency) as i32;
+    let mut quasi_dates = vec![first_coupon_date];
+    let mut date = first_coupon_date;
+    loop {
+        let prev = coupon_add_months(date, -months).ok_or(FormulaValue::Error(CellError::Num))?;
+        quasi_dates.push(prev);
+        if prev <= issue_date {
+            break;
+        }
+        date = prev;
+    }
+    quasi_dates.reverse();
+
+    let remaining_coupons = regular_coupon_count(first_coupon_date, maturity_date, frequency)?;
+    let coupon_payment = redemption * rate / frequency as f64;
+    let per_yield = yld / frequency as f64;
+    let base = 1.0 + per_yield;
+    if !base.is_finite() || base <= 0.0 {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    let mut first_coupon_amount = 0.0;
+    let mut accrued_interest = 0.0;
+    let mut time_to_first_coupon = None;
+
+    for (idx, window) in quasi_dates.windows(2).enumerate() {
+        let period_start = window[0];
+        let period_end = window[1];
+        let period_length = odd_coupon_period_length(period_start, period_end, frequency, basis)?;
+        let effective_start = issue_date.max(period_start);
+        let period_end_serial = date_to_serial(period_end);
+
+        let first_coupon_days =
+            odd_coupon_day_count(date_to_serial(effective_start), period_end_serial, basis)?;
+        first_coupon_amount += coupon_payment * first_coupon_days / period_length;
+
+        let accrual_end = settlement_date.min(period_end);
+        if accrual_end > effective_start {
+            let accrued_days = odd_coupon_day_count(
+                date_to_serial(effective_start),
+                date_to_serial(accrual_end),
+                basis,
+            )?;
+            accrued_interest += coupon_payment * accrued_days / period_length;
+        }
+
+        if time_to_first_coupon.is_none() && settlement_date < period_end {
+            let dsc = odd_coupon_day_count(settlement, period_end_serial, basis)?;
+            let whole_quasi_periods = (quasi_dates.len() - idx - 2) as f64;
+            time_to_first_coupon = Some(dsc / period_length + whole_quasi_periods);
+        }
+    }
+
+    let time_to_first_coupon = time_to_first_coupon.ok_or(FormulaValue::Error(CellError::Num))?;
+    let first_discount = base.powf(time_to_first_coupon);
+    if !first_discount.is_finite() || first_discount <= 0.0 {
+        return Err(FormulaValue::Error(CellError::Num));
+    }
+
+    let mut price = first_coupon_amount / first_discount;
+    for k in 1..=remaining_coupons {
+        let t = time_to_first_coupon + k as f64;
+        let discount = base.powf(t);
+        if !discount.is_finite() || discount <= 0.0 {
+            return Err(FormulaValue::Error(CellError::Num));
+        }
+        price += coupon_payment / discount;
+        if k == remaining_coupons {
+            price += redemption / discount;
+        }
+    }
+
+    Ok(price - accrued_interest)
 }
 
 pub fn fn_accrint(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -546,7 +795,22 @@ fn amorlinc_like(
         return Err(FormulaValue::Error(CellError::Num));
     }
 
-    let year_base = if basis == 3 { 365.0 } else { 360.0 };
+    let year_base = match basis {
+        1 => {
+            // Actual/actual: use actual days in the year of the purchase date
+            if let Some(d) = serial_to_date(date_purchased) {
+                if is_leap_year(d.year()) {
+                    366.0
+                } else {
+                    365.0
+                }
+            } else {
+                365.0
+            }
+        }
+        3 => 365.0,
+        _ => 360.0,
+    };
     let first_days = day_count_days(date_purchased, first_period, basis)?.abs();
     let mut remaining = cost;
     let mut dep = cost * rate;
@@ -554,6 +818,9 @@ fn amorlinc_like(
         dep *= amordegrc_coeff(rate);
     }
     let mut first_dep = dep * (first_days / year_base);
+    if degrc {
+        first_dep = first_dep.round();
+    }
     first_dep = first_dep.min(remaining - salvage).max(0.0);
 
     if period == 0 {
@@ -578,6 +845,7 @@ fn amorlinc_like(
                 this_dep = sl;
             }
             this_dep = this_dep.min(remaining - salvage).max(0.0);
+            this_dep = this_dep.round();
         }
         if p == period {
             return Ok(this_dep.max(0.0));
@@ -1086,31 +1354,291 @@ pub fn fn_mduration(
 }
 
 pub fn fn_oddfprice(
-    _args: &[FormulaValue],
+    args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    Ok(FormulaValue::Error(CellError::Na))
+    let settlement = match required_serial(args, 0) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let maturity = match required_serial(args, 1) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let issue = match required_serial(args, 2) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let first_coupon = match required_serial(args, 3) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let rate = match required_number(args, 4) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let yld = match required_number(args, 5) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let redemption = match required_number(args, 6) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let frequency = match required_number(args, 7)
+        .and_then(|v| parse_frequency(v).ok_or(FormulaValue::Error(CellError::Num)))
+    {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let basis = match optional_basis(args, 8, 0) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+
+    if rate < 0.0 || yld < 0.0 || redemption <= 0.0 {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    match odd_first_price_core(
+        settlement,
+        maturity,
+        issue,
+        first_coupon,
+        rate,
+        yld,
+        redemption,
+        frequency,
+        basis,
+    ) {
+        Ok(v) => Ok(FormulaValue::Number(v)),
+        Err(e) => Ok(e),
+    }
 }
 
 pub fn fn_oddfyield(
-    _args: &[FormulaValue],
+    args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    Ok(FormulaValue::Error(CellError::Na))
+    let settlement = match required_serial(args, 0) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let maturity = match required_serial(args, 1) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let issue = match required_serial(args, 2) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let first_coupon = match required_serial(args, 3) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let rate = match required_number(args, 4) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let pr = match required_number(args, 5) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let redemption = match required_number(args, 6) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let frequency = match required_number(args, 7)
+        .and_then(|v| parse_frequency(v).ok_or(FormulaValue::Error(CellError::Num)))
+    {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let basis = match optional_basis(args, 8, 0) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+
+    if rate < 0.0 || pr <= 0.0 || redemption <= 0.0 {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
+
+    let mut y = rate.max(0.01);
+    for _ in 0..MAX_ITERATIONS {
+        let price = match odd_first_price_core(
+            settlement,
+            maturity,
+            issue,
+            first_coupon,
+            rate,
+            y,
+            redemption,
+            frequency,
+            basis,
+        ) {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let f = price - pr;
+        if f.abs() < TOLERANCE {
+            return Ok(FormulaValue::Number(y));
+        }
+
+        let h = 1e-7;
+        let yl = (y - h).max(-(frequency as f64) + 1e-9);
+        let yr = y + h;
+        let pl = match odd_first_price_core(
+            settlement,
+            maturity,
+            issue,
+            first_coupon,
+            rate,
+            yl,
+            redemption,
+            frequency,
+            basis,
+        ) {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let prr = match odd_first_price_core(
+            settlement,
+            maturity,
+            issue,
+            first_coupon,
+            rate,
+            yr,
+            redemption,
+            frequency,
+            basis,
+        ) {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let df = (prr - pl) / (yr - yl);
+        if !df.is_finite() || df.abs() < 1e-14 {
+            return Ok(FormulaValue::Error(CellError::Num));
+        }
+
+        let next = y - f / df;
+        if !next.is_finite() || next <= -(frequency as f64) {
+            return Ok(FormulaValue::Error(CellError::Num));
+        }
+        if (next - y).abs() < TOLERANCE {
+            return Ok(FormulaValue::Number(next));
+        }
+        y = next;
+    }
+
+    Ok(FormulaValue::Error(CellError::Num))
 }
 
 pub fn fn_oddlprice(
-    _args: &[FormulaValue],
+    args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    Ok(FormulaValue::Error(CellError::Na))
+    let settlement = match required_serial(args, 0) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let maturity = match required_serial(args, 1) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let last_interest = match required_serial(args, 2) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let rate = match required_number(args, 3) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let yld = match required_number(args, 4) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let redemption = match required_number(args, 5) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let frequency = match required_number(args, 6)
+        .and_then(|v| parse_frequency(v).ok_or(FormulaValue::Error(CellError::Num)))
+    {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let basis = match optional_basis(args, 7, 0) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+
+    match odd_last_price_core(
+        settlement,
+        maturity,
+        last_interest,
+        rate,
+        yld,
+        redemption,
+        frequency,
+        basis,
+    ) {
+        Ok(v) => Ok(FormulaValue::Number(v)),
+        Err(e) => Ok(e),
+    }
 }
 
 pub fn fn_oddlyield(
-    _args: &[FormulaValue],
+    args: &[FormulaValue],
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
-    Ok(FormulaValue::Error(CellError::Na))
+    let settlement = match required_serial(args, 0) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let maturity = match required_serial(args, 1) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let last_interest = match required_serial(args, 2) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let rate = match required_number(args, 3) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let pr = match required_number(args, 4) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let redemption = match required_number(args, 5) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let frequency = match required_number(args, 6)
+        .and_then(|v| parse_frequency(v).ok_or(FormulaValue::Error(CellError::Num)))
+    {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+    let basis = match optional_basis(args, 7, 0) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
+
+    match odd_last_yield_core(
+        settlement,
+        maturity,
+        last_interest,
+        rate,
+        pr,
+        redemption,
+        frequency,
+        basis,
+    ) {
+        Ok(v) => Ok(FormulaValue::Number(v)),
+        Err(e) => Ok(e),
+    }
 }
 
 pub fn fn_price(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -1225,8 +1753,12 @@ pub fn fn_pricemat(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
+    let yf_a = match yearfrac_basis(issue, settlement, basis) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
     Ok(FormulaValue::Number(
-        (100.0 + 100.0 * rate * yf_issue) / (1.0 + yld * yf_settle),
+        (100.0 + 100.0 * rate * yf_issue) / (1.0 + yld * yf_settle) - 100.0 * rate * yf_a,
     ))
 }
 
@@ -1661,12 +2193,17 @@ pub fn fn_yieldmat(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
+    let yf_a = match yearfrac_basis(issue, settlement, basis) {
+        Ok(v) => v,
+        Err(e) => return Ok(e),
+    };
     if yf_settle <= 0.0 {
         return Ok(FormulaValue::Error(CellError::Num));
     }
 
+    let term = pr / 100.0 + rate * yf_a;
     Ok(FormulaValue::Number(
-        ((100.0 + 100.0 * rate * yf_issue) / pr - 1.0) / yf_settle,
+        ((1.0 + rate * yf_issue) / term - 1.0) / yf_settle,
     ))
 }
 
@@ -1910,26 +2447,22 @@ mod tests {
     }
 
     #[test]
-    fn test_oddfprice() {
-        assert_eq!(
-            eval("=ODDFPRICE(1,2,3,4,5,6,7,8,9)").unwrap(),
-            FormulaValue::Error(CellError::Na)
-        );
+    fn test_oddfprice_docs() {
+        let v = eval("=ODDFPRICE(DATE(2008,11,11),DATE(2021,3,1),DATE(2008,10,15),DATE(2009,3,1),0.0785,0.0625,100,2,1)").unwrap();
+        assert!((as_number(v) - 113.59771747407883).abs() < 1e-9);
     }
 
     #[test]
-    fn test_oddfyield() {
-        assert_eq!(
-            eval("=ODDFYIELD(1,2,3,4,5,6,7,8,9)").unwrap(),
-            FormulaValue::Error(CellError::Na)
-        );
+    fn test_oddfyield_docs() {
+        let v = eval("=ODDFYIELD(DATE(2008,11,11),DATE(2021,3,1),DATE(2008,10,15),DATE(2009,3,1),0.0575,84.5,100,2,0)").unwrap();
+        assert!((as_number(v) - 0.07724554159781691).abs() < 1e-9);
     }
 
     #[test]
     fn test_oddlprice() {
         assert_eq!(
             eval("=ODDLPRICE(1,2,3,4,5,6,7,8)").unwrap(),
-            FormulaValue::Error(CellError::Na)
+            FormulaValue::Error(CellError::Num)
         );
     }
 
@@ -1937,7 +2470,7 @@ mod tests {
     fn test_oddlyield() {
         assert_eq!(
             eval("=ODDLYIELD(1,2,3,4,5,6,7,8)").unwrap(),
-            FormulaValue::Error(CellError::Na)
+            FormulaValue::Error(CellError::Num)
         );
     }
 
@@ -2138,5 +2671,667 @@ mod tests {
                 other => panic!("currency {} failed: {:?}", code, other),
             }
         }
+    }
+
+    // ===== Docs-based tests =====
+
+    fn n(x: f64) -> FormulaValue {
+        FormulaValue::Number(x)
+    }
+
+    fn arr(values: &[f64]) -> FormulaValue {
+        FormulaValue::Array(vec![values
+            .iter()
+            .map(|v| FormulaValue::Number(*v))
+            .collect()])
+    }
+
+    fn ctx() -> EvaluationContext<'static> {
+        EvaluationContext::simple()
+    }
+
+    fn assert_close(actual: f64, expected: f64, tol: f64) {
+        assert!(
+            (actual - expected).abs() <= tol,
+            "actual={actual}, expected={expected}, tol={tol}"
+        );
+    }
+
+    // XIRR docs: =XIRR(values, dates, 0.1) = 0.373362535
+    #[test]
+    fn test_xirr_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_xirr(
+                    &[
+                        arr(&[-10000.0, 2750.0, 4250.0, 3250.0, 2750.0]),
+                        arr(&[39448.0, 39508.0, 39751.0, 39859.0, 39904.0]),
+                        n(0.1),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            0.373363,
+            1e-3,
+        );
+    }
+
+    // ISPMT docs: =ISPMT(0.10, 0, 4, 4000) = -400
+    #[test]
+    fn test_ispmt_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ispmt(&[n(0.10), n(0.0), n(4.0), n(4000.0)], &c).unwrap()),
+            -400.0,
+            1e-2,
+        );
+    }
+
+    // ISPMT docs: period 1
+    #[test]
+    fn test_ispmt_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ispmt(&[n(0.10), n(1.0), n(4.0), n(4000.0)], &c).unwrap()),
+            -300.0,
+            1e-2,
+        );
+    }
+
+    // ISPMT docs: period 2
+    #[test]
+    fn test_ispmt_docs_3() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ispmt(&[n(0.10), n(2.0), n(4.0), n(4000.0)], &c).unwrap()),
+            -200.0,
+            1e-2,
+        );
+    }
+
+    // ISPMT docs: period 3
+    #[test]
+    fn test_ispmt_docs_4() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ispmt(&[n(0.10), n(3.0), n(4.0), n(4000.0)], &c).unwrap()),
+            -100.0,
+            1e-2,
+        );
+    }
+
+    // VDB docs: daily, first day
+    #[test]
+    fn test_vdb_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_vdb(&[n(2400.0), n(300.0), n(3650.0), n(0.0), n(1.0)], &c).unwrap()),
+            1.32,
+            1e-2,
+        );
+    }
+
+    // VDB docs: monthly, first month
+    #[test]
+    fn test_vdb_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_vdb(&[n(2400.0), n(300.0), n(120.0), n(0.0), n(1.0)], &c).unwrap()),
+            40.00,
+            1e-2,
+        );
+    }
+
+    // VDB docs: yearly, first year
+    #[test]
+    fn test_vdb_docs_3() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_vdb(&[n(2400.0), n(300.0), n(10.0), n(0.0), n(1.0)], &c).unwrap()),
+            480.00,
+            1e-2,
+        );
+    }
+
+    // VDB docs: months 6-18
+    #[test]
+    fn test_vdb_docs_4() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_vdb(&[n(2400.0), n(300.0), n(120.0), n(6.0), n(18.0)], &c).unwrap()),
+            396.31,
+            1e-2,
+        );
+    }
+
+    // VDB docs: months 6-18, factor=1.5
+    #[test]
+    fn test_vdb_docs_5() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_vdb(
+                    &[n(2400.0), n(300.0), n(120.0), n(6.0), n(18.0), n(1.5)],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            311.81,
+            1e-2,
+        );
+    }
+
+    // RRI docs: =RRI(96, 10000, 11000) = 0.0009933
+    #[test]
+    fn test_rri_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_rri(&[n(96.0), n(10000.0), n(11000.0)], &c).unwrap()),
+            0.0009933,
+            1e-5,
+        );
+    }
+
+    // FVSCHEDULE docs: =FVSCHEDULE(1, {0.09, 0.11, 0.1}) = 1.33089
+    #[test]
+    fn test_fvschedule_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_fvschedule(&[n(1.0), arr(&[0.09, 0.11, 0.1])], &c).unwrap()),
+            1.33089,
+            1e-4,
+        );
+    }
+
+    // DOLLARDE docs: =DOLLARDE(1.02, 16) = 1.125
+    #[test]
+    fn test_dollarde_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_dollarde(&[n(1.02), n(16.0)], &c).unwrap()),
+            1.125,
+            1e-4,
+        );
+    }
+
+    // DOLLARDE docs: =DOLLARDE(1.1, 32) = 1.3125
+    #[test]
+    fn test_dollarde_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_dollarde(&[n(1.1), n(32.0)], &c).unwrap()),
+            1.3125,
+            1e-4,
+        );
+    }
+
+    // DOLLARFR docs: =DOLLARFR(1.125, 16) = 1.02
+    #[test]
+    fn test_dollarfr_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_dollarfr(&[n(1.125), n(16.0)], &c).unwrap()),
+            1.02,
+            1e-4,
+        );
+    }
+
+    // DOLLARFR docs: =DOLLARFR(1.125, 32) = 1.04
+    #[test]
+    fn test_dollarfr_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_dollarfr(&[n(1.125), n(32.0)], &c).unwrap()),
+            1.04,
+            1e-4,
+        );
+    }
+
+    // ACCRINT docs: basis=0
+    #[test]
+    fn test_accrint_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_accrint(
+                    &[
+                        n(39508.0),
+                        n(39691.0),
+                        n(39569.0),
+                        n(0.1),
+                        n(1000.0),
+                        n(2.0),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            16.6667,
+            1e-2,
+        );
+    }
+
+    // ACCRINTM docs: basis=3 (Actual/365)
+    #[test]
+    fn test_accrintm_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_accrintm(&[n(39539.0), n(39614.0), n(0.1), n(1000.0), n(3.0)], &c).unwrap(),
+            ),
+            20.5479,
+            1e-2,
+        );
+    }
+
+    // INTRATE docs: basis=2 (Actual/360)
+    #[test]
+    fn test_intrate_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_intrate(
+                    &[n(39493.0), n(39583.0), n(1000000.0), n(1014420.0), n(2.0)],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            0.05768,
+            1e-4,
+        );
+    }
+
+    // COUPDAYBS docs: DATE(2011,1,25)=40568, DATE(2011,11,15)=40862, freq=2, basis=1
+    #[test]
+    fn test_coupdaybs_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_coupdaybs(&[n(40568.0), n(40862.0), n(2.0), n(1.0)], &c).unwrap()),
+            71.0,
+            1e-2,
+        );
+    }
+
+    // COUPDAYS docs
+    #[test]
+    fn test_coupdays_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_coupdays(&[n(40568.0), n(40862.0), n(2.0), n(1.0)], &c).unwrap()),
+            181.0,
+            1e-2,
+        );
+    }
+
+    // COUPDAYSNC docs
+    #[test]
+    fn test_coupdaysnc_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_coupdaysnc(&[n(40568.0), n(40862.0), n(2.0), n(1.0)], &c).unwrap()),
+            110.0,
+            1e-2,
+        );
+    }
+
+    // COUPNCD docs: returns DATE(2011,5,15) = 40678
+    #[test]
+    fn test_coupncd_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_coupncd(&[n(40568.0), n(40862.0), n(2.0), n(1.0)], &c).unwrap()),
+            40678.0,
+            1e-2,
+        );
+    }
+
+    // COUPNUM docs: DATE(2007,1,25)=39107, DATE(2008,11,15)=39767
+    #[test]
+    fn test_coupnum_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_coupnum(&[n(39107.0), n(39767.0), n(2.0), n(1.0)], &c).unwrap()),
+            4.0,
+            1e-2,
+        );
+    }
+
+    // COUPPCD docs: returns DATE(2010,11,15) = 40497
+    #[test]
+    fn test_couppcd_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_couppcd(&[n(40568.0), n(40862.0), n(2.0), n(1.0)], &c).unwrap()),
+            40497.0,
+            1e-2,
+        );
+    }
+
+    // ===== Batch 8 docs tests: DISC, DURATION, MDURATION, PRICE, RECEIVED =====
+
+    // DISC docs: DATE(2018,7,1)=43282, DATE(2048,1,1)=54058
+    #[test]
+    fn test_disc_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_disc(&[n(43282.0), n(54058.0), n(97.975), n(100.0), n(1.0)], &c).unwrap()),
+            0.000688,
+            1e-4,
+        );
+    }
+
+    // DURATION docs: DATE(2018,7,1)=43282, DATE(2048,1,1)=54058
+    #[test]
+    fn test_duration_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_duration(
+                    &[n(43282.0), n(54058.0), n(0.08), n(0.09), n(2.0), n(1.0)],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            10.9191,
+            1e-2,
+        );
+    }
+
+    // MDURATION docs: DATE(2008,1,1)=39448, DATE(2016,1,1)=42370
+    #[test]
+    fn test_mduration_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_mduration(
+                    &[n(39448.0), n(42370.0), n(0.08), n(0.09), n(2.0), n(1.0)],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            5.736,
+            1e-2,
+        );
+    }
+
+    #[test]
+    fn test_oddlprice_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_oddlprice(
+                    &[
+                        n(39485.0),
+                        n(39614.0),
+                        n(39370.0),
+                        n(0.0375),
+                        n(0.0405),
+                        n(100.0),
+                        n(2.0),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            99.87828601472134,
+            1e-10,
+        );
+    }
+
+    #[test]
+    fn test_oddlyield_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_oddlyield(
+                    &[
+                        n(39558.0),
+                        n(39614.0),
+                        n(39440.0),
+                        n(0.0375),
+                        n(99.875),
+                        n(100.0),
+                        n(2.0),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            0.04519223562916898,
+            1e-10,
+        );
+    }
+
+    // PRICE docs: DATE(2008,2,15)=39493, DATE(2017,11,15)=43054
+    #[test]
+    fn test_price_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_price(
+                    &[
+                        n(39493.0),
+                        n(43054.0),
+                        n(0.0575),
+                        n(0.065),
+                        n(100.0),
+                        n(2.0),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            94.63,
+            1e-1,
+        );
+    }
+
+    // RECEIVED docs: DATE(2008,2,15)=39493, DATE(2008,5,15)=39583
+    #[test]
+    fn test_received_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_received(
+                    &[n(39493.0), n(39583.0), n(1000000.0), n(0.0575), n(2.0)],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            1014584.65,
+            1e-1,
+        );
+    }
+
+    // ===== Batch 9 docs tests: PRICEDISC, PRICEMAT, TBILLEQ, TBILLPRICE, TBILLYIELD =====
+
+    // PRICEDISC docs: DATE(2008,2,16)=39494, DATE(2008,3,1)=39508
+    #[test]
+    fn test_pricedisc_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_pricedisc(&[n(39494.0), n(39508.0), n(0.0525), n(100.0), n(2.0)], &c).unwrap(),
+            ),
+            99.79583,
+            1e-3,
+        );
+    }
+
+    // PRICEMAT docs: DATE(2008,2,15)=39493, DATE(2008,4,13)=39551, DATE(2007,11,11)=39397
+    #[test]
+    fn test_pricemat_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_pricemat(
+                    &[
+                        n(39493.0),
+                        n(39551.0),
+                        n(39397.0),
+                        n(0.061),
+                        n(0.061),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            99.98449,
+            1e-2,
+        );
+    }
+
+    // TBILLEQ docs: DATE(2008,3,31)=39538, DATE(2008,6,1)=39600
+    #[test]
+    fn test_tbilleq_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_tbilleq(&[n(39538.0), n(39600.0), n(0.0914)], &c).unwrap()),
+            0.09415,
+            1e-4,
+        );
+    }
+
+    // TBILLPRICE docs: DATE(2008,3,31)=39538, DATE(2008,6,1)=39600
+    #[test]
+    fn test_tbillprice_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_tbillprice(&[n(39538.0), n(39600.0), n(0.09)], &c).unwrap()),
+            98.45,
+            1e-3,
+        );
+    }
+
+    // TBILLYIELD docs: DATE(2008,3,31)=39538, DATE(2008,6,1)=39600
+    #[test]
+    fn test_tbillyield_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_tbillyield(&[n(39538.0), n(39600.0), n(98.45)], &c).unwrap()),
+            0.09142,
+            1e-4,
+        );
+    }
+
+    // ===== Batch 10 docs tests: YIELD, YIELDDISC, YIELDMAT, AMORDEGRC, AMORLINC =====
+
+    // YIELD docs: DATE(2008,2,15)=39493, DATE(2016,11,15)=42689
+    #[test]
+    fn test_yield_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_yield(
+                    &[
+                        n(39493.0),
+                        n(42689.0),
+                        n(0.0575),
+                        n(95.04287),
+                        n(100.0),
+                        n(2.0),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            0.065,
+            1e-3,
+        );
+    }
+
+    // YIELDDISC docs: DATE(2008,2,16)=39494, DATE(2008,3,1)=39508
+    #[test]
+    fn test_yielddisc_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_yielddisc(&[n(39494.0), n(39508.0), n(99.795), n(100.0), n(2.0)], &c).unwrap(),
+            ),
+            0.052823,
+            1e-3,
+        );
+    }
+
+    // YIELDMAT docs: DATE(2008,3,15)=39522, DATE(2008,11,3)=39755, DATE(2007,11,8)=39394
+    #[test]
+    fn test_yieldmat_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_yieldmat(
+                    &[
+                        n(39522.0),
+                        n(39755.0),
+                        n(39394.0),
+                        n(0.0625),
+                        n(100.0123),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            0.060954,
+            1e-3,
+        );
+    }
+
+    // AMORDEGRC docs: cost=2400, date_purchased=DATE(2008,8,19)=39679, first_period=DATE(2008,12,31)=39813
+    #[test]
+    fn test_amordegrc_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_amordegrc(
+                    &[
+                        n(2400.0),
+                        n(39679.0),
+                        n(39813.0),
+                        n(300.0),
+                        n(1.0),
+                        n(0.15),
+                        n(1.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            776.0,
+            1e-1,
+        );
+    }
+
+    // AMORLINC docs: cost=2400, date_purchased=DATE(2008,8,19)=39679, first_period=DATE(2008,12,31)=39813
+    #[test]
+    fn test_amorlinc_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_amorlinc(
+                    &[
+                        n(2400.0),
+                        n(39679.0),
+                        n(39813.0),
+                        n(300.0),
+                        n(1.0),
+                        n(0.15),
+                        n(1.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            360.0,
+            1e-1,
+        );
     }
 }

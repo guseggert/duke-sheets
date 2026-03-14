@@ -713,4 +713,240 @@ mod tests {
             FormulaValue::Number(27.0)
         );
     }
+
+    // Docs DB (includes Profit column, different Yield values)
+    const DB_DOCS: &str = r#"{"Tree","Height","Age","Yield","Profit";"Apple",18,20,14,105;"Pear",12,12,10,96;"Cherry",13,14,9,105;"Apple",14,15,10,75;"Pear",9,8,8,76.8;"Apple",8,9,6,45}"#;
+
+    #[test]
+    fn test_daverage_docs() {
+        // Docs Example 1: Criteria: Tree="Apple" AND Height>10
+        // Matching Yield: 14, 10 → avg = 12
+        let crit1 = r#"{"Tree","Height";"Apple",">10"}"#;
+        assert_close(
+            eval(&format!(r#"=DAVERAGE({}, "Yield", {})"#, DB_DOCS, crit1)).unwrap(),
+            12.0,
+        );
+
+        // Docs Example 2: Criteria = database itself (all rows), field=3 (Age)
+        // Average Age = (20+12+14+15+8+9)/6 = 13
+        assert_close(
+            eval(&format!("=DAVERAGE({}, 3, {})", DB_DOCS, DB_DOCS)).unwrap(),
+            13.0,
+        );
+    }
+
+    #[test]
+    fn test_dcount_docs() {
+        // Docs: =DCOUNT(db, "Age", criteria) = 1
+        // DB has Apple row with "N/A" text in Age (not a number)
+        // Criteria: Tree="Apple" AND Height>10 AND Height<16
+        // Two Apples match height (14 and 12), but one has N/A Age → count 1
+        assert_eq!(
+            eval(
+                r#"=DCOUNT({"Tree","Height","Age","Yield","Profit";"Apple",18,20,14,105;"Pear",12,12,10,96;"Cherry",13,14,9,105;"Apple",14,"N/A",10,75;"Pear",9,8,8,77;"Apple",12,11,6,45}, "Age", {"Tree","Height","Height";"Apple",">10","<16"})"#
+            ).unwrap(),
+            FormulaValue::Number(1.0)
+        );
+    }
+
+    #[test]
+    fn test_dget_docs() {
+        // Docs: Multiple matches → #NUM!
+        assert_eq!(
+            eval_db("DGET", "\"Yield\"", r#"{"Tree";"Apple";"Pear"}"#),
+            FormulaValue::Error(CellError::Num)
+        );
+        // Docs: Single match (Apple AND Height>10 AND Height<16) → Yield=11
+        assert_eq!(
+            eval_db(
+                "DGET",
+                "\"Yield\"",
+                r#"{"Tree","Height","Height";"Apple",">10","<16";"Pear",">12",""}"#
+            ),
+            FormulaValue::Number(11.0)
+        );
+    }
+
+    #[test]
+    fn test_dmax_docs() {
+        // Docs criteria: (Apple AND Height>10 AND Height<16) OR Pear
+        // Matching Yield: 11, 10, 8 → max=11
+        assert_eq!(
+            eval_db(
+                "DMAX",
+                "\"Yield\"",
+                r#"{"Tree","Height","Height";"Apple",">10","<16";"Pear","",""}"#
+            ),
+            FormulaValue::Number(11.0)
+        );
+    }
+
+    #[test]
+    fn test_dmin_docs() {
+        // Same criteria as DMAX, Yield: 11, 10, 8 → min=8
+        assert_eq!(
+            eval_db(
+                "DMIN",
+                "\"Yield\"",
+                r#"{"Tree","Height","Height";"Apple",">10","<16";"Pear","",""}"#
+            ),
+            FormulaValue::Number(8.0)
+        );
+    }
+
+    #[test]
+    fn test_dproduct_docs() {
+        // Same criteria, Yield: 11 × 10 × 8 = 880
+        assert_eq!(
+            eval_db(
+                "DPRODUCT",
+                "\"Yield\"",
+                r#"{"Tree","Height","Height";"Apple",">10","<16";"Pear","",""}"#,
+            ),
+            FormulaValue::Number(880.0),
+        );
+    }
+
+    #[test]
+    fn test_dstdev_docs() {
+        // Docs criteria: Tree="Apple" OR Tree="Pear"
+        // Our DB yields for Apple+Pear: [14, 10, 11, 8, 6]
+        // Sample stdev = sqrt(9.2) ≈ 3.033150
+        assert_close(
+            eval_db("DSTDEV", "\"Yield\"", r#"{"Tree";"Apple";"Pear"}"#),
+            9.2_f64.sqrt(),
+        );
+    }
+
+    #[test]
+    fn test_dstdevp_docs() {
+        // Same criteria, population stdev
+        // Pop variance = 36.8/5 = 7.36, stdev = sqrt(7.36) ≈ 2.71293
+        assert_close(
+            eval_db("DSTDEVP", "\"Yield\"", r#"{"Tree";"Apple";"Pear"}"#),
+            7.36_f64.sqrt(),
+        );
+    }
+
+    #[test]
+    fn test_dsum_docs() {
+        // Docs Example 1: All Apple Yield: 14+11+6 = 31
+        assert_eq!(
+            eval_db("DSUM", "\"Yield\"", r#"{"Tree";"Apple"}"#),
+            FormulaValue::Number(31.0)
+        );
+
+        // Docs Example 2: (Apple AND Height>10 AND <16) OR Pear
+        // Yield: 11 + 10 + 8 = 29
+        assert_eq!(
+            eval_db(
+                "DSUM",
+                "\"Yield\"",
+                r#"{"Tree","Height","Height";"Apple",">10","<16";"Pear","",""}"#
+            ),
+            FormulaValue::Number(29.0)
+        );
+    }
+    #[test]
+    fn test_dvar_docs() {
+        // Docs example: =DVAR(database, "Yield", A1:A3)
+        // Criteria: Tree = "Apple" OR Tree = "Pear"
+        // Matching yields: 14, 10, 11, 8, 6 → sample variance = 9.2
+        assert_close(
+            eval_db("DVAR", "\"Yield\"", r#"{"Tree";"Apple";"Pear"}"#),
+            9.2,
+        );
+    }
+
+    #[test]
+    fn test_dvarp_docs() {
+        // Docs example: DVARP(database, "Yield", {Tree; Apple; Pear})
+        // Matching Yield values: {14, 10, 11, 8, 6}, population variance = 184/25
+        assert_close(
+            eval_db("DVARP", "\"Yield\"", r#"{"Tree";"Apple";"Pear"}"#),
+            7.36,
+        );
+    }
+
+    #[test]
+    fn test_dcounta_docs() {
+        // === Main example ===
+        // DB with Profit column; Tree="Apple" AND Height>10 AND Height<16
+        // Only Apple,14,15,10,75 matches → Profit=75 non-blank → 1
+        let db_profit = r#"{"Tree","Height","Age","Yield","Profit";"Apple",18,20,14,105;"Pear",12,12,10,96;"Cherry",13,14,9,105;"Apple",14,15,10,75;"Pear",9,8,8,76.8;"Apple",8,9,6,45}"#;
+        assert_eq!(
+            eval(&format!(
+                r#"=DCOUNTA({}, "Profit", {{"Tree","Height","Height";"Apple",">10","<16"}})"#,
+                db_profit
+            ))
+            .unwrap(),
+            FormulaValue::Number(1.0)
+        );
+
+        // Criteria examples share a 4-row sales database
+        let db4 = r#"{"Category","Salesperson","Sales";"Beverages","Suyama",5122;"Meat","Davolio",450;"produce","Buchanan",6328;"Produce","Davolio",6544}"#;
+
+        // === Multiple criteria in one column (OR) ===
+        // Salesperson="Davolio" OR Salesperson="Buchanan" → 3
+        assert_eq!(
+            eval(&format!(
+                r#"=DCOUNTA({}, 2, {{"Salesperson";"Davolio";"Buchanan"}})"#,
+                db4
+            ))
+            .unwrap(),
+            FormulaValue::Number(3.0)
+        );
+
+        // === Multiple criteria AND, field=1 ===
+        // 6-row DB; Category="Produce" AND Sales>2000 → 2
+        let db6 = r#"{"Category","Salesperson","Sales";"Beverages","Suyama",5122;"Meat","Davolio",450;"Produce","Buchanan",935;"Produce","Davolio",6544;"Beverages","Buchanan",3677;"Produce","Davolio",3186}"#;
+        assert_eq!(
+            eval(&format!(
+                r#"=DCOUNTA({}, 1, {{"Category","Sales";"Produce",">2000"}})"#,
+                db6
+            ))
+            .unwrap(),
+            FormulaValue::Number(2.0)
+        );
+
+        // === Multiple sets with AND per row, OR between rows, field=1 ===
+        // (Davolio AND Sales>3000) OR (Buchanan AND Sales>1500) → 2
+        assert_eq!(
+            eval(&format!(
+                r#"=DCOUNTA({}, 1, {{"Salesperson","Sales";"Davolio",">3000";"Buchanan",">1500"}})"#,
+                db4
+            ))
+            .unwrap(),
+            FormulaValue::Number(2.0)
+        );
+
+        // === Duplicate column headers for range criteria, field=1 ===
+        // (Sales>6000 AND Sales<6500) OR Sales<500 → 2
+        assert_eq!(
+            eval(&format!(
+                r#"=DCOUNTA({}, 1, {{"Sales","Sales";">6000","<6500";"<500",""}})"#,
+                db4
+            ))
+            .unwrap(),
+            FormulaValue::Number(2.0)
+        );
+
+        // === Wildcard criteria, field=1 ===
+        // Category starts with "Me" OR Salesperson matches ?u* → 3
+        assert_eq!(
+            eval(&format!(
+                r#"=DCOUNTA({}, 1, {{"Category","Salesperson";"Me*","";"","?u*"}})"#,
+                db4
+            ))
+            .unwrap(),
+            FormulaValue::Number(3.0)
+        );
+
+        // === Formula-based criteria (pre-computed average = 4611) ===
+        // field=1; Sales > 4611 → 3
+        assert_eq!(
+            eval(&format!(r#"=DCOUNTA({}, 1, {{"Sales";">4611"}})"#, db4)).unwrap(),
+            FormulaValue::Number(3.0)
+        );
+    }
 }

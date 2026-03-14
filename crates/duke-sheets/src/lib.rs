@@ -134,7 +134,7 @@ pub use duke_sheets_core::named_range;
 // Re-export formula types
 pub use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaError, FormulaExpr, FormulaResult,
-    FormulaValue,
+    FormulaValue, ImageInfo, ImageSizing,
 };
 
 // Re-export chart types
@@ -166,9 +166,7 @@ pub enum FileFormat {
 pub fn detect_format(bytes: &[u8]) -> FileFormat {
     if bytes.len() >= 4 && bytes[0..4] == [0x50, 0x4B, 0x03, 0x04] {
         FileFormat::Xlsx
-    } else if bytes.len() >= 8
-        && bytes[0..8] == [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
-    {
+    } else if bytes.len() >= 8 && bytes[0..8] == [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1] {
         FileFormat::Xls
     } else {
         FileFormat::Unknown

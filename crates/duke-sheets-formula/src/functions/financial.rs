@@ -1794,4 +1794,551 @@ mod tests {
         .unwrap();
         assert_eq!(e, FormulaValue::Error(CellError::Num));
     }
+
+    fn n(x: f64) -> FormulaValue {
+        FormulaValue::Number(x)
+    }
+
+    fn arr(values: &[f64]) -> FormulaValue {
+        FormulaValue::Array(vec![values
+            .iter()
+            .map(|v| FormulaValue::Number(*v))
+            .collect()])
+    }
+
+    // PMT docs: =PMT(0.08/12, 10, 10000) = -1037.03
+    #[test]
+    fn test_pmt_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_pmt(&[n(0.08 / 12.0), n(10.0), n(10000.0)], &c).unwrap()),
+            -1037.03,
+            1e-2,
+        );
+    }
+
+    // PMT docs: type=1 (beginning of period)
+    #[test]
+    fn test_pmt_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_pmt(&[n(0.08 / 12.0), n(10.0), n(10000.0), n(0.0), n(1.0)], &c).unwrap()),
+            -1030.16,
+            1e-2,
+        );
+    }
+
+    // PMT docs: saving for future value
+    #[test]
+    fn test_pmt_docs_3() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_pmt(&[n(0.06 / 12.0), n(216.0), n(0.0), n(50000.0)], &c).unwrap()),
+            -129.08,
+            1e-2,
+        );
+    }
+
+    // FV docs: =FV(0.06/12, 10, -200, -500, 1) = 2581.40
+    #[test]
+    fn test_fv_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_fv(&[n(0.06 / 12.0), n(10.0), n(-200.0), n(-500.0), n(1.0)], &c).unwrap()),
+            2581.40,
+            1e-2,
+        );
+    }
+
+    // FV docs: =FV(0.12/12, 12, -1000) = 12682.50
+    #[test]
+    fn test_fv_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_fv(&[n(0.12 / 12.0), n(12.0), n(-1000.0)], &c).unwrap()),
+            12682.50,
+            1e-2,
+        );
+    }
+
+    // FV docs: type=1
+    #[test]
+    fn test_fv_docs_3() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_fv(&[n(0.11 / 12.0), n(35.0), n(-2000.0), n(0.0), n(1.0)], &c).unwrap()),
+            82846.25,
+            1e-2,
+        );
+    }
+
+    // FV docs: with pv and type
+    #[test]
+    fn test_fv_docs_4() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_fv(
+                    &[n(0.06 / 12.0), n(12.0), n(-100.0), n(-1000.0), n(1.0)],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            2301.40,
+            1e-2,
+        );
+    }
+
+    // PV docs: =PV(0.08/12, 240, 500, 0, 0) = -59777.15
+    #[test]
+    fn test_pv_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_pv(&[n(0.08 / 12.0), n(240.0), n(500.0), n(0.0), n(0.0)], &c).unwrap()),
+            -59777.15,
+            1e-2,
+        );
+    }
+
+    // PV docs: without optional args
+    #[test]
+    fn test_pv_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_pv(&[n(0.08 / 12.0), n(240.0), n(500.0)], &c).unwrap()),
+            -59777.15,
+            1e-2,
+        );
+    }
+
+    // NPER docs: =NPER(0.12/12, -100, -1000, 10000, 1) = 59.6738657
+    #[test]
+    fn test_nper_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_nper(
+                    &[n(0.12 / 12.0), n(-100.0), n(-1000.0), n(10000.0), n(1.0)],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            59.6738657,
+            1e-4,
+        );
+    }
+
+    // NPER docs: type omitted
+    #[test]
+    fn test_nper_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_nper(&[n(0.12 / 12.0), n(-100.0), n(-1000.0), n(10000.0)], &c).unwrap()),
+            60.0821229,
+            1e-4,
+        );
+    }
+
+    // NPER docs: fv omitted
+    #[test]
+    fn test_nper_docs_3() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_nper(&[n(0.12 / 12.0), n(-100.0), n(-1000.0)], &c).unwrap()),
+            -9.57859404,
+            1e-4,
+        );
+    }
+
+    // RATE docs: =RATE(48, -200, 8000) ≈ 0.0077 per month
+    #[test]
+    fn test_rate_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_rate(&[n(48.0), n(-200.0), n(8000.0)], &c).unwrap()),
+            0.0077,
+            1e-4,
+        );
+    }
+
+    // IPMT docs: =IPMT(0.10/12, 1, 36, 8000) = -66.67
+    #[test]
+    fn test_ipmt_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ipmt(&[n(0.10 / 12.0), n(1.0), n(36.0), n(8000.0)], &c).unwrap()),
+            -66.67,
+            1e-2,
+        );
+    }
+
+    // IPMT docs: annual rate, last year
+    #[test]
+    fn test_ipmt_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ipmt(&[n(0.10), n(3.0), n(3.0), n(8000.0)], &c).unwrap()),
+            -292.45,
+            1e-2,
+        );
+    }
+
+    // PPMT docs: =PPMT(0.10/12, 1, 24, 2000) = -75.62
+    #[test]
+    fn test_ppmt_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ppmt(&[n(0.10 / 12.0), n(1.0), n(24.0), n(2000.0)], &c).unwrap()),
+            -75.62,
+            1e-2,
+        );
+    }
+
+    // PPMT docs: annual, period 10
+    #[test]
+    fn test_ppmt_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ppmt(&[n(0.08), n(10.0), n(10.0), n(200000.0)], &c).unwrap()),
+            -27598.05,
+            1e-2,
+        );
+    }
+
+    // CUMIPMT docs: periods 13-24
+    #[test]
+    fn test_cumipmt_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_cumipmt(
+                    &[
+                        n(0.09 / 12.0),
+                        n(360.0),
+                        n(125000.0),
+                        n(13.0),
+                        n(24.0),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            -11135.23,
+            1e-2,
+        );
+    }
+
+    // CUMIPMT docs: first month only
+    #[test]
+    fn test_cumipmt_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_cumipmt(
+                    &[
+                        n(0.09 / 12.0),
+                        n(360.0),
+                        n(125000.0),
+                        n(1.0),
+                        n(1.0),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            -937.5,
+            1e-2,
+        );
+    }
+
+    // CUMPRINC docs: periods 13-24
+    #[test]
+    fn test_cumprinc_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_cumprinc(
+                    &[
+                        n(0.09 / 12.0),
+                        n(360.0),
+                        n(125000.0),
+                        n(13.0),
+                        n(24.0),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            -934.11,
+            1e-2,
+        );
+    }
+
+    // CUMPRINC docs: first month only
+    #[test]
+    fn test_cumprinc_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_cumprinc(
+                    &[
+                        n(0.09 / 12.0),
+                        n(360.0),
+                        n(125000.0),
+                        n(1.0),
+                        n(1.0),
+                        n(0.0),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            -68.28,
+            1e-2,
+        );
+    }
+
+    // NPV docs: =NPV(0.1, -10000, 3000, 4200, 6800) = 1188.44
+    #[test]
+    fn test_npv_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_npv(&[n(0.1), n(-10000.0), n(3000.0), n(4200.0), n(6800.0)], &c).unwrap()),
+            1188.44,
+            1e-2,
+        );
+    }
+
+    // IRR docs: =IRR({-70000,12000,15000,18000,21000}) = -2.12%
+    #[test]
+    fn test_irr_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_irr(&[arr(&[-70000.0, 12000.0, 15000.0, 18000.0, 21000.0])], &c).unwrap()),
+            -0.0212,
+            1e-3,
+        );
+    }
+
+    // IRR docs: =IRR({-70000,12000,15000,18000,21000,26000}) = 8.66%
+    #[test]
+    fn test_irr_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_irr(
+                    &[arr(&[
+                        -70000.0, 12000.0, 15000.0, 18000.0, 21000.0, 26000.0,
+                    ])],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            0.0866,
+            1e-3,
+        );
+    }
+
+    // MIRR docs: =MIRR({-120000,39000,30000,21000,37000,46000},0.10,0.12) = 12.61%
+    #[test]
+    fn test_mirr_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_mirr(
+                    &[
+                        arr(&[-120000.0, 39000.0, 30000.0, 21000.0, 37000.0, 46000.0]),
+                        n(0.10),
+                        n(0.12),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            0.1261,
+            1e-3,
+        );
+    }
+
+    // XNPV docs: rate=0.09, values and dates
+    #[test]
+    fn test_xnpv_docs() {
+        let c = ctx();
+        // dates: 2008-01-01=39448, 2008-03-01=39508, 2008-10-30=39751, 2009-02-15=39859, 2009-04-01=39904
+        let values = arr(&[-10000.0, 2750.0, 4250.0, 3250.0, 2750.0]);
+        let dates = arr(&[39448.0, 39508.0, 39751.0, 39859.0, 39904.0]);
+        assert_close(
+            as_number(fn_xnpv(&[n(0.09), values, dates], &c).unwrap()),
+            2086.65,
+            1e-2,
+        );
+    }
+
+    // SLN docs: =SLN(30000, 7500, 10) = 2250
+    #[test]
+    fn test_sln_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_sln(&[n(30000.0), n(7500.0), n(10.0)], &c).unwrap()),
+            2250.0,
+            1e-2,
+        );
+    }
+
+    // SYD docs: period 1
+    #[test]
+    fn test_syd_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_syd(&[n(30000.0), n(7500.0), n(10.0), n(1.0)], &c).unwrap()),
+            4090.91,
+            1e-2,
+        );
+    }
+
+    // SYD docs: period 10
+    #[test]
+    fn test_syd_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_syd(&[n(30000.0), n(7500.0), n(10.0), n(10.0)], &c).unwrap()),
+            409.09,
+            1e-2,
+        );
+    }
+
+    // DB docs: period 1 (month=7)
+    #[test]
+    fn test_db_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_db(&[n(1000000.0), n(100000.0), n(6.0), n(1.0), n(7.0)], &c).unwrap()),
+            186083.33,
+            1e-2,
+        );
+    }
+
+    // DB docs: period 2
+    #[test]
+    fn test_db_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_db(&[n(1000000.0), n(100000.0), n(6.0), n(2.0), n(7.0)], &c).unwrap()),
+            259639.42,
+            1e-2,
+        );
+    }
+
+    // DB docs: period 3
+    #[test]
+    fn test_db_docs_3() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_db(&[n(1000000.0), n(100000.0), n(6.0), n(3.0), n(7.0)], &c).unwrap()),
+            176814.44,
+            1e-2,
+        );
+    }
+
+    // DB docs: period 4
+    #[test]
+    fn test_db_docs_4() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_db(&[n(1000000.0), n(100000.0), n(6.0), n(4.0), n(7.0)], &c).unwrap()),
+            120410.64,
+            1e-2,
+        );
+    }
+
+    // DDB docs: daily life, period 1
+    #[test]
+    fn test_ddb_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ddb(&[n(2400.0), n(300.0), n(3650.0), n(1.0)], &c).unwrap()),
+            1.32,
+            1e-2,
+        );
+    }
+
+    // DDB docs: monthly life, period 1
+    #[test]
+    fn test_ddb_docs_2() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ddb(&[n(2400.0), n(300.0), n(120.0), n(1.0), n(2.0)], &c).unwrap()),
+            40.00,
+            1e-2,
+        );
+    }
+
+    // DDB docs: yearly life, period 1
+    #[test]
+    fn test_ddb_docs_3() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ddb(&[n(2400.0), n(300.0), n(10.0), n(1.0), n(2.0)], &c).unwrap()),
+            480.00,
+            1e-2,
+        );
+    }
+
+    // DDB docs: factor 1.5, period 2
+    #[test]
+    fn test_ddb_docs_4() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ddb(&[n(2400.0), n(300.0), n(10.0), n(2.0), n(1.5)], &c).unwrap()),
+            306.00,
+            1e-2,
+        );
+    }
+
+    // DDB docs: period 10
+    #[test]
+    fn test_ddb_docs_5() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_ddb(&[n(2400.0), n(300.0), n(10.0), n(10.0)], &c).unwrap()),
+            22.12,
+            1e-2,
+        );
+    }
+
+    // EFFECT docs: =EFFECT(0.0525, 4) = 0.0535427
+    #[test]
+    fn test_effect_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_effect(&[n(0.0525), n(4.0)], &c).unwrap()),
+            0.0535427,
+            1e-4,
+        );
+    }
+
+    // NOMINAL docs: =NOMINAL(0.053543, 4) = 0.0525003
+    #[test]
+    fn test_nominal_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_nominal(&[n(0.053543), n(4.0)], &c).unwrap()),
+            0.0525003,
+            1e-4,
+        );
+    }
+
+    // PDURATION docs: =PDURATION(0.025, 2000, 2200) = 3.86
+    #[test]
+    fn test_pduration_docs() {
+        let c = ctx();
+        assert_close(
+            as_number(fn_pduration(&[n(0.025), n(2000.0), n(2200.0)], &c).unwrap()),
+            3.86,
+            1e-2,
+        );
+    }
 }

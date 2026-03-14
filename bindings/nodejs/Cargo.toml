@@ -14,7 +14,7 @@ duke-sheets = { path = "../../crates/duke-sheets", features = ["full"] }
 duke-sheets-core = { path = "../../crates/duke-sheets-core" }
 duke-sheets-xlsx = { path = "../../crates/duke-sheets-xlsx" }
 duke-sheets-csv = { path = "../../crates/duke-sheets-csv" }
-napi = { version = "3", default-features = false, features = ["napi9"] }
+napi = { version = "3", default-features = false, features = ["napi9", "tokio_rt"] }
 napi-derive = { version = "3", features = ["type-def"] }
 
 [build-dependencies]

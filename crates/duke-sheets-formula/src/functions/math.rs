@@ -680,9 +680,9 @@ pub fn fn_ceiling_math(
         _ => false,
     };
 
-    // For negative numbers with mode=true, round toward zero (less negative)
+    // For negative numbers with mode=true, round away from zero (more negative)
     let result = if number < 0.0 && mode {
-        -((-number / significance).floor() * significance)
+        -((-number / significance).ceil() * significance)
     } else {
         (number / significance).ceil() * significance
     };
@@ -722,9 +722,9 @@ pub fn fn_floor_math(
         _ => false,
     };
 
-    // For negative numbers with mode=true, round away from zero (more negative)
+    // For negative numbers with mode=true, round toward zero (less negative)
     let result = if number < 0.0 && mode {
-        -((-number / significance).ceil() * significance)
+        -((-number / significance).floor() * significance)
     } else {
         (number / significance).floor() * significance
     };
@@ -1114,4 +1114,893 @@ fn array_dims(arr: &[Vec<FormulaValue>]) -> (usize, usize) {
     let rows = arr.len();
     let cols = arr.first().map(|r| r.len()).unwrap_or(0);
     (rows, cols)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::functions::EvaluationContext;
+
+    fn num(v: FormulaValue) -> f64 {
+        match v {
+            FormulaValue::Number(n) => n,
+            other => panic!("expected number, got {:?}", other),
+        }
+    }
+
+    // ===== Batch 1 docs tests: ABS, ROUND, ROUNDUP, ROUNDDOWN, TRUNC, SIGN =====
+
+    #[test]
+    fn test_abs_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_abs(&[FormulaValue::Number(2.0)], &ctx).unwrap(),
+            FormulaValue::Number(2.0)
+        );
+        assert_eq!(
+            fn_abs(&[FormulaValue::Number(-2.0)], &ctx).unwrap(),
+            FormulaValue::Number(2.0)
+        );
+        assert_eq!(
+            fn_abs(&[FormulaValue::Number(-4.0)], &ctx).unwrap(),
+            FormulaValue::Number(4.0)
+        );
+    }
+
+    #[test]
+    fn test_round_docs() {
+        let ctx = EvaluationContext::simple();
+        assert!(
+            (num(fn_round(
+                &[FormulaValue::Number(2.15), FormulaValue::Number(1.0)],
+                &ctx
+            )
+            .unwrap())
+                - 2.2)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_round(
+                &[FormulaValue::Number(2.149), FormulaValue::Number(1.0)],
+                &ctx
+            )
+            .unwrap())
+                - 2.1)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_round(
+                &[FormulaValue::Number(-1.475), FormulaValue::Number(2.0)],
+                &ctx
+            )
+            .unwrap())
+                - (-1.48))
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_round(
+                &[FormulaValue::Number(21.5), FormulaValue::Number(-1.0)],
+                &ctx
+            )
+            .unwrap())
+                - 20.0)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_round(
+                &[FormulaValue::Number(626.3), FormulaValue::Number(-3.0)],
+                &ctx
+            )
+            .unwrap())
+                - 1000.0)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_round(
+                &[FormulaValue::Number(1.98), FormulaValue::Number(-1.0)],
+                &ctx
+            )
+            .unwrap())
+                - 0.0)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_round(
+                &[FormulaValue::Number(-50.55), FormulaValue::Number(-2.0)],
+                &ctx
+            )
+            .unwrap())
+                - (-100.0))
+                .abs()
+                < 1e-10
+        );
+    }
+
+    #[test]
+    fn test_roundup_docs() {
+        let ctx = EvaluationContext::simple();
+        assert!(
+            (num(fn_roundup(
+                &[FormulaValue::Number(3.2), FormulaValue::Number(0.0)],
+                &ctx
+            )
+            .unwrap())
+                - 4.0)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_roundup(
+                &[FormulaValue::Number(76.9), FormulaValue::Number(0.0)],
+                &ctx
+            )
+            .unwrap())
+                - 77.0)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_roundup(
+                &[FormulaValue::Number(3.14159), FormulaValue::Number(3.0)],
+                &ctx
+            )
+            .unwrap())
+                - 3.142)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_roundup(
+                &[FormulaValue::Number(-3.14159), FormulaValue::Number(1.0)],
+                &ctx
+            )
+            .unwrap())
+                - (-3.2))
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_roundup(
+                &[
+                    FormulaValue::Number(31415.92654),
+                    FormulaValue::Number(-2.0)
+                ],
+                &ctx
+            )
+            .unwrap())
+                - 31500.0)
+                .abs()
+                < 1e-10
+        );
+    }
+
+    #[test]
+    fn test_rounddown_docs() {
+        let ctx = EvaluationContext::simple();
+        assert!(
+            (num(fn_rounddown(
+                &[FormulaValue::Number(3.2), FormulaValue::Number(0.0)],
+                &ctx
+            )
+            .unwrap())
+                - 3.0)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_rounddown(
+                &[FormulaValue::Number(76.9), FormulaValue::Number(0.0)],
+                &ctx
+            )
+            .unwrap())
+                - 76.0)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_rounddown(
+                &[FormulaValue::Number(3.14159), FormulaValue::Number(3.0)],
+                &ctx
+            )
+            .unwrap())
+                - 3.141)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_rounddown(
+                &[FormulaValue::Number(-3.14159), FormulaValue::Number(1.0)],
+                &ctx
+            )
+            .unwrap())
+                - (-3.1))
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_rounddown(
+                &[
+                    FormulaValue::Number(31415.92654),
+                    FormulaValue::Number(-2.0)
+                ],
+                &ctx
+            )
+            .unwrap())
+                - 31400.0)
+                .abs()
+                < 1e-10
+        );
+    }
+
+    #[test]
+    fn test_trunc_docs() {
+        let ctx = EvaluationContext::simple();
+        assert!(
+            (num(fn_trunc(
+                &[FormulaValue::Number(8.9), FormulaValue::Number(0.0)],
+                &ctx
+            )
+            .unwrap())
+                - 8.0)
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_trunc(
+                &[FormulaValue::Number(-8.9), FormulaValue::Number(0.0)],
+                &ctx
+            )
+            .unwrap())
+                - (-8.0))
+                .abs()
+                < 1e-10
+        );
+        assert!(
+            (num(fn_trunc(
+                &[FormulaValue::Number(0.45), FormulaValue::Number(0.0)],
+                &ctx
+            )
+            .unwrap())
+                - 0.0)
+                .abs()
+                < 1e-10
+        );
+    }
+
+    #[test]
+    fn test_sign_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_sign(&[FormulaValue::Number(10.0)], &ctx).unwrap(),
+            FormulaValue::Number(1.0)
+        );
+        assert_eq!(
+            fn_sign(&[FormulaValue::Number(0.0)], &ctx).unwrap(),
+            FormulaValue::Number(0.0)
+        );
+        assert_eq!(
+            fn_sign(&[FormulaValue::Number(-0.00001)], &ctx).unwrap(),
+            FormulaValue::Number(-1.0)
+        );
+    }
+
+    // ===== Batch 2 docs tests: MOD, INT, EVEN, ODD, POWER, SQRT =====
+
+    #[test]
+    fn test_mod_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_mod(
+                &[FormulaValue::Number(3.0), FormulaValue::Number(2.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(1.0)
+        );
+        assert_eq!(
+            fn_mod(
+                &[FormulaValue::Number(-3.0), FormulaValue::Number(2.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(1.0)
+        );
+        assert_eq!(
+            fn_mod(
+                &[FormulaValue::Number(3.0), FormulaValue::Number(-2.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(-1.0)
+        );
+        assert_eq!(
+            fn_mod(
+                &[FormulaValue::Number(-3.0), FormulaValue::Number(-2.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(-1.0)
+        );
+    }
+
+    #[test]
+    fn test_int_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_int(&[FormulaValue::Number(8.9)], &ctx).unwrap(),
+            FormulaValue::Number(8.0)
+        );
+        assert_eq!(
+            fn_int(&[FormulaValue::Number(-8.9)], &ctx).unwrap(),
+            FormulaValue::Number(-9.0)
+        );
+        assert_eq!(
+            fn_int(&[FormulaValue::Number(19.5)], &ctx).unwrap(),
+            FormulaValue::Number(19.0)
+        );
+    }
+
+    #[test]
+    fn test_even_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_even(&[FormulaValue::Number(1.5)], &ctx).unwrap(),
+            FormulaValue::Number(2.0)
+        );
+        assert_eq!(
+            fn_even(&[FormulaValue::Number(3.0)], &ctx).unwrap(),
+            FormulaValue::Number(4.0)
+        );
+        assert_eq!(
+            fn_even(&[FormulaValue::Number(2.0)], &ctx).unwrap(),
+            FormulaValue::Number(2.0)
+        );
+        assert_eq!(
+            fn_even(&[FormulaValue::Number(-1.0)], &ctx).unwrap(),
+            FormulaValue::Number(-2.0)
+        );
+    }
+
+    #[test]
+    fn test_odd_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_odd(&[FormulaValue::Number(1.5)], &ctx).unwrap(),
+            FormulaValue::Number(3.0)
+        );
+        assert_eq!(
+            fn_odd(&[FormulaValue::Number(3.0)], &ctx).unwrap(),
+            FormulaValue::Number(3.0)
+        );
+        assert_eq!(
+            fn_odd(&[FormulaValue::Number(2.0)], &ctx).unwrap(),
+            FormulaValue::Number(3.0)
+        );
+        assert_eq!(
+            fn_odd(&[FormulaValue::Number(-1.0)], &ctx).unwrap(),
+            FormulaValue::Number(-1.0)
+        );
+        assert_eq!(
+            fn_odd(&[FormulaValue::Number(-2.0)], &ctx).unwrap(),
+            FormulaValue::Number(-3.0)
+        );
+    }
+
+    #[test]
+    fn test_power_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_power(
+                &[FormulaValue::Number(5.0), FormulaValue::Number(2.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(25.0)
+        );
+        assert!(
+            (num(fn_power(
+                &[FormulaValue::Number(98.6), FormulaValue::Number(3.2)],
+                &ctx
+            )
+            .unwrap())
+                - 2401077.222)
+                .abs()
+                < 0.001
+        );
+        assert!(
+            (num(fn_power(
+                &[FormulaValue::Number(4.0), FormulaValue::Number(1.25)],
+                &ctx
+            )
+            .unwrap())
+                - 5.656854249)
+                .abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn test_sqrt_docs() {
+        let ctx = EvaluationContext::simple();
+        assert_eq!(
+            fn_sqrt(&[FormulaValue::Number(16.0)], &ctx).unwrap(),
+            FormulaValue::Number(4.0)
+        );
+        assert_eq!(
+            fn_sqrt(&[FormulaValue::Number(-16.0)], &ctx).unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
+
+    // ===== Batch 3 docs tests: SIN, COS, TAN, ASIN, ACOS, ATAN, ATAN2 =====
+
+    #[test]
+    fn test_sin_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_sin(&[FormulaValue::Number(std::f64::consts::PI)], &ctx).unwrap());
+        assert!((v - 0.0).abs() < 1e-10);
+        let v = num(fn_sin(&[FormulaValue::Number(std::f64::consts::FRAC_PI_2)], &ctx).unwrap());
+        assert!((v - 1.0).abs() < 1e-10);
+        let v = num(fn_sin(
+            &[FormulaValue::Number(30.0 * std::f64::consts::PI / 180.0)],
+            &ctx,
+        )
+        .unwrap());
+        assert!((v - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cos_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_cos(&[FormulaValue::Number(1.047)], &ctx).unwrap());
+        assert!((v - 0.5001711).abs() < 1e-6);
+        let v = num(fn_cos(
+            &[FormulaValue::Number(60.0 * std::f64::consts::PI / 180.0)],
+            &ctx,
+        )
+        .unwrap());
+        assert!((v - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tan_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_tan(&[FormulaValue::Number(0.785)], &ctx).unwrap());
+        assert!((v - 0.99920).abs() < 1e-4);
+        let v = num(fn_tan(
+            &[FormulaValue::Number(45.0 * std::f64::consts::PI / 180.0)],
+            &ctx,
+        )
+        .unwrap());
+        assert!((v - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_asin_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_asin(&[FormulaValue::Number(-0.5)], &ctx).unwrap());
+        assert!((v - (-0.523598776)).abs() < 1e-8);
+        assert!((v * 180.0 / std::f64::consts::PI - (-30.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_acos_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_acos(&[FormulaValue::Number(-0.5)], &ctx).unwrap());
+        assert!((v - 2.094395102).abs() < 1e-8);
+        assert!((v * 180.0 / std::f64::consts::PI - 120.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_atan_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_atan(&[FormulaValue::Number(1.0)], &ctx).unwrap());
+        assert!((v - 0.785398163).abs() < 1e-8);
+        assert!((v * 180.0 / std::f64::consts::PI - 45.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_atan2_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_atan2(
+            &[FormulaValue::Number(1.0), FormulaValue::Number(1.0)],
+            &ctx,
+        )
+        .unwrap());
+        assert!((v - 0.785398163).abs() < 1e-8);
+        let v = num(fn_atan2(
+            &[FormulaValue::Number(-1.0), FormulaValue::Number(-1.0)],
+            &ctx,
+        )
+        .unwrap());
+        assert!((v - (-2.35619449)).abs() < 1e-7);
+        assert!((v * 180.0 / std::f64::consts::PI - (-135.0)).abs() < 1e-10);
+    }
+
+    // ===== Batch 4 docs tests: DEGREES, RADIANS, EXP, LN, LOG, LOG10, PI =====
+
+    #[test]
+    fn test_degrees_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_degrees(&[FormulaValue::Number(std::f64::consts::PI)], &ctx).unwrap());
+        assert!((v - 180.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_radians_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_radians(&[FormulaValue::Number(270.0)], &ctx).unwrap());
+        assert!((v - std::f64::consts::PI * 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_exp_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_exp(&[FormulaValue::Number(1.0)], &ctx).unwrap());
+        assert!((v - std::f64::consts::E).abs() < 1e-10);
+        let v = num(fn_exp(&[FormulaValue::Number(2.0)], &ctx).unwrap());
+        assert!((v - 2.0_f64.exp()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_ln_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_ln(&[FormulaValue::Number(86.0)], &ctx).unwrap());
+        assert!((v - 86.0_f64.ln()).abs() < 1e-10);
+        let v = num(fn_ln(&[FormulaValue::Number(2.7182818)], &ctx).unwrap());
+        assert!((v - 2.7182818_f64.ln()).abs() < 1e-10);
+        let exp3 = fn_exp(&[FormulaValue::Number(3.0)], &ctx).unwrap();
+        let v = num(fn_ln(&[exp3], &ctx).unwrap());
+        assert!((v - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_log(&[FormulaValue::Number(10.0)], &ctx).unwrap());
+        assert!((v - 1.0).abs() < 1e-10);
+        let v = num(fn_log(
+            &[FormulaValue::Number(8.0), FormulaValue::Number(2.0)],
+            &ctx,
+        )
+        .unwrap());
+        assert!((v - 3.0).abs() < 1e-10);
+        let v = num(fn_log(
+            &[FormulaValue::Number(86.0), FormulaValue::Number(2.7182818)],
+            &ctx,
+        )
+        .unwrap());
+        assert!((v - 86.0_f64.ln() / 2.7182818_f64.ln()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log10_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_log10(&[FormulaValue::Number(86.0)], &ctx).unwrap());
+        assert!((v - 86.0_f64.log10()).abs() < 1e-10);
+        let v = num(fn_log10(&[FormulaValue::Number(10.0)], &ctx).unwrap());
+        assert!((v - 1.0).abs() < 1e-10);
+        let v = num(fn_log10(&[FormulaValue::Number(100000.0)], &ctx).unwrap());
+        assert!((v - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_pi_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_pi(&[], &ctx).unwrap());
+        assert!((v - std::f64::consts::PI).abs() < 1e-10);
+    }
+
+    // ===== Batch 5 docs tests: CEILING.MATH, FLOOR.MATH, SUM, SUMIF =====
+
+    #[test]
+    fn test_ceiling_math_docs() {
+        let ctx = EvaluationContext::simple();
+        // =CEILING.MATH(24.3, 5) = 25
+        assert_eq!(
+            fn_ceiling_math(
+                &[FormulaValue::Number(24.3), FormulaValue::Number(5.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(25.0)
+        );
+        // =CEILING.MATH(6.7) = 7
+        assert_eq!(
+            fn_ceiling_math(&[FormulaValue::Number(6.7)], &ctx).unwrap(),
+            FormulaValue::Number(7.0)
+        );
+        // =CEILING.MATH(-8.1, 2) = -8
+        assert_eq!(
+            fn_ceiling_math(
+                &[FormulaValue::Number(-8.1), FormulaValue::Number(2.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(-8.0)
+        );
+        // =CEILING.MATH(-5.5, 2, -1) = -6
+        assert_eq!(
+            fn_ceiling_math(
+                &[
+                    FormulaValue::Number(-5.5),
+                    FormulaValue::Number(2.0),
+                    FormulaValue::Number(-1.0)
+                ],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(-6.0)
+        );
+    }
+
+    #[test]
+    fn test_floor_math_docs() {
+        let ctx = EvaluationContext::simple();
+        // =FLOOR.MATH(24.3, 5) = 20
+        assert_eq!(
+            fn_floor_math(
+                &[FormulaValue::Number(24.3), FormulaValue::Number(5.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(20.0)
+        );
+        // =FLOOR.MATH(6.7) = 6
+        assert_eq!(
+            fn_floor_math(&[FormulaValue::Number(6.7)], &ctx).unwrap(),
+            FormulaValue::Number(6.0)
+        );
+        // =FLOOR.MATH(-8.1, 2) = -10
+        assert_eq!(
+            fn_floor_math(
+                &[FormulaValue::Number(-8.1), FormulaValue::Number(2.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(-10.0)
+        );
+        // =FLOOR.MATH(-5.5, 2, -1) = -4
+        assert_eq!(
+            fn_floor_math(
+                &[
+                    FormulaValue::Number(-5.5),
+                    FormulaValue::Number(2.0),
+                    FormulaValue::Number(-1.0)
+                ],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(-4.0)
+        );
+    }
+
+    #[test]
+    fn test_sum_docs() {
+        let ctx = EvaluationContext::simple();
+        // =SUM(2, 3) = 5
+        assert_eq!(
+            fn_sum(
+                &[FormulaValue::Number(2.0), FormulaValue::Number(3.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Number(5.0)
+        );
+        // =SUM(14598.93, 65437.90, 78496.23) = 158533.06
+        assert!(
+            (num(fn_sum(
+                &[
+                    FormulaValue::Number(14598.93),
+                    FormulaValue::Number(65437.90),
+                    FormulaValue::Number(78496.23)
+                ],
+                &ctx
+            )
+            .unwrap())
+                - 158533.06)
+                .abs()
+                < 1e-10
+        );
+        // =SUM(array) sums all elements
+        let arr = FormulaValue::Array(vec![
+            vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)],
+            vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
+        ]);
+        assert_eq!(fn_sum(&[arr], &ctx).unwrap(), FormulaValue::Number(10.0));
+    }
+
+    #[test]
+    fn test_sumif_docs() {
+        let ctx = EvaluationContext::simple();
+        // Docs data: property values 100000, 200000, 300000, 400000
+        // commissions: 7000, 14000, 21000, 28000
+        let values = FormulaValue::Array(vec![
+            vec![FormulaValue::Number(100000.0)],
+            vec![FormulaValue::Number(200000.0)],
+            vec![FormulaValue::Number(300000.0)],
+            vec![FormulaValue::Number(400000.0)],
+        ]);
+        let commissions = FormulaValue::Array(vec![
+            vec![FormulaValue::Number(7000.0)],
+            vec![FormulaValue::Number(14000.0)],
+            vec![FormulaValue::Number(21000.0)],
+            vec![FormulaValue::Number(28000.0)],
+        ]);
+        // =SUMIF(values, ">160000", commissions) = 63000
+        assert_eq!(
+            num(fn_sumif(
+                &[
+                    values.clone(),
+                    FormulaValue::String(">160000".to_string()),
+                    commissions.clone()
+                ],
+                &ctx
+            )
+            .unwrap()),
+            63000.0
+        );
+        // =SUMIF(values, ">160000") = 900000 (sum of values > 160000)
+        assert_eq!(
+            num(fn_sumif(
+                &[values.clone(), FormulaValue::String(">160000".to_string())],
+                &ctx
+            )
+            .unwrap()),
+            900000.0
+        );
+        // =SUMIF(values, 300000, commissions) = 21000
+        assert_eq!(
+            num(fn_sumif(&[values, FormulaValue::Number(300000.0), commissions], &ctx).unwrap()),
+            21000.0
+        );
+    }
+
+    // ===== Batch 6 docs tests: SUMIFS, SUMPRODUCT =====
+
+    #[test]
+    fn test_sumifs_docs() {
+        let ctx = EvaluationContext::simple();
+        // Docs data: 8 rows of quantity/product/salesperson
+        let sum_range = FormulaValue::Array(vec![
+            vec![FormulaValue::Number(5.0)],
+            vec![FormulaValue::Number(4.0)],
+            vec![FormulaValue::Number(15.0)],
+            vec![FormulaValue::Number(3.0)],
+            vec![FormulaValue::Number(22.0)],
+            vec![FormulaValue::Number(12.0)],
+            vec![FormulaValue::Number(10.0)],
+            vec![FormulaValue::Number(33.0)],
+        ]);
+        let products = FormulaValue::Array(vec![
+            vec![FormulaValue::String("Apples".to_string())],
+            vec![FormulaValue::String("Apples".to_string())],
+            vec![FormulaValue::String("Artichokes".to_string())],
+            vec![FormulaValue::String("Artichokes".to_string())],
+            vec![FormulaValue::String("Bananas".to_string())],
+            vec![FormulaValue::String("Bananas".to_string())],
+            vec![FormulaValue::String("Carrots".to_string())],
+            vec![FormulaValue::String("Carrots".to_string())],
+        ]);
+        let salesperson = FormulaValue::Array(vec![
+            vec![FormulaValue::String("Tom".to_string())],
+            vec![FormulaValue::String("Sarah".to_string())],
+            vec![FormulaValue::String("Tom".to_string())],
+            vec![FormulaValue::String("Sarah".to_string())],
+            vec![FormulaValue::String("Tom".to_string())],
+            vec![FormulaValue::String("Sarah".to_string())],
+            vec![FormulaValue::String("Tom".to_string())],
+            vec![FormulaValue::String("Sarah".to_string())],
+        ]);
+        // Docs Ex1: =SUMIFS(A2:A9, B2:B9, "=A*", C2:C9, "Tom") = 20
+        // Products starting with A sold by Tom: Apples(5) + Artichokes(15)
+        assert_eq!(
+            num(fn_sumifs(
+                &[
+                    sum_range.clone(),
+                    products.clone(),
+                    FormulaValue::String("a*".to_string()),
+                    salesperson.clone(),
+                    FormulaValue::String("Tom".to_string())
+                ],
+                &ctx
+            )
+            .unwrap()),
+            20.0
+        );
+        // All Tom's sales: 5 + 15 + 22 + 10 = 52
+        assert_eq!(
+            num(fn_sumifs(
+                &[
+                    sum_range,
+                    salesperson,
+                    FormulaValue::String("Tom".to_string())
+                ],
+                &ctx
+            )
+            .unwrap()),
+            52.0
+        );
+    }
+
+    #[test]
+    fn test_sumproduct_docs() {
+        let ctx = EvaluationContext::simple();
+        // SUMPRODUCT({3,4;8,6;1,9}, {2,7;6,7;5,3}) = 156
+        let a = FormulaValue::Array(vec![
+            vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
+            vec![FormulaValue::Number(8.0), FormulaValue::Number(6.0)],
+            vec![FormulaValue::Number(1.0), FormulaValue::Number(9.0)],
+        ]);
+        let b = FormulaValue::Array(vec![
+            vec![FormulaValue::Number(2.0), FormulaValue::Number(7.0)],
+            vec![FormulaValue::Number(6.0), FormulaValue::Number(7.0)],
+            vec![FormulaValue::Number(5.0), FormulaValue::Number(3.0)],
+        ]);
+        assert_eq!(num(fn_sumproduct(&[a.clone(), b], &ctx).unwrap()), 156.0);
+        // Single array: sums all elements = 3+4+8+6+1+9 = 31
+        assert_eq!(num(fn_sumproduct(&[a], &ctx).unwrap()), 31.0);
+    }
+
+    #[test]
+    fn test_sumproduct_docs_dimension_mismatch() {
+        let ctx = EvaluationContext::simple();
+        let a = FormulaValue::Array(vec![vec![
+            FormulaValue::Number(1.0),
+            FormulaValue::Number(2.0),
+        ]]);
+        let b = FormulaValue::Array(vec![
+            vec![FormulaValue::Number(1.0)],
+            vec![FormulaValue::Number(2.0)],
+        ]);
+        assert_eq!(
+            fn_sumproduct(&[a, b], &ctx).unwrap(),
+            FormulaValue::Error(CellError::Value)
+        );
+    }
+
+    // ===== Batch 14 docs tests: RAND, RANDBETWEEN =====
+
+    #[test]
+    fn test_rand_docs() {
+        let ctx = EvaluationContext::simple();
+        let v = num(fn_rand(&[], &ctx).unwrap());
+        assert!(v >= 0.0 && v < 1.0);
+    }
+
+    #[test]
+    fn test_randbetween_docs() {
+        let ctx = EvaluationContext::simple();
+        // =RANDBETWEEN(1, 100) -> integer in [1, 100]
+        let v = num(fn_randbetween(
+            &[FormulaValue::Number(1.0), FormulaValue::Number(100.0)],
+            &ctx,
+        )
+        .unwrap());
+        assert!(v >= 1.0 && v <= 100.0);
+        assert_eq!(v, v.floor()); // must be integer
+                                  // =RANDBETWEEN(-1, 1) -> integer in [-1, 1]
+        let v = num(fn_randbetween(
+            &[FormulaValue::Number(-1.0), FormulaValue::Number(1.0)],
+            &ctx,
+        )
+        .unwrap());
+        assert!(v >= -1.0 && v <= 1.0);
+        assert_eq!(v, v.floor());
+        // bottom > top -> #NUM!
+        assert_eq!(
+            fn_randbetween(
+                &[FormulaValue::Number(100.0), FormulaValue::Number(1.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
+    }
 }

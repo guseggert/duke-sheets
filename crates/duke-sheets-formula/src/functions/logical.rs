@@ -91,7 +91,8 @@ pub fn fn_or(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<F
 
 /// NOT function
 pub fn fn_not(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let arg = args.first()
+    let arg = args
+        .first()
         .ok_or_else(|| crate::error::FormulaError::Argument("NOT requires 1 argument".into()))?;
 
     match arg {
@@ -124,7 +125,8 @@ pub fn fn_iferror(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 /// IFNA(value, value_if_na) - Returns value_if_na if value is #N/A error, otherwise returns value
 /// Similar to IFERROR but only catches #N/A errors
 pub fn fn_ifna(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    let value = args.first()
+    let value = args
+        .first()
         .ok_or_else(|| crate::error::FormulaError::Argument("IFNA requires 2 arguments".into()))?;
 
     let value_if_na = args
@@ -316,5 +318,476 @@ fn values_match(a: &FormulaValue, b: &FormulaValue) -> bool {
         | (FormulaValue::String(s), FormulaValue::Empty) => s.is_empty(),
 
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn eval(formula: &str) -> FormulaResult<FormulaValue> {
+        let ast = crate::parser::parse_formula(formula)?;
+        crate::evaluator::evaluate(&ast, &EvaluationContext::simple())
+    }
+
+    fn number(v: FormulaValue) -> f64 {
+        match v {
+            FormulaValue::Number(n) => n,
+            other => panic!("Expected number, got {:?}", other),
+        }
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "actual={actual}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn test_if_docs() {
+        // Docs example: =IF(C2="Yes",1,2)
+        assert_eq!(
+            eval(r#"=IF("Yes"="Yes",1,2)"#).unwrap(),
+            FormulaValue::Number(1.0)
+        );
+        assert_eq!(
+            eval(r#"=IF("No"="Yes",1,2)"#).unwrap(),
+            FormulaValue::Number(2.0)
+        );
+
+        // Docs example: =IF(C2=1,"Yes","No")
+        assert_eq!(
+            eval(r#"=IF(1=1,"Yes","No")"#).unwrap(),
+            FormulaValue::String("Yes".into())
+        );
+        assert_eq!(
+            eval(r#"=IF(0=1,"Yes","No")"#).unwrap(),
+            FormulaValue::String("No".into())
+        );
+
+        // Docs example: =IF(C2>B2,"Over Budget","Within Budget")
+        assert_eq!(
+            eval(r#"=IF(2>1,"Over Budget","Within Budget")"#).unwrap(),
+            FormulaValue::String("Over Budget".into())
+        );
+        assert_eq!(
+            eval(r#"=IF(1>2,"Over Budget","Within Budget")"#).unwrap(),
+            FormulaValue::String("Within Budget".into())
+        );
+
+        // Docs example: =IF(C2>B2,C2-B2,0)
+        assert_eq!(eval("=IF(2>1,2-1,0)").unwrap(), FormulaValue::Number(1.0));
+        assert_eq!(eval("=IF(1>2,1-2,0)").unwrap(), FormulaValue::Number(0.0));
+
+        // Docs example: =IF(E7="Yes",F5*0.0825,0)
+        assert_eq!(
+            eval(r#"=IF("Yes"="Yes",100*0.0825,0)"#).unwrap(),
+            FormulaValue::Number(8.25)
+        );
+        assert_eq!(
+            eval(r#"=IF("No"="Yes",100*0.0825,0)"#).unwrap(),
+            FormulaValue::Number(0.0)
+        );
+
+        // Docs syntax example: =IF(A2>B2,"Over Budget","OK")
+        assert_eq!(
+            eval(r#"=IF(3>2,"Over Budget","OK")"#).unwrap(),
+            FormulaValue::String("Over Budget".into())
+        );
+        assert_eq!(
+            eval(r#"=IF(2>3,"Over Budget","OK")"#).unwrap(),
+            FormulaValue::String("OK".into())
+        );
+
+        // Docs syntax example: =IF(A2=B2,B4-A4,"")
+        assert_eq!(
+            eval(r#"=IF(5=5,10-3,"")"#).unwrap(),
+            FormulaValue::Number(7.0)
+        );
+        assert_eq!(
+            eval(r#"=IF(5=6,10-3,"")"#).unwrap(),
+            FormulaValue::String("".into())
+        );
+
+        // Docs: TRUE or FALSE literals as conditions
+        assert_eq!(eval("=IF(TRUE,1,2)").unwrap(), FormulaValue::Number(1.0));
+        assert_eq!(eval("=IF(FALSE,1,2)").unwrap(), FormulaValue::Number(2.0));
+
+        // Docs: omitted value_if_false returns FALSE
+        assert_eq!(eval("=IF(TRUE,1)").unwrap(), FormulaValue::Number(1.0));
+        assert_eq!(eval("=IF(FALSE,1)").unwrap(), FormulaValue::Boolean(false));
+
+        // Docs: numeric condition (non-zero=TRUE, zero=FALSE)
+        assert_eq!(
+            eval(r#"=IF(1,"Yes","No")"#).unwrap(),
+            FormulaValue::String("Yes".into())
+        );
+        assert_eq!(
+            eval(r#"=IF(0,"Yes","No")"#).unwrap(),
+            FormulaValue::String("No".into())
+        );
+    }
+
+    #[test]
+    fn test_and_docs() {
+        // Technical Details: AND returns TRUE if all args TRUE
+        assert_eq!(
+            eval("=AND(TRUE,TRUE)").unwrap(),
+            FormulaValue::Boolean(true)
+        );
+        assert_eq!(
+            eval("=AND(TRUE,FALSE)").unwrap(),
+            FormulaValue::Boolean(false)
+        );
+        assert_eq!(
+            eval("=AND(FALSE,TRUE)").unwrap(),
+            FormulaValue::Boolean(false)
+        );
+        assert_eq!(
+            eval("=AND(FALSE,FALSE)").unwrap(),
+            FormulaValue::Boolean(false)
+        );
+
+        // Single argument
+        assert_eq!(eval("=AND(TRUE)").unwrap(), FormulaValue::Boolean(true));
+        assert_eq!(eval("=AND(FALSE)").unwrap(), FormulaValue::Boolean(false));
+
+        // Docs Example 1: =AND(A2>1,A2<100) where A2=50 → TRUE
+        assert_eq!(
+            eval("=AND(50>1,50<100)").unwrap(),
+            FormulaValue::Boolean(true)
+        );
+        assert_eq!(
+            eval("=AND(0>1,50<100)").unwrap(),
+            FormulaValue::Boolean(false)
+        );
+        assert_eq!(
+            eval("=AND(50>1,200<100)").unwrap(),
+            FormulaValue::Boolean(false)
+        );
+
+        // Docs Example 2: =IF(AND(A2<A3,A2<100),A2,"The value is out of range")
+        assert_eq!(
+            eval("=IF(AND(50<100,50<100),50,\"The value is out of range\")").unwrap(),
+            FormulaValue::Number(50.0)
+        );
+
+        // Docs Example 3: A3=100, 100<100 is FALSE
+        assert_eq!(
+            eval("=IF(AND(100>1,100<100),100,\"The value is out of range\")").unwrap(),
+            FormulaValue::String("The value is out of range".into())
+        );
+
+        // Docs Bonus Calculation: =IF(AND(sales>=goal,accounts>=goal),sales*rate,0)
+        assert_eq!(
+            eval("=IF(AND(125000>=100000,55>=50),125000*0.12,0)").unwrap(),
+            FormulaValue::Number(15000.0)
+        );
+        assert_eq!(
+            eval("=IF(AND(95000>=100000,55>=50),95000*0.12,0)").unwrap(),
+            FormulaValue::Number(0.0)
+        );
+        assert_eq!(
+            eval("=IF(AND(125000>=100000,40>=50),125000*0.12,0)").unwrap(),
+            FormulaValue::Number(0.0)
+        );
+
+        // Numbers coerce (non-zero=TRUE, zero=FALSE)
+        assert_eq!(eval("=AND(1,1)").unwrap(), FormulaValue::Boolean(true));
+        assert_eq!(eval("=AND(1,0)").unwrap(), FormulaValue::Boolean(false));
+        assert_eq!(eval("=AND(0,0)").unwrap(), FormulaValue::Boolean(false));
+
+        // Multiple conditions
+        assert_eq!(
+            eval("=AND(TRUE,TRUE,TRUE)").unwrap(),
+            FormulaValue::Boolean(true)
+        );
+        assert_eq!(
+            eval("=AND(TRUE,TRUE,TRUE,TRUE,TRUE)").unwrap(),
+            FormulaValue::Boolean(true)
+        );
+        assert_eq!(
+            eval("=AND(TRUE,TRUE,FALSE,TRUE,TRUE)").unwrap(),
+            FormulaValue::Boolean(false)
+        );
+
+        // Error propagation
+        assert_eq!(
+            eval("=AND(TRUE,1/0)").unwrap(),
+            FormulaValue::Error(CellError::Div0)
+        );
+        assert_eq!(
+            eval("=AND(1/0,TRUE)").unwrap(),
+            FormulaValue::Error(CellError::Div0)
+        );
+    }
+
+    #[test]
+    fn test_or_docs() {
+        // Basic OR examples
+        assert_eq!(eval("=OR(TRUE,TRUE)").unwrap(), FormulaValue::Boolean(true));
+        assert_eq!(
+            eval("=OR(TRUE,FALSE)").unwrap(),
+            FormulaValue::Boolean(true)
+        );
+        assert_eq!(
+            eval("=OR(1=1,2=2,3=3)").unwrap(),
+            FormulaValue::Boolean(true)
+        );
+        assert_eq!(
+            eval("=OR(1=2,2=3,3=4)").unwrap(),
+            FormulaValue::Boolean(false)
+        );
+
+        // OR with IF (A2=50, A3=100)
+        assert_eq!(
+            eval("=OR(50>1,50<100)").unwrap(),
+            FormulaValue::Boolean(true)
+        );
+        assert_eq!(
+            eval("=IF(OR(50>1,50<100),100,\"The value is out of range\")").unwrap(),
+            FormulaValue::Number(100.0)
+        );
+        assert_eq!(
+            eval("=IF(OR(50<0,50>50),50,\"The value is out of range\")").unwrap(),
+            FormulaValue::String("The value is out of range".into())
+        );
+
+        // Sales commission: IF(OR(sales>=goal, accounts>=goal), sales*rate, 0)
+        assert_close(
+            number(eval("=IF(OR(10260>=8500,9>=5),10260*0.02,0)").unwrap()),
+            205.2,
+        );
+        assert_eq!(
+            eval("=IF(OR(15700>=8500,7>=5),15700*0.02,0)").unwrap(),
+            FormulaValue::Number(314.0)
+        );
+        assert_eq!(
+            eval("=IF(OR(13275>=8500,5>=5),13275*0.02,0)").unwrap(),
+            FormulaValue::Number(265.5)
+        );
+        assert_eq!(
+            eval("=IF(OR(9100>=8500,3>=5),9100*0.02,0)").unwrap(),
+            FormulaValue::Number(182.0)
+        );
+        // Neither goal met, commission=0
+        assert_eq!(
+            eval("=IF(OR(7480>=8500,4>=5),7480*0.02,0)").unwrap(),
+            FormulaValue::Number(0.0)
+        );
+    }
+
+    #[test]
+    fn test_not_docs() {
+        // NOT(TRUE) = FALSE, NOT(FALSE) = TRUE
+        assert_eq!(eval("=NOT(TRUE)").unwrap(), FormulaValue::Boolean(false));
+        assert_eq!(eval("=NOT(FALSE)").unwrap(), FormulaValue::Boolean(true));
+
+        // =NOT(1+1=2) → FALSE
+        assert_eq!(eval("=NOT(1+1=2)").unwrap(), FormulaValue::Boolean(false));
+
+        // =NOT(50>100) → TRUE (50 is NOT greater than 100)
+        assert_eq!(eval("=NOT(50>100)").unwrap(), FormulaValue::Boolean(true));
+
+        // =IF(AND(NOT(50>1),NOT(50<100)),50,"The value is out of range")
+        assert_eq!(
+            eval(r#"=IF(AND(NOT(50>1),NOT(50<100)),50,"The value is out of range")"#).unwrap(),
+            FormulaValue::String("The value is out of range".to_string())
+        );
+
+        // =IF(OR(NOT(100<0),NOT(100>50)),100,"The value is out of range")
+        assert_eq!(
+            eval(r#"=IF(OR(NOT(100<0),NOT(100>50)),100,"The value is out of range")"#).unwrap(),
+            FormulaValue::Number(100.0)
+        );
+    }
+
+    #[test]
+    fn test_iferror_docs() {
+        // =IFERROR(210/35, "Error in calculation") → 6.0
+        assert_eq!(
+            eval("=IFERROR(210/35, \"Error in calculation\")").unwrap(),
+            FormulaValue::Number(6.0)
+        );
+
+        // =IFERROR(55/0, "Error in calculation") → "Error in calculation"
+        assert_eq!(
+            eval("=IFERROR(55/0, \"Error in calculation\")").unwrap(),
+            FormulaValue::String("Error in calculation".into())
+        );
+
+        // =IFERROR(0/23, "Error in calculation") → 0.0
+        assert_eq!(
+            eval("=IFERROR(0/23, \"Error in calculation\")").unwrap(),
+            FormulaValue::Number(0.0)
+        );
+    }
+
+    #[test]
+    fn test_ifna_docs() {
+        // IFNA returns value_if_na when formula returns #N/A, otherwise returns formula result
+
+        // #N/A → returns alternate value
+        assert_eq!(
+            eval("=IFNA(NA(), \"Not found\")").unwrap(),
+            FormulaValue::String("Not found".into())
+        );
+
+        // Non-error value passes through
+        assert_eq!(
+            eval("=IFNA(5, \"Not found\")").unwrap(),
+            FormulaValue::Number(5.0)
+        );
+
+        // String passes through
+        assert_eq!(
+            eval(r#"=IFNA("Seattle", "Not found")"#).unwrap(),
+            FormulaValue::String("Seattle".into())
+        );
+
+        // Boolean passes through
+        assert_eq!(
+            eval("=IFNA(TRUE(), \"Not found\")").unwrap(),
+            FormulaValue::Boolean(true)
+        );
+
+        // #N/A with numeric alternate value
+        assert_eq!(eval("=IFNA(NA(), 0)").unwrap(), FormulaValue::Number(0.0));
+
+        // Other errors NOT caught by IFNA — they propagate
+        // #DIV/0!
+        assert_eq!(
+            eval("=IFNA(1/0, \"Not found\")").unwrap(),
+            FormulaValue::Error(CellError::Div0)
+        );
+
+        // value_if_na is itself NA()
+        assert_eq!(
+            eval("=IFNA(NA(), NA())").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+    }
+
+    #[test]
+    fn test_ifs_docs() {
+        // Grade scoring: =IFS(score>89,"A",score>79,"B",...,TRUE,"F")
+        assert_eq!(
+            eval(r#"=IFS(45>89,"A",45>79,"B",45>69,"C",45>59,"D",TRUE,"F")"#).unwrap(),
+            FormulaValue::String("F".into())
+        );
+        assert_eq!(
+            eval(r#"=IFS(90>89,"A",90>79,"B",90>69,"C",90>59,"D",TRUE,"F")"#).unwrap(),
+            FormulaValue::String("A".into())
+        );
+        assert_eq!(
+            eval(r#"=IFS(78>89,"A",78>79,"B",78>69,"C",78>59,"D",TRUE,"F")"#).unwrap(),
+            FormulaValue::String("C".into())
+        );
+        assert_eq!(
+            eval(r#"=IFS(80>89,"A",80>79,"B",80>69,"C",80>59,"D",TRUE,"F")"#).unwrap(),
+            FormulaValue::String("B".into())
+        );
+        assert_eq!(
+            eval(r#"=IFS(60>89,"A",60>79,"B",60>69,"C",60>59,"D",TRUE,"F")"#).unwrap(),
+            FormulaValue::String("D".into())
+        );
+
+        // Day of week mapping
+        assert_eq!(
+            eval(r#"=IFS(1=1,"Sunday",1=2,"Monday",1=3,"Tuesday",1=4,"Wednesday",1=5,"Thursday",1=6,"Friday",1=7,"Saturday")"#).unwrap(),
+            FormulaValue::String("Sunday".into())
+        );
+        assert_eq!(
+            eval(r#"=IFS(3=1,"Sunday",3=2,"Monday",3=3,"Tuesday",3=4,"Wednesday",3=5,"Thursday",3=6,"Friday",3=7,"Saturday")"#).unwrap(),
+            FormulaValue::String("Tuesday".into())
+        );
+        assert_eq!(
+            eval(r#"=IFS(7=1,"Sunday",7=2,"Monday",7=3,"Tuesday",7=4,"Wednesday",7=5,"Thursday",7=6,"Friday",7=7,"Saturday")"#).unwrap(),
+            FormulaValue::String("Saturday".into())
+        );
+
+        // TRUE as default catch-all
+        assert_eq!(
+            eval(r#"=IFS(FALSE,"never",TRUE,"default")"#).unwrap(),
+            FormulaValue::String("default".into())
+        );
+
+        // No TRUE conditions → #N/A
+        assert_eq!(
+            eval(r#"=IFS(1>2,"A",3>4,"B")"#).unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+
+        // First TRUE wins (order matters)
+        assert_eq!(
+            eval(r#"=IFS(1<2,"first",2<3,"second",TRUE,"third")"#).unwrap(),
+            FormulaValue::String("first".into())
+        );
+    }
+
+    #[test]
+    fn test_switch_docs() {
+        // SWITCH(2,...) matches value 2 => "Monday"
+        assert_eq!(
+            eval("=SWITCH(2,1,\"Sunday\",2,\"Monday\",3,\"Tuesday\",\"No match\")").unwrap(),
+            FormulaValue::String("Monday".into())
+        );
+
+        // No match and no default => #N/A
+        assert_eq!(
+            eval("=SWITCH(99,1,\"Sunday\",2,\"Monday\",3,\"Tuesday\")").unwrap(),
+            FormulaValue::Error(CellError::Na)
+        );
+
+        // No match, default is "No match"
+        assert_eq!(
+            eval("=SWITCH(99,1,\"Sunday\",2,\"Monday\",3,\"Tuesday\",\"No match\")").unwrap(),
+            FormulaValue::String("No match".into())
+        );
+
+        // No match for 1 or 7, default is "weekday"
+        assert_eq!(
+            eval("=SWITCH(2,1,\"Sunday\",7,\"Saturday\",\"weekday\")").unwrap(),
+            FormulaValue::String("weekday".into())
+        );
+
+        // Matches value 3 => "Tuesday"
+        assert_eq!(
+            eval("=SWITCH(3,1,\"Sunday\",2,\"Monday\",3,\"Tuesday\",\"No match\")").unwrap(),
+            FormulaValue::String("Tuesday".into())
+        );
+    }
+
+    #[test]
+    fn test_xor_docs() {
+        // =XOR(3>0,2<9) => FALSE (both TRUE, even count)
+        assert_eq!(eval("=XOR(3>0,2<9)").unwrap(), FormulaValue::Boolean(false));
+
+        // =XOR(3>12,4>6) => FALSE (both FALSE, zero TRUE)
+        assert_eq!(
+            eval("=XOR(3>12,4>6)").unwrap(),
+            FormulaValue::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn test_true_docs() {
+        assert_eq!(eval("=TRUE()").unwrap(), FormulaValue::Boolean(true));
+        assert_eq!(eval("=TRUE").unwrap(), FormulaValue::Boolean(true));
+        assert_eq!(
+            eval("=IF(TRUE(),\"yes\",\"no\")").unwrap(),
+            FormulaValue::String("yes".into()),
+        );
+    }
+
+    #[test]
+    fn test_false_docs() {
+        assert_eq!(eval("=FALSE()").unwrap(), FormulaValue::Boolean(false));
+        assert_eq!(eval("=FALSE").unwrap(), FormulaValue::Boolean(false));
+        assert_eq!(
+            eval("=IF(FALSE(),\"yes\",\"no\")").unwrap(),
+            FormulaValue::String("no".into()),
+        );
     }
 }

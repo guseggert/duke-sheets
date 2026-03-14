@@ -386,7 +386,7 @@ describe("Calculation", () => {
 
     sheet.setFormula("A1", "=1+1");
 
-    const stats = wb.calculateWithOptions({ iterative: false, maxIterations: 100, maxChange: 0.001 });
+    const stats = wb.calculate({ iterative: false, maxIterations: 100, maxChange: 0.001 });
     expect(stats.formulaCount).toBe(1);
     expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
   });
@@ -396,7 +396,7 @@ describe("Calculation", () => {
     const sheet = wb.getSheet(0);
     sheet.setFormula("A1", "=1+1");
 
-    const stats = wb.calculateWithOptions({});
+    const stats = wb.calculate({});
     expect(stats.formulaCount).toBe(1);
     expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
   });
@@ -406,7 +406,7 @@ describe("Calculation", () => {
     const sheet = wb.getSheet(0);
     sheet.setFormula("A1", "=1+1");
 
-    const stats = wb.calculateWithOptions({ forceFullCalculation: true });
+    const stats = wb.calculate({ forceFullCalculation: true });
     expect(stats.formulaCount).toBe(1);
     expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
   });
@@ -416,7 +416,7 @@ describe("Calculation", () => {
     const sheet = wb.getSheet(0);
     sheet.setFormula("A1", "=1+1");
 
-    const stats = wb.calculateWithOptions({ calculateVolatile: false });
+    const stats = wb.calculate({ calculateVolatile: false });
     expect(stats.formulaCount).toBe(1);
   });
 
@@ -428,7 +428,7 @@ describe("Calculation", () => {
     const sheet1 = wb.getSheet(1);
     sheet1.setFormula("A1", "=2+2");
 
-    const stats = wb.calculateWithOptions({ sheets: [0] });
+    const stats = wb.calculate({ sheets: [0] });
     expect(stats.cellsCalculated).toBeGreaterThanOrEqual(1);
     expect(sheet0.getCalculatedValue("A1").asNumber()).toBe(2);
   });
@@ -438,9 +438,29 @@ describe("Calculation", () => {
     const sheet = wb.getSheet(0);
     sheet.setFormula("A1", "=1+1");
 
-    const stats = wb.calculateWithOptions({ maxThreads: 1 });
+    const stats = wb.calculate({ maxThreads: 1 });
     expect(stats.formulaCount).toBe(1);
     expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
+  });
+
+
+  it("returns image metadata on worksheet", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", '=IMAGE("https://example.com/logo.png","Logo",3,48,96)');
+    wb.calculate();
+    expect(sheet.getCalculatedValue("A1").asText()).toBe("Logo");
+    const img = sheet.getImageAt(0, 0);
+    expect(img).not.toBeNull();
+    expect(img).toMatchObject({
+      source: "https://example.com/logo.png",
+      altText: "Logo",
+      sizing: 3,
+      width: 96,
+      height: 48,
+    });
+    // Non-image cell returns null
+    expect(sheet.getImageAt(1, 0)).toBeNull();
   });
 
   it("worksheet formulaCount getter", () => {
@@ -525,5 +545,111 @@ describe("CSV", () => {
 
     const wb2 = Workbook.fromCsvString(csv);
     expect(wb2.sheetCount).toBe(1);
+  });
+});
+
+// Callback Function Tests
+
+describe("Callback Functions", () => {
+  it("calculates with webServiceFn callback (async)", async () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", '=WEBSERVICE("https://example.com/api")');
+
+    await wb.calculateAsync({
+      webServiceFn: async (url: string) => `response:${url}`,
+    });
+
+    expect(sheet.getCalculatedValue("A1").asText()).toBe(
+      "response:https://example.com/api",
+    );
+  });
+
+  it("calculates with rtdFn callback (async)", async () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", '=RTD("prog","srv","topic1")');
+
+    await wb.calculateAsync({
+      rtdFn: async (progId: string, server: string, topics: string[]) =>
+        `${progId}:${server}:${topics.join(",")}`,
+    });
+
+    expect(sheet.getCalculatedValue("A1").asText()).toBe("prog:srv:topic1");
+  });
+
+  it("callback returning null gives #N/A", async () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", '=WEBSERVICE("https://example.com/missing")');
+
+    await wb.calculateAsync({
+      webServiceFn: async (_url: string) => null,
+    });
+
+    expect(sheet.getCalculatedValue("A1").asError()).toBe("#N/A");
+  });
+
+  it("callback returning undefined gives #N/A", async () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", '=WEBSERVICE("https://example.com/missing")');
+
+    await wb.calculateAsync({
+      webServiceFn: async (_url: string) => undefined as unknown as string,
+    });
+
+    expect(sheet.getCalculatedValue("A1").asError()).toBe("#N/A");
+  });
+
+  it("rtdFn receives correct arguments with multiple topics", async () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", '=RTD("myProg","myServer","t1","t2","t3")');
+
+    let capturedArgs: { progId: string; server: string; topics: string[] } | null =
+      null;
+    await wb.calculateAsync({
+      rtdFn: async (progId: string, server: string, topics: string[]) => {
+        capturedArgs = { progId, server, topics };
+        return "ok";
+      },
+    });
+
+    expect(capturedArgs).not.toBeNull();
+    expect(capturedArgs!.progId).toBe("myProg");
+    expect(capturedArgs!.server).toBe("myServer");
+    expect(capturedArgs!.topics).toEqual(["t1", "t2", "t3"]);
+    expect(sheet.getCalculatedValue("A1").asText()).toBe("ok");
+  });
+
+  it("webServiceFn called for multiple cells", async () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", '=WEBSERVICE("https://a.com")');
+    sheet.setFormula("A2", '=WEBSERVICE("https://b.com")');
+
+    const calls: string[] = [];
+    await wb.calculateAsync({
+      webServiceFn: async (url: string) => {
+        calls.push(url);
+        return `val:${url}`;
+      },
+    });
+
+    expect(calls).toContain("https://a.com");
+    expect(calls).toContain("https://b.com");
+    expect(sheet.getCalculatedValue("A1").asText()).toBe("val:https://a.com");
+    expect(sheet.getCalculatedValue("A2").asText()).toBe("val:https://b.com");
+  });
+
+  it("calculate without callbacks still works (sync)", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setFormula("A1", "=1+1");
+
+    const stats = wb.calculate({});
+    expect(stats.formulaCount).toBe(1);
+    expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
   });
 });

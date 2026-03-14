@@ -1,9 +1,10 @@
 //! Cell storage implementation
 //!
 //! This module provides efficient sparse storage for spreadsheet cells.
-//! Only non-empty cells are stored, using a row-based BTreeMap structure.
+//! Only non-empty cells are stored, using a flat HashMap for O(1) lookups.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+use ahash::AHashMap;
 
 use super::{CellValue, FormulaData, StringPool};
 use crate::style::StylePool;
@@ -85,19 +86,19 @@ impl SpillInfo {
     }
 }
 
-/// Sparse row-based storage for worksheet cells
+/// Sparse storage for worksheet cells
 ///
 /// Design decisions:
-/// - Uses BTreeMap for ordered iteration (required for streaming writes)
-/// - Row-major layout matches Excel's internal structure
+/// - Uses a flat HashMap<(row, col), CellData> for O(1) point lookups
 /// - Only stores non-empty cells (sparse)
 /// - Can handle millions of cells with reasonable memory usage
+/// - Ordered iteration (for streaming writes) sorts on demand (cold path)
 ///
-/// Structure: `BTreeMap<row_index, BTreeMap<col_index, CellData>>`
+/// Structure: `HashMap<(row_index, col_index), CellData>`
 #[derive(Debug)]
 pub struct CellStorage {
-    /// Row index → column map
-    rows: BTreeMap<u32, BTreeMap<u16, CellData>>,
+    /// Flat cell map keyed by (row, col) — uses ahash for fast integer hashing
+    cells: AHashMap<(u32, u16), CellData>,
 
     /// Shared string pool for deduplication
     pub(crate) string_pool: StringPool,
@@ -146,12 +147,12 @@ pub struct CellStorage {
 
     /// Spill sources: maps source cell (row, col) to spill info
     /// This tracks which cells have active spill ranges
-    spill_sources: HashMap<(u32, u16), SpillInfo>,
+    spill_sources: AHashMap<(u32, u16), SpillInfo>,
 
     /// Formula side table: maps (row, col) to formula data.
     /// Formula cells store their cached result value in the cell grid
     /// as a regular CellValue; the formula text and array results live here.
-    formulas: HashMap<(u32, u16), FormulaData>,
+    formulas: AHashMap<(u32, u16), FormulaData>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -166,7 +167,7 @@ impl CellStorage {
     /// Create a new empty cell storage
     pub fn new() -> Self {
         Self {
-            rows: BTreeMap::new(),
+            cells: AHashMap::new(),
             string_pool: StringPool::new(),
             style_pool: StylePool::new(),
             default_row_height: 15.0,
@@ -182,8 +183,8 @@ impl CellStorage {
             merged_regions: Vec::new(),
             mode: StorageMode::InMemory,
             cached_bounds: None,
-            spill_sources: HashMap::new(),
-            formulas: HashMap::new(),
+            spill_sources: AHashMap::new(),
+            formulas: AHashMap::new(),
         }
     }
 
@@ -201,12 +202,12 @@ impl CellStorage {
 
     /// Get a cell value
     pub fn get(&self, row: u32, col: u16) -> Option<&CellData> {
-        self.rows.get(&row).and_then(|r| r.get(&col))
+        self.cells.get(&(row, col))
     }
 
     /// Get a mutable cell value
     pub fn get_mut(&mut self, row: u32, col: u16) -> Option<&mut CellData> {
-        self.rows.get_mut(&row).and_then(|r| r.get_mut(&col))
+        self.cells.get_mut(&(row, col))
     }
 
     /// Set a cell value
@@ -217,14 +218,9 @@ impl CellStorage {
 
         if data.is_empty() {
             // Remove empty cells to save memory
-            if let Some(row_map) = self.rows.get_mut(&row) {
-                row_map.remove(&col);
-                if row_map.is_empty() {
-                    self.rows.remove(&row);
-                }
-            }
+            self.cells.remove(&(row, col));
         } else {
-            self.rows.entry(row).or_default().insert(col, data);
+            self.cells.insert((row, col), data);
         }
     }
 
@@ -261,23 +257,15 @@ impl CellStorage {
     pub fn remove(&mut self, row: u32, col: u16) -> Option<CellData> {
         self.invalidate_bounds();
 
-        let result = self.rows.get_mut(&row).and_then(|r| r.remove(&col));
         // Also remove any formula for this cell
         self.formulas.remove(&(row, col));
 
-        // Clean up empty rows
-        if let Some(row_map) = self.rows.get(&row) {
-            if row_map.is_empty() {
-                self.rows.remove(&row);
-            }
-        }
-
-        result
+        self.cells.remove(&(row, col))
     }
 
     /// Clear all cells
     pub fn clear(&mut self) {
-        self.rows.clear();
+        self.cells.clear();
         self.merged_regions.clear();
         self.formulas.clear();
         self.invalidate_bounds();
@@ -285,19 +273,19 @@ impl CellStorage {
 
     /// Get the number of non-empty cells
     pub fn cell_count(&self) -> usize {
-        self.rows.values().map(|r| r.len()).sum()
+        self.cells.len()
     }
 
     /// Check if storage is empty
     pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
+        self.cells.is_empty()
     }
 
     /// Get the bounds of used cells
     ///
     /// Returns (min_row, min_col, max_row, max_col) or None if empty
     pub fn used_bounds(&self) -> Option<(u32, u16, u32, u16)> {
-        if self.rows.is_empty() {
+        if self.cells.is_empty() {
             return None;
         }
 
@@ -311,42 +299,47 @@ impl CellStorage {
             ));
         }
 
-        let min_row = *self.rows.keys().next()?;
-        let max_row = *self.rows.keys().next_back()?;
-
+        let mut min_row = u32::MAX;
+        let mut max_row = 0u32;
         let mut min_col = u16::MAX;
         let mut max_col = 0u16;
 
-        for row_data in self.rows.values() {
-            if let Some(&col) = row_data.keys().next() {
-                min_col = min_col.min(col);
-            }
-            if let Some(&col) = row_data.keys().next_back() {
-                max_col = max_col.max(col);
-            }
+        for &(row, col) in self.cells.keys() {
+            min_row = min_row.min(row);
+            max_row = max_row.max(row);
+            min_col = min_col.min(col);
+            max_col = max_col.max(col);
         }
 
         Some((min_row, min_col, max_row, max_col))
     }
 
-    /// Iterate over all cells in row order
+    /// Iterate over all cells in row-major order
     pub fn iter(&self) -> impl Iterator<Item = (u32, u16, &CellData)> {
-        self.rows
+        let mut entries: Vec<_> = self.cells
             .iter()
-            .flat_map(|(&row, cols)| cols.iter().map(move |(&col, data)| (row, col, data)))
+            .map(|(&(row, col), data)| (row, col, data))
+            .collect();
+        entries.sort_unstable_by_key(|&(row, col, _)| (row, col));
+        entries.into_iter()
     }
 
     /// Iterate over cells in a specific row
     pub fn iter_row(&self, row: u32) -> impl Iterator<Item = (u16, &CellData)> {
-        self.rows
-            .get(&row)
-            .into_iter()
-            .flat_map(|cols| cols.iter().map(|(&col, data)| (col, data)))
+        let mut entries: Vec<_> = self.cells
+            .iter()
+            .filter_map(|(&(r, col), data)| if r == row { Some((col, data)) } else { None })
+            .collect();
+        entries.sort_unstable_by_key(|&(col, _)| col);
+        entries.into_iter()
     }
 
     /// Iterate over row indices that have data
     pub fn row_indices(&self) -> impl Iterator<Item = u32> + '_ {
-        self.rows.keys().copied()
+        let mut rows: Vec<u32> = self.cells.keys().map(|&(row, _)| row).collect();
+        rows.sort_unstable();
+        rows.dedup();
+        rows.into_iter()
     }
 
     /// Get default row height
