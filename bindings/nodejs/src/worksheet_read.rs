@@ -6,8 +6,9 @@ use napi_derive::napi;
 use super::{
     catch_panic, to_napi_err, JsAutoFilter, JsColor, JsComment, JsCommentEntry,
     JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
-    JsHyperlinkEntry, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsSelection,
-    JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle, JsTable, Worksheet,
+    JsHyperlinkEntry, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsRow, JsRowCell,
+    JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle, JsTable,
+    Worksheet,
 };
 
 #[napi]
@@ -150,6 +151,86 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             Ok(ws.formatted_value_at(row, col as u16))
+        })
+    }
+
+    /// Get a batch of sparse rows starting from `start_row`.
+    ///
+    /// Returns up to `max_rows` rows that contain non-empty cells.
+    /// Each row contains only its non-empty cells (sparse representation).
+    /// Returns an empty array when no more rows exist.
+    #[napi]
+    pub fn get_rows_batch(
+        &self,
+        start_row: u32,
+        max_rows: u32,
+        options: Option<JsRowsOptions>,
+    ) -> Result<Vec<JsRow>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+
+            let use_formatted = options
+                .as_ref()
+                .and_then(|o| o.use_formatted_values)
+                .unwrap_or(false);
+            let use_calculated = options
+                .as_ref()
+                .and_then(|o| o.use_calculated_values)
+                .unwrap_or(false);
+
+            let end_row = ws
+                .used_range()
+                .map(|r| r.end.row)
+                .unwrap_or(0)
+                .min(start_row.saturating_add(max_rows).saturating_sub(1));
+
+            if start_row > end_row {
+                return Ok(vec![]);
+            }
+
+            let coords = ws.populated_cells_in_range(start_row, end_row);
+            let mut rows = Vec::new();
+            let mut current_row = None;
+            let mut current_cells = Vec::new();
+
+            for (row, col) in coords {
+                if current_row != Some(row) {
+                    if let Some(prev_row) = current_row {
+                        rows.push(JsRow {
+                            index: prev_row,
+                            cells: std::mem::take(&mut current_cells),
+                        });
+                    }
+                    current_row = Some(row);
+                }
+
+                let value = if use_formatted {
+                    ws.formatted_value_at(row, col)
+                } else if use_calculated {
+                    ws.get_calculated_value_at(row, col)
+                        .map(|v| v.to_string())
+                        .unwrap_or_default()
+                } else {
+                    ws.get_value_at(row, col).to_string()
+                };
+
+                current_cells.push(JsRowCell {
+                    col: col as u32,
+                    value,
+                });
+            }
+
+            if let Some(last_row) = current_row {
+                rows.push(JsRow {
+                    index: last_row,
+                    cells: current_cells,
+                });
+            }
+
+            Ok(rows)
         })
     }
 

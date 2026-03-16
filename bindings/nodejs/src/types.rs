@@ -17,6 +17,33 @@ use duke_sheets_core::{
     },
 };
 
+/// A single cell within a sparse row.
+#[napi(object)]
+pub struct JsRowCell {
+    /// Column index (0-based).
+    pub col: u32,
+    /// String representation of the cell value.
+    pub value: String,
+}
+
+/// A sparse row containing only non-empty cells.
+#[napi(object)]
+pub struct JsRow {
+    /// Row index (0-based).
+    pub index: u32,
+    /// Non-empty cells in this row, sorted by column.
+    pub cells: Vec<JsRowCell>,
+}
+
+/// Options for row iteration.
+#[napi(object)]
+pub struct JsRowsOptions {
+    /// Use display-formatted values (e.g., "$1,234.56") instead of raw values.
+    pub use_formatted_values: Option<bool>,
+    /// Use calculated values for formula cells (requires prior calculate() call).
+    pub use_calculated_values: Option<bool>,
+}
+
 /// Color representation. The `colorType` field indicates the variant:
 /// `"auto"`, `"rgb"`, `"argb"`, `"theme"`, or `"indexed"`.
 /// The `hex` field always contains the resolved 6- or 8-char hex string.

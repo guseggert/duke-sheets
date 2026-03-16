@@ -1360,6 +1360,24 @@ pub struct PyHyperlinkEntry {
     pub hyperlink: PyHyperlink,
 }
 
+#[pyclass(name = "RowCell")]
+#[derive(Clone)]
+pub struct PyRowCell {
+    #[pyo3(get)]
+    pub col: u32,
+    #[pyo3(get)]
+    pub value: String,
+}
+
+#[pyclass(name = "Row")]
+#[derive(Clone)]
+pub struct PyRow {
+    #[pyo3(get)]
+    pub index: u32,
+    #[pyo3(get)]
+    pub cells: Vec<PyRowCell>,
+}
+
 #[pyclass(name = "FormulaCell")]
 #[derive(Clone)]
 pub struct PyFormulaCell {

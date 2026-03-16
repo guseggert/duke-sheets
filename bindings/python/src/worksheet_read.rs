@@ -1,12 +1,146 @@
+use std::sync::{Arc, RwLock};
+
+use duke_sheets::Workbook;
 use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 
 use crate::{
     to_py_err, PyAutoFilter, PyColor, PyComment, PyCommentEntry, PyConditionalFormatRule,
     PyDataValidation, PyFormulaCell, PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergeSpan,
-    PyMergedRegion, PyPageBreak, PyPageSetup, PySelection, PySheetProtection, PySpillSource,
-    PySplitPanes, PyStyle, PyTable, PyWorksheet,
+    PyMergedRegion, PyPageBreak, PyPageSetup, PyRow, PyRowCell, PySelection, PySheetProtection,
+    PySpillSource, PySplitPanes, PyStyle, PyTable, PyWorksheet,
 };
+
+const ROW_ITER_BATCH_SIZE: u32 = 1000;
+
+fn sparse_rows_batch(
+    workbook: &Arc<RwLock<Workbook>>,
+    sheet_index: usize,
+    start_row: u32,
+    max_rows: u32,
+    use_formatted_values: bool,
+    use_calculated_values: bool,
+) -> PyResult<Vec<PyRow>> {
+    let wb = workbook.read().map_err(to_py_err)?;
+    let ws = wb
+        .worksheet(sheet_index)
+        .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+
+    let end_row = ws
+        .used_range()
+        .map(|r| r.end.row)
+        .unwrap_or(0)
+        .min(start_row.saturating_add(max_rows).saturating_sub(1));
+
+    if start_row > end_row {
+        return Ok(vec![]);
+    }
+
+    let coords = ws.populated_cells_in_range(start_row, end_row);
+    let mut rows = Vec::new();
+    let mut current_row = None;
+    let mut current_cells = Vec::new();
+
+    for (row, col) in coords {
+        if current_row != Some(row) {
+            if let Some(prev_row) = current_row {
+                rows.push(PyRow {
+                    index: prev_row,
+                    cells: std::mem::take(&mut current_cells),
+                });
+            }
+            current_row = Some(row);
+        }
+
+        let value = if use_formatted_values {
+            ws.formatted_value_at(row, col)
+        } else if use_calculated_values {
+            ws.get_calculated_value_at(row, col)
+                .map(|value| value.to_string())
+                .unwrap_or_default()
+        } else {
+            ws.get_value_at(row, col).to_string()
+        };
+
+        current_cells.push(PyRowCell {
+            col: col as u32,
+            value,
+        });
+    }
+
+    if let Some(last_row) = current_row {
+        rows.push(PyRow {
+            index: last_row,
+            cells: current_cells,
+        });
+    }
+
+    Ok(rows)
+}
+
+fn worksheet_max_row(workbook: &Arc<RwLock<Workbook>>, sheet_index: usize) -> PyResult<u32> {
+    let wb = workbook.read().map_err(to_py_err)?;
+    let ws = wb
+        .worksheet(sheet_index)
+        .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+    Ok(ws.used_range().map(|range| range.end.row).unwrap_or(0))
+}
+
+#[pyclass(name = "RowIterator")]
+pub struct PyRowIterator {
+    workbook: Arc<RwLock<Workbook>>,
+    sheet_index: usize,
+    use_formatted_values: bool,
+    use_calculated_values: bool,
+    next_row: u32,
+    max_row: u32,
+    buffer: Vec<PyRow>,
+    cursor: usize,
+    done: bool,
+}
+
+#[pymethods]
+impl PyRowIterator {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self) -> PyResult<Option<PyRow>> {
+        while self.cursor >= self.buffer.len() {
+            if self.done || self.next_row > self.max_row {
+                self.done = true;
+                return Ok(None);
+            }
+
+            let batch_size = ROW_ITER_BATCH_SIZE
+                .min(self.max_row.saturating_sub(self.next_row).saturating_add(1));
+            self.buffer = sparse_rows_batch(
+                &self.workbook,
+                self.sheet_index,
+                self.next_row,
+                batch_size,
+                self.use_formatted_values,
+                self.use_calculated_values,
+            )?;
+            self.cursor = 0;
+
+            if self.buffer.is_empty() {
+                self.next_row = self.next_row.saturating_add(batch_size);
+                continue;
+            }
+
+            self.next_row = self
+                .buffer
+                .last()
+                .map(|row| row.index.saturating_add(1))
+                .unwrap_or(self.next_row.saturating_add(batch_size));
+        }
+
+        let row = self.buffer[self.cursor].clone();
+        self.cursor += 1;
+        Ok(Some(row))
+    }
+}
 
 #[pymethods]
 impl PyWorksheet {
@@ -108,6 +242,43 @@ impl PyWorksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
         Ok(ws.formatted_value_at(row, col as u16))
+    }
+
+    #[pyo3(signature = (start_row, max_rows, *, use_formatted_values=false, use_calculated_values=false))]
+    fn get_rows_batch(
+        &self,
+        start_row: u32,
+        max_rows: u32,
+        use_formatted_values: bool,
+        use_calculated_values: bool,
+    ) -> PyResult<Vec<PyRow>> {
+        sparse_rows_batch(
+            &self.workbook,
+            self.sheet_index,
+            start_row,
+            max_rows,
+            use_formatted_values,
+            use_calculated_values,
+        )
+    }
+
+    #[pyo3(signature = (*, use_formatted_values=false, use_calculated_values=false))]
+    fn iterate_rows(
+        &self,
+        use_formatted_values: bool,
+        use_calculated_values: bool,
+    ) -> PyResult<PyRowIterator> {
+        Ok(PyRowIterator {
+            workbook: Arc::clone(&self.workbook),
+            sheet_index: self.sheet_index,
+            use_formatted_values,
+            use_calculated_values,
+            next_row: 0,
+            max_row: worksheet_max_row(&self.workbook, self.sheet_index)?,
+            buffer: Vec::new(),
+            cursor: 0,
+            done: false,
+        })
     }
 
     #[getter]

@@ -14,6 +14,20 @@ use duke_sheets_core::{
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmRowCell {
+    pub col: u32,
+    pub value: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmRow {
+    pub index: u32,
+    pub cells: Vec<WasmRowCell>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmColor {
     pub color_type: String,
     pub hex: String,

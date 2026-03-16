@@ -19,6 +19,34 @@ mod worksheet_read;
 
 pub use types::*;
 
+#[wasm_bindgen(typescript_custom_section)]
+const ROW_ITERATOR_TYPES: &str = r#"
+export interface JsRowCell {
+  col: number;
+  value: string;
+}
+
+export interface JsRow {
+  index: number;
+  cells: Array<JsRowCell>;
+}
+
+export interface JsRowsOptions {
+  useFormattedValues?: boolean;
+  useCalculatedValues?: boolean;
+}
+
+export class RowIterator implements IterableIterator<JsRow> {
+  constructor(ws: Worksheet, opts?: JsRowsOptions, maxRow?: number);
+  [Symbol.iterator](): RowIterator;
+  next(): IteratorResult<JsRow>;
+}
+
+export interface Worksheet {
+  iterateRows(opts?: JsRowsOptions): RowIterator;
+}
+"#;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsCalculationOptions {
@@ -527,9 +555,10 @@ impl Workbook {
         let options = if let Some(options) = options {
             // Extract JS callback functions before serde deserialization (which consumes the JsValue).
             // Serde can't deserialize JS functions, so we pull them out via Reflect::get.
-            let web_service_js_fn = js_sys::Reflect::get(&options, &JsValue::from_str("webServiceFn"))
-                .ok()
-                .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
+            let web_service_js_fn =
+                js_sys::Reflect::get(&options, &JsValue::from_str("webServiceFn"))
+                    .ok()
+                    .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
             let rtd_js_fn = js_sys::Reflect::get(&options, &JsValue::from_str("rtdFn"))
                 .ok()
                 .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
@@ -541,7 +570,9 @@ impl Workbook {
             let web_service_fn = web_service_js_fn.map(|js_fn| {
                 let wrapper = SendSyncFunction(js_fn);
                 Arc::new(move |url: &str| -> Option<String> {
-                    let result = wrapper.call1(&JsValue::NULL, &JsValue::from_str(url)).ok()?;
+                    let result = wrapper
+                        .call1(&JsValue::NULL, &JsValue::from_str(url))
+                        .ok()?;
                     result.as_string()
                 }) as Arc<dyn Fn(&str) -> Option<String> + Send + Sync>
             });
@@ -549,19 +580,24 @@ impl Workbook {
             // Build rtd_fn from callback
             let rtd_fn = rtd_js_fn.map(|js_fn| {
                 let wrapper = SendSyncFunction(js_fn);
-                Arc::new(move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
-                    let topics_arr = js_sys::Array::new();
-                    for t in topics {
-                        topics_arr.push(&JsValue::from_str(t));
-                    }
-                    let result = wrapper.call3(
-                        &JsValue::NULL,
-                        &JsValue::from_str(prog_id),
-                        &JsValue::from_str(server),
-                        &topics_arr.into(),
-                    ).ok()?;
-                    result.as_string()
-                }) as Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>
+                Arc::new(
+                    move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
+                        let topics_arr = js_sys::Array::new();
+                        for t in topics {
+                            topics_arr.push(&JsValue::from_str(t));
+                        }
+                        let result = wrapper
+                            .call3(
+                                &JsValue::NULL,
+                                &JsValue::from_str(prog_id),
+                                &JsValue::from_str(server),
+                                &topics_arr.into(),
+                            )
+                            .ok()?;
+                        result.as_string()
+                    },
+                )
+                    as Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>
             });
 
             CalculationOptions {

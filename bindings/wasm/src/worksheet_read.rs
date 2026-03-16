@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -5,11 +6,18 @@ use crate::{
     types::{
         WasmAutoFilter, WasmColor, WasmComment, WasmCommentEntry, WasmConditionalFormatRule,
         WasmDataValidation, WasmFormulaCell, WasmFreezePanes, WasmHyperlink, WasmHyperlinkEntry,
-        WasmMergeSpan, WasmMergedRegion, WasmPageBreak, WasmPageSetup, WasmSelection,
-        WasmSheetProtection, WasmSpillSource, WasmSplitPanes, WasmStyle, WasmTable,
+        WasmMergeSpan, WasmMergedRegion, WasmPageBreak, WasmPageSetup, WasmRow, WasmRowCell,
+        WasmSelection, WasmSheetProtection, WasmSpillSource, WasmSplitPanes, WasmStyle, WasmTable,
     },
     Worksheet,
 };
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmRowsOptions {
+    use_formatted_values: Option<bool>,
+    use_calculated_values: Option<bool>,
+}
 
 #[wasm_bindgen]
 impl Worksheet {
@@ -126,6 +134,89 @@ impl Worksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         Ok(ws.formatted_value_at(row, col as u16))
+    }
+
+    #[wasm_bindgen(skip_typescript, js_name = getRowsBatch)]
+    pub fn get_rows_batch(
+        &self,
+        start_row: u32,
+        max_rows: u32,
+        options: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsValue::from(JsError::new("Worksheet no longer exists")))?;
+
+        let options = if options.is_null() || options.is_undefined() {
+            None
+        } else {
+            Some(
+                serde_wasm_bindgen::from_value::<WasmRowsOptions>(options)
+                    .map_err(|e| JsValue::from(to_js_error(e)))?,
+            )
+        };
+
+        let use_formatted = options
+            .as_ref()
+            .and_then(|o| o.use_formatted_values)
+            .unwrap_or(false);
+        let use_calculated = options
+            .as_ref()
+            .and_then(|o| o.use_calculated_values)
+            .unwrap_or(false);
+
+        let end_row = ws
+            .used_range()
+            .map(|r| r.end.row)
+            .unwrap_or(0)
+            .min(start_row.saturating_add(max_rows).saturating_sub(1));
+
+        if start_row > end_row {
+            let rows: Vec<WasmRow> = Vec::new();
+            return to_js_value(&rows).map_err(JsValue::from);
+        }
+
+        let coords = ws.populated_cells_in_range(start_row, end_row);
+        let mut rows = Vec::new();
+        let mut current_row = None;
+        let mut current_cells = Vec::new();
+
+        for (row, col) in coords {
+            if current_row != Some(row) {
+                if let Some(prev_row) = current_row {
+                    rows.push(WasmRow {
+                        index: prev_row,
+                        cells: std::mem::take(&mut current_cells),
+                    });
+                }
+                current_row = Some(row);
+            }
+
+            let value = if use_formatted {
+                ws.formatted_value_at(row, col)
+            } else if use_calculated {
+                ws.get_calculated_value_at(row, col)
+                    .map(|v| v.to_string())
+                    .unwrap_or_default()
+            } else {
+                ws.get_value_at(row, col).to_string()
+            };
+
+            current_cells.push(WasmRowCell {
+                col: col as u32,
+                value,
+            });
+        }
+
+        if let Some(last_row) = current_row {
+            rows.push(WasmRow {
+                index: last_row,
+                cells: current_cells,
+            });
+        }
+
+        to_js_value(&rows).map_err(JsValue::from)
     }
 
     #[wasm_bindgen(getter, js_name = defaultRowHeight)]

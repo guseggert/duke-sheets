@@ -156,12 +156,19 @@ impl Worksheet {
 
     /// Get image metadata for a cell, if any.
     pub fn get_image_at(&self, row: u32, col: u16) -> Option<ImageInfo> {
-        self.image_metadata.read().unwrap().get(&(row, col)).cloned()
+        self.image_metadata
+            .read()
+            .unwrap()
+            .get(&(row, col))
+            .cloned()
     }
 
     /// Store image metadata for a cell (called by the evaluator through a shared reference).
     pub fn set_image_at(&self, row: u32, col: u16, info: ImageInfo) {
-        self.image_metadata.write().unwrap().insert((row, col), info);
+        self.image_metadata
+            .write()
+            .unwrap()
+            .insert((row, col), info);
     }
 
     /// Clear all image metadata (called before recalculation).
@@ -649,6 +656,25 @@ impl Worksheet {
         bounds.map(|(min_row, min_col, max_row, max_col)| {
             CellRange::from_indices(min_row, min_col, max_row, max_col)
         })
+    }
+
+    /// Returns (row, col) pairs for all non-empty cells in [start_row, end_row] inclusive.
+    /// Results are sorted by (row, col). Empty-value cells (style-only) are excluded.
+    pub fn populated_cells_in_range(&self, start_row: u32, end_row: u32) -> Vec<(u32, u16)> {
+        let mut coords: Vec<(u32, u16)> = self
+            .cells
+            .cells_map()
+            .iter()
+            .filter_map(|(&(row, col), data)| {
+                if row >= start_row && row <= end_row && !data.value.is_empty() {
+                    Some((row, col))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        coords.sort_unstable();
+        coords
     }
 
     /// Clear all cells in a range
@@ -1797,6 +1823,24 @@ mod tests {
         assert_eq!(range.start.col, 3);
         assert_eq!(range.end.row, 10);
         assert_eq!(range.end.col, 7);
+    }
+
+    #[test]
+    fn test_populated_cells_in_range_skips_style_only_cells() {
+        let mut ws = Worksheet::new("Test");
+
+        ws.set_cell_value_at(2, 5, "A").unwrap();
+        ws.set_cell_style_at(3, 1, &Style::new().bold(true))
+            .unwrap();
+        ws.set_cell_formula_at(3, 2, "=1+1").unwrap();
+        ws.set_formula_with_cached_value_at(4, 1, "=2+2", CellValue::Number(4.0))
+            .unwrap();
+        ws.set_cell_value_at(4, 3, "B").unwrap();
+
+        assert_eq!(
+            ws.populated_cells_in_range(2, 4),
+            vec![(2, 5), (4, 1), (4, 3)]
+        );
     }
 
     #[test]

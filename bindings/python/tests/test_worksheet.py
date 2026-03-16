@@ -179,3 +179,65 @@ class TestWorksheetRepr:
         r = repr(sheet)
         assert "Worksheet" in r
         assert "Sheet1" in r
+
+
+class TestIterateRows:
+    """Test sparse row iteration."""
+
+    def test_iterate_rows_basic(self, workbook):
+        """Should iterate sparse rows with for loop."""
+        sheet = workbook.get_sheet(0)
+        sheet.set_cell("A1", 10)
+        sheet.set_cell("C1", "hello")
+        sheet.set_cell("A3", 42)
+        sheet.set_cell("B5", True)
+
+        rows = list(sheet.iterate_rows())
+
+        assert len(rows) == 3  # rows 0, 2, 4
+        assert rows[0].index == 0
+        assert len(rows[0].cells) == 2
+        assert rows[0].cells[0].col == 0
+        assert rows[0].cells[0].value == "10"
+        assert rows[0].cells[1].col == 2
+        assert rows[0].cells[1].value == "hello"
+        assert rows[1].index == 2
+        assert rows[1].cells[0].value == "42"
+        assert rows[2].index == 4
+        assert rows[2].cells[0].col == 1
+        assert rows[2].cells[0].value == "TRUE"
+
+    def test_iterate_rows_empty_sheet(self, workbook):
+        """Empty sheet should yield no rows."""
+        sheet = workbook.get_sheet(0)
+        rows = list(sheet.iterate_rows())
+        assert len(rows) == 0
+
+    def test_iterate_rows_calculated(self, workbook):
+        """Should return calculated values when requested."""
+        sheet = workbook.get_sheet(0)
+        sheet.set_cell("A1", 10)
+        sheet.set_cell("A2", 20)
+        sheet.set_formula("A3", "=A1+A2")
+        workbook.calculate()
+
+        rows = list(sheet.iterate_rows(use_calculated_values=True))
+        a3_row = next(r for r in rows if r.index == 2)
+        assert a3_row.cells[0].value == "30"
+
+    def test_get_rows_batch(self, workbook):
+        """get_rows_batch should return batched results."""
+        sheet = workbook.get_sheet(0)
+        sheet.set_cell("A1", "first")
+        sheet.set_cell("A100", "last")
+
+        batch1 = sheet.get_rows_batch(0, 50)
+        assert len(batch1) == 1  # only row 0 in range 0..49
+        assert batch1[0].index == 0
+
+        batch2 = sheet.get_rows_batch(50, 100)
+        assert len(batch2) == 1  # only row 99 in range 50..149
+        assert batch2[0].index == 99
+
+        batch3 = sheet.get_rows_batch(100, 100)
+        assert len(batch3) == 0

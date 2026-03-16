@@ -18,6 +18,7 @@ mod types;
 pub use types::*;
 mod workbook_read;
 mod worksheet_read;
+pub use worksheet_read::PyRowIterator;
 
 // Error Conversion
 
@@ -201,10 +202,7 @@ pub struct PyCalculationImage {
 #[pymethods]
 impl PyCalculationImage {
     fn __repr__(&self) -> String {
-        format!(
-            "CalculationImage(source={:?})",
-            self.source
-        )
+        format!("CalculationImage(source={:?})", self.source)
     }
 }
 
@@ -237,7 +235,6 @@ pub struct PyCalculationStats {
 
 #[pymethods]
 impl PyCalculationStats {
-
     fn __repr__(&self) -> String {
         format!(
             "CalculationStats(formulas={}, calculated={}, errors={}, circular={}, converged={})",
@@ -482,7 +479,6 @@ impl PyWorksheet {
         Ok(ws.custom_column_widths().get(&col).copied())
     }
 
-
     /// Get IMAGE() metadata for a cell, or None if no image.
     ///
     /// Args:
@@ -710,16 +706,18 @@ impl PyWorkbook {
             }) as Arc<dyn Fn(&str) -> Option<String> + Send + Sync>
         });
         let rtd_fn_arc = rtd_fn.map(|py_fn| {
-            Arc::new(move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
-                Python::with_gil(|py| {
-                    let topics_vec: Vec<String> = topics.to_vec();
-                    let result = py_fn.call1(py, (prog_id, server, topics_vec)).ok()?;
-                    if result.is_none(py) {
-                        return None;
-                    }
-                    result.extract::<String>(py).ok()
-                })
-            }) as Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>
+            Arc::new(
+                move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
+                    Python::with_gil(|py| {
+                        let topics_vec: Vec<String> = topics.to_vec();
+                        let result = py_fn.call1(py, (prog_id, server, topics_vec)).ok()?;
+                        if result.is_none(py) {
+                            return None;
+                        }
+                        result.extract::<String>(py).ok()
+                    })
+                },
+            ) as Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>
         });
         let options = CalculationOptions {
             iterative,
@@ -841,6 +839,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRichTextRun>()?;
     m.add_class::<PyRunFont>()?;
     m.add_class::<PyHyperlinkEntry>()?;
+    m.add_class::<PyRowCell>()?;
+    m.add_class::<PyRow>()?;
+    m.add_class::<PyRowIterator>()?;
     m.add_class::<PyFormulaCell>()?;
     m.add_class::<PySpillSource>()?;
     m.add_class::<PyMergedRegion>()?;

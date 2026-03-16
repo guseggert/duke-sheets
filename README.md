@@ -1,20 +1,29 @@
 # Duke Sheets
 
-A Rust library for reading, writing, and manipulating Excel spreadsheets with full formula evaluation.
+A library for reading, writing, and manipulating Excel spreadsheets with full formula evaluation.
 
 Includes bindings for:
 
 - Python
 - NodeJS
 - WebAssembly
+- Rust
 
-## Features
+Duke Sheets includes an extensive test suite:
 
-- **File Formats**: `.xlsx`, `.xlsm`, `.xltx`, `.xltm` (Excel 2007+), `.xls` (legacy), `.csv`
-- **Formula Engine**: Full evaluation of ~506 Excel functions
-- **Charts**: Create, read, and modify chart types
-- **Styling**: Fonts, colors, borders, number formats
-- **High Performance**: Multi-threaded calculation engine, works in seconds on workbooks with millions of formulas
+- Formula tests covering Excel's documentation cases
+- Compatibility tests against both LibreOffice and Excel
+- Fuzz testing
+- Performance benchmarks
+- Corpus testing on real-world spreadsheets
+
+Duke Sheets has a high-performance multithreaded formula engine which can evaluate millions of formulas in seconds, and has been profiled against some of the most complex financial spreadsheets in the world.
+
+Supported file formats: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xls`, `.csv`
+
+Additional supported features:
+
+- Styling (fonts, colors, borders, number formatting)
 
 ## Node.js / TypeScript
 

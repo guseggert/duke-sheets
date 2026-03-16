@@ -220,6 +220,11 @@ export declare class Worksheet {
   getFormattedValue(address: string): string
   /** Get the display-formatted value by row/col (0-based). */
   getFormattedValueAt(row: number, col: number): string
+  /**
+   * Iterate over all rows with data as sparse rows.
+   * Only non-empty cells are included. Internally batches FFI calls for performance.
+   */
+  iterateRows(opts?: JsRowsOptions): RowIterator
   /** Default row height in points. */
   get defaultRowHeight(): number
   /** Default column width in character units. */
@@ -747,6 +752,30 @@ export interface JsPageSetup {
 export interface JsRichTextRun {
   text: string
   font?: JsRunFont
+}
+
+/** A sparse row containing only non-empty cells. */
+export interface JsRow {
+  /** Row index (0-based). */
+  index: number
+  /** Non-empty cells in this row, sorted by column. */
+  cells: Array<JsRowCell>
+}
+
+/** A single cell within a sparse row. */
+export interface JsRowCell {
+  /** Column index (0-based). */
+  col: number
+  /** String representation of the cell value. */
+  value: string
+}
+
+/** Options for row iteration. */
+export interface JsRowsOptions {
+  /** Use display-formatted values (e.g., "$1,234.56") instead of raw values. */
+  useFormattedValues?: boolean
+  /** Use calculated values for formula cells (requires prior calculate() call). */
+  useCalculatedValues?: boolean
 }
 
 /** Font properties for a rich text run (all fields optional — unset inherits cell style). */

@@ -647,3 +647,95 @@ fn test_web_service_fn_returning_null() {
     assert!(val.is_error());
     assert_eq!(val.as_error().unwrap(), "#N/A");
 }
+
+// Sparse Row Iteration Tests
+
+#[wasm_bindgen_test]
+fn test_get_rows_batch_basic() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    sheet.set_cell("A1", JsValue::from_f64(10.0)).unwrap();
+    sheet.set_cell("C1", JsValue::from_str("hello")).unwrap();
+    sheet.set_cell("A3", JsValue::from_f64(42.0)).unwrap();
+    sheet.set_cell("B5", JsValue::from_bool(true)).unwrap();
+
+    let result = sheet.get_rows_batch(0, 1000, JsValue::UNDEFINED).unwrap();
+    let rows: Vec<JsValue> = js_sys::Array::from(&result).iter().collect();
+
+    assert_eq!(rows.len(), 3); // rows 0, 2, 4
+
+    // Row 0 should have 2 cells (A1 and C1)
+    let row0 = &rows[0];
+    assert_eq!(get_f64_field(row0, "index") as u32, 0);
+    let cells0: Vec<JsValue> = js_sys::Array::from(&Reflect::get(row0, &JsValue::from_str("cells")).unwrap()).iter().collect();
+    assert_eq!(cells0.len(), 2);
+    assert_eq!(get_f64_field(&cells0[0], "col") as u32, 0);
+    assert_eq!(get_string_field(&cells0[0], "value"), "10");
+    assert_eq!(get_f64_field(&cells0[1], "col") as u32, 2);
+    assert_eq!(get_string_field(&cells0[1], "value"), "hello");
+
+    // Row 2 (index 2) has A3
+    let row1 = &rows[1];
+    assert_eq!(get_f64_field(row1, "index") as u32, 2);
+
+    // Row 4 (index 4) has B5
+    let row2 = &rows[2];
+    assert_eq!(get_f64_field(row2, "index") as u32, 4);
+}
+
+#[wasm_bindgen_test]
+fn test_get_rows_batch_empty_sheet() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    let result = sheet.get_rows_batch(0, 1000, JsValue::UNDEFINED).unwrap();
+    let rows: Vec<JsValue> = js_sys::Array::from(&result).iter().collect();
+    assert_eq!(rows.len(), 0);
+}
+
+#[wasm_bindgen_test]
+fn test_get_rows_batch_range() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    sheet.set_cell("A1", JsValue::from_str("first")).unwrap();
+    sheet.set_cell("A100", JsValue::from_str("last")).unwrap();
+
+    // Only row 0 in range 0..49
+    let batch1 = sheet.get_rows_batch(0, 50, JsValue::UNDEFINED).unwrap();
+    let rows1: Vec<JsValue> = js_sys::Array::from(&batch1).iter().collect();
+    assert_eq!(rows1.len(), 1);
+    assert_eq!(get_f64_field(&rows1[0], "index") as u32, 0);
+
+    // Only row 99 in range 50..149
+    let batch2 = sheet.get_rows_batch(50, 100, JsValue::UNDEFINED).unwrap();
+    let rows2: Vec<JsValue> = js_sys::Array::from(&batch2).iter().collect();
+    assert_eq!(rows2.len(), 1);
+    assert_eq!(get_f64_field(&rows2[0], "index") as u32, 99);
+
+    // No data beyond row 99
+    let batch3 = sheet.get_rows_batch(100, 100, JsValue::UNDEFINED).unwrap();
+    let rows3: Vec<JsValue> = js_sys::Array::from(&batch3).iter().collect();
+    assert_eq!(rows3.len(), 0);
+}
+
+#[wasm_bindgen_test]
+fn test_get_rows_batch_calculated() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    sheet.set_cell("A1", JsValue::from_f64(10.0)).unwrap();
+    sheet.set_cell("A2", JsValue::from_f64(20.0)).unwrap();
+    sheet.set_formula("A3", "=A1+A2").unwrap();
+    wb.calculate(None).unwrap();
+
+    let opts = make_options(&[("useCalculatedValues", JsValue::from(true))]);
+    let result = sheet.get_rows_batch(0, 1000, opts).unwrap();
+    let rows: Vec<JsValue> = js_sys::Array::from(&result).iter().collect();
+
+    // Row 2 (A3) should have the calculated value
+    let row2 = &rows[2];
+    let cells: Vec<JsValue> = js_sys::Array::from(&Reflect::get(row2, &JsValue::from_str("cells")).unwrap()).iter().collect();
+    assert_eq!(get_string_field(&cells[0], "value"), "30");
+}

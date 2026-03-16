@@ -3,15 +3,14 @@
 //! This module provides efficient sparse storage for spreadsheet cells.
 //! Only non-empty cells are stored, using a flat HashMap for O(1) lookups.
 
-use std::collections::BTreeMap;
 use ahash::AHashMap;
+use std::collections::BTreeMap;
 
 use super::{CellValue, FormulaData, StringPool};
 use crate::style::StylePool;
 
 /// Storage mode for cell data
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StorageMode {
     /// Standard in-memory storage (default)
     #[default]
@@ -20,7 +19,6 @@ pub enum StorageMode {
     /// Uses more CPU to reduce memory usage
     MemoryOptimized,
 }
-
 
 /// Complete data for a single cell
 #[derive(Debug, Clone)]
@@ -210,6 +208,11 @@ impl CellStorage {
         self.cells.get_mut(&(row, col))
     }
 
+    /// Get read-only access to the underlying cell map.
+    pub fn cells_map(&self) -> &AHashMap<(u32, u16), CellData> {
+        &self.cells
+    }
+
     /// Set a cell value
     ///
     /// If the cell data is empty (no value, default style), the cell is removed.
@@ -316,7 +319,8 @@ impl CellStorage {
 
     /// Iterate over all cells in row-major order
     pub fn iter(&self) -> impl Iterator<Item = (u32, u16, &CellData)> {
-        let mut entries: Vec<_> = self.cells
+        let mut entries: Vec<_> = self
+            .cells
             .iter()
             .map(|(&(row, col), data)| (row, col, data))
             .collect();
@@ -326,7 +330,8 @@ impl CellStorage {
 
     /// Iterate over cells in a specific row
     pub fn iter_row(&self, row: u32) -> impl Iterator<Item = (u16, &CellData)> {
-        let mut entries: Vec<_> = self.cells
+        let mut entries: Vec<_> = self
+            .cells
             .iter()
             .filter_map(|(&(r, col), data)| if r == row { Some((col, data)) } else { None })
             .collect();

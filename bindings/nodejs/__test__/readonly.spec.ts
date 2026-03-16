@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Workbook } from "../index.js";
+import { Workbook } from "../lib.js";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
@@ -599,5 +599,84 @@ describe("Read-only API with XLSX roundtrip", () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Worksheet.iterateRows() sparse iterator", () => {
+  it("iterates sparse rows with for...of", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", 10);
+    sheet.setCell("C1", "hello");
+    sheet.setCell("A3", 42);
+    sheet.setCell("B5", true);
+
+    const rows = [];
+    for (const row of sheet.iterateRows()) {
+      rows.push(row);
+    }
+
+    expect(rows).toHaveLength(3); // rows 0, 2, 4
+    expect(rows[0].index).toBe(0);
+    expect(rows[0].cells).toHaveLength(2);
+    expect(rows[0].cells[0]).toEqual({ col: 0, value: "10" });
+    expect(rows[0].cells[1]).toEqual({ col: 2, value: "hello" });
+    expect(rows[1].index).toBe(2);
+    expect(rows[1].cells).toHaveLength(1);
+    expect(rows[1].cells[0]).toEqual({ col: 0, value: "42" });
+    expect(rows[2].index).toBe(4);
+    expect(rows[2].cells[0]).toEqual({ col: 1, value: "TRUE" });
+  });
+
+  it("returns empty iterator for empty sheet", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    const rows = [...sheet.iterateRows()];
+    expect(rows).toHaveLength(0);
+  });
+
+  it("supports useFormattedValues option", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", 0.5);
+
+    const rawRows = [...sheet.iterateRows()];
+    expect(rawRows[0].cells[0].value).toBe("0.5");
+
+    const fmtRows = [...sheet.iterateRows({ useFormattedValues: true })];
+    // Without a number format, formatted output may differ slightly
+    expect(fmtRows[0].cells[0].value).toBeDefined();
+  });
+
+  it("supports useCalculatedValues option", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", 10);
+    sheet.setCell("A2", 20);
+    sheet.setFormula("A3", "=A1+A2");
+    wb.calculate();
+
+    const rows = [...sheet.iterateRows({ useCalculatedValues: true })];
+    const a3Row = rows.find((r) => r.index === 2);
+    expect(a3Row).toBeDefined();
+    expect(a3Row!.cells[0].value).toBe("30");
+  });
+
+  it("getRowsBatch returns batched results", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "first");
+    sheet.setCell("A100", "last");
+
+    const batch1 = sheet.getRowsBatch(0, 50);
+    expect(batch1).toHaveLength(1); // only row 0 has data in 0..49
+    expect(batch1[0].index).toBe(0);
+
+    const batch2 = sheet.getRowsBatch(50, 100);
+    expect(batch2).toHaveLength(1); // only row 99 has data in 50..149
+    expect(batch2[0].index).toBe(99);
+
+    const batch3 = sheet.getRowsBatch(100, 100);
+    expect(batch3).toHaveLength(0); // no data beyond row 99
   });
 });
