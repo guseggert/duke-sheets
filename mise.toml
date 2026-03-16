@@ -431,7 +431,6 @@ exit $TEST_EXIT
 
 [tasks."release:node"]
 description = "Bump Node.js binding version and rebuild"
-usage = 'release:node <version>'
 run = '''
 #!/bin/bash
 set -euo pipefail
@@ -452,7 +451,6 @@ echo "Done. Verify with: git diff bindings/nodejs/"
 
 [tasks."release:python"]
 description = "Bump Python binding version"
-usage = 'release:python <version>'
 run = '''
 #!/bin/bash
 set -euo pipefail
@@ -471,7 +469,6 @@ echo "Done. Verify with: git diff bindings/python/"
 
 [tasks."release:wasm"]
 description = "Bump WASM binding version and rebuild"
-usage = 'release:wasm <version>'
 run = '''
 #!/bin/bash
 set -euo pipefail
