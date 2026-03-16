@@ -677,6 +677,19 @@ impl Worksheet {
         coords
     }
 
+    /// Returns an iterator over all stored cells (including empty-value styled cells)
+    /// in the given row range.
+    pub fn cells_map_in_range(
+        &self,
+        start_row: u32,
+        end_row: u32,
+    ) -> impl Iterator<Item = (&(u32, u16), &CellData)> {
+        self.cells
+            .cells_map()
+            .iter()
+            .filter(move |(&(row, _), _)| row >= start_row && row <= end_row)
+    }
+
     /// Clear all cells in a range
     pub fn clear_range(&mut self, range: &CellRange) {
         for addr in range.cells() {

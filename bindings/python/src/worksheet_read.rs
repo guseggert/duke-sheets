@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::Workbook;
@@ -5,10 +6,11 @@ use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 
 use crate::{
-    to_py_err, PyAutoFilter, PyColor, PyComment, PyCommentEntry, PyConditionalFormatRule,
-    PyDataValidation, PyFormulaCell, PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergeSpan,
-    PyMergedRegion, PyPageBreak, PyPageSetup, PyRow, PyRowCell, PySelection, PySheetProtection,
-    PySpillSource, PySplitPanes, PyStyle, PyTable, PyWorksheet,
+    image_sizing_to_python, to_py_err, PyAutoFilter, PyCalculationImage, PyColor, PyComment,
+    PyCommentEntry, PyConditionalFormatRule, PyDataValidation, PyFormulaCell, PyFreezePanes,
+    PyHyperlink, PyHyperlinkEntry, PyMergeSpan, PyMergedRegion, PyPageBreak, PyPageSetup, PyRow,
+    PyRowCell, PySelection, PySheetProtection, PySpillSource, PySplitPanes, PyStyle, PyTable,
+    PyWorksheet,
 };
 
 const ROW_ITER_BATCH_SIZE: u32 = 1000;
@@ -20,6 +22,12 @@ fn sparse_rows_batch(
     max_rows: u32,
     use_formatted_values: bool,
     use_calculated_values: bool,
+    include_styles: bool,
+    include_merge_info: bool,
+    include_hyperlinks: bool,
+    include_comments: bool,
+    include_formulas: bool,
+    include_images: bool,
 ) -> PyResult<Vec<PyRow>> {
     let wb = workbook.read().map_err(to_py_err)?;
     let ws = wb
@@ -36,12 +44,60 @@ fn sparse_rows_batch(
         return Ok(vec![]);
     }
 
-    let coords = ws.populated_cells_in_range(start_row, end_row);
+    let mut coords: BTreeSet<(u32, u16)> = ws
+        .populated_cells_in_range(start_row, end_row)
+        .into_iter()
+        .collect();
+
+    if include_styles {
+        for (&(row, col), data) in ws.cells_map_in_range(start_row, end_row) {
+            if data.style_index != 0 {
+                coords.insert((row, col));
+            }
+        }
+    }
+
+    if include_merge_info {
+        for region in ws.merged_regions() {
+            for row in region.start.row.max(start_row)..=region.end.row.min(end_row) {
+                for col in region.start.col..=region.end.col {
+                    coords.insert((row, col));
+                }
+            }
+        }
+    }
+
+    if include_hyperlinks {
+        for (addr, _) in ws.hyperlinks() {
+            if addr.row >= start_row && addr.row <= end_row {
+                coords.insert((addr.row, addr.col));
+            }
+        }
+    }
+
+    if include_comments {
+        for ((row, col), _) in ws.comments() {
+            if row >= start_row && row <= end_row {
+                coords.insert((row, col));
+            }
+        }
+    }
+
+    if include_formulas {
+        for (row, col, _) in ws.formula_cells() {
+            if row >= start_row && row <= end_row {
+                coords.insert((row, col));
+            }
+        }
+    }
+
     let mut rows = Vec::new();
     let mut current_row = None;
     let mut current_cells = Vec::new();
 
-    for (row, col) in coords {
+    for (row, col) in &coords {
+        let (row, col) = (*row, *col);
+
         if current_row != Some(row) {
             if let Some(prev_row) = current_row {
                 rows.push(PyRow {
@@ -62,9 +118,74 @@ fn sparse_rows_batch(
             ws.get_value_at(row, col).to_string()
         };
 
+        let style = if include_styles {
+            ws.cell_style_at(row, col).map(PyStyle::from)
+        } else {
+            None
+        };
+
+        let merge_span = if include_merge_info {
+            ws.get_merge_span(row, col)
+                .map(|(row_span, col_span)| PyMergeSpan {
+                    row_span,
+                    col_span: col_span as u32,
+                })
+        } else {
+            None
+        };
+
+        let is_merged_secondary = if include_merge_info {
+            let is_secondary = ws.is_merged_secondary(row, col);
+            if is_secondary {
+                Some(true)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let hyperlink = if include_hyperlinks {
+            ws.hyperlink_at(row, col).map(PyHyperlink::from)
+        } else {
+            None
+        };
+
+        let comment = if include_comments {
+            ws.comment_at(row, col).map(PyComment::from)
+        } else {
+            None
+        };
+
+        let formula = if include_formulas {
+            ws.get_formula_at(row, col)
+                .map(|formula| formula.to_string())
+        } else {
+            None
+        };
+
+        let image = if include_images {
+            ws.get_image_at(row, col).map(|info| PyCalculationImage {
+                source: info.source,
+                alt_text: info.alt_text,
+                sizing: image_sizing_to_python(info.sizing).to_string(),
+                width: info.width,
+                height: info.height,
+            })
+        } else {
+            None
+        };
+
         current_cells.push(PyRowCell {
             col: col as u32,
             value,
+            style,
+            merge_span,
+            is_merged_secondary,
+            hyperlink,
+            comment,
+            formula,
+            image,
         });
     }
 
@@ -92,6 +213,12 @@ pub struct PyRowIterator {
     sheet_index: usize,
     use_formatted_values: bool,
     use_calculated_values: bool,
+    include_styles: bool,
+    include_merge_info: bool,
+    include_hyperlinks: bool,
+    include_comments: bool,
+    include_formulas: bool,
+    include_images: bool,
     next_row: u32,
     max_row: u32,
     buffer: Vec<PyRow>,
@@ -121,6 +248,12 @@ impl PyRowIterator {
                 batch_size,
                 self.use_formatted_values,
                 self.use_calculated_values,
+                self.include_styles,
+                self.include_merge_info,
+                self.include_hyperlinks,
+                self.include_comments,
+                self.include_formulas,
+                self.include_images,
             )?;
             self.cursor = 0;
 
@@ -244,13 +377,31 @@ impl PyWorksheet {
         Ok(ws.formatted_value_at(row, col as u16))
     }
 
-    #[pyo3(signature = (start_row, max_rows, *, use_formatted_values=false, use_calculated_values=false))]
+    #[pyo3(signature = (
+        start_row,
+        max_rows,
+        *,
+        use_formatted_values=false,
+        use_calculated_values=false,
+        include_styles=None,
+        include_merge_info=None,
+        include_hyperlinks=None,
+        include_comments=None,
+        include_formulas=None,
+        include_images=None
+    ))]
     fn get_rows_batch(
         &self,
         start_row: u32,
         max_rows: u32,
         use_formatted_values: bool,
         use_calculated_values: bool,
+        include_styles: Option<bool>,
+        include_merge_info: Option<bool>,
+        include_hyperlinks: Option<bool>,
+        include_comments: Option<bool>,
+        include_formulas: Option<bool>,
+        include_images: Option<bool>,
     ) -> PyResult<Vec<PyRow>> {
         sparse_rows_batch(
             &self.workbook,
@@ -259,20 +410,48 @@ impl PyWorksheet {
             max_rows,
             use_formatted_values,
             use_calculated_values,
+            include_styles.unwrap_or(false),
+            include_merge_info.unwrap_or(false),
+            include_hyperlinks.unwrap_or(false),
+            include_comments.unwrap_or(false),
+            include_formulas.unwrap_or(false),
+            include_images.unwrap_or(false),
         )
     }
 
-    #[pyo3(signature = (*, use_formatted_values=false, use_calculated_values=false))]
+    #[pyo3(signature = (
+        *,
+        use_formatted_values=false,
+        use_calculated_values=false,
+        include_styles=None,
+        include_merge_info=None,
+        include_hyperlinks=None,
+        include_comments=None,
+        include_formulas=None,
+        include_images=None
+    ))]
     fn iterate_rows(
         &self,
         use_formatted_values: bool,
         use_calculated_values: bool,
+        include_styles: Option<bool>,
+        include_merge_info: Option<bool>,
+        include_hyperlinks: Option<bool>,
+        include_comments: Option<bool>,
+        include_formulas: Option<bool>,
+        include_images: Option<bool>,
     ) -> PyResult<PyRowIterator> {
         Ok(PyRowIterator {
             workbook: Arc::clone(&self.workbook),
             sheet_index: self.sheet_index,
             use_formatted_values,
             use_calculated_values,
+            include_styles: include_styles.unwrap_or(false),
+            include_merge_info: include_merge_info.unwrap_or(false),
+            include_hyperlinks: include_hyperlinks.unwrap_or(false),
+            include_comments: include_comments.unwrap_or(false),
+            include_formulas: include_formulas.unwrap_or(false),
+            include_images: include_images.unwrap_or(false),
             next_row: 0,
             max_row: worksheet_max_row(&self.workbook, self.sheet_index)?,
             buffer: Vec::new(),

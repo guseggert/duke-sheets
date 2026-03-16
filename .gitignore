@@ -55,3 +55,11 @@ bindings/nodejs/artifacts/
 # Fuzz testing artifacts
 fuzz/artifacts/
 fuzz/corpus/
+
+# Data files
+*.xls
+*.xlsx
+*.xlsm
+*.xltx
+*.xltm
+data/

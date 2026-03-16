@@ -1,8 +1,6 @@
 use wasm_bindgen::prelude::*;
 
-use crate::{
-    to_js_value, types::WasmNamedRange, types::WasmWorkbookSettings, Workbook,
-};
+use crate::{to_js_value, types::WasmNamedRange, types::WasmWorkbookSettings, Workbook};
 
 #[wasm_bindgen]
 impl Workbook {

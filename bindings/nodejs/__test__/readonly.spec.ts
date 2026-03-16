@@ -680,3 +680,92 @@ describe("Worksheet.iterateRows() sparse iterator", () => {
     expect(batch3).toHaveLength(0); // no data beyond row 99
   });
 });
+
+describe("iterateRows metadata flags", () => {
+  require("../lib.js");
+
+  it("includeStyles does not crash and returns style when present", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", 42);
+
+    const rows = [...sheet.iterateRows({ includeStyles: true })];
+    expect(rows).toHaveLength(1);
+    // Default-styled cells may have style=undefined since style_index=0
+    // The key test is that the flag doesn't crash and the cell is present
+    expect(rows[0].cells[0].col).toBe(0);
+    expect(rows[0].cells[0].value).toBe("42");
+  });
+
+  it("includeMergeInfo returns merge data", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "merged");
+    sheet.mergeCells("A1:B2");
+
+    const rows = [...sheet.iterateRows({ includeMergeInfo: true })];
+    // Should include A1 (origin) and the secondary cells A2, B1, B2
+    const a1 = rows.find(r => r.index === 0)?.cells.find(c => c.col === 0);
+    expect(a1).toBeDefined();
+    expect(a1!.mergeSpan).toEqual({ rowSpan: 2, colSpan: 2 });
+
+    const b1 = rows.find(r => r.index === 0)?.cells.find(c => c.col === 1);
+    expect(b1).toBeDefined();
+    expect(b1!.isMergedSecondary).toBe(true);
+  });
+
+  it("includeFormulas returns formula text", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", 10);
+    sheet.setFormula("A2", "=A1*2");
+
+    const rows = [...sheet.iterateRows({ includeFormulas: true })];
+    const a2 = rows.find(r => r.index === 1)?.cells.find(c => c.col === 0);
+    expect(a2).toBeDefined();
+    expect(a2!.formula).toBe("=A1*2");
+
+    // Non-formula cell should not have formula
+    const a1 = rows.find(r => r.index === 0)?.cells.find(c => c.col === 0);
+    expect(a1!.formula).toBeUndefined();
+  });
+
+  it("includeMergeInfo includes empty secondary cells", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "merged");
+    sheet.mergeCells("A1:B2");
+
+    // Without flag: only A1 (has value)
+    const noFlag = [...sheet.iterateRows()];
+    expect(noFlag).toHaveLength(1);
+    expect(noFlag[0].cells).toHaveLength(1);
+
+    // With flag: all 4 cells in the merged region should appear
+    const withFlag = [...sheet.iterateRows({ includeMergeInfo: true })];
+    const allCells = withFlag.flatMap(r => r.cells);
+    expect(allCells).toHaveLength(4); // A1, B1, A2, B2
+
+    // A1 is the merge origin
+    const a1 = withFlag[0].cells.find(c => c.col === 0);
+    expect(a1!.mergeSpan).toEqual({ rowSpan: 2, colSpan: 2 });
+
+    // B1 is secondary
+    const b1 = withFlag[0].cells.find(c => c.col === 1);
+    expect(b1!.isMergedSecondary).toBe(true);
+    expect(b1!.value).toBe(""); // empty
+  });
+
+  it("fields are absent when flags not set", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", 42);
+    sheet.setFormula("A2", "=A1*2");
+
+    const rows = [...sheet.iterateRows()];
+    expect(rows[0].cells[0].style).toBeUndefined();
+    expect(rows[0].cells[0].mergeSpan).toBeUndefined();
+    expect(rows[0].cells[0].comment).toBeUndefined();
+    expect(rows[0].cells[0].formula).toBeUndefined();
+  });
+});

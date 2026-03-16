@@ -10,6 +10,8 @@ use duke_sheets_core::{
 };
 use pyo3::prelude::*;
 
+use crate::PyCalculationImage;
+
 #[pyclass(name = "Color")]
 #[derive(Clone)]
 pub struct PyColor {
@@ -1367,6 +1369,20 @@ pub struct PyRowCell {
     pub col: u32,
     #[pyo3(get)]
     pub value: String,
+    #[pyo3(get)]
+    pub style: Option<PyStyle>,
+    #[pyo3(get)]
+    pub merge_span: Option<PyMergeSpan>,
+    #[pyo3(get)]
+    pub is_merged_secondary: Option<bool>,
+    #[pyo3(get)]
+    pub hyperlink: Option<PyHyperlink>,
+    #[pyo3(get)]
+    pub comment: Option<PyComment>,
+    #[pyo3(get)]
+    pub formula: Option<String>,
+    #[pyo3(get)]
+    pub image: Option<PyCalculationImage>,
 }
 
 #[pyclass(name = "Row")]

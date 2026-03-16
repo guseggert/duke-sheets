@@ -65,10 +65,14 @@ run = "wasm-pack build --target web --dev"
 description = "Build Node.js/TypeScript bindings"
 dir = "bindings/nodejs"
 run = "npm run build"
+
 [tasks."build:wasm:release"]
-description = "Build WASM bindings (release)"
+description = "Build WASM bindings (release, all targets)"
 dir = "bindings/wasm"
-run = "wasm-pack build --target web --release"
+run = '''
+wasm-pack build --target web --release --out-dir pkg-web
+wasm-pack build --target nodejs --release --out-dir pkg
+'''
 
 # =============================================================================
 # Test Tasks
@@ -420,3 +424,102 @@ docker stop "$CONTAINER_ID" 2>/dev/null || true
 
 exit $TEST_EXIT
 """
+
+# =============================================================================
+# Release Tasks
+# =============================================================================
+
+[tasks."release:node"]
+description = "Bump Node.js binding version and rebuild"
+usage = 'release:node <version>'
+run = '''
+#!/bin/bash
+set -euo pipefail
+VERSION="${1:?Usage: mise run release:node <version>}"
+echo "=== Releasing @dukelib/sheets v${VERSION} ==="
+
+# Bump source of truth + sync platform packages
+cd bindings/nodejs
+npm version "${VERSION}" --no-git-tag-version
+npx napi version
+cd ../..
+
+# Rebuild (regenerates index.js with version stamps)
+mise run build:nodejs
+
+echo "Done. Verify with: git diff bindings/nodejs/"
+'''
+
+[tasks."release:python"]
+description = "Bump Python binding version"
+usage = 'release:python <version>'
+run = '''
+#!/bin/bash
+set -euo pipefail
+VERSION="${1:?Usage: mise run release:python <version>}"
+
+echo "=== Releasing duke-sheets (Python) v${VERSION} ==="
+
+# Two sources of truth that must stay in sync
+# (no build tool propagates between them)
+sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" bindings/python/Cargo.toml
+sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" bindings/python/pyproject.toml
+
+echo ""
+echo "Done. Verify with: git diff bindings/python/"
+'''
+
+[tasks."release:wasm"]
+description = "Bump WASM binding version and rebuild"
+usage = 'release:wasm <version>'
+run = '''
+#!/bin/bash
+set -euo pipefail
+VERSION="${1:?Usage: mise run release:wasm <version>}"
+echo "=== Releasing duke-sheets-wasm v${VERSION} ==="
+
+# Bump source of truth
+sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" bindings/wasm/Cargo.toml
+
+# Rebuild (wasm-pack stamps Cargo.toml version into pkg/package.json)
+mise run build:wasm:release
+
+echo "Done. Verify with: git diff bindings/wasm/"
+'''
+
+[tasks."release:all"]
+description = "Bump all binding versions and rebuild. Usage: mise run release:all --node 0.1.12 --python 0.1.3 --wasm 0.1.6"
+run = '''
+#!/bin/bash
+set -euo pipefail
+
+NODE_V="" PY_V="" WASM_V=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --node)    NODE_V="$2"; shift 2 ;;
+    --python)  PY_V="$2"; shift 2 ;;
+    --wasm)    WASM_V="$2"; shift 2 ;;
+    *) echo "Unknown arg: $1. Usage: mise run release:all --node X --python Y --wasm Z"; exit 1 ;;
+  esac
+done
+
+[[ -z "$NODE_V" ]]  && { echo "Missing --node <version>"; exit 1; }
+[[ -z "$PY_V" ]]    && { echo "Missing --python <version>"; exit 1; }
+[[ -z "$WASM_V" ]]  && { echo "Missing --wasm <version>"; exit 1; }
+
+echo "=== Releasing all bindings ==="
+echo "  Node.js: ${NODE_V}"
+echo "  Python:  ${PY_V}"
+echo "  WASM:    ${WASM_V}"
+echo ""
+
+mise run release:node "${NODE_V}"
+mise run release:python "${PY_V}"
+mise run release:wasm "${WASM_V}"
+
+echo ""
+echo "All versions bumped. To commit and tag:"
+echo "  git add bindings/ && git commit -m 'release: node ${NODE_V}, python ${PY_V}, wasm ${WASM_V}'"
+echo "  git tag node-v${NODE_V} && git tag python-v${PY_V} && git tag wasm-v${WASM_V}"
+echo "  git push && git push --tags"
+'''

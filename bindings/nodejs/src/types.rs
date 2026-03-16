@@ -24,6 +24,20 @@ pub struct JsRowCell {
     pub col: u32,
     /// String representation of the cell value.
     pub value: String,
+    /// Cell style (when includeStyles is set).
+    pub style: Option<JsStyle>,
+    /// Merge span for merge-origin cells (when includeMergeInfo is set).
+    pub merge_span: Option<JsMergeSpan>,
+    /// Whether this cell is a non-origin member of a merge (when includeMergeInfo is set).
+    pub is_merged_secondary: Option<bool>,
+    /// Hyperlink (when includeHyperlinks is set).
+    pub hyperlink: Option<JsHyperlink>,
+    /// Comment (when includeComments is set).
+    pub comment: Option<JsComment>,
+    /// Formula text (when includeFormulas is set).
+    pub formula: Option<String>,
+    /// IMAGE() metadata (when includeImages is set).
+    pub image: Option<JsImageInfo>,
 }
 
 /// A sparse row containing only non-empty cells.
@@ -42,6 +56,18 @@ pub struct JsRowsOptions {
     pub use_formatted_values: Option<bool>,
     /// Use calculated values for formula cells (requires prior calculate() call).
     pub use_calculated_values: Option<bool>,
+    /// Include cell styles.
+    pub include_styles: Option<bool>,
+    /// Include merge info (mergeSpan + isMergedSecondary).
+    pub include_merge_info: Option<bool>,
+    /// Include hyperlinks.
+    pub include_hyperlinks: Option<bool>,
+    /// Include comments.
+    pub include_comments: Option<bool>,
+    /// Include formula text.
+    pub include_formulas: Option<bool>,
+    /// Include IMAGE() metadata.
+    pub include_images: Option<bool>,
 }
 
 /// Color representation. The `colorType` field indicates the variant:
@@ -1303,4 +1329,19 @@ pub struct JsMergedRegion {
 pub struct JsMergeSpan {
     pub row_span: u32,
     pub col_span: u32,
+}
+
+/// IMAGE() metadata captured during calculation.
+#[napi(object)]
+pub struct JsImageInfo {
+    /// IMAGE source URL or path.
+    pub source: String,
+    /// IMAGE alternate text.
+    pub alt_text: String,
+    /// 0=FitCell, 1=FillCell, 2=OriginalSize, 3=Custom
+    pub sizing: u32,
+    /// Optional custom width.
+    pub width: Option<f64>,
+    /// Optional custom height.
+    pub height: Option<f64>,
 }

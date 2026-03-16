@@ -6,9 +6,9 @@ use napi_derive::napi;
 use super::{
     catch_panic, to_napi_err, JsAutoFilter, JsColor, JsComment, JsCommentEntry,
     JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
-    JsHyperlinkEntry, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsRow, JsRowCell,
-    JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle, JsTable,
-    Worksheet,
+    JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsRow,
+    JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes,
+    JsStyle, JsTable, Worksheet,
 };
 
 #[napi]
@@ -156,9 +156,12 @@ impl Worksheet {
 
     /// Get a batch of sparse rows starting from `start_row`.
     ///
-    /// Returns up to `max_rows` rows that contain non-empty cells.
-    /// Each row contains only its non-empty cells (sparse representation).
+    /// Returns up to `max_rows` rows that contain data or metadata.
+    /// Each row contains only relevant cells (sparse representation).
     /// Returns an empty array when no more rows exist.
+    ///
+    /// When metadata flags are enabled (includeStyles, includeMergeInfo, etc.),
+    /// cells with that metadata are included even if their value is empty.
     #[napi]
     pub fn get_rows_batch(
         &self,
@@ -172,31 +175,97 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
 
-            let use_formatted = options
-                .as_ref()
-                .and_then(|o| o.use_formatted_values)
-                .unwrap_or(false);
-            let use_calculated = options
-                .as_ref()
-                .and_then(|o| o.use_calculated_values)
-                .unwrap_or(false);
+            let opts = options.as_ref();
+            let use_formatted = opts.and_then(|o| o.use_formatted_values).unwrap_or(false);
+            let use_calculated = opts.and_then(|o| o.use_calculated_values).unwrap_or(false);
+            let inc_styles = opts.and_then(|o| o.include_styles).unwrap_or(false);
+            let inc_merge = opts.and_then(|o| o.include_merge_info).unwrap_or(false);
+            let inc_hyperlinks = opts.and_then(|o| o.include_hyperlinks).unwrap_or(false);
+            let inc_comments = opts.and_then(|o| o.include_comments).unwrap_or(false);
+            let inc_formulas = opts.and_then(|o| o.include_formulas).unwrap_or(false);
+            let inc_images = opts.and_then(|o| o.include_images).unwrap_or(false);
 
-            let end_row = ws
-                .used_range()
-                .map(|r| r.end.row)
-                .unwrap_or(0)
-                .min(start_row.saturating_add(max_rows).saturating_sub(1));
+            // Compute the effective max row, extending for metadata sources.
+            let mut max_row = ws.used_range().map(|r| r.end.row).unwrap_or(0);
+            if inc_merge {
+                for region in ws.merged_regions() {
+                    max_row = max_row.max(region.end.row);
+                }
+            }
+            if inc_hyperlinks {
+                for (addr, _) in ws.hyperlinks() {
+                    max_row = max_row.max(addr.row);
+                }
+            }
+            if inc_comments {
+                for ((row, _), _) in ws.comments() {
+                    max_row = max_row.max(row);
+                }
+            }
+            if inc_formulas {
+                for (row, _, _) in ws.formula_cells() {
+                    max_row = max_row.max(row);
+                }
+            }
+            let end_row = max_row.min(start_row.saturating_add(max_rows).saturating_sub(1));
 
             if start_row > end_row {
                 return Ok(vec![]);
             }
 
-            let coords = ws.populated_cells_in_range(start_row, end_row);
-            let mut rows = Vec::new();
-            let mut current_row = None;
-            let mut current_cells = Vec::new();
+            // Build the set of (row, col) coordinates to include.
+            // Start with non-empty value cells.
+            let mut coords: std::collections::BTreeSet<(u32, u16)> =
+                ws.populated_cells_in_range(start_row, end_row)
+                    .into_iter()
+                    .collect();
 
-            for (row, col) in coords {
+            // Add cells with metadata when their flag is enabled.
+            if inc_styles {
+                for (&(row, col), data) in ws.cells_map_in_range(start_row, end_row) {
+                    if data.style_index != 0 {
+                        coords.insert((row, col));
+                    }
+                }
+            }
+            if inc_merge {
+                for region in ws.merged_regions() {
+                    for row in region.start.row.max(start_row)..=region.end.row.min(end_row) {
+                        for col in region.start.col..=region.end.col {
+                            coords.insert((row, col));
+                        }
+                    }
+                }
+            }
+            if inc_hyperlinks {
+                for (addr, _) in ws.hyperlinks() {
+                    if addr.row >= start_row && addr.row <= end_row {
+                        coords.insert((addr.row, addr.col));
+                    }
+                }
+            }
+            if inc_comments {
+                for ((row, col), _) in ws.comments() {
+                    if row >= start_row && row <= end_row {
+                        coords.insert((row, col));
+                    }
+                }
+            }
+            if inc_formulas {
+                for (row, col, _) in ws.formula_cells() {
+                    if row >= start_row && row <= end_row {
+                        coords.insert((row, col));
+                    }
+                }
+            }
+
+            // Group by row and build output.
+            let mut rows: Vec<JsRow> = Vec::new();
+            let mut current_row: Option<u32> = None;
+            let mut current_cells: Vec<JsRowCell> = Vec::new();
+
+            for (row, col) in &coords {
+                let (row, col) = (*row, *col);
                 if current_row != Some(row) {
                     if let Some(prev_row) = current_row {
                         rows.push(JsRow {
@@ -217,9 +286,68 @@ impl Worksheet {
                     ws.get_value_at(row, col).to_string()
                 };
 
+                let style = if inc_styles {
+                    ws.cell_style_at(row, col).map(JsStyle::from)
+                } else {
+                    None
+                };
+
+                let merge_span = if inc_merge {
+                    ws.get_merge_span(row, col).map(|(rs, cs)| JsMergeSpan {
+                        row_span: rs,
+                        col_span: cs as u32,
+                    })
+                } else {
+                    None
+                };
+
+                let is_merged_secondary = if inc_merge {
+                    let v = ws.is_merged_secondary(row, col);
+                    if v { Some(true) } else { None }
+                } else {
+                    None
+                };
+
+                let hyperlink = if inc_hyperlinks {
+                    ws.hyperlink_at(row, col).map(JsHyperlink::from)
+                } else {
+                    None
+                };
+
+                let comment = if inc_comments {
+                    ws.comment_at(row, col).map(JsComment::from)
+                } else {
+                    None
+                };
+
+                let formula = if inc_formulas {
+                    ws.get_formula_at(row, col).map(|s| s.to_string())
+                } else {
+                    None
+                };
+
+                let image = if inc_images {
+                    ws.get_image_at(row, col).map(|info| JsImageInfo {
+                        source: info.source,
+                        alt_text: info.alt_text,
+                        sizing: info.sizing as u32,
+                        width: info.width,
+                        height: info.height,
+                    })
+                } else {
+                    None
+                };
+
                 current_cells.push(JsRowCell {
                     col: col as u32,
                     value,
+                    style,
+                    merge_span,
+                    is_merged_secondary,
+                    hyperlink,
+                    comment,
+                    formula,
+                    image,
                 });
             }
 

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use duke_sheets::{CalculationOptions, ImageSizing, WorkbookCalculationExt};
+use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
@@ -21,9 +21,22 @@ pub use types::*;
 
 #[wasm_bindgen(typescript_custom_section)]
 const ROW_ITERATOR_TYPES: &str = r#"
+declare global {
+  interface SymbolConstructor {
+    readonly dispose: unique symbol;
+  }
+}
+
 export interface JsRowCell {
   col: number;
   value: string;
+  style?: any;
+  mergeSpan?: JsMergeSpan;
+  isMergedSecondary?: boolean;
+  hyperlink?: any;
+  comment?: any;
+  formula?: string;
+  image?: any;
 }
 
 export interface JsRow {
@@ -31,9 +44,20 @@ export interface JsRow {
   cells: Array<JsRowCell>;
 }
 
+export interface JsMergeSpan {
+  rowSpan: number;
+  colSpan: number;
+}
+
 export interface JsRowsOptions {
   useFormattedValues?: boolean;
   useCalculatedValues?: boolean;
+  includeStyles?: boolean;
+  includeMergeInfo?: boolean;
+  includeHyperlinks?: boolean;
+  includeComments?: boolean;
+  includeFormulas?: boolean;
+  includeImages?: boolean;
 }
 
 export class RowIterator implements IterableIterator<JsRow> {
@@ -102,16 +126,6 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
         CellError::Spill => "#SPILL!",
         CellError::Calc => "#CALC!",
     }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmImageInfo {
-    source: String,
-    alt_text: String,
-    sizing: u32,
-    width: Option<f64>,
-    height: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -411,21 +425,7 @@ impl Worksheet {
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
 
         match ws.get_image_at(row, col as u16) {
-            Some(info) => {
-                let wasm_info = WasmImageInfo {
-                    source: info.source,
-                    alt_text: info.alt_text,
-                    sizing: match info.sizing {
-                        ImageSizing::FitCell => 0,
-                        ImageSizing::FillCell => 1,
-                        ImageSizing::OriginalSize => 2,
-                        ImageSizing::Custom => 3,
-                    },
-                    width: info.width,
-                    height: info.height,
-                };
-                to_js_value(&wasm_info)
-            }
+            Some(info) => to_js_value(&WasmImageInfo::from(info)),
             None => Ok(JsValue::NULL),
         }
     }

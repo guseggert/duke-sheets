@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "duke-sheets-python"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "duke-sheets",
  "duke-sheets-core",

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use duke_sheets_core::{
     self as core,
@@ -17,6 +17,20 @@ use duke_sheets_core::{
 pub struct WasmRowCell {
     pub col: u32,
     pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<WasmStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_span: Option<WasmMergeSpan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_merged_secondary: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hyperlink: Option<WasmHyperlink>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<WasmComment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<WasmImageInfo>,
 }
 
 #[derive(Serialize)]
@@ -24,6 +38,46 @@ pub struct WasmRowCell {
 pub struct WasmRow {
     pub index: u32,
     pub cells: Vec<WasmRowCell>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmRowsOptions {
+    pub use_formatted_values: Option<bool>,
+    pub use_calculated_values: Option<bool>,
+    pub include_styles: Option<bool>,
+    pub include_merge_info: Option<bool>,
+    pub include_hyperlinks: Option<bool>,
+    pub include_comments: Option<bool>,
+    pub include_formulas: Option<bool>,
+    pub include_images: Option<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmImageInfo {
+    pub source: String,
+    pub alt_text: String,
+    pub sizing: u32,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+impl From<core::ImageInfo> for WasmImageInfo {
+    fn from(info: core::ImageInfo) -> Self {
+        Self {
+            source: info.source,
+            alt_text: info.alt_text,
+            sizing: match info.sizing {
+                core::ImageSizing::FitCell => 0,
+                core::ImageSizing::FillCell => 1,
+                core::ImageSizing::OriginalSize => 2,
+                core::ImageSizing::Custom => 3,
+            },
+            width: info.width,
+            height: info.height,
+        }
+    }
 }
 
 #[derive(Serialize)]

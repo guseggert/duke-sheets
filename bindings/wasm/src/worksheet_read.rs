@@ -1,4 +1,5 @@
-use serde::Deserialize;
+use std::collections::BTreeSet;
+
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -6,18 +7,12 @@ use crate::{
     types::{
         WasmAutoFilter, WasmColor, WasmComment, WasmCommentEntry, WasmConditionalFormatRule,
         WasmDataValidation, WasmFormulaCell, WasmFreezePanes, WasmHyperlink, WasmHyperlinkEntry,
-        WasmMergeSpan, WasmMergedRegion, WasmPageBreak, WasmPageSetup, WasmRow, WasmRowCell,
-        WasmSelection, WasmSheetProtection, WasmSpillSource, WasmSplitPanes, WasmStyle, WasmTable,
+        WasmImageInfo, WasmMergeSpan, WasmMergedRegion, WasmPageBreak, WasmPageSetup, WasmRow,
+        WasmRowCell, WasmRowsOptions, WasmSelection, WasmSheetProtection, WasmSpillSource,
+        WasmSplitPanes, WasmStyle, WasmTable,
     },
     Worksheet,
 };
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WasmRowsOptions {
-    use_formatted_values: Option<bool>,
-    use_calculated_values: Option<bool>,
-}
 
 #[wasm_bindgen]
 impl Worksheet {
@@ -165,24 +160,88 @@ impl Worksheet {
             .as_ref()
             .and_then(|o| o.use_calculated_values)
             .unwrap_or(false);
+        let inc_styles = options
+            .as_ref()
+            .and_then(|o| o.include_styles)
+            .unwrap_or(false);
+        let inc_merge = options
+            .as_ref()
+            .and_then(|o| o.include_merge_info)
+            .unwrap_or(false);
+        let inc_hyperlinks = options
+            .as_ref()
+            .and_then(|o| o.include_hyperlinks)
+            .unwrap_or(false);
+        let inc_comments = options
+            .as_ref()
+            .and_then(|o| o.include_comments)
+            .unwrap_or(false);
+        let inc_formulas = options
+            .as_ref()
+            .and_then(|o| o.include_formulas)
+            .unwrap_or(false);
+        let inc_images = options
+            .as_ref()
+            .and_then(|o| o.include_images)
+            .unwrap_or(false);
 
-        let end_row = ws
-            .used_range()
-            .map(|r| r.end.row)
-            .unwrap_or(0)
-            .min(start_row.saturating_add(max_rows).saturating_sub(1));
+        let max_row = ws.used_range().map(|r| r.end.row).unwrap_or(0);
+        let end_row = max_row.min(start_row.saturating_add(max_rows).saturating_sub(1));
 
         if start_row > end_row {
             let rows: Vec<WasmRow> = Vec::new();
             return to_js_value(&rows).map_err(JsValue::from);
         }
 
-        let coords = ws.populated_cells_in_range(start_row, end_row);
+        let mut coords: BTreeSet<(u32, u16)> = ws
+            .populated_cells_in_range(start_row, end_row)
+            .into_iter()
+            .collect();
+
+        if inc_styles {
+            for (&(row, col), data) in ws.cells_map_in_range(start_row, end_row) {
+                if data.style_index != 0 {
+                    coords.insert((row, col));
+                }
+            }
+        }
+        if inc_merge {
+            for region in ws.merged_regions() {
+                for row in region.start.row.max(start_row)..=region.end.row.min(end_row) {
+                    for col in region.start.col..=region.end.col {
+                        coords.insert((row, col));
+                    }
+                }
+            }
+        }
+        if inc_hyperlinks {
+            for (addr, _) in ws.hyperlinks() {
+                if addr.row >= start_row && addr.row <= end_row {
+                    coords.insert((addr.row, addr.col));
+                }
+            }
+        }
+        if inc_comments {
+            for ((row, col), _) in ws.comments() {
+                if row >= start_row && row <= end_row {
+                    coords.insert((row, col));
+                }
+            }
+        }
+        if inc_formulas {
+            for (row, col, _) in ws.formula_cells() {
+                if row >= start_row && row <= end_row {
+                    coords.insert((row, col));
+                }
+            }
+        }
+
         let mut rows = Vec::new();
         let mut current_row = None;
         let mut current_cells = Vec::new();
 
-        for (row, col) in coords {
+        for (row, col) in &coords {
+            let (row, col) = (*row, *col);
             if current_row != Some(row) {
                 if let Some(prev_row) = current_row {
                     rows.push(WasmRow {
@@ -203,9 +262,68 @@ impl Worksheet {
                 ws.get_value_at(row, col).to_string()
             };
 
+            let style = if inc_styles {
+                ws.cell_style_at(row, col).map(WasmStyle::from)
+            } else {
+                None
+            };
+
+            let merge_span = if inc_merge {
+                ws.get_merge_span(row, col)
+                    .map(|(row_span, col_span)| WasmMergeSpan {
+                        row_span,
+                        col_span: col_span as u32,
+                    })
+            } else {
+                None
+            };
+
+            let is_merged_secondary = if inc_merge {
+                let value = ws.is_merged_secondary(row, col);
+                if value {
+                    Some(true)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let hyperlink = if inc_hyperlinks {
+                ws.hyperlink_at(row, col).map(WasmHyperlink::from)
+            } else {
+                None
+            };
+
+            let comment = if inc_comments {
+                ws.comment_at(row, col).map(WasmComment::from)
+            } else {
+                None
+            };
+
+            let formula = if inc_formulas {
+                ws.get_formula_at(row, col)
+                    .map(|formula| formula.to_string())
+            } else {
+                None
+            };
+
+            let image = if inc_images {
+                ws.get_image_at(row, col).map(WasmImageInfo::from)
+            } else {
+                None
+            };
+
             current_cells.push(WasmRowCell {
                 col: col as u32,
                 value,
+                style,
+                merge_span,
+                is_merged_secondary,
+                hyperlink,
+                comment,
+                formula,
+                image,
             });
         }
 

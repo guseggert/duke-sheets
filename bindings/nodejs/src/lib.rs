@@ -239,20 +239,7 @@ impl JsCalculationOptions {
     }
 }
 
-/// IMAGE() metadata captured during calculation.
-#[napi(object)]
-pub struct JsImageInfo {
-    /// IMAGE source URL or path.
-    pub source: String,
-    /// IMAGE alternate text.
-    pub alt_text: String,
-    /// 0=FitCell, 1=FillCell, 2=OriginalSize, 3=Custom
-    pub sizing: u32,
-    /// Optional custom width.
-    pub width: Option<f64>,
-    /// Optional custom height.
-    pub height: Option<f64>,
-}
+// JsImageInfo moved to types.rs
 
 /// Statistics from calculating a workbook.
 #[napi]

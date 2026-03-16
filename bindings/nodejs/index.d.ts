@@ -221,10 +221,16 @@ export declare class Worksheet {
   /** Get the display-formatted value by row/col (0-based). */
   getFormattedValueAt(row: number, col: number): string
   /**
-   * Iterate over all rows with data as sparse rows.
-   * Only non-empty cells are included. Internally batches FFI calls for performance.
+   * Get a batch of sparse rows starting from `start_row`.
+   *
+   * Returns up to `max_rows` rows that contain data or metadata.
+   * Each row contains only relevant cells (sparse representation).
+   * Returns an empty array when no more rows exist.
+   *
+   * When metadata flags are enabled (includeStyles, includeMergeInfo, etc.),
+   * cells with that metadata are included even if their value is empty.
    */
-  iterateRows(opts?: JsRowsOptions): RowIterator
+  getRowsBatch(startRow: number, maxRows: number, options?: JsRowsOptions | undefined | null): Array<JsRow>
   /** Default row height in points. */
   get defaultRowHeight(): number
   /** Default column width in character units. */
@@ -768,6 +774,20 @@ export interface JsRowCell {
   col: number
   /** String representation of the cell value. */
   value: string
+  /** Cell style (when includeStyles is set). */
+  style?: JsStyle
+  /** Merge span for merge-origin cells (when includeMergeInfo is set). */
+  mergeSpan?: JsMergeSpan
+  /** Whether this cell is a non-origin member of a merge (when includeMergeInfo is set). */
+  isMergedSecondary?: boolean
+  /** Hyperlink (when includeHyperlinks is set). */
+  hyperlink?: JsHyperlink
+  /** Comment (when includeComments is set). */
+  comment?: JsComment
+  /** Formula text (when includeFormulas is set). */
+  formula?: string
+  /** IMAGE() metadata (when includeImages is set). */
+  image?: JsImageInfo
 }
 
 /** Options for row iteration. */
@@ -776,6 +796,18 @@ export interface JsRowsOptions {
   useFormattedValues?: boolean
   /** Use calculated values for formula cells (requires prior calculate() call). */
   useCalculatedValues?: boolean
+  /** Include cell styles. */
+  includeStyles?: boolean
+  /** Include merge info (mergeSpan + isMergedSecondary). */
+  includeMergeInfo?: boolean
+  /** Include hyperlinks. */
+  includeHyperlinks?: boolean
+  /** Include comments. */
+  includeComments?: boolean
+  /** Include formula text. */
+  includeFormulas?: boolean
+  /** Include IMAGE() metadata. */
+  includeImages?: boolean
 }
 
 /** Font properties for a rich text run (all fields optional — unset inherits cell style). */
