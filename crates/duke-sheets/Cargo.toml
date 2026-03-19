@@ -18,6 +18,7 @@ duke-sheets-csv.workspace = true
 duke-sheets-chart.workspace = true
 thiserror.workspace = true
 ahash.workspace = true
+dashmap.workspace = true
 rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -25,6 +26,7 @@ tempfile.workspace = true
 pretty_assertions.workspace = true
 zip.workspace = true
 criterion.workspace = true
+serde_json.workspace = true
 calamine = "0.26"
 umya-spreadsheet = "2.3"
 rust_xlsxwriter = "0.82"
