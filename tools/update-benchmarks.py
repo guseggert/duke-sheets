@@ -34,6 +34,7 @@ GROUP_ORDER = [
     "calculation/fan_out",
     "calculation/cross_sheet",
     "calculation/mixed",
+    "calculation/repeated_lookups",
 ]
 
 
@@ -92,7 +93,7 @@ def collect_results(criterion_dir: Path) -> list[BenchResult]:
 def natural_sort_key(s: str) -> list[int | str]:
     """Sort key that handles embedded numbers naturally (100 < 500 < 1000)."""
     parts: list[int | str] = []
-    for tok in re.split(r'(\d+)', s):
+    for tok in re.split(r"(\d+)", s):
         parts.append(int(tok) if tok.isdigit() else tok)
     return parts
 
@@ -102,13 +103,19 @@ def group_rank(group: str) -> tuple[int, str]:
     best_rank = 10_000
     for i, candidate in enumerate(GROUP_ORDER):
         if group == candidate or group.startswith(candidate + "/"):
-            if len(candidate) > len(GROUP_ORDER[best_rank]) if best_rank < len(GROUP_ORDER) else True:
+            if (
+                len(candidate) > len(GROUP_ORDER[best_rank])
+                if best_rank < len(GROUP_ORDER)
+                else True
+            ):
                 best_rank = i
     return (best_rank, group)
 
 
 def render_table(results: list[BenchResult]) -> str:
-    results.sort(key=lambda r: (group_rank(r.group), natural_sort_key(r.case), r.library))
+    results.sort(
+        key=lambda r: (group_rank(r.group), natural_sort_key(r.case), r.library)
+    )
 
     out = [
         "| Group | Case | Library | Time |",

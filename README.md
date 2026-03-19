@@ -15,6 +15,7 @@ Duke Sheets includes an extensive test suite:
 - Compatibility tests against both LibreOffice and Excel
 - Fuzz testing
 - Performance benchmarks
+- [Performance regression workflow](docs/PERF_REGRESSION.md)
 - Corpus testing on real-world spreadsheets
 
 Duke Sheets has a high-performance multithreaded formula engine which can evaluate millions of formulas in seconds, and has been profiled against some of the most complex financial spreadsheets in the world.

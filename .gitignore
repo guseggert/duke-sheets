@@ -63,3 +63,8 @@ fuzz/corpus/
 *.xltx
 *.xltm
 data/
+
+perf-snapshots/
+
+# Agent working directories
+.sis*
