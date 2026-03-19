@@ -5,11 +5,11 @@ use crate::evaluator::{EvaluationContext, FormulaValue};
 use duke_sheets_core::CellError;
 use std::cmp::Ordering;
 
-fn to_i64_trunc(v: &FormulaValue) -> Option<i64> {
+pub(crate) fn to_i64_trunc(v: &FormulaValue) -> Option<i64> {
     v.as_number().map(|n| n.trunc() as i64)
 }
 
-fn values_equal(a: &FormulaValue, b: &FormulaValue) -> bool {
+pub(crate) fn values_equal(a: &FormulaValue, b: &FormulaValue) -> bool {
     match (a, b) {
         (FormulaValue::Number(x), FormulaValue::Number(y)) => x == y,
         (FormulaValue::Boolean(x), FormulaValue::Boolean(y)) => x == y,
@@ -34,7 +34,7 @@ fn values_equal(a: &FormulaValue, b: &FormulaValue) -> bool {
 
 fn expect_array(v: &FormulaValue) -> Option<&Vec<Vec<FormulaValue>>> {
     match v {
-        FormulaValue::Array(a) => Some(a),
+        FormulaValue::Array { data: a, .. } => Some(a),
         _ => None,
     }
 }
@@ -45,7 +45,7 @@ fn array_dims(arr: &[Vec<FormulaValue>]) -> (usize, usize) {
     (rows, cols)
 }
 
-fn compare_lookup_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering> {
+pub(crate) fn compare_lookup_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering> {
     match (a, b) {
         (FormulaValue::Number(x), FormulaValue::Number(y)) => x.partial_cmp(y),
         (FormulaValue::Boolean(x), FormulaValue::Boolean(y)) => Some(x.cmp(y)),
@@ -71,7 +71,7 @@ fn compare_lookup_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering>
     }
 }
 
-fn wildcard_match(pattern: &str, text: &str) -> bool {
+pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
     let mut dp = vec![vec![false; t.len() + 1]; p.len() + 1];
@@ -189,7 +189,10 @@ pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
             return Ok(FormulaValue::Error(CellError::Ref));
         }
         let column: Vec<Vec<FormulaValue>> = arr.iter().map(|row| vec![row[c].clone()]).collect();
-        return Ok(FormulaValue::Array(column));
+        return Ok(FormulaValue::Array {
+            data: column,
+            source: None,
+        });
     }
 
     // col_num=0: return entire row as a row vector
@@ -198,7 +201,10 @@ pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         if r >= rows {
             return Ok(FormulaValue::Error(CellError::Ref));
         }
-        return Ok(FormulaValue::Array(vec![arr[r].clone()]));
+        return Ok(FormulaValue::Array {
+            data: vec![arr[r].clone()],
+            source: None,
+        });
     }
 
     let r = (row_num - 1) as usize;
@@ -214,12 +220,12 @@ pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 /// match_type: 1 = largest value <= lookup_value (array must be ascending)
 ///             0 = exact match (default)
 ///            -1 = smallest value >= lookup_value (array must be descending)
-pub fn fn_match(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let lookup_value = args.first().unwrap();
     if let FormulaValue::Error(e) = lookup_value {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(lookup_value, FormulaValue::Array(_)) {
+    if matches!(lookup_value, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -262,7 +268,47 @@ pub fn fn_match(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
     match match_type {
         0 => {
-            // Exact match: linear scan
+            // Exact match: try hash index (Tier 2) first
+            if let Some(cache) = ctx.eval_cache {
+                // Get the RangeSource from the array argument to build the cache key
+                let array_arg = args.get(1).unwrap();
+                if let FormulaValue::Array {
+                    source: Some(src), ..
+                } = array_arg
+                {
+                    let col_offset = if rows == 1 { 0u16 } else { 0u16 }; // single column/row
+                    let range_key = (
+                        src.sheet,
+                        src.start_row,
+                        src.start_col,
+                        src.end_row,
+                        src.end_col,
+                    );
+                    let index_key = (range_key, col_offset);
+
+                    // Check for existing index
+                    if let Some(existing) = cache.lookup_indexes.get(&index_key) {
+                        return match existing.find(lookup_value) {
+                            Some(pos) => Ok(FormulaValue::Number((pos + 1) as f64)),
+                            None => Ok(FormulaValue::Error(CellError::Na)),
+                        };
+                    }
+
+                    // Build index from the 1D vector
+                    let owned_vec: Vec<FormulaValue> = vec.iter().map(|v| (*v).clone()).collect();
+                    let index = crate::eval_cache::LookupIndex::build(&owned_vec);
+                    let result = match index.find(lookup_value) {
+                        Some(pos) => Ok(FormulaValue::Number((pos + 1) as f64)),
+                        None => Ok(FormulaValue::Error(CellError::Na)),
+                    };
+                    cache
+                        .lookup_indexes
+                        .insert(index_key, std::sync::Arc::new(index));
+                    return result;
+                }
+            }
+
+            // Fallback: linear scan (no cache or no source metadata)
             for (i, v) in vec.iter().enumerate() {
                 if values_equal(lookup_value, v) {
                     return Ok(FormulaValue::Number((i + 1) as f64));
@@ -317,7 +363,7 @@ pub fn fn_rows(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
 
     match arg {
         FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
-        FormulaValue::Array(arr) => {
+        FormulaValue::Array { data: arr, .. } => {
             let rows = arr.len();
             Ok(FormulaValue::Number(rows as f64))
         }
@@ -333,7 +379,7 @@ pub fn fn_columns(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 
     match arg {
         FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
-        FormulaValue::Array(arr) => {
+        FormulaValue::Array { data: arr, .. } => {
             let cols = arr.first().map(|r| r.len()).unwrap_or(0);
             Ok(FormulaValue::Number(cols as f64))
         }
@@ -393,7 +439,7 @@ pub fn fn_row(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<F
     let arg = &args[0];
     match arg {
         FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
-        FormulaValue::Array(arr) => {
+        FormulaValue::Array { data: arr, .. } => {
             // For an array, return a column vector of row numbers
             // This matches Excel's behavior: ROW(A1:A5) returns {1;2;3;4;5}
             let rows = arr.len();
@@ -412,7 +458,10 @@ pub fn fn_row(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<F
                     )]
                 })
                 .collect();
-            Ok(FormulaValue::Array(result))
+            Ok(FormulaValue::Array {
+                data: result,
+                source: None,
+            })
         }
         // Single value = assume it's from the current cell context
         _ => Ok(FormulaValue::Number((ctx.current_row + 1) as f64)),
@@ -439,7 +488,7 @@ pub fn fn_column(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResul
     let arg = &args[0];
     match arg {
         FormulaValue::Error(e) => Ok(FormulaValue::Error(*e)),
-        FormulaValue::Array(arr) => {
+        FormulaValue::Array { data: arr, .. } => {
             // For an array, return a row vector of column numbers
             // This matches Excel's behavior: COLUMN(A1:E1) returns {1,2,3,4,5}
             let cols = arr.first().map(|r| r.len()).unwrap_or(0);
@@ -453,7 +502,10 @@ pub fn fn_column(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResul
             let result: Vec<FormulaValue> = (0..cols)
                 .map(|i| FormulaValue::Number((ctx.current_col + 1 + i as u16) as f64))
                 .collect();
-            Ok(FormulaValue::Array(vec![result]))
+            Ok(FormulaValue::Array {
+                data: vec![result],
+                source: None,
+            })
         }
         // Single value = assume it's from the current cell context
         _ => Ok(FormulaValue::Number((ctx.current_col + 1) as f64)),
@@ -464,7 +516,7 @@ pub fn fn_column(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResul
 ///
 /// Currently implements exact match only. If range_lookup is TRUE or omitted, we still
 /// perform exact match (no approximate matching).
-pub fn fn_vlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+pub fn fn_vlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     // Propagate errors in arguments
     for v in args {
         if let FormulaValue::Error(e) = v {
@@ -473,7 +525,7 @@ pub fn fn_vlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     }
 
     let lookup_value = args.first().unwrap();
-    if matches!(lookup_value, FormulaValue::Array(_)) {
+    if matches!(lookup_value, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -500,6 +552,53 @@ pub fn fn_vlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
         return Ok(FormulaValue::Error(*e));
     }
 
+    // Tier 2: Try hash index for first column (exact match)
+    if let Some(cache) = ctx.eval_cache {
+        let array_arg = args.get(1).unwrap();
+        if let FormulaValue::Array {
+            source: Some(src), ..
+        } = array_arg
+        {
+            let range_key = (
+                src.sheet,
+                src.start_row,
+                src.start_col,
+                src.end_row,
+                src.end_col,
+            );
+            let index_key = (range_key, 0u16); // first column
+
+            if let Some(existing) = cache.lookup_indexes.get(&index_key) {
+                return match existing.find(lookup_value) {
+                    Some(pos) => Ok(table[pos]
+                        .get(col_index0)
+                        .cloned()
+                        .unwrap_or(FormulaValue::Empty)),
+                    None => Ok(FormulaValue::Error(CellError::Na)),
+                };
+            }
+
+            // Build index from first column
+            let first_col: Vec<FormulaValue> = table
+                .iter()
+                .map(|row| row.first().cloned().unwrap_or(FormulaValue::Empty))
+                .collect();
+            let index = crate::eval_cache::LookupIndex::build(&first_col);
+            let result = match index.find(lookup_value) {
+                Some(pos) => Ok(table[pos]
+                    .get(col_index0)
+                    .cloned()
+                    .unwrap_or(FormulaValue::Empty)),
+                None => Ok(FormulaValue::Error(CellError::Na)),
+            };
+            cache
+                .lookup_indexes
+                .insert(index_key, std::sync::Arc::new(index));
+            return result;
+        }
+    }
+
+    // Fallback: linear scan
     for row in table {
         let key = row.first().unwrap_or(&FormulaValue::Empty);
         if values_equal(lookup_value, key) {
@@ -518,7 +617,7 @@ pub fn fn_hlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     }
 
     let lookup_value = args.first().unwrap();
-    if matches!(lookup_value, FormulaValue::Array(_)) {
+    if matches!(lookup_value, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -602,7 +701,7 @@ pub fn fn_hlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
         .unwrap_or(FormulaValue::Empty))
 }
 
-pub fn fn_xmatch(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+pub fn fn_xmatch(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     for v in args {
         if let FormulaValue::Error(e) = v {
             return Ok(FormulaValue::Error(*e));
@@ -610,7 +709,7 @@ pub fn fn_xmatch(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     }
 
     let lookup_value = args.first().unwrap();
-    if matches!(lookup_value, FormulaValue::Array(_)) {
+    if matches!(lookup_value, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -629,6 +728,36 @@ pub fn fn_xmatch(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     };
 
     let exact_pos = || {
+        // Tier 2: Try hash index for exact match
+        if let Some(cache) = ctx.eval_cache {
+            let array_arg = args.get(1).unwrap();
+            if let FormulaValue::Array {
+                source: Some(src), ..
+            } = array_arg
+            {
+                let range_key = (
+                    src.sheet,
+                    src.start_row,
+                    src.start_col,
+                    src.end_row,
+                    src.end_col,
+                );
+                let index_key = (range_key, 0u16);
+
+                if let Some(existing) = cache.lookup_indexes.get(&index_key) {
+                    return existing.find(lookup_value);
+                }
+
+                let owned: Vec<FormulaValue> = lookup_arr.iter().cloned().collect();
+                let index = crate::eval_cache::LookupIndex::build(&owned);
+                let result = index.find(lookup_value);
+                cache
+                    .lookup_indexes
+                    .insert(index_key, std::sync::Arc::new(index));
+                return result;
+            }
+        }
+        // Fallback: linear scan
         indices
             .iter()
             .copied()
@@ -731,7 +860,10 @@ pub fn fn_xlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
     let match_mode = args.get(4).cloned().unwrap_or(FormulaValue::Number(0.0));
     let search_mode = args.get(5).cloned().unwrap_or(FormulaValue::Number(1.0));
 
-    let lookup_array_value = FormulaValue::Array(vec![lookup_vec]);
+    let lookup_array_value = FormulaValue::Array {
+        data: vec![lookup_vec],
+        source: None,
+    };
     let xmatch_result = fn_xmatch(
         &[lookup_value, lookup_array_value, match_mode, search_mode],
         ctx,
@@ -764,7 +896,7 @@ pub fn fn_indirect(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaRes
     }
 
     let ref_text = args.first().unwrap();
-    if matches!(ref_text, FormulaValue::Array(_)) {
+    if matches!(ref_text, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -910,7 +1042,10 @@ pub fn fn_sequence(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
         result.push(row);
     }
 
-    Ok(FormulaValue::Array(result))
+    Ok(FormulaValue::Array {
+        data: result,
+        source: None,
+    })
 }
 
 #[cfg(test)]
@@ -1009,13 +1144,18 @@ mod tests {
             fn_indirect(&[FormulaValue::String("A1".into())], &ctx).unwrap(),
             FormulaValue::Number(42.0)
         );
-        assert_eq!(
-            fn_indirect(&[FormulaValue::String("A1:B1".into())], &ctx).unwrap(),
-            FormulaValue::Array(vec![vec![
-                FormulaValue::Number(42.0),
-                FormulaValue::String("x".into())
-            ]])
-        );
+        let result = fn_indirect(&[FormulaValue::String("A1:B1".into())], &ctx).unwrap();
+        if let FormulaValue::Array { data, .. } = &result {
+            assert_eq!(
+                *data,
+                vec![vec![
+                    FormulaValue::Number(42.0),
+                    FormulaValue::String("x".into())
+                ]]
+            );
+        } else {
+            panic!("Expected Array, got {:?}", result);
+        }
     }
 
     #[test]
@@ -1073,13 +1213,18 @@ mod tests {
         );
 
         // INDIRECT with range: INDIRECT("A1:B1") → array of values
-        assert_eq!(
-            fn_indirect(&[FormulaValue::String("A1:B1".into())], &ctx).unwrap(),
-            FormulaValue::Array(vec![vec![
-                FormulaValue::Number(99.0),
-                FormulaValue::String("hello".into()),
-            ]])
-        );
+        let result = fn_indirect(&[FormulaValue::String("A1:B1".into())], &ctx).unwrap();
+        if let FormulaValue::Array { data, .. } = &result {
+            assert_eq!(
+                *data,
+                vec![vec![
+                    FormulaValue::Number(99.0),
+                    FormulaValue::String("hello".into()),
+                ]]
+            );
+        } else {
+            panic!("Expected Array, got {:?}", result);
+        }
 
         // INDIRECT with invalid reference: INDIRECT("ZZZZZ999999") → #REF!
         assert_eq!(
@@ -1210,10 +1355,13 @@ mod tests {
         // Docs Example 2: =INDEX({1,2;3,4},0,2) -> column {2;4}
         assert_eq!(
             eval("=INDEX({1,2;3,4},0,2)").unwrap(),
-            FormulaValue::Array(vec![
-                vec![FormulaValue::Number(2.0)],
-                vec![FormulaValue::Number(4.0)],
-            ])
+            FormulaValue::Array {
+                data: vec![
+                    vec![FormulaValue::Number(2.0)],
+                    vec![FormulaValue::Number(4.0)],
+                ],
+                source: None
+            }
         );
         // Docs Reference form: Fruits/Price/Count table
         // =INDEX(..., 2, 3) -> 38 (Bananas count)
@@ -1396,32 +1544,47 @@ mod tests {
         // Docs: =SEQUENCE(4,5) → 4×5 array, 1..20
         assert_eq!(
             eval("=SEQUENCE(4,5)").unwrap(),
-            FormulaValue::Array(vec![
-                vec![n(1.0), n(2.0), n(3.0), n(4.0), n(5.0)],
-                vec![n(6.0), n(7.0), n(8.0), n(9.0), n(10.0)],
-                vec![n(11.0), n(12.0), n(13.0), n(14.0), n(15.0)],
-                vec![n(16.0), n(17.0), n(18.0), n(19.0), n(20.0)],
-            ])
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(2.0), n(3.0), n(4.0), n(5.0)],
+                    vec![n(6.0), n(7.0), n(8.0), n(9.0), n(10.0)],
+                    vec![n(11.0), n(12.0), n(13.0), n(14.0), n(15.0)],
+                    vec![n(16.0), n(17.0), n(18.0), n(19.0), n(20.0)],
+                ],
+                source: None
+            }
         );
         // Docs: =SEQUENCE(4) → 4×1 column {1;2;3;4}
         assert_eq!(
             eval("=SEQUENCE(4)").unwrap(),
-            FormulaValue::Array(vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)], vec![n(4.0)],])
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)], vec![n(4.0)],],
+                source: None
+            }
         );
         // Docs: =SEQUENCE(1,5) → 1×5 row {1,2,3,4,5}
         assert_eq!(
             eval("=SEQUENCE(1,5)").unwrap(),
-            FormulaValue::Array(vec![vec![n(1.0), n(2.0), n(3.0), n(4.0), n(5.0)],])
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0), n(3.0), n(4.0), n(5.0)],],
+                source: None
+            }
         );
         // Docs: start and step: =SEQUENCE(4,1,2,2) → {2;4;6;8}
         assert_eq!(
             eval("=SEQUENCE(4,1,2,2)").unwrap(),
-            FormulaValue::Array(vec![vec![n(2.0)], vec![n(4.0)], vec![n(6.0)], vec![n(8.0)],])
+            FormulaValue::Array {
+                data: vec![vec![n(2.0)], vec![n(4.0)], vec![n(6.0)], vec![n(8.0)],],
+                source: None
+            }
         );
         // Docs: descending: =SEQUENCE(10,1,100,-5)
         assert_eq!(
             eval("=SEQUENCE(3,1,100,-5)").unwrap(),
-            FormulaValue::Array(vec![vec![n(100.0)], vec![n(95.0)], vec![n(90.0)],])
+            FormulaValue::Array {
+                data: vec![vec![n(100.0)], vec![n(95.0)], vec![n(90.0)],],
+                source: None
+            }
         );
     }
 }

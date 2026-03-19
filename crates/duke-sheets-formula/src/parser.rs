@@ -927,9 +927,7 @@ impl<'a> FormulaParser<'a> {
         sheet: Option<String>,
         ref_str: &str,
     ) -> FormulaResult<FormulaExpr> {
-        // Parse the cell address, stripping $ signs
-        let clean_ref = ref_str.replace('$', "");
-        let address = CellAddress::parse(&clean_ref).map_err(|e| {
+        let address = CellAddress::parse(ref_str).map_err(|e| {
             FormulaError::Parse(format!("Invalid cell reference '{}': {}", ref_str, e))
         })?;
 
@@ -948,8 +946,7 @@ impl<'a> FormulaParser<'a> {
                 match self.current_token().clone() {
                     Token::CellRef(ref_str) => {
                         self.consume();
-                        let clean_ref = ref_str.replace('$', "");
-                        let address = CellAddress::parse(&clean_ref).map_err(|e| {
+                        let address = CellAddress::parse(&ref_str).map_err(|e| {
                             FormulaError::Parse(format!(
                                 "Invalid cell reference '{}': {}",
                                 ref_str, e

@@ -11,7 +11,7 @@ fn to_i64_trunc(v: &FormulaValue) -> Option<i64> {
 fn scalar_string(v: &FormulaValue) -> Result<String, FormulaValue> {
     match v {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => Ok(v.as_string()),
     }
 }
@@ -19,7 +19,7 @@ fn scalar_string(v: &FormulaValue) -> Result<String, FormulaValue> {
 fn scalar_bool(v: &FormulaValue) -> Result<bool, FormulaValue> {
     match v {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => v.as_bool().ok_or(FormulaValue::Error(CellError::Value)),
     }
 }
@@ -27,7 +27,7 @@ fn scalar_bool(v: &FormulaValue) -> Result<bool, FormulaValue> {
 fn scalar_i64(v: &FormulaValue) -> Result<i64, FormulaValue> {
     match v {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => to_i64_trunc(v).ok_or(FormulaValue::Error(CellError::Value)),
     }
 }
@@ -367,7 +367,7 @@ pub fn fn_textsplit(
         }
     }
 
-    Ok(FormulaValue::Array(out))
+    Ok(FormulaValue::Array { data: out, source: None })
 }
 
 /// UNICHAR(number)
@@ -983,10 +983,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             out,
-            FormulaValue::Array(vec![
+            FormulaValue::Array { data: vec![
                 vec![s("a"), s("b")],
                 vec![s("c"), FormulaValue::Error(CellError::Na)]
-            ])
+            ], source: None }
         );
 
         let out2 = fn_textsplit(
@@ -999,10 +999,10 @@ mod tests {
             &EvaluationContext::simple(),
         )
         .unwrap();
-        assert_eq!(out2, FormulaValue::Array(vec![vec![s("a"), s("b")]]));
+        assert_eq!(out2, FormulaValue::Array { data: vec![vec![s("a"), s("b")]], source: None });
 
         let arr = eval("={\"X\",\"Y\"}").unwrap();
-        if let FormulaValue::Array(rows) = arr {
+        if let FormulaValue::Array { data: rows, .. } = arr {
             assert_eq!(rows.len(), 1);
         } else {
             panic!("expected array");
@@ -1397,7 +1397,7 @@ mod tests {
 
         // Example 1: Split by space
         match eval(r#"=TEXTSPLIT("Dakota Lennon Sanchez"," ")"#).unwrap() {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 assert_eq!(arr, vec![vec![s("Dakota"), s("Lennon"), s("Sanchez")]]);
             }
             other => panic!("Expected array, got {:?}", other),
@@ -1405,7 +1405,7 @@ mod tests {
 
         // Example 2: Split by col and row delimiters
         match eval(r#"=TEXTSPLIT("1,2,3;4,5,6",",",";")"#).unwrap() {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 assert_eq!(
                     arr,
                     vec![vec![s("1"), s("2"), s("3")], vec![s("4"), s("5"), s("6")],]
@@ -1416,7 +1416,7 @@ mod tests {
 
         // Example 3: Split by "."
         match eval(r#"=TEXTSPLIT("Do. Or do not. There is no try. -Anonymous",".")"#).unwrap() {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 assert_eq!(
                     arr,
                     vec![vec![
@@ -1434,7 +1434,7 @@ mod tests {
         match eval(r#"=TEXTSPLIT("Do. Or do not. There is no try. -Anonymous"," ",".",TRUE)"#)
             .unwrap()
         {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 assert_eq!(arr.len(), 4);
                 for row in &arr {
                     assert_eq!(row.len(), 4);

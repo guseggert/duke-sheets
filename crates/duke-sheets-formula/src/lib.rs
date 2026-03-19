@@ -23,11 +23,13 @@ pub mod error;
 pub mod evaluator;
 pub mod functions;
 pub mod parser;
+pub mod eval_cache;
 
 pub use ast::{
     BinaryOperator, CellReference, ExternalReference, FormulaExpr, RangeReference,
     StructuredRefSpecifier, StructuredReference, UnaryOperator,
 };
 pub use error::{FormulaError, FormulaResult};
-pub use evaluator::{evaluate, EvaluationContext, FormulaValue, ImageInfo, ImageSizing};
+pub use eval_cache::{EvalCache, LookupIndex, RangeKey};
+pub use evaluator::{evaluate, EvaluationContext, FormulaValue, ImageInfo, ImageSizing, RangeSource};
 pub use parser::parse_formula;

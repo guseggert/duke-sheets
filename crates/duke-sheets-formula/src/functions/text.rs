@@ -152,7 +152,7 @@ pub fn fn_len(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
     if let FormulaValue::Error(e) = v {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
     let s = v.as_string();
@@ -165,7 +165,7 @@ pub fn fn_left(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(text, FormulaValue::Array(_)) {
+    if matches!(text, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -193,7 +193,7 @@ pub fn fn_right(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(text, FormulaValue::Array(_)) {
+    if matches!(text, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -221,7 +221,7 @@ pub fn fn_mid(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(text, FormulaValue::Array(_)) {
+    if matches!(text, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -256,7 +256,7 @@ pub fn fn_lower(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(text, FormulaValue::Array(_)) {
+    if matches!(text, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
     Ok(FormulaValue::String(text.as_string().to_lowercase()))
@@ -268,7 +268,7 @@ pub fn fn_upper(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(text, FormulaValue::Array(_)) {
+    if matches!(text, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
     Ok(FormulaValue::String(text.as_string().to_uppercase()))
@@ -280,7 +280,7 @@ pub fn fn_trim(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     if let FormulaValue::Error(e) = text {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(text, FormulaValue::Array(_)) {
+    if matches!(text, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
     let s = text.as_string();
@@ -296,7 +296,7 @@ pub fn fn_concat(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     for arg in args {
         match arg {
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for v in row {
                         if let FormulaValue::Error(e) = v {
@@ -640,7 +640,7 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     if let FormulaValue::Error(e) = value {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(value, FormulaValue::Array(_)) {
+    if matches!(value, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -648,7 +648,7 @@ pub fn fn_text(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     if let FormulaValue::Error(e) = format_text {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(format_text, FormulaValue::Array(_)) {
+    if matches!(format_text, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -670,7 +670,7 @@ pub fn fn_textjoin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     if let FormulaValue::Error(e) = delimiter {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(delimiter, FormulaValue::Array(_)) {
+    if matches!(delimiter, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -678,7 +678,7 @@ pub fn fn_textjoin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     if let FormulaValue::Error(e) = ignore_empty_arg {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(ignore_empty_arg, FormulaValue::Array(_)) {
+    if matches!(ignore_empty_arg, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -691,7 +691,7 @@ pub fn fn_textjoin(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     for arg in &args[2..] {
         match arg {
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for v in row {
                         if let FormulaValue::Error(e) = v {
@@ -729,7 +729,7 @@ pub fn fn_fixed(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     if let FormulaValue::Error(e) = number_arg {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(number_arg, FormulaValue::Array(_)) {
+    if matches!(number_arg, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -744,7 +744,7 @@ pub fn fn_fixed(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
             if let FormulaValue::Error(e) = v {
                 return Ok(FormulaValue::Error(*e));
             }
-            if matches!(v, FormulaValue::Array(_)) {
+            if matches!(v, FormulaValue::Array { .. }) {
                 return Ok(FormulaValue::Error(CellError::Value));
             }
             to_int_trunc(v).unwrap_or(0)
@@ -757,7 +757,7 @@ pub fn fn_fixed(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
             if let FormulaValue::Error(e) = v {
                 return Ok(FormulaValue::Error(*e));
             }
-            if matches!(v, FormulaValue::Array(_)) {
+            if matches!(v, FormulaValue::Array { .. }) {
                 return Ok(FormulaValue::Error(CellError::Value));
             }
             match v.as_bool() {
@@ -777,7 +777,7 @@ pub fn fn_dollar(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     if let FormulaValue::Error(e) = number_arg {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(number_arg, FormulaValue::Array(_)) {
+    if matches!(number_arg, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -792,7 +792,7 @@ pub fn fn_dollar(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
             if let FormulaValue::Error(e) = v {
                 return Ok(FormulaValue::Error(*e));
             }
-            if matches!(v, FormulaValue::Array(_)) {
+            if matches!(v, FormulaValue::Array { .. }) {
                 return Ok(FormulaValue::Error(CellError::Value));
             }
             to_int_trunc(v).unwrap_or(2)
@@ -815,7 +815,7 @@ pub fn fn_numbervalue(
     if let FormulaValue::Error(e) = text_arg {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(text_arg, FormulaValue::Array(_)) {
+    if matches!(text_arg, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -825,7 +825,7 @@ pub fn fn_numbervalue(
             if let FormulaValue::Error(e) = v {
                 return Ok(FormulaValue::Error(*e));
             }
-            if matches!(v, FormulaValue::Array(_)) {
+            if matches!(v, FormulaValue::Array { .. }) {
                 return Ok(FormulaValue::Error(CellError::Value));
             }
             let s = v.as_string();
@@ -842,7 +842,7 @@ pub fn fn_numbervalue(
             if let FormulaValue::Error(e) = v {
                 return Ok(FormulaValue::Error(*e));
             }
-            if matches!(v, FormulaValue::Array(_)) {
+            if matches!(v, FormulaValue::Array { .. }) {
                 return Ok(FormulaValue::Error(CellError::Value));
             }
             v.as_string()

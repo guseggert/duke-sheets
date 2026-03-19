@@ -13,7 +13,7 @@ fn scalar_number(value: &FormulaValue) -> Result<f64, CellError> {
         FormulaValue::String(s) => s.parse::<f64>().map_err(|_| CellError::Value),
         FormulaValue::Empty => Ok(0.0),
         FormulaValue::Error(e) => Err(*e),
-        FormulaValue::Array(arr) => {
+        FormulaValue::Array { data: arr, .. } => {
             if let Some(row) = arr.first() {
                 if let Some(cell) = row.first() {
                     return scalar_number(cell);
@@ -54,7 +54,7 @@ fn required_bool(args: &[FormulaValue], idx: usize) -> Result<bool, CellError> {
                 Err(CellError::Value)
             }
         }
-        FormulaValue::Array(_) => Err(CellError::Value),
+        FormulaValue::Array { .. } => Err(CellError::Value),
     }
 }
 
@@ -62,7 +62,7 @@ fn collect_numbers(value: &FormulaValue, numbers: &mut Vec<f64>) -> Option<CellE
     match value {
         FormulaValue::Number(n) => numbers.push(*n),
         FormulaValue::Error(e) => return Some(*e),
-        FormulaValue::Array(arr) => {
+        FormulaValue::Array { data: arr, .. } => {
             for row in arr {
                 for cell in row {
                     match cell {
@@ -80,7 +80,7 @@ fn collect_numbers(value: &FormulaValue, numbers: &mut Vec<f64>) -> Option<CellE
 
 fn collect_number_pairs(a: &FormulaValue, b: &FormulaValue) -> Result<Vec<(f64, f64)>, CellError> {
     match (a, b) {
-        (FormulaValue::Array(arr1), FormulaValue::Array(arr2)) => {
+        (FormulaValue::Array { data: arr1, .. }, FormulaValue::Array { data: arr2, .. }) => {
             if arr1.len() != arr2.len() {
                 return Err(CellError::Value);
             }
@@ -677,7 +677,7 @@ pub fn fn_chitest(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
         _ => return Ok(FormulaValue::Error(CellError::Value)),
     };
     let (arr_a, arr_e) = match (actual, expected) {
-        (FormulaValue::Array(a), FormulaValue::Array(e)) => (a, e),
+        (FormulaValue::Array { data: a, .. }, FormulaValue::Array { data: e, .. }) => (a, e),
         _ => return Ok(FormulaValue::Error(CellError::Value)),
     };
     if arr_a.len() != arr_e.len() || arr_a.is_empty() {
@@ -1388,10 +1388,10 @@ mod tests {
     }
 
     fn arr(values: &[f64]) -> FormulaValue {
-        FormulaValue::Array(vec![values
+        FormulaValue::Array { data: vec![values
             .iter()
             .map(|v| FormulaValue::Number(*v))
-            .collect()])
+            .collect()], source: None }
     }
 
     fn assert_close(v: FormulaValue, expected: f64, tol: f64) {
@@ -1470,10 +1470,10 @@ mod tests {
     #[test]
     fn test_chitest() {
         let ctx = EvaluationContext::simple();
-        let a = FormulaValue::Array(vec![vec![n(10.0), n(20.0)], vec![n(20.0), n(40.0)]]);
-        let e = FormulaValue::Array(vec![vec![n(10.0), n(20.0)], vec![n(20.0), n(40.0)]]);
+        let a = FormulaValue::Array { data: vec![vec![n(10.0), n(20.0)], vec![n(20.0), n(40.0)]], source: None };
+        let e = FormulaValue::Array { data: vec![vec![n(10.0), n(20.0)], vec![n(20.0), n(40.0)]], source: None };
         assert_close(fn_chitest(&[a.clone(), e], &ctx).unwrap(), 1.0, 1e-12);
-        let e2 = FormulaValue::Array(vec![vec![n(15.0), n(15.0)], vec![n(15.0), n(45.0)]]);
+        let e2 = FormulaValue::Array { data: vec![vec![n(15.0), n(15.0)], vec![n(15.0), n(45.0)]], source: None };
         if let FormulaValue::Number(p) = fn_chitest(&[a, e2], &ctx).unwrap() {
             assert!(p < 1.0);
         } else {
@@ -1901,7 +1901,7 @@ mod tests {
     #[test]
     fn test_covar_errors() {
         let ctx = EvaluationContext::simple();
-        let bad = FormulaValue::Array(vec![vec![n(1.0)], vec![n(2.0)]]);
+        let bad = FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)]], source: None };
         assert_eq!(
             fn_covar(&[bad, arr(&[1.0, 2.0])], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
@@ -2119,11 +2119,9 @@ mod tests {
     }
 
     fn arr2d(rows: &[&[f64]]) -> FormulaValue {
-        FormulaValue::Array(
-            rows.iter()
-                .map(|row| row.iter().map(|v| FormulaValue::Number(*v)).collect())
-                .collect(),
-        )
+        FormulaValue::Array { data: rows.iter()
+            .map(|row| row.iter().map(|v| FormulaValue::Number(*v)).collect())
+            .collect(), source: None }
     }
 
     // BETADIST docs: =BETADIST(2,8,10,1,3) = 0.6854706

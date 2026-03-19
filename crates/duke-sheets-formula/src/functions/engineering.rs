@@ -18,7 +18,7 @@ const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
 fn scalar_number(value: &FormulaValue) -> Result<f64, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => value
             .as_number()
             .ok_or(FormulaValue::Error(CellError::Value)),
@@ -42,7 +42,7 @@ fn optional_number(args: &[FormulaValue], idx: usize, default: f64) -> Result<f6
 fn scalar_text(value: &FormulaValue) -> Result<String, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => Ok(value.as_string()),
     }
 }
@@ -786,7 +786,7 @@ pub fn fn_complex(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
 
     let suffix = match args.get(2).filter(|v| !matches!(v, FormulaValue::Empty)) {
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
-        Some(FormulaValue::Array(_)) => return Ok(FormulaValue::Error(CellError::Value)),
+        Some(FormulaValue::Array { .. }) => return Ok(FormulaValue::Error(CellError::Value)),
         Some(v) => {
             let s = v.as_string().to_ascii_lowercase();
             if s == "i" || s == "j" {
@@ -1151,7 +1151,7 @@ pub fn fn_imtan(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 fn scalar_string(value: &FormulaValue) -> Result<&str, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         FormulaValue::String(s) => Ok(s.as_str()),
         _ => Err(FormulaValue::Error(CellError::Value)),
     }
@@ -2028,7 +2028,7 @@ mod tests {
             let v = fn_erf_precise(&[FormulaValue::Number(1.0)], &c).unwrap();
             assert_close(as_number(v), 0.8427006897475899, 1e-7);
 
-            let e = fn_erf_precise(&[FormulaValue::Array(vec![])], &c).unwrap();
+            let e = fn_erf_precise(&[FormulaValue::Array { data: vec![], source: None }], &c).unwrap();
             assert_eq!(e, FormulaValue::Error(CellError::Value));
         }
 

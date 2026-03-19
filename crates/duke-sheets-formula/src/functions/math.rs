@@ -12,7 +12,7 @@ pub fn fn_sum(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
         match arg {
             FormulaValue::Number(n) => sum += n,
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         if let FormulaValue::Number(n) = cell {
@@ -42,7 +42,7 @@ pub fn fn_average(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
                 count += 1;
             }
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         if let FormulaValue::Number(n) = cell {
@@ -75,7 +75,7 @@ pub fn fn_min(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
                 min = Some(min.map_or(*n, |m| m.min(*n)));
             }
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         if let FormulaValue::Number(n) = cell {
@@ -103,7 +103,7 @@ pub fn fn_max(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
                 max = Some(max.map_or(*n, |m| m.max(*n)));
             }
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         if let FormulaValue::Number(n) = cell {
@@ -128,7 +128,7 @@ pub fn fn_count(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     for arg in args {
         match arg {
             FormulaValue::Number(_) => count += 1,
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         if matches!(cell, FormulaValue::Number(_)) {
@@ -797,7 +797,7 @@ pub fn fn_sumif(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
     // Get the range (first argument)
     let range = match args.first() {
-        Some(FormulaValue::Array(arr)) => arr,
+        Some(FormulaValue::Array { data: arr, .. }) => arr,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => {
             // Single value treated as 1x1 array
@@ -817,7 +817,7 @@ pub fn fn_sumif(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
     // Get sum_range (third argument) or use range
     let sum_range = match args.get(2) {
-        Some(FormulaValue::Array(arr)) => arr,
+        Some(FormulaValue::Array { data: arr, .. }) => arr,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(_) | None => range, // If no sum_range or single value, use range
     };
@@ -892,7 +892,7 @@ pub fn fn_sumproduct(
     // Get dimensions from first array
     let first = &args[0];
     let (base_rows, base_cols, base_values) = match first {
-        FormulaValue::Array(arr) => {
+        FormulaValue::Array { data: arr, .. } => {
             let rows = arr.len();
             let cols = arr.first().map(|r| r.len()).unwrap_or(0);
             if rows == 0 || cols == 0 {
@@ -926,7 +926,7 @@ pub fn fn_sumproduct(
     // Multiply with each subsequent array
     for arg in args.iter().skip(1) {
         let (rows, cols, values) = match arg {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 let rows = arr.len();
                 let cols = arr.first().map(|r| r.len()).unwrap_or(0);
                 let values: Vec<f64> = arr
@@ -995,7 +995,7 @@ pub fn fn_sumifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
     // Get sum_range (first argument)
     let sum_range = match &args[0] {
-        FormulaValue::Array(arr) => arr,
+        FormulaValue::Array { data: arr, .. } => arr,
         FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
         v => {
             // Single value - treat as 1x1 array
@@ -1019,7 +1019,7 @@ pub fn fn_sumifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
         // Get criteria range
         let range = match &args[range_idx] {
-            FormulaValue::Array(arr) => arr,
+            FormulaValue::Array { data: arr, .. } => arr,
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
             _ => return Ok(FormulaValue::Error(CellError::Value)),
         };
@@ -1809,10 +1809,10 @@ mod tests {
                 < 1e-10
         );
         // =SUM(array) sums all elements
-        let arr = FormulaValue::Array(vec![
+        let arr = FormulaValue::Array { data: vec![
             vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)],
             vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
-        ]);
+        ], source: None };
         assert_eq!(fn_sum(&[arr], &ctx).unwrap(), FormulaValue::Number(10.0));
     }
 
@@ -1821,18 +1821,18 @@ mod tests {
         let ctx = EvaluationContext::simple();
         // Docs data: property values 100000, 200000, 300000, 400000
         // commissions: 7000, 14000, 21000, 28000
-        let values = FormulaValue::Array(vec![
+        let values = FormulaValue::Array { data: vec![
             vec![FormulaValue::Number(100000.0)],
             vec![FormulaValue::Number(200000.0)],
             vec![FormulaValue::Number(300000.0)],
             vec![FormulaValue::Number(400000.0)],
-        ]);
-        let commissions = FormulaValue::Array(vec![
+        ], source: None };
+        let commissions = FormulaValue::Array { data: vec![
             vec![FormulaValue::Number(7000.0)],
             vec![FormulaValue::Number(14000.0)],
             vec![FormulaValue::Number(21000.0)],
             vec![FormulaValue::Number(28000.0)],
-        ]);
+        ], source: None };
         // =SUMIF(values, ">160000", commissions) = 63000
         assert_eq!(
             num(fn_sumif(
@@ -1868,7 +1868,7 @@ mod tests {
     fn test_sumifs_docs() {
         let ctx = EvaluationContext::simple();
         // Docs data: 8 rows of quantity/product/salesperson
-        let sum_range = FormulaValue::Array(vec![
+        let sum_range = FormulaValue::Array { data: vec![
             vec![FormulaValue::Number(5.0)],
             vec![FormulaValue::Number(4.0)],
             vec![FormulaValue::Number(15.0)],
@@ -1877,8 +1877,8 @@ mod tests {
             vec![FormulaValue::Number(12.0)],
             vec![FormulaValue::Number(10.0)],
             vec![FormulaValue::Number(33.0)],
-        ]);
-        let products = FormulaValue::Array(vec![
+        ], source: None };
+        let products = FormulaValue::Array { data: vec![
             vec![FormulaValue::String("Apples".to_string())],
             vec![FormulaValue::String("Apples".to_string())],
             vec![FormulaValue::String("Artichokes".to_string())],
@@ -1887,8 +1887,8 @@ mod tests {
             vec![FormulaValue::String("Bananas".to_string())],
             vec![FormulaValue::String("Carrots".to_string())],
             vec![FormulaValue::String("Carrots".to_string())],
-        ]);
-        let salesperson = FormulaValue::Array(vec![
+        ], source: None };
+        let salesperson = FormulaValue::Array { data: vec![
             vec![FormulaValue::String("Tom".to_string())],
             vec![FormulaValue::String("Sarah".to_string())],
             vec![FormulaValue::String("Tom".to_string())],
@@ -1897,7 +1897,7 @@ mod tests {
             vec![FormulaValue::String("Sarah".to_string())],
             vec![FormulaValue::String("Tom".to_string())],
             vec![FormulaValue::String("Sarah".to_string())],
-        ]);
+        ], source: None };
         // Docs Ex1: =SUMIFS(A2:A9, B2:B9, "=A*", C2:C9, "Tom") = 20
         // Products starting with A sold by Tom: Apples(5) + Artichokes(15)
         assert_eq!(
@@ -1933,16 +1933,16 @@ mod tests {
     fn test_sumproduct_docs() {
         let ctx = EvaluationContext::simple();
         // SUMPRODUCT({3,4;8,6;1,9}, {2,7;6,7;5,3}) = 156
-        let a = FormulaValue::Array(vec![
+        let a = FormulaValue::Array { data: vec![
             vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
             vec![FormulaValue::Number(8.0), FormulaValue::Number(6.0)],
             vec![FormulaValue::Number(1.0), FormulaValue::Number(9.0)],
-        ]);
-        let b = FormulaValue::Array(vec![
+        ], source: None };
+        let b = FormulaValue::Array { data: vec![
             vec![FormulaValue::Number(2.0), FormulaValue::Number(7.0)],
             vec![FormulaValue::Number(6.0), FormulaValue::Number(7.0)],
             vec![FormulaValue::Number(5.0), FormulaValue::Number(3.0)],
-        ]);
+        ], source: None };
         assert_eq!(num(fn_sumproduct(&[a.clone(), b], &ctx).unwrap()), 156.0);
         // Single array: sums all elements = 3+4+8+6+1+9 = 31
         assert_eq!(num(fn_sumproduct(&[a], &ctx).unwrap()), 31.0);
@@ -1951,14 +1951,14 @@ mod tests {
     #[test]
     fn test_sumproduct_docs_dimension_mismatch() {
         let ctx = EvaluationContext::simple();
-        let a = FormulaValue::Array(vec![vec![
+        let a = FormulaValue::Array { data: vec![vec![
             FormulaValue::Number(1.0),
             FormulaValue::Number(2.0),
-        ]]);
-        let b = FormulaValue::Array(vec![
+        ]], source: None };
+        let b = FormulaValue::Array { data: vec![
             vec![FormulaValue::Number(1.0)],
             vec![FormulaValue::Number(2.0)],
-        ]);
+        ], source: None };
         assert_eq!(
             fn_sumproduct(&[a, b], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)

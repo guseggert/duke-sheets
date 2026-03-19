@@ -47,7 +47,7 @@ impl CriteriaMatcher {
             FormulaValue::String(s) => Self::parse_string_criteria(s),
             FormulaValue::Empty => CriteriaType::Empty,
             FormulaValue::Error(_) => CriteriaType::Empty, // Errors don't match anything
-            FormulaValue::Array(_) => CriteriaType::Empty, // Arrays as criteria not supported
+            FormulaValue::Array { .. } => CriteriaType::Empty, // Arrays as criteria not supported
         };
 
         Self { criteria_type }

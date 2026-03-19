@@ -9,7 +9,7 @@ const SQRT_2PI: f64 = 2.506_628_274_631_000_2;
 fn scalar_number(value: &FormulaValue) -> Result<f64, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => value
             .as_number()
             .ok_or(FormulaValue::Error(CellError::Value)),
@@ -32,7 +32,7 @@ fn optional_number(args: &[FormulaValue], idx: usize, default: f64) -> Result<f6
 fn scalar_bool(value: &FormulaValue) -> Result<bool, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => value.as_bool().ok_or(FormulaValue::Error(CellError::Value)),
     }
 }
@@ -53,7 +53,7 @@ fn optional_bool(args: &[FormulaValue], idx: usize, default: bool) -> Result<boo
 fn flatten_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             for row in rows {
                 for cell in row {
                     flatten_numbers(cell, out)?;
@@ -75,7 +75,7 @@ fn flatten_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), Formu
 fn matrix_numbers(value: &FormulaValue) -> Result<Vec<Vec<f64>>, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             if rows.is_empty() {
                 return Err(FormulaValue::Error(CellError::Value));
             }
@@ -522,7 +522,7 @@ fn linest_impl(
 
     let coef_row = reverse_slopes_with_intercept(&fit.slopes, fit.intercept);
     if !with_stats {
-        return Ok(FormulaValue::Array(vec![as_formula_row(&coef_row)]));
+        return Ok(FormulaValue::Array { data: vec![as_formula_row(&coef_row)], source: None });
     }
 
     let stderr_row = reverse_slopes_with_intercept(&fit.stderr_slopes, fit.stderr_intercept);
@@ -543,13 +543,13 @@ fn linest_impl(
         row5[1] = fit.ss_res;
     }
 
-    Ok(FormulaValue::Array(vec![
+    Ok(FormulaValue::Array { data: vec![
         as_formula_row(&coef_row),
         as_formula_row(&stderr_row),
         as_formula_row(&row3),
         as_formula_row(&row4),
         as_formula_row(&row5),
-    ]))
+    ], source: None })
 }
 
 fn logest_impl(
@@ -563,15 +563,13 @@ fn logest_impl(
     if y.is_empty() || y.iter().any(|v| *v <= 0.0) {
         return Err(FormulaValue::Error(CellError::Num));
     }
-    let log_y = FormulaValue::Array(
-        y.iter()
-            .map(|v| vec![FormulaValue::Number(v.ln())])
-            .collect::<Vec<_>>(),
-    );
+    let log_y = FormulaValue::Array { data: y.iter()
+        .map(|v| vec![FormulaValue::Number(v.ln())])
+        .collect::<Vec<_>>(), source: None };
 
     let line = linest_impl(&log_y, known_x, include_const, with_stats)?;
     match line {
-        FormulaValue::Array(mut rows) => {
+        FormulaValue::Array { data: mut rows, .. } => {
             if let Some(first) = rows.first_mut() {
                 for cell in first {
                     if let FormulaValue::Number(n) = cell {
@@ -579,7 +577,7 @@ fn logest_impl(
                     }
                 }
             }
-            Ok(FormulaValue::Array(rows))
+            Ok(FormulaValue::Array { data: rows, source: None })
         }
         _ => Err(FormulaValue::Error(CellError::Value)),
     }
@@ -898,7 +896,7 @@ pub fn fn_growth(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         .into_iter()
         .map(|v| vec![FormulaValue::Number(v)])
         .collect::<Vec<_>>();
-    Ok(FormulaValue::Array(arr))
+    Ok(FormulaValue::Array { data: arr, source: None })
 }
 
 pub fn fn_trend(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -936,7 +934,7 @@ pub fn fn_trend(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         .into_iter()
         .map(|v| vec![FormulaValue::Number(v)])
         .collect::<Vec<_>>();
-    Ok(FormulaValue::Array(arr))
+    Ok(FormulaValue::Array { data: arr, source: None })
 }
 
 pub fn fn_forecast_ets(
@@ -1096,7 +1094,7 @@ pub fn fn_forecast_ets_stat(
         FormulaValue::Number(rmse),
         FormulaValue::Number(step_size),
     ];
-    Ok(FormulaValue::Array(vec![row]))
+    Ok(FormulaValue::Array { data: vec![row], source: None })
 }
 
 #[cfg(test)]
@@ -1148,7 +1146,7 @@ mod tests {
         let args = vec![eval("={1,2,3}").unwrap(), eval("={1,2,3}").unwrap()];
         let result = fn_linest(&args, &ctx).unwrap();
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 assert_eq!(rows.len(), 1);
                 if let FormulaValue::Number(slope) = rows[0][0] {
                     assert!((slope - 1.0).abs() < 1e-8);
@@ -1171,7 +1169,7 @@ mod tests {
         let args = vec![eval("={2,4,8}").unwrap(), eval("={1,2,3}").unwrap()];
         let result = fn_logest(&args, &ctx).unwrap();
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 if let FormulaValue::Number(m) = rows[0][0] {
                     assert!((m - 2.0).abs() < 1e-6);
                 } else {
@@ -1197,7 +1195,7 @@ mod tests {
         ];
         let result = fn_growth(&args, &ctx).unwrap();
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 assert_eq!(rows.len(), 2);
                 if let FormulaValue::Number(v1) = rows[0][0] {
                     assert!((v1 - 16.0).abs() < 1e-4);
@@ -1224,7 +1222,7 @@ mod tests {
         ];
         let result = fn_trend(&args, &ctx).unwrap();
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 if let FormulaValue::Number(v) = rows[0][0] {
                     assert!((v - 9.0).abs() < 1e-8);
                 } else {
@@ -1280,7 +1278,7 @@ mod tests {
         let args = vec![eval("={10,12,14,16}").unwrap(), eval("={1,2,3,4}").unwrap()];
         let result = fn_forecast_ets_stat(&args, &ctx).unwrap();
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0].len(), 8);
                 if let FormulaValue::Number(alpha) = rows[0][0] {
@@ -1332,7 +1330,7 @@ mod tests {
         // known_y={1,9,5,7}, known_x={0,4,2,3} -> slope=2, intercept=1
         let result = eval("=LINEST({1,9,5,7},{0,4,2,3})").unwrap();
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 assert_eq!(rows.len(), 1);
                 if let FormulaValue::Number(slope) = rows[0][0] {
                     assert!((slope - 2.0).abs() < 1e-8);
@@ -1353,7 +1351,7 @@ mod tests {
         // Docs: =SUM(LINEST(B1:B6,A1:A6)*{9,1}) = $11,000
         let result = eval("=LINEST({3100,4500,4400,5400,7500,8100},{1,2,3,4,5,6})").unwrap();
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 if let (FormulaValue::Number(slope), FormulaValue::Number(intercept)) =
                     (&rows[0][0], &rows[0][1])
                 {
@@ -1377,7 +1375,7 @@ mod tests {
         ))
         .unwrap();
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 assert_eq!(rows.len(), 5, "stats=TRUE should return 5 rows");
                 // m4 (age coefficient)
                 if let FormulaValue::Number(m4) = rows[0][0] {
@@ -1421,7 +1419,7 @@ mod tests {
         let result =
             eval("=LOGEST({33100,47300,69000,102000,150000,220000},{11,12,13,14,15,16})").unwrap();
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 assert_eq!(rows.len(), 1);
                 if let FormulaValue::Number(m) = rows[0][0] {
                     assert!((m - 1.4633).abs() < 0.001);
@@ -1443,7 +1441,7 @@ mod tests {
             eval("=GROWTH({33100,47300,69000,102000,150000,220000},{11,12,13,14,15,16})").unwrap();
         let expected_fit = [32618.0, 47729.0, 69841.0, 102197.0, 149542.0, 218822.0];
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 assert_eq!(rows.len(), expected_fit.len());
                 for (i, &exp) in expected_fit.iter().enumerate() {
                     if let FormulaValue::Number(v) = rows[i][0] {
@@ -1464,7 +1462,7 @@ mod tests {
                 .unwrap();
         let expected_pred = [320197.0, 468536.0];
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 assert_eq!(rows.len(), expected_pred.len());
                 for (i, &exp) in expected_pred.iter().enumerate() {
                     if let FormulaValue::Number(v) = rows[i][0] {
@@ -1484,7 +1482,7 @@ mod tests {
         // Docs: SUM(LINEST(...)*{9,1}) = $11,000 — TREND for month 9 must match
         let result = eval("=TREND({3100,4500,4400,5400,7500,8100},{1,2,3,4,5,6},{9})").unwrap();
         match result {
-            FormulaValue::Array(rows) => {
+            FormulaValue::Array { data: rows, .. } => {
                 if let FormulaValue::Number(v) = rows[0][0] {
                     assert!((v - 11000.0).abs() < 1.0);
                 } else {

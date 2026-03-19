@@ -6,9 +6,11 @@ use crate::ast::{
     BinaryOperator, FormulaExpr, StructuredRefSpecifier, StructuredReference, UnaryOperator,
 };
 use crate::error::{FormulaError, FormulaResult};
+use crate::functions::lookup::{compare_lookup_values, to_i64_trunc, values_equal, wildcard_match};
 use crate::functions::FunctionRegistry;
 use duke_sheets_core::{CellError, CellValue, Table, Workbook, MAX_COLS, MAX_ROWS};
-use std::sync::OnceLock;
+use std::cmp::Ordering;
+use std::sync::{Arc, OnceLock};
 
 /// Global function registry (lazily initialized)
 static FUNCTION_REGISTRY: OnceLock<FunctionRegistry> = OnceLock::new();
@@ -24,8 +26,23 @@ pub enum FormulaValue {
     String(String),
     Boolean(bool),
     Error(CellError),
-    Array(Vec<Vec<FormulaValue>>),
+    Array {
+        data: Vec<Vec<FormulaValue>>,
+        /// When this array was materialized from a worksheet range, tracks the source
+        /// for lookup cache keying. `None` for computed arrays.
+        source: Option<RangeSource>,
+    },
     Empty,
+}
+
+/// Identifies the worksheet range an array was materialized from.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RangeSource {
+    pub sheet: usize,
+    pub start_row: u32,
+    pub start_col: u16,
+    pub end_row: u32,
+    pub end_col: u16,
 }
 
 impl FormulaValue {
@@ -82,7 +99,7 @@ impl FormulaValue {
             FormulaValue::Boolean(false) => "FALSE".to_string(),
             FormulaValue::Error(e) => e.to_string(),
             FormulaValue::Empty => String::new(),
-            FormulaValue::Array(_) => "#VALUE!".to_string(),
+            FormulaValue::Array { .. } => "#VALUE!".to_string(),
         }
     }
 
@@ -119,6 +136,22 @@ impl From<CellValue> for FormulaValue {
     }
 }
 
+impl From<&CellValue> for FormulaValue {
+    fn from(value: &CellValue) -> Self {
+        match value {
+            CellValue::Empty => FormulaValue::Empty,
+            CellValue::Number(n) => FormulaValue::Number(*n),
+            CellValue::String(s) => FormulaValue::String(s.as_str().to_string()),
+            CellValue::Boolean(b) => FormulaValue::Boolean(*b),
+            CellValue::Error(e) => FormulaValue::Error(*e),
+            CellValue::SpillTarget { .. } => FormulaValue::Empty,
+            CellValue::RichText(runs) => {
+                FormulaValue::String(duke_sheets_core::rich_text_to_plain(runs))
+            }
+        }
+    }
+}
+
 impl From<FormulaValue> for CellValue {
     fn from(value: FormulaValue) -> Self {
         match value {
@@ -127,7 +160,7 @@ impl From<FormulaValue> for CellValue {
             FormulaValue::String(s) => CellValue::String(s.into()),
             FormulaValue::Boolean(b) => CellValue::Boolean(b),
             FormulaValue::Error(e) => CellValue::Error(e),
-            FormulaValue::Array(_) => CellValue::Error(CellError::Value),
+            FormulaValue::Array { .. } => CellValue::Error(CellError::Value),
         }
     }
 }
@@ -151,6 +184,8 @@ pub struct EvaluationContext<'a> {
     pub rtd_fn: Option<&'a (dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync)>,
     /// Optional IMAGE metadata sink.
     pub image_sink: Option<&'a (dyn Fn(usize, u32, u16, ImageInfo) + Send + Sync)>,
+    /// Shared evaluation cache (range materialization, lookup indexes, sheet names).
+    pub eval_cache: Option<&'a crate::eval_cache::EvalCache>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -164,6 +199,7 @@ impl<'a> EvaluationContext<'a> {
             web_service_fn: None,
             rtd_fn: None,
             image_sink: None,
+            eval_cache: None,
         }
     }
 
@@ -177,6 +213,38 @@ impl<'a> EvaluationContext<'a> {
             web_service_fn: None,
             rtd_fn: None,
             image_sink: None,
+            eval_cache: None,
+        }
+    }
+
+    /// Resolve sheet name to index, using eval_cache (Tier 3) when available.
+    fn resolve_sheet_index(
+        &self,
+        sheet: Option<&str>,
+        workbook: &Workbook,
+    ) -> Result<usize, FormulaValue> {
+        match sheet {
+            Some(name) => {
+                if let Some(cache) = self.eval_cache {
+                    if let Some(&idx) = cache.sheet_names.get(name) {
+                        return Ok(idx);
+                    }
+                    // Fall back to case-insensitive
+                    if let Some((_, &idx)) = cache
+                        .sheet_names
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                    {
+                        return Ok(idx);
+                    }
+                    Err(FormulaValue::Error(CellError::Ref))
+                } else {
+                    workbook
+                        .sheet_index(name)
+                        .ok_or(FormulaValue::Error(CellError::Ref))
+                }
+            }
+            None => Ok(self.current_sheet),
         }
     }
 
@@ -187,12 +255,9 @@ impl<'a> EvaluationContext<'a> {
             None => return FormulaValue::Empty,
         };
 
-        let sheet_idx = match sheet {
-            Some(name) => match workbook.sheet_index(name) {
-                Some(idx) => idx,
-                None => return FormulaValue::Error(CellError::Ref),
-            },
-            None => self.current_sheet,
+        let sheet_idx = match self.resolve_sheet_index(sheet, workbook) {
+            Ok(idx) => idx,
+            Err(e) => return e,
         };
 
         let worksheet = match workbook.worksheet(sheet_idx) {
@@ -200,34 +265,45 @@ impl<'a> EvaluationContext<'a> {
             None => return FormulaValue::Error(CellError::Ref),
         };
 
-        worksheet.get_value_at(row, col).into()
+        worksheet.get_value_at_ref(row, col).into()
     }
 
-    /// Get a range of cell values as an array
-    pub fn get_range_values(
+    /// Get a range of cell values as an array.
+    ///
+    /// When an `eval_cache` is present (Tier 1), the materialized range is cached.
+    /// Subsequent calls with the same range key return a clone from the cache.
+    pub fn get_range_arc(
         &self,
         sheet: Option<&str>,
         start_row: u32,
         start_col: u16,
         end_row: u32,
         end_col: u16,
-    ) -> FormulaValue {
-        let workbook = match self.workbook {
-            Some(wb) => wb,
-            None => return FormulaValue::Array(vec![]),
+    ) -> Result<(Arc<Vec<Vec<FormulaValue>>>, RangeSource), FormulaValue> {
+        let workbook = self.workbook.ok_or_else(|| FormulaValue::Array {
+            data: vec![],
+            source: None,
+        })?;
+
+        let sheet_idx = self.resolve_sheet_index(sheet, workbook)?;
+        let range_key = (sheet_idx, start_row, start_col, end_row, end_col);
+        let source = RangeSource {
+            sheet: sheet_idx,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
         };
 
-        let sheet_idx = match sheet {
-            Some(name) => match workbook.sheet_index(name) {
-                Some(idx) => idx,
-                None => return FormulaValue::Error(CellError::Ref),
-            },
-            None => self.current_sheet,
-        };
+        if let Some(cache) = self.eval_cache {
+            if let Some(cached) = cache.ranges.get(&range_key) {
+                return Ok((cached.clone(), source));
+            }
+        }
 
         let worksheet = match workbook.worksheet(sheet_idx) {
             Some(ws) => ws,
-            None => return FormulaValue::Error(CellError::Ref),
+            None => return Err(FormulaValue::Error(CellError::Ref)),
         };
 
         let num_rows = (end_row - start_row + 1) as usize;
@@ -236,12 +312,33 @@ impl<'a> EvaluationContext<'a> {
         for row in start_row..=end_row {
             let mut cols = Vec::with_capacity(num_cols);
             for col in start_col..=end_col {
-                cols.push(worksheet.get_value_at(row, col).into());
+                cols.push(worksheet.get_value_at_ref(row, col).into());
             }
             rows.push(cols);
         }
 
-        FormulaValue::Array(rows)
+        let rows = Arc::new(rows);
+        if let Some(cache) = self.eval_cache {
+            cache.ranges.insert(range_key, rows.clone());
+        }
+        Ok((rows, source))
+    }
+
+    pub fn get_range_values(
+        &self,
+        sheet: Option<&str>,
+        start_row: u32,
+        start_col: u16,
+        end_row: u32,
+        end_col: u16,
+    ) -> FormulaValue {
+        match self.get_range_arc(sheet, start_row, start_col, end_row, end_col) {
+            Ok((rows, source)) => FormulaValue::Array {
+                data: rows.as_ref().clone(),
+                source: Some(source),
+            },
+            Err(e) => e,
+        }
     }
 
     /// Resolve a named range to its value
@@ -707,7 +804,10 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
                 }
                 result_rows.push(result_row);
             }
-            Ok(FormulaValue::Array(result_rows))
+            Ok(FormulaValue::Array {
+                data: result_rows,
+                source: None,
+            })
         }
     }
 }
@@ -719,8 +819,8 @@ fn apply_binary_op_array(
 ) -> FormulaResult<FormulaValue> {
     let left_arr = to_array(left);
     let right_arr = to_array(right);
-    let left_is_array = matches!(left, FormulaValue::Array(_));
-    let right_is_array = matches!(right, FormulaValue::Array(_));
+    let left_is_array = matches!(left, FormulaValue::Array { .. });
+    let right_is_array = matches!(right, FormulaValue::Array { .. });
 
     let rows = left_arr.len().max(right_arr.len());
     let cols = left_arr
@@ -755,12 +855,15 @@ fn apply_binary_op_array(
         result.push(row);
     }
 
-    Ok(FormulaValue::Array(result))
+    Ok(FormulaValue::Array {
+        data: result,
+        source: None,
+    })
 }
 
 fn to_array(val: &FormulaValue) -> Vec<Vec<FormulaValue>> {
     match val {
-        FormulaValue::Array(rows) => rows.clone(),
+        FormulaValue::Array { data: rows, .. } => rows.clone(),
         other => vec![vec![other.clone()]],
     }
 }
@@ -879,7 +982,9 @@ fn evaluate_binary_op(
     let left_val = evaluate(left, ctx)?;
     let right_val = evaluate(right, ctx)?;
 
-    if matches!(left_val, FormulaValue::Array(_)) || matches!(right_val, FormulaValue::Array(_)) {
+    if matches!(left_val, FormulaValue::Array { .. })
+        || matches!(right_val, FormulaValue::Array { .. })
+    {
         return apply_binary_op_array(op, &left_val, &right_val);
     }
 
@@ -972,7 +1077,7 @@ fn evaluate_unary_op(
             // If the value is an array, pick the element on the same row/column
             // as the formula cell. If already scalar, pass through.
             match val {
-                FormulaValue::Array(ref rows) => {
+                FormulaValue::Array { data: ref rows, .. } => {
                     if rows.is_empty() {
                         return Ok(FormulaValue::Error(CellError::Value));
                     }
@@ -1056,16 +1161,879 @@ fn evaluate_spill_range(
         for r in 0..num_rows {
             let mut result_cols = Vec::with_capacity(num_cols as usize);
             for c in 0..num_cols {
-                let val = worksheet.get_value_at(row + r, col + c);
+                let val = worksheet.get_value_at_ref(row + r, col + c);
                 result_cols.push(FormulaValue::from(val));
             }
             result_rows.push(result_cols);
         }
-        Ok(FormulaValue::Array(result_rows))
+        Ok(FormulaValue::Array {
+            data: result_rows,
+            source: None,
+        })
     } else {
         // Not a spill source — return just the single cell value (1x1)
-        Ok(FormulaValue::from(worksheet.get_value_at(row, col)))
+        Ok(FormulaValue::from(worksheet.get_value_at_ref(row, col)))
     }
+}
+
+fn get_range_from_expr(
+    expr: &FormulaExpr,
+    ctx: &EvaluationContext,
+) -> Option<FormulaResult<(Arc<Vec<Vec<FormulaValue>>>, RangeSource)>> {
+    let rr = match expr {
+        FormulaExpr::RangeRef(rr) => rr,
+        _ => return None,
+    };
+    Some(
+        ctx.get_range_arc(
+            rr.sheet.as_deref(),
+            rr.range.start.row,
+            rr.range.start.col,
+            rr.range.end.row,
+            rr.range.end.col,
+        )
+        .map_err(|v| match v {
+            FormulaValue::Error(e) => FormulaError::Evaluation(format!("{:?}", e)),
+            _ => FormulaError::Evaluation("range lookup failed".into()),
+        }),
+    )
+}
+
+fn shared_array_dims(arr: &[Vec<FormulaValue>]) -> (usize, usize) {
+    let rows = arr.len();
+    let cols = arr.first().map(|r| r.len()).unwrap_or(0);
+    (rows, cols)
+}
+
+fn lookup_source_key(source: &RangeSource) -> Option<crate::eval_cache::LookupSourceKey> {
+    if source.start_col == source.end_col {
+        Some(crate::eval_cache::LookupSourceKey::Column {
+            sheet: source.sheet,
+            row_start: source.start_row,
+            row_end: source.end_row,
+            col: source.start_col,
+        })
+    } else if source.start_row == source.end_row {
+        Some(crate::eval_cache::LookupSourceKey::Row {
+            sheet: source.sheet,
+            row: source.start_row,
+            col_start: source.start_col,
+            col_end: source.end_col,
+        })
+    } else {
+        None
+    }
+}
+
+fn direct_value_from_source(
+    source: &RangeSource,
+    row_offset: usize,
+    col_offset: usize,
+    ctx: &EvaluationContext,
+) -> Option<FormulaValue> {
+    let workbook = ctx.workbook?;
+    let worksheet = workbook.worksheet(source.sheet)?;
+    let row = source.start_row + row_offset as u32;
+    let col = source.start_col + col_offset as u16;
+    Some(FormulaValue::from(worksheet.get_value_at_ref(row, col)))
+}
+
+fn direct_exact_match_in_source(
+    lookup_value: &FormulaValue,
+    source: &RangeSource,
+    ctx: &EvaluationContext,
+) -> Option<usize> {
+    let source_key = lookup_source_key(source)?;
+    let workbook = ctx.workbook?;
+    let worksheet = workbook.worksheet(source.sheet)?;
+    if let Some(cache) = ctx.eval_cache {
+        if let Some(existing) = cache.source_lookup_indexes.get(&source_key) {
+            return existing.find(lookup_value);
+        }
+        let index = match source_key {
+            crate::eval_cache::LookupSourceKey::Column {
+                row_start,
+                row_end,
+                col,
+                ..
+            } => crate::eval_cache::LookupIndex::build_from_cell_refs(
+                (row_start..=row_end).map(|row| worksheet.get_value_at_ref(row, col)),
+            ),
+            crate::eval_cache::LookupSourceKey::Row {
+                row,
+                col_start,
+                col_end,
+                ..
+            } => crate::eval_cache::LookupIndex::build_from_cell_refs(
+                (col_start..=col_end).map(|col| worksheet.get_value_at_ref(row, col)),
+            ),
+        };
+        let result = index.find(lookup_value);
+        cache
+            .source_lookup_indexes
+            .insert(source_key.clone(), Arc::new(index));
+        return result;
+    }
+    match source_key {
+        crate::eval_cache::LookupSourceKey::Column {
+            row_start,
+            row_end,
+            col,
+            ..
+        } => (row_start..=row_end).position(|row| {
+            values_equal(
+                lookup_value,
+                &FormulaValue::from(worksheet.get_value_at_ref(row, col)),
+            )
+        }),
+        crate::eval_cache::LookupSourceKey::Row {
+            row,
+            col_start,
+            col_end,
+            ..
+        } => (col_start..=col_end).position(|col| {
+            values_equal(
+                lookup_value,
+                &FormulaValue::from(worksheet.get_value_at_ref(row, col)),
+            )
+        }),
+    }
+}
+
+fn shared_vector_value<'a>(arr: &'a [Vec<FormulaValue>], idx: usize) -> Option<&'a FormulaValue> {
+    let (rows, cols) = shared_array_dims(arr);
+    if rows == 1 {
+        arr[0].get(idx)
+    } else if cols == 1 {
+        arr.get(idx).and_then(|row| row.first())
+    } else {
+        None
+    }
+}
+
+fn lookup_index_key_for_vector(
+    source: &RangeSource,
+    rows: usize,
+    cols: usize,
+) -> Option<crate::eval_cache::LookupIndexKey> {
+    let range_key = (
+        source.sheet,
+        source.start_row,
+        source.start_col,
+        source.end_row,
+        source.end_col,
+    );
+    if rows == 1 {
+        Some((range_key, u16::MAX))
+    } else if cols == 1 {
+        Some((range_key, 0))
+    } else {
+        None
+    }
+}
+
+fn build_lookup_index_from_shared(arr: &[Vec<FormulaValue>]) -> crate::eval_cache::LookupIndex {
+    let (rows, cols) = shared_array_dims(arr);
+    if rows == 1 {
+        crate::eval_cache::LookupIndex::build(&arr[0])
+    } else if cols == 1 {
+        let owned: Vec<FormulaValue> = arr
+            .iter()
+            .map(|row| row.first().cloned().unwrap_or(FormulaValue::Empty))
+            .collect();
+        crate::eval_cache::LookupIndex::build(&owned)
+    } else {
+        crate::eval_cache::LookupIndex::build(&[])
+    }
+}
+
+fn exact_match_in_shared_range(
+    lookup_value: &FormulaValue,
+    arr: &[Vec<FormulaValue>],
+    source: &RangeSource,
+    ctx: &EvaluationContext,
+) -> Option<usize> {
+    let (rows, cols) = shared_array_dims(arr);
+    let index_key = lookup_index_key_for_vector(source, rows, cols)?;
+    if let Some(cache) = ctx.eval_cache {
+        if let Some(existing) = cache.lookup_indexes.get(&index_key) {
+            return existing.find(lookup_value);
+        }
+        let index = build_lookup_index_from_shared(arr);
+        let result = index.find(lookup_value);
+        cache.lookup_indexes.insert(index_key, Arc::new(index));
+        return result;
+    }
+
+    let len = if rows == 1 { cols } else { rows };
+    (0..len).find(|&i| {
+        shared_vector_value(arr, i)
+            .map(|v| values_equal(lookup_value, v))
+            .unwrap_or(false)
+    })
+}
+
+fn evaluate_index_fast(
+    args: &[FormulaExpr],
+    ctx: &EvaluationContext,
+) -> Option<FormulaResult<FormulaValue>> {
+    let range_expr = match args.first()? {
+        FormulaExpr::RangeRef(rr) => rr,
+        _ => return None,
+    };
+    let rows = (range_expr.range.end.row - range_expr.range.start.row + 1) as usize;
+    let cols = (range_expr.range.end.col - range_expr.range.start.col + 1) as usize;
+    if rows == 0 || cols == 0 {
+        return Some(Ok(FormulaValue::Error(CellError::Ref)));
+    }
+
+    let row_val = match evaluate(args.get(1)?, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    if let FormulaValue::Error(e) = row_val {
+        return Some(Ok(FormulaValue::Error(e)));
+    }
+    let row_num = to_i64_trunc(&row_val).unwrap_or(0);
+    if row_num < 0 {
+        return Some(Ok(FormulaValue::Error(CellError::Value)));
+    }
+
+    let col_num = match args.get(2) {
+        Some(expr) => match evaluate(expr, ctx) {
+            Ok(v) => {
+                if let FormulaValue::Error(e) = v {
+                    return Some(Ok(FormulaValue::Error(e)));
+                }
+                to_i64_trunc(&v).unwrap_or(0)
+            }
+            Err(e) => return Some(Err(e)),
+        },
+        None => {
+            if rows == 1 || cols == 1 {
+                0
+            } else {
+                1
+            }
+        }
+    };
+    if col_num < 0 {
+        return Some(Ok(FormulaValue::Error(CellError::Value)));
+    }
+
+    if row_num > 0 && col_num > 0 {
+        let r = (row_num - 1) as usize;
+        let c = (col_num - 1) as usize;
+        if r >= rows || c >= cols {
+            return Some(Ok(FormulaValue::Error(CellError::Ref)));
+        }
+        let source = RangeSource {
+            sheet: ctx
+                .resolve_sheet_index(range_expr.sheet.as_deref(), ctx.workbook?)
+                .ok()?,
+            start_row: range_expr.range.start.row,
+            start_col: range_expr.range.start.col,
+            end_row: range_expr.range.end.row,
+            end_col: range_expr.range.end.col,
+        };
+        return Some(Ok(direct_value_from_source(&source, r, c, ctx)
+            .unwrap_or(FormulaValue::Error(CellError::Ref))));
+    }
+
+    let (arr, _source) = match get_range_from_expr(args.first()?, ctx)? {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    let arr = arr.as_ref();
+
+    if row_num == 0 {
+        if col_num == 0 {
+            return Some(Ok(FormulaValue::Error(CellError::Value)));
+        }
+        let c = (col_num - 1) as usize;
+        if c >= cols {
+            return Some(Ok(FormulaValue::Error(CellError::Ref)));
+        }
+        let column: Vec<Vec<FormulaValue>> = arr.iter().map(|row| vec![row[c].clone()]).collect();
+        return Some(Ok(FormulaValue::Array {
+            data: column,
+            source: None,
+        }));
+    }
+
+    if col_num == 0 {
+        let r = (row_num - 1) as usize;
+        if r >= rows {
+            return Some(Ok(FormulaValue::Error(CellError::Ref)));
+        }
+        return Some(Ok(FormulaValue::Array {
+            data: vec![arr[r].clone()],
+            source: None,
+        }));
+    }
+
+    let r = (row_num - 1) as usize;
+    let c = (col_num - 1) as usize;
+    if r >= rows || c >= cols {
+        return Some(Ok(FormulaValue::Error(CellError::Ref)));
+    }
+    Some(Ok(arr[r][c].clone()))
+}
+
+fn evaluate_match_fast(
+    args: &[FormulaExpr],
+    ctx: &EvaluationContext,
+) -> Option<FormulaResult<FormulaValue>> {
+    let lookup_value = match evaluate(args.first()?, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    if let FormulaValue::Error(e) = lookup_value {
+        return Some(Ok(FormulaValue::Error(e)));
+    }
+    if matches!(lookup_value, FormulaValue::Array { .. }) {
+        return Some(Ok(FormulaValue::Error(CellError::Value)));
+    }
+
+    let match_type = match args.get(2) {
+        None => 1,
+        Some(expr) => match evaluate(expr, ctx) {
+            Ok(v) => {
+                if let FormulaValue::Error(e) = v {
+                    return Some(Ok(FormulaValue::Error(e)));
+                }
+                let mt = to_i64_trunc(&v).unwrap_or(1);
+                if mt > 0 {
+                    1
+                } else if mt < 0 {
+                    -1
+                } else {
+                    0
+                }
+            }
+            Err(e) => return Some(Err(e)),
+        },
+    };
+
+    if match_type == 0 {
+        if let FormulaExpr::RangeRef(rr) = args.get(1)? {
+            let sheet = match ctx.resolve_sheet_index(rr.sheet.as_deref(), ctx.workbook?) {
+                Ok(idx) => idx,
+                Err(v) => return Some(Ok(v)),
+            };
+            let source = RangeSource {
+                sheet,
+                start_row: rr.range.start.row,
+                start_col: rr.range.start.col,
+                end_row: rr.range.end.row,
+                end_col: rr.range.end.col,
+            };
+            return Some(Ok(
+                match direct_exact_match_in_source(&lookup_value, &source, ctx) {
+                    Some(i) => FormulaValue::Number((i + 1) as f64),
+                    None => FormulaValue::Error(CellError::Na),
+                },
+            ));
+        }
+    }
+
+    let (arr, source) = match get_range_from_expr(args.get(1)?, ctx)? {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    let arr = arr.as_ref();
+    let (rows, cols) = shared_array_dims(arr);
+    if rows == 0 || cols == 0 {
+        return Some(Ok(FormulaValue::Error(CellError::Na)));
+    }
+    if rows != 1 && cols != 1 {
+        return Some(Ok(FormulaValue::Error(CellError::Na)));
+    }
+
+    let len = if rows == 1 { cols } else { rows };
+    let result = match match_type {
+        0 => exact_match_in_shared_range(&lookup_value, arr, &source, ctx),
+        1 => {
+            let mut best = None;
+            for i in 0..len {
+                let v = shared_vector_value(arr, i).unwrap();
+                match compare_lookup_values(v, &lookup_value) {
+                    Some(Ordering::Less) | Some(Ordering::Equal) => best = Some(i),
+                    Some(Ordering::Greater) => break,
+                    None => {}
+                }
+            }
+            best
+        }
+        -1 => {
+            let mut best = None;
+            for i in 0..len {
+                let v = shared_vector_value(arr, i).unwrap();
+                match compare_lookup_values(v, &lookup_value) {
+                    Some(Ordering::Greater) | Some(Ordering::Equal) => best = Some(i),
+                    Some(Ordering::Less) => break,
+                    None => {}
+                }
+            }
+            best
+        }
+        _ => return Some(Ok(FormulaValue::Error(CellError::Na))),
+    };
+
+    Some(Ok(match result {
+        Some(i) => FormulaValue::Number((i + 1) as f64),
+        None => FormulaValue::Error(CellError::Na),
+    }))
+}
+
+fn evaluate_xmatch_fast(
+    args: &[FormulaExpr],
+    ctx: &EvaluationContext,
+) -> Option<FormulaResult<FormulaValue>> {
+    let lookup_value = match evaluate(args.first()?, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    if let FormulaValue::Error(e) = lookup_value {
+        return Some(Ok(FormulaValue::Error(e)));
+    }
+    if matches!(lookup_value, FormulaValue::Array { .. }) {
+        return Some(Ok(FormulaValue::Error(CellError::Value)));
+    }
+
+    let match_mode = args
+        .get(2)
+        .map(|expr| evaluate(expr, ctx))
+        .transpose()
+        .ok()?
+        .and_then(|v| v.as_number())
+        .unwrap_or(0.0) as i64;
+    let search_mode = args
+        .get(3)
+        .map(|expr| evaluate(expr, ctx))
+        .transpose()
+        .ok()?
+        .and_then(|v| v.as_number())
+        .unwrap_or(1.0) as i64;
+
+    if match_mode == 0 && search_mode == 1 {
+        if let FormulaExpr::RangeRef(rr) = args.get(1)? {
+            let sheet = match ctx.resolve_sheet_index(rr.sheet.as_deref(), ctx.workbook?) {
+                Ok(idx) => idx,
+                Err(v) => return Some(Ok(v)),
+            };
+            let source = RangeSource {
+                sheet,
+                start_row: rr.range.start.row,
+                start_col: rr.range.start.col,
+                end_row: rr.range.end.row,
+                end_col: rr.range.end.col,
+            };
+            return Some(Ok(
+                match direct_exact_match_in_source(&lookup_value, &source, ctx) {
+                    Some(i) => FormulaValue::Number((i + 1) as f64),
+                    None => FormulaValue::Error(CellError::Na),
+                },
+            ));
+        }
+    }
+
+    let (arr, source) = match get_range_from_expr(args.get(1)?, ctx)? {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    let arr = arr.as_ref();
+    let (rows, cols) = shared_array_dims(arr);
+    if rows == 0 || cols == 0 || (rows != 1 && cols != 1) {
+        return Some(Ok(FormulaValue::Error(CellError::Value)));
+    }
+    let len = if rows == 1 { cols } else { rows };
+
+    let indices: Vec<usize> = if search_mode == -1 {
+        (0..len).rev().collect()
+    } else {
+        (0..len).collect()
+    };
+    let exact_pos = || {
+        if search_mode == 1 {
+            exact_match_in_shared_range(&lookup_value, arr, &source, ctx)
+        } else {
+            indices
+                .iter()
+                .copied()
+                .find(|&i| values_equal(&lookup_value, shared_vector_value(arr, i).unwrap()))
+        }
+    };
+
+    let result = match match_mode {
+        0 => exact_pos(),
+        2 => {
+            let pattern = lookup_value.as_string().to_ascii_lowercase();
+            indices.iter().copied().find(|&i| {
+                wildcard_match(
+                    &pattern,
+                    &shared_vector_value(arr, i)
+                        .unwrap()
+                        .as_string()
+                        .to_ascii_lowercase(),
+                )
+            })
+        }
+        -1 => {
+            if let Some(i) = exact_pos() {
+                Some(i)
+            } else {
+                let mut best = None;
+                for i in 0..len {
+                    let v = shared_vector_value(arr, i).unwrap();
+                    if let Some(ord) = compare_lookup_values(v, &lookup_value) {
+                        if ord == Ordering::Less {
+                            if let Some(prev) = best {
+                                if compare_lookup_values(v, shared_vector_value(arr, prev).unwrap())
+                                    == Some(Ordering::Greater)
+                                {
+                                    best = Some(i);
+                                }
+                            } else {
+                                best = Some(i);
+                            }
+                        }
+                    }
+                }
+                best
+            }
+        }
+        1 => {
+            if let Some(i) = exact_pos() {
+                Some(i)
+            } else {
+                let mut best = None;
+                for i in 0..len {
+                    let v = shared_vector_value(arr, i).unwrap();
+                    if let Some(ord) = compare_lookup_values(v, &lookup_value) {
+                        if ord == Ordering::Greater {
+                            if let Some(prev) = best {
+                                if compare_lookup_values(v, shared_vector_value(arr, prev).unwrap())
+                                    == Some(Ordering::Less)
+                                {
+                                    best = Some(i);
+                                }
+                            } else {
+                                best = Some(i);
+                            }
+                        }
+                    }
+                }
+                best
+            }
+        }
+        _ => return Some(Ok(FormulaValue::Error(CellError::Value))),
+    };
+
+    Some(Ok(match result {
+        Some(i) => FormulaValue::Number((i + 1) as f64),
+        None => FormulaValue::Error(CellError::Na),
+    }))
+}
+
+fn evaluate_xlookup_fast(
+    args: &[FormulaExpr],
+    ctx: &EvaluationContext,
+) -> Option<FormulaResult<FormulaValue>> {
+    let lookup_value = match evaluate(args.first()?, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    if let FormulaValue::Error(e) = lookup_value {
+        return Some(Ok(FormulaValue::Error(e)));
+    }
+
+    let if_not_found = match args.get(3) {
+        Some(expr) => match evaluate(expr, ctx) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        },
+        None => FormulaValue::Error(CellError::Na),
+    };
+    let match_mode = args
+        .get(4)
+        .map(|expr| evaluate(expr, ctx))
+        .transpose()
+        .ok()?
+        .and_then(|v| v.as_number())
+        .unwrap_or(0.0) as i64;
+    let search_mode = args
+        .get(5)
+        .map(|expr| evaluate(expr, ctx))
+        .transpose()
+        .ok()?
+        .and_then(|v| v.as_number())
+        .unwrap_or(1.0) as i64;
+
+    if match_mode == 0 && search_mode == 1 {
+        if let (FormulaExpr::RangeRef(lookup_rr), FormulaExpr::RangeRef(return_rr)) =
+            (args.get(1)?, args.get(2)?)
+        {
+            let lookup_sheet =
+                match ctx.resolve_sheet_index(lookup_rr.sheet.as_deref(), ctx.workbook?) {
+                    Ok(idx) => idx,
+                    Err(v) => return Some(Ok(v)),
+                };
+            let return_sheet =
+                match ctx.resolve_sheet_index(return_rr.sheet.as_deref(), ctx.workbook?) {
+                    Ok(idx) => idx,
+                    Err(v) => return Some(Ok(v)),
+                };
+            let lookup_source = RangeSource {
+                sheet: lookup_sheet,
+                start_row: lookup_rr.range.start.row,
+                start_col: lookup_rr.range.start.col,
+                end_row: lookup_rr.range.end.row,
+                end_col: lookup_rr.range.end.col,
+            };
+            let return_source = RangeSource {
+                sheet: return_sheet,
+                start_row: return_rr.range.start.row,
+                start_col: return_rr.range.start.col,
+                end_row: return_rr.range.end.row,
+                end_col: return_rr.range.end.col,
+            };
+            let lookup_len = if lookup_source.start_col == lookup_source.end_col {
+                (lookup_source.end_row - lookup_source.start_row + 1) as usize
+            } else if lookup_source.start_row == lookup_source.end_row {
+                (lookup_source.end_col - lookup_source.start_col + 1) as usize
+            } else {
+                0
+            };
+            let return_len = if return_source.start_col == return_source.end_col {
+                (return_source.end_row - return_source.start_row + 1) as usize
+            } else if return_source.start_row == return_source.end_row {
+                (return_source.end_col - return_source.start_col + 1) as usize
+            } else {
+                0
+            };
+            if lookup_len == return_len && lookup_len > 0 {
+                return Some(Ok(
+                    match direct_exact_match_in_source(&lookup_value, &lookup_source, ctx) {
+                        Some(i) => {
+                            let (row_off, col_off) =
+                                if return_source.start_col == return_source.end_col {
+                                    (i, 0)
+                                } else {
+                                    (0, i)
+                                };
+                            direct_value_from_source(&return_source, row_off, col_off, ctx)
+                                .unwrap_or(FormulaValue::Error(CellError::Na))
+                        }
+                        None => {
+                            if matches!(if_not_found, FormulaValue::Error(CellError::Na)) {
+                                FormulaValue::Error(CellError::Na)
+                            } else {
+                                if_not_found
+                            }
+                        }
+                    },
+                ));
+            }
+        }
+    }
+
+    let (lookup_arr, source) = match get_range_from_expr(args.get(1)?, ctx)? {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    let (return_arr, _) = match get_range_from_expr(args.get(2)?, ctx)? {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+
+    let lookup_arr = lookup_arr.as_ref();
+    let return_arr = return_arr.as_ref();
+    let (lookup_rows, lookup_cols) = shared_array_dims(lookup_arr);
+    let (return_rows, return_cols) = shared_array_dims(return_arr);
+    if (lookup_rows != 1 && lookup_cols != 1) || (return_rows != 1 && return_cols != 1) {
+        return Some(Ok(FormulaValue::Error(CellError::Value)));
+    }
+    let lookup_len = if lookup_rows == 1 {
+        lookup_cols
+    } else {
+        lookup_rows
+    };
+    let return_len = if return_rows == 1 {
+        return_cols
+    } else {
+        return_rows
+    };
+    if lookup_len != return_len {
+        return Some(Ok(FormulaValue::Error(CellError::Value)));
+    }
+
+    let indices: Vec<usize> = if search_mode == -1 {
+        (0..lookup_len).rev().collect()
+    } else {
+        (0..lookup_len).collect()
+    };
+    let exact_pos = || {
+        if search_mode == 1 {
+            exact_match_in_shared_range(&lookup_value, lookup_arr, &source, ctx)
+        } else {
+            indices
+                .iter()
+                .copied()
+                .find(|&i| values_equal(&lookup_value, shared_vector_value(lookup_arr, i).unwrap()))
+        }
+    };
+    let pos = match match_mode {
+        0 => exact_pos(),
+        2 => {
+            let pattern = lookup_value.as_string().to_ascii_lowercase();
+            indices.iter().copied().find(|&i| {
+                wildcard_match(
+                    &pattern,
+                    &shared_vector_value(lookup_arr, i)
+                        .unwrap()
+                        .as_string()
+                        .to_ascii_lowercase(),
+                )
+            })
+        }
+        -1 => {
+            if let Some(i) = exact_pos() {
+                Some(i)
+            } else {
+                let mut best = None;
+                for i in 0..lookup_len {
+                    let v = shared_vector_value(lookup_arr, i).unwrap();
+                    if let Some(ord) = compare_lookup_values(v, &lookup_value) {
+                        if ord == Ordering::Less {
+                            if let Some(prev) = best {
+                                if compare_lookup_values(
+                                    v,
+                                    shared_vector_value(lookup_arr, prev).unwrap(),
+                                ) == Some(Ordering::Greater)
+                                {
+                                    best = Some(i);
+                                }
+                            } else {
+                                best = Some(i);
+                            }
+                        }
+                    }
+                }
+                best
+            }
+        }
+        1 => {
+            if let Some(i) = exact_pos() {
+                Some(i)
+            } else {
+                let mut best = None;
+                for i in 0..lookup_len {
+                    let v = shared_vector_value(lookup_arr, i).unwrap();
+                    if let Some(ord) = compare_lookup_values(v, &lookup_value) {
+                        if ord == Ordering::Greater {
+                            if let Some(prev) = best {
+                                if compare_lookup_values(
+                                    v,
+                                    shared_vector_value(lookup_arr, prev).unwrap(),
+                                ) == Some(Ordering::Less)
+                                {
+                                    best = Some(i);
+                                }
+                            } else {
+                                best = Some(i);
+                            }
+                        }
+                    }
+                }
+                best
+            }
+        }
+        _ => return Some(Ok(FormulaValue::Error(CellError::Value))),
+    };
+
+    Some(Ok(match pos {
+        Some(i) => shared_vector_value(return_arr, i)
+            .cloned()
+            .unwrap_or(FormulaValue::Error(CellError::Na)),
+        None => {
+            if matches!(if_not_found, FormulaValue::Error(CellError::Na)) {
+                FormulaValue::Error(CellError::Na)
+            } else {
+                if_not_found
+            }
+        }
+    }))
+}
+
+fn evaluate_vlookup_fast(
+    args: &[FormulaExpr],
+    ctx: &EvaluationContext,
+) -> Option<FormulaResult<FormulaValue>> {
+    let lookup_value = match evaluate(args.first()?, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    if let FormulaValue::Error(e) = lookup_value {
+        return Some(Ok(FormulaValue::Error(e)));
+    }
+
+    let table_rr = match args.get(1)? {
+        FormulaExpr::RangeRef(rr) => rr,
+        _ => return None,
+    };
+    let col_index_val = match evaluate(args.get(2)?, ctx) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    if let FormulaValue::Error(e) = col_index_val {
+        return Some(Ok(FormulaValue::Error(e)));
+    }
+    let col_index = to_i64_trunc(&col_index_val).unwrap_or(0);
+    if col_index < 1 {
+        return Some(Ok(FormulaValue::Error(CellError::Value)));
+    }
+    let range_lookup = match args.get(3) {
+        Some(expr) => match evaluate(expr, ctx) {
+            Ok(v) => v.as_bool().unwrap_or(true),
+            Err(e) => return Some(Err(e)),
+        },
+        None => true,
+    };
+    if range_lookup {
+        return None;
+    }
+
+    let sheet = match ctx.resolve_sheet_index(table_rr.sheet.as_deref(), ctx.workbook?) {
+        Ok(idx) => idx,
+        Err(v) => return Some(Ok(v)),
+    };
+    let source = RangeSource {
+        sheet,
+        start_row: table_rr.range.start.row,
+        start_col: table_rr.range.start.col,
+        end_row: table_rr.range.end.row,
+        end_col: table_rr.range.end.col,
+    };
+    let width = (source.end_col - source.start_col + 1) as i64;
+    if col_index > width {
+        return Some(Ok(FormulaValue::Error(CellError::Ref)));
+    }
+    Some(Ok(
+        match direct_exact_match_in_source(
+            &lookup_value,
+            &RangeSource {
+                start_col: source.start_col,
+                end_col: source.start_col,
+                ..source.clone()
+            },
+            ctx,
+        ) {
+            Some(i) => direct_value_from_source(&source, i, (col_index - 1) as usize, ctx)
+                .unwrap_or(FormulaValue::Error(CellError::Na)),
+            None => FormulaValue::Error(CellError::Na),
+        },
+    ))
 }
 
 /// Evaluate a function call
@@ -1120,6 +2088,37 @@ fn evaluate_function(
     if lookup_name == "FORMULATEXT" {
         return evaluate_formulatext(args, ctx);
     }
+
+    if lookup_name == "INDEX" {
+        if let Some(result) = evaluate_index_fast(args, ctx) {
+            return result;
+        }
+    }
+
+    if lookup_name == "MATCH" {
+        if let Some(result) = evaluate_match_fast(args, ctx) {
+            return result;
+        }
+    }
+
+    if lookup_name == "XMATCH" {
+        if let Some(result) = evaluate_xmatch_fast(args, ctx) {
+            return result;
+        }
+    }
+
+    if lookup_name == "XLOOKUP" {
+        if let Some(result) = evaluate_xlookup_fast(args, ctx) {
+            return result;
+        }
+    }
+
+    if lookup_name == "VLOOKUP" {
+        if let Some(result) = evaluate_vlookup_fast(args, ctx) {
+            return result;
+        }
+    }
+
     // Evaluate arguments
     let mut evaluated_args = Vec::with_capacity(args.len());
     for arg in args {
@@ -1193,9 +2192,7 @@ fn evaluate_formulatext(
 fn evaluate_areas(args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     fn count_areas(expr: &FormulaExpr, ctx: &EvaluationContext) -> Result<u32, CellError> {
         match expr {
-            FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::NameRef(_) => {
-                Ok(1)
-            }
+            FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::NameRef(_) => Ok(1),
             FormulaExpr::BinaryOp {
                 op: BinaryOperator::Union,
                 left,
@@ -1229,7 +2226,6 @@ fn evaluate_areas(args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResul
         Err(e) => Ok(FormulaValue::Error(e)),
     }
 }
-
 
 fn evaluate_offset(args: &[FormulaExpr], ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let to_i64_trunc = |value: &FormulaValue| value.as_number().map(|n| n.trunc() as i64);
@@ -1496,7 +2492,7 @@ mod tests {
     #[test]
     fn test_evaluate_array() {
         let result = eval("={1,2,3}").unwrap();
-        if let FormulaValue::Array(rows) = result {
+        if let FormulaValue::Array { data: rows, .. } = result {
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].len(), 3);
             assert_eq!(rows[0][0], FormulaValue::Number(1.0));
@@ -2465,7 +3461,7 @@ mod tests {
         // For {1;2;3} (3 rows), returns {1;2;3} since default current_row=0 -> 1,2,3
         let result = eval("=ROW({1;2;3})").unwrap();
         match result {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 assert_eq!(arr.len(), 3); // 3 rows
                 assert_eq!(arr[0].len(), 1); // 1 column each
                 assert_eq!(arr[0][0], FormulaValue::Number(1.0));
@@ -2479,7 +3475,7 @@ mod tests {
         // For {1,2,3} (3 columns), returns {1,2,3}
         let result = eval("=COLUMN({1,2,3})").unwrap();
         match result {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 assert_eq!(arr.len(), 1); // 1 row
                 assert_eq!(arr[0].len(), 3); // 3 columns
                 assert_eq!(arr[0][0], FormulaValue::Number(1.0));
@@ -2747,7 +3743,7 @@ mod tests {
         // Test resolving a range
         let result = ctx.resolve_named_range("DataRange").unwrap();
         match result {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 assert_eq!(arr.len(), 2); // 2 rows
                 assert_eq!(arr[0].len(), 2); // 2 columns
                 assert_eq!(arr[0][0], FormulaValue::Number(100.0)); // A1
@@ -2805,7 +3801,7 @@ mod tests {
         // SEQUENCE(rows) - basic column of numbers
         let result = eval("=SEQUENCE(5)").unwrap();
         match result {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 assert_eq!(arr.len(), 5); // 5 rows
                 assert_eq!(arr[0].len(), 1); // 1 column
                 assert_eq!(arr[0][0], FormulaValue::Number(1.0));
@@ -2820,7 +3816,7 @@ mod tests {
         // SEQUENCE(rows, cols) - 2D array
         let result = eval("=SEQUENCE(3, 4)").unwrap();
         match result {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 assert_eq!(arr.len(), 3); // 3 rows
                 assert_eq!(arr[0].len(), 4); // 4 columns
                                              // Row 1: 1, 2, 3, 4
@@ -2839,7 +3835,7 @@ mod tests {
         // SEQUENCE(rows, cols, start) - custom start
         let result = eval("=SEQUENCE(3, 2, 10)").unwrap();
         match result {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 assert_eq!(arr[0][0], FormulaValue::Number(10.0));
                 assert_eq!(arr[0][1], FormulaValue::Number(11.0));
                 assert_eq!(arr[1][0], FormulaValue::Number(12.0));
@@ -2851,7 +3847,7 @@ mod tests {
         // SEQUENCE(rows, cols, start, step) - custom step
         let result = eval("=SEQUENCE(4, 1, 2, 3)").unwrap();
         match result {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 // 2, 5, 8, 11 (step of 3)
                 assert_eq!(arr[0][0], FormulaValue::Number(2.0));
                 assert_eq!(arr[1][0], FormulaValue::Number(5.0));
@@ -2864,7 +3860,7 @@ mod tests {
         // SEQUENCE with negative step (countdown)
         let result = eval("=SEQUENCE(5, 1, 10, -2)").unwrap();
         match result {
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 // 10, 8, 6, 4, 2
                 assert_eq!(arr[0][0], FormulaValue::Number(10.0));
                 assert_eq!(arr[1][0], FormulaValue::Number(8.0));
