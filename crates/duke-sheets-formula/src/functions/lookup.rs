@@ -45,6 +45,30 @@ fn array_dims(arr: &[Vec<FormulaValue>]) -> (usize, usize) {
     (rows, cols)
 }
 
+/// Resolve the effective (row_num, col_num) for INDEX given the raw second
+/// argument, an optional third argument, and the array dimensions.
+///
+/// In the two-argument form `INDEX(vector, position)` Excel treats the
+/// position as an index into the vector's non-trivial dimension:
+///   - single row  → position selects the column  (row fixed at 1)
+///   - single col  → position selects the row     (col fixed at 1)
+///   - position=0  → "return the whole vector"
+///
+/// In the three-argument form the values are used directly.
+pub(crate) fn index_resolve_coords(
+    raw_pos: i64,
+    explicit_col: Option<i64>,
+    rows: usize,
+    cols: usize,
+) -> (i64, i64) {
+    match explicit_col {
+        Some(c) => (raw_pos, c),
+        None if rows == 1 => (1, raw_pos),  // pos=0 → (1,0) → return entire row
+        None if cols == 1 => (raw_pos, 1),  // pos=0 → (0,1) → return entire column
+        None => (raw_pos, 0),               // 2D, no col → return entire row
+    }
+}
+
 pub(crate) fn compare_lookup_values(a: &FormulaValue, b: &FormulaValue) -> Option<Ordering> {
     match (a, b) {
         (FormulaValue::Number(x), FormulaValue::Number(y)) => x.partial_cmp(y),
@@ -158,23 +182,13 @@ pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         return Ok(FormulaValue::Error(CellError::Ref));
     }
 
-    let row_num = to_i64_trunc(args.get(1).unwrap()).unwrap_or(0);
-    if row_num < 0 {
+    let raw_pos = to_i64_trunc(args.get(1).unwrap()).unwrap_or(0);
+    if raw_pos < 0 {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
-    let col_num = match args.get(2) {
-        Some(v) => to_i64_trunc(v).unwrap_or(0),
-        None => {
-            // When only row_num is given and array is a single row/column:
-            // treat as vector lookup
-            if rows == 1 || cols == 1 {
-                0
-            } else {
-                1
-            }
-        }
-    };
+    let explicit_col = args.get(2).map(|v| to_i64_trunc(v).unwrap_or(0));
+    let (row_num, col_num) = index_resolve_coords(raw_pos, explicit_col, rows, cols);
     if col_num < 0 {
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -1368,6 +1382,114 @@ mod tests {
         assert_eq!(
             eval("=INDEX({\"Apples\",0.69,40;\"Bananas\",0.34,38;\"Lemons\",0.55,15;\"Oranges\",0.25,25;\"Pears\",0.59,40},2,3)").unwrap(),
             FormulaValue::Number(38.0)
+        );
+    }
+
+    #[test]
+    fn test_index_two_arg_vector_lookup() {
+        // Two-arg INDEX on a single-row vector: position selects column
+        // =INDEX({10,20,30,40}, 3) -> 30
+        assert_eq!(
+            eval("=INDEX({10,20,30,40},3)").unwrap(),
+            FormulaValue::Number(30.0)
+        );
+
+        // Two-arg INDEX on a single-column vector: position selects row
+        // =INDEX({10;20;30;40}, 3) -> 30
+        assert_eq!(
+            eval("=INDEX({10;20;30;40},3)").unwrap(),
+            FormulaValue::Number(30.0)
+        );
+
+        // Two-arg INDEX with cell range reference (single row)
+        {
+            let mut workbook = Workbook::new();
+            {
+                let sheet = workbook.worksheet_mut(0).unwrap();
+                // A1:L1 = months 1..12
+                for i in 0u16..12 {
+                    sheet.set_cell_value_at(0, i, CellValue::Number((i + 1) as f64)).unwrap();
+                }
+                // A2:L2 = values 10,20,...120
+                for i in 0u16..12 {
+                    sheet.set_cell_value_at(1, i, CellValue::Number(((i + 1) * 10) as f64)).unwrap();
+                }
+            }
+            // INDEX($A$2:$L$2, 3) should return 30 (3rd column)
+            assert_eq!(
+                eval_with_workbook("=INDEX($A$2:$L$2,3)", &workbook).unwrap(),
+                FormulaValue::Number(30.0)
+            );
+            // INDEX($A$2:$L$2, MATCH(3,$A$1:$L$1,0)) should also return 30
+            assert_eq!(
+                eval_with_workbook("=INDEX($A$2:$L$2,MATCH(3,$A$1:$L$1,0))", &workbook).unwrap(),
+                FormulaValue::Number(30.0)
+            );
+        }
+
+        // Two-arg INDEX with cell range reference (single column)
+        {
+            let mut workbook = Workbook::new();
+            {
+                let sheet = workbook.worksheet_mut(0).unwrap();
+                // A1:A4 = {10;20;30;40}
+                for i in 0u32..4 {
+                    sheet.set_cell_value_at(i, 0, CellValue::Number(((i + 1) * 10) as f64)).unwrap();
+                }
+            }
+            assert_eq!(
+                eval_with_workbook("=INDEX($A$1:$A$4,3)", &workbook).unwrap(),
+                FormulaValue::Number(30.0)
+            );
+        }
+
+        // position=0 on single row: return entire row vector
+        assert_eq!(
+            eval("=INDEX({10,20,30},0)").unwrap(),
+            FormulaValue::Array {
+                data: vec![vec![n(10.0), n(20.0), n(30.0)]],
+                source: None,
+            }
+        );
+
+        // position=0 on single column: return entire column vector
+        assert_eq!(
+            eval("=INDEX({10;20;30},0)").unwrap(),
+            FormulaValue::Array {
+                data: vec![vec![n(10.0)], vec![n(20.0)], vec![n(30.0)]],
+                source: None,
+            }
+        );
+
+        // Out of bounds
+        assert_eq!(
+            eval("=INDEX({10,20,30},5)").unwrap(),
+            FormulaValue::Error(CellError::Ref)
+        );
+        assert_eq!(
+            eval("=INDEX({10;20;30},5)").unwrap(),
+            FormulaValue::Error(CellError::Ref)
+        );
+
+        // 2D array with only row_num: returns entire row (col_num defaults to 0)
+        assert_eq!(
+            eval("=INDEX({1,2,3;4,5,6},2)").unwrap(),
+            FormulaValue::Array {
+                data: vec![vec![n(4.0), n(5.0), n(6.0)]],
+                source: None,
+            }
+        );
+
+        // 1x1 array: rows==1 wins, so position=1 -> (1,1) -> scalar
+        assert_eq!(
+            eval("=INDEX({42},1)").unwrap(),
+            FormulaValue::Number(42.0)
+        );
+
+        // 3-arg form on single-row vector still works
+        assert_eq!(
+            eval("=INDEX({10,20,30,40},1,3)").unwrap(),
+            FormulaValue::Number(30.0)
         );
     }
 

@@ -6,7 +6,7 @@ use crate::ast::{
     BinaryOperator, FormulaExpr, StructuredRefSpecifier, StructuredReference, UnaryOperator,
 };
 use crate::error::{FormulaError, FormulaResult};
-use crate::functions::lookup::{compare_lookup_values, to_i64_trunc, values_equal, wildcard_match};
+use crate::functions::lookup::{compare_lookup_values, index_resolve_coords, to_i64_trunc, values_equal, wildcard_match};
 use crate::functions::FunctionRegistry;
 use duke_sheets_core::{CellError, CellValue, Table, Workbook, MAX_COLS, MAX_ROWS};
 use std::cmp::Ordering;
@@ -1394,29 +1394,24 @@ fn evaluate_index_fast(
     if let FormulaValue::Error(e) = row_val {
         return Some(Ok(FormulaValue::Error(e)));
     }
-    let row_num = to_i64_trunc(&row_val).unwrap_or(0);
-    if row_num < 0 {
+    let raw_pos = to_i64_trunc(&row_val).unwrap_or(0);
+    if raw_pos < 0 {
         return Some(Ok(FormulaValue::Error(CellError::Value)));
     }
 
-    let col_num = match args.get(2) {
+    let explicit_col = match args.get(2) {
         Some(expr) => match evaluate(expr, ctx) {
             Ok(v) => {
                 if let FormulaValue::Error(e) = v {
                     return Some(Ok(FormulaValue::Error(e)));
                 }
-                to_i64_trunc(&v).unwrap_or(0)
+                Some(to_i64_trunc(&v).unwrap_or(0))
             }
             Err(e) => return Some(Err(e)),
         },
-        None => {
-            if rows == 1 || cols == 1 {
-                0
-            } else {
-                1
-            }
-        }
+        None => None,
     };
+    let (row_num, col_num) = index_resolve_coords(raw_pos, explicit_col, rows, cols);
     if col_num < 0 {
         return Some(Ok(FormulaValue::Error(CellError::Value)));
     }
