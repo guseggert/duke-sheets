@@ -263,6 +263,20 @@ type SensitiveRange = (usize, u32, u16, u32, u16);
 type DenseDependents = Vec<Box<[u32]>>;
 type DenseInputRanges = Vec<Box<[SensitiveRange]>>;
 
+#[cfg(not(target_arch = "wasm32"))]
+fn now() -> Option<Instant> {
+    Some(Instant::now())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn now() -> Option<Instant> {
+    None
+}
+
+fn elapsed_ms(start: Option<Instant>) -> f64 {
+    start.map(|t| t.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0)
+}
+
 #[derive(Debug, Clone)]
 struct LevelTrace {
     depth: usize,
@@ -705,10 +719,10 @@ impl CalculationEngine {
             }
         } else {
             // Cache miss — full parse + DFS.
-            let t_parse = Instant::now();
+            let t_parse = now();
             self.parse_formulas(workbook, &mut stats)?;
             if trace_enabled {
-                trace.parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
+                trace.parse_ms = elapsed_ms(t_parse);
             }
             if stats.formula_count == 0 {
                 for i in 0..workbook.sheet_count() {
@@ -721,11 +735,11 @@ impl CalculationEngine {
                 }
                 return Ok(stats);
             }
-            let t_plan = Instant::now();
+            let t_plan = now();
             let (built_plan, plan_trace, value_sensitive_ranges) = self.build_eval_plan(workbook);
             plan = built_plan;
             if trace_enabled {
-                trace.plan_ms = t_plan.elapsed().as_secs_f64() * 1000.0;
+                trace.plan_ms = elapsed_ms(t_plan);
                 trace.plan_dep_materialize_ms = plan_trace.dep_materialize_ms;
                 trace.plan_dfs_ms = plan_trace.dfs_ms;
                 trace.plan_edge_count = plan_trace.edge_count;
@@ -749,11 +763,11 @@ impl CalculationEngine {
         }
 
         // Evaluate all formulas using the (possibly cached) plan.
-        let t_eval = Instant::now();
+        let t_eval = now();
         let (parallel_trace, spill_fixup_ms) =
             self.execute_eval_plan(workbook, &plan, affected_flags.as_deref(), &mut stats)?;
         if trace_enabled {
-            trace.eval_ms = t_eval.elapsed().as_secs_f64() * 1000.0;
+            trace.eval_ms = elapsed_ms(t_eval);
             trace.parallel = parallel_trace;
             trace.spill_fixup_ms = spill_fixup_ms;
         }
@@ -947,7 +961,7 @@ impl CalculationEngine {
             .iter()
             .map(|k| &self.parsed_formulas[k])
             .collect();
-        let t_dep = Instant::now();
+        let t_dep = now();
         let (precedents, input_ranges, value_sensitive_ranges) = build_dense_precedents(
             &seed_order,
             &asts,
@@ -958,7 +972,7 @@ impl CalculationEngine {
             self.should_use_parallel(n),
         );
         let dependents = build_dense_dependents(&precedents);
-        let dep_materialize_ms = t_dep.elapsed().as_secs_f64() * 1000.0;
+        let dep_materialize_ms = elapsed_ms(t_dep);
         let edge_count = precedents.iter().map(|deps| deps.len()).sum();
 
         // Phase 1 — build evaluation order via iterative post-order DFS.
@@ -975,7 +989,7 @@ impl CalculationEngine {
         let mut eval_order: Vec<CellKey> = Vec::with_capacity(n);
         let mut stack: Vec<(CellKey, u32, usize)> = Vec::new();
 
-        let t_dfs = Instant::now();
+        let t_dfs = now();
         for (seed_idx, &seed) in seed_order.iter().enumerate() {
             let seed_idx = seed_idx as u32;
             if state[seed_idx as usize] == 2 {
@@ -1051,7 +1065,7 @@ impl CalculationEngine {
             .map(|(_, &k)| k)
             .collect();
 
-        let dfs_ms = t_dfs.elapsed().as_secs_f64() * 1000.0;
+        let dfs_ms = elapsed_ms(t_dfs);
 
         (
             EvalPlan {
@@ -1141,7 +1155,7 @@ impl CalculationEngine {
 
         // Phase 3 — targeted spill fixup: only re-evaluate formulas whose
         // ASTs reference cells inside a spill range.
-        let t_spill = Instant::now();
+        let t_spill = now();
         if !spill_ranges.is_empty() {
             for &cell_key in &plan.eval_order {
                 let include = affected_flags.is_none_or(|flags| {
@@ -1165,7 +1179,7 @@ impl CalculationEngine {
                 }
             }
         }
-        let _spill_fixup_ms = t_spill.elapsed().as_secs_f64() * 1000.0;
+        let _spill_fixup_ms = elapsed_ms(t_spill);
 
         stats.circular_references = self.circular_cells.len();
         stats.iterations = 1;
@@ -1416,7 +1430,7 @@ impl CalculationEngine {
                 // Each evaluation only reads from the workbook — all
                 // deps at lower depths have already been written.
                 let wb_ref: &Workbook = workbook;
-                let t_eval = trace_enabled.then(Instant::now);
+                let t_eval = now();
                 let results: Vec<(CellKey, FormulaValue, bool)> = level
                     .par_iter()
                     .filter_map(|&cell_key| {
@@ -1430,7 +1444,7 @@ impl CalculationEngine {
 
                 // Write results serially and track stats.
                 let mut level_errors = 0usize;
-                let t_write = trace_enabled.then(Instant::now);
+                let t_write = now();
                 for (cell_key, result, was_error) in results {
                     if was_error {
                         level_errors += 1;
