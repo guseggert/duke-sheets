@@ -83,6 +83,11 @@ pub struct Worksheet {
     /// Mutation generation counter — incremented on user-facing cell/formula edits.
     /// The calculation engine uses this to detect stale caches.
     mutation_count: u64,
+    /// Topology generation counter — incremented only when formula/dependency
+    /// structure changes. Used to validate cached calc plans across value-only edits.
+    topology_generation: u64,
+    /// Value-edit ranges since the last successful calculation.
+    dirty_value_ranges: Vec<(u32, u16, u32, u16)>,
     /// Image metadata from IMAGE() formulas, populated during calculation.
     /// Behind RwLock so the evaluator can write through a shared &Worksheet reference.
     image_metadata: RwLock<HashMap<(u32, u16), ImageInfo>>,
@@ -144,6 +149,8 @@ impl Worksheet {
             locale: Locale::en_us(),
             ssfmt_locale: ssfmt::Locale::en_us(),
             mutation_count: 0,
+            topology_generation: 0,
+            dirty_value_ranges: Vec::new(),
             image_metadata: RwLock::new(HashMap::new()),
         }
     }
@@ -152,6 +159,20 @@ impl Worksheet {
     /// The calculation engine uses this to detect stale caches.
     pub fn mutation_count(&self) -> u64 {
         self.mutation_count
+    }
+
+    /// Topology generation counter — incremented on formula/layout edits that
+    /// can change dependency planning, but not on ordinary value-only edits.
+    pub fn topology_generation(&self) -> u64 {
+        self.topology_generation
+    }
+
+    pub fn dirty_value_ranges(&self) -> &[(u32, u16, u32, u16)] {
+        &self.dirty_value_ranges
+    }
+
+    pub fn clear_dirty_value_ranges(&mut self) {
+        self.dirty_value_ranges.clear();
     }
 
     /// Get image metadata for a cell, if any.
@@ -466,6 +487,28 @@ impl Worksheet {
         }
     }
 
+    /// Get cell value by indices as a borrowed reference.
+    ///
+    /// SpillTarget cells are resolved transparently. Missing cells return a
+    /// shared `CellValue::Empty` reference.
+    pub fn get_value_at_ref(&self, row: u32, col: u16) -> &CellValue {
+        static EMPTY: CellValue = CellValue::Empty;
+        let Some(cell) = self.cells.get(row, col) else {
+            return &EMPTY;
+        };
+        match &cell.value {
+            CellValue::SpillTarget {
+                source_row,
+                source_col,
+                offset_row,
+                offset_col,
+            } => self
+                .resolve_spill_value_ref(*source_row, *source_col, *offset_row, *offset_col)
+                .unwrap_or(&EMPTY),
+            other => other,
+        }
+    }
+
     /// Get a cell's style index by address string.
     ///
     /// Returns 0 if the cell does not exist or has the default style.
@@ -561,9 +604,13 @@ impl Worksheet {
         value: V,
     ) -> Result<()> {
         self.validate_cell_position(row, col)?;
-        self.remove_formula_state(row, col);
+        let removed_formula = self.remove_formula_state(row, col);
         self.cells.set_value(row, col, value.into());
         self.mutation_count += 1;
+        self.dirty_value_ranges.push((row, col, row, col));
+        if removed_formula {
+            self.topology_generation += 1;
+        }
         Ok(())
     }
 
@@ -606,6 +653,7 @@ impl Worksheet {
             .set(row, col, CellData::with_style(cached_value, style_index));
         self.cells.set_formula(row, col, FormulaData::new(formula));
         self.mutation_count += 1;
+        self.topology_generation += 1;
         Ok(())
     }
 
@@ -632,9 +680,13 @@ impl Worksheet {
 
     /// Clear a cell by indices
     pub fn clear_cell_at(&mut self, row: u32, col: u16) {
-        self.remove_formula_state(row, col);
+        let removed_formula = self.remove_formula_state(row, col);
         self.cells.remove(row, col);
         self.mutation_count += 1;
+        self.dirty_value_ranges.push((row, col, row, col));
+        if removed_formula {
+            self.topology_generation += 1;
+        }
     }
 
     /// Get the used range (bounds of all non-empty cells)
@@ -692,11 +744,21 @@ impl Worksheet {
 
     /// Clear all cells in a range
     pub fn clear_range(&mut self, range: &CellRange) {
+        let mut removed_formula = false;
         for addr in range.cells() {
-            self.remove_formula_state(addr.row, addr.col);
+            removed_formula |= self.remove_formula_state(addr.row, addr.col);
             self.cells.remove(addr.row, addr.col);
         }
         self.mutation_count += 1;
+        self.dirty_value_ranges.push((
+            range.start.row,
+            range.start.col,
+            range.end.row,
+            range.end.col,
+        ));
+        if removed_formula {
+            self.topology_generation += 1;
+        }
     }
 
     /// Set the same value for all cells in a range
@@ -706,12 +768,22 @@ impl Worksheet {
         value: V,
     ) -> Result<()> {
         let value = value.into();
+        let mut removed_formula = false;
         for addr in range.cells() {
             self.validate_cell_position(addr.row, addr.col)?;
-            self.remove_formula_state(addr.row, addr.col);
+            removed_formula |= self.remove_formula_state(addr.row, addr.col);
             self.cells.set_value(addr.row, addr.col, value.clone());
         }
         self.mutation_count += 1;
+        self.dirty_value_ranges.push((
+            range.start.row,
+            range.start.col,
+            range.end.row,
+            range.end.col,
+        ));
+        if removed_formula {
+            self.topology_generation += 1;
+        }
         Ok(())
     }
 
@@ -1138,6 +1210,8 @@ impl Worksheet {
     /// Add a table to this worksheet.
     pub fn add_table(&mut self, table: Table) {
         self.tables.push(table);
+        self.mutation_count += 1;
+        self.topology_generation += 1;
     }
 
     /// Get all tables.
@@ -1147,6 +1221,8 @@ impl Worksheet {
 
     /// Get a mutable reference to all tables.
     pub fn tables_mut(&mut self) -> &mut Vec<Table> {
+        self.mutation_count += 1;
+        self.topology_generation += 1;
         &mut self.tables
     }
 
@@ -1253,10 +1329,13 @@ impl Worksheet {
         Ok(())
     }
 
-    fn remove_formula_state(&mut self, row: u32, col: u16) {
+    fn remove_formula_state(&mut self, row: u32, col: u16) -> bool {
         if self.cells.has_formula(row, col) {
             self.clear_spill(row, col);
             self.cells.remove_formula(row, col);
+            true
+        } else {
+            false
         }
     }
 
@@ -1337,6 +1416,8 @@ impl Worksheet {
         if let Some(formula) = self.cells.get_formula_mut(row, col) {
             formula.array_result = None;
         }
+        self.mutation_count += 1;
+        self.dirty_value_ranges.push((row, col, row, col));
         Ok(())
     }
 
