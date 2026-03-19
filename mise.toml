@@ -425,6 +425,266 @@ docker stop "$CONTAINER_ID" 2>/dev/null || true
 exit $TEST_EXIT
 """
 
+[tasks."perf:calc"]
+description = "Run calc profiler with perf stat and emit JSON"
+run = '''
+#!/bin/bash
+set -euo pipefail
+
+FILE=""
+FIXTURE=""
+SHEET=""
+CPU=""
+SERIAL=0
+EVENTS="instructions,cycles,task-clock,cache-misses,branches,branch-misses"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --file) FILE="$2"; shift 2 ;;
+    --fixture) FIXTURE="$2"; shift 2 ;;
+    --sheet) SHEET="$2"; shift 2 ;;
+    --cpu) CPU="$2"; shift 2 ;;
+    --serial) SERIAL=1; shift ;;
+    --events) EVENTS="$2"; shift 2 ;;
+    *) echo "Unknown arg: $1"; echo "Usage: mise run perf:calc -- --file path.xlsx | --fixture repeated-lookups [--sheet N] [--serial] [--cpu N] [--events ...]"; exit 1 ;;
+  esac
+done
+
+[[ -n "$FILE" && -n "$FIXTURE" ]] && { echo "Provide either --file or --fixture, not both"; exit 1; }
+[[ -z "$FILE" && -z "$FIXTURE" ]] && { echo "Missing --file <path.xlsx> or --fixture <name>"; exit 1; }
+
+cargo build --release -p duke-sheets --features full --example profile_calc >/dev/null
+
+JSON_OUT=$(mktemp)
+PERF_OUT=$(mktemp)
+
+CMD=(./target/release/examples/profile_calc --json --once)
+[[ -n "$FILE" ]] && CMD+=("$FILE")
+[[ -n "$FIXTURE" ]] && CMD+=(--fixture "$FIXTURE")
+[[ -n "$SHEET" ]] && CMD+=(--sheet "$SHEET")
+[[ "$SERIAL" == "1" ]] && CMD+=(--serial)
+
+if [[ -n "$CPU" ]]; then
+  PERF_CMD=(taskset -c "$CPU" perf stat -x, -e "$EVENTS" -- "${CMD[@]}")
+else
+  PERF_CMD=(perf stat -x, -e "$EVENTS" -- "${CMD[@]}")
+fi
+
+set +e
+"${PERF_CMD[@]}" >"$JSON_OUT" 2>"$PERF_OUT"
+STATUS=$?
+set -e
+
+python3 - "$JSON_OUT" "$PERF_OUT" "$STATUS" <<'PY'
+import json, sys
+json_path, perf_path, status = sys.argv[1], sys.argv[2], int(sys.argv[3])
+
+with open(json_path) as f:
+    payload = json.load(f)
+
+metrics = {}
+with open(perf_path) as f:
+    for raw in f:
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split(',')
+        if len(parts) < 3:
+            continue
+        value, unit, event = parts[0], parts[1], parts[2]
+        key = event.strip()
+        if value == '<not supported>':
+            metrics[key] = None
+            continue
+        try:
+            metrics[key] = float(value.replace(',', ''))
+        except ValueError:
+            metrics[key] = value
+
+target_formulas = payload.get('target_formulas') or payload.get('formula_count') or 0
+instructions = metrics.get('instructions')
+cycles = metrics.get('cycles')
+
+payload['perf_exit_status'] = status
+payload['perf_metrics'] = metrics
+payload['instructions_per_formula'] = (instructions / target_formulas) if instructions not in (None, 0) and target_formulas else None
+payload['cycles_per_formula'] = (cycles / target_formulas) if cycles not in (None, 0) and target_formulas else None
+
+print(json.dumps(payload, indent=2, sort_keys=True))
+PY
+
+exit "$STATUS"
+'''
+
+[tasks."perf:calc:callgrind"]
+description = "Run calc profiler with callgrind and emit JSON"
+run = '''
+#!/bin/bash
+set -euo pipefail
+
+FILE=""
+FIXTURE=""
+SHEET=""
+SERIAL=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --file) FILE="$2"; shift 2 ;;
+    --fixture) FIXTURE="$2"; shift 2 ;;
+    --sheet) SHEET="$2"; shift 2 ;;
+    --serial) SERIAL=1; shift ;;
+    *) echo "Unknown arg: $1"; echo "Usage: mise run perf:calc:callgrind -- --file path.xlsx | --fixture repeated-lookups [--sheet N] [--serial]"; exit 1 ;;
+  esac
+done
+
+[[ -n "$FILE" && -n "$FIXTURE" ]] && { echo "Provide either --file or --fixture, not both"; exit 1; }
+[[ -z "$FILE" && -z "$FIXTURE" ]] && { echo "Missing --file <path.xlsx> or --fixture <name>"; exit 1; }
+
+cargo build --release -p duke-sheets --features full --example profile_calc >/dev/null
+
+OPEN_JSON=$(mktemp)
+OPEN_CG=$(mktemp)
+CALC_JSON=$(mktemp)
+CALC_CG=$(mktemp)
+
+OPEN_CMD=(./target/release/examples/profile_calc --json --once --open-only)
+CALC_CMD=(./target/release/examples/profile_calc --json --once)
+[[ -n "$FILE" ]] && OPEN_CMD+=("$FILE") && CALC_CMD+=("$FILE")
+[[ -n "$FIXTURE" ]] && OPEN_CMD+=(--fixture "$FIXTURE") && CALC_CMD+=(--fixture "$FIXTURE")
+[[ -n "$SHEET" ]] && OPEN_CMD+=(--sheet "$SHEET") && CALC_CMD+=(--sheet "$SHEET")
+[[ "$SERIAL" == "1" ]] && OPEN_CMD+=(--serial) && CALC_CMD+=(--serial)
+
+set +e
+valgrind --tool=callgrind --callgrind-out-file="$OPEN_CG" -- "${OPEN_CMD[@]}" >"$OPEN_JSON" 2>/dev/null
+OPEN_STATUS=$?
+valgrind --tool=callgrind --callgrind-out-file="$CALC_CG" -- "${CALC_CMD[@]}" >"$CALC_JSON" 2>/dev/null
+CALC_STATUS=$?
+set -e
+
+python3 - "$OPEN_JSON" "$OPEN_CG" "$OPEN_STATUS" "$CALC_JSON" "$CALC_CG" "$CALC_STATUS" <<'PY'
+import json, sys
+
+open_json_path, open_cg_path, open_status, calc_json_path, calc_cg_path, calc_status = sys.argv[1:7]
+
+def load_json(path):
+    with open(path) as f:
+        return json.load(f)
+
+def callgrind_summary(path):
+    with open(path) as f:
+        for line in f:
+            if line.startswith('summary:'):
+                return int(line.split(':', 1)[1].strip())
+    return None
+
+open_payload = load_json(open_json_path)
+calc_payload = load_json(calc_json_path)
+open_ir = callgrind_summary(open_cg_path)
+total_ir = callgrind_summary(calc_cg_path)
+calc_ir = None
+if open_ir is not None and total_ir is not None:
+    calc_ir = max(0, total_ir - open_ir)
+
+target_formulas = calc_payload.get('target_formulas') or calc_payload.get('formula_count') or 0
+
+payload = {
+    **calc_payload,
+    'callgrind': {
+        'open_exit_status': int(open_status),
+        'calc_exit_status': int(calc_status),
+        'open_ir': open_ir,
+        'total_ir': total_ir,
+        'calc_ir': calc_ir,
+        'calc_ir_per_formula': (calc_ir / target_formulas) if calc_ir is not None and target_formulas else None,
+        'open_only_open_ms': open_payload.get('open_ms'),
+    }
+}
+
+print(json.dumps(payload, indent=2, sort_keys=True))
+
+if int(open_status) != 0 or int(calc_status) != 0:
+    sys.exit(int(calc_status) or int(open_status))
+PY
+'''
+
+[tasks."perf:calc:snapshot"]
+description = "Capture a callgrind JSON snapshot for a calc workload"
+run = '''
+#!/bin/bash
+set -euo pipefail
+
+OUT=""
+ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --out) OUT="$2"; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+[[ -z "$OUT" ]] && { echo "Missing --out <path.json>"; exit 1; }
+mkdir -p "$(dirname "$OUT")"
+
+mise run perf:calc:callgrind -- "${ARGS[@]}" > "$OUT"
+echo "Wrote snapshot: $OUT"
+'''
+
+[tasks."perf:calc:compare"]
+description = "Compare current callgrind calc_ir_per_formula against a JSON snapshot"
+run = '''
+#!/bin/bash
+set -euo pipefail
+
+BASELINE=""
+TOLERANCE="0.10"
+ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --baseline) BASELINE="$2"; shift 2 ;;
+    --tolerance) TOLERANCE="$2"; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+[[ -z "$BASELINE" ]] && { echo "Missing --baseline <path.json>"; exit 1; }
+[[ ! -f "$BASELINE" ]] && { echo "Baseline not found: $BASELINE"; exit 1; }
+
+CURRENT=$(mktemp)
+mise run perf:calc:callgrind -- "${ARGS[@]}" > "$CURRENT"
+
+python3 - "$BASELINE" "$CURRENT" "$TOLERANCE" <<'PY'
+import json, sys
+
+baseline_path, current_path, tolerance = sys.argv[1], sys.argv[2], float(sys.argv[3])
+
+with open(baseline_path) as f:
+    baseline = json.load(f)
+with open(current_path) as f:
+    current = json.load(f)
+
+base = baseline["callgrind"]["calc_ir_per_formula"]
+curr = current["callgrind"]["calc_ir_per_formula"]
+if base is None or curr is None:
+    raise SystemExit("calc_ir_per_formula missing from baseline or current run")
+
+delta = (curr - base) / base
+result = {
+    "baseline": baseline_path,
+    "baseline_calc_ir_per_formula": base,
+    "current_calc_ir_per_formula": curr,
+    "delta_ratio": delta,
+    "delta_percent": delta * 100.0,
+    "tolerance_ratio": tolerance,
+    "regressed": delta > tolerance,
+}
+print(json.dumps(result, indent=2, sort_keys=True))
+if result["regressed"]:
+    raise SystemExit(1)
+PY
+'''
+
 # =============================================================================
 # Release Tasks
 # =============================================================================

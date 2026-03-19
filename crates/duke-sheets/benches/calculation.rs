@@ -3,6 +3,9 @@
 #[path = "helpers.rs"]
 mod helpers;
 
+#[path = "../perf_fixtures.rs"]
+mod perf_fixtures;
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use duke_sheets::WorkbookCalculationExt;
 
@@ -86,6 +89,21 @@ fn bench_calc_mixed(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_calc_repeated_lookups(c: &mut Criterion) {
+    let mut group = c.benchmark_group("calculation/repeated_lookups");
+    group.bench_function("repeated_lookups", |b| {
+        b.iter_batched(
+            || perf_fixtures::build_fixture("repeated-lookups"),
+            |mut wb| {
+                let stats = wb.calculate().unwrap();
+                black_box(stats);
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+    group.finish();
+}
+
 /// Build a workbook with a mix of values and formulas.
 fn build_mixed_workbook(rows: u32) -> duke_sheets::Workbook {
     let mut wb = duke_sheets::Workbook::new();
@@ -122,6 +140,6 @@ fn build_mixed_workbook(rows: u32) -> duke_sheets::Workbook {
 criterion_group! {
     name = benches;
     config = helpers::fast_criterion();
-    targets = bench_calc_linear, bench_calc_fanout, bench_calc_cross_sheet, bench_calc_mixed
+    targets = bench_calc_linear, bench_calc_fanout, bench_calc_cross_sheet, bench_calc_mixed, bench_calc_repeated_lookups
 }
 criterion_main!(benches);

@@ -30,7 +30,6 @@ excel_samples.zip
 # Local cargo config
 .cargo/
 
-# Agent instructions (local only)
 AGENTS.md
 
 # C# / .NET build artifacts (Excel bridge server)
@@ -63,3 +62,7 @@ fuzz/corpus/
 *.xltx
 *.xltm
 data/
+
+perf-snapshots/
+
+.sis*
