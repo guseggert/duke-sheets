@@ -30,7 +30,7 @@ pub fn fn_counta(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
             // Empty cells are not counted
             FormulaValue::Empty => {}
             // Handle arrays - recursively count non-empty cells
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         match cell {
@@ -43,7 +43,7 @@ pub fn fn_counta(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
                             FormulaValue::Boolean(_) => count += 1,
                             FormulaValue::Error(_) => count += 1,
                             FormulaValue::Empty => {}
-                            FormulaValue::Array(_) => {
+                            FormulaValue::Array { .. } => {
                                 // Nested arrays are rare, but count as 1 if present
                                 count += 1;
                             }
@@ -69,7 +69,7 @@ pub fn fn_countblank(
         match arg {
             FormulaValue::Empty => count += 1,
             FormulaValue::String(s) if s.is_empty() => count += 1,
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         match cell {
@@ -98,7 +98,7 @@ pub fn fn_countblank(
 pub fn fn_countif(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     // Get the range (first argument)
     let range = match args.first() {
-        Some(FormulaValue::Array(arr)) => arr,
+        Some(FormulaValue::Array { data: arr, .. }) => arr,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => {
             // Single value - check if it matches criteria
@@ -149,7 +149,7 @@ pub fn fn_averageif(
 ) -> FormulaResult<FormulaValue> {
     // Get the range (first argument)
     let range = match args.first() {
-        Some(FormulaValue::Array(arr)) => arr,
+        Some(FormulaValue::Array { data: arr, .. }) => arr,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(v) => {
             // Single value treated as 1x1 array
@@ -168,7 +168,7 @@ pub fn fn_averageif(
 
     // Get average_range (third argument) or use range
     let avg_range = match args.get(2) {
-        Some(FormulaValue::Array(arr)) => arr,
+        Some(FormulaValue::Array { data: arr, .. }) => arr,
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
         Some(_) | None => range,
     };
@@ -427,7 +427,7 @@ pub fn fn_maxifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     }
 
     let max_range = match &args[0] {
-        FormulaValue::Array(arr) => arr,
+        FormulaValue::Array { data: arr, .. } => arr,
         FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
         v => return fn_maxifs_single(v, &args[1..]),
     };
@@ -446,7 +446,7 @@ pub fn fn_maxifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         let criteria_idx = range_idx + 1;
 
         let range = match &args[range_idx] {
-            FormulaValue::Array(arr) => arr,
+            FormulaValue::Array { data: arr, .. } => arr,
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
             _ => return Ok(FormulaValue::Error(CellError::Value)),
         };
@@ -501,7 +501,7 @@ pub fn fn_minifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     }
 
     let min_range = match &args[0] {
-        FormulaValue::Array(arr) => arr,
+        FormulaValue::Array { data: arr, .. } => arr,
         FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
         v => return fn_minifs_single(v, &args[1..]),
     };
@@ -520,7 +520,7 @@ pub fn fn_minifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         let criteria_idx = range_idx + 1;
 
         let range = match &args[range_idx] {
-            FormulaValue::Array(arr) => arr,
+            FormulaValue::Array { data: arr, .. } => arr,
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
             _ => return Ok(FormulaValue::Error(CellError::Value)),
         };
@@ -1084,7 +1084,7 @@ fn collect_numbers(value: &FormulaValue, numbers: &mut Vec<f64>) -> Option<CellE
     match value {
         FormulaValue::Number(n) => numbers.push(*n),
         FormulaValue::Error(e) => return Some(*e),
-        FormulaValue::Array(arr) => {
+        FormulaValue::Array { data: arr, .. } => {
             for row in arr {
                 for cell in row {
                     match cell {
@@ -1120,7 +1120,7 @@ pub fn fn_countifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 
     // Get first criteria range to establish dimensions
     let first_range = match &args[0] {
-        FormulaValue::Array(arr) => arr,
+        FormulaValue::Array { data: arr, .. } => arr,
         FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
         v => {
             // Single value
@@ -1144,7 +1144,7 @@ pub fn fn_countifs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
 
         // Get criteria range
         let range = match &args[range_idx] {
-            FormulaValue::Array(arr) => arr,
+            FormulaValue::Array { data: arr, .. } => arr,
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
             _ => return Ok(FormulaValue::Error(CellError::Value)),
         };
@@ -1253,7 +1253,7 @@ pub fn fn_averageifs(
 
     // Get average_range (first argument)
     let avg_range = match &args[0] {
-        FormulaValue::Array(arr) => arr,
+        FormulaValue::Array { data: arr, .. } => arr,
         FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
         v => {
             // Single value
@@ -1277,7 +1277,7 @@ pub fn fn_averageifs(
 
         // Get criteria range
         let range = match &args[range_idx] {
-            FormulaValue::Array(arr) => arr,
+            FormulaValue::Array { data: arr, .. } => arr,
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
             _ => return Ok(FormulaValue::Error(CellError::Value)),
         };
@@ -1389,7 +1389,7 @@ const SQRT_2PI: f64 = 2.506_628_274_631_000_2;
 fn scalar_number(value: &FormulaValue) -> Result<f64, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => value
             .as_number()
             .ok_or(FormulaValue::Error(CellError::Value)),
@@ -1413,7 +1413,7 @@ fn optional_number(args: &[FormulaValue], idx: usize, default: f64) -> Result<f6
 fn scalar_bool(value: &FormulaValue) -> Result<bool, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => value.as_bool().ok_or(FormulaValue::Error(CellError::Value)),
     }
 }
@@ -1736,7 +1736,7 @@ fn poisson_pmf(x: usize, mean: f64) -> f64 {
 fn dist_collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             for row in rows {
                 for cell in row {
                     dist_collect_numbers(cell, out)?;
@@ -1757,7 +1757,7 @@ fn dist_collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), 
 fn matrix_numbers(value: &FormulaValue) -> Result<Vec<Vec<f64>>, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             if rows.is_empty() {
                 return Err(FormulaValue::Error(CellError::Value));
             }
@@ -2919,7 +2919,7 @@ pub fn fn_weibull_dist(
 fn extra_scalar_number(value: &FormulaValue) -> Result<f64, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => value
             .as_number()
             .ok_or(FormulaValue::Error(CellError::Value)),
@@ -2947,7 +2947,7 @@ fn extra_optional_number(
 fn extra_collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) {
     match value {
         FormulaValue::Number(n) => out.push(*n),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             for row in rows {
                 for cell in row {
                     extra_collect_numbers(cell, out);
@@ -2964,7 +2964,7 @@ fn extra_collect_values_a(value: &FormulaValue, out: &mut Vec<f64>) {
         FormulaValue::Boolean(true) => out.push(1.0),
         FormulaValue::Boolean(false) => out.push(0.0),
         FormulaValue::String(_) => out.push(0.0),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             for row in rows {
                 for cell in row {
                     extra_collect_values_a(cell, out);
@@ -2977,7 +2977,7 @@ fn extra_collect_values_a(value: &FormulaValue, out: &mut Vec<f64>) {
 
 fn extra_flatten_values(value: &FormulaValue, out: &mut Vec<FormulaValue>) {
     match value {
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             for row in rows {
                 for cell in row {
                     extra_flatten_values(cell, out);
@@ -3699,7 +3699,7 @@ pub fn fn_frequency(
         .into_iter()
         .map(|c| vec![FormulaValue::Number(c)])
         .collect::<Vec<_>>();
-    Ok(FormulaValue::Array(out))
+    Ok(FormulaValue::Array { data: out, source: None })
 }
 
 pub fn fn_maxa(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -3958,12 +3958,10 @@ pub fn fn_mode_mult(
     }
 
     modes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(FormulaValue::Array(
-        modes
-            .into_iter()
-            .map(|v| vec![FormulaValue::Number(v)])
-            .collect(),
-    ))
+    Ok(FormulaValue::Array { data: modes
+        .into_iter()
+        .map(|v| vec![FormulaValue::Number(v)])
+        .collect(), source: None })
 }
 
 pub fn fn_stdeva(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -4560,26 +4558,26 @@ mod tests {
         #[test]
         fn test_chisq_test() {
             let c = ctx();
-            let actual = FormulaValue::Array(vec![vec![
+            let actual = FormulaValue::Array { data: vec![vec![
                 FormulaValue::Number(10.0),
                 FormulaValue::Number(20.0),
                 FormulaValue::Number(30.0),
-            ]]);
-            let expected = FormulaValue::Array(vec![vec![
+            ]], source: None };
+            let expected = FormulaValue::Array { data: vec![vec![
                 FormulaValue::Number(12.0),
                 FormulaValue::Number(18.0),
                 FormulaValue::Number(30.0),
-            ]]);
+            ]], source: None };
             let v = fn_chisq_test(&[actual, expected], &c).unwrap();
             assert_close(num(v), 0.757_465_128_396_966_4, 1e-12);
 
             let e = fn_chisq_test(
                 &[
-                    FormulaValue::Array(vec![vec![
+                    FormulaValue::Array { data: vec![vec![
                         FormulaValue::Number(1.0),
                         FormulaValue::Number(2.0),
-                    ]]),
-                    FormulaValue::Array(vec![vec![FormulaValue::Number(1.0)]]),
+                    ]], source: None },
+                    FormulaValue::Array { data: vec![vec![FormulaValue::Number(1.0)]], source: None },
                 ],
                 &c,
             )
@@ -4690,20 +4688,20 @@ mod tests {
         #[test]
         fn test_t_test() {
             let c = ctx();
-            let a = FormulaValue::Array(vec![vec![
+            let a = FormulaValue::Array { data: vec![vec![
                 FormulaValue::Number(1.0),
                 FormulaValue::Number(2.0),
                 FormulaValue::Number(3.0),
                 FormulaValue::Number(4.0),
                 FormulaValue::Number(5.0),
-            ]]);
-            let b = FormulaValue::Array(vec![vec![
+            ]], source: None };
+            let b = FormulaValue::Array { data: vec![vec![
                 FormulaValue::Number(1.1),
                 FormulaValue::Number(1.9),
                 FormulaValue::Number(3.2),
                 FormulaValue::Number(3.8),
                 FormulaValue::Number(5.1),
-            ]]);
+            ]], source: None };
             let v = fn_t_test(
                 &[a, b, FormulaValue::Number(2.0), FormulaValue::Number(1.0)],
                 &c,
@@ -4714,8 +4712,8 @@ mod tests {
 
             let e = fn_t_test(
                 &[
-                    FormulaValue::Array(vec![vec![FormulaValue::Number(1.0)]]),
-                    FormulaValue::Array(vec![vec![FormulaValue::Number(2.0)]]),
+                    FormulaValue::Array { data: vec![vec![FormulaValue::Number(1.0)]], source: None },
+                    FormulaValue::Array { data: vec![vec![FormulaValue::Number(2.0)]], source: None },
                     FormulaValue::Number(2.0),
                     FormulaValue::Number(2.0),
                 ],
@@ -4865,28 +4863,28 @@ mod tests {
         #[test]
         fn test_f_test() {
             let c = ctx();
-            let a = FormulaValue::Array(vec![vec![
+            let a = FormulaValue::Array { data: vec![vec![
                 FormulaValue::Number(8.0),
                 FormulaValue::Number(9.0),
                 FormulaValue::Number(10.0),
                 FormulaValue::Number(11.0),
                 FormulaValue::Number(12.0),
-            ]]);
-            let b = FormulaValue::Array(vec![vec![
+            ]], source: None };
+            let b = FormulaValue::Array { data: vec![vec![
                 FormulaValue::Number(1.0),
                 FormulaValue::Number(2.0),
                 FormulaValue::Number(3.0),
                 FormulaValue::Number(4.0),
                 FormulaValue::Number(5.0),
-            ]]);
+            ]], source: None };
             let v = fn_f_test(&[a, b], &c).unwrap();
             let p = num(v);
             assert!(p > 0.0 && p <= 1.0);
 
             let e = fn_f_test(
                 &[
-                    FormulaValue::Array(vec![vec![FormulaValue::Number(1.0)]]),
-                    FormulaValue::Array(vec![vec![FormulaValue::Number(2.0)]]),
+                    FormulaValue::Array { data: vec![vec![FormulaValue::Number(1.0)]], source: None },
+                    FormulaValue::Array { data: vec![vec![FormulaValue::Number(2.0)]], source: None },
                 ],
                 &c,
             )
@@ -5170,7 +5168,7 @@ mod tests {
         }
 
         fn arr(v: &[f64]) -> FormulaValue {
-            FormulaValue::Array(vec![v.iter().copied().map(FormulaValue::Number).collect()])
+            FormulaValue::Array { data: vec![v.iter().copied().map(FormulaValue::Number).collect()], source: None }
         }
 
         fn as_number(v: FormulaValue) -> f64 {
@@ -5400,10 +5398,10 @@ mod tests {
             let out = fn_frequency(&[arr(&[1.0, 2.0, 3.0, 10.0]), arr(&[2.0, 5.0])], &c).unwrap();
             assert_eq!(
                 out,
-                FormulaValue::Array(vec![vec![n(2.0)], vec![n(1.0)], vec![n(1.0)]])
+                FormulaValue::Array { data: vec![vec![n(2.0)], vec![n(1.0)], vec![n(1.0)]], source: None }
             );
             let out2 = fn_frequency(&[arr(&[]), arr(&[1.0])], &c).unwrap();
-            assert_eq!(out2, FormulaValue::Array(vec![vec![n(0.0)], vec![n(0.0)]]));
+            assert_eq!(out2, FormulaValue::Array { data: vec![vec![n(0.0)], vec![n(0.0)]], source: None });
         }
 
         #[test]
@@ -5514,7 +5512,7 @@ mod tests {
         fn test_mode_mult() {
             let c = ctx();
             let out = fn_mode_mult(&[arr(&[1.0, 2.0, 2.0, 3.0, 3.0])], &c).unwrap();
-            assert_eq!(out, FormulaValue::Array(vec![vec![n(2.0)], vec![n(3.0)]]));
+            assert_eq!(out, FormulaValue::Array { data: vec![vec![n(2.0)], vec![n(3.0)]], source: None });
             assert_eq!(
                 fn_mode_mult(&[arr(&[1.0, 2.0, 3.0])], &c).unwrap(),
                 FormulaValue::Error(CellError::Na)
@@ -5551,10 +5549,10 @@ mod tests {
     }
 
     fn arr(values: &[f64]) -> FormulaValue {
-        FormulaValue::Array(vec![values
+        FormulaValue::Array { data: vec![values
             .iter()
             .map(|v| FormulaValue::Number(*v))
-            .collect()])
+            .collect()], source: None }
     }
 
     fn assert_close(v: FormulaValue, expected: f64, tol: f64) {
@@ -6676,7 +6674,7 @@ mod tests {
     #[test]
     fn test_mode_mult_docs() {
         // Data {1,2,3,4,3,2,1,2,3,5,6,1}: modes are 1, 2, 3
-        if let FormulaValue::Array(rows) = eval("=MODE.MULT({1,2,3,4,3,2,1,2,3,5,6,1})").unwrap() {
+        if let FormulaValue::Array { data: rows, .. } = eval("=MODE.MULT({1,2,3,4,3,2,1,2,3,5,6,1})").unwrap() {
             let values: Vec<f64> = rows
                 .iter()
                 .filter_map(|row| {
@@ -7042,7 +7040,7 @@ mod tests {
     #[test]
     fn test_frequency_docs() {
         // Data {79,85,78,85,50,81,95,88,97}, Bins {70,79,89} → {1;2;4;2}
-        if let FormulaValue::Array(rows) =
+        if let FormulaValue::Array { data: rows, .. } =
             eval("=FREQUENCY({79,85,78,85,50,81,95,88,97},{70,79,89})").unwrap()
         {
             assert_eq!(rows.len(), 4);

@@ -9,7 +9,7 @@ const TOLERANCE: f64 = 1e-10;
 fn scalar_number(value: &FormulaValue) -> Result<f64, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => value
             .as_number()
             .ok_or(FormulaValue::Error(CellError::Value)),
@@ -284,7 +284,7 @@ fn coupon_info(
 fn collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             for row in rows {
                 for cell in row {
                     collect_numbers(cell, out)?;
@@ -305,7 +305,7 @@ fn collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), Formu
 fn collect_dates(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             for row in rows {
                 for cell in row {
                     collect_dates(cell, out)?;
@@ -2680,10 +2680,10 @@ mod tests {
     }
 
     fn arr(values: &[f64]) -> FormulaValue {
-        FormulaValue::Array(vec![values
+        FormulaValue::Array { data: vec![values
             .iter()
             .map(|v| FormulaValue::Number(*v))
-            .collect()])
+            .collect()], source: None }
     }
 
     fn ctx() -> EvaluationContext<'static> {

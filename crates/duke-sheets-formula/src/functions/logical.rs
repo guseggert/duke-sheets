@@ -38,7 +38,7 @@ pub fn fn_and(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
             FormulaValue::Boolean(false) => return Ok(FormulaValue::Boolean(false)),
             FormulaValue::Number(n) if *n == 0.0 => return Ok(FormulaValue::Boolean(false)),
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         match cell {
@@ -68,7 +68,7 @@ pub fn fn_or(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<F
             FormulaValue::Boolean(true) => return Ok(FormulaValue::Boolean(true)),
             FormulaValue::Number(n) if *n != 0.0 => return Ok(FormulaValue::Boolean(true)),
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         match cell {
@@ -160,7 +160,7 @@ pub fn fn_xor(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
             FormulaValue::Boolean(true) => true_count += 1,
             FormulaValue::Number(n) if *n != 0.0 => true_count += 1,
             FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
-            FormulaValue::Array(arr) => {
+            FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         match cell {

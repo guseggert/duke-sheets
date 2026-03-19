@@ -79,6 +79,7 @@ once_cell = "1.19"
 
 # Hash functions (for style deduplication)
 ahash = "0.8"
+dashmap = "6.1"
 
 # Parallel calculation (optional)
 rayon = "1.11"

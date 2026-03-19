@@ -8,7 +8,7 @@ const TOLERANCE: f64 = 1e-10;
 fn scalar_number(value: &FormulaValue) -> Result<f64, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => value
             .as_number()
             .ok_or(FormulaValue::Error(CellError::Value)),
@@ -111,7 +111,7 @@ fn calc_ipmt(
 fn collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             for row in rows {
                 for cell in row {
                     collect_numbers(cell, out)?;
@@ -132,7 +132,7 @@ fn collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), Formu
 fn collect_dates(value: &FormulaValue, out: &mut Vec<f64>) -> Result<(), FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             for row in rows {
                 for cell in row {
                     collect_dates(cell, out)?;
@@ -1109,7 +1109,7 @@ mod tests {
 
         let e = fn_pv(
             &[
-                FormulaValue::Array(vec![]),
+                FormulaValue::Array { data: vec![], source: None },
                 FormulaValue::Number(1.0),
                 FormulaValue::Number(1.0),
             ],
@@ -1401,10 +1401,10 @@ mod tests {
         let v = fn_npv(
             &[
                 FormulaValue::Number(0.0),
-                FormulaValue::Array(vec![vec![
+                FormulaValue::Array { data: vec![vec![
                     FormulaValue::Number(1.0),
                     FormulaValue::Number(2.0),
-                ]]),
+                ]], source: None },
             ],
             &c,
         )
@@ -1420,14 +1420,14 @@ mod tests {
         let c = ctx();
         let v = fn_irr(
             &[
-                FormulaValue::Array(vec![vec![
+                FormulaValue::Array { data: vec![vec![
                     FormulaValue::Number(-70000.0),
                     FormulaValue::Number(12000.0),
                     FormulaValue::Number(15000.0),
                     FormulaValue::Number(18000.0),
                     FormulaValue::Number(21000.0),
                     FormulaValue::Number(26000.0),
-                ]]),
+                ]], source: None },
                 FormulaValue::Number(0.1),
             ],
             &c,
@@ -1436,10 +1436,10 @@ mod tests {
         assert_close(as_number(v), 0.08663094803653158, 1e-8);
 
         let e = fn_irr(
-            &[FormulaValue::Array(vec![vec![
+            &[FormulaValue::Array { data: vec![vec![
                 FormulaValue::Number(100.0),
                 FormulaValue::Number(200.0),
-            ]])],
+            ]], source: None }],
             &c,
         )
         .unwrap();
@@ -1447,7 +1447,7 @@ mod tests {
 
         let e = fn_irr(
             &[
-                FormulaValue::Array(vec![vec![FormulaValue::Number(-100.0)]]),
+                FormulaValue::Array { data: vec![vec![FormulaValue::Number(-100.0)]], source: None },
                 FormulaValue::Number(0.1),
             ],
             &c,
@@ -1461,14 +1461,14 @@ mod tests {
         let c = ctx();
         let v = fn_mirr(
             &[
-                FormulaValue::Array(vec![vec![
+                FormulaValue::Array { data: vec![vec![
                     FormulaValue::Number(-120000.0),
                     FormulaValue::Number(39000.0),
                     FormulaValue::Number(30000.0),
                     FormulaValue::Number(21000.0),
                     FormulaValue::Number(37000.0),
                     FormulaValue::Number(46000.0),
-                ]]),
+                ]], source: None },
                 FormulaValue::Number(0.1),
                 FormulaValue::Number(0.12),
             ],
@@ -1479,10 +1479,10 @@ mod tests {
 
         let e = fn_mirr(
             &[
-                FormulaValue::Array(vec![vec![
+                FormulaValue::Array { data: vec![vec![
                     FormulaValue::Number(1.0),
                     FormulaValue::Number(2.0),
-                ]]),
+                ]], source: None },
                 FormulaValue::Number(0.1),
                 FormulaValue::Number(0.1),
             ],
@@ -1493,10 +1493,10 @@ mod tests {
 
         let e = fn_mirr(
             &[
-                FormulaValue::Array(vec![vec![
+                FormulaValue::Array { data: vec![vec![
                     FormulaValue::Number(-1.0),
                     FormulaValue::Number(2.0),
-                ]]),
+                ]], source: None },
                 FormulaValue::Number(-1.0),
                 FormulaValue::Number(0.1),
             ],
@@ -1512,20 +1512,20 @@ mod tests {
         let v = fn_xnpv(
             &[
                 FormulaValue::Number(0.09),
-                FormulaValue::Array(vec![vec![
+                FormulaValue::Array { data: vec![vec![
                     FormulaValue::Number(-10000.0),
                     FormulaValue::Number(2750.0),
                     FormulaValue::Number(4250.0),
                     FormulaValue::Number(3250.0),
                     FormulaValue::Number(2750.0),
-                ]]),
-                FormulaValue::Array(vec![vec![
+                ]], source: None },
+                FormulaValue::Array { data: vec![vec![
                     FormulaValue::Number(39448.0),
                     FormulaValue::Number(39508.0),
                     FormulaValue::Number(39751.0),
                     FormulaValue::Number(39859.0),
                     FormulaValue::Number(39904.0),
-                ]]),
+                ]], source: None },
             ],
             &c,
         )
@@ -1535,11 +1535,11 @@ mod tests {
         let e = fn_xnpv(
             &[
                 FormulaValue::Number(0.1),
-                FormulaValue::Array(vec![vec![
+                FormulaValue::Array { data: vec![vec![
                     FormulaValue::Number(-100.0),
                     FormulaValue::Number(50.0),
-                ]]),
-                FormulaValue::Array(vec![vec![FormulaValue::Number(0.0)]]),
+                ]], source: None },
+                FormulaValue::Array { data: vec![vec![FormulaValue::Number(0.0)]], source: None },
             ],
             &c,
         )
@@ -1800,10 +1800,10 @@ mod tests {
     }
 
     fn arr(values: &[f64]) -> FormulaValue {
-        FormulaValue::Array(vec![values
+        FormulaValue::Array { data: vec![values
             .iter()
             .map(|v| FormulaValue::Number(*v))
-            .collect()])
+            .collect()], source: None }
     }
 
     // PMT docs: =PMT(0.08/12, 10, 10000) = -1037.03

@@ -114,7 +114,7 @@ fn excel1900_date_from_serial(serial: i64) -> Option<(i32, u32, u32)> {
 fn numeric_scalar(value: &FormulaValue) -> Result<f64, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         _ => value
             .as_number()
             .ok_or(FormulaValue::Error(CellError::Value)),
@@ -128,7 +128,7 @@ fn serial_scalar(value: &FormulaValue) -> Result<i64, FormulaValue> {
 fn string_scalar(value: &FormulaValue) -> Result<String, FormulaValue> {
     match value {
         FormulaValue::Error(e) => Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(_) => Err(FormulaValue::Error(CellError::Value)),
+        FormulaValue::Array { .. } => Err(FormulaValue::Error(CellError::Value)),
         FormulaValue::String(s) => Ok(s.clone()),
         _ => Err(FormulaValue::Error(CellError::Value)),
     }
@@ -213,7 +213,7 @@ fn parse_holidays(value: Option<&FormulaValue>) -> Result<HashSet<i64>, FormulaV
 
     match v {
         FormulaValue::Error(e) => return Err(FormulaValue::Error(*e)),
-        FormulaValue::Array(rows) => {
+        FormulaValue::Array { data: rows, .. } => {
             for row in rows {
                 for cell in row {
                     match cell {
@@ -281,7 +281,7 @@ pub fn fn_date(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<
         if let FormulaValue::Error(e) = v {
             return Ok(FormulaValue::Error(*e));
         }
-        if matches!(v, FormulaValue::Array(_)) {
+        if matches!(v, FormulaValue::Array { .. }) {
             return Ok(FormulaValue::Error(CellError::Value));
         }
     }
@@ -332,7 +332,7 @@ pub fn fn_year(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<
     if let FormulaValue::Error(e) = v {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
     let n = match v.as_number() {
@@ -362,7 +362,7 @@ pub fn fn_month(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
     if let FormulaValue::Error(e) = v {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
     let n = match v.as_number() {
@@ -392,7 +392,7 @@ pub fn fn_day(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult<F
     if let FormulaValue::Error(e) = v {
         return Ok(FormulaValue::Error(*e));
     }
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
     let n = match v.as_number() {
@@ -671,7 +671,7 @@ pub fn fn_days360(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
 
     let european = match args.get(2) {
         Some(FormulaValue::Error(e)) => return Ok(FormulaValue::Error(*e)),
-        Some(FormulaValue::Array(_)) => return Ok(FormulaValue::Error(CellError::Value)),
+        Some(FormulaValue::Array { .. }) => return Ok(FormulaValue::Error(CellError::Value)),
         Some(v) => v.as_bool().ok_or(FormulaValue::Error(CellError::Value)),
         None => Ok(false),
     };

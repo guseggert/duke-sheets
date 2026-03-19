@@ -18,7 +18,7 @@ fn database_filter(args: &[FormulaValue]) -> Result<Vec<FormulaValue>, FormulaVa
     }
 
     let database = match &args[0] {
-        FormulaValue::Array(arr) => arr,
+        FormulaValue::Array { data: arr, .. } => arr,
         FormulaValue::Error(e) => return Err(FormulaValue::Error(*e)),
         _ => return Err(FormulaValue::Error(CellError::Value)),
     };
@@ -31,7 +31,7 @@ fn database_filter(args: &[FormulaValue]) -> Result<Vec<FormulaValue>, FormulaVa
     let field_idx = resolve_field_index(&args[1], headers)?;
 
     let criteria = match &args[2] {
-        FormulaValue::Array(arr) => arr,
+        FormulaValue::Array { data: arr, .. } => arr,
         FormulaValue::Error(e) => return Err(FormulaValue::Error(*e)),
         _ => return Err(FormulaValue::Error(CellError::Value)),
     };
@@ -156,7 +156,7 @@ fn is_empty_criteria_cell(value: &FormulaValue) -> bool {
 fn criteria_matches_value(criteria: &FormulaValue, value: &FormulaValue) -> bool {
     match criteria {
         FormulaValue::Empty => true,
-        FormulaValue::Error(_) | FormulaValue::Array(_) => false,
+        FormulaValue::Error(_) | FormulaValue::Array { .. } => false,
         FormulaValue::Number(n) => {
             numeric_value_strict(value).is_some_and(|v| (v - *n).abs() < 1e-10)
         }

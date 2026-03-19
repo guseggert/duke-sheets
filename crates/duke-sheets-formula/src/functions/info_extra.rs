@@ -4,7 +4,7 @@ use duke_sheets_core::{CellAddress, CellError};
 
 pub fn fn_iserr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let v = args.first().unwrap();
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -16,7 +16,7 @@ pub fn fn_iserr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
 
 pub fn fn_iseven(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let v = args.first().unwrap();
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -30,7 +30,7 @@ pub fn fn_iseven(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 
 pub fn fn_isodd(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let v = args.first().unwrap();
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -47,7 +47,7 @@ pub fn fn_islogical(
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
     let v = args.first().unwrap();
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -59,7 +59,7 @@ pub fn fn_isnontext(
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
     let v = args.first().unwrap();
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -68,7 +68,7 @@ pub fn fn_isnontext(
 
 pub fn fn_isref(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let v = args.first().unwrap();
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -105,7 +105,7 @@ pub fn fn_type(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
         FormulaValue::String(_) => 2.0,
         FormulaValue::Boolean(_) => 4.0,
         FormulaValue::Error(_) => 16.0,
-        FormulaValue::Array(_) => 64.0,
+        FormulaValue::Array { .. } => 64.0,
         FormulaValue::Empty => 128.0,
     };
 
@@ -216,7 +216,7 @@ pub fn fn_isformula(
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
     let v = args.first().unwrap();
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -228,7 +228,7 @@ pub fn fn_isomitted(
     _ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
     let v = args.first().unwrap();
-    if matches!(v, FormulaValue::Array(_)) {
+    if matches!(v, FormulaValue::Array { .. }) {
         return Ok(FormulaValue::Error(CellError::Value));
     }
 
@@ -346,7 +346,7 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_iserr(&[FormulaValue::Array(vec![])], &ctx).unwrap(),
+            fn_iserr(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -409,7 +409,7 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_islogical(&[FormulaValue::Array(vec![])], &ctx).unwrap(),
+            fn_islogical(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -430,7 +430,7 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_isnontext(&[FormulaValue::Array(vec![])], &ctx).unwrap(),
+            fn_isnontext(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -451,7 +451,7 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_isref(&[FormulaValue::Array(vec![])], &ctx).unwrap(),
+            fn_isref(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -521,7 +521,7 @@ mod tests {
             FormulaValue::Number(16.0)
         );
         assert_eq!(
-            fn_type(&[FormulaValue::Array(vec![])], &ctx).unwrap(),
+            fn_type(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
             FormulaValue::Number(64.0)
         );
         assert_eq!(
@@ -545,7 +545,7 @@ mod tests {
         );
         // Array as info_type → #VALUE!
         assert_eq!(
-            fn_cell(&[FormulaValue::Array(vec![])], &ctx).unwrap(),
+            fn_cell(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -596,7 +596,7 @@ mod tests {
             FormulaValue::Error(CellError::Na)
         );
         assert_eq!(
-            fn_sheets(&[FormulaValue::Array(vec![])], &ctx).unwrap(),
+            fn_sheets(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
             FormulaValue::Error(CellError::Na)
         );
     }
@@ -613,7 +613,7 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_isformula(&[FormulaValue::Array(vec![])], &ctx).unwrap(),
+            fn_isformula(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -630,7 +630,7 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_isomitted(&[FormulaValue::Array(vec![])], &ctx).unwrap(),
+            fn_isomitted(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
