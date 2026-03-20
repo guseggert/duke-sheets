@@ -196,7 +196,7 @@ pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     // row_num=0: return entire column as a column vector
     if row_num == 0 {
         if col_num == 0 {
-            return Ok(FormulaValue::Error(CellError::Value));
+            return Ok(arr[0][0].clone());
         }
         let c = (col_num - 1) as usize;
         if c >= cols {
@@ -1462,7 +1462,7 @@ mod tests {
         );
         assert_eq!(
             eval("=INDEX({1,2,3;4,5,6},0,0)").unwrap(),
-            FormulaValue::Error(CellError::Value)
+            FormulaValue::Number(1.0) // Excel returns first element for INDEX(2D,0,0)
         );
         // Docs Reference form: Fruits/Price/Count table
         // =INDEX(..., 2, 3) -> 38 (Bananas count)

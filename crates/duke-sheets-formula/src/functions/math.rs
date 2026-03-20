@@ -361,7 +361,7 @@ pub fn fn_power(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     };
 
     if number == 0.0 && power == 0.0 {
-        return Ok(FormulaValue::Number(1.0));
+        return Ok(FormulaValue::Error(CellError::Num));
     }
     let result = number.powf(power);
 
@@ -1532,7 +1532,7 @@ mod tests {
                 &ctx
             )
             .unwrap(),
-            FormulaValue::Number(1.0)
+            FormulaValue::Error(CellError::Num)
         );
     }
 

@@ -232,12 +232,13 @@ fn test_workbook_calculate_power_zero_zero() {
     let mut ctx = EvaluationContext::new(Some(&wb), 0, 0, 0);
     ctx.eval_cache = Some(&cache);
     let ast = parse_formula(wb.worksheet(0).unwrap().get_formula_at(0, 0).unwrap()).unwrap();
-    assert_eq!(evaluate(&ast, &ctx).unwrap(), FormulaValue::Number(1.0));
+    // Excel returns #NUM! for POWER(0,0)
+    assert_eq!(evaluate(&ast, &ctx).unwrap(), FormulaValue::Error(CellError::Num));
 
     wb.calculate().unwrap();
 
     let sheet = wb.worksheet(0).unwrap();
-    assert_eq!(sheet.get_value_at(0, 0), CellValue::Number(1.0));
+    assert_eq!(sheet.get_value_at(0, 0), CellValue::Error(CellError::Num));
 }
 
 #[test]
@@ -254,15 +255,13 @@ fn test_workbook_calculate_index_zero_zero() {
     let mut ctx = EvaluationContext::new(Some(&wb), 0, 0, 0);
     ctx.eval_cache = Some(&cache);
     let ast = parse_formula(wb.worksheet(0).unwrap().get_formula_at(0, 0).unwrap()).unwrap();
-    assert_eq!(
-        evaluate(&ast, &ctx).unwrap(),
-        FormulaValue::Error(CellError::Value)
-    );
+    // Excel returns first element for INDEX(2D, 0, 0)
+    assert_eq!(evaluate(&ast, &ctx).unwrap(), FormulaValue::Number(1.0));
 
     wb.calculate().unwrap();
 
     let sheet = wb.worksheet(0).unwrap();
-    assert_eq!(sheet.get_value_at(0, 0), CellValue::Error(CellError::Value));
+    assert_eq!(sheet.get_value_at(0, 0), CellValue::Number(1.0));
 }
 
 #[test]
@@ -299,11 +298,11 @@ fn test_loaded_parity_cells_recalculate() {
 
     assert_eq!(
         evaluate(&index_ast, &index_ctx).unwrap(),
-        FormulaValue::Error(CellError::Value)
+        FormulaValue::Number(1.0) // Excel returns first element for INDEX(2D,0,0)
     );
     assert_eq!(
         evaluate(&power_ast, &power_ctx).unwrap(),
-        FormulaValue::Number(1.0)
+        FormulaValue::Error(CellError::Num) // Excel returns #NUM! for POWER(0,0)
     );
 
     wb.calculate().unwrap();
@@ -311,7 +310,7 @@ fn test_loaded_parity_cells_recalculate() {
     let tests_sheet = wb.worksheet(tests_sheet_idx).unwrap();
     assert_eq!(
         tests_sheet.get_value_at(441, 2),
-        CellValue::Error(CellError::Value)
+        CellValue::Number(1.0)
     );
-    assert_eq!(tests_sheet.get_value_at(456, 2), CellValue::Number(1.0));
+    assert_eq!(tests_sheet.get_value_at(456, 2), CellValue::Error(CellError::Num));
 }

@@ -1483,7 +1483,7 @@ fn evaluate_index_fast(
 
     if row_num == 0 {
         if col_num == 0 {
-            return Some(Ok(FormulaValue::Error(CellError::Value)));
+            return Some(Ok(arr[0][0].clone()));
         }
         let c = (col_num - 1) as usize;
         if c >= cols {

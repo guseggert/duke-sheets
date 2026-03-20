@@ -1973,8 +1973,8 @@ pub fn fn_vdb(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 }
 
 pub fn fn_xirr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
-    const XIRR_MAX_ITERATIONS: usize = 200;
-    const XIRR_TOLERANCE: f64 = 1e-14;
+    const XIRR_MAX_ITER: usize = 50;
+    const XIRR_EPS: f64 = 1e-10;
     let mut values = Vec::new();
     let mut dates = Vec::new();
 
@@ -2005,37 +2005,67 @@ pub fn fn_xirr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     }
 
     let d0 = dates[0];
-    let mut rate = if guess <= -0.999_999_999 { 0.1 } else { guess };
 
-    for _ in 0..XIRR_MAX_ITERATIONS {
-        if rate <= -1.0 {
-            return Ok(FormulaValue::Error(CellError::Num));
+    // XIRR NPV function: f(R) = Σ V_i / (1+R)^((D_i - D_0)/365)
+    let xirr_f = |rate: f64| -> f64 {
+        let r = 1.0 + rate;
+        let mut result = values[0]; // i=0 has exponent 0
+        for i in 1..values.len() {
+            result += values[i] / r.powf((dates[i] - d0) / 365.0);
         }
-        let base = 1.0 + rate;
-        let mut f = 0.0;
-        let mut df = 0.0;
-        for (v, d) in values.iter().zip(dates.iter()) {
-            let t = (d - d0) / 365.0;
-            let p = base.powf(t);
-            f += v / p;
-            df -= t * v / base.powf(t + 1.0);
-        }
+        result
+    };
 
-        if f.abs() < XIRR_TOLERANCE {
+    // Derivative: f'(R) = -Σ E_i * V_i / (1+R)^(E_i+1)
+    let xirr_df = |rate: f64| -> f64 {
+        let r = 1.0 + rate;
+        let mut result = 0.0;
+        for i in 1..values.len() {
+            let e_i = (dates[i] - d0) / 365.0;
+            result -= e_i * values[i] / r.powf(e_i + 1.0);
+        }
+        result
+    };
+
+    // Newton-Raphson with fallback scan (matching spreadsheet conventions)
+    let try_newton = |start_rate: f64| -> Option<f64> {
+        let mut rate = start_rate;
+        for _ in 0..XIRR_MAX_ITER {
+            let f = xirr_f(rate);
+            let df = xirr_df(rate);
+            if !df.is_finite() || df == 0.0 {
+                return None;
+            }
+            let new_rate = rate - f / df;
+            let rate_eps = (new_rate - rate).abs();
+            rate = new_rate;
+            if !rate.is_finite() {
+                return None;
+            }
+            // Stop when EITHER rate step or function value is small enough
+            if rate_eps <= XIRR_EPS || f.abs() <= XIRR_EPS {
+                return Some(rate);
+            }
+        }
+        None
+    };
+
+    // First attempt: user-supplied guess
+    let initial = if guess <= -0.999_999_999 { 0.1 } else { guess };
+    if let Some(rate) = try_newton(initial) {
+        if rate > -1.0 {
             return Ok(FormulaValue::Number(rate));
         }
-        if !df.is_finite() || df.abs() < 1e-14 {
-            return Ok(FormulaValue::Error(CellError::Num));
-        }
+    }
 
-        let next = rate - f / df;
-        if !next.is_finite() || next <= -1.0 {
-            return Ok(FormulaValue::Error(CellError::Num));
+    // Fallback: scan -0.99 to +0.99 in 0.01 steps
+    for scan in 0..200 {
+        let start = -0.99 + scan as f64 * 0.01;
+        if let Some(rate) = try_newton(start) {
+            if rate > -1.0 {
+                return Ok(FormulaValue::Number(rate));
+            }
         }
-        if (next - rate).abs() < XIRR_TOLERANCE {
-            return Ok(FormulaValue::Number(next));
-        }
-        rate = next;
     }
 
     Ok(FormulaValue::Error(CellError::Num))

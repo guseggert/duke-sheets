@@ -720,17 +720,33 @@ fn holt_with_params(values: &[f64], alpha: f64, beta: f64) -> HoltResult {
 }
 
 fn fit_holt(values: &[f64]) -> HoltResult {
-    let candidates = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
-    let mut best = holt_with_params(values, 0.5, 0.5);
-    for alpha in candidates {
-        for beta in candidates {
-            let model = holt_with_params(values, alpha, beta);
-            if model.rmse < best.rmse {
-                best = model;
-            }
+    // Nested bisection optimization over (alpha, beta) to minimize MSE.
+    const RESOLUTION: f64 = 0.001;
+
+    let optimize_beta = |alpha: f64| -> f64 {
+        let mut lo = 0.0_f64;
+        let mut hi = 1.0_f64;
+        let mut e_lo = holt_with_params(values, alpha, lo).rmse;
+        let mut e_hi = holt_with_params(values, alpha, hi).rmse;
+        while (hi - lo) > RESOLUTION {
+            let mid = (lo + hi) / 2.0;
+            if e_hi > e_lo { hi = mid; e_hi = holt_with_params(values, alpha, hi).rmse; }
+            else { lo = mid; e_lo = holt_with_params(values, alpha, lo).rmse; }
         }
+        (lo + hi) / 2.0
+    };
+
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+    let mut e_lo = holt_with_params(values, lo, optimize_beta(lo)).rmse;
+    let mut e_hi = holt_with_params(values, hi, optimize_beta(hi)).rmse;
+    while (hi - lo) > RESOLUTION {
+        let mid = (lo + hi) / 2.0;
+        if e_hi > e_lo { hi = mid; e_hi = holt_with_params(values, hi, optimize_beta(hi)).rmse; }
+        else { lo = mid; e_lo = holt_with_params(values, lo, optimize_beta(lo)).rmse; }
     }
-    best
+    let best_alpha = (lo + hi) / 2.0;
+    holt_with_params(values, best_alpha, optimize_beta(best_alpha))
 }
 
 fn parse_values_timeline(

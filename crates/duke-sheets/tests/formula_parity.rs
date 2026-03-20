@@ -193,19 +193,16 @@ fn is_type_only_case(case: &ParityCase) -> bool {
 }
 
 fn effective_expected_type(case: &ParityCase) -> &str {
-    match case.id.as_str() {
-        "INDEX_zero_both" => "error",
-        "POWER_zero_zero" => "number",
-        _ => case.expected_type.as_str(),
-    }
+    case.expected_type.as_str()
 }
 
 fn number_epsilon(case: &ParityCase) -> f64 {
     match case.id.as_str() {
-        // XIRR iterative solver has inherent precision limits
-        "XIRR_basic" => 5e-9,
-        // FORECAST.ETS triple-exponential smoothing has a real precision gap
-        id if id.contains("FORECAST_ETS") || id.contains("STAT_FORECAST_ETS") => 0.1,
+        // Newton-Raphson iterative solvers: different convergence paths
+        id if id.contains("XIRR") => 2e-9,
+        // ETS parameter optimization: nested bisection vs Excel's nonlinear
+        // optimizer find slightly different points in the MSE valley
+        id if id.contains("FORECAST_ETS") => 0.005,
         _ => 1e-9,
     }
 }
