@@ -2639,7 +2639,7 @@ mod tests {
             let c = ctx();
             let v =
                 fn_besselk(&[FormulaValue::Number(1.5), FormulaValue::Number(1.0)], &c).unwrap();
-            assert_close(as_number(v), 0.277_387_804, 1e-5); // K₁(1.5) from Wolfram Alpha
+            assert_close(as_number(v), 0.277_387_804, 1e-9);
 
             let e =
                 fn_besselk(&[FormulaValue::Number(0.0), FormulaValue::Number(1.0)], &c).unwrap();
@@ -2651,7 +2651,7 @@ mod tests {
             let c = ctx();
             let v =
                 fn_bessely(&[FormulaValue::Number(2.5), FormulaValue::Number(1.0)], &c).unwrap();
-            assert_close(as_number(v), 0.145_918_138, 1e-6);
+            assert_close(as_number(v), 0.145_918_138, 1e-9);
 
             let e =
                 fn_bessely(&[FormulaValue::Number(-1.0), FormulaValue::Number(1.0)], &c).unwrap();
@@ -2735,7 +2735,8 @@ mod tests {
         fn assert_close_num(result: FormulaValue, expected: f64) {
             match result {
                 FormulaValue::Number(v) => {
-                    assert!((v - expected).abs() < 1e-5, "got {v}, expected {expected}")
+                    // MS docs values are truncated to fewer digits than our precision
+                    assert!((v - expected).abs() < 1e-6, "got {v}, expected {expected}")
                 }
                 other => panic!("expected number, got {other:?}"),
             }
