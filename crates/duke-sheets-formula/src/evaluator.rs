@@ -2146,6 +2146,36 @@ fn evaluate_function(
         }
     }
 
+    // ROW/COLUMN need the unevaluated reference to extract row/col numbers.
+    if lookup_name == "ROW" || lookup_name == "COLUMN" {
+        let is_row = lookup_name == "ROW";
+        if args.is_empty() {
+            // No args: return current cell position
+            let val = if is_row { ctx.current_row + 1 } else { (ctx.current_col + 1) as u32 };
+            return Ok(FormulaValue::Number(val as f64));
+        }
+        match &args[0] {
+            FormulaExpr::CellRef(cr) => {
+                let val = if is_row { cr.address.row + 1 } else { (cr.address.col + 1) as u32 };
+                return Ok(FormulaValue::Number(val as f64));
+            }
+            FormulaExpr::RangeRef(rr) => {
+                if is_row {
+                    let rows: Vec<Vec<FormulaValue>> = (rr.range.start.row..=rr.range.end.row)
+                        .map(|r| vec![FormulaValue::Number((r + 1) as f64)])
+                        .collect();
+                    return Ok(FormulaValue::Array { data: rows, source: None });
+                } else {
+                    let cols: Vec<FormulaValue> = (rr.range.start.col..=rr.range.end.col)
+                        .map(|c| FormulaValue::Number((c + 1) as f64))
+                        .collect();
+                    return Ok(FormulaValue::Array { data: vec![cols], source: None });
+                }
+            }
+            _ => {} // fall through to normal evaluation
+        }
+    }
+
     // Evaluate arguments
     let mut evaluated_args = Vec::with_capacity(args.len());
     for arg in args {

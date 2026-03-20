@@ -44,6 +44,22 @@ fn collect_numbers(value: &FormulaValue, out: &mut Vec<f64>) -> Option<CellError
     None
 }
 
+fn collect_numbers_skip_errors(value: &FormulaValue, out: &mut Vec<f64>) {
+    match value {
+        FormulaValue::Number(n) => out.push(*n),
+        FormulaValue::Array { data: arr, .. } => {
+            for row in arr {
+                for cell in row {
+                    if let FormulaValue::Number(n) = cell {
+                        out.push(*n);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn collect_values(value: &FormulaValue, out: &mut Vec<FormulaValue>) -> Option<CellError> {
     match value {
         FormulaValue::Array { data: arr, .. } => {
@@ -1316,20 +1332,32 @@ pub fn fn_aggregate(
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
-    match get_number(args.get(1)) {
-        Ok(_) => {}
+    let option = match get_number(args.get(1)).and_then(to_int_trunc) {
+        Ok(v) => v,
         Err(e) => return Ok(e),
-    }
+    };
+    // Options that skip errors: 2,3,6,7 (and combinations)
+    let skip_errors = matches!(option, 2 | 3 | 6 | 7);
 
     let mut numbers = Vec::new();
-    if (14..=19).contains(&fn_num) {
-        if let Some(e) = collect_numbers(&args[2], &mut numbers) {
-            return Ok(FormulaValue::Error(e));
+    if skip_errors {
+        if (14..=19).contains(&fn_num) {
+            collect_numbers_skip_errors(&args[2], &mut numbers);
+        } else {
+            for arg in args.iter().skip(2) {
+                collect_numbers_skip_errors(arg, &mut numbers);
+            }
         }
     } else {
-        for arg in args.iter().skip(2) {
-            if let Some(e) = collect_numbers(arg, &mut numbers) {
+        if (14..=19).contains(&fn_num) {
+            if let Some(e) = collect_numbers(&args[2], &mut numbers) {
                 return Ok(FormulaValue::Error(e));
+            }
+        } else {
+            for arg in args.iter().skip(2) {
+                if let Some(e) = collect_numbers(arg, &mut numbers) {
+                    return Ok(FormulaValue::Error(e));
+                }
             }
         }
     }
@@ -1526,14 +1554,12 @@ pub fn fn_subtotal(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
         101..=111 => fn_num - 100,
         _ => return Ok(FormulaValue::Error(CellError::Value)),
     };
-    fn_aggregate(
-        &[
-            FormulaValue::Number(normalized as f64),
-            FormulaValue::Number(0.0),
-            FormulaValue::Array { data: args[1..].iter().cloned().map(|v| vec![v]).collect(), source: None },
-        ],
-        _ctx,
-    )
+    let mut agg_args = vec![
+        FormulaValue::Number(normalized as f64),
+        FormulaValue::Number(0.0),
+    ];
+    agg_args.extend_from_slice(&args[1..]);
+    fn_aggregate(&agg_args, _ctx)
 }
 
 /// PERCENTOF(data_subset, data_all) — percentage that a subset makes up of a given data set
