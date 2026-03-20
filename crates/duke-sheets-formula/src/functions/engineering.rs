@@ -1314,22 +1314,25 @@ fn bessel_j0_excel(x: f64) -> f64 {
 
 fn bessel_k0(x: f64) -> f64 {
     if x <= 2.0 {
-        let t = (x * x) * 0.25;
+        // A&S 9.8.5: K₀(x) = -ln(x/2) * I₀(x) + p(y)
+        // I₀ uses t = (x/3.75)², correction polynomial uses y = (x/2)²
+        let t_i0 = (x / 3.75).powi(2);
         let i0 = 1.0
-            + 3.515_622_9 * t
-            + 3.089_942_4 * t.powi(2)
-            + 1.206_749_2 * t.powi(3)
-            + 0.265_973_2 * t.powi(4)
-            + 0.036_076_8 * t.powi(5)
-            + 0.004_581_3 * t.powi(6);
+            + 3.515_622_9 * t_i0
+            + 3.089_942_4 * t_i0.powi(2)
+            + 1.206_749_2 * t_i0.powi(3)
+            + 0.265_973_2 * t_i0.powi(4)
+            + 0.036_076_8 * t_i0.powi(5)
+            + 0.004_581_3 * t_i0.powi(6);
+        let y = (x * 0.5).powi(2);
         -((x * 0.5).ln()) * i0
             + (-0.577_215_66
-                + 0.422_784_20 * t
-                + 0.230_697_56 * t.powi(2)
-                + 0.034_885_90 * t.powi(3)
-                + 0.002_626_98 * t.powi(4)
-                + 0.000_107_50 * t.powi(5)
-                + 0.000_007_40 * t.powi(6))
+                + 0.422_784_20 * y
+                + 0.230_697_56 * y.powi(2)
+                + 0.034_885_90 * y.powi(3)
+                + 0.002_626_98 * y.powi(4)
+                + 0.000_107_50 * y.powi(5)
+                + 0.000_007_40 * y.powi(6))
     } else {
         let t = 2.0 / x;
         (-x).exp() / x.sqrt()
@@ -1343,24 +1346,24 @@ fn bessel_k0(x: f64) -> f64 {
 
 fn bessel_k1(x: f64) -> f64 {
     if x <= 2.0 {
-        let t = (x * x) * 0.25;
+        let t_i1 = (x / 3.75).powi(2);
         let i1 = x
             * (0.5
-                + 0.878_905_94 * t
-                + 0.514_988_69 * t.powi(2)
-                + 0.150_849_34 * t.powi(3)
-                + 0.026_587_33 * t.powi(4)
-                + 0.003_015_32 * t.powi(5)
-                + 0.000_324_11 * t.powi(6));
-
+                + 0.878_905_94 * t_i1
+                + 0.514_988_69 * t_i1.powi(2)
+                + 0.150_849_34 * t_i1.powi(3)
+                + 0.026_587_33 * t_i1.powi(4)
+                + 0.003_015_32 * t_i1.powi(5)
+                + 0.000_324_11 * t_i1.powi(6));
+        let y = (x * 0.5).powi(2);
         (x * 0.5).ln() * i1
             + (1.0 / x)
-                * (1.0 + 0.154_431_44 * t
-                    - 0.672_785_79 * t.powi(2)
-                    - 0.181_568_97 * t.powi(3)
-                    - 0.019_194_02 * t.powi(4)
-                    - 0.001_104_04 * t.powi(5)
-                    - 0.000_046_86 * t.powi(6))
+                * (1.0 + 0.154_431_44 * y
+                    - 0.672_785_79 * y.powi(2)
+                    - 0.181_568_97 * y.powi(3)
+                    - 0.019_194_02 * y.powi(4)
+                    - 0.001_104_04 * y.powi(5)
+                    - 0.000_046_86 * y.powi(6))
     } else {
         let t = 2.0 / x;
         (-x).exp() / x.sqrt()
@@ -1373,56 +1376,63 @@ fn bessel_k1(x: f64) -> f64 {
 }
 
 fn bessel_y0(x: f64) -> f64 {
-    let j0 = bessel_j_series(x, 0);
-    let z = (x * x) * 0.25;
-
-    let mut harmonic = 0.0;
-    let mut term = z;
-    let mut series_sum = 0.0;
-
-    for k in 1..=BESSEL_MAX_TERMS {
-        harmonic += 1.0 / (k as f64);
-        let signed = if k % 2 == 1 { term } else { -term };
-        let add = harmonic * signed;
-        series_sum += add;
-
-        if add.abs() < BESSEL_TOLERANCE * series_sum.abs().max(1.0) {
-            break;
-        }
-
-        let kp1 = (k + 1) as f64;
-        term *= z / (kp1 * kp1);
+    // Rational polynomial approximation (Numerical Recipes / Cephes)
+    if x < 8.0 {
+        let y = x * x;
+        let ans1 = -2957821389.0
+            + y * (7062834065.0
+                + y * (-512359803.6
+                    + y * (10879881.29 + y * (-86327.92757 + y * 228.4622733))));
+        let ans2 = 40076544269.0
+            + y * (745249964.8
+                + y * (7189466.438 + y * (47447.2647 + y * (226.1030244 + y))));
+        ans1 / ans2 + (2.0 / PI) * bessel_j_series(x, 0) * x.ln()
+    } else {
+        let z = 8.0 / x;
+        let y = z * z;
+        let xx = x - 0.785398164; // x - PI/4
+        let p0 = 1.0
+            + y * (-0.1098628627e-2
+                + y * (0.2734510407e-4
+                    + y * (-0.2073370639e-5 + y * 0.2093887211e-6)));
+        let q0 = -0.1562499995e-1
+            + y * (0.1430488765e-3
+                + y * (-0.6911147651e-5
+                    + y * (0.7621095161e-6 + y * (-0.934945152e-7))));
+        (0.636619772 / x).sqrt() * (xx.sin() * p0 + z * xx.cos() * q0)
     }
-
-    (2.0 / PI) * (((x * 0.5).ln() + EULER_GAMMA) * j0 + series_sum)
 }
 
 fn bessel_y1(x: f64) -> f64 {
-    let j1 = bessel_j_series(x, 1);
-    let z = (x * x) * 0.25;
-
-    let mut h_k = 0.0;
-    let mut term = 1.0;
-    let mut series_sum = 0.0;
-
-    for k in 0..BESSEL_MAX_TERMS {
-        let h_k1 = h_k + 1.0 / ((k + 1) as f64);
-        let coeff = h_k + h_k1;
-        let signed = if k % 2 == 0 { term } else { -term };
-        let add = coeff * signed;
-        series_sum += add;
-
-        if add.abs() < BESSEL_TOLERANCE * series_sum.abs().max(1.0) {
-            break;
-        }
-
-        let kp1 = (k + 1) as f64;
-        let kp2 = (k + 2) as f64;
-        term *= z / (kp1 * kp2);
-        h_k = h_k1;
+    // Rational polynomial approximation (Abramowitz & Stegun)
+    if x < 8.0 {
+        let y = x * x;
+        let ans1 = x
+            * (-4.900604943e12
+                + y * (1.27527439e12
+                    + y * (-5.153438139e10
+                        + y * (7.349264551e8
+                            + y * (-4.237922726e6 + y * 8511.937935)))));
+        let ans2 = 2.49958057e13
+            + y * (4.244419664e11
+                + y * (3.733650367e9
+                    + y * (2.245904002e7
+                        + y * (1.02042605e5 + y * (354.9632885 + y)))));
+        ans1 / ans2 + (2.0 / PI) * (bessel_j_series(x, 1) * x.ln() - 1.0 / x)
+    } else {
+        let z = 8.0 / x;
+        let y = z * z;
+        let xx = x - 2.356194491; // x - 3*PI/4
+        let p1 = 1.0
+            + y * (0.183105e-2
+                + y * (-0.3516396496e-4
+                    + y * (0.2457520174e-5 + y * (-0.240337019e-6))));
+        let q1 = 0.04687499995
+            + y * (-0.2002690873e-3
+                + y * (0.8449199096e-5
+                    + y * (-0.88228987e-6 + y * 0.105787412e-6)));
+        (0.636619772 / x).sqrt() * (xx.sin() * p1 + z * xx.cos() * q1)
     }
-
-    (2.0 / PI) * ((x * 0.5).ln() * j1 - 1.0 / x + (x * 0.5) * series_sum)
 }
 
 pub fn fn_besseli(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -2629,7 +2639,7 @@ mod tests {
             let c = ctx();
             let v =
                 fn_besselk(&[FormulaValue::Number(1.5), FormulaValue::Number(1.0)], &c).unwrap();
-            assert_close(as_number(v), 0.047_569_085_237_139_54, 1e-9);
+            assert_close(as_number(v), 0.277_387_804, 1e-5); // K₁(1.5) from Wolfram Alpha
 
             let e =
                 fn_besselk(&[FormulaValue::Number(0.0), FormulaValue::Number(1.0)], &c).unwrap();
@@ -2641,7 +2651,7 @@ mod tests {
             let c = ctx();
             let v =
                 fn_bessely(&[FormulaValue::Number(2.5), FormulaValue::Number(1.0)], &c).unwrap();
-            assert_close(as_number(v), -0.478_600_759_123_969, 1e-9);
+            assert_close(as_number(v), 0.145_918_138, 5e-3);
 
             let e =
                 fn_bessely(&[FormulaValue::Number(-1.0), FormulaValue::Number(1.0)], &c).unwrap();
@@ -3133,14 +3143,14 @@ mod tests {
 
         #[test]
         fn test_besselk_docs() {
-            // MS docs says 0.277387804 but our impl uses a different normalization
-            assert_close_num(eval("=BESSELK(1.5, 1)").unwrap(), 0.04756908523713954);
+            // K₁(1.5) = 0.277387804 (MS docs, Wolfram Alpha)
+            assert_close_num(eval("=BESSELK(1.5, 1)").unwrap(), 0.277387804);
         }
 
         #[test]
         fn test_bessely_docs() {
-            // MS docs says 0.145918138 but our impl uses a different convention
-            assert_close_num(eval("=BESSELY(2.5, 1)").unwrap(), -0.478600759123969);
+            // Y₁(2.5) = 0.145918138 (MS docs)
+            assert_close_num(eval("=BESSELY(2.5, 1)").unwrap(), 0.145918138);
         }
 
         // ===== CONVERT =====
