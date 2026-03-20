@@ -192,6 +192,38 @@ fn populate_data_sheet(wb: &Workbook<'_>) -> Result<(), BridgeError> {
         wb.set_cell_value(&cell_addr(row, 3), *amount)?;
     }
 
+    let pi_digits = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0, 5.0, 3.0, 5.0, 8.0];
+    for (offset, value) in pi_digits.iter().enumerate() {
+        wb.set_cell_value(&cell_addr(offset as u32 + 1, 19), *value)?;
+    }
+
+    wb.set_cell_value("A40", "hello")?;
+    wb.set_cell_value("C40", 42.0)?;
+    wb.set_cell_value("E40", "world")?;
+
+    wb.set_cell_value("A43", 200000.0)?;
+    wb.set_cell_value("B43", 0.06)?;
+    wb.set_cell_value("C43", 30.0)?;
+    wb.set_cell_value("D43", 12.0)?;
+    let cash_flows = [-1000.0, 300.0, 420.0, 680.0, 250.0];
+    for (offset, value) in cash_flows.iter().enumerate() {
+        wb.set_cell_value(&cell_addr(offset as u32 + 44, 1), *value)?;
+    }
+
+    wb.set_cell_value("A50", 42.0)?;
+    wb.set_cell_value("A51", "hello")?;
+    wb.set_cell_value("A52", true)?;
+    wb.set_cell_formula("A54", "=1/0")?;
+
+    wb.set_cell_value("A56", 0.1)?;
+    wb.set_cell_value("B56", 0.2)?;
+    wb.set_cell_value("A57", 1e15)?;
+    wb.set_cell_value("B57", 1.0)?;
+
+    wb.set_cell_value("A60", "Hello World")?;
+    wb.set_cell_value("A61", "mississippi")?;
+    wb.set_cell_value("A62", "2024-01-15")?;
+
     Ok(())
 }
 
@@ -696,6 +728,598 @@ fn populate_tests_sheet(wb: &Workbook<'_>) -> Result<(), BridgeError> {
             id: "SEQUENCE_sum_1_to_4",
             label: "SUM(SEQUENCE(4,1,1,1))",
             formula: "=SUM(SEQUENCE(4,1,1,1))",
+            expected_type: "number",
+            kind: FormulaKind::Formula2,
+        },
+        FormulaCase {
+            id: "VLOOKUP_approx_below_min",
+            label: "VLOOKUP(-5,Data!P17:Q21,2,TRUE)",
+            formula: "=VLOOKUP(-5,Data!P17:Q21,2,TRUE)",
+            expected_type: "error",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "VLOOKUP_approx_above_max",
+            label: "VLOOKUP(99,Data!P17:Q21,2,TRUE)",
+            formula: "=VLOOKUP(99,Data!P17:Q21,2,TRUE)",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "VLOOKUP_approx_exact_bound",
+            label: "VLOOKUP(90,Data!P17:Q21,2,TRUE)",
+            formula: "=VLOOKUP(90,Data!P17:Q21,2,TRUE)",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "VLOOKUP_approx_first_match",
+            label: "VLOOKUP(0,Data!P17:Q21,2,TRUE)",
+            formula: "=VLOOKUP(0,Data!P17:Q21,2,TRUE)",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "INDEX_2arg_row_out_of_bounds",
+            label: "INDEX(Data!A2:L2,15)",
+            formula: "=INDEX(Data!A2:L2,15)",
+            expected_type: "error",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "INDEX_2arg_col_out_of_bounds",
+            label: "INDEX(Data!A3:A14,15)",
+            formula: "=INDEX(Data!A3:A14,15)",
+            expected_type: "error",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "INDEX_2arg_row_position_1",
+            label: "INDEX(Data!A2:L2,1)",
+            formula: "=INDEX(Data!A2:L2,1)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "INDEX_2arg_col_position_1",
+            label: "INDEX(Data!A3:A14,1)",
+            formula: "=INDEX(Data!A3:A14,1)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "INDEX_2arg_row_last",
+            label: "INDEX(Data!A2:L2,12)",
+            formula: "=INDEX(Data!A2:L2,12)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "MEDIAN_numbers",
+            label: "MEDIAN(Data!A2:L2)",
+            formula: "=MEDIAN(Data!A2:L2)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "STDEV_numbers",
+            label: "STDEV(Data!A2:L2)",
+            formula: "=STDEV(Data!A2:L2)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "VAR_numbers",
+            label: "VAR(Data!A2:L2)",
+            formula: "=VAR(Data!A2:L2)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "LARGE_3rd",
+            label: "LARGE(Data!A2:L2,3)",
+            formula: "=LARGE(Data!A2:L2,3)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "SMALL_2nd",
+            label: "SMALL(Data!A2:L2,2)",
+            formula: "=SMALL(Data!A2:L2,2)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "PERCENTILE_50",
+            label: "PERCENTILE(Data!A2:L2,0.5)",
+            formula: "=PERCENTILE(Data!A2:L2,0.5)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "QUARTILE_1",
+            label: "QUARTILE(Data!A2:L2,1)",
+            formula: "=QUARTILE(Data!A2:L2,1)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "RANK_30",
+            label: "RANK(30,Data!A2:L2)",
+            formula: "=RANK(30,Data!A2:L2)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "MODE_SNGL",
+            label: "MODE.SNGL(Data!S1:S12)",
+            formula: "=MODE.SNGL(Data!S1:S12)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "AVERAGEIF_fruit",
+            label: "AVERAGEIF(Data!B29:B37,\"fruit\",Data!C29:C37)",
+            formula: "=AVERAGEIF(Data!B29:B37,\"fruit\",Data!C29:C37)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ABS_negative",
+            label: "ABS(-42.5)",
+            formula: "=ABS(-42.5)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "MOD_basic",
+            label: "MOD(17,5)",
+            formula: "=MOD(17,5)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "POWER_basic",
+            label: "POWER(2,10)",
+            formula: "=POWER(2,10)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "SQRT_basic",
+            label: "SQRT(144)",
+            formula: "=SQRT(144)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "LOG_base10",
+            label: "LOG(1000,10)",
+            formula: "=LOG(1000,10)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "LOG10_basic",
+            label: "LOG10(100)",
+            formula: "=LOG10(100)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "LN_basic",
+            label: "LN(EXP(1))",
+            formula: "=LN(EXP(1))",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "CEILING_basic",
+            label: "CEILING(2.3,1)",
+            formula: "=CEILING(2.3,1)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "FLOOR_MATH_basic",
+            label: "FLOOR.MATH(2.7,1)",
+            formula: "=FLOOR.MATH(2.7,1)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "INT_basic",
+            label: "INT(3.9)",
+            formula: "=INT(3.9)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "SIGN_negative",
+            label: "SIGN(-42)",
+            formula: "=SIGN(-42)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "PI_value",
+            label: "PI()",
+            formula: "=PI()",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "RAND_type",
+            label: "RAND()",
+            formula: "=RAND()",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "RANDBETWEEN_type",
+            label: "RANDBETWEEN(1,100)",
+            formula: "=RANDBETWEEN(1,100)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ISNUMBER_yes",
+            label: "ISNUMBER(Data!A50)",
+            formula: "=ISNUMBER(Data!A50)",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ISNUMBER_no",
+            label: "ISNUMBER(Data!A51)",
+            formula: "=ISNUMBER(Data!A51)",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ISTEXT_yes",
+            label: "ISTEXT(Data!A51)",
+            formula: "=ISTEXT(Data!A51)",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ISTEXT_no",
+            label: "ISTEXT(Data!A50)",
+            formula: "=ISTEXT(Data!A50)",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ISBLANK_yes",
+            label: "ISBLANK(Data!A53)",
+            formula: "=ISBLANK(Data!A53)",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ISBLANK_no",
+            label: "ISBLANK(Data!A50)",
+            formula: "=ISBLANK(Data!A50)",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ISERROR_yes",
+            label: "ISERROR(1/0)",
+            formula: "=ISERROR(1/0)",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ISERROR_no",
+            label: "ISERROR(42)",
+            formula: "=ISERROR(42)",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ISLOGICAL_yes",
+            label: "ISLOGICAL(Data!A52)",
+            formula: "=ISLOGICAL(Data!A52)",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ISLOGICAL_no",
+            label: "ISLOGICAL(Data!A50)",
+            formula: "=ISLOGICAL(Data!A50)",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "TYPE_number",
+            label: "TYPE(Data!A50)",
+            formula: "=TYPE(Data!A50)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "TYPE_text",
+            label: "TYPE(Data!A51)",
+            formula: "=TYPE(Data!A51)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "TYPE_logical",
+            label: "TYPE(Data!A52)",
+            formula: "=TYPE(Data!A52)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "SUBSTITUTE_basic",
+            label: "SUBSTITUTE(\"Hello World\",\"World\",\"Earth\")",
+            formula: "=SUBSTITUTE(\"Hello World\",\"World\",\"Earth\")",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "SUBSTITUTE_nth",
+            label: "SUBSTITUTE(\"mississippi\",\"s\",\"S\",2)",
+            formula: "=SUBSTITUTE(\"mississippi\",\"s\",\"S\",2)",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "REPLACE_basic",
+            label: "REPLACE(\"Hello World\",7,5,\"Earth\")",
+            formula: "=REPLACE(\"Hello World\",7,5,\"Earth\")",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "REPT_basic",
+            label: "REPT(\"ab\",3)",
+            formula: "=REPT(\"ab\",3)",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "EXACT_match",
+            label: "EXACT(\"hello\",\"hello\")",
+            formula: "=EXACT(\"hello\",\"hello\")",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "EXACT_no_match",
+            label: "EXACT(\"hello\",\"Hello\")",
+            formula: "=EXACT(\"hello\",\"Hello\")",
+            expected_type: "boolean",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "VALUE_numeric",
+            label: "VALUE(\"123.45\")",
+            formula: "=VALUE(\"123.45\")",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "TEXT_format",
+            label: "TEXT(0.75,\"0.0%\")",
+            formula: "=TEXT(0.75,\"0.0%\")",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "CLEAN_basic",
+            label: "CLEAN(CHAR(9)&\"hello\"&CHAR(10))",
+            formula: "=CLEAN(CHAR(9)&\"hello\"&CHAR(10))",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "NUMBERVALUE_basic",
+            label: "NUMBERVALUE(\"1,234.56\",\".\",\",\")",
+            formula: "=NUMBERVALUE(\"1,234.56\",\".\",\",\")",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "PMT_basic",
+            label: "PMT(Data!B43/Data!D43,Data!C43*Data!D43,-Data!A43)",
+            formula: "=PMT(Data!B43/Data!D43,Data!C43*Data!D43,-Data!A43)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "FV_basic",
+            label: "FV(0.05/12,10*12,-200)",
+            formula: "=FV(0.05/12,10*12,-200)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "PV_basic",
+            label: "PV(0.08/12,20*12,-500)",
+            formula: "=PV(0.08/12,20*12,-500)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "NPER_basic",
+            label: "NPER(0.06/12,-200,10000)",
+            formula: "=NPER(0.06/12,-200,10000)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "NPV_basic",
+            label: "NPV(0.1,Data!A45:A48)+Data!A44",
+            formula: "=NPV(0.1,Data!A45:A48)+Data!A44",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "IRR_basic",
+            label: "IRR(Data!A44:A48)",
+            formula: "=IRR(Data!A44:A48)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ERROR_div_zero",
+            label: "1/0",
+            formula: "=1/0",
+            expected_type: "error",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ERROR_ref",
+            label: "INDEX(Data!A2:L2,99)",
+            formula: "=INDEX(Data!A2:L2,99)",
+            expected_type: "error",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ERROR_value",
+            label: "VALUE(\"not_a_number\")",
+            formula: "=VALUE(\"not_a_number\")",
+            expected_type: "error",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "ERROR_nested_iferror",
+            label: "IFERROR(IFERROR(1/0,SQRT(-1)),\"caught\")",
+            formula: "=IFERROR(IFERROR(1/0,SQRT(-1)),\"caught\")",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "SUM_with_error",
+            label: "SUM(1,2,1/0)",
+            formula: "=SUM(1,2,1/0)",
+            expected_type: "error",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "SUM_with_blanks",
+            label: "SUM(Data!A40:E40)",
+            formula: "=SUM(Data!A40:E40)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "COUNTA_with_blanks",
+            label: "COUNTA(Data!A40:E40)",
+            formula: "=COUNTA(Data!A40:E40)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "COUNTBLANK_range",
+            label: "COUNTBLANK(Data!A40:E40)",
+            formula: "=COUNTBLANK(Data!A40:E40)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "CONCATENATE_blank",
+            label: "CONCATENATE(Data!A40,Data!B40,Data!C40)",
+            formula: "=CONCATENATE(Data!A40,Data!B40,Data!C40)",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "IF_blank",
+            label: "IF(Data!B40=\"\",\"empty\",\"full\")",
+            formula: "=IF(Data!B40=\"\",\"empty\",\"full\")",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "PRECISION_sum",
+            label: "Data!A56+Data!B56",
+            formula: "=Data!A56+Data!B56",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "PRECISION_round",
+            label: "ROUND(Data!A56+Data!B56,1)",
+            formula: "=ROUND(Data!A56+Data!B56,1)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "PRECISION_large",
+            label: "Data!A57+Data!B57",
+            formula: "=Data!A57+Data!B57",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "INDEX_MATCH_2D",
+            label:
+                "INDEX(Data!E17:G20,MATCH(\"Q3\",Data!D17:D20,0),MATCH(\"South\",Data!E16:G16,0))",
+            formula:
+                "=INDEX(Data!E17:G20,MATCH(\"Q3\",Data!D17:D20,0),MATCH(\"South\",Data!E16:G16,0))",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "SUMPRODUCT_IF",
+            label: "SUMPRODUCT((Data!B29:B37=\"fruit\")*Data!C29:C37)",
+            formula: "=SUMPRODUCT((Data!B29:B37=\"fruit\")*Data!C29:C37)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "SUMPRODUCT_MULTI",
+            label: "SUMPRODUCT((Data!B29:B37=\"fruit\")*(Data!C29:C37>15))",
+            formula: "=SUMPRODUCT((Data!B29:B37=\"fruit\")*(Data!C29:C37>15))",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "NESTED_XLOOKUP",
+            label:
+                "XLOOKUP(XLOOKUP(\"cherry\",Data!A16:A25,Data!B16:B25),Data!B16:B25,Data!A16:A25)",
+            formula:
+                "=XLOOKUP(XLOOKUP(\"cherry\",Data!A16:A25,Data!B16:B25),Data!B16:B25,Data!A16:A25)",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "CHOOSE_basic",
+            label: "CHOOSE(2,\"apple\",\"banana\",\"cherry\")",
+            formula: "=CHOOSE(2,\"apple\",\"banana\",\"cherry\")",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "CHOOSE_calc",
+            label: "CHOOSE(MATCH(70,Data!P17:P21,1),\"F\",\"D\",\"C\",\"B\",\"A\")",
+            formula: "=CHOOSE(MATCH(70,Data!P17:P21,1),\"F\",\"D\",\"C\",\"B\",\"A\")",
+            expected_type: "string",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "SORTBY_basic",
+            label: "INDEX(SORTBY(Data!A29:A37,Data!C29:C37,-1),1)",
+            formula: "=INDEX(SORTBY(Data!A29:A37,Data!C29:C37,-1),1)",
+            expected_type: "string",
+            kind: FormulaKind::Formula2,
+        },
+        FormulaCase {
+            id: "FILTER_multi",
+            label: "SUM(FILTER(Data!C29:C37,(Data!B29:B37=\"fruit\")*(Data!C29:C37>15)))",
+            formula: "=SUM(FILTER(Data!C29:C37,(Data!B29:B37=\"fruit\")*(Data!C29:C37>15)))",
+            expected_type: "number",
+            kind: FormulaKind::Formula2,
+        },
+        FormulaCase {
+            id: "SEQUENCE_2d_sum",
+            label: "SUM(SEQUENCE(3,3,1,1))",
+            formula: "=SUM(SEQUENCE(3,3,1,1))",
             expected_type: "number",
             kind: FormulaKind::Formula2,
         },
