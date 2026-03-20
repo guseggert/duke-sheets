@@ -2041,11 +2041,10 @@ fn evaluate_function(
 
     // Strip Excel future function prefixes — Excel stores newer functions
     // like IFNA, IFS, SWITCH, TEXTJOIN with _xlfn. (or _xlws.) in XML.
+    // Some functions have both: _xlfn._xlws.FILTER — strip in sequence.
     // Note: function names are already uppercased by the parser.
-    let lookup_name = name
-        .strip_prefix("_XLFN.")
-        .or_else(|| name.strip_prefix("_XLWS."))
-        .unwrap_or(name);
+    let lookup_name = name.strip_prefix("_XLFN.").unwrap_or(name);
+    let lookup_name = lookup_name.strip_prefix("_XLWS.").unwrap_or(lookup_name);
 
     let func = registry
         .get(lookup_name)

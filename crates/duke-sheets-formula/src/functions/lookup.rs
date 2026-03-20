@@ -561,66 +561,121 @@ pub fn fn_vlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
         return Ok(FormulaValue::Error(CellError::Ref));
     }
 
-    // range_lookup (ignored for now; exact match only)
     if let Some(FormulaValue::Error(e)) = args.get(3) {
         return Ok(FormulaValue::Error(*e));
     }
+    let range_lookup = args
+        .get(3)
+        .map(|v| v.as_bool().unwrap_or(false))
+        .unwrap_or(true);
 
-    // Tier 2: Try hash index for first column (exact match)
-    if let Some(cache) = ctx.eval_cache {
-        let array_arg = args.get(1).unwrap();
-        if let FormulaValue::Array {
-            source: Some(src), ..
-        } = array_arg
-        {
-            let range_key = (
-                src.sheet,
-                src.start_row,
-                src.start_col,
-                src.end_row,
-                src.end_col,
-            );
-            let index_key = (range_key, 0u16); // first column
+    if range_lookup {
+        // Approximate match: binary search for largest value <= lookup_value
+        // First column must be sorted ascending.
+        let first_col: Vec<&FormulaValue> = table
+            .iter()
+            .map(|row| row.first().unwrap_or(&FormulaValue::Empty))
+            .collect();
 
-            if let Some(existing) = cache.lookup_indexes.get(&index_key) {
-                return match existing.find(lookup_value) {
+        let mut is_sorted = true;
+        for i in 1..first_col.len() {
+            match compare_lookup_values(first_col[i - 1], first_col[i]) {
+                Some(Ordering::Greater) | None => {
+                    is_sorted = false;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if !is_sorted {
+            return Ok(FormulaValue::Error(CellError::Na));
+        }
+
+        let mut lo = 0usize;
+        let mut hi = first_col.len();
+        let mut best: Option<usize> = None;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match compare_lookup_values(first_col[mid], lookup_value) {
+                Some(Ordering::Equal) => {
+                    best = Some(mid);
+                    break;
+                }
+                Some(Ordering::Less) => {
+                    best = Some(mid);
+                    lo = mid + 1;
+                }
+                Some(Ordering::Greater) => {
+                    hi = mid;
+                }
+                None => return Ok(FormulaValue::Error(CellError::Na)),
+            }
+        }
+        match best {
+            Some(r) => Ok(table[r]
+                .get(col_index0)
+                .cloned()
+                .unwrap_or(FormulaValue::Empty)),
+            None => Ok(FormulaValue::Error(CellError::Na)),
+        }
+    } else {
+        // Exact match
+        // Tier 2: Try hash index for first column
+        if let Some(cache) = ctx.eval_cache {
+            let array_arg = args.get(1).unwrap();
+            if let FormulaValue::Array {
+                source: Some(src), ..
+            } = array_arg
+            {
+                let range_key = (
+                    src.sheet,
+                    src.start_row,
+                    src.start_col,
+                    src.end_row,
+                    src.end_col,
+                );
+                let index_key = (range_key, 0u16); // first column
+
+                if let Some(existing) = cache.lookup_indexes.get(&index_key) {
+                    return match existing.find(lookup_value) {
+                        Some(pos) => Ok(table[pos]
+                            .get(col_index0)
+                            .cloned()
+                            .unwrap_or(FormulaValue::Empty)),
+                        None => Ok(FormulaValue::Error(CellError::Na)),
+                    };
+                }
+
+                // Build index from first column
+                let first_col: Vec<FormulaValue> = table
+                    .iter()
+                    .map(|row| row.first().cloned().unwrap_or(FormulaValue::Empty))
+                    .collect();
+                let index = crate::eval_cache::LookupIndex::build(&first_col);
+                let result = match index.find(lookup_value) {
                     Some(pos) => Ok(table[pos]
                         .get(col_index0)
                         .cloned()
                         .unwrap_or(FormulaValue::Empty)),
                     None => Ok(FormulaValue::Error(CellError::Na)),
                 };
+                cache
+                    .lookup_indexes
+                    .insert(index_key, std::sync::Arc::new(index));
+                return result;
             }
-
-            // Build index from first column
-            let first_col: Vec<FormulaValue> = table
-                .iter()
-                .map(|row| row.first().cloned().unwrap_or(FormulaValue::Empty))
-                .collect();
-            let index = crate::eval_cache::LookupIndex::build(&first_col);
-            let result = match index.find(lookup_value) {
-                Some(pos) => Ok(table[pos]
-                    .get(col_index0)
-                    .cloned()
-                    .unwrap_or(FormulaValue::Empty)),
-                None => Ok(FormulaValue::Error(CellError::Na)),
-            };
-            cache
-                .lookup_indexes
-                .insert(index_key, std::sync::Arc::new(index));
-            return result;
         }
-    }
 
-    // Fallback: linear scan
-    for row in table {
-        let key = row.first().unwrap_or(&FormulaValue::Empty);
-        if values_equal(lookup_value, key) {
-            return Ok(row.get(col_index0).cloned().unwrap_or(FormulaValue::Empty));
+        // Fallback: linear scan (exact match)
+        for row in table {
+            let key = row.first().unwrap_or(&FormulaValue::Empty);
+            if values_equal(lookup_value, key) {
+                return Ok(row.get(col_index0).cloned().unwrap_or(FormulaValue::Empty));
+            }
         }
-    }
 
-    Ok(FormulaValue::Error(CellError::Na))
+        Ok(FormulaValue::Error(CellError::Na))
+    }
 }
 
 pub fn fn_hlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
