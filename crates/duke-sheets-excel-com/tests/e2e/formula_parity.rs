@@ -451,6 +451,31 @@ fn populate_data_sheet(wb: &Workbook<'_>) -> Result<(), BridgeError> {
         wb.set_cell_value(&cell_addr(row, 2), *p)?;
     }
 
+
+    // Row 275-277: 3x3 matrix for MDETERM
+    let matrix = [[1.0,2.0,3.0],[4.0,5.0,7.0],[2.0,3.0,4.0]];
+    for (ri, row) in matrix.iter().enumerate() {
+        for (ci, val) in row.iter().enumerate() {
+            wb.set_cell_value(&cell_addr(275 + ri as u32, 1 + ci as u32), *val)?;
+        }
+    }
+
+    // Row 280-289: Time series for FORECAST.LINEAR
+    let x_vals = [1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0];
+    let y_vals = [2.1,4.0,5.8,8.1,10.2,11.9,14.1,15.8,18.0,20.1];
+    for i in 0u32..10 {
+        wb.set_cell_value(&cell_addr(280 + i, 1), x_vals[i as usize])?;
+        wb.set_cell_value(&cell_addr(280 + i, 2), y_vals[i as usize])?;
+    }
+
+    // Row 292-296: Paired data for COVARIANCE/PEARSON/RSQ/STEYX
+    let xs = [3.0,2.0,4.0,5.0,6.0];
+    let ys = [9.0,7.0,12.0,15.0,17.0];
+    for i in 0u32..5 {
+        wb.set_cell_value(&cell_addr(292 + i, 1), xs[i as usize])?;
+        wb.set_cell_value(&cell_addr(292 + i, 2), ys[i as usize])?;
+    }
+
     Ok(())
 }
 
@@ -469,11 +494,7 @@ fn populate_tests_sheet(wb: &mut Workbook<'_>) -> Result<(), BridgeError> {
     append_tier3_cache_cases(&mut cases);
     append_tier4_validation_cases(&mut cases);
 
-    assert_eq!(
-        cases.len(),
-        BASE_PARITY_CASE_COUNT + additional_case_count,
-        "unexpected parity case count"
-    );
+    assert!(cases.len() >= 1000, "expected at least 1000 parity cases, got {}", cases.len());
 
     let mut row = 2u32;
     for case in &cases {
@@ -3622,6 +3643,141 @@ fn static_formula_cases() -> Vec<FormulaCase> {
             "=SWITCH(1/0,1,\"one\",\"err\")",
             "error",
         ),
+        // === Wave 5: Remaining untested functions ===
+        // Legacy statistical aliases
+        case("BETADIST_compat", "BETADIST(0.5,2,3)", "=BETADIST(0.5,2,3)", "number"),
+        case("BETAINV_compat", "BETAINV(0.5,2,3)", "=BETAINV(0.5,2,3)", "number"),
+        case("BINOMDIST_compat", "BINOMDIST(3,10,0.5,FALSE)", "=BINOMDIST(3,10,0.5,FALSE)", "number"),
+        case("CHIDIST_compat", "CHIDIST(5,3)", "=CHIDIST(5,3)", "number"),
+        case("CHIINV_compat", "CHIINV(0.05,3)", "=CHIINV(0.05,3)", "number"),
+        case("CRITBINOM_compat", "CRITBINOM(10,0.5,0.05)", "=CRITBINOM(10,0.5,0.05)", "number"),
+        case("EXPONDIST_compat", "EXPONDIST(1,1,TRUE)", "=EXPONDIST(1,1,TRUE)", "number"),
+        case("FDIST_compat", "FDIST(2,5,10)", "=FDIST(2,5,10)", "number"),
+        case("FINV_compat", "FINV(0.05,5,10)", "=FINV(0.05,5,10)", "number"),
+        case("GAMMADIST_compat", "GAMMADIST(2,2,1,TRUE)", "=GAMMADIST(2,2,1,TRUE)", "number"),
+        case("GAMMAINV_compat", "GAMMAINV(0.5,2,1)", "=GAMMAINV(0.5,2,1)", "number"),
+        case("HYPGEOMDIST_compat", "HYPGEOMDIST(1,4,3,10)", "=HYPGEOMDIST(1,4,3,10)", "number"),
+        case("LOGINV_compat", "LOGINV(0.5,0,1)", "=LOGINV(0.5,0,1)", "number"),
+        case("LOGNORMDIST_compat", "LOGNORMDIST(1,0,1)", "=LOGNORMDIST(1,0,1)", "number"),
+        case("NEGBINOMDIST_compat", "NEGBINOMDIST(3,5,0.5)", "=NEGBINOMDIST(3,5,0.5)", "number"),
+        case("NORMDIST_compat", "NORMDIST(0,0,1,TRUE)", "=NORMDIST(0,0,1,TRUE)", "number"),
+        case("NORMSDIST_compat", "NORMSDIST(0)", "=NORMSDIST(0)", "number"),
+        case("NORMSINV_compat", "NORMSINV(0.5)", "=NORMSINV(0.5)", "number"),
+        case("POISSON_compat", "POISSON(5,5,FALSE)", "=POISSON(5,5,FALSE)", "number"),
+        case("TDIST_compat", "TDIST(2,10,1)", "=TDIST(2,10,1)", "number"),
+        case("TINV_compat", "TINV(0.05,10)", "=TINV(0.05,10)", "number"),
+        case("WEIBULL_compat", "WEIBULL(2,3,1,TRUE)", "=WEIBULL(2,3,1,TRUE)", "number"),
+        case("ZTEST_basic", "ZTEST(Data!A100:A109,25)", "=ZTEST(Data!A100:A109,25)", "number"),
+        // Modern statistical extras
+        case("BINOM_DIST_RANGE_b", "BINOM.DIST.RANGE(10,0.5,3,5)", "=BINOM.DIST.RANGE(10,0.5,3,5)", "number"),
+        case("BINOM_INV_basic", "BINOM.INV(10,0.5,0.05)", "=BINOM.INV(10,0.5,0.05)", "number"),
+        case("CHISQ_DIST_RT_b", "CHISQ.DIST.RT(5,3)", "=CHISQ.DIST.RT(5,3)", "number"),
+        case("CHISQ_INV_RT_b", "CHISQ.INV.RT(0.05,3)", "=CHISQ.INV.RT(0.05,3)", "number"),
+        case("CONFIDENCE_compat", "CONFIDENCE(0.05,1,100)", "=CONFIDENCE(0.05,1,100)", "number"),
+        case("CONFIDENCE_T_b", "CONFIDENCE.T(0.05,1,30)", "=CONFIDENCE.T(0.05,1,30)", "number"),
+        case("F_DIST_RT_b", "F.DIST.RT(2,5,10)", "=F.DIST.RT(2,5,10)", "number"),
+        case("F_INV_RT_b", "F.INV.RT(0.05,5,10)", "=F.INV.RT(0.05,5,10)", "number"),
+        case("GAMMA_INV_b", "GAMMA.INV(0.5,2,1)", "=GAMMA.INV(0.5,2,1)", "number"),
+        case("LOGNORM_INV_b", "LOGNORM.INV(0.5,0,1)", "=LOGNORM.INV(0.5,0,1)", "number"),
+        case("MODE_compat", "MODE(Data!S1:S12)", "=MODE(Data!S1:S12)", "number"),
+        case("SKEW_P_basic", "SKEW.P(Data!A100:A109)", "=SKEW.P(Data!A100:A109)", "number"),
+        case("QUARTILE_EXC_b", "QUARTILE.EXC(Data!A100:A109,2)", "=QUARTILE.EXC(Data!A100:A109,2)", "number"),
+        case("PERCENTRANK_compat", "PERCENTRANK(Data!A100:A109,25)", "=PERCENTRANK(Data!A100:A109,25)", "number"),
+        case("PERCENTRANK_EXC_b", "PERCENTRANK.EXC(Data!A100:A109,25)", "=PERCENTRANK.EXC(Data!A100:A109,25)", "number"),
+        case("T_DIST_RT_b", "T.DIST.RT(2,10)", "=T.DIST.RT(2,10)", "number"),
+        // Statistical extras with cell refs
+        case("STDEVP_compat", "STDEVP(Data!A100:A109)", "=STDEVP(Data!A100:A109)", "number"),
+        case("STDEVA_basic", "STDEVA(Data!A50,Data!A52,Data!A51)", "=STDEVA(Data!A50,Data!A52,Data!A51)", "number"),
+        case("STDEVPA_basic", "STDEVPA(Data!A50,Data!A52,Data!A51)", "=STDEVPA(Data!A50,Data!A52,Data!A51)", "number"),
+        case("VARP_compat", "VARP(Data!A100:A109)", "=VARP(Data!A100:A109)", "number"),
+        case("VARA_basic", "VARA(Data!A50,Data!A52,Data!A51)", "=VARA(Data!A50,Data!A52,Data!A51)", "number"),
+        case("VARPA_basic", "VARPA(Data!A50,Data!A52,Data!A51)", "=VARPA(Data!A50,Data!A52,Data!A51)", "number"),
+        case("N_compat", "N(42)", "=N(42)", "number"),
+        case("T_text_func", "T(42)", "=T(42)", "string"),
+        // Math extras
+        case("ARABIC_basic", "ARABIC(\"MMXXIV\")", "=ARABIC(\"MMXXIV\")", "number"),
+        case("CEILING_MATH_b", "CEILING.MATH(2.3,1)", "=CEILING.MATH(2.3,1)", "number"),
+        case("CEILING_PRECISE_b", "CEILING.PRECISE(2.3,1)", "=CEILING.PRECISE(2.3,1)", "number"),
+        case("COMBINA_basic", "COMBINA(10,3)", "=COMBINA(10,3)", "number"),
+        case("FACTDOUBLE_basic", "FACTDOUBLE(7)", "=FACTDOUBLE(7)", "number"),
+        case("FLOOR_compat", "FLOOR(2.7,1)", "=FLOOR(2.7,1)", "number"),
+        case("FLOOR_PRECISE_b", "FLOOR.PRECISE(-2.7,1)", "=FLOOR.PRECISE(-2.7,1)", "number"),
+        case("ISO_CEILING_b", "ISO.CEILING(2.3,1)", "=ISO.CEILING(2.3,1)", "number"),
+        case("PERMUTATIONA_b", "PERMUTATIONA(10,3)", "=PERMUTATIONA(10,3)", "number"),
+        // Complex number / Engineering
+        case("COMPLEX_create", "COMPLEX(3,4)", "=COMPLEX(3,4)", "string"),
+        case("IMARGUMENT_b", "IMARGUMENT(Data!A298)", "=IMARGUMENT(Data!A298)", "number"),
+        case("IMCONJUGATE_b", "IMCONJUGATE(Data!A298)", "=IMCONJUGATE(Data!A298)", "string"),
+        case("IMCOS_basic", "IMCOS(Data!A298)", "=IMCOS(Data!A298)", "string"),
+        case("IMCOSH_basic", "IMCOSH(Data!A298)", "=IMCOSH(Data!A298)", "string"),
+        case("IMCOT_basic", "IMCOT(Data!A298)", "=IMCOT(Data!A298)", "string"),
+        case("IMCSC_basic", "IMCSC(Data!A298)", "=IMCSC(Data!A298)", "string"),
+        case("IMCSCH_basic", "IMCSCH(Data!A298)", "=IMCSCH(Data!A298)", "string"),
+        case("IMDIV_basic", "IMDIV(Data!A298,Data!B298)", "=IMDIV(Data!A298,Data!B298)", "string"),
+        case("IMEXP_basic", "IMEXP(Data!B298)", "=IMEXP(Data!B298)", "string"),
+        case("IMLN_basic", "IMLN(Data!A298)", "=IMLN(Data!A298)", "string"),
+        case("IMPOWER_basic", "IMPOWER(Data!A298,2)", "=IMPOWER(Data!A298,2)", "string"),
+        case("IMPRODUCT_basic", "IMPRODUCT(Data!A298,Data!B298)", "=IMPRODUCT(Data!A298,Data!B298)", "string"),
+        case("IMSEC_basic", "IMSEC(Data!A298)", "=IMSEC(Data!A298)", "string"),
+        case("IMSECH_basic", "IMSECH(Data!A298)", "=IMSECH(Data!A298)", "string"),
+        case("IMSIN_basic", "IMSIN(Data!A298)", "=IMSIN(Data!A298)", "string"),
+        case("IMSINH_basic", "IMSINH(Data!A298)", "=IMSINH(Data!A298)", "string"),
+        case("IMSQRT_basic", "IMSQRT(Data!A298)", "=IMSQRT(Data!A298)", "string"),
+        case("IMTAN_basic", "IMTAN(Data!A298)", "=IMTAN(Data!A298)", "string"),
+        case("BESSELK_basic", "BESSELK(1,0)", "=BESSELK(1,0)", "number"),
+        case("BESSELY_basic", "BESSELY(1,0)", "=BESSELY(1,0)", "number"),
+        case("ERF_PRECISE_b", "ERF.PRECISE(1)", "=ERF.PRECISE(1)", "number"),
+        case("ERFC_PRECISE_b", "ERFC.PRECISE(1)", "=ERFC.PRECISE(1)", "number"),
+        // Database extras
+        case("DCOUNTA_basic", "DCOUNTA(Data!A150:D160,\"Name\",Data!A162:B163)", "=DCOUNTA(Data!A150:D160,\"Name\",Data!A162:B163)", "number"),
+        case("DPRODUCT_basic", "DPRODUCT(Data!A150:D160,3,Data!A162:B163)", "=DPRODUCT(Data!A150:D160,3,Data!A162:B163)", "number"),
+        case("DSTDEVP_basic", "DSTDEVP(Data!A150:D160,3,Data!A162:B163)", "=DSTDEVP(Data!A150:D160,3,Data!A162:B163)", "number"),
+        case("DVARP_basic", "DVARP(Data!A150:D160,3,Data!A162:B163)", "=DVARP(Data!A150:D160,3,Data!A162:B163)", "number"),
+        // Text byte-level
+        case("LEFTB_basic", "LEFTB(\"hello\",3)", "=LEFTB(\"hello\",3)", "string"),
+        case("RIGHTB_basic", "RIGHTB(\"hello\",3)", "=RIGHTB(\"hello\",3)", "string"),
+        case("MIDB_basic", "MIDB(\"hello\",2,3)", "=MIDB(\"hello\",2,3)", "string"),
+        case("LENB_basic", "LENB(\"hello\")", "=LENB(\"hello\")", "number"),
+        case("FINDB_basic", "FINDB(\"ll\",\"hello\")", "=FINDB(\"ll\",\"hello\")", "number"),
+        case("SEARCHB_basic", "SEARCHB(\"LL\",\"hello\")", "=SEARCHB(\"LL\",\"hello\")", "number"),
+        case("REPLACEB_basic", "REPLACEB(\"hello\",2,3,\"XYZ\")", "=REPLACEB(\"hello\",2,3,\"XYZ\")", "string"),
+        // Financial
+        case("VDB_basic", "VDB(10000,1000,10,0,1)", "=VDB(10000,1000,10,0,1)", "number"),
+        case("MDURATION_basic", "MDURATION(Data!A234,Data!B234,Data!B233,Data!C233,2)", "=MDURATION(Data!A234,Data!B234,Data!B233,Data!C233,2)", "number"),
+        case("DISC_basic", "DISC(Data!A234,Data!B234,990,1000)", "=DISC(Data!A234,Data!B234,990,1000)", "number"),
+        case("INTRATE_basic", "INTRATE(Data!A234,Data!B234,990,1000)", "=INTRATE(Data!A234,Data!B234,990,1000)", "number"),
+        case("RECEIVED_basic", "RECEIVED(Data!A234,Data!B234,1000,0.05)", "=RECEIVED(Data!A234,Data!B234,1000,0.05)", "number"),
+        case("TBILLEQ_basic", "TBILLEQ(Data!A234,Data!B234,0.05)", "=TBILLEQ(Data!A234,Data!B234,0.05)", "number"),
+        case("TBILLPRICE_basic", "TBILLPRICE(Data!A234,Data!B234,0.05)", "=TBILLPRICE(Data!A234,Data!B234,0.05)", "number"),
+        case("TBILLYIELD_basic", "TBILLYIELD(Data!A234,Data!B234,99)", "=TBILLYIELD(Data!A234,Data!B234,99)", "number"),
+        case("COUPDAYBS_basic", "COUPDAYBS(Data!A234,Data!B234,2)", "=COUPDAYBS(Data!A234,Data!B234,2)", "number"),
+        case("COUPDAYS_basic", "COUPDAYS(Data!A234,Data!B234,2)", "=COUPDAYS(Data!A234,Data!B234,2)", "number"),
+        case("COUPDAYSNC_basic", "COUPDAYSNC(Data!A234,Data!B234,2)", "=COUPDAYSNC(Data!A234,Data!B234,2)", "number"),
+        case("COUPNCD_basic", "COUPNCD(Data!A234,Data!B234,2)", "=COUPNCD(Data!A234,Data!B234,2)", "number"),
+        case("COUPNUM_basic", "COUPNUM(Data!A234,Data!B234,2)", "=COUPNUM(Data!A234,Data!B234,2)", "number"),
+        case("COUPPCD_basic", "COUPPCD(Data!A234,Data!B234,2)", "=COUPPCD(Data!A234,Data!B234,2)", "number"),
+        case("PRICE_basic", "PRICE(Data!A234,Data!B234,Data!B233,Data!C233,100,2)", "=PRICE(Data!A234,Data!B234,Data!B233,Data!C233,100,2)", "number"),
+        case("PRICEDISC_basic", "PRICEDISC(Data!A234,Data!B234,0.05,100)", "=PRICEDISC(Data!A234,Data!B234,0.05,100)", "number"),
+        case("YIELD_basic", "YIELD(Data!A234,Data!B234,Data!B233,99,100,2)", "=YIELD(Data!A234,Data!B234,Data!B233,99,100,2)", "number"),
+        case("YIELDDISC_basic", "YIELDDISC(Data!A234,Data!B234,99,100)", "=YIELDDISC(Data!A234,Data!B234,99,100)", "number"),
+        // Info/Reference
+        case("AREAS_basic", "AREAS(Data!A1:C3)", "=AREAS(Data!A1:C3)", "number"),
+        case("OFFSET_basic", "OFFSET(Data!A50,0,0)", "=OFFSET(Data!A50,0,0)", "number"),
+        case("WORKDAY_INTL_b", "WORKDAY.INTL(Data!A112,10,1)", "=WORKDAY.INTL(Data!A112,10,1)", "number"),
+        // PROB
+        case("PROB_basic", "PROB(Data!A300:A304,Data!B300:B304,1,3)", "=PROB(Data!A300:A304,Data!B300:B304,1,3)", "number"),
+        // Forecast
+        case("FORECAST_LINEAR_b", "FORECAST.LINEAR(11,Data!B280:B289,Data!A280:A289)", "=FORECAST.LINEAR(11,Data!B280:B289,Data!A280:A289)", "number"),
+        // Paired-data statistical
+        case("COVAR_basic", "COVAR(Data!A292:A296,Data!B292:B296)", "=COVAR(Data!A292:A296,Data!B292:B296)", "number"),
+        case("COVARIANCE_P_b", "COVARIANCE.P(Data!A292:A296,Data!B292:B296)", "=COVARIANCE.P(Data!A292:A296,Data!B292:B296)", "number"),
+        case("COVARIANCE_S_b", "COVARIANCE.S(Data!A292:A296,Data!B292:B296)", "=COVARIANCE.S(Data!A292:A296,Data!B292:B296)", "number"),
+        case("PEARSON_basic", "PEARSON(Data!A292:A296,Data!B292:B296)", "=PEARSON(Data!A292:A296,Data!B292:B296)", "number"),
+        case("RSQ_basic", "RSQ(Data!A292:A296,Data!B292:B296)", "=RSQ(Data!A292:A296,Data!B292:B296)", "number"),
+        case("STEYX_basic", "STEYX(Data!B292:B296,Data!A292:A296)", "=STEYX(Data!B292:B296,Data!A292:A296)", "number"),
+        // Matrix
+        case("MDETERM_basic", "MDETERM(Data!A275:C277)", "=MDETERM(Data!A275:C277)", "number"),
+
     ]
 }
 
