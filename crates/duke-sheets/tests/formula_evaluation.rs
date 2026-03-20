@@ -223,13 +223,15 @@ fn test_boolean_functions() {
 #[test]
 fn test_workbook_calculate_power_zero_zero() {
     let mut wb = Workbook::new();
-    let sheet = wb.worksheet_mut(0).unwrap();
-    sheet.set_cell_formula("A1", "=POWER(0,0)").unwrap();
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", "=POWER(0,0)").unwrap();
+    }
 
     let cache = EvalCache::new([(String::from("Sheet1"), 0usize)].into_iter().collect());
     let mut ctx = EvaluationContext::new(Some(&wb), 0, 0, 0);
     ctx.eval_cache = Some(&cache);
-    let ast = parse_formula(sheet.get_formula_at(0, 0).unwrap()).unwrap();
+    let ast = parse_formula(wb.worksheet(0).unwrap().get_formula_at(0, 0).unwrap()).unwrap();
     assert_eq!(evaluate(&ast, &ctx).unwrap(), FormulaValue::Number(1.0));
 
     wb.calculate().unwrap();
@@ -241,15 +243,17 @@ fn test_workbook_calculate_power_zero_zero() {
 #[test]
 fn test_workbook_calculate_index_zero_zero() {
     let mut wb = Workbook::new();
-    let sheet = wb.worksheet_mut(0).unwrap();
-    sheet
-        .set_cell_formula("A1", "=INDEX({1,2,3;4,5,6},0,0)")
-        .unwrap();
+    {
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet
+            .set_cell_formula("A1", "=INDEX({1,2,3;4,5,6},0,0)")
+            .unwrap();
+    }
 
     let cache = EvalCache::new([(String::from("Sheet1"), 0usize)].into_iter().collect());
     let mut ctx = EvaluationContext::new(Some(&wb), 0, 0, 0);
     ctx.eval_cache = Some(&cache);
-    let ast = parse_formula(sheet.get_formula_at(0, 0).unwrap()).unwrap();
+    let ast = parse_formula(wb.worksheet(0).unwrap().get_formula_at(0, 0).unwrap()).unwrap();
     assert_eq!(
         evaluate(&ast, &ctx).unwrap(),
         FormulaValue::Error(CellError::Value)

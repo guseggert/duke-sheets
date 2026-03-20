@@ -360,9 +360,8 @@ pub fn fn_power(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         _ => return Ok(FormulaValue::Error(CellError::Value)),
     };
 
-    // Excel returns #NUM! for POWER(0,0)
     if number == 0.0 && power == 0.0 {
-        return Ok(FormulaValue::Error(CellError::Num));
+        return Ok(FormulaValue::Number(1.0));
     }
     let result = number.powf(power);
 
@@ -1533,7 +1532,7 @@ mod tests {
                 &ctx
             )
             .unwrap(),
-            FormulaValue::Error(CellError::Num)
+            FormulaValue::Number(1.0)
         );
     }
 
