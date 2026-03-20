@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "duke-sheets-wasm"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "chrono",
  "duke-sheets",
