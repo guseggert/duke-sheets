@@ -2573,7 +2573,7 @@ impl FunctionRegistry {
         });
         self.register(FunctionDef {
             name: "SKEW.P",
-            min_args: 3,
+            min_args: 1,
             max_args: None,
             implementation: statistical::fn_skew_p,
             volatile: false,

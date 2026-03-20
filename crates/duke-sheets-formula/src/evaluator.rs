@@ -2224,6 +2224,14 @@ fn evaluate_function(
         }
     }
 
+    // ISREF needs the unevaluated reference to check if it's a valid ref.
+    if lookup_name == "ISREF" {
+        if args.is_empty() {
+            return Ok(FormulaValue::Boolean(false));
+        }
+        return Ok(FormulaValue::Boolean(matches!(&args[0], FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_))));
+    }
+
     // Evaluate arguments
     let mut evaluated_args = Vec::with_capacity(args.len());
     for arg in args {
