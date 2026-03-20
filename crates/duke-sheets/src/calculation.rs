@@ -600,11 +600,12 @@ fn parse_with_row_template_cache(
     text: &str,
     row: u32,
     check_volatile: bool,
-    template_cache: &DashMap<String, ParsedFormulaTemplate>,
+    template_cache: &DashMap<(String, u32), ParsedFormulaTemplate>,
 ) -> (Option<FormulaExpr>, bool) {
     let (template_text, base_row) = normalize_formula_row_template(text, row);
+    let cache_key = (template_text, base_row);
 
-    if let Some(existing) = template_cache.get(&template_text) {
+    if let Some(existing) = template_cache.get(&cache_key) {
         let cached = existing.clone();
         drop(existing);
         let mut ast = cached.ast.clone();
@@ -615,11 +616,12 @@ fn parse_with_row_template_cache(
         return (Some(ast), cached.volatile);
     }
 
-    match parse_formula(&template_text) {
+    let template_text_ref = &cache_key.0;
+    match parse_formula(template_text_ref) {
         Ok(template_ast) => {
             let volatile = check_volatile && contains_volatile_function(&template_ast);
             template_cache.insert(
-                template_text,
+                cache_key,
                 ParsedFormulaTemplate {
                     base_row,
                     ast: template_ast.clone(),
@@ -812,7 +814,7 @@ impl CalculationEngine {
         let mut pending: Vec<usize> = included.iter().copied().collect();
         pending.sort_unstable();
         let check_volatile = self.options.calculate_volatile;
-        let template_cache: DashMap<String, ParsedFormulaTemplate> = DashMap::new();
+        let template_cache: DashMap<(String, u32), ParsedFormulaTemplate> = DashMap::new();
 
         while !pending.is_empty() {
             // Process each sheet in the current wave.  Formulas within
@@ -1196,6 +1198,7 @@ impl CalculationEngine {
         if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
             sheet.clear_spill(cell_key.row, cell_key.col);
         }
+
 
         // Evaluate in a block so immutable borrows drop before we mutably store results.
         let result = {
@@ -4049,5 +4052,58 @@ mod tests {
         }).unwrap();
 
         assert_cached_vs_full_equivalence(&wb1, &wb2);
+    }
+
+    #[test]
+    fn test_cross_sheet_constants_many_rows() {
+        // Regression: cross-sheet formulas referencing constants in later
+        // rows sometimes evaluate to 0 due to non-deterministic ordering.
+        let mut wb = Workbook::new();
+        let data = wb.worksheet_mut(0).unwrap();
+        data.set_name("Data");
+        for r in 0u32..60 {
+            data.set_cell_value_at(r, 0, CellValue::Number((r + 1) as f64))
+                .unwrap();
+        }
+        // Also a string and boolean for type-checking formulas
+        data.set_cell_value_at(50, 0, CellValue::String("hello".into()))
+            .unwrap();
+        data.set_cell_value_at(51, 0, CellValue::Boolean(true))
+            .unwrap();
+
+        wb.add_worksheet_with_name("Tests").unwrap();
+        let tests = wb.worksheet_mut(1).unwrap();
+        // 60 cross-sheet addition formulas
+        for r in 0u32..50 {
+            tests
+                .set_cell_formula_at(r, 0, &format!("=Data!A{}", r + 1))
+                .unwrap();
+        }
+        tests.set_cell_formula_at(50, 0, "=ISTEXT(Data!A51)").unwrap();
+        tests.set_cell_formula_at(51, 0, "=ISLOGICAL(Data!A52)").unwrap();
+
+        wb.calculate().unwrap();
+
+        let tests = wb.worksheet(1).unwrap();
+        for r in 0u32..50 {
+            let expected = (r + 1) as f64;
+            let val = tests.get_value_at(r, 0);
+            assert_eq!(
+                val,
+                CellValue::Number(expected),
+                "Row {r}: Data!A{} should be {expected}",
+                r + 1
+            );
+        }
+        assert_eq!(
+            tests.get_value_at(50, 0),
+            CellValue::Boolean(true),
+            "ISTEXT(Data!A51) should be true"
+        );
+        assert_eq!(
+            tests.get_value_at(51, 0),
+            CellValue::Boolean(true),
+            "ISLOGICAL(Data!A52) should be true"
+        );
     }
 }
