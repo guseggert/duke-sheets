@@ -993,13 +993,26 @@ fn evaluate_binary_op(
 
 /// Compare two values for ordering (Excel-style comparison)
 fn compare_values(left: &FormulaValue, right: &FormulaValue) -> i32 {
-    // Empty values
+    // Coerce Empty depending on what it's being compared against:
+    // Empty vs number → 0.0, Empty vs string → "", Empty vs bool → FALSE
+    let empty_num = FormulaValue::Number(0.0);
+    let empty_str = FormulaValue::String(String::new().into());
+    let empty_bool = FormulaValue::Boolean(false);
+
     let left = match left {
-        FormulaValue::Empty => &FormulaValue::Number(0.0),
+        FormulaValue::Empty => match right {
+            FormulaValue::String(_) => &empty_str,
+            FormulaValue::Boolean(_) => &empty_bool,
+            _ => &empty_num,
+        },
         v => v,
     };
     let right = match right {
-        FormulaValue::Empty => &FormulaValue::Number(0.0),
+        FormulaValue::Empty => match left {
+            FormulaValue::String(_) => &empty_str,
+            FormulaValue::Boolean(_) => &empty_bool,
+            _ => &empty_num,
+        },
         v => v,
     };
 

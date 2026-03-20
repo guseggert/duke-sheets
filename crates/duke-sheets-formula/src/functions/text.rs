@@ -106,6 +106,8 @@ fn format_text_value(number: f64, format_text: &str) -> String {
         "0.00" => format_fixed_number(number, 2, false),
         "#,##0" => format_fixed_number(number, 0, true),
         "0%" => format!("{}%", round_with_decimals(number * 100.0, 0) as i64),
+        "0.0%" => format!("{:.1}%", round_with_decimals(number * 100.0, 1)),
+        "0.00%" => format!("{:.2}%", round_with_decimals(number * 100.0, 2)),
         "0.00e+00" => format!("{:.2E}", number),
         "$#,##0.00" => {
             if number < 0.0 {
