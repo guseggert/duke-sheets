@@ -200,6 +200,54 @@ cargo test -p duke-sheets-xls --test e2e -- --test-threads=1 --nocapture
 description = "Run Excel COM E2E tests (requires vm:start + vm:deploy-bridge)"
 run = "cargo test -p duke-sheets-excel-com --test e2e -- --test-threads=1"
 
+[tasks."generate:formula-parity"]
+description = "Generate formula parity fixture via Excel COM (auto-starts VM if needed)"
+run = """
+#!/bin/bash
+set -e
+
+# Check if bridge is actually responsive (not just port-forwarded)
+bridge_ready() {
+    echo '{"id":1,"cmd":"Init","params":{}}' | nc -w2 localhost 9876 2>/dev/null | grep -q '"ok"'
+}
+
+if ! bridge_ready; then
+    echo "Bridge not responsive on localhost:9876, starting VM..."
+    if ! nc -z localhost 9876 2>/dev/null; then
+        mise run vm:start &
+    fi
+    for i in $(seq 1 90); do
+        if bridge_ready; then
+            echo "Bridge ready (took ${i}s)"
+            break
+        fi
+        if [ "$i" -eq 90 ]; then
+            echo "ERROR: Timeout waiting for Excel COM bridge"
+            exit 1
+        fi
+        sleep 2
+    done
+else
+    echo "Bridge already running on localhost:9876"
+fi
+
+cargo test -p duke-sheets-excel-com --test e2e generate_formula_parity_spreadsheet -- --test-threads=1 --nocapture
+"""
+
+[tasks."test:formula-parity"]
+description = "Run formula parity test against Excel cached values (no VM needed, requires data/formula-parity.xlsx)"
+run = """
+#!/bin/bash
+set -e
+
+if [ ! -f data/formula-parity.xlsx ]; then
+    echo "data/formula-parity.xlsx not found, generating via Excel COM..."
+    mise run generate:formula-parity
+fi
+
+cargo test -p duke-sheets --test formula_parity -- --nocapture --ignored
+"""
+
 [tasks."test:all"]
 alias = "ta"
 description = "Run all tests: cargo test, Excel COM E2E, LibreOffice URP + XLSX E2E"
