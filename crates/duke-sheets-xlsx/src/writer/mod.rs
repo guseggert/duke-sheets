@@ -1364,8 +1364,8 @@ impl XlsxWriter {
         // Emit all stored selections.
         // If a selection has no pane set but the sheet has freeze/split panes,
         // infer the pane from the active pane of the freeze/split.
-        let default_pane: Option<&str> = if freeze.is_some() {
-            Some(match (freeze.unwrap().col > 0, freeze.unwrap().row > 0) {
+        let default_pane: Option<&str> = if let Some(f) = freeze {
+            Some(match (f.col > 0, f.row > 0) {
                 (true, true) => "bottomRight",
                 (false, true) => "bottomLeft",
                 (true, false) => "topRight",
@@ -1630,6 +1630,7 @@ impl XlsxWriter {
     }
 
     /// Write a single `<c>` cell element.
+    #[allow(clippy::too_many_arguments)]
     fn write_cell(
         w: &mut XmlWriter,
         row: u32,

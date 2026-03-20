@@ -47,6 +47,7 @@ fn get_function_registry() -> &'static FunctionRegistry {
 
 /// Options for workbook calculation
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub struct CalculationOptions {
     /// Enable iterative calculation for circular references
     pub iterative: bool,
@@ -1156,7 +1157,7 @@ impl CalculationEngine {
                 }
                 if workbook
                     .worksheet(cell_key.sheet)
-                    .map_or(false, |s| s.is_spill_source(cell_key.row, cell_key.col))
+                    .is_some_and(|s| s.is_spill_source(cell_key.row, cell_key.col))
                 {
                     continue;
                 }
@@ -1243,7 +1244,7 @@ impl CalculationEngine {
         // spill targets (1×1 arrays are stored as scalars, no spill).
         let did_spill = workbook
             .worksheet(cell_key.sheet)
-            .map_or(false, |s| s.is_spill_source(cell_key.row, cell_key.col));
+            .is_some_and(|s| s.is_spill_source(cell_key.row, cell_key.col));
         stats.cells_calculated += 1;
         did_spill
     }
@@ -1579,6 +1580,7 @@ fn extract_references(
     refs
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_references_recursive(
     expr: &FormulaExpr,
     current_sheet: usize,
@@ -2306,6 +2308,7 @@ fn build_dense_precedents(
     (precedents, all_input_ranges, value_sensitive_ranges)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_range_references(
     sheet_idx: usize,
     row_start: u32,
@@ -2417,6 +2420,7 @@ fn extract_sheet_refs_recursive(
 /// Resolves the structured ref to a concrete cell range using the workbook's
 /// table definitions and adds all cells in that range to the dependency list.
 /// For large ranges, prunes to formula cells only.
+#[allow(clippy::too_many_arguments)]
 fn extract_structured_ref_deps(
     sr: &StructuredReference,
     current_sheet: usize,

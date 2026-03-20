@@ -1348,16 +1348,14 @@ pub fn fn_aggregate(
                 collect_numbers_skip_errors(arg, &mut numbers);
             }
         }
+    } else if (14..=19).contains(&fn_num) {
+        if let Some(e) = collect_numbers(&args[2], &mut numbers) {
+            return Ok(FormulaValue::Error(e));
+        }
     } else {
-        if (14..=19).contains(&fn_num) {
-            if let Some(e) = collect_numbers(&args[2], &mut numbers) {
+        for arg in args.iter().skip(2) {
+            if let Some(e) = collect_numbers(arg, &mut numbers) {
                 return Ok(FormulaValue::Error(e));
-            }
-        } else {
-            for arg in args.iter().skip(2) {
-                if let Some(e) = collect_numbers(arg, &mut numbers) {
-                    return Ok(FormulaValue::Error(e));
-                }
             }
         }
     }

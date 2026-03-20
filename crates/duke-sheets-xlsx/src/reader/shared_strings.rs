@@ -209,10 +209,7 @@ pub(crate) fn parse_rpr_element(name: &[u8], e: &BytesStart, font: &mut Option<R
 fn parse_bool_attr(e: &BytesStart) -> bool {
     for attr in e.attributes().flatten() {
         if attr.key.local_name().as_ref() == b"val" {
-            return match attr.unescape_value().ok().as_deref() {
-                Some("0") | Some("false") => false,
-                _ => true,
-            };
+            return !matches!(attr.unescape_value().ok().as_deref(), Some("0") | Some("false"));
         }
     }
     true // No val attribute means true

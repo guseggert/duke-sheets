@@ -297,6 +297,7 @@ impl XlsxReader {
     }
 
     /// Read a worksheet from the archive
+    #[allow(clippy::too_many_arguments)]
     fn read_worksheet<R: Read + Seek>(
         archive: &mut zip::ZipArchive<R>,
         path: &str,
@@ -342,6 +343,7 @@ impl XlsxReader {
 
         // Pending array/dataTable formulas with ref ranges — post-processed after all cells.
         // Each entry: (anchor_cell_ref, ref_range, kind, formula_text, r1, r2)
+        #[allow(clippy::type_complexity)]
         let mut pending_array_formulas: Vec<(
             String,
             String,
@@ -479,13 +481,13 @@ impl XlsxReader {
                                 }
                                 b"hiddenButton" => {
                                     current_af_hidden_button =
-                                        attr.unescape_value().ok().map_or(false, |s| {
+                                        attr.unescape_value().ok().is_some_and(|s| {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
                                 }
                                 b"showButton" => {
                                     current_af_show_button =
-                                        attr.unescape_value().ok().map_or(true, |s| {
+                                        attr.unescape_value().ok().is_none_or(|s| {
                                             !(s.as_ref() == "0" || s.as_ref() == "false")
                                         });
                                 }
@@ -502,7 +504,7 @@ impl XlsxReader {
                                 current_af_blank = attr
                                     .unescape_value()
                                     .ok()
-                                    .map_or(false, |s| s.as_ref() == "1" || s.as_ref() == "true");
+                                    .is_some_and(|s| s.as_ref() == "1" || s.as_ref() == "true");
                             }
                         }
                     }
@@ -515,7 +517,7 @@ impl XlsxReader {
                                 current_af_custom_and = attr
                                     .unescape_value()
                                     .ok()
-                                    .map_or(false, |s| s.as_ref() == "1" || s.as_ref() == "true");
+                                    .is_some_and(|s| s.as_ref() == "1" || s.as_ref() == "true");
                             }
                         }
                     }
@@ -599,7 +601,7 @@ impl XlsxReader {
                                     }
                                 }
                                 b"orientation" => {
-                                    if let Some(v) = attr.unescape_value().ok() {
+                                    if let Ok(v) = attr.unescape_value() {
                                         ps.orientation = if v.as_ref() == "landscape" {
                                             duke_sheets_core::PageOrientation::Landscape
                                         } else {
@@ -638,13 +640,13 @@ impl XlsxReader {
                         for attr in e.attributes().flatten() {
                             match attr.key.local_name().as_ref() {
                                 b"gridLines" => {
-                                    if let Some(v) = attr.unescape_value().ok() {
+                                    if let Ok(v) = attr.unescape_value() {
                                         ps.print_gridlines =
                                             v.as_ref() == "1" || v.as_ref() == "true";
                                     }
                                 }
                                 b"headings" => {
-                                    if let Some(v) = attr.unescape_value().ok() {
+                                    if let Ok(v) = attr.unescape_value() {
                                         ps.print_headings =
                                             v.as_ref() == "1" || v.as_ref() == "true";
                                     }
@@ -748,12 +750,12 @@ impl XlsxReader {
                                         .and_then(|s| s.parse::<f64>().ok());
                                 }
                                 b"customHeight" => {
-                                    custom_height = attr.unescape_value().ok().map_or(false, |s| {
+                                    custom_height = attr.unescape_value().ok().is_some_and(|s| {
                                         s.as_ref() == "1" || s.as_ref() == "true"
                                     });
                                 }
                                 b"hidden" => {
-                                    hidden = attr.unescape_value().ok().map_or(false, |s| {
+                                    hidden = attr.unescape_value().ok().is_some_and(|s| {
                                         s.as_ref() == "1" || s.as_ref() == "true"
                                     });
                                 }
@@ -764,7 +766,7 @@ impl XlsxReader {
                                         .and_then(|s| s.parse::<u8>().ok());
                                 }
                                 b"collapsed" => {
-                                    collapsed = attr.unescape_value().ok().map_or(false, |s| {
+                                    collapsed = attr.unescape_value().ok().is_some_and(|s| {
                                         s.as_ref() == "1" || s.as_ref() == "true"
                                     });
                                 }
@@ -904,7 +906,7 @@ impl XlsxReader {
                         for attr in e.attributes().flatten() {
                             if attr.key.local_name().as_ref() == b"showValue" {
                                 data_bar_show_value =
-                                    attr.unescape_value().ok().map_or(true, |s| s != "0");
+                                    attr.unescape_value().ok().is_none_or(|s| s != "0");
                             }
                         }
                     }
@@ -921,11 +923,11 @@ impl XlsxReader {
                                 }
                                 b"reverse" => {
                                     icon_set_reverse =
-                                        attr.unescape_value().ok().map_or(false, |s| s == "1");
+                                        attr.unescape_value().ok().is_some_and(|s| s == "1");
                                 }
                                 b"showValue" => {
                                     icon_set_show_value =
-                                        attr.unescape_value().ok().map_or(true, |s| s != "0");
+                                        attr.unescape_value().ok().is_none_or(|s| s != "0");
                                 }
                                 _ => {}
                             }
@@ -1459,7 +1461,7 @@ impl XlsxReader {
                                         }
                                     }
                                     b"orientation" => {
-                                        if let Some(v) = attr.unescape_value().ok() {
+                                        if let Ok(v) = attr.unescape_value() {
                                             ps.orientation = if v.as_ref() == "landscape" {
                                                 duke_sheets_core::PageOrientation::Landscape
                                             } else {
@@ -1498,13 +1500,13 @@ impl XlsxReader {
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
                                     b"gridLines" => {
-                                        if let Some(v) = attr.unescape_value().ok() {
+                                        if let Ok(v) = attr.unescape_value() {
                                             ps.print_gridlines =
                                                 v.as_ref() == "1" || v.as_ref() == "true";
                                         }
                                     }
                                     b"headings" => {
-                                        if let Some(v) = attr.unescape_value().ok() {
+                                        if let Ok(v) = attr.unescape_value() {
                                             ps.print_headings =
                                                 v.as_ref() == "1" || v.as_ref() == "true";
                                         }
@@ -1587,12 +1589,12 @@ impl XlsxReader {
                                     }
                                     b"customHeight" => {
                                         custom_height =
-                                            attr.unescape_value().ok().map_or(false, |s| {
+                                            attr.unescape_value().ok().is_some_and(|s| {
                                                 s.as_ref() == "1" || s.as_ref() == "true"
                                             });
                                     }
                                     b"hidden" => {
-                                        hidden = attr.unescape_value().ok().map_or(false, |s| {
+                                        hidden = attr.unescape_value().ok().is_some_and(|s| {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
                                     }
@@ -1603,7 +1605,7 @@ impl XlsxReader {
                                             .and_then(|s| s.parse::<u8>().ok());
                                     }
                                     b"collapsed" => {
-                                        collapsed = attr.unescape_value().ok().map_or(false, |s| {
+                                        collapsed = attr.unescape_value().ok().is_some_and(|s| {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
                                     }
@@ -1659,12 +1661,12 @@ impl XlsxReader {
                                     }
                                     b"customWidth" => {
                                         custom_width =
-                                            attr.unescape_value().ok().map_or(false, |s| {
+                                            attr.unescape_value().ok().is_some_and(|s| {
                                                 s.as_ref() == "1" || s.as_ref() == "true"
                                             });
                                     }
                                     b"hidden" => {
-                                        hidden = attr.unescape_value().ok().map_or(false, |s| {
+                                        hidden = attr.unescape_value().ok().is_some_and(|s| {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
                                     }
@@ -1675,7 +1677,7 @@ impl XlsxReader {
                                             .and_then(|s| s.parse::<u8>().ok());
                                     }
                                     b"collapsed" => {
-                                        collapsed = attr.unescape_value().ok().map_or(false, |s| {
+                                        collapsed = attr.unescape_value().ok().is_some_and(|s| {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
                                     }
@@ -1834,13 +1836,13 @@ impl XlsxReader {
                                     }
                                     b"hiddenButton" => {
                                         hidden_button =
-                                            attr.unescape_value().ok().map_or(false, |s| {
+                                            attr.unescape_value().ok().is_some_and(|s| {
                                                 s.as_ref() == "1" || s.as_ref() == "true"
                                             });
                                     }
                                     b"showButton" => {
                                         show_button =
-                                            attr.unescape_value().ok().map_or(true, |s| {
+                                            attr.unescape_value().ok().is_none_or(|s| {
                                                 !(s.as_ref() == "0" || s.as_ref() == "false")
                                             });
                                     }
@@ -1872,7 +1874,7 @@ impl XlsxReader {
                             for attr in e.attributes().flatten() {
                                 if attr.key.local_name().as_ref() == b"blank" {
                                     current_af_blank =
-                                        attr.unescape_value().ok().map_or(false, |s| {
+                                        attr.unescape_value().ok().is_some_and(|s| {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
                                 }
@@ -1901,7 +1903,7 @@ impl XlsxReader {
                             for attr in e.attributes().flatten() {
                                 if attr.key.local_name().as_ref() == b"and" {
                                     current_af_custom_and =
-                                        attr.unescape_value().ok().map_or(false, |s| {
+                                        attr.unescape_value().ok().is_some_and(|s| {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
                                 }
@@ -1957,12 +1959,12 @@ impl XlsxReader {
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
                                     b"top" => {
-                                        top = attr.unescape_value().ok().map_or(true, |s| {
+                                        top = attr.unescape_value().ok().is_none_or(|s| {
                                             !(s.as_ref() == "0" || s.as_ref() == "false")
                                         });
                                     }
                                     b"percent" => {
-                                        percent = attr.unescape_value().ok().map_or(false, |s| {
+                                        percent = attr.unescape_value().ok().is_some_and(|s| {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
                                     }
@@ -2054,7 +2056,7 @@ impl XlsxReader {
                                             .and_then(|s| s.parse::<u32>().ok());
                                     }
                                     b"cellColor" => {
-                                        cell_color = attr.unescape_value().ok().map_or(true, |s| {
+                                        cell_color = attr.unescape_value().ok().is_none_or(|s| {
                                             !(s.as_ref() == "0" || s.as_ref() == "false")
                                         });
                                     }
@@ -2424,6 +2426,7 @@ impl XlsxReader {
     }
 
     /// Process a cell and add it to the worksheet
+    #[allow(clippy::too_many_arguments)]
     fn process_cell(
         worksheet: &mut duke_sheets_core::Worksheet,
         cell_ref: &str,
@@ -2578,7 +2581,7 @@ impl XlsxReader {
 /// into a CellRange. Only handles a single contiguous range (no comma-separated multiple areas).
 fn parse_print_area_formula(formula: &str, _sheet_name: &str) -> Option<CellRange> {
     let trimmed = formula.trim().trim_start_matches('=');
-    let range_part = trimmed.split('!').last()?.trim();
+    let range_part = trimmed.split('!').next_back()?.trim();
     let first_area = range_part.split(',').next()?.trim();
     let clean = first_area.replace('$', "");
     CellRange::parse(&clean).ok()
@@ -2588,6 +2591,7 @@ fn parse_print_area_formula(formula: &str, _sheet_name: &str) -> Option<CellRang
 /// - `Sheet1!$1:$5` (repeat rows only)
 /// - `Sheet1!$A:$B` (repeat cols only)
 /// - `Sheet1!$1:$5,Sheet1!$A:$B` (both)
+#[allow(clippy::type_complexity)]
 fn parse_print_titles_formula(
     formula: &str,
     _sheet_name: &str,
@@ -2596,7 +2600,7 @@ fn parse_print_titles_formula(
     let mut cols = None;
 
     for part in formula.trim().trim_start_matches('=').split(',') {
-        let range_part = match part.split('!').last() {
+        let range_part = match part.split('!').next_back() {
             Some(r) => r.trim(),
             None => continue,
         };

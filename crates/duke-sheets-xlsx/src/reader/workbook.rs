@@ -91,7 +91,7 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
                                 comment = attr.unescape_value().ok().map(|s| s.to_string());
                             }
                             b"hidden" => {
-                                hidden = attr.unescape_value().ok().map_or(false, |v| {
+                                hidden = attr.unescape_value().ok().is_some_and(|v| {
                                     v.as_ref() == "1" || v.eq_ignore_ascii_case("true")
                                 });
                             }
@@ -222,15 +222,15 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
                 if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type) {
                     if rel_type.ends_with("/worksheet") {
                         // Target is relative to xl/ folder
-                        let full_path = if target.starts_with('/') {
-                            target[1..].to_string()
+                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
+                            stripped.to_string()
                         } else {
                             format!("xl/{}", target)
                         };
                         rels.insert(id, full_path);
                     } else if rel_type.ends_with("/theme") {
-                        let full_path = if target.starts_with('/') {
-                            target[1..].to_string()
+                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
+                            stripped.to_string()
                         } else {
                             format!("xl/{}", target)
                         };

@@ -2112,12 +2112,6 @@ mod tests {
         );
     }
 
-    // ===== Docs-based tests (from Microsoft docs examples) =====
-
-    fn s(x: &str) -> FormulaValue {
-        FormulaValue::String(x.to_string())
-    }
-
     fn arr2d(rows: &[&[f64]]) -> FormulaValue {
         FormulaValue::Array { data: rows.iter()
             .map(|row| row.iter().map(|v| FormulaValue::Number(*v)).collect())

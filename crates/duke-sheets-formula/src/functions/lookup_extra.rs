@@ -1291,7 +1291,7 @@ fn parse_xpath(xpath: &str) -> Option<Vec<XPathStep>> {
 
 fn append_xml_node(
     node: XmlNode,
-    stack: &mut Vec<XmlNode>,
+    stack: &mut [XmlNode],
     root: &mut Option<XmlNode>,
 ) -> Option<()> {
     if let Some(parent) = stack.last_mut() {
@@ -1356,7 +1356,7 @@ fn parse_xml_document(xml: &str) -> Option<XmlNode> {
     root
 }
 
-fn pick_index<'a>(nodes: Vec<&'a XmlNode>, index: Option<usize>) -> Vec<&'a XmlNode> {
+fn pick_index(nodes: Vec<&XmlNode>, index: Option<usize>) -> Vec<&XmlNode> {
     match index {
         Some(index) => nodes
             .get(index.saturating_sub(1))

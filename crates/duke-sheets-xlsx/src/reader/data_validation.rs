@@ -16,21 +16,21 @@ pub(super) fn parse_data_validation_attrs(e: &quick_xml::events::BytesStart) -> 
                 operator = attr.unescape_value().ok().map(|s| s.to_string());
             }
             b"allowBlank" => {
-                validation.allow_blank = attr.unescape_value().ok().map_or(false, |s| s == "1");
+                validation.allow_blank = attr.unescape_value().ok().is_some_and(|s| s == "1");
             }
             b"showDropDown" => {
-                validation.show_dropdown = attr.unescape_value().ok().map_or(true, |s| s != "1");
+                validation.show_dropdown = attr.unescape_value().ok().is_none_or(|s| s != "1");
             }
             b"showInputMessage" => {
                 validation.show_input_message =
-                    attr.unescape_value().ok().map_or(false, |s| s == "1");
+                    attr.unescape_value().ok().is_some_and(|s| s == "1");
             }
             b"showErrorMessage" => {
                 validation.show_error_alert =
-                    attr.unescape_value().ok().map_or(false, |s| s == "1");
+                    attr.unescape_value().ok().is_some_and(|s| s == "1");
             }
             b"errorStyle" => {
-                if let Some(style) = attr.unescape_value().ok() {
+                if let Ok(style) = attr.unescape_value() {
                     validation.error_style = match style.as_ref() {
                         "warning" => ValidationErrorStyle::Warning,
                         "information" => ValidationErrorStyle::Information,
@@ -51,7 +51,7 @@ pub(super) fn parse_data_validation_attrs(e: &quick_xml::events::BytesStart) -> 
                 validation.input_message = attr.unescape_value().ok().map(|s| s.to_string());
             }
             b"sqref" => {
-                if let Some(sqref) = attr.unescape_value().ok() {
+                if let Ok(sqref) = attr.unescape_value() {
                     validation.ranges = super::parse_sqref(&sqref);
                 }
             }

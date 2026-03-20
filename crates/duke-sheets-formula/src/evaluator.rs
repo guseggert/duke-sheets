@@ -14,6 +14,9 @@ use duke_sheets_core::{CellError, CellValue, Table, Workbook, MAX_COLS, MAX_ROWS
 use std::cmp::Ordering;
 use std::sync::{Arc, OnceLock};
 
+/// Result type for range materialization: the data grid plus its source coordinates.
+type RangeArcResult = Result<(Arc<Vec<Vec<FormulaValue>>>, RangeSource), FormulaValue>;
+
 /// Global function registry (lazily initialized)
 static FUNCTION_REGISTRY: OnceLock<FunctionRegistry> = OnceLock::new();
 
@@ -170,6 +173,7 @@ impl From<FormulaValue> for CellValue {
 // Re-export ImageInfo/ImageSizing from core so existing imports keep working.
 pub use duke_sheets_core::{ImageInfo, ImageSizing};
 
+#[allow(clippy::type_complexity)]
 /// Context for formula evaluation
 pub struct EvaluationContext<'a> {
     /// Reference to the workbook for cell lookups
@@ -281,7 +285,7 @@ impl<'a> EvaluationContext<'a> {
         start_col: u16,
         end_row: u32,
         end_col: u16,
-    ) -> Result<(Arc<Vec<Vec<FormulaValue>>>, RangeSource), FormulaValue> {
+    ) -> RangeArcResult {
         let workbook = self.workbook.ok_or_else(|| FormulaValue::Array {
             data: vec![],
             source: None,
@@ -1000,7 +1004,7 @@ fn compare_values(left: &FormulaValue, right: &FormulaValue) -> i32 {
     // Coerce Empty depending on what it's being compared against:
     // Empty vs number → 0.0, Empty vs string → "", Empty vs bool → FALSE
     let empty_num = FormulaValue::Number(0.0);
-    let empty_str = FormulaValue::String(String::new().into());
+    let empty_str = FormulaValue::String(String::new());
     let empty_bool = FormulaValue::Boolean(false);
 
     let left = match left {
@@ -1216,6 +1220,7 @@ fn evaluate_spill_range(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn get_range_from_expr(
     expr: &FormulaExpr,
     ctx: &EvaluationContext,
@@ -1340,7 +1345,7 @@ fn direct_exact_match_in_source(
     }
 }
 
-fn shared_vector_value<'a>(arr: &'a [Vec<FormulaValue>], idx: usize) -> Option<&'a FormulaValue> {
+fn shared_vector_value(arr: &[Vec<FormulaValue>], idx: usize) -> Option<&FormulaValue> {
     let (rows, cols) = shared_array_dims(arr);
     if rows == 1 {
         arr[0].get(idx)
@@ -2294,7 +2299,7 @@ fn evaluate_formulatext(
     };
 
     match worksheet.get_formula_at(row, col) {
-        Some(formula) => Ok(FormulaValue::String(formula.to_string().into())),
+        Some(formula) => Ok(FormulaValue::String(formula.to_string())),
         None => Ok(FormulaValue::Error(CellError::Na)),
     }
 }

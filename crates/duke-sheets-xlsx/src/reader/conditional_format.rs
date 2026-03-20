@@ -122,7 +122,7 @@ pub(super) fn parse_cf_rule_attrs(
                 }
             }
             b"stopIfTrue" => {
-                rule.stop_if_true = attr.unescape_value().ok().map_or(false, |s| s == "1");
+                rule.stop_if_true = attr.unescape_value().ok().is_some_and(|s| s == "1");
             }
             b"dxfId" => {
                 rule.dxf_id = attr.unescape_value().ok().and_then(|s| s.parse().ok());
@@ -134,16 +134,16 @@ pub(super) fn parse_cf_rule_attrs(
                 rank = attr.unescape_value().ok().and_then(|s| s.parse().ok());
             }
             b"percent" => {
-                percent = attr.unescape_value().ok().map_or(false, |s| s == "1");
+                percent = attr.unescape_value().ok().is_some_and(|s| s == "1");
             }
             b"bottom" => {
-                bottom = attr.unescape_value().ok().map_or(false, |s| s == "1");
+                bottom = attr.unescape_value().ok().is_some_and(|s| s == "1");
             }
             b"aboveAverage" => {
-                above_average = attr.unescape_value().ok().map_or(true, |s| s != "0");
+                above_average = attr.unescape_value().ok().is_none_or(|s| s != "0");
             }
             b"equalAverage" => {
-                equal_average = attr.unescape_value().ok().map_or(false, |s| s == "1");
+                equal_average = attr.unescape_value().ok().is_some_and(|s| s == "1");
             }
             b"stdDev" => {
                 std_dev = attr.unescape_value().ok().and_then(|s| s.parse().ok());

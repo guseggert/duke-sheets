@@ -154,7 +154,7 @@ impl LookupKey {
             }
             FormulaValue::String(s) => LookupKey::Text(s.to_lowercase()),
             FormulaValue::Boolean(b) => LookupKey::Boolean(*b),
-            FormulaValue::Error(e) => LookupKey::Error(e.clone()),
+            FormulaValue::Error(e) => LookupKey::Error(*e),
             FormulaValue::Empty => LookupKey::Empty,
             FormulaValue::Array { .. } => LookupKey::Empty, // arrays in lookup columns shouldn't happen
         }

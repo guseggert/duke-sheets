@@ -3125,6 +3125,7 @@ fn extra_inverse_standard_normal(p: f64) -> Option<f64> {
 
     // Peter Acklam's algorithm for the inverse normal CDF.
     // Maximum relative error < 1.15e-9 across the full range.
+    #[allow(clippy::excessive_precision)]
     const A: [f64; 6] = [
         -3.969683028665376e+01,
         2.209460984245205e+02,

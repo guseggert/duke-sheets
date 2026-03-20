@@ -216,10 +216,8 @@ pub(super) fn resolve_style_theme_colors(style: &mut Style, theme: &ThemePalette
         &mut style.border.top,
         &mut style.border.bottom,
         &mut style.border.diagonal,
-    ] {
-        if let Some(edge) = edge {
-            edge.color = resolve_color_theme(edge.color, theme);
-        }
+    ].into_iter().flatten() {
+        edge.color = resolve_color_theme(edge.color, theme);
     }
 }
 

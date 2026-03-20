@@ -982,6 +982,7 @@ enum XfTarget {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Default)]
 struct ParsedXf {
     num_fmt_id: u32,
     font_id: u32,
@@ -998,25 +999,6 @@ struct ParsedXf {
     protection: Protection,
 }
 
-impl Default for ParsedXf {
-    fn default() -> Self {
-        Self {
-            num_fmt_id: 0,
-            font_id: 0,
-            fill_id: 0,
-            border_id: 0,
-            xf_id: 0,
-            apply_number_format: false,
-            apply_font: false,
-            apply_fill: false,
-            apply_border: false,
-            apply_alignment: false,
-            apply_protection: false,
-            alignment: Alignment::default(),
-            protection: Protection::default(),
-        }
-    }
-}
 
 pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     let mut xml_reader = Reader::from_reader(BufReader::new(reader));
@@ -1955,7 +1937,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     xf.fill_id,
                     xf.border_id,
                     xf.alignment.clone(),
-                    xf.protection.clone(),
+                    xf.protection,
                     &numfmts,
                     &fonts,
                     &fills,
@@ -1983,7 +1965,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     xf.fill_id,
                     xf.border_id,
                     xf.alignment.clone(),
-                    xf.protection.clone(),
+                    xf.protection,
                     &numfmts,
                     &fonts,
                     &fills,
@@ -2032,6 +2014,7 @@ fn parse_named_cell_style_attrs(e: &quick_xml::events::BytesStart<'_>) -> NamedC
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_style(
     num_fmt_id: u32,
     font_id: u32,
@@ -2044,14 +2027,7 @@ fn resolve_style(
     fills: &[FillStyle],
     borders: &[BorderStyle],
 ) -> Style {
-    let mut style = Style::default();
-    style.font = fonts.get(font_id as usize).cloned().unwrap_or_default();
-    style.fill = fills.get(fill_id as usize).cloned().unwrap_or_default();
-    style.border = borders.get(border_id as usize).cloned().unwrap_or_default();
-    style.alignment = alignment;
-    style.protection = protection;
-
-    style.number_format = if num_fmt_id == 0 {
+    let number_format = if num_fmt_id == 0 {
         NumberFormat::General
     } else if let Some(code) = numfmts.get(&num_fmt_id) {
         NumberFormat::Custom(code.clone())
@@ -2059,7 +2035,14 @@ fn resolve_style(
         NumberFormat::BuiltIn(num_fmt_id)
     };
 
-    style
+    Style {
+        font: fonts.get(font_id as usize).cloned().unwrap_or_default(),
+        fill: fills.get(fill_id as usize).cloned().unwrap_or_default(),
+        border: borders.get(border_id as usize).cloned().unwrap_or_default(),
+        alignment,
+        protection,
+        number_format,
+    }
 }
 
 fn parse_xf_attrs(e: &quick_xml::events::BytesStart<'_>) -> ParsedXf {
@@ -2108,7 +2091,7 @@ fn merge_cell_xf_with_base(base: Style, resolved_xf: &Style, xf_meta: &ParsedXf)
         out.alignment = resolved_xf.alignment.clone();
     }
     if xf_meta.apply_protection || xf_meta.protection != Protection::default() {
-        out.protection = resolved_xf.protection.clone();
+        out.protection = resolved_xf.protection;
     }
 
     out

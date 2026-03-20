@@ -845,7 +845,7 @@ pub fn fn_xmatch(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResul
                     return existing.find(lookup_value);
                 }
 
-                let owned: Vec<FormulaValue> = lookup_arr.iter().cloned().collect();
+                let owned: Vec<FormulaValue> = lookup_arr.to_vec();
                 let index = crate::eval_cache::LookupIndex::build(&owned);
                 let result = index.find(lookup_value);
                 cache

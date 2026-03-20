@@ -91,8 +91,8 @@ pub(super) fn write_data_validations(
 
         match &validation.validation_type {
             ValidationType::List { source } => {
-                let formula = if source.starts_with('=') {
-                    source[1..].to_string()
+                let formula = if let Some(stripped) = source.strip_prefix('=') {
+                    stripped.to_string()
                 } else if source.contains('!')
                     || source
                         .chars()
@@ -118,8 +118,8 @@ pub(super) fn write_data_validations(
                 }
             }
             ValidationType::Custom { formula } => {
-                let f = if formula.starts_with('=') {
-                    &formula[1..]
+                let f = if let Some(stripped) = formula.strip_prefix('=') {
+                    stripped
                 } else {
                     formula
                 };

@@ -389,6 +389,7 @@ fn odd_last_coupon_fractions(
     Ok((accrued, odd_period, discount_period))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn odd_last_price_core(
     settlement: i64,
     maturity: i64,
@@ -413,6 +414,7 @@ fn odd_last_price_core(
     Ok((redemption + 100.0 * rate * odd_period) / denom - 100.0 * rate * accrued)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn odd_last_yield_core(
     settlement: i64,
     maturity: i64,
@@ -545,6 +547,7 @@ fn regular_coupon_count(
     Ok(count)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn odd_first_price_core(
     settlement: i64,
     maturity: i64,
