@@ -1,6 +1,6 @@
 {
   "name": "@dukelib/sheets",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "High-performance Excel file library for Node.js, powered by Rust",
   "main": "lib.js",
   "types": "index.d.ts",
@@ -22,6 +22,7 @@
   "files": [
     "index.js",
     "index.d.ts",
+    "generated.d.ts",
     "lib.js"
   ],
   "napi": {
