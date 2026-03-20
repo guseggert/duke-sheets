@@ -282,49 +282,57 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
 
     match match_type {
         0 => {
-            // Exact match: try hash index (Tier 2) first
-            if let Some(cache) = ctx.eval_cache {
-                // Get the RangeSource from the array argument to build the cache key
-                let array_arg = args.get(1).unwrap();
-                if let FormulaValue::Array {
-                    source: Some(src), ..
-                } = array_arg
-                {
-                    let col_offset = if rows == 1 { 0u16 } else { 0u16 }; // single column/row
-                    let range_key = (
-                        src.sheet,
-                        src.start_row,
-                        src.start_col,
-                        src.end_row,
-                        src.end_col,
-                    );
-                    let index_key = (range_key, col_offset);
+            // Exact match (with wildcard support for string patterns)
+            let is_wildcard = matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
 
-                    // Check for existing index
-                    if let Some(existing) = cache.lookup_indexes.get(&index_key) {
-                        return match existing.find(lookup_value) {
+            if !is_wildcard {
+                // Hash index (Tier 2) — only for non-wildcard lookups
+                if let Some(cache) = ctx.eval_cache {
+                    let array_arg = args.get(1).unwrap();
+                    if let FormulaValue::Array {
+                        source: Some(src), ..
+                    } = array_arg
+                    {
+                        let col_offset = 0u16;
+                        let range_key = (
+                            src.sheet,
+                            src.start_row,
+                            src.start_col,
+                            src.end_row,
+                            src.end_col,
+                        );
+                        let index_key = (range_key, col_offset);
+
+                        if let Some(existing) = cache.lookup_indexes.get(&index_key) {
+                            return match existing.find(lookup_value) {
+                                Some(pos) => Ok(FormulaValue::Number((pos + 1) as f64)),
+                                None => Ok(FormulaValue::Error(CellError::Na)),
+                            };
+                        }
+
+                        let owned_vec: Vec<FormulaValue> = vec.iter().map(|v| (*v).clone()).collect();
+                        let index = crate::eval_cache::LookupIndex::build(&owned_vec);
+                        let result = match index.find(lookup_value) {
                             Some(pos) => Ok(FormulaValue::Number((pos + 1) as f64)),
                             None => Ok(FormulaValue::Error(CellError::Na)),
                         };
+                        cache
+                            .lookup_indexes
+                            .insert(index_key, std::sync::Arc::new(index));
+                        return result;
                     }
-
-                    // Build index from the 1D vector
-                    let owned_vec: Vec<FormulaValue> = vec.iter().map(|v| (*v).clone()).collect();
-                    let index = crate::eval_cache::LookupIndex::build(&owned_vec);
-                    let result = match index.find(lookup_value) {
-                        Some(pos) => Ok(FormulaValue::Number((pos + 1) as f64)),
-                        None => Ok(FormulaValue::Error(CellError::Na)),
-                    };
-                    cache
-                        .lookup_indexes
-                        .insert(index_key, std::sync::Arc::new(index));
-                    return result;
                 }
             }
 
-            // Fallback: linear scan (no cache or no source metadata)
+            // Linear scan (handles wildcards and non-cached lookups)
             for (i, v) in vec.iter().enumerate() {
-                if values_equal(lookup_value, v) {
+                if is_wildcard {
+                    if let (FormulaValue::String(pattern), FormulaValue::String(text)) = (lookup_value, v) {
+                        if wildcard_match(pattern, text) {
+                            return Ok(FormulaValue::Number((i + 1) as f64));
+                        }
+                    }
+                } else if values_equal(lookup_value, v) {
                     return Ok(FormulaValue::Number((i + 1) as f64));
                 }
             }
@@ -619,57 +627,65 @@ pub fn fn_vlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
             None => Ok(FormulaValue::Error(CellError::Na)),
         }
     } else {
-        // Exact match
-        // Tier 2: Try hash index for first column
-        if let Some(cache) = ctx.eval_cache {
-            let array_arg = args.get(1).unwrap();
-            if let FormulaValue::Array {
-                source: Some(src), ..
-            } = array_arg
-            {
-                let range_key = (
-                    src.sheet,
-                    src.start_row,
-                    src.start_col,
-                    src.end_row,
-                    src.end_col,
-                );
-                let index_key = (range_key, 0u16); // first column
+        // Exact match (with wildcard support for string patterns)
+        let is_wildcard = matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
 
-                if let Some(existing) = cache.lookup_indexes.get(&index_key) {
-                    return match existing.find(lookup_value) {
+        if !is_wildcard {
+            // Hash index (Tier 2) — only for non-wildcard lookups
+            if let Some(cache) = ctx.eval_cache {
+                let array_arg = args.get(1).unwrap();
+                if let FormulaValue::Array {
+                    source: Some(src), ..
+                } = array_arg
+                {
+                    let range_key = (
+                        src.sheet,
+                        src.start_row,
+                        src.start_col,
+                        src.end_row,
+                        src.end_col,
+                    );
+                    let index_key = (range_key, 0u16);
+
+                    if let Some(existing) = cache.lookup_indexes.get(&index_key) {
+                        return match existing.find(lookup_value) {
+                            Some(pos) => Ok(table[pos]
+                                .get(col_index0)
+                                .cloned()
+                                .unwrap_or(FormulaValue::Empty)),
+                            None => Ok(FormulaValue::Error(CellError::Na)),
+                        };
+                    }
+
+                    let first_col: Vec<FormulaValue> = table
+                        .iter()
+                        .map(|row| row.first().cloned().unwrap_or(FormulaValue::Empty))
+                        .collect();
+                    let index = crate::eval_cache::LookupIndex::build(&first_col);
+                    let result = match index.find(lookup_value) {
                         Some(pos) => Ok(table[pos]
                             .get(col_index0)
                             .cloned()
                             .unwrap_or(FormulaValue::Empty)),
                         None => Ok(FormulaValue::Error(CellError::Na)),
                     };
+                    cache
+                        .lookup_indexes
+                        .insert(index_key, std::sync::Arc::new(index));
+                    return result;
                 }
-
-                // Build index from first column
-                let first_col: Vec<FormulaValue> = table
-                    .iter()
-                    .map(|row| row.first().cloned().unwrap_or(FormulaValue::Empty))
-                    .collect();
-                let index = crate::eval_cache::LookupIndex::build(&first_col);
-                let result = match index.find(lookup_value) {
-                    Some(pos) => Ok(table[pos]
-                        .get(col_index0)
-                        .cloned()
-                        .unwrap_or(FormulaValue::Empty)),
-                    None => Ok(FormulaValue::Error(CellError::Na)),
-                };
-                cache
-                    .lookup_indexes
-                    .insert(index_key, std::sync::Arc::new(index));
-                return result;
             }
         }
 
-        // Fallback: linear scan (exact match)
+        // Linear scan (handles wildcards and non-cached lookups)
         for row in table {
             let key = row.first().unwrap_or(&FormulaValue::Empty);
-            if values_equal(lookup_value, key) {
+            let matched = if is_wildcard {
+                matches!((lookup_value, key), (FormulaValue::String(p), FormulaValue::String(t)) if wildcard_match(p, t))
+            } else {
+                values_equal(lookup_value, key)
+            };
+            if matched {
                 return Ok(row.get(col_index0).cloned().unwrap_or(FormulaValue::Empty));
             }
         }
@@ -757,7 +773,14 @@ pub fn fn_hlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
             None => return Ok(FormulaValue::Error(CellError::Na)),
         }
     } else {
-        match first_row.iter().position(|k| values_equal(lookup_value, k)) {
+        let is_wildcard = matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+        match first_row.iter().position(|k| {
+            if is_wildcard {
+                matches!((lookup_value, k), (FormulaValue::String(p), FormulaValue::String(t)) if wildcard_match(p, t))
+            } else {
+                values_equal(lookup_value, k)
+            }
+        }) {
             Some(i) => i,
             None => return Ok(FormulaValue::Error(CellError::Na)),
         }

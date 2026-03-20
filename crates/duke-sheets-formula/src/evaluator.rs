@@ -1523,7 +1523,9 @@ fn evaluate_match_fast(
         },
     };
 
-    if match_type == 0 {
+    // Skip fast path for wildcard patterns — they need linear scan.
+    let is_wildcard = matches!(&lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+    if match_type == 0 && !is_wildcard {
         if let FormulaExpr::RangeRef(rr) = args.get(1)? {
             let sheet = match ctx.resolve_sheet_index(rr.sheet.as_deref(), ctx.workbook?) {
                 Ok(idx) => idx,
@@ -1560,6 +1562,22 @@ fn evaluate_match_fast(
 
     let len = if rows == 1 { cols } else { rows };
     let result = match match_type {
+        0 if is_wildcard => {
+            // Wildcard: linear scan with pattern matching
+            let mut found = None;
+            for i in 0..len {
+                if let (FormulaValue::String(pattern), FormulaValue::String(text)) =
+                    (&lookup_value, shared_vector_value(arr, i).unwrap())
+                {
+                    if wildcard_match(pattern, text) {
+                        found = Some(i);
+                        break;
+                    }
+                }
+            }
+            found
+        }
+        0 => exact_match_in_shared_range(&lookup_value, arr, &source, ctx),
         0 => exact_match_in_shared_range(&lookup_value, arr, &source, ctx),
         1 => {
             let mut best = None;
@@ -2008,7 +2026,9 @@ fn evaluate_vlookup_fast(
         },
         None => true,
     };
-    if range_lookup {
+    // Skip fast path for approximate match and wildcard patterns
+    let is_wildcard = matches!(&lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+    if range_lookup || is_wildcard {
         return None;
     }
 

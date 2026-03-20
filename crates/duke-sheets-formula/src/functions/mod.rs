@@ -2559,14 +2559,14 @@ impl FunctionRegistry {
         });
         self.register(FunctionDef {
             name: "KURT",
-            min_args: 4,
+            min_args: 1,
             max_args: None,
             implementation: statistical::fn_kurt,
             volatile: false,
         });
         self.register(FunctionDef {
             name: "SKEW",
-            min_args: 3,
+            min_args: 1,
             max_args: None,
             implementation: statistical::fn_skew,
             volatile: false,

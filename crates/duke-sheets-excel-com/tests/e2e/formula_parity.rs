@@ -2062,6 +2062,56 @@ fn populate_tests_sheet(wb: &Workbook<'_>) -> Result<(), BridgeError> {
             expected_type: "number",
             kind: FormulaKind::Formula,
         },
+        // Wildcard support in VLOOKUP / HLOOKUP / MATCH
+        FormulaCase {
+            id: "VLOOKUP_wildcard_star",
+            label: "VLOOKUP(\"*berry\",Data!A16:B25,2,FALSE)",
+            formula: "=VLOOKUP(\"*berry\",Data!A16:B25,2,FALSE)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "VLOOKUP_wildcard_question",
+            label: "VLOOKUP(\"d?te\",Data!A16:B25,2,FALSE)",
+            formula: "=VLOOKUP(\"d?te\",Data!A16:B25,2,FALSE)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "VLOOKUP_wildcard_no_match",
+            label: "VLOOKUP(\"z*\",Data!A16:B25,2,FALSE)",
+            formula: "=VLOOKUP(\"z*\",Data!A16:B25,2,FALSE)",
+            expected_type: "error",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "HLOOKUP_wildcard_star",
+            label: "HLOOKUP(\"*berry\",Data!A16:B25,2,FALSE)",
+            formula: "=HLOOKUP(\"*berry\",Data!A16:B25,2,FALSE)",
+            expected_type: "error",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "MATCH_wildcard_question",
+            label: "MATCH(\"ch???y\",Data!A16:A25,0)",
+            formula: "=MATCH(\"ch???y\",Data!A16:A25,0)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "MATCH_wildcard_combined",
+            label: "MATCH(\"g*p?\",Data!A16:A25,0)",
+            formula: "=MATCH(\"g*p?\",Data!A16:A25,0)",
+            expected_type: "number",
+            kind: FormulaKind::Formula,
+        },
+        FormulaCase {
+            id: "MATCH_wildcard_no_match",
+            label: "MATCH(\"z*\",Data!A16:A25,0)",
+            formula: "=MATCH(\"z*\",Data!A16:A25,0)",
+            expected_type: "error",
+            kind: FormulaKind::Formula,
+        },
     ];
 
     let mut row = 2u32;
