@@ -179,7 +179,11 @@ fn compare_case(case: &ParityCase, actual_value: &CellValue) -> std::result::Res
 }
 
 fn is_type_only_case(case: &ParityCase) -> bool {
-    case.id.contains("TODAY") || case.label.contains("TODAY()") || case.id.contains("RAND")
+    case.id.contains("TODAY")
+        || case.label.contains("TODAY()")
+        || case.id.contains("RANDARRAY")
+        || case.label.contains("RANDARRAY(")
+        || case.id.contains("RAND")
 }
 
 fn strict_number(value: &CellValue) -> Option<f64> {
