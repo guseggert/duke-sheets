@@ -1,6 +1,6 @@
 {
   "name": "@dukelib/sheets-linux-arm64-musl",
-  "version": "0.1.12",
+  "version": "0.1.15",
   "cpu": [
     "arm64"
   ],
