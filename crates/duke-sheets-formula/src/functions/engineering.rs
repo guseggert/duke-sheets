@@ -2651,7 +2651,7 @@ mod tests {
             let c = ctx();
             let v =
                 fn_bessely(&[FormulaValue::Number(2.5), FormulaValue::Number(1.0)], &c).unwrap();
-            assert_close(as_number(v), 0.145_918_138, 5e-3);
+            assert_close(as_number(v), 0.145_918_138, 1e-6);
 
             let e =
                 fn_bessely(&[FormulaValue::Number(-1.0), FormulaValue::Number(1.0)], &c).unwrap();

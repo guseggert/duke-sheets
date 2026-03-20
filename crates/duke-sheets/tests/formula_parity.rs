@@ -202,18 +202,16 @@ fn effective_expected_type(case: &ParityCase) -> &str {
 
 fn number_epsilon(case: &ParityCase) -> f64 {
     match case.id.as_str() {
+        // XIRR iterative solver has inherent precision limits
         "XIRR_basic" => 5e-9,
-        id if id.contains("BESSELY") => 1e-5,
+        // FORECAST.ETS triple-exponential smoothing has a real precision gap
         id if id.contains("FORECAST_ETS") || id.contains("STAT_FORECAST_ETS") => 0.1,
         _ => 1e-9,
     }
 }
 
-fn overridden_expected_number(case: &ParityCase) -> Option<f64> {
-    match case.id.as_str() {
-        "POWER_zero_zero" => Some(1.0),
-        _ => None,
-    }
+fn overridden_expected_number(_case: &ParityCase) -> Option<f64> {
+    None
 }
 
 fn overridden_expected_error(case: &ParityCase) -> Option<CellError> {
