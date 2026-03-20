@@ -14,7 +14,6 @@ const ZERO_TOLERANCE: f64 = 1e-10;
 const BESSEL_MAX_TERMS: usize = 100;
 const BESSEL_TOLERANCE: f64 = 1e-15;
 const GAMMA_SERIES_MAX_TERMS: usize = 200;
-const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
 
 fn scalar_number(value: &FormulaValue) -> Result<f64, FormulaValue> {
     match value {
