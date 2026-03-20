@@ -24,6 +24,7 @@ enum CriteriaType {
     Comparison(ComparisonOp, f64),
     /// Text match (case-insensitive, with wildcards)
     Text(String),
+    TextComparison(ComparisonOp, String),
     /// Match empty values
     Empty,
 }
@@ -97,8 +98,7 @@ impl CriteriaMatcher {
         if let Ok(n) = rest.parse::<f64>() {
             Some(CriteriaType::Comparison(op, n))
         } else {
-            // Could be text comparison like ">A" - treat as text
-            None
+            Some(CriteriaType::TextComparison(op, rest.to_lowercase()))
         }
     }
 
@@ -144,6 +144,19 @@ impl CriteriaMatcher {
             CriteriaType::Text(pattern) => {
                 let text = value.as_string().to_lowercase();
                 Self::wildcard_match(pattern, &text)
+            }
+
+            CriteriaType::TextComparison(op, pattern) => {
+                let text = value.as_string().to_lowercase();
+                let matched = Self::wildcard_match(pattern, &text);
+                match op {
+                    ComparisonOp::Equal => matched,
+                    ComparisonOp::NotEqual => !matched,
+                    ComparisonOp::LessThan => text < *pattern,
+                    ComparisonOp::LessEqual => text <= *pattern,
+                    ComparisonOp::GreaterThan => text > *pattern,
+                    ComparisonOp::GreaterEqual => text >= *pattern,
+                }
             }
 
             CriteriaType::Empty => {
@@ -252,6 +265,10 @@ mod tests {
         assert!(!matcher.matches(&FormulaValue::Number(6.0)));
         assert!(matcher.matches(&FormulaValue::Number(5.0)));
         assert!(!matcher.matches(&FormulaValue::Number(4.0)));
+
+        let matcher = CriteriaMatcher::new(&FormulaValue::String("<>fruit".into()));
+        assert!(matcher.matches(&FormulaValue::String("veg".into())));
+        assert!(!matcher.matches(&FormulaValue::String("fruit".into())));
     }
 
     #[test]

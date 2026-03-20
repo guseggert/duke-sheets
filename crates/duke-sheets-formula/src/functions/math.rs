@@ -360,6 +360,10 @@ pub fn fn_power(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         _ => return Ok(FormulaValue::Error(CellError::Value)),
     };
 
+    // Excel returns #NUM! for POWER(0,0)
+    if number == 0.0 && power == 0.0 {
+        return Ok(FormulaValue::Error(CellError::Num));
+    }
     let result = number.powf(power);
 
     // Check for invalid results
@@ -1523,6 +1527,14 @@ mod tests {
                 .abs()
                 < 1e-9
         );
+        assert_eq!(
+            fn_power(
+                &[FormulaValue::Number(0.0), FormulaValue::Number(0.0)],
+                &ctx
+            )
+            .unwrap(),
+            FormulaValue::Error(CellError::Num)
+        );
     }
 
     #[test]
@@ -1809,10 +1821,13 @@ mod tests {
                 < 1e-10
         );
         // =SUM(array) sums all elements
-        let arr = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)],
-            vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
-        ], source: None };
+        let arr = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)],
+                vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
+            ],
+            source: None,
+        };
         assert_eq!(fn_sum(&[arr], &ctx).unwrap(), FormulaValue::Number(10.0));
     }
 
@@ -1821,18 +1836,24 @@ mod tests {
         let ctx = EvaluationContext::simple();
         // Docs data: property values 100000, 200000, 300000, 400000
         // commissions: 7000, 14000, 21000, 28000
-        let values = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(100000.0)],
-            vec![FormulaValue::Number(200000.0)],
-            vec![FormulaValue::Number(300000.0)],
-            vec![FormulaValue::Number(400000.0)],
-        ], source: None };
-        let commissions = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(7000.0)],
-            vec![FormulaValue::Number(14000.0)],
-            vec![FormulaValue::Number(21000.0)],
-            vec![FormulaValue::Number(28000.0)],
-        ], source: None };
+        let values = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(100000.0)],
+                vec![FormulaValue::Number(200000.0)],
+                vec![FormulaValue::Number(300000.0)],
+                vec![FormulaValue::Number(400000.0)],
+            ],
+            source: None,
+        };
+        let commissions = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(7000.0)],
+                vec![FormulaValue::Number(14000.0)],
+                vec![FormulaValue::Number(21000.0)],
+                vec![FormulaValue::Number(28000.0)],
+            ],
+            source: None,
+        };
         // =SUMIF(values, ">160000", commissions) = 63000
         assert_eq!(
             num(fn_sumif(
@@ -1868,36 +1889,45 @@ mod tests {
     fn test_sumifs_docs() {
         let ctx = EvaluationContext::simple();
         // Docs data: 8 rows of quantity/product/salesperson
-        let sum_range = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(5.0)],
-            vec![FormulaValue::Number(4.0)],
-            vec![FormulaValue::Number(15.0)],
-            vec![FormulaValue::Number(3.0)],
-            vec![FormulaValue::Number(22.0)],
-            vec![FormulaValue::Number(12.0)],
-            vec![FormulaValue::Number(10.0)],
-            vec![FormulaValue::Number(33.0)],
-        ], source: None };
-        let products = FormulaValue::Array { data: vec![
-            vec![FormulaValue::String("Apples".to_string())],
-            vec![FormulaValue::String("Apples".to_string())],
-            vec![FormulaValue::String("Artichokes".to_string())],
-            vec![FormulaValue::String("Artichokes".to_string())],
-            vec![FormulaValue::String("Bananas".to_string())],
-            vec![FormulaValue::String("Bananas".to_string())],
-            vec![FormulaValue::String("Carrots".to_string())],
-            vec![FormulaValue::String("Carrots".to_string())],
-        ], source: None };
-        let salesperson = FormulaValue::Array { data: vec![
-            vec![FormulaValue::String("Tom".to_string())],
-            vec![FormulaValue::String("Sarah".to_string())],
-            vec![FormulaValue::String("Tom".to_string())],
-            vec![FormulaValue::String("Sarah".to_string())],
-            vec![FormulaValue::String("Tom".to_string())],
-            vec![FormulaValue::String("Sarah".to_string())],
-            vec![FormulaValue::String("Tom".to_string())],
-            vec![FormulaValue::String("Sarah".to_string())],
-        ], source: None };
+        let sum_range = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(5.0)],
+                vec![FormulaValue::Number(4.0)],
+                vec![FormulaValue::Number(15.0)],
+                vec![FormulaValue::Number(3.0)],
+                vec![FormulaValue::Number(22.0)],
+                vec![FormulaValue::Number(12.0)],
+                vec![FormulaValue::Number(10.0)],
+                vec![FormulaValue::Number(33.0)],
+            ],
+            source: None,
+        };
+        let products = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::String("Apples".to_string())],
+                vec![FormulaValue::String("Apples".to_string())],
+                vec![FormulaValue::String("Artichokes".to_string())],
+                vec![FormulaValue::String("Artichokes".to_string())],
+                vec![FormulaValue::String("Bananas".to_string())],
+                vec![FormulaValue::String("Bananas".to_string())],
+                vec![FormulaValue::String("Carrots".to_string())],
+                vec![FormulaValue::String("Carrots".to_string())],
+            ],
+            source: None,
+        };
+        let salesperson = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::String("Tom".to_string())],
+                vec![FormulaValue::String("Sarah".to_string())],
+                vec![FormulaValue::String("Tom".to_string())],
+                vec![FormulaValue::String("Sarah".to_string())],
+                vec![FormulaValue::String("Tom".to_string())],
+                vec![FormulaValue::String("Sarah".to_string())],
+                vec![FormulaValue::String("Tom".to_string())],
+                vec![FormulaValue::String("Sarah".to_string())],
+            ],
+            source: None,
+        };
         // Docs Ex1: =SUMIFS(A2:A9, B2:B9, "=A*", C2:C9, "Tom") = 20
         // Products starting with A sold by Tom: Apples(5) + Artichokes(15)
         assert_eq!(
@@ -1933,16 +1963,22 @@ mod tests {
     fn test_sumproduct_docs() {
         let ctx = EvaluationContext::simple();
         // SUMPRODUCT({3,4;8,6;1,9}, {2,7;6,7;5,3}) = 156
-        let a = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
-            vec![FormulaValue::Number(8.0), FormulaValue::Number(6.0)],
-            vec![FormulaValue::Number(1.0), FormulaValue::Number(9.0)],
-        ], source: None };
-        let b = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(2.0), FormulaValue::Number(7.0)],
-            vec![FormulaValue::Number(6.0), FormulaValue::Number(7.0)],
-            vec![FormulaValue::Number(5.0), FormulaValue::Number(3.0)],
-        ], source: None };
+        let a = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
+                vec![FormulaValue::Number(8.0), FormulaValue::Number(6.0)],
+                vec![FormulaValue::Number(1.0), FormulaValue::Number(9.0)],
+            ],
+            source: None,
+        };
+        let b = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(2.0), FormulaValue::Number(7.0)],
+                vec![FormulaValue::Number(6.0), FormulaValue::Number(7.0)],
+                vec![FormulaValue::Number(5.0), FormulaValue::Number(3.0)],
+            ],
+            source: None,
+        };
         assert_eq!(num(fn_sumproduct(&[a.clone(), b], &ctx).unwrap()), 156.0);
         // Single array: sums all elements = 3+4+8+6+1+9 = 31
         assert_eq!(num(fn_sumproduct(&[a], &ctx).unwrap()), 31.0);
@@ -1951,14 +1987,17 @@ mod tests {
     #[test]
     fn test_sumproduct_docs_dimension_mismatch() {
         let ctx = EvaluationContext::simple();
-        let a = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(1.0),
-            FormulaValue::Number(2.0),
-        ]], source: None };
-        let b = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(1.0)],
-            vec![FormulaValue::Number(2.0)],
-        ], source: None };
+        let a = FormulaValue::Array {
+            data: vec![vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)]],
+            source: None,
+        };
+        let b = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(1.0)],
+                vec![FormulaValue::Number(2.0)],
+            ],
+            source: None,
+        };
         assert_eq!(
             fn_sumproduct(&[a, b], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)

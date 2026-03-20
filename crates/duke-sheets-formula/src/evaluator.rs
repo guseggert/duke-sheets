@@ -6,7 +6,9 @@ use crate::ast::{
     BinaryOperator, FormulaExpr, StructuredRefSpecifier, StructuredReference, UnaryOperator,
 };
 use crate::error::{FormulaError, FormulaResult};
-use crate::functions::lookup::{compare_lookup_values, index_resolve_coords, to_i64_trunc, values_equal, wildcard_match};
+use crate::functions::lookup::{
+    compare_lookup_values, index_resolve_coords, to_i64_trunc, values_equal, wildcard_match,
+};
 use crate::functions::FunctionRegistry;
 use duke_sheets_core::{CellError, CellValue, Table, Workbook, MAX_COLS, MAX_ROWS};
 use std::cmp::Ordering;
@@ -930,6 +932,9 @@ fn apply_scalar_binary_op(
             let r = right_val
                 .as_number()
                 .ok_or_else(|| FormulaError::Evaluation("Expected number".into()))?;
+            if l == 0.0 && r == 0.0 {
+                return Ok(FormulaValue::Error(CellError::Num));
+            }
             let result = l.powf(r);
             if result.is_nan() || result.is_infinite() {
                 Ok(FormulaValue::Error(CellError::Num))
@@ -937,7 +942,6 @@ fn apply_scalar_binary_op(
                 Ok(FormulaValue::Number(result))
             }
         }
-
         // Comparison operators
         BinaryOperator::Equal => Ok(FormulaValue::Boolean(
             compare_values(left_val, right_val) == 0,
@@ -1053,6 +1057,19 @@ fn compare_values(left: &FormulaValue, right: &FormulaValue) -> i32 {
     }
 }
 
+fn negate_scalar_value(value: &FormulaValue) -> FormulaValue {
+    match value {
+        FormulaValue::Error(e) => FormulaValue::Error(*e),
+        _ => match value.as_number() {
+            Some(n) => {
+                let negated = -n;
+                FormulaValue::Number(if negated == 0.0 { 0.0 } else { negated })
+            }
+            None => FormulaValue::Error(CellError::Value),
+        },
+    }
+}
+
 /// Evaluate a unary operation
 fn evaluate_unary_op(
     op: UnaryOperator,
@@ -1074,6 +1091,16 @@ fn evaluate_unary_op(
 
     match op {
         UnaryOperator::Negate => {
+            if let FormulaValue::Array { data, .. } = val {
+                let negated = data
+                    .iter()
+                    .map(|row| row.iter().map(negate_scalar_value).collect())
+                    .collect();
+                return Ok(FormulaValue::Array {
+                    data: negated,
+                    source: None,
+                });
+            }
             let n = val
                 .as_number()
                 .ok_or_else(|| FormulaError::Evaluation("Expected number".into()))?;
@@ -1524,7 +1551,8 @@ fn evaluate_match_fast(
     };
 
     // Skip fast path for wildcard patterns — they need linear scan.
-    let is_wildcard = matches!(&lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+    let is_wildcard =
+        matches!(&lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
     if match_type == 0 && !is_wildcard {
         if let FormulaExpr::RangeRef(rr) = args.get(1)? {
             let sheet = match ctx.resolve_sheet_index(rr.sheet.as_deref(), ctx.workbook?) {
@@ -1577,7 +1605,6 @@ fn evaluate_match_fast(
             }
             found
         }
-        0 => exact_match_in_shared_range(&lookup_value, arr, &source, ctx),
         0 => exact_match_in_shared_range(&lookup_value, arr, &source, ctx),
         1 => {
             let mut best = None;
@@ -2027,7 +2054,8 @@ fn evaluate_vlookup_fast(
         None => true,
     };
     // Skip fast path for approximate match and wildcard patterns
-    let is_wildcard = matches!(&lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+    let is_wildcard =
+        matches!(&lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
     if range_lookup || is_wildcard {
         return None;
     }
@@ -2116,6 +2144,12 @@ fn evaluate_function(
         return evaluate_formulatext(args, ctx);
     }
 
+    if lookup_name == "ISFORMULA" {
+        if let Some(result) = evaluate_isformula(args, ctx) {
+            return result;
+        }
+    }
+
     if lookup_name == "INDEX" {
         if let Some(result) = evaluate_index_fast(args, ctx) {
             return result;
@@ -2151,12 +2185,20 @@ fn evaluate_function(
         let is_row = lookup_name == "ROW";
         if args.is_empty() {
             // No args: return current cell position
-            let val = if is_row { ctx.current_row + 1 } else { (ctx.current_col + 1) as u32 };
+            let val = if is_row {
+                ctx.current_row + 1
+            } else {
+                (ctx.current_col + 1) as u32
+            };
             return Ok(FormulaValue::Number(val as f64));
         }
         match &args[0] {
             FormulaExpr::CellRef(cr) => {
-                let val = if is_row { cr.address.row + 1 } else { (cr.address.col + 1) as u32 };
+                let val = if is_row {
+                    cr.address.row + 1
+                } else {
+                    (cr.address.col + 1) as u32
+                };
                 return Ok(FormulaValue::Number(val as f64));
             }
             FormulaExpr::RangeRef(rr) => {
@@ -2164,12 +2206,18 @@ fn evaluate_function(
                     let rows: Vec<Vec<FormulaValue>> = (rr.range.start.row..=rr.range.end.row)
                         .map(|r| vec![FormulaValue::Number((r + 1) as f64)])
                         .collect();
-                    return Ok(FormulaValue::Array { data: rows, source: None });
+                    return Ok(FormulaValue::Array {
+                        data: rows,
+                        source: None,
+                    });
                 } else {
                     let cols: Vec<FormulaValue> = (rr.range.start.col..=rr.range.end.col)
                         .map(|c| FormulaValue::Number((c + 1) as f64))
                         .collect();
-                    return Ok(FormulaValue::Array { data: vec![cols], source: None });
+                    return Ok(FormulaValue::Array {
+                        data: vec![cols],
+                        source: None,
+                    });
                 }
             }
             _ => {} // fall through to normal evaluation
@@ -2241,6 +2289,33 @@ fn evaluate_formulatext(
         Some(formula) => Ok(FormulaValue::String(formula.to_string().into())),
         None => Ok(FormulaValue::Error(CellError::Na)),
     }
+}
+
+fn evaluate_isformula(
+    args: &[FormulaExpr],
+    ctx: &EvaluationContext,
+) -> Option<FormulaResult<FormulaValue>> {
+    let workbook = ctx.workbook?;
+    let arg = args.first()?;
+    let (sheet_name, row, col) = match arg {
+        FormulaExpr::CellRef(cell_ref) => (
+            cell_ref.sheet.as_deref(),
+            cell_ref.address.row,
+            cell_ref.address.col,
+        ),
+        FormulaExpr::RangeRef(range_ref) => (
+            range_ref.sheet.as_deref(),
+            range_ref.range.start.row,
+            range_ref.range.start.col,
+        ),
+        _ => return None,
+    };
+
+    let sheet_idx = ctx.resolve_sheet_index(sheet_name, workbook).ok()?;
+    let worksheet = workbook.worksheet(sheet_idx)?;
+    Some(Ok(FormulaValue::Boolean(
+        worksheet.get_formula_at(row, col).is_some(),
+    )))
 }
 
 /// AREAS needs the raw AST to count how many separate reference areas the
@@ -2445,6 +2520,16 @@ mod tests {
         assert_eq!(eval("=-5").unwrap(), FormulaValue::Number(-5.0));
         assert_eq!(eval("=50%").unwrap(), FormulaValue::Number(0.5));
         assert_eq!(eval("=--5").unwrap(), FormulaValue::Number(5.0));
+        assert_eq!(
+            eval("=--{TRUE;FALSE}").unwrap(),
+            FormulaValue::Array {
+                data: vec![
+                    vec![FormulaValue::Number(1.0)],
+                    vec![FormulaValue::Number(0.0)],
+                ],
+                source: None,
+            }
+        );
     }
 
     #[test]

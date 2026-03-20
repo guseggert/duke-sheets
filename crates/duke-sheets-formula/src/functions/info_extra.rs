@@ -324,10 +324,16 @@ pub fn fn_cubevalue(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use duke_sheets_core::Workbook;
 
     fn eval(formula: &str) -> FormulaResult<FormulaValue> {
         let ast = crate::parser::parse_formula(formula)?;
         crate::evaluator::evaluate(&ast, &EvaluationContext::simple())
+    }
+
+    fn eval_with_ctx(formula: &str, ctx: &EvaluationContext<'_>) -> FormulaResult<FormulaValue> {
+        let ast = crate::parser::parse_formula(formula)?;
+        crate::evaluator::evaluate(&ast, ctx)
     }
 
     #[test]
@@ -346,7 +352,14 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_iserr(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
+            fn_iserr(
+                &[FormulaValue::Array {
+                    data: vec![],
+                    source: None
+                }],
+                &ctx
+            )
+            .unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -409,7 +422,14 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_islogical(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
+            fn_islogical(
+                &[FormulaValue::Array {
+                    data: vec![],
+                    source: None
+                }],
+                &ctx
+            )
+            .unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -430,7 +450,14 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_isnontext(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
+            fn_isnontext(
+                &[FormulaValue::Array {
+                    data: vec![],
+                    source: None
+                }],
+                &ctx
+            )
+            .unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -451,7 +478,14 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_isref(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
+            fn_isref(
+                &[FormulaValue::Array {
+                    data: vec![],
+                    source: None
+                }],
+                &ctx
+            )
+            .unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -521,7 +555,14 @@ mod tests {
             FormulaValue::Number(16.0)
         );
         assert_eq!(
-            fn_type(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
+            fn_type(
+                &[FormulaValue::Array {
+                    data: vec![],
+                    source: None
+                }],
+                &ctx
+            )
+            .unwrap(),
             FormulaValue::Number(64.0)
         );
         assert_eq!(
@@ -545,7 +586,14 @@ mod tests {
         );
         // Array as info_type → #VALUE!
         assert_eq!(
-            fn_cell(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
+            fn_cell(
+                &[FormulaValue::Array {
+                    data: vec![],
+                    source: None
+                }],
+                &ctx
+            )
+            .unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }
@@ -596,7 +644,14 @@ mod tests {
             FormulaValue::Error(CellError::Na)
         );
         assert_eq!(
-            fn_sheets(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
+            fn_sheets(
+                &[FormulaValue::Array {
+                    data: vec![],
+                    source: None
+                }],
+                &ctx
+            )
+            .unwrap(),
             FormulaValue::Error(CellError::Na)
         );
     }
@@ -613,8 +668,30 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_isformula(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
+            fn_isformula(
+                &[FormulaValue::Array {
+                    data: vec![],
+                    source: None
+                }],
+                &ctx
+            )
+            .unwrap(),
             FormulaValue::Error(CellError::Value)
+        );
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_formula("A1", "=1+1").unwrap();
+        ws.set_cell_value("A2", 2.0).unwrap();
+
+        let ctx = EvaluationContext::new(Some(&wb), 0, 0, 0);
+        assert_eq!(
+            eval_with_ctx("=ISFORMULA(A1)", &ctx).unwrap(),
+            FormulaValue::Boolean(true)
+        );
+        assert_eq!(
+            eval_with_ctx("=ISFORMULA(A2)", &ctx).unwrap(),
+            FormulaValue::Boolean(false)
         );
     }
 
@@ -630,7 +707,14 @@ mod tests {
             FormulaValue::Boolean(false)
         );
         assert_eq!(
-            fn_isomitted(&[FormulaValue::Array { data: vec![], source: None }], &ctx).unwrap(),
+            fn_isomitted(
+                &[FormulaValue::Array {
+                    data: vec![],
+                    source: None
+                }],
+                &ctx
+            )
+            .unwrap(),
             FormulaValue::Error(CellError::Value)
         );
     }

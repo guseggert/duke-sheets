@@ -63,9 +63,9 @@ pub(crate) fn index_resolve_coords(
 ) -> (i64, i64) {
     match explicit_col {
         Some(c) => (raw_pos, c),
-        None if rows == 1 => (1, raw_pos),  // pos=0 → (1,0) → return entire row
-        None if cols == 1 => (raw_pos, 1),  // pos=0 → (0,1) → return entire column
-        None => (raw_pos, 0),               // 2D, no col → return entire row
+        None if rows == 1 => (1, raw_pos), // pos=0 → (1,0) → return entire row
+        None if cols == 1 => (raw_pos, 1), // pos=0 → (0,1) → return entire column
+        None => (raw_pos, 0),              // 2D, no col → return entire row
     }
 }
 
@@ -196,7 +196,8 @@ pub fn fn_index(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     // row_num=0: return entire column as a column vector
     if row_num == 0 {
         if col_num == 0 {
-            return Ok(FormulaValue::Error(CellError::Value));
+            // Both 0 on 2D array: Excel returns first element
+            return Ok(arr[0][0].clone());
         }
         let c = (col_num - 1) as usize;
         if c >= cols {
@@ -310,7 +311,8 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
                             };
                         }
 
-                        let owned_vec: Vec<FormulaValue> = vec.iter().map(|v| (*v).clone()).collect();
+                        let owned_vec: Vec<FormulaValue> =
+                            vec.iter().map(|v| (*v).clone()).collect();
                         let index = crate::eval_cache::LookupIndex::build(&owned_vec);
                         let result = match index.find(lookup_value) {
                             Some(pos) => Ok(FormulaValue::Number((pos + 1) as f64)),
@@ -327,7 +329,9 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
             // Linear scan (handles wildcards and non-cached lookups)
             for (i, v) in vec.iter().enumerate() {
                 if is_wildcard {
-                    if let (FormulaValue::String(pattern), FormulaValue::String(text)) = (lookup_value, v) {
+                    if let (FormulaValue::String(pattern), FormulaValue::String(text)) =
+                        (lookup_value, v)
+                    {
                         if wildcard_match(pattern, text) {
                             return Ok(FormulaValue::Number((i + 1) as f64));
                         }
@@ -628,7 +632,8 @@ pub fn fn_vlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
         }
     } else {
         // Exact match (with wildcard support for string patterns)
-        let is_wildcard = matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+        let is_wildcard =
+            matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
 
         if !is_wildcard {
             // Hash index (Tier 2) — only for non-wildcard lookups
@@ -773,7 +778,8 @@ pub fn fn_hlookup(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
             None => return Ok(FormulaValue::Error(CellError::Na)),
         }
     } else {
-        let is_wildcard = matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
+        let is_wildcard =
+            matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
         match first_row.iter().position(|k| {
             if is_wildcard {
                 matches!((lookup_value, k), (FormulaValue::String(p), FormulaValue::String(t)) if wildcard_match(p, t))
@@ -1455,6 +1461,10 @@ mod tests {
                 source: None
             }
         );
+        assert_eq!(
+            eval("=INDEX({1,2,3;4,5,6},0,0)").unwrap(),
+            FormulaValue::Number(1.0)  // Excel returns first element for INDEX(2D,0,0)
+        );
         // Docs Reference form: Fruits/Price/Count table
         // =INDEX(..., 2, 3) -> 38 (Bananas count)
         assert_eq!(
@@ -1486,11 +1496,15 @@ mod tests {
                 let sheet = workbook.worksheet_mut(0).unwrap();
                 // A1:L1 = months 1..12
                 for i in 0u16..12 {
-                    sheet.set_cell_value_at(0, i, CellValue::Number((i + 1) as f64)).unwrap();
+                    sheet
+                        .set_cell_value_at(0, i, CellValue::Number((i + 1) as f64))
+                        .unwrap();
                 }
                 // A2:L2 = values 10,20,...120
                 for i in 0u16..12 {
-                    sheet.set_cell_value_at(1, i, CellValue::Number(((i + 1) * 10) as f64)).unwrap();
+                    sheet
+                        .set_cell_value_at(1, i, CellValue::Number(((i + 1) * 10) as f64))
+                        .unwrap();
                 }
             }
             // INDEX($A$2:$L$2, 3) should return 30 (3rd column)
@@ -1512,7 +1526,9 @@ mod tests {
                 let sheet = workbook.worksheet_mut(0).unwrap();
                 // A1:A4 = {10;20;30;40}
                 for i in 0u32..4 {
-                    sheet.set_cell_value_at(i, 0, CellValue::Number(((i + 1) * 10) as f64)).unwrap();
+                    sheet
+                        .set_cell_value_at(i, 0, CellValue::Number(((i + 1) * 10) as f64))
+                        .unwrap();
                 }
             }
             assert_eq!(
@@ -1559,10 +1575,7 @@ mod tests {
         );
 
         // 1x1 array: rows==1 wins, so position=1 -> (1,1) -> scalar
-        assert_eq!(
-            eval("=INDEX({42},1)").unwrap(),
-            FormulaValue::Number(42.0)
-        );
+        assert_eq!(eval("=INDEX({42},1)").unwrap(), FormulaValue::Number(42.0));
 
         // 3-arg form on single-row vector still works
         assert_eq!(

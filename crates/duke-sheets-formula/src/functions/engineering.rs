@@ -13,6 +13,7 @@ const MAX_BITWISE: u64 = (1u64 << 48) - 1;
 const ZERO_TOLERANCE: f64 = 1e-10;
 const BESSEL_MAX_TERMS: usize = 100;
 const BESSEL_TOLERANCE: f64 = 1e-15;
+const GAMMA_SERIES_MAX_TERMS: usize = 200;
 const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
 
 fn scalar_number(value: &FormulaValue) -> Result<f64, FormulaValue> {
@@ -200,20 +201,77 @@ fn parse_hex(text: &str) -> Result<i64, CellError> {
     parse_signed_fixed_width(text, 16, HEX_BITS, MAX_DIGITS)
 }
 
-fn erf_approx(x: f64) -> f64 {
-    let a1 = 0.254_829_592;
-    let a2 = -0.284_496_736;
-    let a3 = 1.421_413_741;
-    let a4 = -1.453_152_027;
-    let a5 = 1.061_405_429;
-    let p = 0.327_591_1;
+fn ln_gamma(z: f64) -> f64 {
+    let coeffs = [
+        0.999_999_999_999_809_9,
+        676.520_368_121_885_1,
+        -1_259.139_216_722_402_8,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
+        12.507_343_278_686_905,
+        -0.138_571_095_265_720_12,
+        9.984_369_578_019_572e-6,
+        1.505_632_735_149_311_6e-7,
+    ];
 
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let x_abs = x.abs();
-    let t = 1.0 / (1.0 + p * x_abs);
-    let poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t;
-    let value = 1.0 - poly * (-x_abs * x_abs).exp();
-    sign * value
+    if z < 0.5 {
+        let pi = std::f64::consts::PI;
+        return (pi / (pi * z).sin()).ln() - ln_gamma(1.0 - z);
+    }
+
+    let z1 = z - 1.0;
+    let mut x = coeffs[0];
+    for (i, c) in coeffs.iter().enumerate().skip(1) {
+        x += c / (z1 + i as f64);
+    }
+
+    let t = z1 + 7.5;
+    0.5 * (2.0 * std::f64::consts::PI).ln() + (z1 + 0.5) * t.ln() - t + x.ln()
+}
+
+fn regularized_gamma_p(a: f64, x: f64) -> f64 {
+    if a <= 0.0 || x < 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 0.0;
+    }
+
+    let mut sum = 1.0 / a;
+    let mut del = sum;
+    let mut ap = a;
+    for _ in 1..=GAMMA_SERIES_MAX_TERMS {
+        ap += 1.0;
+        del *= x / ap;
+        sum += del;
+        if del.abs() < sum.abs().max(1.0) * 1e-15 {
+            break;
+        }
+    }
+
+    sum * (-x + a * x.ln() - ln_gamma(a)).exp()
+}
+
+fn erf_value(x: f64) -> f64 {
+    if x == 0.0 {
+        0.0
+    } else {
+        let p = regularized_gamma_p(0.5, x * x);
+        if x.is_sign_negative() {
+            -p
+        } else {
+            p
+        }
+    }
+}
+
+fn erfc_value(x: f64) -> f64 {
+    let p = regularized_gamma_p(0.5, x * x);
+    if x.is_sign_negative() {
+        1.0 + p
+    } else {
+        1.0 - p
+    }
 }
 
 pub fn fn_bin2dec(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -578,8 +636,8 @@ pub fn fn_erf(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
     };
 
     let value = match upper {
-        Some(upper_bound) => erf_approx(upper_bound) - erf_approx(lower),
-        None => erf_approx(lower),
+        Some(upper_bound) => erf_value(upper_bound) - erf_value(lower),
+        None => erf_value(lower),
     };
     Ok(FormulaValue::Number(value))
 }
@@ -593,7 +651,7 @@ pub fn fn_erf_precise(
         Err(e) => return Ok(e),
     };
 
-    Ok(FormulaValue::Number(erf_approx(x)))
+    Ok(FormulaValue::Number(erf_value(x)))
 }
 
 pub fn fn_erfc(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -602,7 +660,7 @@ pub fn fn_erfc(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
         Err(e) => return Ok(e),
     };
 
-    Ok(FormulaValue::Number(1.0 - erf_approx(x)))
+    Ok(FormulaValue::Number(erfc_value(x)))
 }
 
 pub fn fn_erfc_precise(
@@ -614,7 +672,7 @@ pub fn fn_erfc_precise(
         Err(e) => return Ok(e),
     };
 
-    Ok(FormulaValue::Number(1.0 - erf_approx(x)))
+    Ok(FormulaValue::Number(erfc_value(x)))
 }
 
 // Complex number functions
@@ -1185,6 +1243,28 @@ fn bessel_i_series(x: f64, n: usize) -> f64 {
     sum
 }
 
+fn bessel_i0_excel(x: f64) -> f64 {
+    let ax = x.abs();
+    if ax < 3.75 {
+        let y = (ax / 3.75).powi(2);
+        1.0 + y
+            * (3.515_622_9
+                + y * (3.089_942_4
+                    + y * (1.206_749_2 + y * (0.265_973_2 + y * (0.036_076_8 + y * 0.004_581_3)))))
+    } else {
+        let y = 3.75 / ax;
+        (ax.exp() / ax.sqrt())
+            * (0.398_942_28
+                + y * (0.013_285_92
+                    + y * (0.002_253_19
+                        + y * (-0.001_575_65
+                            + y * (0.009_162_81
+                                + y * (-0.020_577_06
+                                    + y * (0.026_355_37
+                                        + y * (-0.016_476_33 + y * 0.003_923_77))))))))
+    }
+}
+
 fn bessel_j_series(x: f64, n: usize) -> f64 {
     let half_x = x * 0.5;
     let mut term = half_x.powi(n as i32);
@@ -1202,6 +1282,34 @@ fn bessel_j_series(x: f64, n: usize) -> f64 {
         }
     }
     sum
+}
+
+fn bessel_j0_excel(x: f64) -> f64 {
+    let ax = x.abs();
+    if ax < 8.0 {
+        let y = x * x;
+        let ans1 = 57_568_490_574.0
+            + y * (-13_362_590_354.0
+                + y * (651_619_640.7
+                    + y * (-11_214_424.18 + y * (77_392.330_17 + y * -184.905_245_6))));
+        let ans2 = 57_568_490_411.0
+            + y * (1_029_532_985.0
+                + y * (9_494_680.718 + y * (59_272.648_53 + y * (267.853_271_2 + y))));
+        ans1 / ans2
+    } else {
+        let z = 8.0 / ax;
+        let y = z * z;
+        let xx = ax - 0.785_398_164;
+        let ans1 = 1.0
+            + y * (-0.001_098_628_627
+                + y * (0.000_027_345_104_07
+                    + y * (-0.000_002_073_370_639 + y * 0.000_000_209_388_721_1)));
+        let ans2 = -0.015_624_999_95
+            + y * (0.000_143_048_876_5
+                + y * (-0.000_006_911_147_651
+                    + y * (0.000_000_762_109_516_1 - y * 0.000_000_093_494_515_2)));
+        (0.636_619_772 / ax).sqrt() * (xx.cos() * ans1 - z * xx.sin() * ans2)
+    }
 }
 
 fn bessel_k0(x: f64) -> f64 {
@@ -1327,7 +1435,12 @@ pub fn fn_besseli(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
         Err(e) => return Ok(e),
     };
 
-    Ok(FormulaValue::Number(bessel_i_series(x, n)))
+    let value = if n == 0 {
+        bessel_i0_excel(x)
+    } else {
+        bessel_i_series(x, n)
+    };
+    Ok(FormulaValue::Number(value))
 }
 
 pub fn fn_besselj(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -1340,7 +1453,12 @@ pub fn fn_besselj(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
         Err(e) => return Ok(e),
     };
 
-    Ok(FormulaValue::Number(bessel_j_series(x, n)))
+    let value = if n == 0 {
+        bessel_j0_excel(x)
+    } else {
+        bessel_j_series(x, n)
+    };
+    Ok(FormulaValue::Number(value))
 }
 
 pub fn fn_besselk(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -2016,19 +2134,26 @@ mod tests {
         fn test_erf() {
             let c = ctx();
             let v = fn_erf(&[FormulaValue::Number(1.0)], &c).unwrap();
-            assert_close(as_number(v), 0.8427006897475899, 1e-7);
+            assert_close(as_number(v), 0.842_700_792_949_714_9, 1e-12);
 
             let v = fn_erf(&[FormulaValue::Number(0.0), FormulaValue::Number(1.0)], &c).unwrap();
-            assert_close(as_number(v), 0.8427006897475899, 1e-7);
+            assert_close(as_number(v), 0.842_700_792_949_714_9, 1e-12);
         }
 
         #[test]
         fn test_erf_precise() {
             let c = ctx();
             let v = fn_erf_precise(&[FormulaValue::Number(1.0)], &c).unwrap();
-            assert_close(as_number(v), 0.8427006897475899, 1e-7);
+            assert_close(as_number(v), 0.842_700_792_949_714_9, 1e-12);
 
-            let e = fn_erf_precise(&[FormulaValue::Array { data: vec![], source: None }], &c).unwrap();
+            let e = fn_erf_precise(
+                &[FormulaValue::Array {
+                    data: vec![],
+                    source: None,
+                }],
+                &c,
+            )
+            .unwrap();
             assert_eq!(e, FormulaValue::Error(CellError::Value));
         }
 
@@ -2036,7 +2161,7 @@ mod tests {
         fn test_erfc() {
             let c = ctx();
             let v = fn_erfc(&[FormulaValue::Number(1.0)], &c).unwrap();
-            assert_close(as_number(v), 0.15729931025241006, 1e-7);
+            assert_close(as_number(v), 0.157_299_207_050_285_13, 1e-12);
 
             let v = fn_erfc(&[FormulaValue::Number(0.0)], &c).unwrap();
             assert_close(as_number(v), 1.0, 1e-8);
@@ -2046,7 +2171,7 @@ mod tests {
         fn test_erfc_precise() {
             let c = ctx();
             let v = fn_erfc_precise(&[FormulaValue::Number(1.0)], &c).unwrap();
-            assert_close(as_number(v), 0.15729931025241006, 1e-7);
+            assert_close(as_number(v), 0.157_299_207_050_285_13, 1e-12);
 
             let e = fn_erfc_precise(&[FormulaValue::String("bad".to_string())], &c).unwrap();
             assert_eq!(e, FormulaValue::Error(CellError::Value));
@@ -2472,6 +2597,14 @@ mod tests {
         }
 
         #[test]
+        fn test_besseli_formula_parity() {
+            let c = ctx();
+            let v =
+                fn_besseli(&[FormulaValue::Number(1.0), FormulaValue::Number(0.0)], &c).unwrap();
+            assert_close(as_number(v), 1.266_065_848_034_260_1, 1e-12);
+        }
+
+        #[test]
         fn test_besselj() {
             let c = ctx();
             let v =
@@ -2481,6 +2614,14 @@ mod tests {
             let v2 =
                 fn_besselj(&[FormulaValue::Number(1.9), FormulaValue::Number(2.9)], &c).unwrap();
             assert_close(as_number(v2), 0.329_925_727_692_388, 1e-12);
+        }
+
+        #[test]
+        fn test_besselj_formula_parity() {
+            let c = ctx();
+            let v =
+                fn_besselj(&[FormulaValue::Number(1.0), FormulaValue::Number(0.0)], &c).unwrap();
+            assert_close(as_number(v), 0.765_197_683_754_859_2, 1e-12);
         }
 
         #[test]

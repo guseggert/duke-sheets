@@ -94,7 +94,12 @@ fn add_months(date: NaiveDate, months: i32) -> Option<NaiveDate> {
     let month0 = total.rem_euclid(12) as u32;
     let month = month0 + 1;
     let last = last_day_of_month(year, month)?;
-    let day = date.day().min(last);
+    let source_last = date.day() == last_day_of_month(date.year(), date.month())?;
+    let day = if source_last {
+        last
+    } else {
+        date.day().min(last)
+    };
     NaiveDate::from_ymd_opt(year, month, day)
 }
 
@@ -471,7 +476,6 @@ fn duration_core(
         weighted += t_year * pv;
     }
 
-    pv_total -= c * coup.a / coup.e;
     if pv_total <= 0.0 || !pv_total.is_finite() {
         return Err(FormulaValue::Error(CellError::Num));
     }
@@ -1969,6 +1973,8 @@ pub fn fn_vdb(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
 }
 
 pub fn fn_xirr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    const XIRR_MAX_ITERATIONS: usize = 200;
+    const XIRR_TOLERANCE: f64 = 1e-14;
     let mut values = Vec::new();
     let mut dates = Vec::new();
 
@@ -2001,7 +2007,7 @@ pub fn fn_xirr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     let d0 = dates[0];
     let mut rate = if guess <= -0.999_999_999 { 0.1 } else { guess };
 
-    for _ in 0..MAX_ITERATIONS {
+    for _ in 0..XIRR_MAX_ITERATIONS {
         if rate <= -1.0 {
             return Ok(FormulaValue::Error(CellError::Num));
         }
@@ -2015,7 +2021,7 @@ pub fn fn_xirr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
             df -= t * v / base.powf(t + 1.0);
         }
 
-        if f.abs() < TOLERANCE {
+        if f.abs() < XIRR_TOLERANCE {
             return Ok(FormulaValue::Number(rate));
         }
         if !df.is_finite() || df.abs() < 1e-14 {
@@ -2026,7 +2032,7 @@ pub fn fn_xirr(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
         if !next.is_finite() || next <= -1.0 {
             return Ok(FormulaValue::Error(CellError::Num));
         }
-        if (next - rate).abs() < TOLERANCE {
+        if (next - rate).abs() < XIRR_TOLERANCE {
             return Ok(FormulaValue::Number(next));
         }
         rate = next;
@@ -2680,10 +2686,10 @@ mod tests {
     }
 
     fn arr(values: &[f64]) -> FormulaValue {
-        FormulaValue::Array { data: vec![values
-            .iter()
-            .map(|v| FormulaValue::Number(*v))
-            .collect()], source: None }
+        FormulaValue::Array {
+            data: vec![values.iter().map(|v| FormulaValue::Number(*v)).collect()],
+            source: None,
+        }
     }
 
     fn ctx() -> EvaluationContext<'static> {
@@ -2715,6 +2721,25 @@ mod tests {
             ),
             0.373363,
             1e-3,
+        );
+    }
+
+    #[test]
+    fn test_xirr_formula_parity() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_xirr(
+                    &[
+                        arr(&[-1000.0, 300.0, 420.0, 680.0]),
+                        arr(&[44927.0, 45292.0, 45658.0, 46023.0]),
+                    ],
+                    &c,
+                )
+                .unwrap(),
+            ),
+            0.163_241_082_429_885_9,
+            5e-9,
         );
     }
 
@@ -3037,6 +3062,18 @@ mod tests {
             ),
             10.9191,
             1e-2,
+        );
+    }
+
+    #[test]
+    fn test_duration_formula_parity() {
+        let c = ctx();
+        assert_close(
+            as_number(
+                fn_duration(&[n(44927.0), n(46387.0), n(0.05), n(0.04), n(2.0)], &c).unwrap(),
+            ),
+            3.678_876_807_667_357_3,
+            1e-9,
         );
     }
 

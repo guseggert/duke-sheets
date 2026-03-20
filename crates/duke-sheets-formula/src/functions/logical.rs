@@ -33,22 +33,25 @@ pub fn fn_if(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<F
 
 /// AND function
 pub fn fn_and(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let mut result = true;
+    let mut first_error = None;
+
     for arg in args {
         match arg {
-            FormulaValue::Boolean(false) => return Ok(FormulaValue::Boolean(false)),
-            FormulaValue::Number(n) if *n == 0.0 => return Ok(FormulaValue::Boolean(false)),
-            FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+            FormulaValue::Boolean(false) => result = false,
+            FormulaValue::Number(n) if *n == 0.0 => result = false,
+            FormulaValue::Error(e) => {
+                first_error.get_or_insert(*e);
+            }
             FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         match cell {
-                            FormulaValue::Boolean(false) => {
-                                return Ok(FormulaValue::Boolean(false))
+                            FormulaValue::Boolean(false) => result = false,
+                            FormulaValue::Number(n) if *n == 0.0 => result = false,
+                            FormulaValue::Error(e) => {
+                                first_error.get_or_insert(*e);
                             }
-                            FormulaValue::Number(n) if *n == 0.0 => {
-                                return Ok(FormulaValue::Boolean(false))
-                            }
-                            FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
                             _ => {}
                         }
                     }
@@ -58,25 +61,34 @@ pub fn fn_and(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
         }
     }
 
-    Ok(FormulaValue::Boolean(true))
+    if let Some(error) = first_error {
+        return Ok(FormulaValue::Error(error));
+    }
+
+    Ok(FormulaValue::Boolean(result))
 }
 
 /// OR function
 pub fn fn_or(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
+    let mut result = false;
+    let mut first_error = None;
+
     for arg in args {
         match arg {
-            FormulaValue::Boolean(true) => return Ok(FormulaValue::Boolean(true)),
-            FormulaValue::Number(n) if *n != 0.0 => return Ok(FormulaValue::Boolean(true)),
-            FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
+            FormulaValue::Boolean(true) => result = true,
+            FormulaValue::Number(n) if *n != 0.0 => result = true,
+            FormulaValue::Error(e) => {
+                first_error.get_or_insert(*e);
+            }
             FormulaValue::Array { data: arr, .. } => {
                 for row in arr {
                     for cell in row {
                         match cell {
-                            FormulaValue::Boolean(true) => return Ok(FormulaValue::Boolean(true)),
-                            FormulaValue::Number(n) if *n != 0.0 => {
-                                return Ok(FormulaValue::Boolean(true))
+                            FormulaValue::Boolean(true) => result = true,
+                            FormulaValue::Number(n) if *n != 0.0 => result = true,
+                            FormulaValue::Error(e) => {
+                                first_error.get_or_insert(*e);
                             }
-                            FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
                             _ => {}
                         }
                     }
@@ -86,7 +98,11 @@ pub fn fn_or(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<F
         }
     }
 
-    Ok(FormulaValue::Boolean(false))
+    if let Some(error) = first_error {
+        return Ok(FormulaValue::Error(error));
+    }
+
+    Ok(FormulaValue::Boolean(result))
 }
 
 /// NOT function
@@ -521,6 +537,10 @@ mod tests {
             eval("=AND(1/0,TRUE)").unwrap(),
             FormulaValue::Error(CellError::Div0)
         );
+        assert_eq!(
+            eval("=AND(FALSE,1/0)").unwrap(),
+            FormulaValue::Error(CellError::Div0)
+        );
     }
 
     #[test]
@@ -575,6 +595,14 @@ mod tests {
         assert_eq!(
             eval("=IF(OR(7480>=8500,4>=5),7480*0.02,0)").unwrap(),
             FormulaValue::Number(0.0)
+        );
+        assert_eq!(
+            eval("=OR(TRUE,1/0)").unwrap(),
+            FormulaValue::Error(CellError::Div0)
+        );
+        assert_eq!(
+            eval("=OR(1/0,TRUE)").unwrap(),
+            FormulaValue::Error(CellError::Div0)
         );
     }
 

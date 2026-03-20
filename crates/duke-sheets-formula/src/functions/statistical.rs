@@ -1595,6 +1595,23 @@ fn normal_cdf(x: f64) -> f64 {
     }
 }
 
+fn refine_inverse_normal_estimate(p: f64, mut x: f64) -> f64 {
+    for _ in 0..2 {
+        let err = normal_cdf(x) - p;
+        let pdf = normal_pdf(x);
+        if !err.is_finite() || !pdf.is_finite() || pdf == 0.0 {
+            break;
+        }
+        let u = err / pdf;
+        let delta = u / (1.0 + 0.5 * x * u);
+        x -= delta;
+        if delta.abs() < 1e-15 {
+            break;
+        }
+    }
+    x
+}
+
 fn inverse_normal(p: f64) -> f64 {
     let a = [
         -3.969_683_028_665_376e1,
@@ -1629,21 +1646,22 @@ fn inverse_normal(p: f64) -> f64 {
     let plow = 0.024_25;
     let phigh = 1.0 - plow;
 
-    if p < plow {
+    let x = if p < plow {
         let q = (-2.0 * p.ln()).sqrt();
-        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0);
-    }
-    if p > phigh {
+        (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
+            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
+    } else if p > phigh {
         let q = (-2.0 * (1.0 - p).ln()).sqrt();
-        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0);
-    }
+        -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
+            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
+    } else {
+        let q = p - 0.5;
+        let r = q * q;
+        (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
+            / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
+    };
 
-    let q = p - 0.5;
-    let r = q * q;
-    (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
-        / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
+    refine_inverse_normal_estimate(p, x)
 }
 
 fn t_pdf(x: f64, df: f64) -> f64 {
@@ -3096,26 +3114,8 @@ fn extra_regression_slope_intercept(x: &[f64], y: &[f64]) -> Result<(f64, f64), 
     Ok((slope, intercept))
 }
 
-fn extra_erf_approx(x: f64) -> f64 {
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let ax = x.abs();
-    let p = 0.3275911;
-    let a1 = 0.254829592;
-    let a2 = -0.284496736;
-    let a3 = 1.421413741;
-    let a4 = -1.453152027;
-    let a5 = 1.061405429;
-    let t = 1.0 / (1.0 + p * ax);
-    let y = 1.0 - (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * (-ax * ax).exp();
-    sign * y
-}
-
 fn extra_normal_cdf(x: f64) -> f64 {
-    if x == 0.0 {
-        0.5
-    } else {
-        0.5 * (1.0 + extra_erf_approx(x / 2.0_f64.sqrt()))
-    }
+    normal_cdf(x)
 }
 
 fn extra_inverse_standard_normal(p: f64) -> Option<f64> {
@@ -3176,7 +3176,7 @@ fn extra_inverse_standard_normal(p: f64) -> Option<f64> {
             / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
     };
 
-    Some(x)
+    Some(refine_inverse_normal_estimate(p, x))
 }
 
 fn extra_ln_gamma(z: f64) -> f64 {
@@ -3699,7 +3699,10 @@ pub fn fn_frequency(
         .into_iter()
         .map(|c| vec![FormulaValue::Number(c)])
         .collect::<Vec<_>>();
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 pub fn fn_maxa(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -3958,10 +3961,13 @@ pub fn fn_mode_mult(
     }
 
     modes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(FormulaValue::Array { data: modes
-        .into_iter()
-        .map(|v| vec![FormulaValue::Number(v)])
-        .collect(), source: None })
+    Ok(FormulaValue::Array {
+        data: modes
+            .into_iter()
+            .map(|v| vec![FormulaValue::Number(v)])
+            .collect(),
+        source: None,
+    })
 }
 
 pub fn fn_stdeva(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -4381,7 +4387,7 @@ mod tests {
             assert_close(num(v), 0.0, 1e-12);
 
             let v = fn_norm_s_inv(&[FormulaValue::Number(0.975)], &c).unwrap();
-            assert_close(num(v), 1.959_963_986_120_195, 1e-8);
+            assert_close(num(v), 1.959_963_984_540_053_6, 1e-12);
         }
 
         #[test]
@@ -4558,26 +4564,35 @@ mod tests {
         #[test]
         fn test_chisq_test() {
             let c = ctx();
-            let actual = FormulaValue::Array { data: vec![vec![
-                FormulaValue::Number(10.0),
-                FormulaValue::Number(20.0),
-                FormulaValue::Number(30.0),
-            ]], source: None };
-            let expected = FormulaValue::Array { data: vec![vec![
-                FormulaValue::Number(12.0),
-                FormulaValue::Number(18.0),
-                FormulaValue::Number(30.0),
-            ]], source: None };
+            let actual = FormulaValue::Array {
+                data: vec![vec![
+                    FormulaValue::Number(10.0),
+                    FormulaValue::Number(20.0),
+                    FormulaValue::Number(30.0),
+                ]],
+                source: None,
+            };
+            let expected = FormulaValue::Array {
+                data: vec![vec![
+                    FormulaValue::Number(12.0),
+                    FormulaValue::Number(18.0),
+                    FormulaValue::Number(30.0),
+                ]],
+                source: None,
+            };
             let v = fn_chisq_test(&[actual, expected], &c).unwrap();
             assert_close(num(v), 0.757_465_128_396_966_4, 1e-12);
 
             let e = fn_chisq_test(
                 &[
-                    FormulaValue::Array { data: vec![vec![
-                        FormulaValue::Number(1.0),
-                        FormulaValue::Number(2.0),
-                    ]], source: None },
-                    FormulaValue::Array { data: vec![vec![FormulaValue::Number(1.0)]], source: None },
+                    FormulaValue::Array {
+                        data: vec![vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)]],
+                        source: None,
+                    },
+                    FormulaValue::Array {
+                        data: vec![vec![FormulaValue::Number(1.0)]],
+                        source: None,
+                    },
                 ],
                 &c,
             )
@@ -4688,20 +4703,26 @@ mod tests {
         #[test]
         fn test_t_test() {
             let c = ctx();
-            let a = FormulaValue::Array { data: vec![vec![
-                FormulaValue::Number(1.0),
-                FormulaValue::Number(2.0),
-                FormulaValue::Number(3.0),
-                FormulaValue::Number(4.0),
-                FormulaValue::Number(5.0),
-            ]], source: None };
-            let b = FormulaValue::Array { data: vec![vec![
-                FormulaValue::Number(1.1),
-                FormulaValue::Number(1.9),
-                FormulaValue::Number(3.2),
-                FormulaValue::Number(3.8),
-                FormulaValue::Number(5.1),
-            ]], source: None };
+            let a = FormulaValue::Array {
+                data: vec![vec![
+                    FormulaValue::Number(1.0),
+                    FormulaValue::Number(2.0),
+                    FormulaValue::Number(3.0),
+                    FormulaValue::Number(4.0),
+                    FormulaValue::Number(5.0),
+                ]],
+                source: None,
+            };
+            let b = FormulaValue::Array {
+                data: vec![vec![
+                    FormulaValue::Number(1.1),
+                    FormulaValue::Number(1.9),
+                    FormulaValue::Number(3.2),
+                    FormulaValue::Number(3.8),
+                    FormulaValue::Number(5.1),
+                ]],
+                source: None,
+            };
             let v = fn_t_test(
                 &[a, b, FormulaValue::Number(2.0), FormulaValue::Number(1.0)],
                 &c,
@@ -4712,8 +4733,14 @@ mod tests {
 
             let e = fn_t_test(
                 &[
-                    FormulaValue::Array { data: vec![vec![FormulaValue::Number(1.0)]], source: None },
-                    FormulaValue::Array { data: vec![vec![FormulaValue::Number(2.0)]], source: None },
+                    FormulaValue::Array {
+                        data: vec![vec![FormulaValue::Number(1.0)]],
+                        source: None,
+                    },
+                    FormulaValue::Array {
+                        data: vec![vec![FormulaValue::Number(2.0)]],
+                        source: None,
+                    },
                     FormulaValue::Number(2.0),
                     FormulaValue::Number(2.0),
                 ],
@@ -4863,28 +4890,40 @@ mod tests {
         #[test]
         fn test_f_test() {
             let c = ctx();
-            let a = FormulaValue::Array { data: vec![vec![
-                FormulaValue::Number(8.0),
-                FormulaValue::Number(9.0),
-                FormulaValue::Number(10.0),
-                FormulaValue::Number(11.0),
-                FormulaValue::Number(12.0),
-            ]], source: None };
-            let b = FormulaValue::Array { data: vec![vec![
-                FormulaValue::Number(1.0),
-                FormulaValue::Number(2.0),
-                FormulaValue::Number(3.0),
-                FormulaValue::Number(4.0),
-                FormulaValue::Number(5.0),
-            ]], source: None };
+            let a = FormulaValue::Array {
+                data: vec![vec![
+                    FormulaValue::Number(8.0),
+                    FormulaValue::Number(9.0),
+                    FormulaValue::Number(10.0),
+                    FormulaValue::Number(11.0),
+                    FormulaValue::Number(12.0),
+                ]],
+                source: None,
+            };
+            let b = FormulaValue::Array {
+                data: vec![vec![
+                    FormulaValue::Number(1.0),
+                    FormulaValue::Number(2.0),
+                    FormulaValue::Number(3.0),
+                    FormulaValue::Number(4.0),
+                    FormulaValue::Number(5.0),
+                ]],
+                source: None,
+            };
             let v = fn_f_test(&[a, b], &c).unwrap();
             let p = num(v);
             assert!(p > 0.0 && p <= 1.0);
 
             let e = fn_f_test(
                 &[
-                    FormulaValue::Array { data: vec![vec![FormulaValue::Number(1.0)]], source: None },
-                    FormulaValue::Array { data: vec![vec![FormulaValue::Number(2.0)]], source: None },
+                    FormulaValue::Array {
+                        data: vec![vec![FormulaValue::Number(1.0)]],
+                        source: None,
+                    },
+                    FormulaValue::Array {
+                        data: vec![vec![FormulaValue::Number(2.0)]],
+                        source: None,
+                    },
                 ],
                 &c,
             )
@@ -5168,7 +5207,10 @@ mod tests {
         }
 
         fn arr(v: &[f64]) -> FormulaValue {
-            FormulaValue::Array { data: vec![v.iter().copied().map(FormulaValue::Number).collect()], source: None }
+            FormulaValue::Array {
+                data: vec![v.iter().copied().map(FormulaValue::Number).collect()],
+                source: None,
+            }
         }
 
         fn as_number(v: FormulaValue) -> f64 {
@@ -5398,10 +5440,19 @@ mod tests {
             let out = fn_frequency(&[arr(&[1.0, 2.0, 3.0, 10.0]), arr(&[2.0, 5.0])], &c).unwrap();
             assert_eq!(
                 out,
-                FormulaValue::Array { data: vec![vec![n(2.0)], vec![n(1.0)], vec![n(1.0)]], source: None }
+                FormulaValue::Array {
+                    data: vec![vec![n(2.0)], vec![n(1.0)], vec![n(1.0)]],
+                    source: None
+                }
             );
             let out2 = fn_frequency(&[arr(&[]), arr(&[1.0])], &c).unwrap();
-            assert_eq!(out2, FormulaValue::Array { data: vec![vec![n(0.0)], vec![n(0.0)]], source: None });
+            assert_eq!(
+                out2,
+                FormulaValue::Array {
+                    data: vec![vec![n(0.0)], vec![n(0.0)]],
+                    source: None
+                }
+            );
         }
 
         #[test]
@@ -5505,14 +5556,20 @@ mod tests {
             let z0 = as_number(fn_gauss(&[n(0.0)], &c).unwrap());
             let z1 = as_number(fn_gauss(&[n(1.0)], &c).unwrap());
             assert!(z0.abs() < 1e-12);
-            assert!((z1 - 0.3413).abs() < 1e-3);
+            assert!((z1 - 0.341_344_746_068_543_04).abs() < 1e-12);
         }
 
         #[test]
         fn test_mode_mult() {
             let c = ctx();
             let out = fn_mode_mult(&[arr(&[1.0, 2.0, 2.0, 3.0, 3.0])], &c).unwrap();
-            assert_eq!(out, FormulaValue::Array { data: vec![vec![n(2.0)], vec![n(3.0)]], source: None });
+            assert_eq!(
+                out,
+                FormulaValue::Array {
+                    data: vec![vec![n(2.0)], vec![n(3.0)]],
+                    source: None
+                }
+            );
             assert_eq!(
                 fn_mode_mult(&[arr(&[1.0, 2.0, 3.0])], &c).unwrap(),
                 FormulaValue::Error(CellError::Na)
@@ -5549,10 +5606,10 @@ mod tests {
     }
 
     fn arr(values: &[f64]) -> FormulaValue {
-        FormulaValue::Array { data: vec![values
-            .iter()
-            .map(|v| FormulaValue::Number(*v))
-            .collect()], source: None }
+        FormulaValue::Array {
+            data: vec![values.iter().map(|v| FormulaValue::Number(*v)).collect()],
+            source: None,
+        }
     }
 
     fn assert_close(v: FormulaValue, expected: f64, tol: f64) {
@@ -6674,7 +6731,9 @@ mod tests {
     #[test]
     fn test_mode_mult_docs() {
         // Data {1,2,3,4,3,2,1,2,3,5,6,1}: modes are 1, 2, 3
-        if let FormulaValue::Array { data: rows, .. } = eval("=MODE.MULT({1,2,3,4,3,2,1,2,3,5,6,1})").unwrap() {
+        if let FormulaValue::Array { data: rows, .. } =
+            eval("=MODE.MULT({1,2,3,4,3,2,1,2,3,5,6,1})").unwrap()
+        {
             let values: Vec<f64> = rows
                 .iter()
                 .filter_map(|row| {
