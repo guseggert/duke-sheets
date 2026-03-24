@@ -28,6 +28,8 @@ fn sparse_rows_batch(
     include_comments: bool,
     include_formulas: bool,
     include_images: bool,
+    skip_empty_values: bool,
+    skip_blank_values: bool,
 ) -> PyResult<Vec<PyRow>> {
     let wb = workbook.read().map_err(to_py_err)?;
     let ws = wb
@@ -100,10 +102,12 @@ fn sparse_rows_batch(
 
         if current_row != Some(row) {
             if let Some(prev_row) = current_row {
-                rows.push(PyRow {
-                    index: prev_row,
-                    cells: std::mem::take(&mut current_cells),
-                });
+                if !current_cells.is_empty() {
+                    rows.push(PyRow {
+                        index: prev_row,
+                        cells: std::mem::take(&mut current_cells),
+                    });
+                }
             }
             current_row = Some(row);
         }
@@ -117,6 +121,16 @@ fn sparse_rows_batch(
         } else {
             ws.get_value_at(row, col).to_string()
         };
+
+        if skip_blank_values || skip_empty_values {
+            let raw = ws.get_value_at(row, col);
+            if skip_blank_values && raw.is_blank() {
+                continue;
+            }
+            if skip_empty_values && raw.is_empty() {
+                continue;
+            }
+        }
 
         let style = if include_styles {
             ws.cell_style_at(row, col).map(PyStyle::from)
@@ -190,10 +204,12 @@ fn sparse_rows_batch(
     }
 
     if let Some(last_row) = current_row {
-        rows.push(PyRow {
-            index: last_row,
-            cells: current_cells,
-        });
+        if !current_cells.is_empty() {
+            rows.push(PyRow {
+                index: last_row,
+                cells: current_cells,
+            });
+        }
     }
 
     Ok(rows)
@@ -219,6 +235,8 @@ pub struct PyRowIterator {
     include_comments: bool,
     include_formulas: bool,
     include_images: bool,
+    skip_empty_values: bool,
+    skip_blank_values: bool,
     next_row: u32,
     max_row: u32,
     buffer: Vec<PyRow>,
@@ -254,6 +272,8 @@ impl PyRowIterator {
                 self.include_comments,
                 self.include_formulas,
                 self.include_images,
+                self.skip_empty_values,
+                self.skip_blank_values,
             )?;
             self.cursor = 0;
 
@@ -388,7 +408,9 @@ impl PyWorksheet {
         include_hyperlinks=None,
         include_comments=None,
         include_formulas=None,
-        include_images=None
+        include_images=None,
+        skip_empty_values=false,
+        skip_blank_values=false
     ))]
     fn get_rows_batch(
         &self,
@@ -402,6 +424,8 @@ impl PyWorksheet {
         include_comments: Option<bool>,
         include_formulas: Option<bool>,
         include_images: Option<bool>,
+        skip_empty_values: bool,
+        skip_blank_values: bool,
     ) -> PyResult<Vec<PyRow>> {
         sparse_rows_batch(
             &self.workbook,
@@ -416,6 +440,8 @@ impl PyWorksheet {
             include_comments.unwrap_or(false),
             include_formulas.unwrap_or(false),
             include_images.unwrap_or(false),
+            skip_empty_values,
+            skip_blank_values,
         )
     }
 
@@ -428,7 +454,9 @@ impl PyWorksheet {
         include_hyperlinks=None,
         include_comments=None,
         include_formulas=None,
-        include_images=None
+        include_images=None,
+        skip_empty_values=false,
+        skip_blank_values=false
     ))]
     fn iterate_rows(
         &self,
@@ -440,6 +468,8 @@ impl PyWorksheet {
         include_comments: Option<bool>,
         include_formulas: Option<bool>,
         include_images: Option<bool>,
+        skip_empty_values: bool,
+        skip_blank_values: bool,
     ) -> PyResult<PyRowIterator> {
         Ok(PyRowIterator {
             workbook: Arc::clone(&self.workbook),
@@ -452,6 +482,8 @@ impl PyWorksheet {
             include_comments: include_comments.unwrap_or(false),
             include_formulas: include_formulas.unwrap_or(false),
             include_images: include_images.unwrap_or(false),
+            skip_empty_values,
+            skip_blank_values,
             next_row: 0,
             max_row: worksheet_max_row(&self.workbook, self.sheet_index)?,
             buffer: Vec::new(),

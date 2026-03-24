@@ -7,8 +7,8 @@ use super::{
     catch_panic, to_napi_err, JsAutoFilter, JsColor, JsComment, JsCommentEntry,
     JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
     JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsRow,
-    JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes,
-    JsStyle, JsTable, Worksheet,
+    JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle,
+    JsTable, Worksheet,
 };
 
 #[napi]
@@ -184,6 +184,8 @@ impl Worksheet {
             let inc_comments = opts.and_then(|o| o.include_comments).unwrap_or(false);
             let inc_formulas = opts.and_then(|o| o.include_formulas).unwrap_or(false);
             let inc_images = opts.and_then(|o| o.include_images).unwrap_or(false);
+            let skip_empty = opts.and_then(|o| o.skip_empty_values).unwrap_or(false);
+            let skip_blank = opts.and_then(|o| o.skip_blank_values).unwrap_or(false);
 
             // Compute the effective max row, extending for metadata sources.
             let mut max_row = ws.used_range().map(|r| r.end.row).unwrap_or(0);
@@ -215,10 +217,10 @@ impl Worksheet {
 
             // Build the set of (row, col) coordinates to include.
             // Start with non-empty value cells.
-            let mut coords: std::collections::BTreeSet<(u32, u16)> =
-                ws.populated_cells_in_range(start_row, end_row)
-                    .into_iter()
-                    .collect();
+            let mut coords: std::collections::BTreeSet<(u32, u16)> = ws
+                .populated_cells_in_range(start_row, end_row)
+                .into_iter()
+                .collect();
 
             // Add cells with metadata when their flag is enabled.
             if inc_styles {
@@ -268,10 +270,12 @@ impl Worksheet {
                 let (row, col) = (*row, *col);
                 if current_row != Some(row) {
                     if let Some(prev_row) = current_row {
-                        rows.push(JsRow {
-                            index: prev_row,
-                            cells: std::mem::take(&mut current_cells),
-                        });
+                        if !current_cells.is_empty() {
+                            rows.push(JsRow {
+                                index: prev_row,
+                                cells: std::mem::take(&mut current_cells),
+                            });
+                        }
                     }
                     current_row = Some(row);
                 }
@@ -285,6 +289,16 @@ impl Worksheet {
                 } else {
                     ws.get_value_at(row, col).to_string()
                 };
+
+                if skip_blank || skip_empty {
+                    let raw = ws.get_value_at(row, col);
+                    if skip_blank && raw.is_blank() {
+                        continue;
+                    }
+                    if skip_empty && raw.is_empty() {
+                        continue;
+                    }
+                }
 
                 let style = if inc_styles {
                     ws.cell_style_at(row, col).map(JsStyle::from)
@@ -303,7 +317,11 @@ impl Worksheet {
 
                 let is_merged_secondary = if inc_merge {
                     let v = ws.is_merged_secondary(row, col);
-                    if v { Some(true) } else { None }
+                    if v {
+                        Some(true)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -352,10 +370,12 @@ impl Worksheet {
             }
 
             if let Some(last_row) = current_row {
-                rows.push(JsRow {
-                    index: last_row,
-                    cells: current_cells,
-                });
+                if !current_cells.is_empty() {
+                    rows.push(JsRow {
+                        index: last_row,
+                        cells: current_cells,
+                    });
+                }
             }
 
             Ok(rows)

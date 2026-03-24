@@ -769,3 +769,63 @@ describe("iterateRows metadata flags", () => {
     expect(rows[0].cells[0].formula).toBeUndefined();
   });
 });
+
+describe("iterateRows skip flags", () => {
+  it("skipEmptyValues filters empty cells but keeps empty strings", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "merged");
+    sheet.mergeCells("A1:C1");
+    sheet.setCell("A2", "");
+
+    const rows = [...sheet.iterateRows({ includeMergeInfo: true, skipEmptyValues: true })];
+    expect(rows).toHaveLength(2);
+
+    const mergedRow = rows.find(r => r.index === 0);
+    expect(mergedRow).toBeDefined();
+    expect(mergedRow!.cells.map(c => c.col)).toEqual([0]);
+    expect(mergedRow!.cells[0].value).toBe("merged");
+
+    const emptyStringRow = rows.find(r => r.index === 1);
+    expect(emptyStringRow).toBeDefined();
+    expect(emptyStringRow!.cells).toHaveLength(1);
+    expect(emptyStringRow!.cells[0].col).toBe(0);
+    expect(emptyStringRow!.cells[0].value).toBe("");
+  });
+
+  it("skipBlankValues filters both empty and empty-string cells", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", 10);
+    sheet.setCell("B1", "");
+    sheet.setCell("A2", "merged");
+    sheet.mergeCells("A2:C2");
+
+    const rows = [...sheet.iterateRows({ includeMergeInfo: true, skipBlankValues: true })];
+    expect(rows).toHaveLength(2);
+
+    const firstRow = rows.find(r => r.index === 0);
+    expect(firstRow).toBeDefined();
+    expect(firstRow!.cells.map(c => c.col)).toEqual([0]);
+    expect(firstRow!.cells[0].value).toBe("10");
+
+    const mergedRow = rows.find(r => r.index === 1);
+    expect(mergedRow).toBeDefined();
+    expect(mergedRow!.cells.map(c => c.col)).toEqual([0]);
+    expect(mergedRow!.cells[0].value).toBe("merged");
+  });
+
+  it("omits rows whose cells are fully filtered out", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "");
+    sheet.setCell("B2", 42);
+
+    const rows = [...sheet.iterateRows({ skipBlankValues: true })];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].index).toBe(1);
+    expect(rows[0].cells).toHaveLength(1);
+    expect(rows[0].cells[0].col).toBe(1);
+    expect(rows[0].cells[0].value).toBe("42");
+  });
+});

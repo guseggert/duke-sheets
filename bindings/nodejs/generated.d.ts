@@ -808,6 +808,10 @@ export interface JsRowsOptions {
   includeFormulas?: boolean
   /** Include IMAGE() metadata. */
   includeImages?: boolean
+  /** Skip cells whose raw value is empty (CellValue::Empty). */
+  skipEmptyValues?: boolean
+  /** Skip cells whose raw value is blank (empty, empty string, or empty rich text). */
+  skipBlankValues?: boolean
 }
 
 /** Font properties for a rich text run (all fields optional — unset inherits cell style). */

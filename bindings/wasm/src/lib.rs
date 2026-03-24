@@ -58,6 +58,8 @@ export interface JsRowsOptions {
   includeComments?: boolean;
   includeFormulas?: boolean;
   includeImages?: boolean;
+  skipEmptyValues?: boolean;
+  skipBlankValues?: boolean;
 }
 
 export class RowIterator implements IterableIterator<JsRow> {

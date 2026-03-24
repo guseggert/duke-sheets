@@ -51,6 +51,8 @@ pub struct WasmRowsOptions {
     pub include_comments: Option<bool>,
     pub include_formulas: Option<bool>,
     pub include_images: Option<bool>,
+    pub skip_empty_values: Option<bool>,
+    pub skip_blank_values: Option<bool>,
 }
 
 #[derive(Serialize)]

@@ -12,7 +12,7 @@ class TestCellOperations:
         """Should set and get a number."""
         sheet = workbook.get_sheet(0)
         sheet.set_cell("A1", 42.0)
-        
+
         value = sheet.get_cell("A1")
         assert value.is_number
         assert value.as_number() == 42.0
@@ -21,7 +21,7 @@ class TestCellOperations:
         """Should convert integer to float."""
         sheet = workbook.get_sheet(0)
         sheet.set_cell("A1", 42)
-        
+
         value = sheet.get_cell("A1")
         assert value.is_number
         assert value.as_number() == 42.0
@@ -30,7 +30,7 @@ class TestCellOperations:
         """Should set and get text."""
         sheet = workbook.get_sheet(0)
         sheet.set_cell("A1", "Hello, World!")
-        
+
         value = sheet.get_cell("A1")
         assert value.is_text
         assert value.as_text() == "Hello, World!"
@@ -39,7 +39,7 @@ class TestCellOperations:
         """Should set and get True."""
         sheet = workbook.get_sheet(0)
         sheet.set_cell("A1", True)
-        
+
         value = sheet.get_cell("A1")
         assert value.is_boolean
         assert value.as_boolean() == True
@@ -48,7 +48,7 @@ class TestCellOperations:
         """Should set and get False."""
         sheet = workbook.get_sheet(0)
         sheet.set_cell("A1", False)
-        
+
         value = sheet.get_cell("A1")
         assert value.is_boolean
         assert value.as_boolean() == False
@@ -58,7 +58,7 @@ class TestCellOperations:
         sheet = workbook.get_sheet(0)
         sheet.set_cell("A1", 42.0)
         sheet.set_cell("A1", None)
-        
+
         value = sheet.get_cell("A1")
         assert value.is_empty
 
@@ -71,7 +71,7 @@ class TestCellOperations:
     def test_invalid_cell_address(self, workbook):
         """Should raise error for invalid address."""
         sheet = workbook.get_sheet(0)
-        
+
         with pytest.raises(ValueError):
             sheet.set_cell("invalid", 42)
 
@@ -79,7 +79,7 @@ class TestCellOperations:
         """Cell addresses should be case-insensitive."""
         sheet = workbook.get_sheet(0)
         sheet.set_cell("a1", 42.0)
-        
+
         value = sheet.get_cell("A1")
         assert value.as_number() == 42.0
 
@@ -96,7 +96,7 @@ class TestUsedRange:
         """Single cell should define used range."""
         sheet = workbook.get_sheet(0)
         sheet.set_cell("B2", 42.0)
-        
+
         used = sheet.used_range
         assert used is not None
         min_row, min_col, max_row, max_col = used
@@ -110,7 +110,7 @@ class TestUsedRange:
         sheet = workbook.get_sheet(0)
         sheet.set_cell("A1", 1.0)
         sheet.set_cell("C5", 2.0)
-        
+
         used = sheet.used_range
         assert used is not None
         min_row, min_col, max_row, max_col = used
@@ -127,7 +127,7 @@ class TestRowColumnDimensions:
         """Should set row height."""
         sheet = workbook.get_sheet(0)
         sheet.set_row_height(0, 30.0)
-        
+
         height = sheet.get_row_height(0)
         assert height == 30.0
 
@@ -135,7 +135,7 @@ class TestRowColumnDimensions:
         """Should set column width."""
         sheet = workbook.get_sheet(0)
         sheet.set_column_width(0, 15.0)
-        
+
         width = sheet.get_column_width(0)
         assert width == 15.0
 
@@ -241,3 +241,60 @@ class TestIterateRows:
 
         batch3 = sheet.get_rows_batch(100, 100)
         assert len(batch3) == 0
+
+    def test_iterate_rows_skip_empty_values(self, workbook):
+        sheet = workbook.get_sheet(0)
+        sheet.set_cell("A1", "merged")
+        sheet.merge_cells("A1:C1")
+        sheet.set_cell("A2", "")
+
+        rows = list(sheet.iterate_rows(include_merge_info=True, skip_empty_values=True))
+
+        assert [row.index for row in rows] == [0, 1]
+        assert [cell.col for cell in rows[0].cells] == [0]
+        assert rows[0].cells[0].value == "merged"
+        assert [cell.col for cell in rows[1].cells] == [0]
+        assert rows[1].cells[0].value == ""
+
+    def test_iterate_rows_skip_blank_values(self, workbook):
+        sheet = workbook.get_sheet(0)
+        sheet.set_cell("A1", 10)
+        sheet.set_cell("B1", "")
+        sheet.set_cell("A2", "merged")
+        sheet.merge_cells("A2:C2")
+
+        rows = list(sheet.iterate_rows(include_merge_info=True, skip_blank_values=True))
+
+        assert [row.index for row in rows] == [0, 1]
+        assert [cell.col for cell in rows[0].cells] == [0]
+        assert rows[0].cells[0].value == "10"
+        assert [cell.col for cell in rows[1].cells] == [0]
+        assert rows[1].cells[0].value == "merged"
+
+    def test_get_rows_batch_skip_flags(self, workbook):
+        sheet = workbook.get_sheet(0)
+        sheet.set_cell("A1", "")
+        sheet.set_cell("A2", "merged")
+        sheet.merge_cells("A2:C2")
+        sheet.set_cell("B3", 42)
+
+        keep_empty_strings = sheet.get_rows_batch(
+            0,
+            10,
+            include_merge_info=True,
+            skip_empty_values=True,
+        )
+        assert [row.index for row in keep_empty_strings] == [0, 1, 2]
+        assert keep_empty_strings[0].cells[0].value == ""
+        assert [cell.col for cell in keep_empty_strings[1].cells] == [0]
+
+        skip_blanks = sheet.get_rows_batch(
+            0,
+            10,
+            include_merge_info=True,
+            skip_blank_values=True,
+        )
+        assert [row.index for row in skip_blanks] == [1, 2]
+        assert [cell.col for cell in skip_blanks[0].cells] == [0]
+        assert skip_blanks[0].cells[0].value == "merged"
+        assert skip_blanks[1].cells[0].value == "42"

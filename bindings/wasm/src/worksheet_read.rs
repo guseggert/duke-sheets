@@ -184,6 +184,14 @@ impl Worksheet {
             .as_ref()
             .and_then(|o| o.include_images)
             .unwrap_or(false);
+        let skip_empty = options
+            .as_ref()
+            .and_then(|o| o.skip_empty_values)
+            .unwrap_or(false);
+        let skip_blank = options
+            .as_ref()
+            .and_then(|o| o.skip_blank_values)
+            .unwrap_or(false);
 
         let max_row = ws.used_range().map(|r| r.end.row).unwrap_or(0);
         let end_row = max_row.min(start_row.saturating_add(max_rows).saturating_sub(1));
@@ -244,10 +252,12 @@ impl Worksheet {
             let (row, col) = (*row, *col);
             if current_row != Some(row) {
                 if let Some(prev_row) = current_row {
-                    rows.push(WasmRow {
-                        index: prev_row,
-                        cells: std::mem::take(&mut current_cells),
-                    });
+                    if !current_cells.is_empty() {
+                        rows.push(WasmRow {
+                            index: prev_row,
+                            cells: std::mem::take(&mut current_cells),
+                        });
+                    }
                 }
                 current_row = Some(row);
             }
@@ -261,6 +271,16 @@ impl Worksheet {
             } else {
                 ws.get_value_at(row, col).to_string()
             };
+
+            if skip_blank || skip_empty {
+                let raw = ws.get_value_at(row, col);
+                if skip_blank && raw.is_blank() {
+                    continue;
+                }
+                if skip_empty && raw.is_empty() {
+                    continue;
+                }
+            }
 
             let style = if inc_styles {
                 ws.cell_style_at(row, col).map(WasmStyle::from)
@@ -328,10 +348,12 @@ impl Worksheet {
         }
 
         if let Some(last_row) = current_row {
-            rows.push(WasmRow {
-                index: last_row,
-                cells: current_cells,
-            });
+            if !current_cells.is_empty() {
+                rows.push(WasmRow {
+                    index: last_row,
+                    cells: current_cells,
+                });
+            }
         }
 
         to_js_value(&rows).map_err(JsValue::from)

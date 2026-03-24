@@ -39,8 +39,7 @@ impl FormulaData {
 ///
 /// This enum holds only leaf values — no formula text or metadata.
 /// Formulas are stored separately in [`CellStorage`](super::CellStorage).
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum CellValue {
     /// Empty cell (no value)
     #[default]
@@ -89,6 +88,16 @@ impl CellValue {
     /// Check if the cell is empty
     pub fn is_empty(&self) -> bool {
         matches!(self, CellValue::Empty)
+    }
+
+    /// Check if the cell is blank (empty, empty string, or empty rich text)
+    pub fn is_blank(&self) -> bool {
+        match self {
+            CellValue::Empty => true,
+            CellValue::String(s) => s.as_str().is_empty(),
+            CellValue::RichText(runs) => rich_text_to_plain(runs).is_empty(),
+            _ => false,
+        }
     }
 
     /// Check if the cell contains rich text
@@ -165,7 +174,6 @@ impl CellValue {
         }
     }
 }
-
 
 impl fmt::Display for CellValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -433,6 +441,20 @@ mod tests {
         assert_eq!(CellValue::Boolean(false).as_number(), Some(0.0));
         assert_eq!(CellValue::string("hello").as_number(), None);
         assert_eq!(CellValue::Empty.as_number(), None);
+    }
+
+    #[test]
+    fn test_cell_value_is_blank() {
+        assert!(CellValue::Empty.is_blank());
+        assert!(CellValue::Empty.is_empty());
+
+        assert!(CellValue::string("").is_blank());
+        assert!(!CellValue::string("").is_empty());
+
+        assert!(!CellValue::string("hello").is_blank());
+        assert!(!CellValue::Number(0.0).is_blank());
+        assert!(!CellValue::Boolean(false).is_blank());
+        assert!(CellValue::rich_text(vec![]).is_blank());
     }
 
     #[test]

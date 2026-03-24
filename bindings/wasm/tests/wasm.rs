@@ -27,7 +27,6 @@ fn get_string_field(obj: &JsValue, key: &str) -> String {
         .unwrap()
 }
 
-
 // Workbook Tests
 
 #[wasm_bindgen_test]
@@ -329,7 +328,6 @@ fn test_calculation_with_max_threads() {
     );
 }
 
-
 #[wasm_bindgen_test]
 fn test_calculation_image_metadata() {
     let wb = Workbook::new();
@@ -612,7 +610,7 @@ fn test_calculation_with_rtd_fn() {
     // JS function: (progId, server, topics) => progId + ":" + server + ":" + topics.join(",")
     let js_fn = Function::new_with_args(
         "progId, server, topics",
-        "return progId + ':' + server + ':' + topics.join(',')"
+        "return progId + ':' + server + ':' + topics.join(',')",
     );
 
     let opts = Object::new();
@@ -625,7 +623,6 @@ fn test_calculation_with_rtd_fn() {
         "prog:srv:topic1"
     );
 }
-
 
 #[wasm_bindgen_test]
 fn test_web_service_fn_returning_null() {
@@ -668,7 +665,10 @@ fn test_get_rows_batch_basic() {
     // Row 0 should have 2 cells (A1 and C1)
     let row0 = &rows[0];
     assert_eq!(get_f64_field(row0, "index") as u32, 0);
-    let cells0: Vec<JsValue> = js_sys::Array::from(&Reflect::get(row0, &JsValue::from_str("cells")).unwrap()).iter().collect();
+    let cells0: Vec<JsValue> =
+        js_sys::Array::from(&Reflect::get(row0, &JsValue::from_str("cells")).unwrap())
+            .iter()
+            .collect();
     assert_eq!(cells0.len(), 2);
     assert_eq!(get_f64_field(&cells0[0], "col") as u32, 0);
     assert_eq!(get_string_field(&cells0[0], "value"), "10");
@@ -736,6 +736,82 @@ fn test_get_rows_batch_calculated() {
 
     // Row 2 (A3) should have the calculated value
     let row2 = &rows[2];
-    let cells: Vec<JsValue> = js_sys::Array::from(&Reflect::get(row2, &JsValue::from_str("cells")).unwrap()).iter().collect();
+    let cells: Vec<JsValue> =
+        js_sys::Array::from(&Reflect::get(row2, &JsValue::from_str("cells")).unwrap())
+            .iter()
+            .collect();
     assert_eq!(get_string_field(&cells[0], "value"), "30");
+}
+
+#[wasm_bindgen_test]
+fn test_get_rows_batch_skip_empty() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    sheet.set_cell("A1", JsValue::from_str("merged")).unwrap();
+    sheet.merge_cells("A1:C1").unwrap();
+    sheet.set_cell("A2", JsValue::from_str("")).unwrap();
+
+    let opts = make_options(&[
+        ("includeMergeInfo", JsValue::from(true)),
+        ("skipEmptyValues", JsValue::from(true)),
+    ]);
+    let result = sheet.get_rows_batch(0, 10, opts).unwrap();
+    let rows: Vec<JsValue> = js_sys::Array::from(&result).iter().collect();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(get_f64_field(&rows[0], "index") as u32, 0);
+    let merged_cells: Vec<JsValue> =
+        js_sys::Array::from(&Reflect::get(&rows[0], &JsValue::from_str("cells")).unwrap())
+            .iter()
+            .collect();
+    assert_eq!(merged_cells.len(), 1);
+    assert_eq!(get_f64_field(&merged_cells[0], "col") as u32, 0);
+    assert_eq!(get_string_field(&merged_cells[0], "value"), "merged");
+
+    assert_eq!(get_f64_field(&rows[1], "index") as u32, 1);
+    let empty_string_cells: Vec<JsValue> =
+        js_sys::Array::from(&Reflect::get(&rows[1], &JsValue::from_str("cells")).unwrap())
+            .iter()
+            .collect();
+    assert_eq!(empty_string_cells.len(), 1);
+    assert_eq!(get_f64_field(&empty_string_cells[0], "col") as u32, 0);
+    assert_eq!(get_string_field(&empty_string_cells[0], "value"), "");
+}
+
+#[wasm_bindgen_test]
+fn test_get_rows_batch_skip_blank() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    sheet.set_cell("A1", JsValue::from_f64(10.0)).unwrap();
+    sheet.set_cell("B1", JsValue::from_str("")).unwrap();
+    sheet.set_cell("A2", JsValue::from_str("merged")).unwrap();
+    sheet.merge_cells("A2:C2").unwrap();
+
+    let opts = make_options(&[
+        ("includeMergeInfo", JsValue::from(true)),
+        ("skipBlankValues", JsValue::from(true)),
+    ]);
+    let result = sheet.get_rows_batch(0, 10, opts).unwrap();
+    let rows: Vec<JsValue> = js_sys::Array::from(&result).iter().collect();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(get_f64_field(&rows[0], "index") as u32, 0);
+    let first_row_cells: Vec<JsValue> =
+        js_sys::Array::from(&Reflect::get(&rows[0], &JsValue::from_str("cells")).unwrap())
+            .iter()
+            .collect();
+    assert_eq!(first_row_cells.len(), 1);
+    assert_eq!(get_f64_field(&first_row_cells[0], "col") as u32, 0);
+    assert_eq!(get_string_field(&first_row_cells[0], "value"), "10");
+
+    assert_eq!(get_f64_field(&rows[1], "index") as u32, 1);
+    let merged_row_cells: Vec<JsValue> =
+        js_sys::Array::from(&Reflect::get(&rows[1], &JsValue::from_str("cells")).unwrap())
+            .iter()
+            .collect();
+    assert_eq!(merged_row_cells.len(), 1);
+    assert_eq!(get_f64_field(&merged_row_cells[0], "col") as u32, 0);
+    assert_eq!(get_string_field(&merged_row_cells[0], "value"), "merged");
 }

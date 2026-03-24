@@ -68,6 +68,10 @@ pub struct JsRowsOptions {
     pub include_formulas: Option<bool>,
     /// Include IMAGE() metadata.
     pub include_images: Option<bool>,
+    /// Skip cells whose raw value is empty (CellValue::Empty).
+    pub skip_empty_values: Option<bool>,
+    /// Skip cells whose raw value is blank (empty, empty string, or empty rich text).
+    pub skip_blank_values: Option<bool>,
 }
 
 /// Color representation. The `colorType` field indicates the variant:
