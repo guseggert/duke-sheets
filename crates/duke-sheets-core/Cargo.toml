@@ -12,6 +12,7 @@ thiserror.workspace = true
 ahash.workspace = true
 chrono.workspace = true
 ssfmt.workspace = true
+duke-sheets-chart.workspace = true
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]

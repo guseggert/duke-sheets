@@ -8,7 +8,7 @@ use super::{
     JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
     JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsRow,
     JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle,
-    JsTable, Worksheet,
+    JsTable, JsChart, Worksheet,
 };
 
 #[napi]
@@ -1011,6 +1011,31 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             Ok(ws.is_merged_secondary(row, col as u16))
+        })
+    }
+    // Charts (read)
+
+    /// Get all charts embedded in the worksheet.
+    #[napi(getter)]
+    pub fn charts(&self) -> Result<Vec<JsChart>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.charts().iter().map(JsChart::from).collect())
+        })
+    }
+
+    /// Number of charts in the worksheet.
+    #[napi(getter)]
+    pub fn chart_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.chart_count() as u32)
         })
     }
 }

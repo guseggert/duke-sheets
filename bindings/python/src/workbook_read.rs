@@ -5,7 +5,7 @@ use duke_sheets_core::{named_range::NameScope, Workbook};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::{to_py_err, PyNamedRange, PyWorkbook, PyWorkbookSettings};
+use crate::{to_py_err, PyChartSheet, PyNamedRange, PySheetSlot, PyWorkbook, PyWorkbookSettings};
 
 #[pymethods]
 impl PyWorkbook {
@@ -99,5 +99,32 @@ impl PyWorkbook {
                 hidden: nr.hidden,
             })
             .collect())
+    }
+}
+
+#[pymethods]
+impl PyWorkbook {
+    #[getter]
+    fn chartsheets(&self) -> PyResult<Vec<PyChartSheet>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb.chartsheets().iter().map(PyChartSheet::from).collect())
+    }
+
+    #[getter]
+    fn chartsheet_count(&self) -> PyResult<u32> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb.chartsheet_count() as u32)
+    }
+
+    #[getter]
+    fn sheet_order(&self) -> PyResult<Vec<PySheetSlot>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb.sheet_order().iter().map(PySheetSlot::from).collect())
+    }
+
+    #[getter]
+    fn total_sheet_count(&self) -> PyResult<u32> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb.total_sheet_count() as u32)
     }
 }

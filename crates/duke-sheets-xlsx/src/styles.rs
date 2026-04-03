@@ -65,9 +65,12 @@ fn style_data_store() -> &'static Mutex<HashMap<u64, RoundtripStyleData>> {
 
 fn workbook_style_fingerprint(workbook: &Workbook) -> u64 {
     let mut hasher = DefaultHasher::new();
+    workbook.nonce().hash(&mut hasher);
     workbook.sheet_count().hash(&mut hasher);
     for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
         sheet_idx.hash(&mut hasher);
+        sheet.name().hash(&mut hasher);
+        sheet.cell_count().hash(&mut hasher);
         for (row, col, cell) in sheet.iter_cells() {
             row.hash(&mut hasher);
             col.hash(&mut hasher);

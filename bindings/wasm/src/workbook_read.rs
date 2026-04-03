@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 
-use crate::{to_js_value, types::WasmNamedRange, types::WasmWorkbookSettings, Workbook};
+use crate::{to_js_value, types::WasmChartSheet, types::WasmNamedRange, types::WasmSheetSlot, types::WasmWorkbookSettings, Workbook};
 
 #[wasm_bindgen]
 impl Workbook {
@@ -34,5 +34,34 @@ impl Workbook {
         let ranges: Vec<WasmNamedRange> =
             wb.named_ranges().iter().map(WasmNamedRange::from).collect();
         to_js_value(&ranges)
+    }
+}
+
+#[wasm_bindgen]
+impl Workbook {
+    #[wasm_bindgen(getter, js_name = chartsheets)]
+    pub fn chartsheets(&self) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        let sheets: Vec<WasmChartSheet> = wb.chartsheets().iter().map(WasmChartSheet::from).collect();
+        to_js_value(&sheets)
+    }
+
+    #[wasm_bindgen(getter, js_name = chartsheetCount)]
+    pub fn chartsheet_count(&self) -> Result<u32, JsError> {
+        let wb = self.inner.borrow();
+        Ok(wb.chartsheet_count() as u32)
+    }
+
+    #[wasm_bindgen(getter, js_name = sheetOrder)]
+    pub fn sheet_order(&self) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        let slots: Vec<WasmSheetSlot> = wb.sheet_order().iter().map(WasmSheetSlot::from).collect();
+        to_js_value(&slots)
+    }
+
+    #[wasm_bindgen(getter, js_name = totalSheetCount)]
+    pub fn total_sheet_count(&self) -> Result<u32, JsError> {
+        let wb = self.inner.borrow();
+        Ok(wb.total_sheet_count() as u32)
     }
 }

@@ -63,7 +63,7 @@ pub use locale::Locale;
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
-pub use workbook::{Workbook, WorkbookSettings};
+pub use workbook::{ChartSheet, SheetSlot, Workbook, WorkbookSettings};
 pub use worksheet::{
     FreezePanes, ImageInfo, ImageSizing, PageBreak, PageOrientation, PageSetup, Selection,
     SheetProtection, SheetVisibility, SplitPanes, Worksheet,

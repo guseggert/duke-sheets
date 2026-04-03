@@ -5,7 +5,7 @@ use napi_derive::napi;
 
 use duke_sheets_core::named_range::NameScope;
 
-use super::{catch_panic, to_napi_err, JsNamedRange, JsWorkbookSettings, Workbook};
+use super::{catch_panic, to_napi_err, JsChartSheet, JsNamedRange, JsSheetSlot, JsWorkbookSettings, Workbook};
 
 #[napi]
 impl Workbook {
@@ -68,6 +68,45 @@ impl Workbook {
                     hidden: nr.hidden,
                 })
                 .collect())
+        })
+    }
+}
+
+#[napi]
+impl Workbook {
+    /// Get all chart sheets.
+    #[napi(getter)]
+    pub fn chartsheets(&self) -> Result<Vec<JsChartSheet>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.chartsheets().iter().map(JsChartSheet::from).collect())
+        })
+    }
+
+    /// Get the number of chart sheets.
+    #[napi(getter)]
+    pub fn chartsheet_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.chartsheet_count() as u32)
+        })
+    }
+
+    /// Get the tab-bar ordering of worksheets and chartsheets.
+    #[napi(getter)]
+    pub fn sheet_order(&self) -> Result<Vec<JsSheetSlot>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.sheet_order().iter().map(JsSheetSlot::from).collect())
+        })
+    }
+
+    /// Total number of tabs (worksheets + chartsheets).
+    #[napi(getter)]
+    pub fn total_sheet_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.total_sheet_count() as u32)
         })
     }
 }

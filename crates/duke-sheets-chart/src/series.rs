@@ -1,7 +1,13 @@
 //! Data series types
 
+use crate::data_labels::{DataLabels, DataPoint};
+use crate::error_bars::ErrorBars;
+use crate::formatting::ChartShapeProperties;
+use crate::marker::Marker;
+use crate::trendline::Trendline;
+
 /// Data series for a chart
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DataSeries {
     /// Series name
     pub name: Option<String>,
@@ -9,6 +15,21 @@ pub struct DataSeries {
     pub values: DataReference,
     /// Categories (X data)
     pub categories: Option<DataReference>,
+    pub data_labels: Option<DataLabels>,
+    pub trendline: Option<Trendline>,
+    pub error_bars: Option<ErrorBars>,
+    pub marker: Option<Marker>,
+    pub data_points: Vec<DataPoint>,
+    pub shape_properties: Option<ChartShapeProperties>,
+    /// Smooth line (for line/scatter charts)
+    pub smooth: Option<bool>,
+    /// Pie explosion percent
+    pub explosion: Option<u32>,
+    pub invert_if_negative: Option<bool>,
+    pub bubble_3d: Option<bool>,
+    /// Raw extLst XML to preserve on roundtrip.
+    #[doc(hidden)]
+    pub raw_ext: Option<Vec<u8>>,
 }
 
 impl DataSeries {
@@ -18,6 +39,17 @@ impl DataSeries {
             name: None,
             values,
             categories: None,
+            data_labels: None,
+            trendline: None,
+            error_bars: None,
+            marker: None,
+            data_points: Vec::new(),
+            shape_properties: None,
+            smooth: None,
+            explosion: None,
+            raw_ext: None,
+            invert_if_negative: None,
+            bubble_3d: None,
         }
     }
 
@@ -35,7 +67,7 @@ impl DataSeries {
 }
 
 /// Reference to chart data
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DataReference {
     /// Formula reference (e.g., "Sheet1!$A$1:$A$10")
     Formula(String),

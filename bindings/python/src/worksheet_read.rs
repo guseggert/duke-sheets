@@ -6,11 +6,11 @@ use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 
 use crate::{
-    image_sizing_to_python, to_py_err, PyAutoFilter, PyCalculationImage, PyColor, PyComment,
-    PyCommentEntry, PyConditionalFormatRule, PyDataValidation, PyFormulaCell, PyFreezePanes,
-    PyHyperlink, PyHyperlinkEntry, PyMergeSpan, PyMergedRegion, PyPageBreak, PyPageSetup, PyRow,
-    PyRowCell, PySelection, PySheetProtection, PySpillSource, PySplitPanes, PyStyle, PyTable,
-    PyWorksheet,
+    image_sizing_to_python, to_py_err, PyAutoFilter, PyCalculationImage, PyChart, PyColor,
+    PyComment, PyCommentEntry, PyConditionalFormatRule, PyDataValidation, PyFormulaCell,
+    PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergeSpan, PyMergedRegion, PyPageBreak,
+    PyPageSetup, PyRow, PyRowCell, PySelection, PySheetProtection, PySpillSource, PySplitPanes,
+    PyStyle, PyTable, PyWorksheet,
 };
 
 const ROW_ITER_BATCH_SIZE: u32 = 1000;
@@ -940,5 +940,22 @@ impl PyWorksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
         Ok(ws.is_merged_secondary(row, col as u16))
+    }
+    #[getter]
+    fn charts(&self) -> PyResult<Vec<PyChart>> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws.charts().iter().map(PyChart::from).collect())
+    }
+
+    #[getter]
+    fn chart_count(&self) -> PyResult<u32> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws.chart_count() as u32)
     }
 }

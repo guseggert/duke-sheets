@@ -709,7 +709,6 @@ dependencies = [
 name = "duke-sheets-chart"
 version = "0.1.0"
 dependencies = [
- "duke-sheets-core",
  "pretty_assertions",
  "serde",
  "thiserror 1.0.69",
@@ -731,6 +730,7 @@ version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
  "chrono",
+ "duke-sheets-chart",
  "pretty_assertions",
  "serde",
  "ssfmt",

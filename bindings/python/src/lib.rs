@@ -846,5 +846,28 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySpillSource>()?;
     m.add_class::<PyMergedRegion>()?;
     m.add_class::<PyMergeSpan>()?;
+    m.add_class::<PyChart>()?;
+    m.add_class::<PyChartAnchor>()?;
+    m.add_class::<PyDataSeries>()?;
+    m.add_class::<PyDataReference>()?;
+    m.add_class::<PyAxis>()?;
+    m.add_class::<PyLegend>()?;
+    m.add_class::<PyChartNumberFormat>()?;
+    m.add_class::<PyChartShapeProperties>()?;
+    m.add_class::<PyDataLabels>()?;
+    m.add_class::<PyTrendline>()?;
+    m.add_class::<PyErrorBars>()?;
+    m.add_class::<PyMarker>()?;
+    m.add_class::<PyDataPoint>()?;
+    m.add_class::<PyView3D>()?;
+    m.add_class::<PyChartDataTable>()?;
+    m.add_class::<PyManualLayout>()?;
+    m.add_class::<PyLayout>()?;
+    m.add_class::<PyChartTypeGroup>()?;
+    m.add_class::<PyChartAxis>()?;
+    m.add_class::<PyChartLines>()?;
+    m.add_class::<PyUpDownBars>()?;
+    m.add_class::<PyChartSheet>()?;
+    m.add_class::<PySheetSlot>()?;
     Ok(())
 }
