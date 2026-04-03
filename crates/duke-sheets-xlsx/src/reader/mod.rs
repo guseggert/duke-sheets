@@ -23,7 +23,8 @@ use duke_sheets_core::conditional_format::{
 use duke_sheets_core::style::{Color, Style};
 use duke_sheets_core::validation::DataValidation;
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue, Hyperlink, PageBreak, SplitPanes, Workbook,
+    CellAddress, CellError, CellRange, CellValue, Hyperlink, PageBreak, SheetSlot, SplitPanes,
+    Workbook,
 };
 use formulas::{
     parse_cell_formula_state, resolve_cell_formula, CellFormulaKind, SharedFormulaMaster,
@@ -31,6 +32,8 @@ use formulas::{
 use theme::{read_theme_palette, resolve_style_theme_colors};
 
 mod comments;
+pub(crate) mod chart;
+mod drawing;
 mod conditional_format;
 mod data_validation;
 mod formulas;
@@ -38,6 +41,7 @@ mod shared_strings;
 mod table;
 mod theme;
 mod workbook;
+mod chartsheet;
 
 pub(crate) use formulas::CellFormulaState;
 use shared_strings::SharedStringEntry;
@@ -104,6 +108,34 @@ fn decode_excel_escapes(s: &str) -> String {
     result
 }
 
+fn read_chart_style_color<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    chart_path: &str,
+    chart: &mut duke_sheets_chart::Chart,
+) {
+    let chart_rels = match workbook::read_sheet_rels(archive, chart_path) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    for rel in chart_rels.values() {
+        if rel.rel_type.ends_with("/chartStyle") {
+            if let Ok(mut f) = archive.by_name(&rel.target) {
+                let mut bytes = Vec::new();
+                if f.read_to_end(&mut bytes).is_ok() {
+                    chart.raw_chart_style = Some(bytes);
+                }
+            }
+        } else if rel.rel_type.ends_with("/chartColorStyle") {
+            if let Ok(mut f) = archive.by_name(&rel.target) {
+                let mut bytes = Vec::new();
+                if f.read_to_end(&mut bytes).is_ok() {
+                    chart.raw_chart_color_style = Some(bytes);
+                }
+            }
+        }
+    }
+}
+
 /// XLSX file reader
 pub struct XlsxReader;
 
@@ -151,6 +183,7 @@ impl XlsxReader {
         let wb_props = read_workbook_xml(&mut archive)?;
 
         let sheet_paths = workbook_rels.sheet_paths;
+        let chartsheet_paths = workbook_rels.chartsheet_paths;
 
         // Create workbook
         let mut workbook = Workbook::empty();
@@ -164,10 +197,14 @@ impl XlsxReader {
         let sheet_info = &wb_props.sheets;
         let date_1904 = wb_props.date_1904;
 
-        // Read each worksheet
-        for (idx, sheet_entry) in sheet_info.iter().enumerate() {
+        // Read each sheet in tab-bar order (single pass over sheet_info).
+        // Worksheets and chartsheets are interleaved in workbook.xml <sheets>;
+        // we store them in separate Vecs but record ordering in sheet_order.
+        let mut ws_count: usize = 0;
+        for (_idx, sheet_entry) in sheet_info.iter().enumerate() {
             if let Some(path) = sheet_paths.get(&sheet_entry.r_id) {
                 let sheet_idx = workbook.add_worksheet_with_name_unchecked(&sheet_entry.name);
+                ws_count += 1;
                 workbook
                     .worksheet_mut(sheet_idx)
                     .unwrap()
@@ -176,6 +213,7 @@ impl XlsxReader {
                     .worksheet_mut(sheet_idx)
                     .unwrap()
                     .set_visibility(sheet_entry.visibility);
+                workbook.sheet_order_mut().push(SheetSlot::Worksheet(sheet_idx));
                 let sheet_rels = read_sheet_rels(&mut archive, path)?;
                 Self::read_worksheet(
                     &mut archive,
@@ -195,12 +233,12 @@ impl XlsxReader {
                     .values()
                     .find(|r| r.rel_type.ends_with("/comments"))
                     .map(|r| r.target.clone())
-                    .unwrap_or_else(|| format!("xl/comments{}.xml", idx + 1));
+                    .unwrap_or_else(|| format!("xl/comments{}.xml", ws_count));
                 let vml_path = sheet_rels
                     .values()
                     .find(|r| r.rel_type.ends_with("/vmlDrawing"))
                     .map(|r| r.target.clone())
-                    .unwrap_or_else(|| format!("xl/drawings/vmlDrawing{}.vml", idx + 1));
+                    .unwrap_or_else(|| format!("xl/drawings/vmlDrawing{}.vml", ws_count));
                 read_worksheet_comments(
                     &mut archive,
                     &comments_path,
@@ -222,6 +260,65 @@ impl XlsxReader {
                         workbook.worksheet_mut(sheet_idx).unwrap().add_table(t);
                     }
                 }
+
+                // Read charts for this worksheet (if present).
+                // Sheet → drawing relationship → drawing XML → chart relationships → chart XML.
+                for drawing_rel in sheet_rels.values().filter(|r| r.rel_type.ends_with("/drawing")) {
+                    let drawing_path = &drawing_rel.target;
+                    let drawing_contents = drawing::read_drawing_contents(&mut archive, drawing_path)?;
+                    for raw in drawing_contents.raw_non_chart_anchors {
+                        workbook.worksheet_mut(sheet_idx).unwrap().raw_drawing_objects.push(raw);
+                    }
+                    if drawing_contents.chart_refs.is_empty() {
+                        continue;
+                    }
+                    let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
+                    for chart_ref in drawing_contents.chart_refs {
+                        if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
+                            if let Some(mut c) = chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)? {
+                                read_chart_style_color(&mut archive, &dr.target, &mut c);
+                                workbook.worksheet_mut(sheet_idx).unwrap().add_chart(c);
+                            }
+                        }
+                    }
+                }
+            } else if let Some(cs_path) = chartsheet_paths.get(&sheet_entry.r_id) {
+                let mut chart_found = false;
+                let drawing_rid = chartsheet::read_chartsheet_drawing_rid(&mut archive, cs_path)?;
+                if let Some(rid) = drawing_rid {
+                    let cs_rels = read_sheet_rels(&mut archive, cs_path)?;
+                    if let Some(drawing_rel) = cs_rels.get(&rid) {
+                        let drawing_path = &drawing_rel.target;
+                        let drawing_contents = drawing::read_drawing_contents(&mut archive, drawing_path)?;
+                        let raw_anchors = drawing_contents.raw_non_chart_anchors;
+                        let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
+                        for chart_ref in drawing_contents.chart_refs {
+                            if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
+                                if let Some(mut c) = chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)? {
+                                    read_chart_style_color(&mut archive, &dr.target, &mut c);
+                                    let cs_idx = workbook.add_chartsheet_unchecked(duke_sheets_core::ChartSheet {
+                                        name: sheet_entry.name.clone(),
+                                        chart: c,
+                                        visibility: sheet_entry.visibility,
+                                        raw_drawing_objects: raw_anchors.clone(),
+                                    });
+                                    workbook.sheet_order_mut().push(SheetSlot::ChartSheet(cs_idx));
+                                    chart_found = true;
+                                    break; // chartsheet has exactly one chart
+                                }
+                            }
+                        }
+                    }
+                }
+                if !chart_found {
+                    let cs_idx = workbook.add_chartsheet_unchecked(duke_sheets_core::ChartSheet {
+                        name: sheet_entry.name.clone(),
+                        chart: duke_sheets_chart::Chart::new(duke_sheets_chart::ChartType::Unsupported("missing".into())),
+                        visibility: sheet_entry.visibility,
+                        raw_drawing_objects: Vec::new(),
+                    });
+                    workbook.sheet_order_mut().push(SheetSlot::ChartSheet(cs_idx));
+                }
             }
         }
 
@@ -229,7 +326,7 @@ impl XlsxReader {
         Self::apply_print_settings(&mut workbook);
 
         // Ensure at least one sheet exists
-        if workbook.is_empty() {
+        if workbook.sheet_count() == 0 && workbook.chartsheet_count() == 0 {
             workbook.add_worksheet()?;
         }
 

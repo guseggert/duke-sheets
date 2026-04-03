@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+use duke_sheets_chart::Chart;
+
 use crate::auto_filter::AutoFilter;
 use crate::cell::view::CellView;
 use crate::cell::{CellAddress, CellData, CellRange, CellStorage, CellValue, FormulaData};
@@ -65,6 +67,8 @@ pub struct Worksheet {
     conditional_formats: Vec<ConditionalFormatRule>,
     /// Tables (ListObjects)
     tables: Vec<Table>,
+    /// Embedded charts
+    charts: Vec<Chart>,
     /// Standalone auto-filter (dropdown filter on columns)
     auto_filter: Option<AutoFilter>,
     /// Horizontal page breaks (row breaks)
@@ -91,6 +95,11 @@ pub struct Worksheet {
     /// Image metadata from IMAGE() formulas, populated during calculation.
     /// Behind RwLock so the evaluator can write through a shared &Worksheet reference.
     image_metadata: RwLock<HashMap<(u32, u16), ImageInfo>>,
+    /// Raw XML fragments for non-chart drawing anchors, preserved for roundtrip.
+    /// Each entry is one complete anchor element (twoCellAnchor/oneCellAnchor/absoluteAnchor)
+    /// that does NOT contain a chart graphicFrame.
+    #[doc(hidden)]
+    pub raw_drawing_objects: Vec<Vec<u8>>,
 }
 
 /// Sizing mode for the IMAGE function.
@@ -142,6 +151,7 @@ impl Worksheet {
             data_validations: Vec::new(),
             conditional_formats: Vec::new(),
             tables: Vec::new(),
+            charts: Vec::new(),
             auto_filter: None,
             row_breaks: Vec::new(),
             col_breaks: Vec::new(),
@@ -152,6 +162,7 @@ impl Worksheet {
             topology_generation: 0,
             dirty_value_ranges: Vec::new(),
             image_metadata: RwLock::new(HashMap::new()),
+            raw_drawing_objects: Vec::new(),
         }
     }
 
@@ -1234,6 +1245,28 @@ impl Worksheet {
     /// Get the number of tables.
     pub fn table_count(&self) -> usize {
         self.tables.len()
+    }
+
+    /// Add a chart to this worksheet.
+    pub fn add_chart(&mut self, chart: Chart) {
+        self.charts.push(chart);
+        self.mutation_count += 1;
+    }
+
+    /// Get all charts.
+    pub fn charts(&self) -> &[Chart] {
+        &self.charts
+    }
+
+    /// Get a mutable reference to all charts.
+    pub fn charts_mut(&mut self) -> &mut Vec<Chart> {
+        self.mutation_count += 1;
+        &mut self.charts
+    }
+
+    /// Get the number of charts.
+    pub fn chart_count(&self) -> usize {
+        self.charts.len()
     }
 
     /// Set the standalone auto-filter for this worksheet.

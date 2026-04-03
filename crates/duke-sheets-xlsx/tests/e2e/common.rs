@@ -75,6 +75,7 @@ pub async fn lo_bridge() -> Option<&'static Mutex<LibreOfficeBridge>> {
 /// The file is placed in `/tmp/duke-sheets-urp/` so that LibreOffice (inside
 /// Docker) can write to it and the host test process can read it back.
 pub fn temp_fixture_path() -> PathBuf {
+    let _ = std::fs::create_dir_all(SHARED_DIR);
     let n = FILE_COUNTER.fetch_add(1, Ordering::SeqCst);
     let pid = std::process::id();
     PathBuf::from(format!("{SHARED_DIR}/test_{pid}_{n}.xlsx"))
@@ -82,6 +83,7 @@ pub fn temp_fixture_path() -> PathBuf {
 
 /// Same as `temp_fixture_path()` but with `.xls` extension (for BIFF8/XLS tests).
 pub fn temp_fixture_path_xls() -> PathBuf {
+    let _ = std::fs::create_dir_all(SHARED_DIR);
     let n = FILE_COUNTER.fetch_add(1, Ordering::SeqCst);
     let pid = std::process::id();
     PathBuf::from(format!("{SHARED_DIR}/test_{pid}_{n}.xls"))

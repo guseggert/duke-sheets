@@ -26,6 +26,7 @@ pub use crate::{
     CfRuleType,
     // Chart types
     Chart,
+    ChartAnchor,
     ChartType,
 
     Color,

@@ -1292,3 +1292,737 @@ pub struct WasmMergeSpan {
     pub row_span: u32,
     pub col_span: u32,
 }
+
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartAnchor {
+    pub from_col: u16,
+    pub from_row: u32,
+    pub from_col_offset: i64,
+    pub from_row_offset: i64,
+    pub to_col: u16,
+    pub to_row: u32,
+    pub to_col_offset: i64,
+    pub to_row_offset: i64,
+}
+
+impl From<&duke_sheets_chart::ChartAnchor> for WasmChartAnchor {
+    fn from(a: &duke_sheets_chart::ChartAnchor) -> Self {
+        Self {
+            from_col: a.from_col,
+            from_row: a.from_row,
+            from_col_offset: a.from_col_offset,
+            from_row_offset: a.from_row_offset,
+            to_col: a.to_col,
+            to_row: a.to_row,
+            to_col_offset: a.to_col_offset,
+            to_row_offset: a.to_row_offset,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmDataReference {
+    pub ref_type: String,
+    pub formula: Option<String>,
+    pub numbers: Option<Vec<f64>>,
+    pub strings: Option<Vec<String>>,
+}
+
+impl From<&duke_sheets_chart::DataReference> for WasmDataReference {
+    fn from(r: &duke_sheets_chart::DataReference) -> Self {
+        match r {
+            duke_sheets_chart::DataReference::Formula(f) => Self {
+                ref_type: "formula".into(),
+                formula: Some(f.clone()),
+                numbers: None,
+                strings: None,
+            },
+            duke_sheets_chart::DataReference::Numbers(n) => Self {
+                ref_type: "numbers".into(),
+                formula: None,
+                numbers: Some(n.clone()),
+                strings: None,
+            },
+            duke_sheets_chart::DataReference::Strings(s) => Self {
+                ref_type: "strings".into(),
+                formula: None,
+                numbers: None,
+                strings: Some(s.clone()),
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartNumberFormat {
+    pub format_code: String,
+    pub source_linked: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::NumberFormat> for WasmChartNumberFormat {
+    fn from(n: &duke_sheets_chart::NumberFormat) -> Self {
+        Self {
+            format_code: n.format_code.clone(),
+            source_linked: n.source_linked,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartShapeProperties {
+    pub solid_fill_hex: Option<String>,
+    pub no_fill: bool,
+    pub line_width: Option<i64>,
+    pub line_color_hex: Option<String>,
+    pub line_no_fill: bool,
+    pub line_dash_style: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartShapeProperties> for WasmChartShapeProperties {
+    fn from(sp: &duke_sheets_chart::ChartShapeProperties) -> Self {
+        Self {
+            solid_fill_hex: sp.solid_fill.as_ref().map(|c| c.hex.clone()),
+            no_fill: sp.no_fill,
+            line_width: sp.line.as_ref().and_then(|l| l.width),
+            line_color_hex: sp.line.as_ref().and_then(|l| l.solid_fill.as_ref().map(|c| c.hex.clone())),
+            line_no_fill: sp.line.as_ref().map(|l| l.no_fill).unwrap_or(false),
+            line_dash_style: sp.line.as_ref().and_then(|l| l.dash_style.clone()),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmDataLabels {
+    pub show_legend_key: Option<bool>,
+    pub show_value: Option<bool>,
+    pub show_category_name: Option<bool>,
+    pub show_series_name: Option<bool>,
+    pub show_percent: Option<bool>,
+    pub show_bubble_size: Option<bool>,
+    pub separator: Option<String>,
+    pub position: Option<String>,
+    pub number_format: Option<WasmChartNumberFormat>,
+    pub show_leader_lines: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::DataLabels> for WasmDataLabels {
+    fn from(d: &duke_sheets_chart::DataLabels) -> Self {
+        use duke_sheets_chart::DataLabelPosition;
+        Self {
+            show_legend_key: d.show_legend_key,
+            show_value: d.show_value,
+            show_category_name: d.show_category_name,
+            show_series_name: d.show_series_name,
+            show_percent: d.show_percent,
+            show_bubble_size: d.show_bubble_size,
+            separator: d.separator.clone(),
+            position: d.position.as_ref().map(|p| {
+                match p {
+                    DataLabelPosition::BestFit => "bestFit",
+                    DataLabelPosition::Bottom => "bottom",
+                    DataLabelPosition::Center => "center",
+                    DataLabelPosition::InsideBase => "insideBase",
+                    DataLabelPosition::InsideEnd => "insideEnd",
+                    DataLabelPosition::Left => "left",
+                    DataLabelPosition::OutsideEnd => "outsideEnd",
+                    DataLabelPosition::Right => "right",
+                    DataLabelPosition::Top => "top",
+                }
+                .into()
+            }),
+            number_format: d.number_format.as_ref().map(WasmChartNumberFormat::from),
+            show_leader_lines: d.show_leader_lines,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmTrendline {
+    pub trendline_type: String,
+    pub name: Option<String>,
+    pub order: Option<u32>,
+    pub period: Option<u32>,
+    pub forward: Option<f64>,
+    pub backward: Option<f64>,
+    pub intercept: Option<f64>,
+    pub display_r_squared: Option<bool>,
+    pub display_equation: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::Trendline> for WasmTrendline {
+    fn from(t: &duke_sheets_chart::Trendline) -> Self {
+        use duke_sheets_chart::TrendlineType;
+        Self {
+            trendline_type: match t.trendline_type {
+                TrendlineType::Linear => "linear",
+                TrendlineType::Exponential => "exponential",
+                TrendlineType::Logarithmic => "logarithmic",
+                TrendlineType::MovingAverage => "movingAverage",
+                TrendlineType::Polynomial => "polynomial",
+                TrendlineType::Power => "power",
+            }
+            .into(),
+            name: t.name.clone(),
+            order: t.order,
+            period: t.period,
+            forward: t.forward,
+            backward: t.backward,
+            intercept: t.intercept,
+            display_r_squared: t.display_r_squared,
+            display_equation: t.display_equation,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmErrorBars {
+    pub direction: String,
+    pub bar_type: String,
+    pub value_type: String,
+    pub value: Option<f64>,
+    pub no_end_cap: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::ErrorBars> for WasmErrorBars {
+    fn from(e: &duke_sheets_chart::ErrorBars) -> Self {
+        use duke_sheets_chart::{ErrorBarDirection, ErrorBarType, ErrorValueType};
+        Self {
+            direction: match e.direction {
+                ErrorBarDirection::X => "x",
+                ErrorBarDirection::Y => "y",
+            }
+            .into(),
+            bar_type: match e.bar_type {
+                ErrorBarType::Both => "both",
+                ErrorBarType::Minus => "minus",
+                ErrorBarType::Plus => "plus",
+            }
+            .into(),
+            value_type: match e.value_type {
+                ErrorValueType::Custom => "custom",
+                ErrorValueType::FixedValue => "fixedValue",
+                ErrorValueType::Percentage => "percentage",
+                ErrorValueType::StandardDeviation => "standardDeviation",
+                ErrorValueType::StandardError => "standardError",
+            }
+            .into(),
+            value: e.value,
+            no_end_cap: e.no_end_cap,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmMarker {
+    pub symbol: Option<String>,
+    pub size: Option<u8>,
+}
+
+impl From<&duke_sheets_chart::Marker> for WasmMarker {
+    fn from(m: &duke_sheets_chart::Marker) -> Self {
+        use duke_sheets_chart::MarkerSymbol;
+        Self {
+            symbol: m.symbol.as_ref().map(|s| {
+                match s {
+                    MarkerSymbol::Circle => "circle",
+                    MarkerSymbol::Dash => "dash",
+                    MarkerSymbol::Diamond => "diamond",
+                    MarkerSymbol::Dot => "dot",
+                    MarkerSymbol::None => "none",
+                    MarkerSymbol::Picture => "picture",
+                    MarkerSymbol::Plus => "plus",
+                    MarkerSymbol::Square => "square",
+                    MarkerSymbol::Star => "star",
+                    MarkerSymbol::Triangle => "triangle",
+                    MarkerSymbol::X => "x",
+                    MarkerSymbol::Auto => "auto",
+                }
+                .into()
+            }),
+            size: m.size,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmDataPoint {
+    pub index: u32,
+    pub marker: Option<WasmMarker>,
+    pub explosion: Option<u32>,
+}
+
+impl From<&duke_sheets_chart::DataPoint> for WasmDataPoint {
+    fn from(dp: &duke_sheets_chart::DataPoint) -> Self {
+        Self {
+            index: dp.index,
+            marker: dp.marker.as_ref().map(WasmMarker::from),
+            explosion: dp.explosion,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmView3D {
+    pub rotate_x: Option<i32>,
+    pub rotate_y: Option<i32>,
+    pub depth_percent: Option<u32>,
+    pub height_percent: Option<u32>,
+    pub perspective: Option<u32>,
+    pub right_angle_axes: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::View3D> for WasmView3D {
+    fn from(v: &duke_sheets_chart::View3D) -> Self {
+        Self {
+            rotate_x: v.rotate_x,
+            rotate_y: v.rotate_y,
+            depth_percent: v.depth_percent,
+            height_percent: v.height_percent,
+            perspective: v.perspective,
+            right_angle_axes: v.right_angle_axes,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartDataTable {
+    pub show_horizontal_border: Option<bool>,
+    pub show_vertical_border: Option<bool>,
+    pub show_outline: Option<bool>,
+    pub show_keys: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::ChartDataTable> for WasmChartDataTable {
+    fn from(dt: &duke_sheets_chart::ChartDataTable) -> Self {
+        Self {
+            show_horizontal_border: dt.show_horizontal_border,
+            show_vertical_border: dt.show_vertical_border,
+            show_outline: dt.show_outline,
+            show_keys: dt.show_keys,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmManualLayout {
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+impl From<&duke_sheets_chart::ManualLayout> for WasmManualLayout {
+    fn from(ml: &duke_sheets_chart::ManualLayout) -> Self {
+        Self {
+            x: ml.x,
+            y: ml.y,
+            width: ml.width,
+            height: ml.height,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmLayout {
+    pub manual_layout: Option<WasmManualLayout>,
+}
+
+impl From<&duke_sheets_chart::Layout> for WasmLayout {
+    fn from(l: &duke_sheets_chart::Layout) -> Self {
+        Self {
+            manual_layout: l.manual_layout.as_ref().map(WasmManualLayout::from),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmDataSeries {
+    pub name: Option<String>,
+    pub values: WasmDataReference,
+    pub categories: Option<WasmDataReference>,
+    pub data_labels: Option<WasmDataLabels>,
+    pub trendline: Option<WasmTrendline>,
+    pub error_bars: Option<WasmErrorBars>,
+    pub marker: Option<WasmMarker>,
+    pub data_points: Vec<WasmDataPoint>,
+    pub smooth: Option<bool>,
+    pub explosion: Option<u32>,
+    pub invert_if_negative: Option<bool>,
+    pub shape_properties: Option<WasmChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::DataSeries> for WasmDataSeries {
+    fn from(s: &duke_sheets_chart::DataSeries) -> Self {
+        Self {
+            name: s.name.clone(),
+            values: WasmDataReference::from(&s.values),
+            categories: s.categories.as_ref().map(WasmDataReference::from),
+            data_labels: s.data_labels.as_ref().map(WasmDataLabels::from),
+            trendline: s.trendline.as_ref().map(WasmTrendline::from),
+            error_bars: s.error_bars.as_ref().map(WasmErrorBars::from),
+            marker: s.marker.as_ref().map(WasmMarker::from),
+            data_points: s.data_points.iter().map(WasmDataPoint::from).collect(),
+            smooth: s.smooth,
+            explosion: s.explosion,
+            invert_if_negative: s.invert_if_negative,
+            shape_properties: s.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmAxis {
+    pub title: Option<String>,
+    pub minimum: Option<f64>,
+    pub maximum: Option<f64>,
+    pub major_unit: Option<f64>,
+    pub minor_unit: Option<f64>,
+    pub position: String,
+    pub number_format: Option<WasmChartNumberFormat>,
+    pub major_gridlines: bool,
+    pub minor_gridlines: bool,
+    pub major_tick_mark: Option<String>,
+    pub minor_tick_mark: Option<String>,
+    pub label_position: Option<String>,
+    pub delete: Option<bool>,
+    pub crosses: Option<String>,
+    pub cross_between: Option<String>,
+    pub shape_properties: Option<WasmChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::Axis> for WasmAxis {
+    fn from(a: &duke_sheets_chart::Axis) -> Self {
+        use duke_sheets_chart::{AxisCrosses, CrossBetween, TickLabelPosition, TickMark};
+        Self {
+            title: a.title.clone(),
+            minimum: a.minimum,
+            maximum: a.maximum,
+            major_unit: a.major_unit,
+            minor_unit: a.minor_unit,
+            position: match a.position {
+                duke_sheets_chart::AxisPosition::Bottom => "bottom",
+                duke_sheets_chart::AxisPosition::Top => "top",
+                duke_sheets_chart::AxisPosition::Left => "left",
+                duke_sheets_chart::AxisPosition::Right => "right",
+            }
+            .into(),
+            number_format: a.number_format.as_ref().map(WasmChartNumberFormat::from),
+            major_gridlines: a.major_gridlines,
+            minor_gridlines: a.minor_gridlines,
+            major_tick_mark: a.major_tick_mark.as_ref().map(|t| {
+                match t {
+                    TickMark::Cross => "cross",
+                    TickMark::Inside => "inside",
+                    TickMark::None => "none",
+                    TickMark::Outside => "outside",
+                }
+                .into()
+            }),
+            minor_tick_mark: a.minor_tick_mark.as_ref().map(|t| {
+                match t {
+                    TickMark::Cross => "cross",
+                    TickMark::Inside => "inside",
+                    TickMark::None => "none",
+                    TickMark::Outside => "outside",
+                }
+                .into()
+            }),
+            label_position: a.label_position.as_ref().map(|p| {
+                match p {
+                    TickLabelPosition::High => "high",
+                    TickLabelPosition::Low => "low",
+                    TickLabelPosition::NextTo => "nextTo",
+                    TickLabelPosition::None => "none",
+                }
+                .into()
+            }),
+            delete: a.delete,
+            crosses: a.crosses.as_ref().map(|c| {
+                match c {
+                    AxisCrosses::AutoZero => "autoZero",
+                    AxisCrosses::Min => "min",
+                    AxisCrosses::Max => "max",
+                }
+                .into()
+            }),
+            cross_between: a.cross_between.as_ref().map(|cb| {
+                match cb {
+                    CrossBetween::Between => "between",
+                    CrossBetween::MidCat => "midCat",
+                }
+                .into()
+            }),
+            shape_properties: a.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmLegend {
+    pub position: String,
+    pub overlay: bool,
+}
+
+impl From<&duke_sheets_chart::Legend> for WasmLegend {
+    fn from(l: &duke_sheets_chart::Legend) -> Self {
+        Self {
+            position: match l.position {
+                duke_sheets_chart::LegendPosition::Right => "right",
+                duke_sheets_chart::LegendPosition::Top => "top",
+                duke_sheets_chart::LegendPosition::Bottom => "bottom",
+                duke_sheets_chart::LegendPosition::Left => "left",
+                duke_sheets_chart::LegendPosition::TopRight => "topRight",
+            }
+            .into(),
+            overlay: l.overlay,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartTypeGroup {
+    pub chart_type: String,
+    pub is_3d: bool,
+    pub series: Vec<WasmDataSeries>,
+    pub data_labels: Option<WasmDataLabels>,
+    pub vary_colors: Option<bool>,
+    pub gap_width: Option<u32>,
+    pub overlap: Option<i32>,
+    pub first_slice_angle: Option<u32>,
+    pub hole_size: Option<u32>,
+    pub bubble_scale: Option<u32>,
+    pub show_negative_bubbles: Option<bool>,
+    pub radar_style: Option<String>,
+    pub wireframe: Option<bool>,
+    pub axis_ids: Vec<u32>,
+    pub drop_lines: Option<WasmChartLines>,
+    pub high_low_lines: Option<WasmChartLines>,
+    pub series_lines: Option<WasmChartLines>,
+    pub up_down_bars: Option<WasmUpDownBars>,
+}
+
+impl From<&duke_sheets_chart::ChartTypeGroup> for WasmChartTypeGroup {
+    fn from(g: &duke_sheets_chart::ChartTypeGroup) -> Self {
+        Self {
+            chart_type: format!("{:?}", g.chart_type),
+            is_3d: g.is_3d,
+            series: g.series.iter().map(WasmDataSeries::from).collect(),
+            data_labels: g.data_labels.as_ref().map(WasmDataLabels::from),
+            vary_colors: g.vary_colors,
+            gap_width: g.gap_width,
+            overlap: g.overlap,
+            first_slice_angle: g.first_slice_angle,
+            hole_size: g.hole_size,
+            bubble_scale: g.bubble_scale,
+            show_negative_bubbles: g.show_negative_bubbles,
+            radar_style: g.radar_style.clone(),
+            wireframe: g.wireframe,
+            axis_ids: g.axis_ids.clone(),
+            drop_lines: g.drop_lines.as_ref().map(WasmChartLines::from),
+            high_low_lines: g.high_low_lines.as_ref().map(WasmChartLines::from),
+            series_lines: g.series_lines.as_ref().map(WasmChartLines::from),
+            up_down_bars: g.up_down_bars.as_ref().map(WasmUpDownBars::from),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartAxis {
+    pub id: u32,
+    pub cross_id: u32,
+    pub axis: WasmAxis,
+}
+
+impl From<&duke_sheets_chart::ChartAxis> for WasmChartAxis {
+    fn from(a: &duke_sheets_chart::ChartAxis) -> Self {
+        Self {
+            id: a.id,
+            cross_id: a.cross_id,
+            axis: WasmAxis::from(&a.axis),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChart {
+    pub chart_type: String,
+    pub title: Option<String>,
+    pub series: Vec<WasmDataSeries>,
+    pub category_axis: Option<WasmAxis>,
+    pub value_axis: Option<WasmAxis>,
+    pub legend: Option<WasmLegend>,
+    pub anchor: WasmChartAnchor,
+    pub data_labels: Option<WasmDataLabels>,
+    pub view_3d: Option<WasmView3D>,
+    pub data_table: Option<WasmChartDataTable>,
+    pub display_blanks_as: Option<String>,
+    pub plot_visible_only: Option<bool>,
+    pub layout: Option<WasmLayout>,
+    pub is_3d: bool,
+    pub vary_colors: Option<bool>,
+    pub gap_width: Option<u32>,
+    pub overlap: Option<i32>,
+    pub first_slice_angle: Option<u32>,
+    pub hole_size: Option<u32>,
+    pub bubble_scale: Option<u32>,
+    pub show_negative_bubbles: Option<bool>,
+    pub auto_title_deleted: Option<bool>,
+    pub rounded_corners: Option<bool>,
+    pub show_dlbls_over_max: Option<bool>,
+    pub wireframe: Option<bool>,
+    pub radar_style: Option<String>,
+    pub type_groups: Vec<WasmChartTypeGroup>,
+    pub axes: Vec<WasmChartAxis>,
+    pub drop_lines: Option<WasmChartLines>,
+    pub high_low_lines: Option<WasmChartLines>,
+    pub series_lines: Option<WasmChartLines>,
+    pub up_down_bars: Option<WasmUpDownBars>,
+}
+
+impl From<&duke_sheets_chart::Chart> for WasmChart {
+    fn from(c: &duke_sheets_chart::Chart) -> Self {
+        let chart_type = match &c.chart_type {
+            duke_sheets_chart::ChartType::Unsupported(tag) => format!("Unsupported({})", tag),
+            other => format!("{:?}", other),
+        };
+        Self {
+            chart_type,
+            title: c.title.clone(),
+            series: c.series.iter().map(WasmDataSeries::from).collect(),
+            category_axis: c.category_axis.as_ref().map(WasmAxis::from),
+            value_axis: c.value_axis.as_ref().map(WasmAxis::from),
+            legend: c.legend.as_ref().map(WasmLegend::from),
+            anchor: WasmChartAnchor::from(&c.anchor),
+            data_labels: c.data_labels.as_ref().map(WasmDataLabels::from),
+            view_3d: c.view_3d.as_ref().map(WasmView3D::from),
+            data_table: c.data_table.as_ref().map(WasmChartDataTable::from),
+            display_blanks_as: c.display_blanks_as.as_ref().map(|d| {
+                use duke_sheets_chart::DisplayBlanksAs;
+                match d {
+                    DisplayBlanksAs::Gap => "gap",
+                    DisplayBlanksAs::Span => "span",
+                    DisplayBlanksAs::Zero => "zero",
+                }
+                .into()
+            }),
+            plot_visible_only: c.plot_visible_only,
+            layout: c.layout.as_ref().map(WasmLayout::from),
+            is_3d: c.is_3d,
+            vary_colors: c.vary_colors,
+            gap_width: c.gap_width,
+            overlap: c.overlap,
+            first_slice_angle: c.first_slice_angle,
+            hole_size: c.hole_size,
+            bubble_scale: c.bubble_scale,
+            show_negative_bubbles: c.show_negative_bubbles,
+            auto_title_deleted: c.auto_title_deleted,
+            rounded_corners: c.rounded_corners,
+            show_dlbls_over_max: c.show_dlbls_over_max,
+            wireframe: c.wireframe,
+            radar_style: c.radar_style.clone(),
+            type_groups: c.type_groups.iter().map(WasmChartTypeGroup::from).collect(),
+            axes: c.axes.iter().map(WasmChartAxis::from).collect(),
+            drop_lines: c.drop_lines.as_ref().map(WasmChartLines::from),
+            high_low_lines: c.high_low_lines.as_ref().map(WasmChartLines::from),
+            series_lines: c.series_lines.as_ref().map(WasmChartLines::from),
+            up_down_bars: c.up_down_bars.as_ref().map(WasmUpDownBars::from),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartLines {
+    pub shape_properties: Option<WasmChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartLines> for WasmChartLines {
+    fn from(cl: &duke_sheets_chart::ChartLines) -> Self {
+        Self {
+            shape_properties: cl.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmUpDownBars {
+    pub gap_width: Option<u32>,
+    pub up_bars: Option<WasmChartLines>,
+    pub down_bars: Option<WasmChartLines>,
+}
+
+impl From<&duke_sheets_chart::UpDownBars> for WasmUpDownBars {
+    fn from(ud: &duke_sheets_chart::UpDownBars) -> Self {
+        Self {
+            gap_width: ud.gap_width,
+            up_bars: ud.up_bars.as_ref().map(WasmChartLines::from),
+            down_bars: ud.down_bars.as_ref().map(WasmChartLines::from),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmChartSheet {
+    pub name: String,
+    pub chart: WasmChart,
+    pub visibility: String,
+}
+
+impl From<&core::ChartSheet> for WasmChartSheet {
+    fn from(cs: &core::ChartSheet) -> Self {
+        Self {
+            name: cs.name.clone(),
+            chart: WasmChart::from(&cs.chart),
+            visibility: match cs.visibility {
+                core::worksheet::SheetVisibility::Visible => "visible",
+                core::worksheet::SheetVisibility::Hidden => "hidden",
+                core::worksheet::SheetVisibility::VeryHidden => "veryHidden",
+            }
+            .into(),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmSheetSlot {
+    pub slot_type: String,
+    pub index: u32,
+}
+
+impl From<&core::SheetSlot> for WasmSheetSlot {
+    fn from(slot: &core::SheetSlot) -> Self {
+        match slot {
+            core::SheetSlot::Worksheet(idx) => Self {
+                slot_type: "worksheet".into(),
+                index: *idx as u32,
+            },
+            core::SheetSlot::ChartSheet(idx) => Self {
+                slot_type: "chartsheet".into(),
+                index: *idx as u32,
+            },
+        }
+    }
+}

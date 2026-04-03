@@ -18,6 +18,7 @@ pub(super) struct WorkbookProps {
 
 pub(super) struct WorkbookRels {
     pub(super) sheet_paths: HashMap<String, String>,
+    pub(super) chartsheet_paths: HashMap<String, String>,
     pub(super) theme_path: Option<String>,
 }
 
@@ -192,8 +193,8 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
 
     let mut buf = Vec::new();
     let mut rels = HashMap::new();
+    let mut chartsheet_rels = HashMap::new();
     let mut theme_path: Option<String> = None;
-
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Empty(e)) | Ok(Event::Start(e))
@@ -228,6 +229,13 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
                             format!("xl/{}", target)
                         };
                         rels.insert(id, full_path);
+                    } else if rel_type.ends_with("/chartsheet") {
+                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
+                            stripped.to_string()
+                        } else {
+                            format!("xl/{}", target)
+                        };
+                        chartsheet_rels.insert(id, full_path);
                     } else if rel_type.ends_with("/theme") {
                         let full_path = if let Some(stripped) = target.strip_prefix('/') {
                             stripped.to_string()
@@ -247,6 +255,7 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
 
     Ok(WorkbookRels {
         sheet_paths: rels,
+        chartsheet_paths: chartsheet_rels,
         theme_path,
     })
 }

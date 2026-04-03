@@ -54,6 +54,8 @@ pub use duke_sheets_core::{
     BorderLineStyle,
     BorderStyle,
     CellAddress,
+    // Chart sheet types
+    ChartSheet,
     // Comments
     CellComment,
     CellData,
@@ -101,6 +103,7 @@ pub use duke_sheets_core::{
     RichTextRun,
     RunFont,
     SheetProtection,
+    SheetSlot,
     // Style types
     Style,
     StylePool,
@@ -139,7 +142,7 @@ pub use duke_sheets_formula::{
 
 // Re-export chart types
 pub use duke_sheets_chart::{
-    Axis, Chart, ChartType, DataReference, DataSeries, Legend, LegendPosition,
+    Axis, AxisPosition, Chart, ChartAnchor, ChartType, DataReference, DataSeries, Legend,
 };
 
 // Re-export I/O types

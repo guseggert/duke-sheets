@@ -1349,3 +1349,625 @@ pub struct JsImageInfo {
     /// Optional custom height.
     pub height: Option<f64>,
 }
+
+
+/// Chart anchor position in a worksheet.
+#[napi(object)]
+pub struct JsChartAnchor {
+    pub from_col: u32,
+    pub from_row: u32,
+    pub from_col_offset: i64,
+    pub from_row_offset: i64,
+    pub to_col: u32,
+    pub to_row: u32,
+    pub to_col_offset: i64,
+    pub to_row_offset: i64,
+}
+
+impl From<&duke_sheets_chart::ChartAnchor> for JsChartAnchor {
+    fn from(a: &duke_sheets_chart::ChartAnchor) -> Self {
+        JsChartAnchor {
+            from_col: a.from_col as u32,
+            from_row: a.from_row,
+            from_col_offset: a.from_col_offset,
+            from_row_offset: a.from_row_offset,
+            to_col: a.to_col as u32,
+            to_row: a.to_row,
+            to_col_offset: a.to_col_offset,
+            to_row_offset: a.to_row_offset,
+        }
+    }
+}
+
+/// Reference to chart data.
+#[napi(object)]
+pub struct JsDataReference {
+    /// One of: `"formula"`, `"numbers"`, `"strings"`.
+    pub ref_type: String,
+    pub formula: Option<String>,
+    pub numbers: Option<Vec<f64>>,
+    pub strings: Option<Vec<String>>,
+}
+
+impl From<&duke_sheets_chart::DataReference> for JsDataReference {
+    fn from(r: &duke_sheets_chart::DataReference) -> Self {
+        match r {
+            duke_sheets_chart::DataReference::Formula(f) => JsDataReference {
+                ref_type: "formula".into(),
+                formula: Some(f.clone()),
+                numbers: None,
+                strings: None,
+            },
+            duke_sheets_chart::DataReference::Numbers(ns) => JsDataReference {
+                ref_type: "numbers".into(),
+                formula: None,
+                numbers: Some(ns.clone()),
+                strings: None,
+            },
+            duke_sheets_chart::DataReference::Strings(ss) => JsDataReference {
+                ref_type: "strings".into(),
+                formula: None,
+                numbers: None,
+                strings: Some(ss.clone()),
+            },
+        }
+    }
+}
+
+/// A chart number format.
+#[napi(object)]
+pub struct JsChartNumberFormat {
+    pub format_code: String,
+    pub source_linked: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::NumberFormat> for JsChartNumberFormat {
+    fn from(n: &duke_sheets_chart::NumberFormat) -> Self {
+        JsChartNumberFormat {
+            format_code: n.format_code.clone(),
+            source_linked: n.source_linked,
+        }
+    }
+}
+
+/// Shape properties for chart elements.
+#[napi(object)]
+pub struct JsChartShapeProperties {
+    pub solid_fill_hex: Option<String>,
+    pub no_fill: bool,
+    pub line_width: Option<i64>,
+    pub line_color_hex: Option<String>,
+    pub line_no_fill: bool,
+    pub line_dash_style: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartShapeProperties> for JsChartShapeProperties {
+    fn from(sp: &duke_sheets_chart::ChartShapeProperties) -> Self {
+        JsChartShapeProperties {
+            solid_fill_hex: sp.solid_fill.as_ref().map(|c| c.hex.clone()),
+            no_fill: sp.no_fill,
+            line_width: sp.line.as_ref().and_then(|l| l.width),
+            line_color_hex: sp.line.as_ref().and_then(|l| l.solid_fill.as_ref().map(|c| c.hex.clone())),
+            line_no_fill: sp.line.as_ref().map(|l| l.no_fill).unwrap_or(false),
+            line_dash_style: sp.line.as_ref().and_then(|l| l.dash_style.clone()),
+        }
+    }
+}
+
+/// Data labels configuration.
+#[napi(object)]
+pub struct JsDataLabels {
+    pub show_legend_key: Option<bool>,
+    pub show_value: Option<bool>,
+    pub show_category_name: Option<bool>,
+    pub show_series_name: Option<bool>,
+    pub show_percent: Option<bool>,
+    pub show_bubble_size: Option<bool>,
+    pub separator: Option<String>,
+    pub position: Option<String>,
+    pub number_format: Option<JsChartNumberFormat>,
+    pub show_leader_lines: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::DataLabels> for JsDataLabels {
+    fn from(d: &duke_sheets_chart::DataLabels) -> Self {
+        JsDataLabels {
+            show_legend_key: d.show_legend_key,
+            show_value: d.show_value,
+            show_category_name: d.show_category_name,
+            show_series_name: d.show_series_name,
+            show_percent: d.show_percent,
+            show_bubble_size: d.show_bubble_size,
+            separator: d.separator.clone(),
+            position: d.position.as_ref().map(|p| format!("{:?}", p)),
+            number_format: d.number_format.as_ref().map(JsChartNumberFormat::from),
+            show_leader_lines: d.show_leader_lines,
+        }
+    }
+}
+
+/// A trendline attached to a data series.
+#[napi(object)]
+pub struct JsTrendline {
+    pub trendline_type: String,
+    pub name: Option<String>,
+    pub order: Option<u32>,
+    pub period: Option<u32>,
+    pub forward: Option<f64>,
+    pub backward: Option<f64>,
+    pub intercept: Option<f64>,
+    pub display_r_squared: Option<bool>,
+    pub display_equation: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::Trendline> for JsTrendline {
+    fn from(t: &duke_sheets_chart::Trendline) -> Self {
+        JsTrendline {
+            trendline_type: format!("{:?}", t.trendline_type),
+            name: t.name.clone(),
+            order: t.order,
+            period: t.period,
+            forward: t.forward,
+            backward: t.backward,
+            intercept: t.intercept,
+            display_r_squared: t.display_r_squared,
+            display_equation: t.display_equation,
+        }
+    }
+}
+
+/// Error bars attached to a data series.
+#[napi(object)]
+pub struct JsErrorBars {
+    pub direction: String,
+    pub bar_type: String,
+    pub value_type: String,
+    pub value: Option<f64>,
+    pub no_end_cap: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::ErrorBars> for JsErrorBars {
+    fn from(e: &duke_sheets_chart::ErrorBars) -> Self {
+        JsErrorBars {
+            direction: format!("{:?}", e.direction),
+            bar_type: format!("{:?}", e.bar_type),
+            value_type: format!("{:?}", e.value_type),
+            value: e.value,
+            no_end_cap: e.no_end_cap,
+        }
+    }
+}
+
+/// Marker for a data point.
+#[napi(object)]
+pub struct JsMarker {
+    pub symbol: Option<String>,
+    pub size: Option<u32>,
+}
+
+impl From<&duke_sheets_chart::Marker> for JsMarker {
+    fn from(m: &duke_sheets_chart::Marker) -> Self {
+        JsMarker {
+            symbol: m.symbol.as_ref().map(|s| format!("{:?}", s)),
+            size: m.size.map(|s| s as u32),
+        }
+    }
+}
+
+/// An individual data point override.
+#[napi(object)]
+pub struct JsDataPoint {
+    pub index: u32,
+    pub marker: Option<JsMarker>,
+    pub explosion: Option<u32>,
+}
+
+impl From<&duke_sheets_chart::DataPoint> for JsDataPoint {
+    fn from(p: &duke_sheets_chart::DataPoint) -> Self {
+        JsDataPoint {
+            index: p.index,
+            marker: p.marker.as_ref().map(JsMarker::from),
+            explosion: p.explosion,
+        }
+    }
+}
+
+/// A chart data series.
+#[napi(object)]
+pub struct JsDataSeries {
+    pub name: Option<String>,
+    pub values: JsDataReference,
+    pub categories: Option<JsDataReference>,
+    pub data_labels: Option<JsDataLabels>,
+    pub trendline: Option<JsTrendline>,
+    pub error_bars: Option<JsErrorBars>,
+    pub marker: Option<JsMarker>,
+    pub data_points: Vec<JsDataPoint>,
+    pub smooth: Option<bool>,
+    pub explosion: Option<u32>,
+    pub invert_if_negative: Option<bool>,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::DataSeries> for JsDataSeries {
+    fn from(s: &duke_sheets_chart::DataSeries) -> Self {
+        JsDataSeries {
+            name: s.name.clone(),
+            values: JsDataReference::from(&s.values),
+            categories: s.categories.as_ref().map(JsDataReference::from),
+            data_labels: s.data_labels.as_ref().map(JsDataLabels::from),
+            trendline: s.trendline.as_ref().map(JsTrendline::from),
+            error_bars: s.error_bars.as_ref().map(JsErrorBars::from),
+            marker: s.marker.as_ref().map(JsMarker::from),
+            data_points: s.data_points.iter().map(JsDataPoint::from).collect(),
+            smooth: s.smooth,
+            explosion: s.explosion,
+            invert_if_negative: s.invert_if_negative,
+            shape_properties: s.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+/// A chart axis.
+#[napi(object)]
+pub struct JsAxis {
+    pub title: Option<String>,
+    pub minimum: Option<f64>,
+    pub maximum: Option<f64>,
+    pub major_unit: Option<f64>,
+    pub minor_unit: Option<f64>,
+    /// One of: `"Bottom"`, `"Top"`, `"Left"`, `"Right"`.
+    pub position: String,
+    pub number_format: Option<JsChartNumberFormat>,
+    pub major_gridlines: bool,
+    pub minor_gridlines: bool,
+    pub major_tick_mark: Option<String>,
+    pub minor_tick_mark: Option<String>,
+    pub label_position: Option<String>,
+    pub delete: Option<bool>,
+    pub crosses: Option<String>,
+    pub cross_between: Option<String>,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::Axis> for JsAxis {
+    fn from(a: &duke_sheets_chart::Axis) -> Self {
+        JsAxis {
+            title: a.title.clone(),
+            minimum: a.minimum,
+            maximum: a.maximum,
+            major_unit: a.major_unit,
+            minor_unit: a.minor_unit,
+            position: format!("{:?}", a.position),
+            number_format: a.number_format.as_ref().map(JsChartNumberFormat::from),
+            major_gridlines: a.major_gridlines,
+            minor_gridlines: a.minor_gridlines,
+            major_tick_mark: a.major_tick_mark.as_ref().map(|t| format!("{:?}", t)),
+            minor_tick_mark: a.minor_tick_mark.as_ref().map(|t| format!("{:?}", t)),
+            label_position: a.label_position.as_ref().map(|p| format!("{:?}", p)),
+            delete: a.delete,
+            crosses: a.crosses.as_ref().map(|c| format!("{:?}", c)),
+            cross_between: a.cross_between.as_ref().map(|c| format!("{:?}", c)),
+            shape_properties: a.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+/// A chart legend.
+#[napi(object)]
+pub struct JsLegend {
+    /// One of: `"Right"`, `"Top"`, `"Bottom"`, `"Left"`, `"TopRight"`.
+    pub position: String,
+    pub overlay: bool,
+}
+
+impl From<&duke_sheets_chart::Legend> for JsLegend {
+    fn from(l: &duke_sheets_chart::Legend) -> Self {
+        JsLegend {
+            position: format!("{:?}", l.position),
+            overlay: l.overlay,
+        }
+    }
+}
+
+/// 3D view settings.
+#[napi(object)]
+pub struct JsView3D {
+    pub rotate_x: Option<i32>,
+    pub rotate_y: Option<i32>,
+    pub depth_percent: Option<u32>,
+    pub height_percent: Option<u32>,
+    pub perspective: Option<u32>,
+    pub right_angle_axes: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::View3D> for JsView3D {
+    fn from(v: &duke_sheets_chart::View3D) -> Self {
+        JsView3D {
+            rotate_x: v.rotate_x,
+            rotate_y: v.rotate_y,
+            depth_percent: v.depth_percent,
+            height_percent: v.height_percent,
+            perspective: v.perspective,
+            right_angle_axes: v.right_angle_axes,
+        }
+    }
+}
+
+/// Data table displayed beneath the chart.
+#[napi(object)]
+pub struct JsChartDataTable {
+    pub show_horizontal_border: Option<bool>,
+    pub show_vertical_border: Option<bool>,
+    pub show_outline: Option<bool>,
+    pub show_keys: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::ChartDataTable> for JsChartDataTable {
+    fn from(t: &duke_sheets_chart::ChartDataTable) -> Self {
+        JsChartDataTable {
+            show_horizontal_border: t.show_horizontal_border,
+            show_vertical_border: t.show_vertical_border,
+            show_outline: t.show_outline,
+            show_keys: t.show_keys,
+        }
+    }
+}
+
+/// Manual layout positioning.
+#[napi(object)]
+pub struct JsManualLayout {
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+impl From<&duke_sheets_chart::ManualLayout> for JsManualLayout {
+    fn from(m: &duke_sheets_chart::ManualLayout) -> Self {
+        JsManualLayout {
+            x: m.x,
+            y: m.y,
+            width: m.width,
+            height: m.height,
+        }
+    }
+}
+
+/// Layout container.
+#[napi(object)]
+pub struct JsLayout {
+    pub manual_layout: Option<JsManualLayout>,
+}
+
+impl From<&duke_sheets_chart::Layout> for JsLayout {
+    fn from(l: &duke_sheets_chart::Layout) -> Self {
+        JsLayout {
+            manual_layout: l.manual_layout.as_ref().map(JsManualLayout::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartTypeGroup {
+    pub chart_type: String,
+    pub is_3d: bool,
+    pub series: Vec<JsDataSeries>,
+    pub data_labels: Option<JsDataLabels>,
+    pub vary_colors: Option<bool>,
+    pub gap_width: Option<u32>,
+    pub overlap: Option<i32>,
+    pub first_slice_angle: Option<u32>,
+    pub hole_size: Option<u32>,
+    pub bubble_scale: Option<u32>,
+    pub show_negative_bubbles: Option<bool>,
+    pub radar_style: Option<String>,
+    pub wireframe: Option<bool>,
+    pub axis_ids: Vec<u32>,
+    pub drop_lines: Option<JsChartLines>,
+    pub high_low_lines: Option<JsChartLines>,
+    pub series_lines: Option<JsChartLines>,
+    pub up_down_bars: Option<JsUpDownBars>,
+}
+
+impl From<&duke_sheets_chart::ChartTypeGroup> for JsChartTypeGroup {
+    fn from(g: &duke_sheets_chart::ChartTypeGroup) -> Self {
+        Self {
+            chart_type: format!("{:?}", g.chart_type),
+            is_3d: g.is_3d,
+            series: g.series.iter().map(JsDataSeries::from).collect(),
+            data_labels: g.data_labels.as_ref().map(JsDataLabels::from),
+            vary_colors: g.vary_colors,
+            gap_width: g.gap_width,
+            overlap: g.overlap,
+            first_slice_angle: g.first_slice_angle,
+            hole_size: g.hole_size,
+            bubble_scale: g.bubble_scale,
+            show_negative_bubbles: g.show_negative_bubbles,
+            radar_style: g.radar_style.clone(),
+            wireframe: g.wireframe,
+            axis_ids: g.axis_ids.clone(),
+            drop_lines: g.drop_lines.as_ref().map(JsChartLines::from),
+            high_low_lines: g.high_low_lines.as_ref().map(JsChartLines::from),
+            series_lines: g.series_lines.as_ref().map(JsChartLines::from),
+            up_down_bars: g.up_down_bars.as_ref().map(JsUpDownBars::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartAxis {
+    pub id: u32,
+    pub cross_id: u32,
+    pub axis: JsAxis,
+}
+
+impl From<&duke_sheets_chart::ChartAxis> for JsChartAxis {
+    fn from(a: &duke_sheets_chart::ChartAxis) -> Self {
+        Self {
+            id: a.id,
+            cross_id: a.cross_id,
+            axis: JsAxis::from(&a.axis),
+        }
+    }
+}
+
+/// A chart embedded in a worksheet.
+#[napi(object)]
+pub struct JsChart {
+    /// Chart type string, e.g. `"ColumnClustered"`, `"Line"`, `"Pie"`.
+    pub chart_type: String,
+    pub title: Option<String>,
+    pub series: Vec<JsDataSeries>,
+    pub category_axis: Option<JsAxis>,
+    pub value_axis: Option<JsAxis>,
+    pub legend: Option<JsLegend>,
+    pub anchor: JsChartAnchor,
+    pub data_labels: Option<JsDataLabels>,
+    pub view_3d: Option<JsView3D>,
+    pub data_table: Option<JsChartDataTable>,
+    pub display_blanks_as: Option<String>,
+    pub plot_visible_only: Option<bool>,
+    pub layout: Option<JsLayout>,
+    pub is_3d: bool,
+    pub vary_colors: Option<bool>,
+    pub gap_width: Option<u32>,
+    pub overlap: Option<i32>,
+    pub first_slice_angle: Option<u32>,
+    pub hole_size: Option<u32>,
+    pub bubble_scale: Option<u32>,
+    pub show_negative_bubbles: Option<bool>,
+    pub auto_title_deleted: Option<bool>,
+    pub rounded_corners: Option<bool>,
+    pub show_dlbls_over_max: Option<bool>,
+    pub wireframe: Option<bool>,
+    pub radar_style: Option<String>,
+    pub type_groups: Vec<JsChartTypeGroup>,
+    pub axes: Vec<JsChartAxis>,
+    pub drop_lines: Option<JsChartLines>,
+    pub high_low_lines: Option<JsChartLines>,
+    pub series_lines: Option<JsChartLines>,
+    pub up_down_bars: Option<JsUpDownBars>,
+}
+
+impl From<&duke_sheets_chart::Chart> for JsChart {
+    fn from(c: &duke_sheets_chart::Chart) -> Self {
+        let chart_type = match &c.chart_type {
+            duke_sheets_chart::ChartType::Unsupported(tag) => format!("Unsupported({})", tag),
+            other => format!("{:?}", other),
+        };
+        JsChart {
+            chart_type,
+            title: c.title.clone(),
+            series: c.series.iter().map(JsDataSeries::from).collect(),
+            category_axis: c.category_axis.as_ref().map(JsAxis::from),
+            value_axis: c.value_axis.as_ref().map(JsAxis::from),
+            legend: c.legend.as_ref().map(JsLegend::from),
+            anchor: JsChartAnchor::from(&c.anchor),
+            data_labels: c.data_labels.as_ref().map(JsDataLabels::from),
+            view_3d: c.view_3d.as_ref().map(JsView3D::from),
+            data_table: c.data_table.as_ref().map(JsChartDataTable::from),
+            display_blanks_as: c.display_blanks_as.as_ref().map(|d| format!("{:?}", d)),
+            plot_visible_only: c.plot_visible_only,
+            layout: c.layout.as_ref().map(JsLayout::from),
+            is_3d: c.is_3d,
+            vary_colors: c.vary_colors,
+            gap_width: c.gap_width,
+            overlap: c.overlap,
+            first_slice_angle: c.first_slice_angle,
+            hole_size: c.hole_size,
+            bubble_scale: c.bubble_scale,
+            show_negative_bubbles: c.show_negative_bubbles,
+            auto_title_deleted: c.auto_title_deleted,
+            rounded_corners: c.rounded_corners,
+            show_dlbls_over_max: c.show_dlbls_over_max,
+            wireframe: c.wireframe,
+            radar_style: c.radar_style.clone(),
+            type_groups: c.type_groups.iter().map(JsChartTypeGroup::from).collect(),
+            axes: c.axes.iter().map(JsChartAxis::from).collect(),
+            drop_lines: c.drop_lines.as_ref().map(JsChartLines::from),
+            high_low_lines: c.high_low_lines.as_ref().map(JsChartLines::from),
+            series_lines: c.series_lines.as_ref().map(JsChartLines::from),
+            up_down_bars: c.up_down_bars.as_ref().map(JsUpDownBars::from),
+        }
+    }
+}
+
+/// Chart line overlay (drop lines, high-low lines, series lines).
+#[napi(object)]
+pub struct JsChartLines {
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartLines> for JsChartLines {
+    fn from(cl: &duke_sheets_chart::ChartLines) -> Self {
+        Self {
+            shape_properties: cl.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+/// Up-down bars (stock charts).
+#[napi(object)]
+pub struct JsUpDownBars {
+    pub gap_width: Option<u32>,
+    pub up_bars: Option<JsChartLines>,
+    pub down_bars: Option<JsChartLines>,
+}
+
+impl From<&duke_sheets_chart::UpDownBars> for JsUpDownBars {
+    fn from(ud: &duke_sheets_chart::UpDownBars) -> Self {
+        Self {
+            gap_width: ud.gap_width,
+            up_bars: ud.up_bars.as_ref().map(JsChartLines::from),
+            down_bars: ud.down_bars.as_ref().map(JsChartLines::from),
+        }
+    }
+}
+
+/// A chart sheet — a sheet that contains only a chart.
+#[napi(object)]
+pub struct JsChartSheet {
+    pub name: String,
+    pub chart: JsChart,
+    pub visibility: String,
+}
+
+impl From<&core::ChartSheet> for JsChartSheet {
+    fn from(cs: &core::ChartSheet) -> Self {
+        Self {
+            name: cs.name.clone(),
+            chart: JsChart::from(&cs.chart),
+            visibility: match cs.visibility {
+                core::worksheet::SheetVisibility::Visible => "visible",
+                core::worksheet::SheetVisibility::Hidden => "hidden",
+                core::worksheet::SheetVisibility::VeryHidden => "veryHidden",
+            }
+            .into(),
+        }
+    }
+}
+
+/// A slot in the workbook tab bar.
+#[napi(object)]
+pub struct JsSheetSlot {
+    /// `"worksheet"` or `"chartsheet"`.
+    pub slot_type: String,
+    /// Index into the respective collection.
+    pub index: u32,
+}
+
+impl From<&core::SheetSlot> for JsSheetSlot {
+    fn from(slot: &core::SheetSlot) -> Self {
+        match slot {
+            core::SheetSlot::Worksheet(idx) => Self {
+                slot_type: "worksheet".into(),
+                index: *idx as u32,
+            },
+            core::SheetSlot::ChartSheet(idx) => Self {
+                slot_type: "chartsheet".into(),
+                index: *idx as u32,
+            },
+        }
+    }
+}

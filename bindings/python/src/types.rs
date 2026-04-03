@@ -1,3 +1,4 @@
+use duke_sheets_chart as chart;
 use duke_sheets_core::{
     self as core,
     style::{
@@ -1437,4 +1438,862 @@ pub struct PyMergeSpan {
     pub row_span: u32,
     #[pyo3(get)]
     pub col_span: u32,
+}
+
+#[pyclass(name = "ChartAnchor")]
+#[derive(Clone)]
+pub struct PyChartAnchor {
+    #[pyo3(get)]
+    pub from_col: u16,
+    #[pyo3(get)]
+    pub from_row: u32,
+    #[pyo3(get)]
+    pub from_col_offset: i64,
+    #[pyo3(get)]
+    pub from_row_offset: i64,
+    #[pyo3(get)]
+    pub to_col: u16,
+    #[pyo3(get)]
+    pub to_row: u32,
+    #[pyo3(get)]
+    pub to_col_offset: i64,
+    #[pyo3(get)]
+    pub to_row_offset: i64,
+}
+
+impl From<&duke_sheets::ChartAnchor> for PyChartAnchor {
+    fn from(a: &duke_sheets::ChartAnchor) -> Self {
+        Self {
+            from_col: a.from_col,
+            from_row: a.from_row,
+            from_col_offset: a.from_col_offset,
+            from_row_offset: a.from_row_offset,
+            to_col: a.to_col,
+            to_row: a.to_row,
+            to_col_offset: a.to_col_offset,
+            to_row_offset: a.to_row_offset,
+        }
+    }
+}
+
+#[pyclass(name = "DataReference")]
+#[derive(Clone)]
+pub struct PyDataReference {
+    #[pyo3(get)]
+    pub ref_type: String,
+    #[pyo3(get)]
+    pub formula: Option<String>,
+    #[pyo3(get)]
+    pub numbers: Option<Vec<f64>>,
+    #[pyo3(get)]
+    pub strings: Option<Vec<String>>,
+}
+
+impl From<&duke_sheets::DataReference> for PyDataReference {
+    fn from(r: &duke_sheets::DataReference) -> Self {
+        match r {
+            duke_sheets::DataReference::Formula(f) => Self {
+                ref_type: "formula".into(),
+                formula: Some(f.clone()),
+                numbers: None,
+                strings: None,
+            },
+            duke_sheets::DataReference::Numbers(ns) => Self {
+                ref_type: "numbers".into(),
+                formula: None,
+                numbers: Some(ns.clone()),
+                strings: None,
+            },
+            duke_sheets::DataReference::Strings(ss) => Self {
+                ref_type: "strings".into(),
+                formula: None,
+                numbers: None,
+                strings: Some(ss.clone()),
+            },
+        }
+    }
+}
+
+#[pyclass(name = "ChartShapeProperties")]
+#[derive(Clone)]
+pub struct PyChartShapeProperties {
+    #[pyo3(get)]
+    pub solid_fill_hex: Option<String>,
+    #[pyo3(get)]
+    pub no_fill: bool,
+    #[pyo3(get)]
+    pub line_width: Option<i64>,
+    #[pyo3(get)]
+    pub line_color_hex: Option<String>,
+    #[pyo3(get)]
+    pub line_no_fill: bool,
+    #[pyo3(get)]
+    pub line_dash_style: Option<String>,
+}
+
+impl From<&chart::ChartShapeProperties> for PyChartShapeProperties {
+    fn from(sp: &chart::ChartShapeProperties) -> Self {
+        Self {
+            solid_fill_hex: sp.solid_fill.as_ref().map(|c| c.hex.clone()),
+            no_fill: sp.no_fill,
+            line_width: sp.line.as_ref().and_then(|l| l.width),
+            line_color_hex: sp.line.as_ref().and_then(|l| l.solid_fill.as_ref().map(|c| c.hex.clone())),
+            line_no_fill: sp.line.as_ref().map(|l| l.no_fill).unwrap_or(false),
+            line_dash_style: sp.line.as_ref().and_then(|l| l.dash_style.clone()),
+        }
+    }
+}
+
+#[pyclass(name = "DataSeries")]
+#[derive(Clone)]
+pub struct PyDataSeries {
+    #[pyo3(get)]
+    pub name: Option<String>,
+    #[pyo3(get)]
+    pub values: PyDataReference,
+    #[pyo3(get)]
+    pub categories: Option<PyDataReference>,
+    #[pyo3(get)]
+    pub data_labels: Option<PyDataLabels>,
+    #[pyo3(get)]
+    pub trendline: Option<PyTrendline>,
+    #[pyo3(get)]
+    pub error_bars: Option<PyErrorBars>,
+    #[pyo3(get)]
+    pub marker: Option<PyMarker>,
+    #[pyo3(get)]
+    pub data_points: Vec<PyDataPoint>,
+    #[pyo3(get)]
+    pub smooth: Option<bool>,
+    #[pyo3(get)]
+    pub explosion: Option<u32>,
+    #[pyo3(get)]
+    pub invert_if_negative: Option<bool>,
+    #[pyo3(get)]
+    pub shape_properties: Option<PyChartShapeProperties>,
+}
+
+impl From<&duke_sheets::DataSeries> for PyDataSeries {
+    fn from(s: &duke_sheets::DataSeries) -> Self {
+        Self {
+            name: s.name.clone(),
+            values: PyDataReference::from(&s.values),
+            categories: s.categories.as_ref().map(PyDataReference::from),
+            data_labels: s.data_labels.as_ref().map(PyDataLabels::from),
+            trendline: s.trendline.as_ref().map(PyTrendline::from),
+            error_bars: s.error_bars.as_ref().map(PyErrorBars::from),
+            marker: s.marker.as_ref().map(PyMarker::from),
+            data_points: s.data_points.iter().map(PyDataPoint::from).collect(),
+            smooth: s.smooth,
+            explosion: s.explosion,
+            invert_if_negative: s.invert_if_negative,
+            shape_properties: s.shape_properties.as_ref().map(PyChartShapeProperties::from),
+        }
+    }
+}
+
+#[pyclass(name = "Axis")]
+#[derive(Clone)]
+pub struct PyAxis {
+    #[pyo3(get)]
+    pub title: Option<String>,
+    #[pyo3(get)]
+    pub minimum: Option<f64>,
+    #[pyo3(get)]
+    pub maximum: Option<f64>,
+    #[pyo3(get)]
+    pub major_unit: Option<f64>,
+    #[pyo3(get)]
+    pub minor_unit: Option<f64>,
+    #[pyo3(get)]
+    pub position: String,
+    #[pyo3(get)]
+    pub number_format: Option<PyChartNumberFormat>,
+    #[pyo3(get)]
+    pub major_gridlines: bool,
+    #[pyo3(get)]
+    pub minor_gridlines: bool,
+    #[pyo3(get)]
+    pub major_tick_mark: Option<String>,
+    #[pyo3(get)]
+    pub minor_tick_mark: Option<String>,
+    #[pyo3(get)]
+    pub label_position: Option<String>,
+    #[pyo3(get)]
+    pub delete: Option<bool>,
+    #[pyo3(get)]
+    pub crosses: Option<String>,
+    #[pyo3(get)]
+    pub cross_between: Option<String>,
+    #[pyo3(get)]
+    pub shape_properties: Option<PyChartShapeProperties>,
+}
+
+impl From<&duke_sheets::Axis> for PyAxis {
+    fn from(a: &duke_sheets::Axis) -> Self {
+        Self {
+            title: a.title.clone(),
+            minimum: a.minimum,
+            maximum: a.maximum,
+            major_unit: a.major_unit,
+            minor_unit: a.minor_unit,
+            position: match a.position {
+                duke_sheets::AxisPosition::Bottom => "bottom",
+                duke_sheets::AxisPosition::Top => "top",
+                duke_sheets::AxisPosition::Left => "left",
+                duke_sheets::AxisPosition::Right => "right",
+            }
+            .into(),
+            number_format: a.number_format.as_ref().map(PyChartNumberFormat::from),
+            major_gridlines: a.major_gridlines,
+            minor_gridlines: a.minor_gridlines,
+            major_tick_mark: a.major_tick_mark.as_ref().map(|t| match t {
+                chart::TickMark::Cross => "cross",
+                chart::TickMark::Inside => "inside",
+                chart::TickMark::None => "none",
+                chart::TickMark::Outside => "outside",
+            }.into()),
+            minor_tick_mark: a.minor_tick_mark.as_ref().map(|t| match t {
+                chart::TickMark::Cross => "cross",
+                chart::TickMark::Inside => "inside",
+                chart::TickMark::None => "none",
+                chart::TickMark::Outside => "outside",
+            }.into()),
+            label_position: a.label_position.as_ref().map(|p| match p {
+                chart::TickLabelPosition::High => "high",
+                chart::TickLabelPosition::Low => "low",
+                chart::TickLabelPosition::NextTo => "nextTo",
+                chart::TickLabelPosition::None => "none",
+            }.into()),
+            delete: a.delete,
+            crosses: a.crosses.as_ref().map(|c| match c {
+                chart::AxisCrosses::AutoZero => "autoZero",
+                chart::AxisCrosses::Min => "min",
+                chart::AxisCrosses::Max => "max",
+            }.into()),
+            cross_between: a.cross_between.as_ref().map(|c| match c {
+                chart::CrossBetween::Between => "between",
+                chart::CrossBetween::MidCat => "midCat",
+            }.into()),
+            shape_properties: a.shape_properties.as_ref().map(PyChartShapeProperties::from),
+        }
+    }
+}
+
+#[pyclass(name = "Legend")]
+#[derive(Clone)]
+pub struct PyLegend {
+    #[pyo3(get)]
+    pub position: String,
+    #[pyo3(get)]
+    pub overlay: bool,
+}
+
+impl From<&duke_sheets::Legend> for PyLegend {
+    fn from(l: &duke_sheets::Legend) -> Self {
+        let position = match format!("{:?}", l.position).as_str() {
+            "Right" => "right",
+            "Top" => "top",
+            "Bottom" => "bottom",
+            "Left" => "left",
+            "TopRight" => "topRight",
+            _ => "right",
+        }
+        .to_string();
+        Self {
+            position,
+            overlay: l.overlay,
+        }
+    }
+}
+
+#[pyclass(name = "ChartTypeGroup")]
+#[derive(Clone)]
+pub struct PyChartTypeGroup {
+    #[pyo3(get)]
+    pub chart_type: String,
+    #[pyo3(get)]
+    pub is_3d: bool,
+    #[pyo3(get)]
+    pub series: Vec<PyDataSeries>,
+    #[pyo3(get)]
+    pub data_labels: Option<PyDataLabels>,
+    #[pyo3(get)]
+    pub vary_colors: Option<bool>,
+    #[pyo3(get)]
+    pub gap_width: Option<u32>,
+    #[pyo3(get)]
+    pub overlap: Option<i32>,
+    #[pyo3(get)]
+    pub first_slice_angle: Option<u32>,
+    #[pyo3(get)]
+    pub hole_size: Option<u32>,
+    #[pyo3(get)]
+    pub bubble_scale: Option<u32>,
+    #[pyo3(get)]
+    pub show_negative_bubbles: Option<bool>,
+    #[pyo3(get)]
+    pub radar_style: Option<String>,
+    #[pyo3(get)]
+    pub wireframe: Option<bool>,
+    #[pyo3(get)]
+    pub axis_ids: Vec<u32>,
+    #[pyo3(get)]
+    pub drop_lines: Option<PyChartLines>,
+    #[pyo3(get)]
+    pub high_low_lines: Option<PyChartLines>,
+    #[pyo3(get)]
+    pub series_lines: Option<PyChartLines>,
+    #[pyo3(get)]
+    pub up_down_bars: Option<PyUpDownBars>,
+}
+
+impl From<&chart::ChartTypeGroup> for PyChartTypeGroup {
+    fn from(g: &chart::ChartTypeGroup) -> Self {
+        Self {
+            chart_type: format!("{:?}", g.chart_type),
+            is_3d: g.is_3d,
+            series: g.series.iter().map(PyDataSeries::from).collect(),
+            data_labels: g.data_labels.as_ref().map(PyDataLabels::from),
+            vary_colors: g.vary_colors,
+            gap_width: g.gap_width,
+            overlap: g.overlap,
+            first_slice_angle: g.first_slice_angle,
+            hole_size: g.hole_size,
+            bubble_scale: g.bubble_scale,
+            show_negative_bubbles: g.show_negative_bubbles,
+            radar_style: g.radar_style.clone(),
+            wireframe: g.wireframe,
+            axis_ids: g.axis_ids.clone(),
+            drop_lines: g.drop_lines.as_ref().map(PyChartLines::from),
+            high_low_lines: g.high_low_lines.as_ref().map(PyChartLines::from),
+            series_lines: g.series_lines.as_ref().map(PyChartLines::from),
+            up_down_bars: g.up_down_bars.as_ref().map(PyUpDownBars::from),
+        }
+    }
+}
+
+
+#[pyclass(name = "ChartAxis")]
+#[derive(Clone)]
+pub struct PyChartAxis {
+    #[pyo3(get)]
+    pub id: u32,
+    #[pyo3(get)]
+    pub cross_id: u32,
+    #[pyo3(get)]
+    pub axis: PyAxis,
+}
+
+impl From<&chart::ChartAxis> for PyChartAxis {
+    fn from(a: &chart::ChartAxis) -> Self {
+        Self {
+            id: a.id,
+            cross_id: a.cross_id,
+            axis: PyAxis::from(&a.axis),
+        }
+    }
+}
+
+#[pyclass(name = "Chart")]
+#[derive(Clone)]
+pub struct PyChart {
+    #[pyo3(get)]
+    pub chart_type: String,
+    #[pyo3(get)]
+    pub title: Option<String>,
+    #[pyo3(get)]
+    pub series: Vec<PyDataSeries>,
+    #[pyo3(get)]
+    pub category_axis: Option<PyAxis>,
+    #[pyo3(get)]
+    pub value_axis: Option<PyAxis>,
+    #[pyo3(get)]
+    pub legend: Option<PyLegend>,
+    #[pyo3(get)]
+    pub anchor: PyChartAnchor,
+    #[pyo3(get)]
+    pub data_labels: Option<PyDataLabels>,
+    #[pyo3(get)]
+    pub view_3d: Option<PyView3D>,
+    #[pyo3(get)]
+    pub data_table: Option<PyChartDataTable>,
+    #[pyo3(get)]
+    pub display_blanks_as: Option<String>,
+    #[pyo3(get)]
+    pub plot_visible_only: Option<bool>,
+    #[pyo3(get)]
+    pub layout: Option<PyLayout>,
+    #[pyo3(get)]
+    pub is_3d: bool,
+    #[pyo3(get)]
+    pub vary_colors: Option<bool>,
+    #[pyo3(get)]
+    pub gap_width: Option<u32>,
+    #[pyo3(get)]
+    pub overlap: Option<i32>,
+    #[pyo3(get)]
+    pub first_slice_angle: Option<u32>,
+    #[pyo3(get)]
+    pub hole_size: Option<u32>,
+    #[pyo3(get)]
+    pub bubble_scale: Option<u32>,
+    #[pyo3(get)]
+    pub show_negative_bubbles: Option<bool>,
+    #[pyo3(get)]
+    pub auto_title_deleted: Option<bool>,
+    #[pyo3(get)]
+    pub rounded_corners: Option<bool>,
+    #[pyo3(get)]
+    pub show_dlbls_over_max: Option<bool>,
+    #[pyo3(get)]
+    pub wireframe: Option<bool>,
+    #[pyo3(get)]
+    pub radar_style: Option<String>,
+    #[pyo3(get)]
+    pub type_groups: Vec<PyChartTypeGroup>,
+    #[pyo3(get)]
+    pub axes: Vec<PyChartAxis>,
+    #[pyo3(get)]
+    pub drop_lines: Option<PyChartLines>,
+    #[pyo3(get)]
+    pub high_low_lines: Option<PyChartLines>,
+    #[pyo3(get)]
+    pub series_lines: Option<PyChartLines>,
+    #[pyo3(get)]
+    pub up_down_bars: Option<PyUpDownBars>,
+}
+
+impl From<&duke_sheets::Chart> for PyChart {
+    fn from(c: &duke_sheets::Chart) -> Self {
+        let chart_type = match &c.chart_type {
+            duke_sheets::ChartType::Unsupported(tag) => format!("Unsupported({})", tag),
+            other => format!("{:?}", other),
+        };
+        Self {
+            chart_type,
+            title: c.title.clone(),
+            series: c.series.iter().map(PyDataSeries::from).collect(),
+            category_axis: c.category_axis.as_ref().map(PyAxis::from),
+            value_axis: c.value_axis.as_ref().map(PyAxis::from),
+            legend: c.legend.as_ref().map(PyLegend::from),
+            anchor: PyChartAnchor::from(&c.anchor),
+            data_labels: c.data_labels.as_ref().map(PyDataLabels::from),
+            view_3d: c.view_3d.as_ref().map(PyView3D::from),
+            data_table: c.data_table.as_ref().map(PyChartDataTable::from),
+            display_blanks_as: c.display_blanks_as.as_ref().map(|d| match d {
+                chart::DisplayBlanksAs::Gap => "gap",
+                chart::DisplayBlanksAs::Span => "span",
+                chart::DisplayBlanksAs::Zero => "zero",
+            }.into()),
+            plot_visible_only: c.plot_visible_only,
+            layout: c.layout.as_ref().map(PyLayout::from),
+            is_3d: c.is_3d,
+            vary_colors: c.vary_colors,
+            gap_width: c.gap_width,
+            overlap: c.overlap,
+            first_slice_angle: c.first_slice_angle,
+            hole_size: c.hole_size,
+            bubble_scale: c.bubble_scale,
+            show_negative_bubbles: c.show_negative_bubbles,
+            auto_title_deleted: c.auto_title_deleted,
+            rounded_corners: c.rounded_corners,
+            show_dlbls_over_max: c.show_dlbls_over_max,
+            wireframe: c.wireframe,
+            radar_style: c.radar_style.clone(),
+            type_groups: c.type_groups.iter().map(PyChartTypeGroup::from).collect(),
+            axes: c.axes.iter().map(PyChartAxis::from).collect(),
+            drop_lines: c.drop_lines.as_ref().map(PyChartLines::from),
+            high_low_lines: c.high_low_lines.as_ref().map(PyChartLines::from),
+            series_lines: c.series_lines.as_ref().map(PyChartLines::from),
+            up_down_bars: c.up_down_bars.as_ref().map(PyUpDownBars::from),
+        }
+    }
+}
+
+#[pyclass(name = "ChartNumberFormat")]
+#[derive(Clone)]
+pub struct PyChartNumberFormat {
+    #[pyo3(get)]
+    pub format_code: String,
+    #[pyo3(get)]
+    pub source_linked: Option<bool>,
+}
+
+impl From<&chart::NumberFormat> for PyChartNumberFormat {
+    fn from(n: &chart::NumberFormat) -> Self {
+        Self {
+            format_code: n.format_code.clone(),
+            source_linked: n.source_linked,
+        }
+    }
+}
+
+#[pyclass(name = "DataLabels")]
+#[derive(Clone)]
+pub struct PyDataLabels {
+    #[pyo3(get)]
+    pub show_legend_key: Option<bool>,
+    #[pyo3(get)]
+    pub show_value: Option<bool>,
+    #[pyo3(get)]
+    pub show_category_name: Option<bool>,
+    #[pyo3(get)]
+    pub show_series_name: Option<bool>,
+    #[pyo3(get)]
+    pub show_percent: Option<bool>,
+    #[pyo3(get)]
+    pub show_bubble_size: Option<bool>,
+    #[pyo3(get)]
+    pub separator: Option<String>,
+    #[pyo3(get)]
+    pub position: Option<String>,
+    #[pyo3(get)]
+    pub number_format: Option<PyChartNumberFormat>,
+    #[pyo3(get)]
+    pub show_leader_lines: Option<bool>,
+}
+
+impl From<&chart::DataLabels> for PyDataLabels {
+    fn from(d: &chart::DataLabels) -> Self {
+        Self {
+            show_legend_key: d.show_legend_key,
+            show_value: d.show_value,
+            show_category_name: d.show_category_name,
+            show_series_name: d.show_series_name,
+            show_percent: d.show_percent,
+            show_bubble_size: d.show_bubble_size,
+            separator: d.separator.clone(),
+            position: d.position.as_ref().map(|p| match p {
+                chart::DataLabelPosition::BestFit => "bestFit",
+                chart::DataLabelPosition::Bottom => "bottom",
+                chart::DataLabelPosition::Center => "center",
+                chart::DataLabelPosition::InsideBase => "insideBase",
+                chart::DataLabelPosition::InsideEnd => "insideEnd",
+                chart::DataLabelPosition::Left => "left",
+                chart::DataLabelPosition::OutsideEnd => "outsideEnd",
+                chart::DataLabelPosition::Right => "right",
+                chart::DataLabelPosition::Top => "top",
+            }.into()),
+            number_format: d.number_format.as_ref().map(PyChartNumberFormat::from),
+            show_leader_lines: d.show_leader_lines,
+        }
+    }
+}
+
+#[pyclass(name = "Trendline")]
+#[derive(Clone)]
+pub struct PyTrendline {
+    #[pyo3(get)]
+    pub trendline_type: String,
+    #[pyo3(get)]
+    pub name: Option<String>,
+    #[pyo3(get)]
+    pub order: Option<u32>,
+    #[pyo3(get)]
+    pub period: Option<u32>,
+    #[pyo3(get)]
+    pub forward: Option<f64>,
+    #[pyo3(get)]
+    pub backward: Option<f64>,
+    #[pyo3(get)]
+    pub intercept: Option<f64>,
+    #[pyo3(get)]
+    pub display_r_squared: Option<bool>,
+    #[pyo3(get)]
+    pub display_equation: Option<bool>,
+}
+
+impl From<&chart::Trendline> for PyTrendline {
+    fn from(t: &chart::Trendline) -> Self {
+        Self {
+            trendline_type: match t.trendline_type {
+                chart::TrendlineType::Linear => "linear",
+                chart::TrendlineType::Exponential => "exponential",
+                chart::TrendlineType::Logarithmic => "logarithmic",
+                chart::TrendlineType::MovingAverage => "movingAverage",
+                chart::TrendlineType::Polynomial => "polynomial",
+                chart::TrendlineType::Power => "power",
+            }.into(),
+            name: t.name.clone(),
+            order: t.order,
+            period: t.period,
+            forward: t.forward,
+            backward: t.backward,
+            intercept: t.intercept,
+            display_r_squared: t.display_r_squared,
+            display_equation: t.display_equation,
+        }
+    }
+}
+
+#[pyclass(name = "ErrorBars")]
+#[derive(Clone)]
+pub struct PyErrorBars {
+    #[pyo3(get)]
+    pub direction: String,
+    #[pyo3(get)]
+    pub bar_type: String,
+    #[pyo3(get)]
+    pub value_type: String,
+    #[pyo3(get)]
+    pub value: Option<f64>,
+    #[pyo3(get)]
+    pub no_end_cap: Option<bool>,
+}
+
+impl From<&chart::ErrorBars> for PyErrorBars {
+    fn from(e: &chart::ErrorBars) -> Self {
+        Self {
+            direction: match e.direction {
+                chart::ErrorBarDirection::X => "x",
+                chart::ErrorBarDirection::Y => "y",
+            }.into(),
+            bar_type: match e.bar_type {
+                chart::ErrorBarType::Both => "both",
+                chart::ErrorBarType::Minus => "minus",
+                chart::ErrorBarType::Plus => "plus",
+            }.into(),
+            value_type: match e.value_type {
+                chart::ErrorValueType::Custom => "custom",
+                chart::ErrorValueType::FixedValue => "fixedValue",
+                chart::ErrorValueType::Percentage => "percentage",
+                chart::ErrorValueType::StandardDeviation => "standardDeviation",
+                chart::ErrorValueType::StandardError => "standardError",
+            }.into(),
+            value: e.value,
+            no_end_cap: e.no_end_cap,
+        }
+    }
+}
+
+#[pyclass(name = "Marker")]
+#[derive(Clone)]
+pub struct PyMarker {
+    #[pyo3(get)]
+    pub symbol: Option<String>,
+    #[pyo3(get)]
+    pub size: Option<u8>,
+}
+
+impl From<&chart::Marker> for PyMarker {
+    fn from(m: &chart::Marker) -> Self {
+        Self {
+            symbol: m.symbol.as_ref().map(|s| match s {
+                chart::MarkerSymbol::Circle => "circle",
+                chart::MarkerSymbol::Dash => "dash",
+                chart::MarkerSymbol::Diamond => "diamond",
+                chart::MarkerSymbol::Dot => "dot",
+                chart::MarkerSymbol::None => "none",
+                chart::MarkerSymbol::Picture => "picture",
+                chart::MarkerSymbol::Plus => "plus",
+                chart::MarkerSymbol::Square => "square",
+                chart::MarkerSymbol::Star => "star",
+                chart::MarkerSymbol::Triangle => "triangle",
+                chart::MarkerSymbol::X => "x",
+                chart::MarkerSymbol::Auto => "auto",
+            }.into()),
+            size: m.size,
+        }
+    }
+}
+
+#[pyclass(name = "DataPoint")]
+#[derive(Clone)]
+pub struct PyDataPoint {
+    #[pyo3(get)]
+    pub index: u32,
+    #[pyo3(get)]
+    pub marker: Option<PyMarker>,
+    #[pyo3(get)]
+    pub explosion: Option<u32>,
+}
+
+impl From<&chart::DataPoint> for PyDataPoint {
+    fn from(p: &chart::DataPoint) -> Self {
+        Self {
+            index: p.index,
+            marker: p.marker.as_ref().map(PyMarker::from),
+            explosion: p.explosion,
+        }
+    }
+}
+
+#[pyclass(name = "View3D")]
+#[derive(Clone)]
+pub struct PyView3D {
+    #[pyo3(get)]
+    pub rotate_x: Option<i32>,
+    #[pyo3(get)]
+    pub rotate_y: Option<i32>,
+    #[pyo3(get)]
+    pub depth_percent: Option<u32>,
+    #[pyo3(get)]
+    pub height_percent: Option<u32>,
+    #[pyo3(get)]
+    pub perspective: Option<u32>,
+    #[pyo3(get)]
+    pub right_angle_axes: Option<bool>,
+}
+
+impl From<&chart::View3D> for PyView3D {
+    fn from(v: &chart::View3D) -> Self {
+        Self {
+            rotate_x: v.rotate_x,
+            rotate_y: v.rotate_y,
+            depth_percent: v.depth_percent,
+            height_percent: v.height_percent,
+            perspective: v.perspective,
+            right_angle_axes: v.right_angle_axes,
+        }
+    }
+}
+
+#[pyclass(name = "ChartDataTable")]
+#[derive(Clone)]
+pub struct PyChartDataTable {
+    #[pyo3(get)]
+    pub show_horizontal_border: Option<bool>,
+    #[pyo3(get)]
+    pub show_vertical_border: Option<bool>,
+    #[pyo3(get)]
+    pub show_outline: Option<bool>,
+    #[pyo3(get)]
+    pub show_keys: Option<bool>,
+}
+
+impl From<&chart::ChartDataTable> for PyChartDataTable {
+    fn from(t: &chart::ChartDataTable) -> Self {
+        Self {
+            show_horizontal_border: t.show_horizontal_border,
+            show_vertical_border: t.show_vertical_border,
+            show_outline: t.show_outline,
+            show_keys: t.show_keys,
+        }
+    }
+}
+
+#[pyclass(name = "ManualLayout")]
+#[derive(Clone)]
+pub struct PyManualLayout {
+    #[pyo3(get)]
+    pub x: Option<f64>,
+    #[pyo3(get)]
+    pub y: Option<f64>,
+    #[pyo3(get)]
+    pub width: Option<f64>,
+    #[pyo3(get)]
+    pub height: Option<f64>,
+}
+
+impl From<&chart::ManualLayout> for PyManualLayout {
+    fn from(m: &chart::ManualLayout) -> Self {
+        Self {
+            x: m.x,
+            y: m.y,
+            width: m.width,
+            height: m.height,
+        }
+    }
+}
+
+#[pyclass(name = "Layout")]
+#[derive(Clone)]
+pub struct PyLayout {
+    #[pyo3(get)]
+    pub manual_layout: Option<PyManualLayout>,
+}
+
+impl From<&chart::Layout> for PyLayout {
+    fn from(l: &chart::Layout) -> Self {
+        Self {
+            manual_layout: l.manual_layout.as_ref().map(PyManualLayout::from),
+        }
+    }
+}
+
+#[pyclass(name = "ChartLines")]
+#[derive(Clone)]
+pub struct PyChartLines {
+    #[pyo3(get)]
+    pub shape_properties: Option<PyChartShapeProperties>,
+}
+
+impl From<&chart::ChartLines> for PyChartLines {
+    fn from(cl: &chart::ChartLines) -> Self {
+        Self {
+            shape_properties: cl.shape_properties.as_ref().map(PyChartShapeProperties::from),
+        }
+    }
+}
+
+#[pyclass(name = "UpDownBars")]
+#[derive(Clone)]
+pub struct PyUpDownBars {
+    #[pyo3(get)]
+    pub gap_width: Option<u32>,
+    #[pyo3(get)]
+    pub up_bars: Option<PyChartLines>,
+    #[pyo3(get)]
+    pub down_bars: Option<PyChartLines>,
+}
+
+impl From<&chart::UpDownBars> for PyUpDownBars {
+    fn from(ud: &chart::UpDownBars) -> Self {
+        Self {
+            gap_width: ud.gap_width,
+            up_bars: ud.up_bars.as_ref().map(PyChartLines::from),
+            down_bars: ud.down_bars.as_ref().map(PyChartLines::from),
+        }
+    }
+}
+
+#[pyclass(name = "ChartSheet")]
+#[derive(Clone)]
+pub struct PyChartSheet {
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub chart: PyChart,
+    #[pyo3(get)]
+    pub visibility: String,
+}
+
+impl From<&core::ChartSheet> for PyChartSheet {
+    fn from(cs: &core::ChartSheet) -> Self {
+        Self {
+            name: cs.name.clone(),
+            chart: PyChart::from(&cs.chart),
+            visibility: match cs.visibility {
+                core::worksheet::SheetVisibility::Visible => "visible",
+                core::worksheet::SheetVisibility::Hidden => "hidden",
+                core::worksheet::SheetVisibility::VeryHidden => "veryHidden",
+            }
+            .into(),
+        }
+    }
+}
+
+#[pyclass(name = "SheetSlot")]
+#[derive(Clone)]
+pub struct PySheetSlot {
+    #[pyo3(get)]
+    pub slot_type: String,
+    #[pyo3(get)]
+    pub index: u32,
+}
+
+impl From<&core::SheetSlot> for PySheetSlot {
+    fn from(slot: &core::SheetSlot) -> Self {
+        match slot {
+            core::SheetSlot::Worksheet(idx) => Self {
+                slot_type: "worksheet".into(),
+                index: *idx as u32,
+            },
+            core::SheetSlot::ChartSheet(idx) => Self {
+                slot_type: "chartsheet".into(),
+                index: *idx as u32,
+            },
+        }
+    }
 }

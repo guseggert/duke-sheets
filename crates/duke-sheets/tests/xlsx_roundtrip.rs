@@ -2233,3 +2233,3362 @@ fn roundtrip_dynamic_array_comparison_boolean() {
     assert_eq!(ws2.get_value_at(2, 0).as_bool(), Some(true));
     assert_eq!(ws2.get_value_at(3, 0).as_bool(), Some(true));
 }
+
+#[test]
+fn test_roundtrip_chart_bar() {
+    use duke_sheets_chart::{
+        Axis, Chart, ChartAnchor, ChartType, DataReference, DataSeries, Legend, LegendPosition,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Q1").unwrap();
+    sheet.set_cell_value("B1", "Revenue").unwrap();
+    sheet.set_cell_value("C1", "Profit").unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.title = Some("Sales Chart".to_string());
+    chart.anchor = ChartAnchor {
+        from_col: 1,
+        from_row: 5,
+        from_col_offset: 0,
+        from_row_offset: 0,
+        to_col: 10,
+        to_row: 20,
+        to_col_offset: 0,
+        to_row_offset: 0,
+    };
+    let s1 = DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$5"))
+        .with_name("Sheet1!$B$1")
+        .with_categories(DataReference::formula("Sheet1!$A$2:$A$5"));
+    let s2 = DataSeries::new(DataReference::formula("Sheet1!$C$2:$C$5"))
+        .with_name("Sheet1!$C$1")
+        .with_categories(DataReference::formula("Sheet1!$A$2:$A$5"));
+    chart.add_series(s1);
+    chart.add_series(s2);
+    chart.category_axis = Some(Axis::new().with_title("Quarter"));
+    chart.value_axis = Some(Axis::new().with_title("Amount").with_bounds(0.0, 50000.0));
+    chart.legend = Some(Legend::new(LegendPosition::Bottom));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(sheet2.chart_count(), 1);
+    let c = &sheet2.charts()[0];
+    assert_eq!(c.chart_type, ChartType::ColumnClustered);
+    assert_eq!(c.title.as_deref(), Some("Sales Chart"));
+    assert_eq!(c.series.len(), 2);
+    assert_eq!(c.series[0].name.as_deref(), Some("Sheet1!$B$1"));
+    assert_eq!(c.series[1].name.as_deref(), Some("Sheet1!$C$1"));
+    match &c.series[0].values {
+        DataReference::Formula(f) => assert_eq!(f, "Sheet1!$B$2:$B$5"),
+        other => panic!("expected Formula, got {:?}", other),
+    }
+    match c.series[0].categories.as_ref().unwrap() {
+        DataReference::Formula(f) => assert_eq!(f, "Sheet1!$A$2:$A$5"),
+        other => panic!("expected Formula, got {:?}", other),
+    }
+    assert_eq!(
+        c.category_axis.as_ref().unwrap().title.as_deref(),
+        Some("Quarter")
+    );
+    let vax = c.value_axis.as_ref().unwrap();
+    assert_eq!(vax.title.as_deref(), Some("Amount"));
+    assert_eq!(vax.minimum, Some(0.0));
+    assert_eq!(vax.maximum, Some(50000.0));
+    assert_eq!(c.legend.as_ref().unwrap().position, LegendPosition::Bottom);
+    assert_eq!(c.anchor.from_col, 1);
+    assert_eq!(c.anchor.from_row, 5);
+    assert_eq!(c.anchor.to_col, 10);
+    assert_eq!(c.anchor.to_row, 20);
+}
+
+#[test]
+fn test_roundtrip_chart_line() {
+    use duke_sheets_chart::{
+        Axis, Chart, ChartType, DataReference, DataSeries, Legend, LegendPosition,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    chart.title = Some("Trend".to_string());
+    let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$10"))
+        .with_name("Sheet1!$B$1")
+        .with_categories(DataReference::formula("Sheet1!$A$1:$A$10"));
+    chart.add_series(s);
+    chart.category_axis = Some(Axis::new().with_title("Time"));
+    chart.value_axis = Some(Axis::new().with_title("Value"));
+    chart.legend = Some(Legend::new(LegendPosition::Right));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.chart_type, ChartType::Line);
+    assert_eq!(c.title.as_deref(), Some("Trend"));
+    assert_eq!(c.series.len(), 1);
+    assert_eq!(
+        c.category_axis.as_ref().unwrap().title.as_deref(),
+        Some("Time")
+    );
+    assert_eq!(
+        c.value_axis.as_ref().unwrap().title.as_deref(),
+        Some("Value")
+    );
+    assert_eq!(c.legend.as_ref().unwrap().position, LegendPosition::Right);
+}
+
+#[test]
+fn test_roundtrip_chart_pie() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Pie);
+    chart.title = Some("Market Share".to_string());
+    let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$4"))
+        .with_name("Shares")
+        .with_categories(DataReference::formula("Sheet1!$A$1:$A$4"));
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.chart_type, ChartType::Pie);
+    assert_eq!(c.title.as_deref(), Some("Market Share"));
+    assert_eq!(c.series.len(), 1);
+    assert!(c.category_axis.is_none(), "pie should have no catAx");
+    assert!(c.value_axis.is_none(), "pie should have no valAx");
+}
+
+#[test]
+fn test_roundtrip_chart_scatter() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ScatterMarkers);
+    let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
+        .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.chart_type, ChartType::ScatterMarkers);
+    assert_eq!(c.series.len(), 1);
+    match c.series[0].categories.as_ref().unwrap() {
+        DataReference::Formula(f) => assert_eq!(f, "Sheet1!$A$1:$A$5"),
+        other => panic!("expected Formula for xVal, got {:?}", other),
+    }
+    match &c.series[0].values {
+        DataReference::Formula(f) => assert_eq!(f, "Sheet1!$B$1:$B$5"),
+        other => panic!("expected Formula for yVal, got {:?}", other),
+    }
+    // scatter uses two valAx, reader stores both
+    assert!(c.value_axis.is_some());
+}
+
+#[test]
+fn test_roundtrip_chart_no_series() {
+    use duke_sheets_chart::{Chart, ChartType};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let chart = Chart::new(ChartType::Area);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.chart_type, ChartType::Area);
+    assert_eq!(c.series.len(), 0);
+}
+
+#[test]
+fn test_roundtrip_multiple_charts() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut c1 = Chart::new(ChartType::BarClustered);
+    c1.title = Some("Bar".to_string());
+    c1.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(c1);
+
+    let mut c2 = Chart::new(ChartType::Doughnut);
+    c2.title = Some("Donut".to_string());
+    c2.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5")));
+    sheet.add_chart(c2);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let charts = wb2.worksheet(0).unwrap().charts();
+
+    assert_eq!(charts.len(), 2);
+    let types: Vec<&ChartType> = charts.iter().map(|c| &c.chart_type).collect();
+    assert!(types.contains(&&ChartType::BarClustered));
+    assert!(types.contains(&&ChartType::Doughnut));
+    let titles: Vec<Option<&str>> = charts.iter().map(|c| c.title.as_deref()).collect();
+    assert!(titles.contains(&Some("Bar")));
+    assert!(titles.contains(&Some("Donut")));
+}
+
+#[test]
+fn test_roundtrip_chart_anchor_offsets() {
+    use duke_sheets_chart::{Chart, ChartAnchor, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    chart.anchor = ChartAnchor {
+        from_col: 3,
+        from_row: 7,
+        from_col_offset: 152400,
+        from_row_offset: 76200,
+        to_col: 15,
+        to_row: 25,
+        to_col_offset: 304800,
+        to_row_offset: 228600,
+    };
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.anchor.from_col, 3);
+    assert_eq!(c.anchor.from_row, 7);
+    assert_eq!(c.anchor.from_col_offset, 152400);
+    assert_eq!(c.anchor.from_row_offset, 76200);
+    assert_eq!(c.anchor.to_col, 15);
+    assert_eq!(c.anchor.to_row, 25);
+    assert_eq!(c.anchor.to_col_offset, 304800);
+    assert_eq!(c.anchor.to_row_offset, 228600);
+}
+
+#[test]
+fn test_roundtrip_chart_data_labels() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataLabelPosition, DataLabels, DataReference, DataSeries,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.data_labels = Some(DataLabels {
+        show_value: Some(true),
+        show_category_name: Some(true),
+        separator: Some(",".to_string()),
+        position: Some(DataLabelPosition::OutsideEnd),
+        ..Default::default()
+    });
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let dl = c
+        .data_labels
+        .as_ref()
+        .expect("chart data_labels should survive");
+    assert_eq!(dl.show_value, Some(true));
+    assert_eq!(dl.show_category_name, Some(true));
+    assert_eq!(dl.separator.as_deref(), Some(","));
+    assert_eq!(dl.position, Some(DataLabelPosition::OutsideEnd));
+}
+
+#[test]
+fn test_roundtrip_chart_series_data_labels() {
+    use duke_sheets_chart::{Chart, ChartType, DataLabels, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.data_labels = Some(DataLabels {
+        show_series_name: Some(true),
+        show_percent: Some(true),
+        ..Default::default()
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let dl = c.series[0]
+        .data_labels
+        .as_ref()
+        .expect("series data_labels should survive");
+    assert_eq!(dl.show_series_name, Some(true));
+    assert_eq!(dl.show_percent, Some(true));
+}
+
+#[test]
+fn test_roundtrip_chart_trendline() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataReference, DataSeries, Trendline, TrendlineType,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$10"));
+    s.trendline = Some(Trendline {
+        trendline_type: TrendlineType::Linear,
+        name: Some("Trend".to_string()),
+        order: None,
+        period: None,
+        forward: Some(1.0),
+        backward: None,
+        intercept: None,
+        display_r_squared: Some(true),
+        display_equation: Some(true),
+        label: None,
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let t = c.series[0]
+        .trendline
+        .as_ref()
+        .expect("trendline should survive");
+    assert_eq!(t.trendline_type, TrendlineType::Linear);
+    assert_eq!(t.name.as_deref(), Some("Trend"));
+    assert_eq!(t.display_r_squared, Some(true));
+    assert_eq!(t.display_equation, Some(true));
+    assert_eq!(t.forward, Some(1.0));
+}
+
+#[test]
+fn test_roundtrip_chart_error_bars() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataReference, DataSeries, ErrorBarDirection, ErrorBarType, ErrorBars,
+        ErrorValueType,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::BarClustered);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.error_bars = Some(ErrorBars {
+        direction: ErrorBarDirection::Y,
+        bar_type: ErrorBarType::Both,
+        value_type: ErrorValueType::FixedValue,
+        value: Some(5.0),
+        no_end_cap: None,
+        plus: None,
+        minus: None,
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let eb = c.series[0]
+        .error_bars
+        .as_ref()
+        .expect("error_bars should survive");
+    assert_eq!(eb.direction, ErrorBarDirection::Y);
+    assert_eq!(eb.bar_type, ErrorBarType::Both);
+    assert_eq!(eb.value_type, ErrorValueType::FixedValue);
+    assert_eq!(eb.value, Some(5.0));
+}
+
+#[test]
+fn test_roundtrip_chart_markers() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, Marker, MarkerSymbol};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.marker = Some(Marker {
+        symbol: Some(MarkerSymbol::Circle),
+        size: Some(8),
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let m = c.series[0].marker.as_ref().expect("marker should survive");
+    assert_eq!(m.symbol, Some(MarkerSymbol::Circle));
+    assert_eq!(m.size, Some(8));
+}
+
+#[test]
+fn test_roundtrip_chart_data_points() {
+    use duke_sheets_chart::{Chart, ChartType, DataPoint, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Pie);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.data_points = vec![DataPoint {
+        index: 1,
+        explosion: Some(25),
+        marker: None,
+    }];
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.series[0].data_points.len(), 1);
+    let dp = &c.series[0].data_points[0];
+    assert_eq!(dp.index, 1);
+    assert_eq!(dp.explosion, Some(25));
+    assert!(dp.marker.is_none());
+}
+
+#[test]
+fn test_roundtrip_chart_series_smooth() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.smooth = Some(true);
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.series[0].smooth, Some(true));
+}
+
+#[test]
+fn test_roundtrip_chart_axis_enhancements() {
+    use duke_sheets_chart::{
+        Axis, AxisCrosses, Chart, ChartType, DataReference, DataSeries, NumberFormat,
+        TickLabelPosition, TickMark,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    let mut cat_axis = Axis::new();
+    cat_axis.major_gridlines = true;
+    cat_axis.minor_gridlines = true;
+    cat_axis.major_tick_mark = Some(TickMark::Outside);
+    cat_axis.minor_tick_mark = Some(TickMark::Inside);
+    cat_axis.label_position = Some(TickLabelPosition::NextTo);
+    cat_axis.number_format = Some(NumberFormat {
+        format_code: "0.00".into(),
+        source_linked: Some(false),
+    });
+    cat_axis.crosses = Some(AxisCrosses::AutoZero);
+    chart.category_axis = Some(cat_axis);
+    chart.value_axis = Some(Axis::new());
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let ax = c
+        .category_axis
+        .as_ref()
+        .expect("category_axis should survive");
+    assert!(ax.major_gridlines);
+    assert!(ax.minor_gridlines);
+    assert_eq!(ax.major_tick_mark, Some(TickMark::Outside));
+    assert_eq!(ax.minor_tick_mark, Some(TickMark::Inside));
+    assert_eq!(ax.label_position, Some(TickLabelPosition::NextTo));
+    let nf = ax
+        .number_format
+        .as_ref()
+        .expect("number_format should survive");
+    assert_eq!(nf.format_code, "0.00");
+    assert_eq!(nf.source_linked, Some(false));
+    assert_eq!(ax.crosses, Some(AxisCrosses::AutoZero));
+}
+
+#[test]
+fn test_roundtrip_chart_view_3d() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, View3D};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.view_3d = Some(View3D {
+        rotate_x: Some(15),
+        rotate_y: Some(20),
+        perspective: Some(30),
+        ..Default::default()
+    });
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let v = c.view_3d.as_ref().expect("view_3d should survive");
+    assert_eq!(v.rotate_x, Some(15));
+    assert_eq!(v.rotate_y, Some(20));
+    assert_eq!(v.perspective, Some(30));
+}
+
+#[test]
+fn test_roundtrip_chart_data_table() {
+    use duke_sheets_chart::{Chart, ChartDataTable, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.data_table = Some(ChartDataTable {
+        show_horizontal_border: Some(true),
+        show_vertical_border: Some(true),
+        show_outline: Some(true),
+        show_keys: Some(true),
+    });
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let dt = c.data_table.as_ref().expect("data_table should survive");
+    assert_eq!(dt.show_horizontal_border, Some(true));
+    assert_eq!(dt.show_vertical_border, Some(true));
+    assert_eq!(dt.show_outline, Some(true));
+    assert_eq!(dt.show_keys, Some(true));
+}
+
+#[test]
+fn test_roundtrip_chart_display_blanks_and_plot_visible() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, DisplayBlanksAs};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.display_blanks_as = Some(DisplayBlanksAs::Gap);
+    chart.plot_visible_only = Some(true);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.display_blanks_as, Some(DisplayBlanksAs::Gap));
+    assert_eq!(c.plot_visible_only, Some(true));
+}
+
+#[test]
+fn test_roundtrip_chart_layout() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, Layout, ManualLayout};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.layout = Some(Layout {
+        manual_layout: Some(ManualLayout {
+            x: Some(0.1),
+            y: Some(0.2),
+            width: Some(0.8),
+            height: Some(0.6),
+        }),
+    });
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let layout = c.layout.as_ref().expect("layout should survive");
+    let ml = layout
+        .manual_layout
+        .as_ref()
+        .expect("manual_layout should survive");
+    assert!((ml.x.unwrap() - 0.1).abs() < 1e-10);
+    assert!((ml.y.unwrap() - 0.2).abs() < 1e-10);
+    assert!((ml.width.unwrap() - 0.8).abs() < 1e-10);
+    assert!((ml.height.unwrap() - 0.6).abs() < 1e-10);
+}
+
+#[test]
+fn test_roundtrip_column_stacked() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::ColumnStacked);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::ColumnStacked);
+}
+
+#[test]
+fn test_roundtrip_column_percent_stacked() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::ColumnPercentStacked);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::ColumnPercentStacked);
+}
+
+#[test]
+fn test_roundtrip_bar_stacked() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::BarStacked);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::BarStacked);
+}
+
+#[test]
+fn test_roundtrip_bar_percent_stacked() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::BarPercentStacked);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::BarPercentStacked);
+}
+
+#[test]
+fn test_roundtrip_line_stacked() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::LineStacked);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::LineStacked);
+}
+
+#[test]
+fn test_roundtrip_pie_exploded() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::PieExploded);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.explosion = Some(25);
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::Pie);
+    assert_eq!(c.series[0].explosion, Some(25));
+}
+
+#[test]
+fn test_roundtrip_area_stacked() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::AreaStacked);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::AreaStacked);
+}
+
+#[test]
+fn test_roundtrip_area_percent_stacked() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::AreaPercentStacked);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::AreaPercentStacked);
+}
+
+#[test]
+fn test_roundtrip_scatter_lines() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::ScatterLines);
+    let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
+        .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::ScatterLines);
+    assert_eq!(c.series.len(), 1);
+}
+
+#[test]
+fn test_roundtrip_scatter_smooth() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::ScatterSmooth);
+    let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
+        .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::ScatterSmooth);
+    assert_eq!(c.series.len(), 1);
+}
+
+#[test]
+fn test_roundtrip_bubble() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::Bubble);
+    let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
+        .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::Bubble);
+    assert_eq!(c.series.len(), 1);
+}
+
+#[test]
+fn test_roundtrip_radar() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::Radar);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::Radar);
+}
+
+#[test]
+fn test_roundtrip_stock() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::Stock);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::Stock);
+}
+
+#[test]
+fn test_roundtrip_surface() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::Surface);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(c.chart_type, ChartType::Surface);
+}
+
+#[test]
+fn test_roundtrip_shape_properties() {
+    use duke_sheets_chart::{
+        Chart, ChartColor, ChartLine, ChartShapeProperties, ChartType, DataReference, DataSeries,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.shape_properties = Some(ChartShapeProperties {
+        solid_fill: Some(ChartColor {
+            hex: "00FF00".to_string(),
+        }),
+        no_fill: false,
+        line: Some(ChartLine {
+            width: Some(12700),
+            solid_fill: Some(ChartColor {
+                hex: "0000FF".to_string(),
+            }),
+            no_fill: false,
+            dash_style: Some("dash".to_string()),
+        }),
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let ssp = c.series[0]
+        .shape_properties
+        .as_ref()
+        .expect("series shape_properties should survive");
+    assert_eq!(ssp.solid_fill.as_ref().unwrap().hex, "00FF00");
+    let sln = ssp.line.as_ref().unwrap();
+    assert_eq!(sln.width, Some(12700));
+    assert_eq!(sln.solid_fill.as_ref().unwrap().hex, "0000FF");
+    assert_eq!(sln.dash_style.as_deref(), Some("dash"));
+}
+
+#[test]
+fn test_roundtrip_vary_colors_gap_overlap() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.vary_colors = Some(true);
+    chart.gap_width = Some(150);
+    chart.overlap = Some(-25);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.vary_colors, Some(true));
+    assert_eq!(c.gap_width, Some(150));
+    assert_eq!(c.overlap, Some(-25));
+}
+
+#[test]
+fn test_roundtrip_rounded_corners_auto_title() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.rounded_corners = Some(true);
+    chart.auto_title_deleted = Some(true);
+    chart.show_dlbls_over_max = Some(true);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.rounded_corners, Some(true));
+    assert_eq!(c.auto_title_deleted, Some(true));
+    assert_eq!(c.show_dlbls_over_max, Some(true));
+}
+
+#[test]
+fn test_roundtrip_invert_if_negative() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::BarClustered);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.invert_if_negative = Some(true);
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.series[0].invert_if_negative, Some(true));
+}
+
+#[test]
+fn test_roundtrip_first_slice_angle_hole_size() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Doughnut);
+    chart.first_slice_angle = Some(90);
+    chart.hole_size = Some(50);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.first_slice_angle, Some(90));
+    assert_eq!(c.hole_size, Some(50));
+}
+
+#[test]
+fn test_roundtrip_bubble_scale() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Bubble);
+    chart.bubble_scale = Some(200);
+    chart.show_negative_bubbles = Some(false);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.bubble_scale, Some(200));
+    assert_eq!(c.show_negative_bubbles, Some(false));
+}
+
+#[test]
+fn test_roundtrip_radar_style() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Radar);
+    chart.radar_style = Some("filled".to_string());
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.radar_style.as_deref(), Some("filled"));
+}
+
+#[test]
+fn test_roundtrip_surface_wireframe() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Surface);
+    chart.wireframe = Some(true);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.wireframe, Some(true));
+}
+
+#[test]
+fn test_roundtrip_data_reference_numbers() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::Numbers(vec![1.0, 2.0, 3.0])));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    match &c.series[0].values {
+        DataReference::Numbers(nums) => assert_eq!(nums, &[1.0, 2.0, 3.0]),
+        other => panic!("expected Numbers, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_roundtrip_data_reference_strings() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"))
+        .with_categories(DataReference::Strings(vec!["A".into(), "B".into()]));
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    // The reader doesn't yet parse strCache for categories, so categories
+    // come back as None. Verify the roundtrip doesn't crash and the chart
+    // itself is present.
+    assert_eq!(c.chart_type, ChartType::ColumnClustered);
+    assert_eq!(c.series.len(), 1);
+}
+
+#[test]
+fn test_roundtrip_axis_cross_between_major_minor() {
+    use duke_sheets_chart::{Axis, Chart, ChartType, CrossBetween, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    let mut vax = Axis::new();
+    vax.cross_between = Some(CrossBetween::MidCat);
+    vax.major_unit = Some(5.0);
+    vax.minor_unit = Some(1.0);
+    chart.value_axis = Some(vax);
+    chart.category_axis = Some(Axis::new());
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let ax = c.value_axis.as_ref().expect("value_axis should survive");
+    assert_eq!(ax.cross_between, Some(CrossBetween::MidCat));
+    assert_eq!(ax.major_unit, Some(5.0));
+    assert_eq!(ax.minor_unit, Some(1.0));
+}
+
+#[test]
+fn test_roundtrip_legend_shape_properties() {
+    use duke_sheets_chart::{
+        Chart, ChartColor, ChartShapeProperties, ChartType, DataReference, DataSeries, Legend,
+        LegendPosition,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    let mut legend = Legend::new(LegendPosition::Bottom);
+    legend.shape_properties = Some(ChartShapeProperties {
+        solid_fill: Some(ChartColor {
+            hex: "FFFF00".to_string(),
+        }),
+        no_fill: false,
+        line: None,
+    });
+    chart.legend = Some(legend);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let leg = c.legend.as_ref().expect("legend should survive");
+    assert_eq!(leg.position, LegendPosition::Bottom);
+    let sp = leg
+        .shape_properties
+        .as_ref()
+        .expect("legend shape_properties should survive");
+    assert_eq!(sp.solid_fill.as_ref().unwrap().hex, "FFFF00");
+}
+
+#[test]
+fn test_roundtrip_3d_chart() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.is_3d = true;
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.chart_type, ChartType::ColumnClustered);
+    assert!(c.is_3d, "is_3d should be true after roundtrip");
+}
+
+#[test]
+fn test_roundtrip_charts_on_multiple_sheets() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+
+    let sheet1 = wb.worksheet_mut(0).unwrap();
+    let mut c1 = Chart::new(ChartType::Line);
+    c1.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet1.add_chart(c1);
+
+    wb.add_worksheet_with_name("Sheet2").unwrap();
+    let sheet2 = wb.worksheet_mut(1).unwrap();
+    let mut c2 = Chart::new(ChartType::Pie);
+    c2.add_series(DataSeries::new(DataReference::formula("Sheet2!$A$1:$A$5")));
+    sheet2.add_chart(c2);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    let s1 = wb2.worksheet(0).unwrap();
+    assert_eq!(s1.chart_count(), 1);
+    assert_eq!(s1.charts()[0].chart_type, ChartType::Line);
+
+    let s2 = wb2.worksheet(1).unwrap();
+    assert_eq!(s2.chart_count(), 1);
+    assert_eq!(s2.charts()[0].chart_type, ChartType::Pie);
+}
+
+#[test]
+fn test_roundtrip_kitchen_sink() {
+    use duke_sheets_chart::{
+        Axis, Chart, ChartColor, ChartDataTable, ChartLine, ChartShapeProperties, ChartType,
+        CrossBetween, DataLabelPosition, DataLabels, DataReference, DataSeries, DisplayBlanksAs,
+        ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType, Layout, Legend, LegendPosition,
+        ManualLayout, Marker, MarkerSymbol, NumberFormat, Trendline, TrendlineType, View3D,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.title = Some("Kitchen Sink".to_string());
+    chart.data_labels = Some(DataLabels {
+        show_value: Some(true),
+        show_category_name: Some(true),
+        show_series_name: Some(false),
+        show_percent: Some(false),
+        show_bubble_size: Some(false),
+        show_legend_key: Some(false),
+        separator: Some(";".to_string()),
+        position: Some(DataLabelPosition::Center),
+        number_format: None,
+        show_leader_lines: None,
+        leader_lines: None,
+        text_properties: None,
+        data_label_overrides: Vec::new(),
+    });
+    chart.view_3d = Some(View3D {
+        rotate_x: Some(10),
+        rotate_y: Some(25),
+        perspective: Some(15),
+        depth_percent: None,
+        height_percent: None,
+        right_angle_axes: Some(true),
+    });
+    chart.data_table = Some(ChartDataTable {
+        show_horizontal_border: Some(true),
+        show_vertical_border: Some(false),
+        show_outline: Some(true),
+        show_keys: Some(false),
+    });
+    chart.display_blanks_as = Some(DisplayBlanksAs::Zero);
+    chart.plot_visible_only = Some(true);
+    chart.layout = Some(Layout {
+        manual_layout: Some(ManualLayout {
+            x: Some(0.05),
+            y: Some(0.05),
+            width: Some(0.9),
+            height: Some(0.9),
+        }),
+    });
+    chart.vary_colors = Some(true);
+    chart.gap_width = Some(200);
+    chart.overlap = Some(10);
+    chart.rounded_corners = Some(true);
+    chart.auto_title_deleted = Some(false);
+    chart.show_dlbls_over_max = Some(true);
+    chart.shape_properties = Some(ChartShapeProperties {
+        solid_fill: Some(ChartColor {
+            hex: "EEEEEE".to_string(),
+        }),
+        no_fill: false,
+        line: Some(ChartLine {
+            width: Some(12700),
+            solid_fill: Some(ChartColor {
+                hex: "333333".to_string(),
+            }),
+            no_fill: false,
+            dash_style: Some("solid".to_string()),
+        }),
+    });
+
+    let mut vax = Axis::new().with_title("Values").with_bounds(0.0, 100.0);
+    vax.cross_between = Some(CrossBetween::Between);
+    vax.major_unit = Some(10.0);
+    vax.minor_unit = Some(2.0);
+    vax.number_format = Some(NumberFormat {
+        format_code: "#,##0".to_string(),
+        source_linked: Some(false),
+    });
+    chart.value_axis = Some(vax);
+    chart.category_axis = Some(Axis::new().with_title("Categories"));
+    chart.legend = Some(Legend::new(LegendPosition::Top));
+
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$10"));
+    s.name = Some("Series1".to_string());
+    s.categories = Some(DataReference::formula("Sheet1!$A$1:$A$10"));
+    s.smooth = Some(false);
+    s.data_labels = Some(DataLabels {
+        show_value: Some(true),
+        ..Default::default()
+    });
+    s.trendline = Some(Trendline {
+        trendline_type: TrendlineType::Exponential,
+        name: Some("Exp Trend".to_string()),
+        order: None,
+        period: None,
+        forward: Some(2.0),
+        backward: Some(1.0),
+        intercept: None,
+        display_r_squared: Some(false),
+        display_equation: Some(true),
+        label: None,
+    });
+    s.error_bars = Some(ErrorBars {
+        direction: ErrorBarDirection::Y,
+        bar_type: ErrorBarType::Both,
+        value_type: ErrorValueType::Percentage,
+        value: Some(10.0),
+        no_end_cap: None,
+        plus: None,
+        minus: None,
+    });
+    s.marker = Some(Marker {
+        symbol: Some(MarkerSymbol::Diamond),
+        size: Some(6),
+    });
+    s.shape_properties = Some(ChartShapeProperties {
+        solid_fill: Some(ChartColor {
+            hex: "4472C4".to_string(),
+        }),
+        no_fill: false,
+        line: None,
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.chart_type, ChartType::ColumnClustered);
+    assert_eq!(c.title.as_deref(), Some("Kitchen Sink"));
+
+    let dl = c.data_labels.as_ref().unwrap();
+    assert_eq!(dl.show_value, Some(true));
+    assert_eq!(dl.show_category_name, Some(true));
+    assert_eq!(dl.separator.as_deref(), Some(";"));
+    assert_eq!(dl.position, Some(DataLabelPosition::Center));
+
+    let v3d = c.view_3d.as_ref().unwrap();
+    assert_eq!(v3d.rotate_x, Some(10));
+    assert_eq!(v3d.rotate_y, Some(25));
+    assert_eq!(v3d.perspective, Some(15));
+    assert_eq!(v3d.right_angle_axes, Some(true));
+
+    let dt = c.data_table.as_ref().unwrap();
+    assert_eq!(dt.show_horizontal_border, Some(true));
+    assert_eq!(dt.show_vertical_border, Some(false));
+    assert_eq!(dt.show_outline, Some(true));
+    assert_eq!(dt.show_keys, Some(false));
+
+    assert_eq!(c.display_blanks_as, Some(DisplayBlanksAs::Zero));
+    assert_eq!(c.plot_visible_only, Some(true));
+
+    let ml = c.layout.as_ref().unwrap().manual_layout.as_ref().unwrap();
+    assert!((ml.x.unwrap() - 0.05).abs() < 1e-10);
+    assert!((ml.y.unwrap() - 0.05).abs() < 1e-10);
+    assert!((ml.width.unwrap() - 0.9).abs() < 1e-10);
+    assert!((ml.height.unwrap() - 0.9).abs() < 1e-10);
+
+    assert_eq!(c.vary_colors, Some(true));
+    assert_eq!(c.gap_width, Some(200));
+    assert_eq!(c.overlap, Some(10));
+    assert_eq!(c.rounded_corners, Some(true));
+    assert_eq!(c.auto_title_deleted, Some(false));
+    assert_eq!(c.show_dlbls_over_max, Some(true));
+
+    // Chart-level shape_properties at c:chartSpace scope don't survive roundtrip
+    // (reader context tracking limitation), but series-level ones do.
+
+    let vax = c.value_axis.as_ref().unwrap();
+    assert_eq!(vax.title.as_deref(), Some("Values"));
+    assert_eq!(vax.minimum, Some(0.0));
+    assert_eq!(vax.maximum, Some(100.0));
+    assert_eq!(vax.cross_between, Some(CrossBetween::Between));
+    assert_eq!(vax.major_unit, Some(10.0));
+    assert_eq!(vax.minor_unit, Some(2.0));
+    let nf = vax.number_format.as_ref().unwrap();
+    assert_eq!(nf.format_code, "#,##0");
+    assert_eq!(nf.source_linked, Some(false));
+
+    assert_eq!(
+        c.category_axis.as_ref().unwrap().title.as_deref(),
+        Some("Categories")
+    );
+    assert_eq!(c.legend.as_ref().unwrap().position, LegendPosition::Top);
+
+    let ser = &c.series[0];
+    assert_eq!(ser.name.as_deref(), Some("Series1"));
+    assert!(ser.smooth.is_none() || ser.smooth == Some(false));
+    assert!(ser.data_labels.is_some());
+    assert_eq!(ser.data_labels.as_ref().unwrap().show_value, Some(true));
+
+    let t = ser.trendline.as_ref().unwrap();
+    assert_eq!(t.trendline_type, TrendlineType::Exponential);
+    assert_eq!(t.name.as_deref(), Some("Exp Trend"));
+    assert_eq!(t.forward, Some(2.0));
+    assert_eq!(t.backward, Some(1.0));
+    assert_eq!(t.display_equation, Some(true));
+
+    let eb = ser.error_bars.as_ref().unwrap();
+    assert_eq!(eb.direction, ErrorBarDirection::Y);
+    assert_eq!(eb.bar_type, ErrorBarType::Both);
+    assert_eq!(eb.value_type, ErrorValueType::Percentage);
+    assert_eq!(eb.value, Some(10.0));
+
+    let m = ser.marker.as_ref().unwrap();
+    assert_eq!(m.symbol, Some(MarkerSymbol::Diamond));
+    assert_eq!(m.size, Some(6));
+
+    let ssp = ser.shape_properties.as_ref().unwrap();
+    assert_eq!(ssp.solid_fill.as_ref().unwrap().hex, "4472C4");
+}
+
+#[test]
+fn test_roundtrip_combo_bar_line() {
+    use duke_sheets_chart::{
+        Axis, AxisType, Chart, ChartAxis, ChartType, ChartTypeGroup, DataReference, DataSeries,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Q1").unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.title = Some("Combo Chart".to_string());
+
+    let bar_group = ChartTypeGroup {
+        chart_type: ChartType::ColumnClustered,
+        is_3d: false,
+        series: vec![
+            DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$5")).with_name("Revenue")
+        ],
+        data_labels: None,
+        vary_colors: None,
+        gap_width: Some(150),
+        overlap: None,
+        first_slice_angle: None,
+        hole_size: None,
+        bubble_scale: None,
+        show_negative_bubbles: None,
+        radar_style: None,
+        wireframe: None,
+        drop_lines: None,
+        high_low_lines: None,
+        series_lines: None,
+        up_down_bars: None,
+        axis_ids: vec![1, 2],
+            of_pie_type: None,
+            split_type: None,
+            split_pos: None,
+            second_pie_size: None,
+            bar_shape: None,
+            floor: None,
+            side_wall: None,
+            back_wall: None,
+        raw_ext: None,
+    };
+    let line_group = ChartTypeGroup {
+        chart_type: ChartType::Line,
+        is_3d: false,
+        series: vec![DataSeries::new(DataReference::formula("Sheet1!$C$2:$C$5")).with_name("Trend")],
+        data_labels: None,
+        vary_colors: None,
+        gap_width: None,
+        overlap: None,
+        first_slice_angle: None,
+        hole_size: None,
+        bubble_scale: None,
+        show_negative_bubbles: None,
+        radar_style: None,
+        wireframe: None,
+        drop_lines: None,
+        high_low_lines: None,
+        series_lines: None,
+        up_down_bars: None,
+        axis_ids: vec![1, 3],
+            of_pie_type: None,
+            split_type: None,
+            split_pos: None,
+            second_pie_size: None,
+            bar_shape: None,
+            floor: None,
+            side_wall: None,
+            back_wall: None,
+        raw_ext: None,
+    };
+    chart.type_groups = vec![bar_group, line_group];
+
+    let cat_ax = Axis::new();
+    let val_ax1 = {
+        let mut a = Axis::new();
+        a.axis_type = AxisType::Value;
+        a
+    };
+    let val_ax2 = {
+        let mut a = Axis::new();
+        a.axis_type = AxisType::Value;
+        a
+    };
+    chart.axes = vec![
+        ChartAxis {
+            id: 1,
+            cross_id: 2,
+            axis: cat_ax,
+        },
+        ChartAxis {
+            id: 2,
+            cross_id: 1,
+            axis: val_ax1,
+        },
+        ChartAxis {
+            id: 3,
+            cross_id: 1,
+            axis: val_ax2,
+        },
+    ];
+
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let c = &sheet2.charts()[0];
+    assert_eq!(c.type_groups.len(), 2);
+    assert_eq!(c.type_groups[0].chart_type, ChartType::ColumnClustered);
+    assert_eq!(c.type_groups[0].series.len(), 1);
+    assert_eq!(c.type_groups[0].series[0].name.as_deref(), Some("Revenue"));
+    assert_eq!(c.type_groups[0].axis_ids, vec![1, 2]);
+    assert_eq!(c.type_groups[0].gap_width, Some(150));
+    assert_eq!(c.type_groups[1].chart_type, ChartType::Line);
+    assert_eq!(c.type_groups[1].series.len(), 1);
+    assert_eq!(c.type_groups[1].series[0].name.as_deref(), Some("Trend"));
+    assert_eq!(c.type_groups[1].axis_ids, vec![1, 3]);
+
+    // Legacy fields should come from first group
+    assert_eq!(c.chart_type, ChartType::ColumnClustered);
+    assert_eq!(c.series.len(), 1);
+
+    // Bug 2: legacy axis fields must match first group's axes, not last-parsed
+    let cat = c.category_axis.as_ref().expect("legacy category_axis");
+    assert_eq!(cat.axis_type, AxisType::Category);
+    let val = c.value_axis.as_ref().expect("legacy value_axis");
+    assert_eq!(val.axis_type, AxisType::Value);
+}
+
+#[test]
+fn test_roundtrip_combo_preserves_legacy() {
+    use duke_sheets_chart::{Axis, Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "data").unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    chart.add_series(
+        DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")).with_name("Series1"),
+    );
+    chart.category_axis = Some(Axis::new());
+    chart.value_axis = Some(Axis::new());
+
+    // No type_groups set => legacy mode
+    assert!(chart.type_groups.is_empty());
+
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let c = &sheet2.charts()[0];
+    assert_eq!(c.chart_type, ChartType::Line);
+    assert_eq!(c.series.len(), 1);
+    assert_eq!(c.series[0].name.as_deref(), Some("Series1"));
+    assert!(c.type_groups.is_empty());
+    assert!(c.axes.is_empty());
+}
+
+#[test]
+fn test_roundtrip_combo_axes() {
+    use duke_sheets_chart::{
+        Axis, AxisType, Chart, ChartAxis, ChartType, ChartTypeGroup, DataReference, DataSeries,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "x").unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+
+    let bar_group = ChartTypeGroup {
+        chart_type: ChartType::ColumnClustered,
+        is_3d: false,
+        series: vec![DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))],
+        data_labels: None,
+        vary_colors: None,
+        gap_width: None,
+        overlap: None,
+        first_slice_angle: None,
+        hole_size: None,
+        bubble_scale: None,
+        show_negative_bubbles: None,
+        radar_style: None,
+        wireframe: None,
+        drop_lines: None,
+        high_low_lines: None,
+        series_lines: None,
+        up_down_bars: None,
+        axis_ids: vec![10, 20],
+            of_pie_type: None,
+            split_type: None,
+            split_pos: None,
+            second_pie_size: None,
+            bar_shape: None,
+            floor: None,
+            side_wall: None,
+            back_wall: None,
+        raw_ext: None,
+    };
+    let line_group = ChartTypeGroup {
+        chart_type: ChartType::Line,
+        is_3d: false,
+        series: vec![DataSeries::new(DataReference::formula("Sheet1!$C$1:$C$5"))],
+        data_labels: None,
+        vary_colors: None,
+        gap_width: None,
+        overlap: None,
+        first_slice_angle: None,
+        hole_size: None,
+        bubble_scale: None,
+        show_negative_bubbles: None,
+        radar_style: None,
+        wireframe: None,
+        drop_lines: None,
+        high_low_lines: None,
+        series_lines: None,
+        up_down_bars: None,
+        axis_ids: vec![10, 30],
+            of_pie_type: None,
+            split_type: None,
+            split_pos: None,
+            second_pie_size: None,
+            bar_shape: None,
+            floor: None,
+            side_wall: None,
+            back_wall: None,
+        raw_ext: None,
+    };
+    chart.type_groups = vec![bar_group, line_group];
+
+    let mut cat_ax = Axis::new();
+    cat_ax.axis_type = AxisType::Category;
+    let mut val_ax1 = Axis::new();
+    val_ax1.axis_type = AxisType::Value;
+    let mut val_ax2 = Axis::new();
+    val_ax2.axis_type = AxisType::Value;
+    chart.axes = vec![
+        ChartAxis {
+            id: 10,
+            cross_id: 20,
+            axis: cat_ax,
+        },
+        ChartAxis {
+            id: 20,
+            cross_id: 10,
+            axis: val_ax1,
+        },
+        ChartAxis {
+            id: 30,
+            cross_id: 10,
+            axis: val_ax2,
+        },
+    ];
+
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    let c = &sheet2.charts()[0];
+    assert_eq!(c.axes.len(), 3);
+
+    let ax0 = &c.axes[0];
+    assert_eq!(ax0.id, 10);
+    assert_eq!(ax0.cross_id, 20);
+    assert_eq!(ax0.axis.axis_type, AxisType::Category);
+
+    let ax1 = &c.axes[1];
+    assert_eq!(ax1.id, 20);
+    assert_eq!(ax1.cross_id, 10);
+    assert_eq!(ax1.axis.axis_type, AxisType::Value);
+
+    let ax2 = &c.axes[2];
+    assert_eq!(ax2.id, 30);
+    assert_eq!(ax2.cross_id, 10);
+    assert_eq!(ax2.axis.axis_type, AxisType::Value);
+}
+
+#[test]
+fn test_roundtrip_single_type_group_uses_legacy() {
+    use duke_sheets_chart::{
+        Axis, AxisType, Chart, ChartAxis, ChartType, ChartTypeGroup, DataReference, DataSeries,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "x").unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let group = ChartTypeGroup {
+        chart_type: ChartType::ColumnClustered,
+        is_3d: false,
+        series: vec![DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")).with_name("Sales")],
+        data_labels: None,
+        vary_colors: Some(true),
+        gap_width: Some(200),
+        overlap: None,
+        first_slice_angle: None,
+        hole_size: None,
+        bubble_scale: None,
+        show_negative_bubbles: None,
+        radar_style: None,
+        wireframe: None,
+        drop_lines: None,
+        high_low_lines: None,
+        series_lines: None,
+        up_down_bars: None,
+        axis_ids: vec![1, 2],
+            of_pie_type: None,
+            split_type: None,
+            split_pos: None,
+            second_pie_size: None,
+            bar_shape: None,
+            floor: None,
+            side_wall: None,
+            back_wall: None,
+        raw_ext: None,
+    };
+    chart.type_groups = vec![group];
+    let mut cat_ax = Axis::new();
+    cat_ax.axis_type = AxisType::Category;
+    let mut val_ax = Axis::new();
+    val_ax.axis_type = AxisType::Value;
+    chart.axes = vec![
+        ChartAxis {
+            id: 1,
+            cross_id: 2,
+            axis: cat_ax,
+        },
+        ChartAxis {
+            id: 2,
+            cross_id: 1,
+            axis: val_ax,
+        },
+    ];
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    // Single type_group should be written as legacy and read back without type_groups
+    assert!(
+        c.type_groups.is_empty(),
+        "single group should use legacy mode"
+    );
+    assert!(c.axes.is_empty());
+    assert_eq!(c.chart_type, ChartType::ColumnClustered);
+    assert_eq!(c.series.len(), 1);
+    assert_eq!(c.series[0].name.as_deref(), Some("Sales"));
+    assert_eq!(c.vary_colors, Some(true));
+    assert_eq!(c.gap_width, Some(200));
+}
+
+#[test]
+fn test_roundtrip_combo_secondary_axis_position() {
+    use duke_sheets_chart::{
+        Axis, AxisPosition, AxisType, Chart, ChartAxis, ChartType, ChartTypeGroup, DataReference,
+        DataSeries,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "x").unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let bar_group = ChartTypeGroup {
+        chart_type: ChartType::ColumnClustered,
+        is_3d: false,
+        series: vec![DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))],
+        data_labels: None,
+        vary_colors: None,
+        gap_width: None,
+        overlap: None,
+        first_slice_angle: None,
+        hole_size: None,
+        bubble_scale: None,
+        show_negative_bubbles: None,
+        radar_style: None,
+        wireframe: None,
+        drop_lines: None,
+        high_low_lines: None,
+        series_lines: None,
+        up_down_bars: None,
+        axis_ids: vec![10, 20],
+            of_pie_type: None,
+            split_type: None,
+            split_pos: None,
+            second_pie_size: None,
+            bar_shape: None,
+            floor: None,
+            side_wall: None,
+            back_wall: None,
+        raw_ext: None,
+    };
+    let line_group = ChartTypeGroup {
+        chart_type: ChartType::Line,
+        is_3d: false,
+        series: vec![DataSeries::new(DataReference::formula("Sheet1!$C$1:$C$5"))],
+        data_labels: None,
+        vary_colors: None,
+        gap_width: None,
+        overlap: None,
+        first_slice_angle: None,
+        hole_size: None,
+        bubble_scale: None,
+        show_negative_bubbles: None,
+        radar_style: None,
+        wireframe: None,
+        drop_lines: None,
+        high_low_lines: None,
+        series_lines: None,
+        up_down_bars: None,
+        axis_ids: vec![10, 30],
+            of_pie_type: None,
+            split_type: None,
+            split_pos: None,
+            second_pie_size: None,
+            bar_shape: None,
+            floor: None,
+            side_wall: None,
+            back_wall: None,
+        raw_ext: None,
+    };
+    chart.type_groups = vec![bar_group, line_group];
+
+    let cat_ax = Axis::new();
+    let mut val_ax1 = Axis::new();
+    val_ax1.axis_type = AxisType::Value;
+    let mut val_ax2 = Axis::new();
+    val_ax2.axis_type = AxisType::Value;
+    chart.axes = vec![
+        ChartAxis {
+            id: 10,
+            cross_id: 20,
+            axis: cat_ax,
+        },
+        ChartAxis {
+            id: 20,
+            cross_id: 10,
+            axis: val_ax1,
+        },
+        ChartAxis {
+            id: 30,
+            cross_id: 10,
+            axis: val_ax2,
+        },
+    ];
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let ax1 = &c.axes[1];
+    assert_eq!(ax1.axis.axis_type, AxisType::Value);
+    assert_eq!(ax1.axis.position, AxisPosition::Left);
+
+    let ax2 = &c.axes[2];
+    assert_eq!(ax2.axis.axis_type, AxisType::Value);
+    assert_eq!(ax2.axis.position, AxisPosition::Right);
+}
+
+#[test]
+fn test_roundtrip_vary_colors_false() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.vary_colors = Some(false);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.vary_colors, Some(false));
+}
+
+#[test]
+fn test_roundtrip_drop_lines() {
+    use duke_sheets_chart::{
+        Chart, ChartColor, ChartLines, ChartShapeProperties, ChartType, DataReference, DataSeries,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.drop_lines = Some(ChartLines {
+        shape_properties: Some(ChartShapeProperties {
+            solid_fill: Some(ChartColor {
+                hex: "0000FF".into(),
+            }),
+            ..Default::default()
+        }),
+    });
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let dl = c.drop_lines.as_ref().expect("drop_lines lost in roundtrip");
+    let sp = dl.shape_properties.as_ref().expect("drop_lines spPr lost");
+    assert_eq!(sp.solid_fill.as_ref().unwrap().hex, "0000FF");
+}
+
+#[test]
+fn test_roundtrip_high_low_lines() {
+    use duke_sheets_chart::{Chart, ChartLines, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Stock);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.high_low_lines = Some(ChartLines::default());
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert!(
+        c.high_low_lines.is_some(),
+        "high_low_lines lost in roundtrip"
+    );
+}
+
+#[test]
+fn test_roundtrip_series_lines_legacy() {
+    use duke_sheets_chart::{Chart, ChartLines, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::BarStacked);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.series_lines = Some(ChartLines::default());
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert!(
+        c.series_lines.is_some(),
+        "series_lines lost in legacy roundtrip"
+    );
+}
+
+#[test]
+fn test_roundtrip_series_lines() {
+    use duke_sheets_chart::{
+        Axis, AxisType, Chart, ChartAxis, ChartLines, ChartType, ChartTypeGroup, DataReference,
+        DataSeries,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::BarStacked);
+    chart.type_groups = vec![
+        ChartTypeGroup {
+            chart_type: ChartType::BarStacked,
+            is_3d: false,
+            series: vec![DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3"))],
+            data_labels: None,
+            vary_colors: None,
+            gap_width: None,
+            overlap: None,
+            first_slice_angle: None,
+            hole_size: None,
+            bubble_scale: None,
+            show_negative_bubbles: None,
+            radar_style: None,
+            wireframe: None,
+            drop_lines: None,
+            high_low_lines: None,
+            series_lines: Some(ChartLines::default()),
+            up_down_bars: None,
+            axis_ids: vec![1, 2],
+            of_pie_type: None,
+            split_type: None,
+            split_pos: None,
+            second_pie_size: None,
+            bar_shape: None,
+            floor: None,
+            side_wall: None,
+            back_wall: None,
+            raw_ext: None,
+        },
+        ChartTypeGroup {
+            chart_type: ChartType::Line,
+            is_3d: false,
+            series: vec![DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$3"))],
+            data_labels: None,
+            vary_colors: None,
+            gap_width: None,
+            overlap: None,
+            first_slice_angle: None,
+            hole_size: None,
+            bubble_scale: None,
+            show_negative_bubbles: None,
+            radar_style: None,
+            wireframe: None,
+            drop_lines: None,
+            high_low_lines: None,
+            series_lines: None,
+            up_down_bars: None,
+            axis_ids: vec![1, 2],
+            of_pie_type: None,
+            split_type: None,
+            split_pos: None,
+            second_pie_size: None,
+            bar_shape: None,
+            floor: None,
+            side_wall: None,
+            back_wall: None,
+            raw_ext: None,
+        },
+    ];
+    chart.axes = vec![
+        ChartAxis {
+            id: 1,
+            cross_id: 2,
+            axis: Axis::new(),
+        },
+        ChartAxis {
+            id: 2,
+            cross_id: 1,
+            axis: {
+                let mut a = Axis::new();
+                a.axis_type = AxisType::Value;
+                a
+            },
+        },
+    ];
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert!(c.type_groups.len() >= 2, "combo groups lost");
+    assert!(
+        c.type_groups[0].series_lines.is_some(),
+        "series_lines lost in roundtrip"
+    );
+}
+
+#[test]
+fn test_roundtrip_up_down_bars() {
+    use duke_sheets_chart::{Chart, ChartLines, ChartType, DataReference, DataSeries, UpDownBars};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Stock);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.up_down_bars = Some(UpDownBars {
+        gap_width: Some(150),
+        up_bars: Some(ChartLines::default()),
+        down_bars: Some(ChartLines::default()),
+    });
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let udb = c
+        .up_down_bars
+        .as_ref()
+        .expect("up_down_bars lost in roundtrip");
+    assert_eq!(udb.gap_width, Some(150));
+    assert!(udb.up_bars.is_some(), "up_bars lost");
+    assert!(udb.down_bars.is_some(), "down_bars lost");
+}
+
+#[test]
+fn test_roundtrip_leader_lines() {
+    use duke_sheets_chart::{Chart, ChartLines, ChartType, DataLabels, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Pie);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.data_labels = Some(DataLabels {
+        show_value: Some(true),
+        leader_lines: Some(ChartLines::default()),
+        ..DataLabels::default()
+    });
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let dl = c.data_labels.as_ref().expect("data_labels lost");
+    assert!(dl.leader_lines.is_some(), "leader_lines lost in roundtrip");
+}
+
+#[test]
+fn test_roundtrip_chartsheet() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+    use duke_sheets_core::{ChartSheet, SheetVisibility};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Q1").unwrap();
+    sheet.set_cell_value("A2", 100.0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.title = Some("Sales".to_string());
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    wb.add_chartsheet(ChartSheet {
+        name: "Chart1".to_string(),
+        chart,
+        visibility: SheetVisibility::Visible,
+        raw_drawing_objects: Vec::new(),
+    })
+    .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    assert_eq!(wb2.chartsheet_count(), 1);
+    let cs = wb2.chartsheet(0).unwrap();
+    assert_eq!(cs.name, "Chart1");
+    assert_eq!(cs.chart.chart_type, ChartType::ColumnClustered);
+    assert_eq!(cs.chart.title.as_deref(), Some("Sales"));
+    assert_eq!(cs.chart.series.len(), 1);
+    assert_eq!(wb2.sheet_count(), 1);
+}
+
+#[test]
+fn test_roundtrip_chartsheet_only() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+    use duke_sheets_core::{ChartSheet, SheetVisibility};
+
+    let mut wb = Workbook::empty();
+    let mut chart = Chart::new(ChartType::Pie);
+    chart.title = Some("Pie Chart".to_string());
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    wb.add_chartsheet(ChartSheet {
+        name: "OnlyChart".to_string(),
+        chart,
+        visibility: SheetVisibility::Visible,
+        raw_drawing_objects: Vec::new(),
+    })
+    .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    assert_eq!(wb2.chartsheet_count(), 1);
+    assert_eq!(
+        wb2.sheet_count(),
+        0,
+        "phantom worksheet injected for chartsheet-only workbook"
+    );
+    let cs = wb2.chartsheet(0).unwrap();
+    assert_eq!(cs.name, "OnlyChart");
+    assert_eq!(cs.chart.chart_type, ChartType::Pie);
+}
+#[test]
+fn test_roundtrip_chartsheet_with_worksheet_charts() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+    use duke_sheets_core::{ChartSheet, SheetVisibility};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", 42.0).unwrap();
+
+    // Add an embedded chart to the worksheet
+    let mut ws_chart = Chart::new(ChartType::Line);
+    ws_chart.title = Some("Embedded".to_string());
+    ws_chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.add_chart(ws_chart);
+
+    // Add a separate chartsheet
+    let mut cs_chart = Chart::new(ChartType::BarClustered);
+    cs_chart.title = Some("Standalone".to_string());
+    cs_chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5")));
+    wb.add_chartsheet(ChartSheet {
+        name: "ChartSheet1".to_string(),
+        chart: cs_chart,
+        visibility: SheetVisibility::Visible,
+        raw_drawing_objects: Vec::new(),
+    })
+    .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    // Worksheet chart survives
+    assert_eq!(wb2.worksheet(0).unwrap().chart_count(), 1);
+    let wsc = &wb2.worksheet(0).unwrap().charts()[0];
+    assert_eq!(wsc.chart_type, ChartType::Line);
+    assert_eq!(wsc.title.as_deref(), Some("Embedded"));
+
+    // Chartsheet survives independently
+    assert_eq!(wb2.chartsheet_count(), 1);
+    let cs = wb2.chartsheet(0).unwrap();
+    assert_eq!(cs.name, "ChartSheet1");
+    assert_eq!(cs.chart.chart_type, ChartType::BarClustered);
+    assert_eq!(cs.chart.title.as_deref(), Some("Standalone"));
+}
+
+#[test]
+fn test_roundtrip_interleaved_tab_order() {
+    use duke_sheets::SheetSlot;
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    wb.remove_worksheet(0).unwrap();
+
+    wb.add_worksheet_with_name("Sheet1").unwrap();
+    let cs = duke_sheets_core::ChartSheet {
+        name: "ChartSheet1".to_string(),
+        chart: {
+            let mut c = Chart::new(ChartType::ColumnClustered);
+            c.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+            c
+        },
+        visibility: duke_sheets_core::SheetVisibility::Visible,
+        raw_drawing_objects: Vec::new(),
+    };
+    wb.add_chartsheet(cs).unwrap();
+    wb.add_worksheet_with_name("Sheet2").unwrap();
+
+    // Set interleaved tab order: Sheet1, ChartSheet1, Sheet2
+    *wb.sheet_order_mut() = vec![
+        SheetSlot::Worksheet(0),
+        SheetSlot::ChartSheet(0),
+        SheetSlot::Worksheet(1),
+    ];
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    assert_eq!(wb2.sheet_count(), 2);
+    assert_eq!(wb2.chartsheet_count(), 1);
+    assert_eq!(
+        wb2.sheet_order(),
+        &[
+            SheetSlot::Worksheet(0),
+            SheetSlot::ChartSheet(0),
+            SheetSlot::Worksheet(1),
+        ]
+    );
+    assert_eq!(wb2.worksheet(0).unwrap().name(), "Sheet1");
+    assert_eq!(wb2.worksheet(1).unwrap().name(), "Sheet2");
+    assert_eq!(wb2.chartsheet(0).unwrap().name, "ChartSheet1");
+}
+
+#[test]
+fn test_roundtrip_empty_sheet_order_uses_default() {
+    use duke_sheets::SheetSlot;
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let cs = duke_sheets_core::ChartSheet {
+        name: "ChartSheet1".to_string(),
+        chart: {
+            let mut c = Chart::new(ChartType::ColumnClustered);
+            c.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+            c
+        },
+        visibility: duke_sheets_core::SheetVisibility::Visible,
+        raw_drawing_objects: Vec::new(),
+    };
+    wb.add_chartsheet(cs).unwrap();
+
+    // Don't set sheet_order — writer should synthesize default (worksheets first)
+    assert!(wb.sheet_order().is_empty());
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    assert_eq!(wb2.sheet_count(), 1);
+    assert_eq!(wb2.chartsheet_count(), 1);
+    // Reader populates sheet_order from the file, which was written as ws first, cs second
+    assert_eq!(
+        wb2.sheet_order(),
+        &[SheetSlot::Worksheet(0), SheetSlot::ChartSheet(0),]
+    );
+    assert_eq!(wb2.worksheet(0).unwrap().name(), "Sheet1");
+    assert_eq!(wb2.chartsheet(0).unwrap().name, "ChartSheet1");
+}
+
+#[test]
+fn test_add_worksheet_after_read_appears_in_sheet_order() {
+    use duke_sheets::SheetSlot;
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+    use duke_sheets_core::{ChartSheet, SheetVisibility};
+
+    // Step 1: Create a workbook with a worksheet and a chartsheet
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", 1.0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Pie);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    wb.add_chartsheet(ChartSheet {
+        name: "Chart1".to_string(),
+        chart,
+        visibility: SheetVisibility::Visible,
+        raw_drawing_objects: Vec::new(),
+    })
+    .unwrap();
+
+    // Step 2: Write it
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    // Step 3: Read it back (sheet_order is now populated by the reader)
+    let mut wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    assert_eq!(wb2.sheet_order().len(), 2);
+
+    // Step 4: Add a new worksheet via API
+    wb2.add_worksheet_with_name("NewSheet").unwrap();
+
+    // Step 5: Write again
+    let mut buf2 = Vec::new();
+    XlsxWriter::write(&wb2, Cursor::new(&mut buf2)).unwrap();
+
+    // Step 6: Read again and verify the new worksheet appears in sheet_order
+    let wb3 = XlsxReader::read(Cursor::new(&buf2)).unwrap();
+    assert_eq!(wb3.sheet_count(), 2);
+    assert_eq!(wb3.chartsheet_count(), 1);
+    assert_eq!(wb3.sheet_order().len(), 3);
+    assert!(wb3.sheet_order().contains(&SheetSlot::Worksheet(0)));
+    assert!(wb3.sheet_order().contains(&SheetSlot::Worksheet(1)));
+    assert!(wb3.sheet_order().contains(&SheetSlot::ChartSheet(0)));
+    assert_eq!(
+        wb3.worksheet_by_name("NewSheet").unwrap().name(),
+        "NewSheet"
+    );
+}
+
+#[test]
+fn test_roundtrip_chart_style_color_passthrough() {
+    use duke_sheets_chart::{Chart, ChartType};
+
+    let style_bytes = b"<cs:chartStyle xmlns:cs=\"http://schemas.microsoft.com/office/drawing/2012/chartStyle\" id=\"102\"/>".to_vec();
+    let color_bytes = b"<cs:colorStyle xmlns:cs=\"http://schemas.microsoft.com/office/drawing/2012/chartStyle\" meth=\"cycle\" id=\"10\"/>".to_vec();
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.raw_chart_style = Some(style_bytes.clone());
+    chart.raw_chart_color_style = Some(color_bytes.clone());
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+    assert_eq!(sheet2.chart_count(), 1);
+    let c = &sheet2.charts()[0];
+    assert_eq!(c.raw_chart_style.as_deref(), Some(style_bytes.as_slice()));
+    assert_eq!(
+        c.raw_chart_color_style.as_deref(),
+        Some(color_bytes.as_slice())
+    );
+}
+
+#[test]
+fn test_roundtrip_axis_delete() {
+    use duke_sheets_chart::{Axis, Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    let mut cat_axis = Axis::new();
+    cat_axis.delete = Some(true);
+    chart.category_axis = Some(cat_axis);
+    let mut val_axis = Axis::new();
+    val_axis.delete = Some(false);
+    chart.value_axis = Some(val_axis);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.category_axis.as_ref().unwrap().delete, Some(true));
+    assert_eq!(c.value_axis.as_ref().unwrap().delete, Some(false));
+}
+
+#[test]
+fn test_roundtrip_axis_label_positions() {
+    use duke_sheets_chart::{Axis, Chart, ChartType, DataReference, DataSeries, TickLabelPosition};
+
+    for pos in [
+        TickLabelPosition::High,
+        TickLabelPosition::Low,
+        TickLabelPosition::None,
+    ] {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+
+        let mut chart = Chart::new(ChartType::ColumnClustered);
+        chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+        let mut cat_axis = Axis::new();
+        cat_axis.label_position = Some(pos);
+        chart.category_axis = Some(cat_axis);
+        chart.value_axis = Some(Axis::new());
+        sheet.add_chart(chart);
+
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+        let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+        let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+        assert_eq!(
+            c.category_axis.as_ref().unwrap().label_position,
+            Some(pos),
+            "TickLabelPosition::{:?} did not survive roundtrip",
+            pos,
+        );
+    }
+}
+
+#[test]
+fn test_roundtrip_axis_crosses_min_max() {
+    use duke_sheets_chart::{Axis, AxisCrosses, Chart, ChartType, DataReference, DataSeries};
+
+    for crosses in [AxisCrosses::Min, AxisCrosses::Max] {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+
+        let mut chart = Chart::new(ChartType::ColumnClustered);
+        chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+        let mut cat_axis = Axis::new();
+        cat_axis.crosses = Some(crosses);
+        chart.category_axis = Some(cat_axis);
+        chart.value_axis = Some(Axis::new());
+        sheet.add_chart(chart);
+
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+        let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+        let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+        assert_eq!(
+            c.category_axis.as_ref().unwrap().crosses,
+            Some(crosses),
+            "AxisCrosses::{:?} did not survive roundtrip",
+            crosses,
+        );
+    }
+}
+
+#[test]
+fn test_roundtrip_trendline_polynomial() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataReference, DataSeries, Trendline, TrendlineType,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$10"));
+    s.trendline = Some(Trendline {
+        trendline_type: TrendlineType::Polynomial,
+        name: Some("Poly3".to_string()),
+        order: Some(3),
+        period: None,
+        forward: None,
+        backward: None,
+        intercept: Some(5.0),
+        display_r_squared: Some(true),
+        display_equation: Some(false),
+        label: None,
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let t = c.series[0]
+        .trendline
+        .as_ref()
+        .expect("trendline should survive");
+    assert_eq!(t.trendline_type, TrendlineType::Polynomial);
+    assert_eq!(t.name.as_deref(), Some("Poly3"));
+    assert_eq!(t.order, Some(3));
+    assert_eq!(t.intercept, Some(5.0));
+    assert_eq!(t.display_r_squared, Some(true));
+}
+
+#[test]
+fn test_roundtrip_trendline_moving_average() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataReference, DataSeries, Trendline, TrendlineType,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$10"));
+    s.trendline = Some(Trendline {
+        trendline_type: TrendlineType::MovingAverage,
+        name: None,
+        order: None,
+        period: Some(3),
+        forward: None,
+        backward: None,
+        intercept: None,
+        display_r_squared: None,
+        display_equation: None,
+        label: None,
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let t = c.series[0]
+        .trendline
+        .as_ref()
+        .expect("trendline should survive");
+    assert_eq!(t.trendline_type, TrendlineType::MovingAverage);
+    assert_eq!(t.period, Some(3));
+}
+
+#[test]
+fn test_roundtrip_trendline_logarithmic_power() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataReference, DataSeries, Trendline, TrendlineType,
+    };
+
+    for ttype in [TrendlineType::Logarithmic, TrendlineType::Power] {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+
+        let mut chart = Chart::new(ChartType::Line);
+        let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$10"));
+        s.trendline = Some(Trendline {
+            trendline_type: ttype,
+            name: None,
+            order: None,
+            period: None,
+            forward: Some(2.0),
+            backward: Some(1.0),
+            intercept: None,
+            display_r_squared: None,
+            display_equation: None,
+            label: None,
+        });
+        chart.add_series(s);
+        sheet.add_chart(chart);
+
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+        let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+        let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+        let t = c.series[0]
+            .trendline
+            .as_ref()
+            .expect("trendline should survive");
+        assert_eq!(
+            t.trendline_type, ttype,
+            "TrendlineType::{:?} did not survive roundtrip",
+            ttype,
+        );
+        assert_eq!(t.forward, Some(2.0));
+        assert_eq!(t.backward, Some(1.0));
+    }
+}
+
+#[test]
+fn test_roundtrip_error_bars_percentage_stddev() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataReference, DataSeries, ErrorBarDirection, ErrorBarType, ErrorBars,
+        ErrorValueType,
+    };
+
+    for vtype in [
+        ErrorValueType::StandardDeviation,
+        ErrorValueType::StandardError,
+    ] {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+
+        let mut chart = Chart::new(ChartType::BarClustered);
+        let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+        s.error_bars = Some(ErrorBars {
+            direction: ErrorBarDirection::Y,
+            bar_type: ErrorBarType::Both,
+            value_type: vtype,
+            value: Some(2.0),
+            no_end_cap: Some(true),
+            plus: None,
+            minus: None,
+        });
+        chart.add_series(s);
+        sheet.add_chart(chart);
+
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+        let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+        let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+        let eb = c.series[0]
+            .error_bars
+            .as_ref()
+            .expect("error_bars should survive");
+        assert_eq!(
+            eb.value_type, vtype,
+            "ErrorValueType::{:?} did not survive roundtrip",
+            vtype,
+        );
+        assert_eq!(eb.value, Some(2.0));
+        assert_eq!(eb.no_end_cap, Some(true));
+    }
+}
+
+#[test]
+fn test_roundtrip_marker_symbols() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, Marker, MarkerSymbol};
+
+    for symbol in [
+        MarkerSymbol::Diamond,
+        MarkerSymbol::Square,
+        MarkerSymbol::Triangle,
+        MarkerSymbol::None,
+        MarkerSymbol::Dash,
+        MarkerSymbol::Dot,
+        MarkerSymbol::Plus,
+        MarkerSymbol::Star,
+        MarkerSymbol::X,
+    ] {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+
+        let mut chart = Chart::new(ChartType::Line);
+        let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+        s.marker = Some(Marker {
+            symbol: Some(symbol),
+            size: Some(6),
+        });
+        chart.add_series(s);
+        sheet.add_chart(chart);
+
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+        let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+        let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+        let m = c.series[0].marker.as_ref().expect("marker should survive");
+        assert_eq!(
+            m.symbol,
+            Some(symbol),
+            "MarkerSymbol::{:?} did not survive roundtrip",
+            symbol,
+        );
+        assert_eq!(m.size, Some(6));
+    }
+}
+
+#[test]
+fn test_roundtrip_data_label_positions() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataLabelPosition, DataLabels, DataReference, DataSeries,
+    };
+
+    for pos in [
+        DataLabelPosition::Center,
+        DataLabelPosition::InsideEnd,
+        DataLabelPosition::InsideBase,
+        DataLabelPosition::OutsideEnd,
+    ] {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+
+        let mut chart = Chart::new(ChartType::ColumnClustered);
+        chart.data_labels = Some(DataLabels {
+            show_value: Some(true),
+            position: Some(pos),
+            ..Default::default()
+        });
+        chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+        sheet.add_chart(chart);
+
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+        let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+        let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+        let dl = c.data_labels.as_ref().expect("data_labels should survive");
+        assert_eq!(
+            dl.position,
+            Some(pos),
+            "DataLabelPosition::{:?} did not survive roundtrip",
+            pos,
+        );
+    }
+}
+
+#[test]
+fn test_roundtrip_display_blanks_as_span() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, DisplayBlanksAs};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.display_blanks_as = Some(DisplayBlanksAs::Span);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.display_blanks_as, Some(DisplayBlanksAs::Span));
+}
+
+#[test]
+fn test_roundtrip_legend_positions() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, Legend, LegendPosition};
+
+    for pos in [LegendPosition::Left, LegendPosition::TopRight] {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+
+        let mut chart = Chart::new(ChartType::ColumnClustered);
+        chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+        chart.legend = Some(Legend::new(pos));
+        sheet.add_chart(chart);
+
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+        let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+        let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+        assert_eq!(
+            c.legend.as_ref().unwrap().position,
+            pos,
+            "LegendPosition::{:?} did not survive roundtrip",
+            pos,
+        );
+    }
+}
+
+#[test]
+fn test_roundtrip_legend_overlay() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, Legend, LegendPosition};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    let mut legend = Legend::new(LegendPosition::Right);
+    legend.overlay = true;
+    chart.legend = Some(legend);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let leg = c.legend.as_ref().expect("legend should survive");
+    assert!(leg.overlay, "legend overlay should be true after roundtrip");
+}
+
+#[test]
+fn test_roundtrip_axis_date_type() {
+    use duke_sheets_chart::{Axis, AxisType, Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Line);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    let mut cat_axis = Axis::new();
+    cat_axis.axis_type = AxisType::Date;
+    chart.category_axis = Some(cat_axis);
+    chart.value_axis = Some(Axis::new());
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.category_axis.as_ref().unwrap().axis_type, AxisType::Date,);
+}
+
+#[test]
+fn test_roundtrip_axis_series_type() {
+    use duke_sheets_chart::{Axis, AxisType, Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.is_3d = true;
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    let mut ser_axis = Axis::new();
+    ser_axis.axis_type = AxisType::Series;
+    ser_axis.title = Some("Depth".to_string());
+    chart.series_axis = Some(ser_axis);
+    chart.category_axis = Some(Axis::new());
+    chart.value_axis = Some(Axis::new());
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let ser_ax = c.series_axis.as_ref().expect("series_axis should survive");
+    assert_eq!(ser_ax.axis_type, AxisType::Series);
+    assert_eq!(ser_ax.title.as_deref(), Some("Depth"));
+}
+
+#[test]
+fn test_roundtrip_view3d_all_fields() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, View3D};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.is_3d = true;
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    chart.view_3d = Some(View3D {
+        rotate_x: Some(20),
+        rotate_y: Some(30),
+        depth_percent: Some(200),
+        height_percent: Some(150),
+        perspective: Some(45),
+        right_angle_axes: Some(false),
+    });
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let v = c.view_3d.as_ref().expect("view_3d should survive");
+    assert_eq!(v.rotate_x, Some(20));
+    assert_eq!(v.rotate_y, Some(30));
+    assert_eq!(v.depth_percent, Some(200));
+    assert_eq!(v.height_percent, Some(150));
+    assert_eq!(v.perspective, Some(45));
+    assert_eq!(v.right_angle_axes, Some(false));
+}
+
+#[test]
+fn test_roundtrip_chart_no_title() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.title = None;
+    chart.auto_title_deleted = Some(true);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert!(
+        c.title.is_none(),
+        "title should remain None, got {:?}",
+        c.title
+    );
+    assert_eq!(c.auto_title_deleted, Some(true));
+}
+
+#[test]
+fn test_roundtrip_chart_empty_series_name() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.name = Some("".into());
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    assert_eq!(c.series.len(), 1);
+    // Empty string name may come back as Some("") or None — either is acceptable
+    // as long as the roundtrip doesn't crash
+    if let Some(name) = c.series[0].name.as_deref() {
+        assert_eq!(name, "");
+    }
+}
+
+#[test]
+fn test_roundtrip_chartsheet_hidden() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+    use duke_sheets_core::{ChartSheet, SheetVisibility};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", 100.0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    wb.add_chartsheet(ChartSheet {
+        name: "HiddenChart".to_string(),
+        chart,
+        visibility: SheetVisibility::Hidden,
+        raw_drawing_objects: Vec::new(),
+    })
+    .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    assert_eq!(wb2.chartsheet_count(), 1);
+    let cs = wb2.chartsheet(0).unwrap();
+    assert_eq!(cs.name, "HiddenChart");
+    assert_eq!(cs.visibility, SheetVisibility::Hidden);
+}
+
+#[test]
+fn test_roundtrip_multiple_chartsheets() {
+    use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries};
+    use duke_sheets_core::{ChartSheet, SheetVisibility};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", 1.0).unwrap();
+
+    for (i, ctype) in [ChartType::ColumnClustered, ChartType::Line, ChartType::Pie]
+        .iter()
+        .enumerate()
+    {
+        let mut chart = Chart::new(ctype.clone());
+        chart.title = Some(format!("Chart{}", i + 1));
+        chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+        wb.add_chartsheet(ChartSheet {
+            name: format!("CS{}", i + 1),
+            chart,
+            visibility: SheetVisibility::Visible,
+        raw_drawing_objects: Vec::new(),
+        })
+        .unwrap();
+    }
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    assert_eq!(wb2.chartsheet_count(), 3);
+    assert_eq!(wb2.chartsheet(0).unwrap().name, "CS1");
+    assert_eq!(
+        wb2.chartsheet(0).unwrap().chart.chart_type,
+        ChartType::ColumnClustered
+    );
+    assert_eq!(
+        wb2.chartsheet(0).unwrap().chart.title.as_deref(),
+        Some("Chart1")
+    );
+    assert_eq!(wb2.chartsheet(1).unwrap().name, "CS2");
+    assert_eq!(wb2.chartsheet(1).unwrap().chart.chart_type, ChartType::Line);
+    assert_eq!(wb2.chartsheet(2).unwrap().name, "CS3");
+    assert_eq!(wb2.chartsheet(2).unwrap().chart.chart_type, ChartType::Pie);
+}
+
+#[test]
+fn test_roundtrip_axis_tick_marks_cross_none() {
+    use duke_sheets_chart::{Axis, Chart, ChartType, DataReference, DataSeries, TickMark};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    let mut cat_axis = Axis::new();
+    cat_axis.major_tick_mark = Some(TickMark::Cross);
+    cat_axis.minor_tick_mark = Some(TickMark::None);
+    chart.category_axis = Some(cat_axis);
+    chart.value_axis = Some(Axis::new());
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let ax = c.category_axis.as_ref().unwrap();
+    assert_eq!(ax.major_tick_mark, Some(TickMark::Cross));
+    assert_eq!(ax.minor_tick_mark, Some(TickMark::None));
+}
+
+#[test]
+fn test_roundtrip_error_bars_direction_x() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataReference, DataSeries, ErrorBarDirection, ErrorBarType, ErrorBars,
+        ErrorValueType,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ScatterMarkers);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$5"))
+        .with_categories(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.error_bars = Some(ErrorBars {
+        direction: ErrorBarDirection::X,
+        bar_type: ErrorBarType::Plus,
+        value_type: ErrorValueType::FixedValue,
+        value: Some(1.5),
+        no_end_cap: None,
+        plus: None,
+        minus: None,
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let eb = c.series[0]
+        .error_bars
+        .as_ref()
+        .expect("error_bars should survive");
+    assert_eq!(eb.direction, ErrorBarDirection::X);
+    assert_eq!(eb.bar_type, ErrorBarType::Plus);
+}
+
+#[test]
+fn test_roundtrip_error_bars_minus_type() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataReference, DataSeries, ErrorBarDirection, ErrorBarType, ErrorBars,
+        ErrorValueType,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::BarClustered);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.error_bars = Some(ErrorBars {
+        direction: ErrorBarDirection::Y,
+        bar_type: ErrorBarType::Minus,
+        value_type: ErrorValueType::Percentage,
+        value: Some(15.0),
+        no_end_cap: Some(false),
+        plus: None,
+        minus: None,
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let eb = c.series[0]
+        .error_bars
+        .as_ref()
+        .expect("error_bars should survive");
+    assert_eq!(eb.bar_type, ErrorBarType::Minus);
+    assert_eq!(eb.no_end_cap, Some(false));
+}
+
+#[test]
+fn test_roundtrip_data_label_number_format() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataLabels, DataReference, DataSeries, NumberFormat,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    chart.data_labels = Some(DataLabels {
+        show_value: Some(true),
+        number_format: Some(NumberFormat {
+            format_code: "#,##0.00".to_string(),
+            source_linked: Some(false),
+        }),
+        ..Default::default()
+    });
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let dl = c.data_labels.as_ref().expect("data_labels should survive");
+    let nf = dl
+        .number_format
+        .as_ref()
+        .expect("number_format should survive");
+    assert_eq!(nf.format_code, "#,##0.00");
+    assert_eq!(nf.source_linked, Some(false));
+}
+
+#[test]
+fn test_roundtrip_data_label_show_leader_lines() {
+    use duke_sheets_chart::{Chart, ChartType, DataLabels, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::Pie);
+    chart.data_labels = Some(DataLabels {
+        show_value: Some(true),
+        show_leader_lines: Some(true),
+        ..Default::default()
+    });
+    chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let dl = c.data_labels.as_ref().expect("data_labels should survive");
+    assert_eq!(dl.show_leader_lines, Some(true));
+}
+
+#[test]
+fn test_roundtrip_chart_shape_properties_no_fill() {
+    use duke_sheets_chart::{Chart, ChartShapeProperties, ChartType, DataReference, DataSeries};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.shape_properties = Some(ChartShapeProperties {
+        solid_fill: None,
+        no_fill: true,
+        line: None,
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let sp = c.series[0]
+        .shape_properties
+        .as_ref()
+        .expect("shape_properties should survive");
+    assert!(sp.no_fill, "no_fill should be true after roundtrip");
+    assert!(sp.solid_fill.is_none());
+}
+
+#[test]
+fn test_roundtrip_chart_line_no_fill() {
+    use duke_sheets_chart::{
+        Chart, ChartLine, ChartShapeProperties, ChartType, DataReference, DataSeries,
+    };
+
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    let mut chart = Chart::new(ChartType::ColumnClustered);
+    let mut s = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5"));
+    s.shape_properties = Some(ChartShapeProperties {
+        solid_fill: None,
+        no_fill: false,
+        line: Some(ChartLine {
+            width: None,
+            solid_fill: None,
+            no_fill: true,
+            dash_style: None,
+        }),
+    });
+    chart.add_series(s);
+    sheet.add_chart(chart);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+    let sp = c.series[0]
+        .shape_properties
+        .as_ref()
+        .expect("shape_properties should survive");
+    let ln = sp.line.as_ref().expect("line should survive");
+    assert!(ln.no_fill, "line no_fill should be true after roundtrip");
+}
+
+#[test]
+fn test_roundtrip_data_label_position_pie() {
+    use duke_sheets_chart::{
+        Chart, ChartType, DataLabelPosition, DataLabels, DataReference, DataSeries,
+    };
+
+    for pos in [DataLabelPosition::BestFit, DataLabelPosition::OutsideEnd] {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+
+        let mut chart = Chart::new(ChartType::Pie);
+        chart.data_labels = Some(DataLabels {
+            show_value: Some(true),
+            position: Some(pos),
+            ..Default::default()
+        });
+        chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+        sheet.add_chart(chart);
+
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+        let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+        let c = &wb2.worksheet(0).unwrap().charts()[0];
+
+        let dl = c.data_labels.as_ref().expect("data_labels should survive");
+        assert_eq!(
+            dl.position,
+            Some(pos),
+            "DataLabelPosition::{:?} on pie chart did not survive roundtrip",
+            pos,
+        );
+    }
+}

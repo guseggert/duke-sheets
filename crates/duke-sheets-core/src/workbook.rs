@@ -1,10 +1,22 @@
 //! Workbook type - the main document structure
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use std::any::Any;
 use crate::error::{Error, Result};
 use crate::named_range::{NameScope, NamedRange, NamedRangeCollection};
-use crate::worksheet::Worksheet;
+use crate::worksheet::{SheetVisibility, Worksheet};
+use duke_sheets_chart::Chart;
 use crate::MAX_SHEET_NAME_LEN;
+
+static NEXT_WORKBOOK_NONCE: AtomicU64 = AtomicU64::new(1);
+
+/// A slot in the workbook tab bar, referencing either a worksheet or a chartsheet by index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SheetSlot {
+    Worksheet(usize),
+    ChartSheet(usize),
+}
 
 /// A workbook (spreadsheet document)
 ///
@@ -13,6 +25,11 @@ use crate::MAX_SHEET_NAME_LEN;
 pub struct Workbook {
     /// Worksheets in the workbook
     worksheets: Vec<Worksheet>,
+    /// Chart sheets in the workbook
+    chartsheets: Vec<ChartSheet>,
+    /// Tab-bar ordering of worksheets and chartsheets.
+    /// Empty means "use default order: all worksheets first, then all chartsheets".
+    sheet_order: Vec<SheetSlot>,
     /// Workbook settings
     settings: WorkbookSettings,
     /// Active sheet index
@@ -26,6 +43,8 @@ pub struct Workbook {
     /// Structural generation counter — incremented when sheets are added, removed,
     /// reordered, or renamed. The calculation engine uses this to detect stale caches.
     structural_generation: u64,
+    /// Unique identity for roundtrip state lookup (not persisted).
+    nonce: u64,
 }
 
 impl Workbook {
@@ -33,11 +52,14 @@ impl Workbook {
     pub fn new() -> Self {
         let mut wb = Self {
             worksheets: Vec::new(),
+            chartsheets: Vec::new(),
+            sheet_order: Vec::new(),
             settings: WorkbookSettings::default(),
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
             calc_cache: None,
             structural_generation: 0,
+            nonce: NEXT_WORKBOOK_NONCE.fetch_add(1, Ordering::Relaxed),
         };
         wb.add_worksheet_with_name("Sheet1").unwrap();
         wb
@@ -47,11 +69,14 @@ impl Workbook {
     pub fn empty() -> Self {
         Self {
             worksheets: Vec::new(),
+            chartsheets: Vec::new(),
+            sheet_order: Vec::new(),
             settings: WorkbookSettings::default(),
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
             calc_cache: None,
             structural_generation: 0,
+            nonce: NEXT_WORKBOOK_NONCE.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -60,9 +85,25 @@ impl Workbook {
         self.worksheets.len()
     }
 
-    /// Check if the workbook has no worksheets
+    /// Get the tab-bar order as a slice of SheetSlot entries.
+    /// Empty means the default order (all worksheets first, then all chartsheets).
+    pub fn sheet_order(&self) -> &[SheetSlot] {
+        &self.sheet_order
+    }
+
+    /// Get a mutable reference to the tab-bar order.
+    pub fn sheet_order_mut(&mut self) -> &mut Vec<SheetSlot> {
+        &mut self.sheet_order
+    }
+
+    /// Total number of tabs (worksheets + chartsheets).
+    pub fn total_sheet_count(&self) -> usize {
+        self.worksheets.len() + self.chartsheets.len()
+    }
+
+    /// Check if the workbook has no worksheets and no chartsheets
     pub fn is_empty(&self) -> bool {
-        self.worksheets.is_empty()
+        self.worksheets.is_empty() && self.chartsheets.is_empty()
     }
 
     /// Get a worksheet by index
@@ -106,6 +147,11 @@ impl Workbook {
         self.structural_generation
     }
 
+    /// Unique nonce for roundtrip state lookup.
+    pub fn nonce(&self) -> u64 {
+        self.nonce
+    }
+
     /// Take the calculation cache (moves it out of the workbook).
     pub fn take_calc_cache(&mut self) -> Option<Box<dyn Any + Send + Sync>> {
         self.calc_cache.take()
@@ -129,6 +175,9 @@ impl Workbook {
         let index = self.worksheets.len();
         let worksheet = Worksheet::new(name);
         self.worksheets.push(worksheet);
+        if !self.sheet_order.is_empty() {
+            self.sheet_order.push(SheetSlot::Worksheet(index));
+        }
         self.structural_generation += 1;
         Ok(index)
     }
@@ -156,6 +205,18 @@ impl Workbook {
         let worksheet = Worksheet::new(name);
         self.worksheets.insert(index, worksheet);
 
+        // Update sheet_order: increment indices >= the insertion point
+        if !self.sheet_order.is_empty() {
+            for slot in &mut self.sheet_order {
+                if let SheetSlot::Worksheet(ref mut idx) = slot {
+                    if *idx >= index {
+                        *idx += 1;
+                    }
+                }
+            }
+            self.sheet_order.push(SheetSlot::Worksheet(index));
+        }
+
         // Adjust active sheet index if needed
         if self.active_sheet >= index && !self.worksheets.is_empty() {
             self.active_sheet = self.active_sheet.saturating_add(1);
@@ -169,6 +230,9 @@ impl Workbook {
         self.validate_sheet_name(worksheet.name())?;
         let index = self.worksheets.len();
         self.worksheets.push(worksheet);
+        if !self.sheet_order.is_empty() {
+            self.sheet_order.push(SheetSlot::Worksheet(index));
+        }
         self.structural_generation += 1;
         Ok(index)
     }
@@ -180,6 +244,18 @@ impl Workbook {
         }
 
         let worksheet = self.worksheets.remove(index);
+
+        // Update sheet_order: remove the entry and decrement indices above it
+        if !self.sheet_order.is_empty() {
+            self.sheet_order.retain(|slot| *slot != SheetSlot::Worksheet(index));
+            for slot in &mut self.sheet_order {
+                if let SheetSlot::Worksheet(ref mut idx) = slot {
+                    if *idx > index {
+                        *idx -= 1;
+                    }
+                }
+            }
+        }
 
         // Adjust active sheet index
         if !self.worksheets.is_empty() {
@@ -204,6 +280,21 @@ impl Workbook {
 
         let worksheet = self.worksheets.remove(from);
         self.worksheets.insert(to, worksheet);
+
+        // Update sheet_order indices to reflect the move
+        if !self.sheet_order.is_empty() {
+            for slot in &mut self.sheet_order {
+                if let SheetSlot::Worksheet(ref mut idx) = slot {
+                    if *idx == from {
+                        *idx = to;
+                    } else if from < to && *idx > from && *idx <= to {
+                        *idx -= 1;
+                    } else if from > to && *idx >= to && *idx < from {
+                        *idx += 1;
+                    }
+                }
+            }
+        }
 
         // Adjust active sheet if needed
         if self.active_sheet == from {
@@ -363,10 +454,17 @@ impl Workbook {
             }
         }
 
-        // Check for duplicate names (case-insensitive)
+        // Check for duplicate names against worksheets (case-insensitive)
         let name_lower = name.to_lowercase();
         for (i, ws) in self.worksheets.iter().enumerate() {
             if Some(i) != exclude_index && ws.name().to_lowercase() == name_lower {
+                return Err(Error::DuplicateSheetName(name.into()));
+            }
+        }
+
+        // Check for duplicate names against chartsheets (case-insensitive)
+        for cs in &self.chartsheets {
+            if cs.name.to_lowercase() == name_lower {
                 return Err(Error::DuplicateSheetName(name.into()));
             }
         }
@@ -384,6 +482,47 @@ impl Workbook {
             }
             n += 1;
         }
+    }
+
+    /// Add a chart sheet to the workbook.
+    ///
+    /// Returns an error if the name is empty or duplicates an existing
+    /// worksheet or chartsheet name.
+    pub fn add_chartsheet(&mut self, sheet: ChartSheet) -> Result<usize> {
+        self.validate_sheet_name(&sheet.name)?;
+        let index = self.chartsheets.len();
+        self.chartsheets.push(sheet);
+        if !self.sheet_order.is_empty() {
+            self.sheet_order.push(SheetSlot::ChartSheet(index));
+        }
+        self.structural_generation += 1;
+        Ok(index)
+    }
+
+    /// Add a chart sheet without name validation (for the reader).
+    ///
+    /// Real-world files can have names that violate validation rules.
+    /// Readers must preserve them as-is.
+    pub fn add_chartsheet_unchecked(&mut self, sheet: ChartSheet) -> usize {
+        let index = self.chartsheets.len();
+        self.chartsheets.push(sheet);
+        self.structural_generation += 1;
+        index
+    }
+
+    /// Get all chart sheets.
+    pub fn chartsheets(&self) -> &[ChartSheet] {
+        &self.chartsheets
+    }
+
+    /// Get a chart sheet by index.
+    pub fn chartsheet(&self, index: usize) -> Option<&ChartSheet> {
+        self.chartsheets.get(index)
+    }
+
+    /// Get the number of chart sheets.
+    pub fn chartsheet_count(&self) -> usize {
+        self.chartsheets.len()
     }
 }
 
@@ -418,6 +557,20 @@ impl Default for WorkbookSettings {
             theme: None,
         }
     }
+}
+
+/// A chart sheet — a sheet that contains only a chart, no cell data.
+#[derive(Debug, Clone)]
+pub struct ChartSheet {
+    /// Sheet name (as it appears on the tab)
+    pub name: String,
+    /// The chart displayed in this sheet
+    pub chart: Chart,
+    /// Sheet visibility
+    pub visibility: SheetVisibility,
+    /// Raw XML fragments for non-chart drawing anchors, preserved for roundtrip.
+    #[doc(hidden)]
+    pub raw_drawing_objects: Vec<Vec<u8>>,
 }
 
 #[cfg(test)]
@@ -490,5 +643,88 @@ mod tests {
 
         assert!(wb.worksheet_by_name("Data").is_some());
         assert!(wb.worksheet_by_name("NonExistent").is_none());
+    }
+
+    #[test]
+    fn test_insert_worksheet_updates_sheet_order() {
+        let mut wb = Workbook::new();
+        // wb starts with Sheet1 at worksheets[0], sheet_order is empty
+        // Manually populate sheet_order to simulate a read workbook:
+        wb.sheet_order_mut().push(SheetSlot::Worksheet(0));
+        // Now insert at position 0
+        wb.insert_worksheet(0, "Inserted").unwrap();
+        // Expected: sheet_order should have [Worksheet(0), Worksheet(1)]
+        // The original Worksheet(0) became Worksheet(1) because it shifted right
+        // The new sheet at index 0 was pushed to the end of sheet_order
+        assert_eq!(wb.sheet_order().len(), 2);
+        assert!(wb.sheet_order().contains(&SheetSlot::Worksheet(0)));
+        assert!(wb.sheet_order().contains(&SheetSlot::Worksheet(1)));
+        // Verify the original slot was renumbered:
+        assert_eq!(wb.sheet_order()[0], SheetSlot::Worksheet(1)); // was 0, now 1
+        assert_eq!(wb.sheet_order()[1], SheetSlot::Worksheet(0)); // newly inserted, pushed to end
+    }
+
+    #[test]
+    fn test_remove_worksheet_updates_sheet_order() {
+        let mut wb = Workbook::new();
+        wb.add_worksheet_with_name("Sheet2").unwrap();
+        // worksheets: [Sheet1(0), Sheet2(1)]
+        // Manually set sheet_order:
+        wb.sheet_order_mut().push(SheetSlot::Worksheet(0));
+        wb.sheet_order_mut().push(SheetSlot::Worksheet(1));
+        // Remove worksheet 0 (Sheet1)
+        wb.remove_worksheet(0).unwrap();
+        // Expected: sheet_order should have [Worksheet(0)] — the old index 1 became 0
+        assert_eq!(wb.sheet_order().len(), 1);
+        assert_eq!(wb.sheet_order()[0], SheetSlot::Worksheet(0));
+        assert_eq!(wb.worksheet(0).unwrap().name(), "Sheet2");
+    }
+
+    #[test]
+    fn test_move_worksheet_updates_sheet_order() {
+        let mut wb = Workbook::new();
+        wb.add_worksheet_with_name("Sheet2").unwrap();
+        wb.add_worksheet_with_name("Sheet3").unwrap();
+        // worksheets: [Sheet1(0), Sheet2(1), Sheet3(2)]
+        wb.sheet_order_mut().push(SheetSlot::Worksheet(0));
+        wb.sheet_order_mut().push(SheetSlot::Worksheet(1));
+        wb.sheet_order_mut().push(SheetSlot::Worksheet(2));
+        // Move worksheet from index 0 to index 2
+        wb.move_worksheet(0, 2).unwrap();
+        // After move: worksheets = [Sheet2(0), Sheet3(1), Sheet1(2)]
+        // sheet_order indices should be remapped:
+        // Old 0→new 2, old 1→new 0, old 2→new 1
+        assert_eq!(wb.sheet_order()[0], SheetSlot::Worksheet(2)); // was 0, moved to 2
+        assert_eq!(wb.sheet_order()[1], SheetSlot::Worksheet(0)); // was 1, shifted to 0
+        assert_eq!(wb.sheet_order()[2], SheetSlot::Worksheet(1)); // was 2, shifted to 1
+    }
+
+    #[test]
+    fn test_add_worksheet_pushes_to_nonempty_sheet_order() {
+        let mut wb = Workbook::new();
+        // Simulate reading: manually populate sheet_order
+        wb.sheet_order_mut().push(SheetSlot::Worksheet(0));
+        // Now add a new worksheet via the API
+        wb.add_worksheet_with_name("Sheet2").unwrap();
+        // Since sheet_order was non-empty, the new sheet should have been appended
+        assert_eq!(wb.sheet_order().len(), 2);
+        assert_eq!(wb.sheet_order()[1], SheetSlot::Worksheet(1));
+    }
+
+    #[test]
+    fn test_add_chartsheet_pushes_to_nonempty_sheet_order() {
+        use duke_sheets_chart::ChartType;
+
+        let mut wb = Workbook::new();
+        wb.sheet_order_mut().push(SheetSlot::Worksheet(0));
+        let cs = ChartSheet {
+            name: "Chart1".into(),
+            chart: Chart::new(ChartType::Pie),
+            visibility: SheetVisibility::Visible,
+            raw_drawing_objects: Vec::new(),
+        };
+        wb.add_chartsheet(cs).unwrap();
+        assert_eq!(wb.sheet_order().len(), 2);
+        assert_eq!(wb.sheet_order()[1], SheetSlot::ChartSheet(0));
     }
 }
