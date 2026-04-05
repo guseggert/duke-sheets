@@ -25,3 +25,236 @@ declare module './generated' {
     iterateRows(opts?: JsRowsOptions): RowIterator
   }
 }
+
+export interface JsChartExOffset {
+  top?: number
+  left?: number
+}
+
+export interface JsChartExText {
+  formula?: string
+  value?: string
+}
+
+export interface JsChartExColorPosition {
+  positionType: string
+  value?: number
+}
+
+export interface JsChartExValueColorPositions {
+  count?: number
+  min?: JsChartExColorPosition
+  mid?: JsChartExColorPosition
+  max?: JsChartExColorPosition
+}
+
+export interface JsChartExScaling {
+  scalingType: string
+  gapWidth?: number
+  min?: number
+  max?: number
+  majorUnit?: number
+  minorUnit?: number
+}
+
+export interface JsChartExAxisTitle {
+  text?: string
+  shapeProperties?: import('./generated').JsChartShapeProperties
+}
+
+export interface JsChartExAxisUnits {
+  unit?: string
+}
+
+export interface JsChartExSeriesVisibility {
+  connectorLines?: boolean
+  meanLine?: boolean
+  meanMarker?: boolean
+  nonoutliers?: boolean
+  outliers?: boolean
+}
+
+export interface JsChartExBinning {
+  intervalClosed?: string
+  underflow?: string
+  overflow?: string
+  binSize?: number
+  binCount?: number
+}
+
+export interface JsChartExGeography {
+  projectionType?: string
+  viewedRegionType?: string
+  cultureLanguage?: string
+  cultureRegion?: string
+  attribution?: string
+}
+
+export interface JsChartExStatistics {
+  quartileMethod?: string
+}
+
+export interface JsChartExDataPoint {
+  idx: number
+  shapeProperties?: import('./generated').JsChartShapeProperties
+}
+
+export interface JsChartExDataLabel {
+  idx: number
+  position?: string
+  visibilitySeriesName?: boolean
+  visibilityCategoryName?: boolean
+  visibilityValue?: boolean
+  numberFormat?: import('./generated').JsChartNumberFormat
+  separator?: string
+  shapeProperties?: import('./generated').JsChartShapeProperties
+}
+
+export interface JsChartExFormatOverride {
+  idx: number
+  shapeProperties?: import('./generated').JsChartShapeProperties
+}
+
+export interface JsChartExHeaderFooter {
+  alignWithMargins?: boolean
+  differentOddEven?: boolean
+  differentFirst?: boolean
+  oddHeader?: string
+  oddFooter?: string
+  evenHeader?: string
+  evenFooter?: string
+  firstHeader?: string
+  firstFooter?: string
+}
+
+export interface JsChartExPageMargins {
+  left?: number
+  right?: number
+  top?: number
+  bottom?: number
+  header?: number
+  footer?: number
+}
+
+export interface JsChartExPageSetup {
+  paperSize?: number
+  firstPageNumber?: number
+  orientation?: string
+  blackAndWhite?: boolean
+  draft?: boolean
+  useFirstPageNumber?: boolean
+  horizontalDpi?: number
+  verticalDpi?: number
+  copies?: number
+}
+
+export interface JsChartExPrintSettings {
+  headerFooter?: JsChartExHeaderFooter
+  pageMargins?: JsChartExPageMargins
+  pageSetup?: JsChartExPageSetup
+}
+
+export interface JsChartExDimension {
+  dimType: string
+  formula?: string
+  nfFormula?: string
+}
+
+export interface JsChartExData {
+  id: number
+  dimensions: JsChartExDimension[]
+}
+
+export interface JsChartExDataLabels {
+  position?: string
+  visibilitySeriesName?: boolean
+  visibilityCategoryName?: boolean
+  visibilityValue?: boolean
+  numberFormat?: import('./generated').JsChartNumberFormat
+  separator?: string
+  shapeProperties?: import('./generated').JsChartShapeProperties
+  overrides: JsChartExDataLabel[]
+  hiddenLabels: number[]
+}
+
+export interface JsChartExTitle {
+  text?: string
+  position?: string
+  align?: string
+  overlay?: boolean
+  offset?: JsChartExOffset
+  shapeProperties?: import('./generated').JsChartShapeProperties
+}
+
+export interface JsChartExLegend {
+  position?: string
+  align?: string
+  overlay?: boolean
+  offset?: JsChartExOffset
+  shapeProperties?: import('./generated').JsChartShapeProperties
+}
+
+export interface JsChartExLayoutPr {
+  parentLabelLayout?: string
+  regionLabelLayout?: string
+  visibility?: JsChartExSeriesVisibility
+  aggregation: boolean
+  binning?: JsChartExBinning
+  geography?: JsChartExGeography
+  statistics?: JsChartExStatistics
+  subtotals: number[]
+}
+
+export interface JsChartExAxis {
+  id: number
+  hidden?: boolean
+  scaling: JsChartExScaling
+  title?: JsChartExAxisTitle
+  units?: JsChartExAxisUnits
+  majorGridlines?: import('./generated').JsChartShapeProperties
+  minorGridlines?: import('./generated').JsChartShapeProperties
+  majorTickMarks?: string
+  minorTickMarks?: string
+  tickLabels: boolean
+  numberFormat?: import('./generated').JsChartNumberFormat
+  shapeProperties?: import('./generated').JsChartShapeProperties
+}
+
+export interface JsChartExPlotArea {
+  plotSurface?: import('./generated').JsChartShapeProperties
+  series: JsChartExSeries[]
+  axes: JsChartExAxis[]
+  shapeProperties?: import('./generated').JsChartShapeProperties
+}
+
+export interface JsChartExSeries {
+  layout: string
+  dataId: number
+  uniqueId?: string
+  hidden?: boolean
+  ownerIdx?: number
+  formatIdx?: number
+  text?: JsChartExText
+  dataLabels?: JsChartExDataLabels
+  dataPoints: JsChartExDataPoint[]
+  layoutProperties?: JsChartExLayoutPr
+  axisIds: number[]
+  valueColors: boolean
+  valueColorPositions?: JsChartExValueColorPositions
+  shapeProperties?: import('./generated').JsChartShapeProperties
+}
+
+export interface JsChartEx {
+  layout: string
+  version?: string
+  featureList?: string
+  fallbackImg?: string
+  title?: JsChartExTitle
+  data: JsChartExData[]
+  plotArea: JsChartExPlotArea
+  legend?: JsChartExLegend
+  anchor: import('./generated').JsChartAnchor
+  shapeProperties?: import('./generated').JsChartShapeProperties
+  formatOverrides: JsChartExFormatOverride[]
+  printSettings?: JsChartExPrintSettings
+}

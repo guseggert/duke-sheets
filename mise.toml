@@ -248,6 +248,18 @@ fi
 cargo test -p duke-sheets --test formula_parity -- --nocapture --ignored
 """
 
+[tasks."test:corpus-charts"]
+description = "Run chart corpus smoke test against real Excel files"
+run = 'cargo test -p duke-sheets --test chart_corpus -- --ignored --nocapture'
+
+[tasks."generate:chart-parity"]
+description = "Generate chart parity fixture via Excel COM (requires VM)"
+run = 'cargo test -p duke-sheets-excel-com --test e2e generate_chart_parity -- --nocapture --test-threads=1'
+
+[tasks."test:chart-parity"]
+description = "Verify chart parity fixture (requires data/chart-parity.xlsx)"
+run = 'cargo test -p duke-sheets --test chart_parity -- --ignored --nocapture'
+
 [tasks."test:all"]
 alias = "ta"
 description = "Run all tests: cargo test, Excel COM E2E, LibreOffice URP + XLSX E2E"

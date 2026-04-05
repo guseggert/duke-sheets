@@ -274,6 +274,11 @@ fn write_chart_type_group(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
         w.create_element("c:axId")
             .with_attribute(("val", "2"))
             .write_empty()?;
+        if matches!(chart.chart_type, ChartType::Surface) {
+            w.create_element("c:axId")
+                .with_attribute(("val", "3"))
+                .write_empty()?;
+        }
     }
 
     if let Some(val) = chart.first_slice_angle {
@@ -427,7 +432,7 @@ fn write_chart_type_props_for_group(
             w.create_element("c:grouping").with_attribute(("val", "percentStacked")).write_empty()?;
         }
         ChartType::ScatterMarkers => {
-            w.create_element("c:scatterStyle").with_attribute(("val", "markersOnly")).write_empty()?;
+            w.create_element("c:scatterStyle").with_attribute(("val", "marker")).write_empty()?;
         }
         ChartType::ScatterSmooth => {
             w.create_element("c:scatterStyle").with_attribute(("val", "smoothMarker")).write_empty()?;
@@ -589,7 +594,7 @@ fn write_chart_type_props(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
         }
         ChartType::ScatterMarkers => {
             w.create_element("c:scatterStyle")
-                .with_attribute(("val", "markersOnly"))
+                .with_attribute(("val", "marker"))
                 .write_empty()?;
         }
         ChartType::ScatterSmooth => {
@@ -679,9 +684,9 @@ fn write_series(
     let val_tag = if use_xy { "c:yVal" } else { "c:val" };
     write_data_ref(w, val_tag, &series.values)?;
 
-    if let Some(true) = series.smooth {
+    if let Some(smooth) = series.smooth {
         w.create_element("c:smooth")
-            .with_attribute(("val", "1"))
+            .with_attribute(("val", if smooth { "1" } else { "0" }))
             .write_empty()?;
     }
 
@@ -1145,8 +1150,9 @@ fn write_axes(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
         write_val_ax(w, 2, "l", 1, &chart.value_axis)?;
     }
 
-    if let Some(ref ser_ax) = chart.series_axis {
-        write_cat_ax(w, "c:serAx", 3, 1, &Some(ser_ax.clone()))?;
+    if chart.series_axis.is_some() || matches!(chart.chart_type, ChartType::Surface) {
+        let ser_ax = chart.series_axis.clone().unwrap_or_else(|| Axis::new());
+        write_cat_ax(w, "c:serAx", 3, 1, &Some(ser_ax))?;
     }
 
     Ok(())

@@ -869,5 +869,33 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUpDownBars>()?;
     m.add_class::<PyChartSheet>()?;
     m.add_class::<PySheetSlot>()?;
+    m.add_class::<PyChartEx>()?;
+    m.add_class::<PyChartExSeries>()?;
+    m.add_class::<PyChartExData>()?;
+    m.add_class::<PyChartExDimension>()?;
+    m.add_class::<PyChartExAxis>()?;
+    m.add_class::<PyChartExLegend>()?;
+    m.add_class::<PyChartExDataLabels>()?;
+    m.add_class::<PyChartExTitle>()?;
+    m.add_class::<PyChartExLayoutPr>()?;
+    m.add_class::<PyChartExOffset>()?;
+    m.add_class::<PyChartExText>()?;
+    m.add_class::<PyChartExColorPosition>()?;
+    m.add_class::<PyChartExValueColorPositions>()?;
+    m.add_class::<PyChartExScaling>()?;
+    m.add_class::<PyChartExAxisTitle>()?;
+    m.add_class::<PyChartExAxisUnits>()?;
+    m.add_class::<PyChartExSeriesVisibility>()?;
+    m.add_class::<PyChartExBinning>()?;
+    m.add_class::<PyChartExGeography>()?;
+    m.add_class::<PyChartExStatistics>()?;
+    m.add_class::<PyChartExDataPoint>()?;
+    m.add_class::<PyChartExDataLabel>()?;
+    m.add_class::<PyChartExFormatOverride>()?;
+    m.add_class::<PyChartExHeaderFooter>()?;
+    m.add_class::<PyChartExPageMargins>()?;
+    m.add_class::<PyChartExPageSetup>()?;
+    m.add_class::<PyChartExPrintSettings>()?;
+    m.add_class::<PyChartExPlotArea>()?;
     Ok(())
 }

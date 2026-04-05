@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use duke_sheets_chart::Chart;
+use duke_sheets_chart::ChartEx;
 
 use crate::auto_filter::AutoFilter;
 use crate::cell::view::CellView;
@@ -69,6 +70,8 @@ pub struct Worksheet {
     tables: Vec<Table>,
     /// Embedded charts
     charts: Vec<Chart>,
+    /// Embedded ChartEx charts (Office 2016+ extended charts)
+    charts_ex: Vec<ChartEx>,
     /// Standalone auto-filter (dropdown filter on columns)
     auto_filter: Option<AutoFilter>,
     /// Horizontal page breaks (row breaks)
@@ -152,6 +155,7 @@ impl Worksheet {
             conditional_formats: Vec::new(),
             tables: Vec::new(),
             charts: Vec::new(),
+            charts_ex: Vec::new(),
             auto_filter: None,
             row_breaks: Vec::new(),
             col_breaks: Vec::new(),
@@ -1267,6 +1271,22 @@ impl Worksheet {
     /// Get the number of charts.
     pub fn chart_count(&self) -> usize {
         self.charts.len()
+    }
+
+    /// Add a ChartEx chart to this worksheet.
+    pub fn add_chart_ex(&mut self, chart: ChartEx) {
+        self.charts_ex.push(chart);
+        self.mutation_count += 1;
+    }
+
+    /// Get all ChartEx charts.
+    pub fn charts_ex(&self) -> &[ChartEx] {
+        &self.charts_ex
+    }
+
+    /// Get the number of ChartEx charts.
+    pub fn chart_ex_count(&self) -> usize {
+        self.charts_ex.len()
     }
 
     /// Set the standalone auto-filter for this worksheet.

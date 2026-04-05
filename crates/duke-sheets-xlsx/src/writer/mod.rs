@@ -18,6 +18,7 @@ mod conditional_format;
 mod data_validation;
 mod tables;
 mod chart;
+mod chart_ex;
 mod drawing;
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,9 @@ const RT_CHART_COLOR_STYLE: &str =
     "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
 const CT_CHART_STYLE: &str = "application/vnd.ms-office.chartstyle+xml";
 const CT_CHART_COLOR_STYLE: &str = "application/vnd.ms-office.chartcolorstyle+xml";
+const CT_CHART_EX: &str = "application/vnd.ms-office.chartex+xml";
+const RT_CHART_EX: &str =
+    "http://schemas.microsoft.com/office/2014/relationships/chartEx";
 
 const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
@@ -513,9 +517,12 @@ impl XlsxWriter {
 
         // Build chart/drawing numbering:
         // chart_numbering: (sheet_idx, chart_in_sheet_idx, global_chart_num)
+        // chart_ex_numbering: (sheet_idx, chartex_in_sheet_idx, global_chartex_num)
         // drawing_numbering: (sheet_idx, drawing_num)
         let mut chart_numbering: Vec<(usize, usize, usize)> = Vec::new();
         let mut global_chart_num = 1usize;
+        let mut chart_ex_numbering: Vec<(usize, usize, usize)> = Vec::new();
+        let mut global_chart_ex_num = 1usize;
         let mut drawing_numbering: Vec<(usize, usize)> = Vec::new();
         let mut global_drawing_num = 1usize;
         for (i, sheet) in workbook.worksheets().enumerate() {
@@ -523,8 +530,9 @@ impl XlsxWriter {
                 .charts()
                 .iter()
                 .any(|c| !matches!(c.chart_type, duke_sheets_chart::ChartType::Unsupported(_)));
+            let has_charts_ex = sheet.chart_ex_count() > 0;
             let has_raw_objects = !sheet.raw_drawing_objects.is_empty();
-            if has_supported || has_raw_objects {
+            if has_supported || has_charts_ex || has_raw_objects {
                 drawing_numbering.push((i, global_drawing_num));
                 global_drawing_num += 1;
                 for (j, c) in sheet.charts().iter().enumerate() {
@@ -532,6 +540,10 @@ impl XlsxWriter {
                         chart_numbering.push((i, j, global_chart_num));
                         global_chart_num += 1;
                     }
+                }
+                for j in 0..sheet.chart_ex_count() {
+                    chart_ex_numbering.push((i, j, global_chart_ex_num));
+                    global_chart_ex_num += 1;
                 }
             }
         }
@@ -561,6 +573,8 @@ impl XlsxWriter {
             &table_numbering,
             &drawing_numbering,
             &chart_numbering,
+            &chart_ex_numbering,
+            global_chart_num - 1,  // total standard charts (for style/color numbering)
             &cs_drawing_numbering,
             &cs_chart_numbering,
             needs_metadata,
@@ -643,11 +657,29 @@ impl XlsxWriter {
                     .iter()
                     .map(|&(_, gn)| gn)
                     .collect();
-                drawing::write_drawing(&mut zip, &chart_refs, &sheet.raw_drawing_objects, dn)?;
-                drawing::write_drawing_rels(&mut zip, dn, &chart_global_nums)?;
+                let sheet_chartex_globals: Vec<(usize, usize)> = chart_ex_numbering
+                    .iter()
+                    .filter(|(si, _, _)| *si == i)
+                    .map(|(_, ji, gn)| (*ji, *gn))
+                    .collect();
+                let chartex_refs: Vec<&duke_sheets_chart::ChartEx> = sheet_chartex_globals
+                    .iter()
+                    .map(|&(ji, _)| &sheet.charts_ex()[ji])
+                    .collect();
+                let chartex_global_nums: Vec<usize> = sheet_chartex_globals
+                    .iter()
+                    .map(|&(_, gn)| gn)
+                    .collect();
+                drawing::write_drawing(&mut zip, &chart_refs, &chartex_refs, &sheet.raw_drawing_objects, dn)?;
+                drawing::write_drawing_rels(&mut zip, dn, &chart_global_nums, &chartex_global_nums)?;
                 for &(ji, gn) in &sheet_chart_globals {
                     chart::write_chart_part(&mut zip, &sheet.charts()[ji], gn)?;
                     Self::write_chart_style_color_parts(&mut zip, &sheet.charts()[ji], gn)?;
+                }
+                for &(ji, gn) in &sheet_chartex_globals {
+                    chart_ex::write_chart_ex_part(&mut zip, &sheet.charts_ex()[ji], gn)?;
+                    let style_num = (global_chart_num - 1) + gn;
+                    chart_ex::write_chart_ex_style_color_parts(&mut zip, &sheet.charts_ex()[ji], gn, style_num)?;
                 }
             }
         }
@@ -662,14 +694,14 @@ impl XlsxWriter {
             if let (Some(dn), Some(cn)) = (cs_dn, cs_cn) {
                 Self::write_chartsheet_rels(&mut zip, i, dn)?;
                 drawing::write_chartsheet_drawing(&mut zip, &cs.chart, &cs.raw_drawing_objects, dn)?;
-                drawing::write_drawing_rels(&mut zip, dn, &[cn])?;
+                drawing::write_drawing_rels(&mut zip, dn, &[cn], &[])?;
                 chart::write_chart_part(&mut zip, &cs.chart, cn)?;
                 Self::write_chart_style_color_parts(&mut zip, &cs.chart, cn)?;
             } else if let Some(dn) = cs_dn {
                 // Drawing-only (raw objects, no chart)
                 Self::write_chartsheet_rels(&mut zip, i, dn)?;
                 drawing::write_chartsheet_drawing(&mut zip, &cs.chart, &cs.raw_drawing_objects, dn)?;
-                drawing::write_drawing_rels(&mut zip, dn, &[])?;
+                drawing::write_drawing_rels(&mut zip, dn, &[], &[])?;
             }
         }
         zip.finish()?;
@@ -688,6 +720,8 @@ impl XlsxWriter {
         table_numbering: &[(usize, usize, usize)],
         drawing_numbering: &[(usize, usize)],
         chart_numbering: &[(usize, usize, usize)],
+        chart_ex_numbering: &[(usize, usize, usize)],
+        total_standard_charts: usize,
         cs_drawing_numbering: &[(usize, usize)],
         cs_chart_numbering: &[(usize, usize)],
         has_metadata: bool,
@@ -822,6 +856,31 @@ impl XlsxWriter {
                     }
                     if cs.chart.raw_chart_color_style.is_some() {
                         let color_part = format!("/xl/charts/colors{}.xml", global_num);
+                        w.create_element("Override")
+                            .with_attribute(("PartName", color_part.as_str()))
+                            .with_attribute(("ContentType", CT_CHART_COLOR_STYLE))
+                            .write_empty()?;
+                    }
+                }
+            }
+
+            for &(sheet_idx, chart_ex_in_sheet_idx, global_num) in chart_ex_numbering {
+                let part = format!("/xl/charts/chartEx{}.xml", global_num);
+                w.create_element("Override")
+                    .with_attribute(("PartName", part.as_str()))
+                    .with_attribute(("ContentType", CT_CHART_EX))
+                    .write_empty()?;
+                if let Some(sheet) = workbook.worksheet(sheet_idx) {
+                    let cx = &sheet.charts_ex()[chart_ex_in_sheet_idx];
+                    if cx.raw_chart_style.is_some() {
+                        let style_part = format!("/xl/charts/style{}.xml", total_standard_charts + global_num);
+                        w.create_element("Override")
+                            .with_attribute(("PartName", style_part.as_str()))
+                            .with_attribute(("ContentType", CT_CHART_STYLE))
+                            .write_empty()?;
+                    }
+                    if cx.raw_chart_color_style.is_some() {
+                        let color_part = format!("/xl/charts/colors{}.xml", total_standard_charts + global_num);
                         w.create_element("Override")
                             .with_attribute(("PartName", color_part.as_str()))
                             .with_attribute(("ContentType", CT_CHART_COLOR_STYLE))

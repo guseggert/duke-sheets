@@ -1698,6 +1698,15 @@ fn parse_chart_xml<R: Read>(
         result.series_lines = first.series_lines.clone();
     }
 
+    // Detect PieExploded: shares the same XML element (pieChart) as Pie
+    // but has explosion attributes on series.
+    if result.chart_type == ChartType::Pie {
+        let has_explosion = result.series.iter().any(|s| s.explosion.is_some());
+        if has_explosion {
+            result.chart_type = ChartType::PieExploded;
+        }
+    }
+
     // Re-populate legacy axis fields from result.axes using first group's axis_ids.
     // Only needed for combo charts (2+ groups) where multiple value axes exist
     // and the parse-loop's last-wins behavior gives the wrong legacy value_axis.

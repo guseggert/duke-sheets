@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 use crate::{
     to_js_error, to_js_value,
     types::{
-        WasmAutoFilter, WasmChart, WasmColor, WasmComment, WasmCommentEntry,
+        WasmAutoFilter, WasmChart, WasmChartEx, WasmColor, WasmComment, WasmCommentEntry,
         WasmConditionalFormatRule, WasmDataValidation, WasmFormulaCell, WasmFreezePanes,
         WasmHyperlink, WasmHyperlinkEntry, WasmImageInfo, WasmMergeSpan, WasmMergedRegion,
         WasmPageBreak, WasmPageSetup, WasmRow, WasmRowCell, WasmRowsOptions, WasmSelection,
@@ -879,5 +879,24 @@ impl Worksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         Ok(ws.chart_count() as u32)
+    }
+
+    #[wasm_bindgen(getter, js_name = chartsEx)]
+    pub fn charts_ex(&self) -> Result<JsValue, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let charts: Vec<WasmChartEx> = ws.charts_ex().iter().map(WasmChartEx::from).collect();
+        to_js_value(&charts)
+    }
+
+    #[wasm_bindgen(getter, js_name = chartExCount)]
+    pub fn chart_ex_count(&self) -> Result<u32, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws.chart_ex_count() as u32)
     }
 }

@@ -18,6 +18,7 @@ duke-sheets-csv = { path = "../crates/duke-sheets-csv" }
 duke-sheets-formula = { path = "../crates/duke-sheets-formula" }
 duke-sheets-core = { path = "../crates/duke-sheets-core" }
 duke-sheets = { path = "../crates/duke-sheets", features = ["full"] }
+duke-sheets-chart = { path = "../crates/duke-sheets-chart" }
 
 [workspace]
 members = ["."]

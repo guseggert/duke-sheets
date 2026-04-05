@@ -2976,7 +2976,7 @@ fn test_roundtrip_pie_exploded() {
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
     let c = &wb2.worksheet(0).unwrap().charts()[0];
-    assert_eq!(c.chart_type, ChartType::Pie);
+    assert_eq!(c.chart_type, ChartType::PieExploded);
     assert_eq!(c.series[0].explosion, Some(25));
 }
 
