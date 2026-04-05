@@ -33,6 +33,7 @@ use theme::{read_theme_palette, resolve_style_theme_colors};
 
 mod comments;
 pub(crate) mod chart;
+pub(crate) mod chart_ex;
 mod drawing;
 mod conditional_format;
 mod data_validation;
@@ -112,6 +113,34 @@ fn read_chart_style_color<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     chart_path: &str,
     chart: &mut duke_sheets_chart::Chart,
+) {
+    let chart_rels = match workbook::read_sheet_rels(archive, chart_path) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    for rel in chart_rels.values() {
+        if rel.rel_type.ends_with("/chartStyle") {
+            if let Ok(mut f) = archive.by_name(&rel.target) {
+                let mut bytes = Vec::new();
+                if f.read_to_end(&mut bytes).is_ok() {
+                    chart.raw_chart_style = Some(bytes);
+                }
+            }
+        } else if rel.rel_type.ends_with("/chartColorStyle") {
+            if let Ok(mut f) = archive.by_name(&rel.target) {
+                let mut bytes = Vec::new();
+                if f.read_to_end(&mut bytes).is_ok() {
+                    chart.raw_chart_color_style = Some(bytes);
+                }
+            }
+        }
+    }
+}
+
+fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    chart_path: &str,
+    chart: &mut duke_sheets_chart::ChartEx,
 ) {
     let chart_rels = match workbook::read_sheet_rels(archive, chart_path) {
         Ok(r) => r,
@@ -275,7 +304,13 @@ impl XlsxReader {
                     let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
                     for chart_ref in drawing_contents.chart_refs {
                         if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
-                            if let Some(mut c) = chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)? {
+                            if chart_ref.is_chart_ex {
+                                if let Some(mut cx) = chart_ex::read_chart_ex(&mut archive, &dr.target, chart_ref.anchor)? {
+                                    cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
+                                    read_chart_style_color_for_chart_ex(&mut archive, &dr.target, &mut cx);
+                                    workbook.worksheet_mut(sheet_idx).unwrap().add_chart_ex(cx);
+                                }
+                            } else if let Some(mut c) = chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)? {
                                 read_chart_style_color(&mut archive, &dr.target, &mut c);
                                 workbook.worksheet_mut(sheet_idx).unwrap().add_chart(c);
                             }
@@ -294,6 +329,11 @@ impl XlsxReader {
                         let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
                         for chart_ref in drawing_contents.chart_refs {
                             if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
+                                if chart_ref.is_chart_ex {
+                                    // ChartEx in a chartsheet — skip for now (chartsheets
+                                    // require a standard Chart). Parse it but don't embed.
+                                    continue;
+                                }
                                 if let Some(mut c) = chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)? {
                                     read_chart_style_color(&mut archive, &dr.target, &mut c);
                                     let cs_idx = workbook.add_chartsheet_unchecked(duke_sheets_core::ChartSheet {

@@ -8,7 +8,7 @@ use super::{
     JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
     JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsRow,
     JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle,
-    JsTable, JsChart, Worksheet,
+    JsTable, JsChart, JsChartEx, Worksheet,
 };
 
 #[napi]
@@ -1036,6 +1036,30 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             Ok(ws.chart_count() as u32)
+        })
+    }
+
+    /// Get all ChartEx charts (Office 2016+ extended charts) in the worksheet.
+    #[napi(getter)]
+    pub fn charts_ex(&self) -> Result<Vec<JsChartEx>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.charts_ex().iter().map(JsChartEx::from).collect())
+        })
+    }
+
+    /// Number of ChartEx charts in the worksheet.
+    #[napi(getter)]
+    pub fn chart_ex_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.chart_ex_count() as u32)
         })
     }
 }

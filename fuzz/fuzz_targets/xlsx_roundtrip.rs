@@ -10,6 +10,10 @@ use libfuzzer_sys::fuzz_target;
 use std::io::Cursor;
 
 use duke_sheets_core::{CellValue, Style, Workbook};
+use duke_sheets_chart::{
+    Chart, ChartAnchor, ChartType, DataLabels, DataReference, DataSeries, Legend,
+    LegendPosition, Marker, MarkerSymbol, Trendline, TrendlineType,
+};
 
 /// Structured workbook specification for fuzzing.
 #[derive(Arbitrary, Debug)]
@@ -21,8 +25,8 @@ struct FuzzWorkbook {
 struct FuzzSheet {
     name: String,
     cells: Vec<FuzzCell>,
+    charts: Vec<FuzzChart>,
 }
-
 impl<'a> Arbitrary<'a> for FuzzSheet {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         // Sheet name: 1-20 alphanumeric chars
@@ -38,7 +42,13 @@ impl<'a> Arbitrary<'a> for FuzzSheet {
             cells.push(FuzzCell::arbitrary(u)?);
         }
 
-        Ok(FuzzSheet { name, cells })
+        let ncharts = u.int_in_range(0..=3)?;
+        let mut charts = Vec::with_capacity(ncharts);
+        for _ in 0..ncharts {
+            charts.push(FuzzChart::arbitrary(u)?);
+        }
+
+        Ok(FuzzSheet { name, cells, charts })
     }
 }
 
@@ -133,6 +143,214 @@ struct FuzzStyle {
     font_size: Option<u8>,
 }
 
+#[derive(Debug)]
+struct FuzzChart {
+    chart_type: FuzzChartType,
+    title: Option<SmallString>,
+    series: Vec<FuzzSeries>,
+    anchor: FuzzAnchor,
+    legend_pos: Option<FuzzLegendPos>,
+    hole_size: Option<u8>,
+    data_labels_show_value: Option<bool>,
+}
+
+impl<'a> Arbitrary<'a> for FuzzChart {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        let chart_type = FuzzChartType::arbitrary(u)?;
+        let title = u.arbitrary()?;
+        let nseries = u.int_in_range(1..=5)?;
+        let mut series = Vec::with_capacity(nseries);
+        for _ in 0..nseries {
+            series.push(FuzzSeries::arbitrary(u)?);
+        }
+        let anchor = FuzzAnchor::arbitrary(u)?;
+        let legend_pos = u.arbitrary()?;
+        let hole_size = if matches!(chart_type, FuzzChartType::Doughnut) {
+            Some(u.int_in_range(10..=90)?)
+        } else {
+            None
+        };
+        let data_labels_show_value = u.arbitrary()?;
+        Ok(FuzzChart {
+            chart_type,
+            title,
+            series,
+            anchor,
+            legend_pos,
+            hole_size,
+            data_labels_show_value,
+        })
+    }
+}
+
+#[derive(Arbitrary, Debug, Clone, Copy)]
+enum FuzzChartType {
+    ColumnClustered,
+    ColumnStacked,
+    ColumnPercentStacked,
+    BarClustered,
+    BarStacked,
+    BarPercentStacked,
+    Line,
+    LineStacked,
+    Pie,
+    PieExploded,
+    Doughnut,
+    Area,
+    AreaStacked,
+    AreaPercentStacked,
+    ScatterMarkers,
+    ScatterSmooth,
+    ScatterLines,
+    Bubble,
+    Radar,
+    Stock,
+    Surface,
+}
+
+impl From<FuzzChartType> for ChartType {
+    fn from(f: FuzzChartType) -> Self {
+        match f {
+            FuzzChartType::ColumnClustered => ChartType::ColumnClustered,
+            FuzzChartType::ColumnStacked => ChartType::ColumnStacked,
+            FuzzChartType::ColumnPercentStacked => ChartType::ColumnPercentStacked,
+            FuzzChartType::BarClustered => ChartType::BarClustered,
+            FuzzChartType::BarStacked => ChartType::BarStacked,
+            FuzzChartType::BarPercentStacked => ChartType::BarPercentStacked,
+            FuzzChartType::Line => ChartType::Line,
+            FuzzChartType::LineStacked => ChartType::LineStacked,
+            FuzzChartType::Pie => ChartType::Pie,
+            FuzzChartType::PieExploded => ChartType::PieExploded,
+            FuzzChartType::Doughnut => ChartType::Doughnut,
+            FuzzChartType::Area => ChartType::Area,
+            FuzzChartType::AreaStacked => ChartType::AreaStacked,
+            FuzzChartType::AreaPercentStacked => ChartType::AreaPercentStacked,
+            FuzzChartType::ScatterMarkers => ChartType::ScatterMarkers,
+            FuzzChartType::ScatterSmooth => ChartType::ScatterSmooth,
+            FuzzChartType::ScatterLines => ChartType::ScatterLines,
+            FuzzChartType::Bubble => ChartType::Bubble,
+            FuzzChartType::Radar => ChartType::Radar,
+            FuzzChartType::Stock => ChartType::Stock,
+            FuzzChartType::Surface => ChartType::Surface,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FuzzSeries {
+    values: FuzzDataRef,
+    categories: Option<FuzzDataRef>,
+    name: Option<SmallString>,
+    explosion: Option<u8>,
+    smooth: Option<bool>,
+    has_trendline: bool,
+    has_marker: bool,
+}
+
+impl<'a> Arbitrary<'a> for FuzzSeries {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        Ok(FuzzSeries {
+            values: FuzzDataRef::arbitrary(u)?,
+            categories: u.arbitrary::<bool>()?.then(|| FuzzDataRef::arbitrary(u)).transpose()?,
+            name: u.arbitrary()?,
+            explosion: u.arbitrary::<bool>()?.then(|| u.int_in_range(0..=100u8)).transpose()?,
+            smooth: u.arbitrary()?,
+            has_trendline: u.arbitrary()?,
+            has_marker: u.arbitrary()?,
+        })
+    }
+}
+
+#[derive(Debug)]
+enum FuzzDataRef {
+    Formula(String),
+    Numbers(Vec<f64>),
+    Strings(Vec<String>),
+}
+
+impl<'a> Arbitrary<'a> for FuzzDataRef {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        let kind: u8 = u.int_in_range(0..=3)?;
+        match kind {
+            0 | 1 => {
+                // Formula: "Sheet1!$C$1:$C$N"
+                let col = (b'A' + u.int_in_range(0..=5)?) as char;
+                let end_row = u.int_in_range(1..=20)?;
+                Ok(FuzzDataRef::Formula(format!(
+                    "Sheet1!${col}$1:${col}${end_row}"
+                )))
+            }
+            2 => {
+                let n = u.int_in_range(1..=10)?;
+                let mut vals = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let v: f64 = u.arbitrary()?;
+                    vals.push(if v.is_finite() { v } else { 0.0 });
+                }
+                Ok(FuzzDataRef::Numbers(vals))
+            }
+            _ => {
+                let n = u.int_in_range(1..=10)?;
+                let mut vals = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let s = SmallString::arbitrary(u)?;
+                    vals.push(s.0);
+                }
+                Ok(FuzzDataRef::Strings(vals))
+            }
+        }
+    }
+}
+
+impl From<&FuzzDataRef> for DataReference {
+    fn from(r: &FuzzDataRef) -> Self {
+        match r {
+            FuzzDataRef::Formula(f) => DataReference::Formula(f.clone()),
+            FuzzDataRef::Numbers(v) => DataReference::Numbers(v.clone()),
+            FuzzDataRef::Strings(v) => DataReference::Strings(v.clone()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FuzzAnchor {
+    from_col: u16,
+    from_row: u32,
+    to_col: u16,
+    to_row: u32,
+}
+
+impl<'a> Arbitrary<'a> for FuzzAnchor {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        let from_col = u.int_in_range(0..=20u16)?;
+        let from_row = u.int_in_range(0..=200u32)?;
+        let to_col = from_col + u.int_in_range(3..=15u16)?;
+        let to_row = from_row + u.int_in_range(5..=20u32)?;
+        Ok(FuzzAnchor { from_col, from_row, to_col, to_row })
+    }
+}
+
+#[derive(Arbitrary, Debug, Clone, Copy)]
+enum FuzzLegendPos {
+    Right,
+    Top,
+    Bottom,
+    Left,
+    TopRight,
+}
+
+impl From<FuzzLegendPos> for LegendPosition {
+    fn from(f: FuzzLegendPos) -> Self {
+        match f {
+            FuzzLegendPos::Right => LegendPosition::Right,
+            FuzzLegendPos::Top => LegendPosition::Top,
+            FuzzLegendPos::Bottom => LegendPosition::Bottom,
+            FuzzLegendPos::Left => LegendPosition::Left,
+            FuzzLegendPos::TopRight => LegendPosition::TopRight,
+        }
+    }
+}
+
 fn col_to_letters(col: u8) -> String {
     if col < 26 {
         String::from((b'A' + col) as char)
@@ -212,6 +430,67 @@ fuzz_target!(|data: &[u8]| {
                 }
                 let _ = sheet.set_cell_style(&addr, &s);
             }
+        }
+
+        for fchart in &fsheet.charts {
+            let mut chart = Chart::new(fchart.chart_type.into());
+            if let Some(ref t) = fchart.title {
+                chart.title = Some(t.0.clone());
+            }
+            if let Some(hole) = fchart.hole_size {
+                chart.hole_size = Some(hole as u32);
+            }
+            if let Some(show_val) = fchart.data_labels_show_value {
+                chart.data_labels = Some(DataLabels {
+                    show_value: Some(show_val),
+                    ..Default::default()
+                });
+            }
+            if let Some(lp) = fchart.legend_pos {
+                chart.legend = Some(Legend::new(lp.into()));
+            }
+            chart.anchor = ChartAnchor {
+                from_col: fchart.anchor.from_col,
+                from_row: fchart.anchor.from_row,
+                to_col: fchart.anchor.to_col,
+                to_row: fchart.anchor.to_row,
+                ..Default::default()
+            };
+            for fs in &fchart.series {
+                let mut series = DataSeries::new(DataReference::from(&fs.values));
+                if let Some(ref cats) = fs.categories {
+                    series.categories = Some(DataReference::from(cats));
+                }
+                if let Some(ref n) = fs.name {
+                    series.name = Some(n.0.clone());
+                }
+                if let Some(exp) = fs.explosion {
+                    series.explosion = Some(exp as u32);
+                }
+                series.smooth = fs.smooth;
+                if fs.has_trendline {
+                    series.trendline = Some(Trendline {
+                        trendline_type: TrendlineType::Linear,
+                        name: None,
+                        order: None,
+                        period: None,
+                        forward: None,
+                        backward: None,
+                        intercept: None,
+                        display_r_squared: None,
+                        display_equation: None,
+                        label: None,
+                    });
+                }
+                if fs.has_marker {
+                    series.marker = Some(Marker {
+                        symbol: Some(MarkerSymbol::Circle),
+                        size: Some(5),
+                    });
+                }
+                chart.add_series(series);
+            }
+            sheet.add_chart(chart);
         }
     }
 

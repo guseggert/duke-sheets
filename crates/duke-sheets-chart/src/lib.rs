@@ -4,6 +4,7 @@
 
 mod axis;
 mod chart;
+pub mod chart_ex;
 mod config;
 mod data_labels;
 mod error_bars;
@@ -29,3 +30,13 @@ pub use marker::{Marker, MarkerSymbol};
 pub use series::{DataReference, DataSeries};
 pub use text_properties::{TextAnchor, TextProperties, TextVertical, TextWrap};
 pub use trendline::{Trendline, TrendlineLabel, TrendlineType};
+pub use chart_ex::{
+    ChartEx, ChartExAxis, ChartExAxisTitle, ChartExAxisUnits, ChartExAxisUnitsLabel,
+    ChartExBinning, ChartExColorPosition, ChartExData, ChartExDataLabel, ChartExDataLabels,
+    ChartExDataPoint, ChartExDimension, ChartExExternalData, ChartExFormatOverride,
+    ChartExGeography, ChartExHeaderFooter, ChartExLayout, ChartExLayoutPr, ChartExLegend,
+    ChartExNumericLevel, ChartExOffset, ChartExPageMargins, ChartExPageSetup, ChartExPlotArea,
+    ChartExPrintSettings, ChartExScaling, ChartExSeries, ChartExSeriesVisibility,
+    ChartExStatistics, ChartExStringLevel, ChartExText, ChartExTextData, ChartExTitle,
+    ChartExValueColorPositions, ChartExValueColors, NumericDimType, StringDimType,
+};

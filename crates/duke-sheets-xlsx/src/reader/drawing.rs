@@ -13,6 +13,10 @@ pub(crate) struct DrawingChartRef {
     pub(crate) rel_id: String,
     /// The two-cell anchor positioning the chart in the worksheet.
     pub(crate) anchor: ChartAnchor,
+    /// Whether this references a ChartEx part (`cx:chart`) rather than a standard chart.
+    pub(crate) is_chart_ex: bool,
+    /// Raw `mc:Fallback` XML bytes for roundtrip (chartEx only).
+    pub(crate) raw_mc_fallback: Option<Vec<u8>>,
 }
 
 /// Chart refs plus raw non-chart drawing anchors from a drawing XML.
@@ -20,6 +24,9 @@ pub(crate) struct DrawingContents {
     pub chart_refs: Vec<DrawingChartRef>,
     pub raw_non_chart_anchors: Vec<Vec<u8>>,
 }
+
+const URI_STANDARD_CHART: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+const URI_CHART_EX: &str = "http://schemas.microsoft.com/office/drawing/2014/chartex";
 
 /// Parse a SpreadsheetML drawing and return chart refs plus raw non-chart anchors.
 ///
@@ -59,19 +66,26 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
     let mut in_row = false;
     let mut in_row_off = false;
     let mut in_graphic_data = false;
+    let mut graphic_data_uri: Option<String> = None;
     let mut chart_rel_id: Option<String> = None;
+    let mut is_chart_ex = false;
     let mut capture: Option<Writer<Cursor<Vec<u8>>>> = None;
+    let mut fallback_capture: Option<Writer<Cursor<Vec<u8>>>> = None;
+    let mut fallback_depth: u32 = 0;
+    let mut raw_mc_fallback: Option<Vec<u8>> = None;
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let in_any_anchor =
-                    in_two_cell_anchor || in_one_cell_anchor || in_absolute_anchor;
+                let in_any_anchor = in_two_cell_anchor || in_one_cell_anchor || in_absolute_anchor;
 
-                if in_any_anchor {
+                // Capture mc:Fallback content
+                if let Some(ref mut w) = fallback_capture {
+                    let _ = w.write_event(Event::Start(e.clone().into_owned()));
+                    fallback_depth += 1;
+                } else if in_any_anchor {
                     if let Some(ref mut w) = capture {
-                        let _ =
-                            w.write_event(Event::Start(e.clone().into_owned()));
+                        let _ = w.write_event(Event::Start(e.clone().into_owned()));
                     }
                 }
 
@@ -80,27 +94,30 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         in_two_cell_anchor = true;
                         anchor = ChartAnchor::default();
                         chart_rel_id = None;
+                        is_chart_ex = false;
+                        raw_mc_fallback = None;
                         let mut w = Writer::new(Cursor::new(Vec::new()));
-                        let _ =
-                            w.write_event(Event::Start(e.clone().into_owned()));
+                        let _ = w.write_event(Event::Start(e.clone().into_owned()));
                         capture = Some(w);
                     }
                     b"oneCellAnchor" => {
                         in_one_cell_anchor = true;
                         anchor = ChartAnchor::default();
                         chart_rel_id = None;
+                        is_chart_ex = false;
+                        raw_mc_fallback = None;
                         let mut w = Writer::new(Cursor::new(Vec::new()));
-                        let _ =
-                            w.write_event(Event::Start(e.clone().into_owned()));
+                        let _ = w.write_event(Event::Start(e.clone().into_owned()));
                         capture = Some(w);
                     }
                     b"absoluteAnchor" => {
                         in_absolute_anchor = true;
                         anchor = ChartAnchor::default();
                         chart_rel_id = None;
+                        is_chart_ex = false;
+                        raw_mc_fallback = None;
                         let mut w = Writer::new(Cursor::new(Vec::new()));
-                        let _ =
-                            w.write_event(Event::Start(e.clone().into_owned()));
+                        let _ = w.write_event(Event::Start(e.clone().into_owned()));
                         capture = Some(w);
                     }
                     b"from" if in_two_cell_anchor || in_one_cell_anchor => {
@@ -123,15 +140,35 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                     }
                     b"graphicData" if in_any_anchor => {
                         in_graphic_data = true;
+                        graphic_data_uri = None;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"uri" {
+                                graphic_data_uri =
+                                    attr.unescape_value().ok().map(|s| s.to_string());
+                            }
+                        }
+                    }
+                    b"Fallback" if in_any_anchor && fallback_capture.is_none() && is_chart_ex => {
+                        let mut w = Writer::new(Cursor::new(Vec::new()));
+                        let _ = w.write_event(Event::Start(e.clone().into_owned()));
+                        fallback_depth = 1;
+                        fallback_capture = Some(w);
                     }
                     _ => {}
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                if let Some(ref mut w) = capture {
+                if let Some(ref mut w) = fallback_capture {
+                    let _ = w.write_event(Event::Empty(e.clone().into_owned()));
+                } else if let Some(ref mut w) = capture {
                     let _ = w.write_event(Event::Empty(e.clone().into_owned()));
                 }
                 if in_graphic_data && e.name().local_name().as_ref() == b"chart" {
+                    let uri = graphic_data_uri.as_deref().unwrap_or("");
+                    match uri {
+                        URI_CHART_EX => is_chart_ex = true,
+                        URI_STANDARD_CHART | _ => is_chart_ex = uri == URI_CHART_EX,
+                    }
                     for attr in e.attributes().flatten() {
                         if attr.key.local_name().as_ref() == b"id" {
                             chart_rel_id = attr.unescape_value().ok().map(|s| s.to_string());
@@ -140,7 +177,9 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                 }
             }
             Ok(Event::Text(ref e)) => {
-                if let Some(ref mut w) = capture {
+                if let Some(ref mut w) = fallback_capture {
+                    let _ = w.write_event(Event::Text(e.clone().into_owned()));
+                } else if let Some(ref mut w) = capture {
                     let _ = w.write_event(Event::Text(e.clone().into_owned()));
                 }
                 if let Ok(text) = e.unescape() {
@@ -173,7 +212,15 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                 }
             }
             Ok(Event::End(ref e)) => {
-                if let Some(ref mut w) = capture {
+                if let Some(ref mut w) = fallback_capture {
+                    fallback_depth -= 1;
+                    let _ = w.write_event(Event::End(e.clone().into_owned()));
+                    if fallback_depth == 0 {
+                        if let Some(w) = fallback_capture.take() {
+                            raw_mc_fallback = Some(w.into_inner().into_inner());
+                        }
+                    }
+                } else if let Some(ref mut w) = capture {
                     let _ = w.write_event(Event::End(e.clone().into_owned()));
                 }
                 match e.name().local_name().as_ref() {
@@ -182,6 +229,8 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                             chart_refs.push(DrawingChartRef {
                                 rel_id,
                                 anchor: anchor.clone(),
+                                is_chart_ex,
+                                raw_mc_fallback: raw_mc_fallback.take(),
                             });
                         } else if let Some(w) = capture.take() {
                             raw_non_chart_anchors.push(w.into_inner().into_inner());
@@ -192,6 +241,8 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         in_absolute_anchor = false;
                         in_from = false;
                         in_to = false;
+                        is_chart_ex = false;
+                        raw_mc_fallback = None;
                     }
                     b"from" => in_from = false,
                     b"to" => in_to = false,
@@ -205,7 +256,14 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(XlsxError::Xml(e)),
-            _ => {}
+            _ => {
+                if let Some(ref mut _w) = fallback_capture {
+                    // Forward other events (CData, PI, etc.) into fallback capture
+                    // We can't easily clone arbitrary events, so just skip.
+                } else if let Some(ref mut _w) = capture {
+                    // same
+                }
+            }
         }
         buf.clear();
     }
@@ -217,13 +275,13 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
 }
 
 /// Backward-compatible wrapper that returns only chart refs.
+#[cfg(test)]
 pub(crate) fn read_drawing_chart_refs<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     drawing_path: &str,
 ) -> XlsxResult<Vec<DrawingChartRef>> {
     Ok(read_drawing_contents(archive, drawing_path)?.chart_refs)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -276,6 +334,7 @@ mod tests {
 
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId1");
+        assert!(!refs[0].is_chart_ex);
         assert_eq!(refs[0].anchor.from_col, 1);
         assert_eq!(refs[0].anchor.from_col_offset, 100);
         assert_eq!(refs[0].anchor.from_row, 2);
@@ -316,6 +375,7 @@ mod tests {
 
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId2");
+        assert!(!refs[0].is_chart_ex);
         assert_eq!(refs[0].anchor.from_col, 1);
         assert_eq!(refs[0].anchor.from_col_offset, 100);
         assert_eq!(refs[0].anchor.from_row, 2);
@@ -380,10 +440,52 @@ mod tests {
 
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId1");
+        assert!(!refs[0].is_chart_ex);
         // absoluteAnchor defaults all anchor values to zero
         assert_eq!(refs[0].anchor.from_col, 0);
         assert_eq!(refs[0].anchor.from_row, 0);
         assert_eq!(refs[0].anchor.to_col, 0);
         assert_eq!(refs[0].anchor.to_row, 0);
+    }
+
+    #[test]
+    fn test_parse_drawing_with_chart_ex_ref() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+           xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:twoCellAnchor>
+    <xdr:from>
+      <xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff>
+    </xdr:from>
+    <xdr:to>
+      <xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff>
+      <xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff>
+    </xdr:to>
+    <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+      <mc:Choice Requires="cx1">
+        <xdr:graphicFrame>
+          <a:graphic>
+            <a:graphicData uri="http://schemas.microsoft.com/office/drawing/2014/chartex">
+              <cx:chart xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" r:id="rId3"/>
+            </a:graphicData>
+          </a:graphic>
+        </xdr:graphicFrame>
+      </mc:Choice>
+      <mc:Fallback>
+        <xdr:sp><xdr:txBody><a:p><a:r><a:t>Fallback text</a:t></a:r></a:p></xdr:txBody></xdr:sp>
+      </mc:Fallback>
+    </mc:AlternateContent>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"#;
+
+        let mut archive = zip_with_entry("xl/drawings/drawing1.xml", xml);
+        let refs = read_drawing_chart_refs(&mut archive, "xl/drawings/drawing1.xml").unwrap();
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].rel_id, "rId3");
+        assert!(refs[0].is_chart_ex);
+        assert!(refs[0].raw_mc_fallback.is_some());
     }
 }

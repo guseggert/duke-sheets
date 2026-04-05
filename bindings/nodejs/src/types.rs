@@ -1971,3 +1971,677 @@ impl From<&core::SheetSlot> for JsSheetSlot {
         }
     }
 }
+
+fn chart_ex_layout_to_string(layout: &duke_sheets_chart::ChartExLayout) -> &'static str {
+    match layout {
+        duke_sheets_chart::ChartExLayout::Waterfall => "waterfall",
+        duke_sheets_chart::ChartExLayout::Treemap => "treemap",
+        duke_sheets_chart::ChartExLayout::Sunburst => "sunburst",
+        duke_sheets_chart::ChartExLayout::Funnel => "funnel",
+        duke_sheets_chart::ChartExLayout::Histogram => "histogram",
+        duke_sheets_chart::ChartExLayout::BoxWhisker => "boxWhisker",
+        duke_sheets_chart::ChartExLayout::ParetoLine => "paretoLine",
+        duke_sheets_chart::ChartExLayout::RegionMap => "regionMap",
+        duke_sheets_chart::ChartExLayout::ClusteredColumn => "clusteredColumn",
+        duke_sheets_chart::ChartExLayout::Unknown(_) => "unknown",
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExOffset {
+    pub top: Option<f64>,
+    pub left: Option<f64>,
+}
+
+impl From<&duke_sheets_chart::ChartExOffset> for JsChartExOffset {
+    fn from(o: &duke_sheets_chart::ChartExOffset) -> Self {
+        Self {
+            top: o.top,
+            left: o.left,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExText {
+    pub formula: Option<String>,
+    pub value: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartExText> for JsChartExText {
+    fn from(t: &duke_sheets_chart::ChartExText) -> Self {
+        Self {
+            formula: t.data.as_ref().and_then(|d| d.formula.clone()),
+            value: t.data.as_ref().and_then(|d| d.value.clone()),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExColorPosition {
+    pub position_type: String,
+    pub value: Option<f64>,
+}
+
+impl From<&duke_sheets_chart::ChartExColorPosition> for JsChartExColorPosition {
+    fn from(p: &duke_sheets_chart::ChartExColorPosition) -> Self {
+        match p {
+            duke_sheets_chart::ChartExColorPosition::ExtremeValue => Self {
+                position_type: "extremeValue".into(),
+                value: None,
+            },
+            duke_sheets_chart::ChartExColorPosition::Number(v) => Self {
+                position_type: "number".into(),
+                value: Some(*v),
+            },
+            duke_sheets_chart::ChartExColorPosition::Percent(v) => Self {
+                position_type: "percent".into(),
+                value: Some(*v),
+            },
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExValueColorPositions {
+    pub count: Option<u32>,
+    pub min: Option<JsChartExColorPosition>,
+    pub mid: Option<JsChartExColorPosition>,
+    pub max: Option<JsChartExColorPosition>,
+}
+
+impl From<&duke_sheets_chart::ChartExValueColorPositions> for JsChartExValueColorPositions {
+    fn from(p: &duke_sheets_chart::ChartExValueColorPositions) -> Self {
+        Self {
+            count: p.count,
+            min: p.min.as_ref().map(JsChartExColorPosition::from),
+            mid: p.mid.as_ref().map(JsChartExColorPosition::from),
+            max: p.max.as_ref().map(JsChartExColorPosition::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExScaling {
+    pub scaling_type: String,
+    pub gap_width: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub major_unit: Option<f64>,
+    pub minor_unit: Option<f64>,
+}
+
+impl From<&duke_sheets_chart::ChartExScaling> for JsChartExScaling {
+    fn from(s: &duke_sheets_chart::ChartExScaling) -> Self {
+        match s {
+            duke_sheets_chart::ChartExScaling::Category { gap_width } => Self {
+                scaling_type: "category".into(),
+                gap_width: *gap_width,
+                min: None,
+                max: None,
+                major_unit: None,
+                minor_unit: None,
+            },
+            duke_sheets_chart::ChartExScaling::Value { min, max, major_unit, minor_unit } => Self {
+                scaling_type: "value".into(),
+                gap_width: None,
+                min: *min,
+                max: *max,
+                major_unit: *major_unit,
+                minor_unit: *minor_unit,
+            },
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExAxisTitle {
+    pub text: Option<String>,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExAxisTitle> for JsChartExAxisTitle {
+    fn from(t: &duke_sheets_chart::ChartExAxisTitle) -> Self {
+        Self {
+            text: t.text.as_ref().and_then(|tx| {
+                tx.data.as_ref().and_then(|d| d.value.clone().or_else(|| d.formula.clone()))
+            }),
+            shape_properties: t.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExAxisUnits {
+    pub unit: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartExAxisUnits> for JsChartExAxisUnits {
+    fn from(u: &duke_sheets_chart::ChartExAxisUnits) -> Self {
+        Self {
+            unit: u.unit.clone(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExSeriesVisibility {
+    pub connector_lines: Option<bool>,
+    pub mean_line: Option<bool>,
+    pub mean_marker: Option<bool>,
+    pub nonoutliers: Option<bool>,
+    pub outliers: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::ChartExSeriesVisibility> for JsChartExSeriesVisibility {
+    fn from(v: &duke_sheets_chart::ChartExSeriesVisibility) -> Self {
+        Self {
+            connector_lines: v.connector_lines,
+            mean_line: v.mean_line,
+            mean_marker: v.mean_marker,
+            nonoutliers: v.nonoutliers,
+            outliers: v.outliers,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExBinning {
+    pub interval_closed: Option<String>,
+    pub underflow: Option<String>,
+    pub overflow: Option<String>,
+    pub bin_size: Option<f64>,
+    pub bin_count: Option<u32>,
+}
+
+impl From<&duke_sheets_chart::ChartExBinning> for JsChartExBinning {
+    fn from(b: &duke_sheets_chart::ChartExBinning) -> Self {
+        Self {
+            interval_closed: b.interval_closed.clone(),
+            underflow: b.underflow.clone(),
+            overflow: b.overflow.clone(),
+            bin_size: b.bin_size,
+            bin_count: b.bin_count,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExGeography {
+    pub projection_type: Option<String>,
+    pub viewed_region_type: Option<String>,
+    pub culture_language: Option<String>,
+    pub culture_region: Option<String>,
+    pub attribution: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartExGeography> for JsChartExGeography {
+    fn from(g: &duke_sheets_chart::ChartExGeography) -> Self {
+        Self {
+            projection_type: g.projection_type.clone(),
+            viewed_region_type: g.viewed_region_type.clone(),
+            culture_language: g.culture_language.clone(),
+            culture_region: g.culture_region.clone(),
+            attribution: g.attribution.clone(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExStatistics {
+    pub quartile_method: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartExStatistics> for JsChartExStatistics {
+    fn from(s: &duke_sheets_chart::ChartExStatistics) -> Self {
+        Self {
+            quartile_method: s.quartile_method.clone(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExDataPoint {
+    pub idx: u32,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExDataPoint> for JsChartExDataPoint {
+    fn from(p: &duke_sheets_chart::ChartExDataPoint) -> Self {
+        Self {
+            idx: p.idx,
+            shape_properties: p.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExDataLabel {
+    pub idx: u32,
+    pub position: Option<String>,
+    pub visibility_series_name: Option<bool>,
+    pub visibility_category_name: Option<bool>,
+    pub visibility_value: Option<bool>,
+    pub number_format: Option<JsChartNumberFormat>,
+    pub separator: Option<String>,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExDataLabel> for JsChartExDataLabel {
+    fn from(l: &duke_sheets_chart::ChartExDataLabel) -> Self {
+        Self {
+            idx: l.idx,
+            position: l.position.clone(),
+            visibility_series_name: l.visibility_series_name,
+            visibility_category_name: l.visibility_category_name,
+            visibility_value: l.visibility_value,
+            number_format: l.number_format.as_ref().map(JsChartNumberFormat::from),
+            separator: l.separator.clone(),
+            shape_properties: l.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExFormatOverride {
+    pub idx: u32,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExFormatOverride> for JsChartExFormatOverride {
+    fn from(o: &duke_sheets_chart::ChartExFormatOverride) -> Self {
+        Self {
+            idx: o.idx,
+            shape_properties: o.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExHeaderFooter {
+    pub align_with_margins: Option<bool>,
+    pub different_odd_even: Option<bool>,
+    pub different_first: Option<bool>,
+    pub odd_header: Option<String>,
+    pub odd_footer: Option<String>,
+    pub even_header: Option<String>,
+    pub even_footer: Option<String>,
+    pub first_header: Option<String>,
+    pub first_footer: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartExHeaderFooter> for JsChartExHeaderFooter {
+    fn from(h: &duke_sheets_chart::ChartExHeaderFooter) -> Self {
+        Self {
+            align_with_margins: h.align_with_margins,
+            different_odd_even: h.different_odd_even,
+            different_first: h.different_first,
+            odd_header: h.odd_header.clone(),
+            odd_footer: h.odd_footer.clone(),
+            even_header: h.even_header.clone(),
+            even_footer: h.even_footer.clone(),
+            first_header: h.first_header.clone(),
+            first_footer: h.first_footer.clone(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExPageMargins {
+    pub left: Option<f64>,
+    pub right: Option<f64>,
+    pub top: Option<f64>,
+    pub bottom: Option<f64>,
+    pub header: Option<f64>,
+    pub footer: Option<f64>,
+}
+
+impl From<&duke_sheets_chart::ChartExPageMargins> for JsChartExPageMargins {
+    fn from(m: &duke_sheets_chart::ChartExPageMargins) -> Self {
+        Self {
+            left: m.left,
+            right: m.right,
+            top: m.top,
+            bottom: m.bottom,
+            header: m.header,
+            footer: m.footer,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExPageSetup {
+    pub paper_size: Option<u32>,
+    pub first_page_number: Option<u32>,
+    pub orientation: Option<String>,
+    pub black_and_white: Option<bool>,
+    pub draft: Option<bool>,
+    pub use_first_page_number: Option<bool>,
+    pub horizontal_dpi: Option<u32>,
+    pub vertical_dpi: Option<u32>,
+    pub copies: Option<u32>,
+}
+
+impl From<&duke_sheets_chart::ChartExPageSetup> for JsChartExPageSetup {
+    fn from(p: &duke_sheets_chart::ChartExPageSetup) -> Self {
+        Self {
+            paper_size: p.paper_size,
+            first_page_number: p.first_page_number,
+            orientation: p.orientation.clone(),
+            black_and_white: p.black_and_white,
+            draft: p.draft,
+            use_first_page_number: p.use_first_page_number,
+            horizontal_dpi: p.horizontal_dpi,
+            vertical_dpi: p.vertical_dpi,
+            copies: p.copies,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExPrintSettings {
+    pub header_footer: Option<JsChartExHeaderFooter>,
+    pub page_margins: Option<JsChartExPageMargins>,
+    pub page_setup: Option<JsChartExPageSetup>,
+}
+
+impl From<&duke_sheets_chart::ChartExPrintSettings> for JsChartExPrintSettings {
+    fn from(p: &duke_sheets_chart::ChartExPrintSettings) -> Self {
+        Self {
+            header_footer: p.header_footer.as_ref().map(JsChartExHeaderFooter::from),
+            page_margins: p.page_margins.as_ref().map(JsChartExPageMargins::from),
+            page_setup: p.page_setup.as_ref().map(JsChartExPageSetup::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExPlotArea {
+    pub plot_surface: Option<JsChartShapeProperties>,
+    pub series: Vec<JsChartExSeries>,
+    pub axes: Vec<JsChartExAxis>,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExPlotArea> for JsChartExPlotArea {
+    fn from(p: &duke_sheets_chart::ChartExPlotArea) -> Self {
+        Self {
+            plot_surface: p.plot_surface.as_ref().map(JsChartShapeProperties::from),
+            series: p.series.iter().map(JsChartExSeries::from).collect(),
+            axes: p.axes.iter().map(JsChartExAxis::from).collect(),
+            shape_properties: p.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExDimension {
+    pub dim_type: String,
+    pub formula: Option<String>,
+    pub nf_formula: Option<String>,
+}
+
+impl From<&duke_sheets_chart::ChartExDimension> for JsChartExDimension {
+    fn from(d: &duke_sheets_chart::ChartExDimension) -> Self {
+        match d {
+            duke_sheets_chart::ChartExDimension::String { dim_type, formula, nf_formula, .. } => {
+                Self {
+                    dim_type: match dim_type {
+                        duke_sheets_chart::StringDimType::Cat => "cat".into(),
+                        duke_sheets_chart::StringDimType::ColorStr => "colorStr".into(),
+                        duke_sheets_chart::StringDimType::EntityId => "entityId".into(),
+                    },
+                    formula: formula.clone(),
+                    nf_formula: nf_formula.clone(),
+                }
+            }
+            duke_sheets_chart::ChartExDimension::Numeric { dim_type, formula, nf_formula, .. } => {
+                Self {
+                    dim_type: match dim_type {
+                        duke_sheets_chart::NumericDimType::Val => "val".into(),
+                        duke_sheets_chart::NumericDimType::X => "x".into(),
+                        duke_sheets_chart::NumericDimType::Y => "y".into(),
+                        duke_sheets_chart::NumericDimType::Size => "size".into(),
+                        duke_sheets_chart::NumericDimType::ColorVal => "colorVal".into(),
+                    },
+                    formula: formula.clone(),
+                    nf_formula: nf_formula.clone(),
+                }
+            }
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExData {
+    pub id: u32,
+    pub dimensions: Vec<JsChartExDimension>,
+}
+
+impl From<&duke_sheets_chart::ChartExData> for JsChartExData {
+    fn from(d: &duke_sheets_chart::ChartExData) -> Self {
+        Self {
+            id: d.id,
+            dimensions: d.dimensions.iter().map(JsChartExDimension::from).collect(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExDataLabels {
+    pub position: Option<String>,
+    pub visibility_series_name: Option<bool>,
+    pub visibility_category_name: Option<bool>,
+    pub visibility_value: Option<bool>,
+    pub number_format: Option<JsChartNumberFormat>,
+    pub separator: Option<String>,
+    pub shape_properties: Option<JsChartShapeProperties>,
+    pub overrides: Vec<JsChartExDataLabel>,
+    pub hidden_labels: Vec<u32>,
+}
+
+impl From<&duke_sheets_chart::ChartExDataLabels> for JsChartExDataLabels {
+    fn from(l: &duke_sheets_chart::ChartExDataLabels) -> Self {
+        Self {
+            position: l.position.clone(),
+            visibility_series_name: l.visibility_series_name,
+            visibility_category_name: l.visibility_category_name,
+            visibility_value: l.visibility_value,
+            number_format: l.number_format.as_ref().map(JsChartNumberFormat::from),
+            separator: l.separator.clone(),
+            shape_properties: l.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            overrides: l.overrides.iter().map(JsChartExDataLabel::from).collect(),
+            hidden_labels: l.hidden_labels.clone(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExTitle {
+    pub text: Option<String>,
+    pub position: Option<String>,
+    pub align: Option<String>,
+    pub overlay: Option<bool>,
+    pub offset: Option<JsChartExOffset>,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExTitle> for JsChartExTitle {
+    fn from(t: &duke_sheets_chart::ChartExTitle) -> Self {
+        Self {
+            text: t.text.clone(),
+            position: t.position.clone(),
+            align: t.align.clone(),
+            overlay: t.overlay,
+            offset: t.offset.as_ref().map(JsChartExOffset::from),
+            shape_properties: t.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExLegend {
+    pub position: Option<String>,
+    pub align: Option<String>,
+    pub overlay: Option<bool>,
+    pub offset: Option<JsChartExOffset>,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExLegend> for JsChartExLegend {
+    fn from(l: &duke_sheets_chart::ChartExLegend) -> Self {
+        Self {
+            position: l.position.clone(),
+            align: l.align.clone(),
+            overlay: l.overlay,
+            offset: l.offset.as_ref().map(JsChartExOffset::from),
+            shape_properties: l.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExLayoutPr {
+    pub parent_label_layout: Option<String>,
+    pub region_label_layout: Option<String>,
+    pub visibility: Option<JsChartExSeriesVisibility>,
+    pub aggregation: bool,
+    pub binning: Option<JsChartExBinning>,
+    pub geography: Option<JsChartExGeography>,
+    pub statistics: Option<JsChartExStatistics>,
+    pub subtotals: Vec<u32>,
+}
+
+impl From<&duke_sheets_chart::ChartExLayoutPr> for JsChartExLayoutPr {
+    fn from(l: &duke_sheets_chart::ChartExLayoutPr) -> Self {
+        Self {
+            parent_label_layout: l.parent_label_layout.clone(),
+            region_label_layout: l.region_label_layout.clone(),
+            visibility: l.visibility.as_ref().map(JsChartExSeriesVisibility::from),
+            aggregation: l.aggregation,
+            binning: l.binning.as_ref().map(JsChartExBinning::from),
+            geography: l.geography.as_ref().map(JsChartExGeography::from),
+            statistics: l.statistics.as_ref().map(JsChartExStatistics::from),
+            subtotals: l.subtotals.clone(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExAxis {
+    pub id: u32,
+    pub hidden: Option<bool>,
+    pub scaling: JsChartExScaling,
+    pub title: Option<JsChartExAxisTitle>,
+    pub units: Option<JsChartExAxisUnits>,
+    pub major_gridlines: Option<JsChartShapeProperties>,
+    pub minor_gridlines: Option<JsChartShapeProperties>,
+    pub major_tick_marks: Option<String>,
+    pub minor_tick_marks: Option<String>,
+    pub tick_labels: bool,
+    pub number_format: Option<JsChartNumberFormat>,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExAxis> for JsChartExAxis {
+    fn from(a: &duke_sheets_chart::ChartExAxis) -> Self {
+        Self {
+            id: a.id,
+            hidden: a.hidden,
+            scaling: JsChartExScaling::from(&a.scaling),
+            title: a.title.as_ref().map(JsChartExAxisTitle::from),
+            units: a.units.as_ref().map(JsChartExAxisUnits::from),
+            major_gridlines: a.major_gridlines.as_ref().map(JsChartShapeProperties::from),
+            minor_gridlines: a.minor_gridlines.as_ref().map(JsChartShapeProperties::from),
+            major_tick_marks: a.major_tick_marks.clone(),
+            minor_tick_marks: a.minor_tick_marks.clone(),
+            tick_labels: a.tick_labels,
+            number_format: a.number_format.as_ref().map(JsChartNumberFormat::from),
+            shape_properties: a.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartExSeries {
+    pub layout: String,
+    pub data_id: u32,
+    pub unique_id: Option<String>,
+    pub hidden: Option<bool>,
+    pub owner_idx: Option<u32>,
+    pub format_idx: Option<u32>,
+    pub text: Option<JsChartExText>,
+    pub data_labels: Option<JsChartExDataLabels>,
+    pub data_points: Vec<JsChartExDataPoint>,
+    pub layout_properties: Option<JsChartExLayoutPr>,
+    pub axis_ids: Vec<u32>,
+    pub value_colors: bool,
+    pub value_color_positions: Option<JsChartExValueColorPositions>,
+    pub shape_properties: Option<JsChartShapeProperties>,
+}
+
+impl From<&duke_sheets_chart::ChartExSeries> for JsChartExSeries {
+    fn from(s: &duke_sheets_chart::ChartExSeries) -> Self {
+        Self {
+            layout: chart_ex_layout_to_string(&s.layout).into(),
+            data_id: s.data_id,
+            unique_id: s.unique_id.clone(),
+            hidden: s.hidden,
+            owner_idx: s.owner_idx,
+            format_idx: s.format_idx,
+            text: s.text.as_ref().map(JsChartExText::from),
+            data_labels: s.data_labels.as_ref().map(JsChartExDataLabels::from),
+            data_points: s.data_points.iter().map(JsChartExDataPoint::from).collect(),
+            layout_properties: s.layout_properties.as_ref().map(JsChartExLayoutPr::from),
+            axis_ids: s.axis_ids.clone(),
+            value_colors: s.value_colors.is_some(),
+            value_color_positions: s.value_color_positions.as_ref().map(JsChartExValueColorPositions::from),
+            shape_properties: s.shape_properties.as_ref().map(JsChartShapeProperties::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsChartEx {
+    pub layout: String,
+    pub version: Option<String>,
+    pub feature_list: Option<String>,
+    pub fallback_img: Option<String>,
+    pub title: Option<JsChartExTitle>,
+    pub data: Vec<JsChartExData>,
+    pub plot_area: JsChartExPlotArea,
+    pub legend: Option<JsChartExLegend>,
+    pub anchor: JsChartAnchor,
+    pub shape_properties: Option<JsChartShapeProperties>,
+    pub format_overrides: Vec<JsChartExFormatOverride>,
+    pub print_settings: Option<JsChartExPrintSettings>,
+    pub external_data_rel_id: Option<String>,
+    pub external_data_auto_update: Option<bool>,
+}
+
+impl From<&duke_sheets_chart::ChartEx> for JsChartEx {
+    fn from(c: &duke_sheets_chart::ChartEx) -> Self {
+        let layout = c
+            .plot_area
+            .series
+            .first()
+            .map(|s| chart_ex_layout_to_string(&s.layout))
+            .unwrap_or("unknown");
+        Self {
+            layout: layout.into(),
+            version: c.version.clone(),
+            feature_list: c.feature_list.clone(),
+            fallback_img: c.fallback_img.clone(),
+            title: c.title.as_ref().map(JsChartExTitle::from),
+            data: c.data.iter().map(JsChartExData::from).collect(),
+            plot_area: JsChartExPlotArea::from(&c.plot_area),
+            legend: c.legend.as_ref().map(JsChartExLegend::from),
+            anchor: JsChartAnchor::from(&c.anchor),
+            shape_properties: c.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            format_overrides: c.format_overrides.iter().map(JsChartExFormatOverride::from).collect(),
+            print_settings: c.print_settings.as_ref().map(JsChartExPrintSettings::from),
+            external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
+            external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),
+        }
+    }
+}

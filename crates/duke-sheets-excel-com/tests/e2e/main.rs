@@ -16,6 +16,7 @@
 
 mod alignment;
 mod border_styles;
+mod chart_parity;
 mod comments;
 mod common;
 mod conditional_format;
