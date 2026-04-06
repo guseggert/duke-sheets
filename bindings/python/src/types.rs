@@ -1440,9 +1440,9 @@ pub struct PyMergeSpan {
     pub col_span: u32,
 }
 
-#[pyclass(name = "ChartAnchor")]
+#[pyclass(name = "DrawingAnchor")]
 #[derive(Clone)]
-pub struct PyChartAnchor {
+pub struct PyDrawingAnchor {
     #[pyo3(get)]
     pub from_col: u16,
     #[pyo3(get)]
@@ -1461,7 +1461,7 @@ pub struct PyChartAnchor {
     pub to_row_offset: i64,
 }
 
-impl From<&duke_sheets::DrawingAnchor> for PyChartAnchor {
+impl From<&duke_sheets::DrawingAnchor> for PyDrawingAnchor {
     fn from(a: &duke_sheets::DrawingAnchor) -> Self {
         match a {
             duke_sheets::DrawingAnchor::TwoCell { from, to, .. } => Self {
@@ -1817,7 +1817,7 @@ pub struct PyChart {
     #[pyo3(get)]
     pub legend: Option<PyLegend>,
     #[pyo3(get)]
-    pub anchor: PyChartAnchor,
+    pub anchor: PyDrawingAnchor,
     #[pyo3(get)]
     pub data_labels: Option<PyDataLabels>,
     #[pyo3(get)]
@@ -1883,7 +1883,7 @@ impl From<&duke_sheets::Chart> for PyChart {
             category_axis: c.category_axis.as_ref().map(PyAxis::from),
             value_axis: c.value_axis.as_ref().map(PyAxis::from),
             legend: c.legend.as_ref().map(PyLegend::from),
-            anchor: PyChartAnchor::from(&c.anchor),
+            anchor: PyDrawingAnchor::from(&c.anchor),
             data_labels: c.data_labels.as_ref().map(PyDataLabels::from),
             view_3d: c.view_3d.as_ref().map(PyView3D::from),
             data_table: c.data_table.as_ref().map(PyChartDataTable::from),
@@ -3117,7 +3117,7 @@ pub struct PyChartEx {
     #[pyo3(get)]
     pub legend: Option<PyChartExLegend>,
     #[pyo3(get)]
-    pub anchor: PyChartAnchor,
+    pub anchor: PyDrawingAnchor,
     #[pyo3(get)]
     pub shape_properties: Option<PyChartShapeProperties>,
     #[pyo3(get)]
@@ -3145,7 +3145,7 @@ impl From<&chart::ChartEx> for PyChartEx {
             data: c.data.iter().map(PyChartExData::from).collect(),
             plot_area: PyChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(PyChartExLegend::from),
-            anchor: PyChartAnchor::from(&c.anchor),
+            anchor: PyDrawingAnchor::from(&c.anchor),
             shape_properties: c.shape_properties.as_ref().map(PyChartShapeProperties::from),
             format_overrides: c.format_overrides.iter().map(PyChartExFormatOverride::from).collect(),
             print_settings: c.print_settings.as_ref().map(PyChartExPrintSettings::from),
@@ -3165,7 +3165,7 @@ pub struct PyEmbeddedImage {
     #[pyo3(get)]
     pub description: Option<String>,
     #[pyo3(get)]
-    pub anchor: PyChartAnchor,
+    pub anchor: PyDrawingAnchor,
     #[pyo3(get)]
     pub format: String,
     #[pyo3(get)]
@@ -3194,7 +3194,7 @@ impl From<&duke_sheets::EmbeddedImage> for PyEmbeddedImage {
             id: img.id,
             name: img.name.clone(),
             description: img.description.clone(),
-            anchor: PyChartAnchor::from(&img.anchor),
+            anchor: PyDrawingAnchor::from(&img.anchor),
             format: img.format.as_str().to_string(),
             media_path: img.media_path.clone(),
             svg_media_path: img.svg_media_path.clone(),

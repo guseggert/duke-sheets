@@ -1554,7 +1554,7 @@ mod tests {
     use std::io::Cursor;
 
     use duke_sheets_chart::{
-        Axis, AxisType, Chart, ChartAnchor, ChartColor, ChartLine, ChartLines,
+        Axis, AxisType, Chart, DrawingAnchor, ChartColor, ChartLine, ChartLines,
         ChartShapeProperties, ChartType, DataLabels, DataReference, DataSeries, UpDownBars,
     };
 
@@ -1588,7 +1588,7 @@ mod tests {
         let reparsed = read_chart(
             &mut archive,
             "xl/charts/chart1.xml",
-            ChartAnchor::default(),
+            DrawingAnchor::default(),
         )
         .unwrap()
         .unwrap();
@@ -1632,7 +1632,7 @@ mod tests {
         let reparsed = read_chart(
             &mut archive,
             "xl/charts/chart1.xml",
-            ChartAnchor::default(),
+            DrawingAnchor::default(),
         )
         .unwrap()
         .unwrap();
@@ -1666,7 +1666,7 @@ mod tests {
         let reparsed = read_chart(
             &mut archive,
             "xl/charts/chart1.xml",
-            ChartAnchor::default(),
+            DrawingAnchor::default(),
         )
         .unwrap()
         .unwrap();
@@ -1694,7 +1694,7 @@ mod tests {
         let reparsed = read_chart(
             &mut archive,
             "xl/charts/chart1.xml",
-            ChartAnchor::default(),
+            DrawingAnchor::default(),
         )
         .unwrap()
         .unwrap();
@@ -1710,7 +1710,7 @@ mod tests {
         write_chart_part(&mut zip_writer, chart, 1).unwrap();
         let cursor = zip_writer.finish().unwrap();
         let mut archive = zip::ZipArchive::new(cursor).unwrap();
-        read_chart(&mut archive, "xl/charts/chart1.xml", ChartAnchor::default())
+        read_chart(&mut archive, "xl/charts/chart1.xml", DrawingAnchor::default())
             .unwrap()
             .unwrap()
     }

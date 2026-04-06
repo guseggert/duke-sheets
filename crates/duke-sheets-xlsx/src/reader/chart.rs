@@ -1965,7 +1965,7 @@ mod tests {
     use std::io::{Cursor, Write};
 
     use super::*;
-    use duke_sheets_chart::ChartAnchor;
+    use duke_sheets_chart::DrawingAnchor;
     use crate::reader::XlsxReader;
 
     fn zip_with_entry(path: &str, xml: &str) -> zip::ZipArchive<Cursor<Vec<u8>>> {
@@ -2031,7 +2031,7 @@ mod tests {
 </c:chartSpace>"#;
 
         let mut archive = zip_with_entry("xl/charts/chart1.xml", xml);
-        let chart = read_chart(&mut archive, "xl/charts/chart1.xml", ChartAnchor::default())
+        let chart = read_chart(&mut archive, "xl/charts/chart1.xml", DrawingAnchor::default())
             .unwrap()
             .unwrap();
 
@@ -2088,7 +2088,7 @@ mod tests {
 </c:chartSpace>"#;
 
         let mut archive = zip_with_entry("xl/charts/chart1.xml", xml);
-        let chart = read_chart(&mut archive, "xl/charts/chart1.xml", ChartAnchor::default())
+        let chart = read_chart(&mut archive, "xl/charts/chart1.xml", DrawingAnchor::default())
             .unwrap()
             .unwrap();
 
@@ -2121,7 +2121,7 @@ mod tests {
 </c:chartSpace>"#;
 
         let mut archive = zip_with_entry("xl/charts/chart1.xml", xml);
-        let chart = read_chart(&mut archive, "xl/charts/chart1.xml", ChartAnchor::default())
+        let chart = read_chart(&mut archive, "xl/charts/chart1.xml", DrawingAnchor::default())
             .unwrap()
             .unwrap();
 

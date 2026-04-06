@@ -304,8 +304,6 @@ impl Default for DrawingAnchor {
     }
 }
 
-/// Backward-compatible alias for `DrawingAnchor`.
-pub type ChartAnchor = DrawingAnchor;
 
 /// Image format for embedded images.
 #[derive(Debug, Clone, PartialEq)]
