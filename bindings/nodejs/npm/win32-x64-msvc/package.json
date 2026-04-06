@@ -1,6 +1,6 @@
 {
   "name": "@dukelib/sheets-win32-x64-msvc",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "cpu": [
     "x64"
   ],
