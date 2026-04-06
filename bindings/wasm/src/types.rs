@@ -1296,7 +1296,7 @@ pub struct WasmMergeSpan {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct WasmChartAnchor {
+pub struct WasmDrawingAnchor {
     pub from_col: u16,
     pub from_row: u32,
     pub from_col_offset: i64,
@@ -1307,7 +1307,7 @@ pub struct WasmChartAnchor {
     pub to_row_offset: i64,
 }
 
-impl From<&duke_sheets_chart::DrawingAnchor> for WasmChartAnchor {
+impl From<&duke_sheets_chart::DrawingAnchor> for WasmDrawingAnchor {
     fn from(a: &duke_sheets_chart::DrawingAnchor) -> Self {
         match a {
             duke_sheets_chart::DrawingAnchor::TwoCell { from, to, .. } => Self {
@@ -1877,7 +1877,7 @@ pub struct WasmChart {
     pub category_axis: Option<WasmAxis>,
     pub value_axis: Option<WasmAxis>,
     pub legend: Option<WasmLegend>,
-    pub anchor: WasmChartAnchor,
+    pub anchor: WasmDrawingAnchor,
     pub data_labels: Option<WasmDataLabels>,
     pub view_3d: Option<WasmView3D>,
     pub data_table: Option<WasmChartDataTable>,
@@ -1918,7 +1918,7 @@ impl From<&duke_sheets_chart::Chart> for WasmChart {
             category_axis: c.category_axis.as_ref().map(WasmAxis::from),
             value_axis: c.value_axis.as_ref().map(WasmAxis::from),
             legend: c.legend.as_ref().map(WasmLegend::from),
-            anchor: WasmChartAnchor::from(&c.anchor),
+            anchor: WasmDrawingAnchor::from(&c.anchor),
             data_labels: c.data_labels.as_ref().map(WasmDataLabels::from),
             view_3d: c.view_3d.as_ref().map(WasmView3D::from),
             data_table: c.data_table.as_ref().map(WasmChartDataTable::from),
@@ -2700,7 +2700,7 @@ pub struct WasmChartEx {
     pub data: Vec<WasmChartExData>,
     pub plot_area: WasmChartExPlotArea,
     pub legend: Option<WasmChartExLegend>,
-    pub anchor: WasmChartAnchor,
+    pub anchor: WasmDrawingAnchor,
     pub shape_properties: Option<WasmChartShapeProperties>,
     pub format_overrides: Vec<WasmChartExFormatOverride>,
     pub print_settings: Option<WasmChartExPrintSettings>,
@@ -2725,7 +2725,7 @@ impl From<&duke_sheets_chart::ChartEx> for WasmChartEx {
             data: c.data.iter().map(WasmChartExData::from).collect(),
             plot_area: WasmChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(WasmChartExLegend::from),
-            anchor: WasmChartAnchor::from(&c.anchor),
+            anchor: WasmDrawingAnchor::from(&c.anchor),
             shape_properties: c.shape_properties.as_ref().map(WasmChartShapeProperties::from),
             format_overrides: c.format_overrides.iter().map(WasmChartExFormatOverride::from).collect(),
             print_settings: c.print_settings.as_ref().map(WasmChartExPrintSettings::from),
@@ -2742,7 +2742,7 @@ pub struct WasmEmbeddedImage {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    pub anchor: WasmChartAnchor,
+    pub anchor: WasmDrawingAnchor,
     pub format: String,
     pub media_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2764,7 +2764,7 @@ impl From<&duke_sheets_chart::EmbeddedImage> for WasmEmbeddedImage {
             id: img.id,
             name: img.name.clone(),
             description: img.description.clone(),
-            anchor: WasmChartAnchor::from(&img.anchor),
+            anchor: WasmDrawingAnchor::from(&img.anchor),
             format: img.format.as_str().to_string(),
             media_path: img.media_path.clone(),
             svg_media_path: img.svg_media_path.clone(),

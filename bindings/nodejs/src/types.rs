@@ -1353,7 +1353,7 @@ pub struct JsImageInfo {
 
 /// Chart anchor position in a worksheet.
 #[napi(object)]
-pub struct JsChartAnchor {
+pub struct JsDrawingAnchor {
     pub from_col: u32,
     pub from_row: u32,
     pub from_col_offset: i64,
@@ -1364,10 +1364,10 @@ pub struct JsChartAnchor {
     pub to_row_offset: i64,
 }
 
-impl From<&duke_sheets_chart::DrawingAnchor> for JsChartAnchor {
+impl From<&duke_sheets_chart::DrawingAnchor> for JsDrawingAnchor {
     fn from(a: &duke_sheets_chart::DrawingAnchor) -> Self {
         match a {
-            duke_sheets_chart::DrawingAnchor::TwoCell { from, to, .. } => JsChartAnchor {
+            duke_sheets_chart::DrawingAnchor::TwoCell { from, to, .. } => JsDrawingAnchor {
                 from_col: from.col as u32,
                 from_row: from.row,
                 from_col_offset: from.col_offset_emu,
@@ -1377,7 +1377,7 @@ impl From<&duke_sheets_chart::DrawingAnchor> for JsChartAnchor {
                 to_col_offset: to.col_offset_emu,
                 to_row_offset: to.row_offset_emu,
             },
-            _ => JsChartAnchor {
+            _ => JsDrawingAnchor {
                 from_col: 0, from_row: 0, from_col_offset: 0, from_row_offset: 0,
                 to_col: 0, to_row: 0, to_col_offset: 0, to_row_offset: 0,
             },
@@ -1828,7 +1828,7 @@ pub struct JsChart {
     pub category_axis: Option<JsAxis>,
     pub value_axis: Option<JsAxis>,
     pub legend: Option<JsLegend>,
-    pub anchor: JsChartAnchor,
+    pub anchor: JsDrawingAnchor,
     pub data_labels: Option<JsDataLabels>,
     pub view_3d: Option<JsView3D>,
     pub data_table: Option<JsChartDataTable>,
@@ -1869,7 +1869,7 @@ impl From<&duke_sheets_chart::Chart> for JsChart {
             category_axis: c.category_axis.as_ref().map(JsAxis::from),
             value_axis: c.value_axis.as_ref().map(JsAxis::from),
             legend: c.legend.as_ref().map(JsLegend::from),
-            anchor: JsChartAnchor::from(&c.anchor),
+            anchor: JsDrawingAnchor::from(&c.anchor),
             data_labels: c.data_labels.as_ref().map(JsDataLabels::from),
             view_3d: c.view_3d.as_ref().map(JsView3D::from),
             data_table: c.data_table.as_ref().map(JsChartDataTable::from),
@@ -2617,7 +2617,7 @@ pub struct JsChartEx {
     pub data: Vec<JsChartExData>,
     pub plot_area: JsChartExPlotArea,
     pub legend: Option<JsChartExLegend>,
-    pub anchor: JsChartAnchor,
+    pub anchor: JsDrawingAnchor,
     pub shape_properties: Option<JsChartShapeProperties>,
     pub format_overrides: Vec<JsChartExFormatOverride>,
     pub print_settings: Option<JsChartExPrintSettings>,
@@ -2642,7 +2642,7 @@ impl From<&duke_sheets_chart::ChartEx> for JsChartEx {
             data: c.data.iter().map(JsChartExData::from).collect(),
             plot_area: JsChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(JsChartExLegend::from),
-            anchor: JsChartAnchor::from(&c.anchor),
+            anchor: JsDrawingAnchor::from(&c.anchor),
             shape_properties: c.shape_properties.as_ref().map(JsChartShapeProperties::from),
             format_overrides: c.format_overrides.iter().map(JsChartExFormatOverride::from).collect(),
             print_settings: c.print_settings.as_ref().map(JsChartExPrintSettings::from),
@@ -2657,7 +2657,7 @@ pub struct JsEmbeddedImage {
     pub id: u32,
     pub name: String,
     pub description: Option<String>,
-    pub anchor: JsChartAnchor,
+    pub anchor: JsDrawingAnchor,
     pub format: String,
     pub media_path: String,
     pub svg_media_path: Option<String>,
@@ -2676,7 +2676,7 @@ impl From<&duke_sheets_chart::EmbeddedImage> for JsEmbeddedImage {
             id: img.id,
             name: img.name.clone(),
             description: img.description.clone(),
-            anchor: JsChartAnchor::from(&img.anchor),
+            anchor: JsDrawingAnchor::from(&img.anchor),
             format: img.format.as_str().to_string(),
             media_path: img.media_path.clone(),
             svg_media_path: img.svg_media_path.clone(),

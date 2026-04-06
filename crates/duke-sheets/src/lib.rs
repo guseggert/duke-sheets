@@ -142,7 +142,7 @@ pub use duke_sheets_formula::{
 
 // Re-export chart types
 pub use duke_sheets_chart::{
-    Axis, AxisPosition, CellMarker, Chart, ChartAnchor, ChartType, DataReference, DataSeries,
+    Axis, AxisPosition, CellMarker, Chart, ChartType, DataReference, DataSeries,
     DrawingAnchor, EditAs, EmbeddedImage, ImageFormat, Legend,
 };
 

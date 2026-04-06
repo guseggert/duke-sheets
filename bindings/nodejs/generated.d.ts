@@ -517,7 +517,7 @@ export interface JsChart {
   categoryAxis?: JsAxis
   valueAxis?: JsAxis
   legend?: JsLegend
-  anchor: JsChartAnchor
+  anchor: JsDrawingAnchor
   dataLabels?: JsDataLabels
   view3D?: JsView3D
   dataTable?: JsChartDataTable
@@ -545,18 +545,6 @@ export interface JsChart {
   upDownBars?: JsUpDownBars
 }
 
-/** Chart anchor position in a worksheet. */
-export interface JsChartAnchor {
-  fromCol: number
-  fromRow: number
-  fromColOffset: number
-  fromRowOffset: number
-  toCol: number
-  toRow: number
-  toColOffset: number
-  toRowOffset: number
-}
-
 export interface JsChartAxis {
   id: number
   crossId: number
@@ -580,7 +568,7 @@ export interface JsChartEx {
   data: Array<JsChartExData>
   plotArea: JsChartExPlotArea
   legend?: JsChartExLegend
-  anchor: JsChartAnchor
+  anchor: JsDrawingAnchor
   shapeProperties?: JsChartShapeProperties
   formatOverrides: Array<JsChartExFormatOverride>
   printSettings?: JsChartExPrintSettings
@@ -1000,11 +988,23 @@ export interface JsDataValidation {
   formula?: string
 }
 
+/** Chart anchor position in a worksheet. */
+export interface JsDrawingAnchor {
+  fromCol: number
+  fromRow: number
+  fromColOffset: number
+  fromRowOffset: number
+  toCol: number
+  toRow: number
+  toColOffset: number
+  toRowOffset: number
+}
+
 export interface JsEmbeddedImage {
   id: number
   name: string
   description?: string
-  anchor: JsChartAnchor
+  anchor: JsDrawingAnchor
   format: string
   mediaPath: string
   svgMediaPath?: string

@@ -1,6 +1,6 @@
 [package]
 name = "duke-sheets-python"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "Python bindings for duke-sheets - high-performance Excel library"
 license = "MIT OR Apache-2.0"
