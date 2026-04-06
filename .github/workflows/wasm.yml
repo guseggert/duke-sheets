@@ -144,8 +144,6 @@ jobs:
           cd dist
           tar xzf dukelib-sheets-wasm-web.tgz
           cd package && npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   deploy-pages:
     name: Deploy to GitHub Pages
