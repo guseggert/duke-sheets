@@ -81,6 +81,14 @@ export declare class Workbook {
   get settings(): JsWorkbookSettings
   /** Get all named ranges defined in the workbook. */
   get namedRanges(): Array<JsNamedRange>
+  /** Get all chart sheets. */
+  get chartsheets(): Array<JsChartSheet>
+  /** Get the number of chart sheets. */
+  get chartsheetCount(): number
+  /** Get the tab-bar ordering of worksheets and chartsheets. */
+  get sheetOrder(): Array<JsSheetSlot>
+  /** Total number of tabs (worksheets + chartsheets). */
+  get totalSheetCount(): number
   /** Create a new empty workbook with one worksheet */
   constructor()
   /**
@@ -327,6 +335,14 @@ export declare class Worksheet {
   getMergeSpan(row: number, col: number): JsMergeSpan | null
   /** Whether a cell is a non-origin member of a merged region (should be skipped when rendering). */
   isMergedSecondary(row: number, col: number): boolean
+  /** Get all charts embedded in the worksheet. */
+  get charts(): Array<JsChart>
+  /** Number of charts in the worksheet. */
+  get chartCount(): number
+  /** Get all ChartEx charts (Office 2016+ extended charts) in the worksheet. */
+  get chartsEx(): Array<JsChartEx>
+  /** Number of ChartEx charts in the worksheet. */
+  get chartExCount(): number
   /** Get the worksheet name */
   get name(): string
   /**
@@ -409,6 +425,27 @@ export interface JsAutoFilter {
   filterColumns: Array<JsFilterColumn>
 }
 
+/** A chart axis. */
+export interface JsAxis {
+  title?: string
+  minimum?: number
+  maximum?: number
+  majorUnit?: number
+  minorUnit?: number
+  /** One of: `"Bottom"`, `"Top"`, `"Left"`, `"Right"`. */
+  position: string
+  numberFormat?: JsChartNumberFormat
+  majorGridlines: boolean
+  minorGridlines: boolean
+  majorTickMark?: string
+  minorTickMark?: string
+  labelPosition?: string
+  delete?: boolean
+  crosses?: string
+  crossBetween?: string
+  shapeProperties?: JsChartShapeProperties
+}
+
 /** A single border edge (line style + color). */
 export interface JsBorderEdge {
   /**
@@ -465,6 +502,353 @@ export interface JsCalculationOptions {
 export interface JsCellProtection {
   locked: boolean
   hidden: boolean
+}
+
+/** A chart embedded in a worksheet. */
+export interface JsChart {
+  /** Chart type string, e.g. `"ColumnClustered"`, `"Line"`, `"Pie"`. */
+  chartType: string
+  title?: string
+  series: Array<JsDataSeries>
+  categoryAxis?: JsAxis
+  valueAxis?: JsAxis
+  legend?: JsLegend
+  anchor: JsChartAnchor
+  dataLabels?: JsDataLabels
+  view3D?: JsView3D
+  dataTable?: JsChartDataTable
+  displayBlanksAs?: string
+  plotVisibleOnly?: boolean
+  layout?: JsLayout
+  is3D: boolean
+  varyColors?: boolean
+  gapWidth?: number
+  overlap?: number
+  firstSliceAngle?: number
+  holeSize?: number
+  bubbleScale?: number
+  showNegativeBubbles?: boolean
+  autoTitleDeleted?: boolean
+  roundedCorners?: boolean
+  showDlblsOverMax?: boolean
+  wireframe?: boolean
+  radarStyle?: string
+  typeGroups: Array<JsChartTypeGroup>
+  axes: Array<JsChartAxis>
+  dropLines?: JsChartLines
+  highLowLines?: JsChartLines
+  seriesLines?: JsChartLines
+  upDownBars?: JsUpDownBars
+}
+
+/** Chart anchor position in a worksheet. */
+export interface JsChartAnchor {
+  fromCol: number
+  fromRow: number
+  fromColOffset: number
+  fromRowOffset: number
+  toCol: number
+  toRow: number
+  toColOffset: number
+  toRowOffset: number
+}
+
+export interface JsChartAxis {
+  id: number
+  crossId: number
+  axis: JsAxis
+}
+
+/** Data table displayed beneath the chart. */
+export interface JsChartDataTable {
+  showHorizontalBorder?: boolean
+  showVerticalBorder?: boolean
+  showOutline?: boolean
+  showKeys?: boolean
+}
+
+export interface JsChartEx {
+  layout: string
+  version?: string
+  featureList?: string
+  fallbackImg?: string
+  title?: JsChartExTitle
+  data: Array<JsChartExData>
+  plotArea: JsChartExPlotArea
+  legend?: JsChartExLegend
+  anchor: JsChartAnchor
+  shapeProperties?: JsChartShapeProperties
+  formatOverrides: Array<JsChartExFormatOverride>
+  printSettings?: JsChartExPrintSettings
+  externalDataRelId?: string
+  externalDataAutoUpdate?: boolean
+}
+
+export interface JsChartExAxis {
+  id: number
+  hidden?: boolean
+  scaling: JsChartExScaling
+  title?: JsChartExAxisTitle
+  units?: JsChartExAxisUnits
+  majorGridlines?: JsChartShapeProperties
+  minorGridlines?: JsChartShapeProperties
+  majorTickMarks?: string
+  minorTickMarks?: string
+  tickLabels: boolean
+  numberFormat?: JsChartNumberFormat
+  shapeProperties?: JsChartShapeProperties
+}
+
+export interface JsChartExAxisTitle {
+  text?: string
+  shapeProperties?: JsChartShapeProperties
+}
+
+export interface JsChartExAxisUnits {
+  unit?: string
+}
+
+export interface JsChartExBinning {
+  intervalClosed?: string
+  underflow?: string
+  overflow?: string
+  binSize?: number
+  binCount?: number
+}
+
+export interface JsChartExColorPosition {
+  positionType: string
+  value?: number
+}
+
+export interface JsChartExData {
+  id: number
+  dimensions: Array<JsChartExDimension>
+}
+
+export interface JsChartExDataLabel {
+  idx: number
+  position?: string
+  visibilitySeriesName?: boolean
+  visibilityCategoryName?: boolean
+  visibilityValue?: boolean
+  numberFormat?: JsChartNumberFormat
+  separator?: string
+  shapeProperties?: JsChartShapeProperties
+}
+
+export interface JsChartExDataLabels {
+  position?: string
+  visibilitySeriesName?: boolean
+  visibilityCategoryName?: boolean
+  visibilityValue?: boolean
+  numberFormat?: JsChartNumberFormat
+  separator?: string
+  shapeProperties?: JsChartShapeProperties
+  overrides: Array<JsChartExDataLabel>
+  hiddenLabels: Array<number>
+}
+
+export interface JsChartExDataPoint {
+  idx: number
+  shapeProperties?: JsChartShapeProperties
+}
+
+export interface JsChartExDimension {
+  dimType: string
+  formula?: string
+  nfFormula?: string
+}
+
+export interface JsChartExFormatOverride {
+  idx: number
+  shapeProperties?: JsChartShapeProperties
+}
+
+export interface JsChartExGeography {
+  projectionType?: string
+  viewedRegionType?: string
+  cultureLanguage?: string
+  cultureRegion?: string
+  attribution?: string
+}
+
+export interface JsChartExHeaderFooter {
+  alignWithMargins?: boolean
+  differentOddEven?: boolean
+  differentFirst?: boolean
+  oddHeader?: string
+  oddFooter?: string
+  evenHeader?: string
+  evenFooter?: string
+  firstHeader?: string
+  firstFooter?: string
+}
+
+export interface JsChartExLayoutPr {
+  parentLabelLayout?: string
+  regionLabelLayout?: string
+  visibility?: JsChartExSeriesVisibility
+  aggregation: boolean
+  binning?: JsChartExBinning
+  geography?: JsChartExGeography
+  statistics?: JsChartExStatistics
+  subtotals: Array<number>
+}
+
+export interface JsChartExLegend {
+  position?: string
+  align?: string
+  overlay?: boolean
+  offset?: JsChartExOffset
+  shapeProperties?: JsChartShapeProperties
+}
+
+export interface JsChartExOffset {
+  top?: number
+  left?: number
+}
+
+export interface JsChartExPageMargins {
+  left?: number
+  right?: number
+  top?: number
+  bottom?: number
+  header?: number
+  footer?: number
+}
+
+export interface JsChartExPageSetup {
+  paperSize?: number
+  firstPageNumber?: number
+  orientation?: string
+  blackAndWhite?: boolean
+  draft?: boolean
+  useFirstPageNumber?: boolean
+  horizontalDpi?: number
+  verticalDpi?: number
+  copies?: number
+}
+
+export interface JsChartExPlotArea {
+  plotSurface?: JsChartShapeProperties
+  series: Array<JsChartExSeries>
+  axes: Array<JsChartExAxis>
+  shapeProperties?: JsChartShapeProperties
+}
+
+export interface JsChartExPrintSettings {
+  headerFooter?: JsChartExHeaderFooter
+  pageMargins?: JsChartExPageMargins
+  pageSetup?: JsChartExPageSetup
+}
+
+export interface JsChartExScaling {
+  scalingType: string
+  gapWidth?: number
+  min?: number
+  max?: number
+  majorUnit?: number
+  minorUnit?: number
+}
+
+export interface JsChartExSeries {
+  layout: string
+  dataId: number
+  uniqueId?: string
+  hidden?: boolean
+  ownerIdx?: number
+  formatIdx?: number
+  text?: JsChartExText
+  dataLabels?: JsChartExDataLabels
+  dataPoints: Array<JsChartExDataPoint>
+  layoutProperties?: JsChartExLayoutPr
+  axisIds: Array<number>
+  valueColors: boolean
+  valueColorPositions?: JsChartExValueColorPositions
+  shapeProperties?: JsChartShapeProperties
+}
+
+export interface JsChartExSeriesVisibility {
+  connectorLines?: boolean
+  meanLine?: boolean
+  meanMarker?: boolean
+  nonoutliers?: boolean
+  outliers?: boolean
+}
+
+export interface JsChartExStatistics {
+  quartileMethod?: string
+}
+
+export interface JsChartExText {
+  formula?: string
+  value?: string
+}
+
+export interface JsChartExTitle {
+  text?: string
+  position?: string
+  align?: string
+  overlay?: boolean
+  offset?: JsChartExOffset
+  shapeProperties?: JsChartShapeProperties
+}
+
+export interface JsChartExValueColorPositions {
+  count?: number
+  min?: JsChartExColorPosition
+  mid?: JsChartExColorPosition
+  max?: JsChartExColorPosition
+}
+
+/** Chart line overlay (drop lines, high-low lines, series lines). */
+export interface JsChartLines {
+  shapeProperties?: JsChartShapeProperties
+}
+
+/** A chart number format. */
+export interface JsChartNumberFormat {
+  formatCode: string
+  sourceLinked?: boolean
+}
+
+/** Shape properties for chart elements. */
+export interface JsChartShapeProperties {
+  solidFillHex?: string
+  noFill: boolean
+  lineWidth?: number
+  lineColorHex?: string
+  lineNoFill: boolean
+  lineDashStyle?: string
+}
+
+/** A chart sheet — a sheet that contains only a chart. */
+export interface JsChartSheet {
+  name: string
+  chart: JsChart
+  visibility: string
+}
+
+export interface JsChartTypeGroup {
+  chartType: string
+  is3D: boolean
+  series: Array<JsDataSeries>
+  dataLabels?: JsDataLabels
+  varyColors?: boolean
+  gapWidth?: number
+  overlap?: number
+  firstSliceAngle?: number
+  holeSize?: number
+  bubbleScale?: number
+  showNegativeBubbles?: boolean
+  radarStyle?: string
+  wireframe?: boolean
+  axisIds: Array<number>
+  dropLines?: JsChartLines
+  highLowLines?: JsChartLines
+  seriesLines?: JsChartLines
+  upDownBars?: JsUpDownBars
 }
 
 /**
@@ -531,6 +915,52 @@ export interface JsConditionalFormatRule {
   bottom?: boolean
 }
 
+/** Data labels configuration. */
+export interface JsDataLabels {
+  showLegendKey?: boolean
+  showValue?: boolean
+  showCategoryName?: boolean
+  showSeriesName?: boolean
+  showPercent?: boolean
+  showBubbleSize?: boolean
+  separator?: string
+  position?: string
+  numberFormat?: JsChartNumberFormat
+  showLeaderLines?: boolean
+}
+
+/** An individual data point override. */
+export interface JsDataPoint {
+  index: number
+  marker?: JsMarker
+  explosion?: number
+}
+
+/** Reference to chart data. */
+export interface JsDataReference {
+  /** One of: `"formula"`, `"numbers"`, `"strings"`. */
+  refType: string
+  formula?: string
+  numbers?: Array<number>
+  strings?: Array<string>
+}
+
+/** A chart data series. */
+export interface JsDataSeries {
+  name?: string
+  values: JsDataReference
+  categories?: JsDataReference
+  dataLabels?: JsDataLabels
+  trendline?: JsTrendline
+  errorBars?: JsErrorBars
+  marker?: JsMarker
+  dataPoints: Array<JsDataPoint>
+  smooth?: boolean
+  explosion?: number
+  invertIfNegative?: boolean
+  shapeProperties?: JsChartShapeProperties
+}
+
 /** A data validation rule. */
 export interface JsDataValidation {
   /**
@@ -564,6 +994,15 @@ export interface JsDataValidation {
   listSource?: string
   /** Custom formula (present when `validationType === "custom"`). */
   formula?: string
+}
+
+/** Error bars attached to a data series. */
+export interface JsErrorBars {
+  direction: string
+  barType: string
+  valueType: string
+  value?: number
+  noEndCap?: boolean
 }
 
 /**
@@ -669,6 +1108,32 @@ export interface JsImageInfo {
   width?: number
   /** Optional custom height. */
   height?: number
+}
+
+/** Layout container. */
+export interface JsLayout {
+  manualLayout?: JsManualLayout
+}
+
+/** A chart legend. */
+export interface JsLegend {
+  /** One of: `"Right"`, `"Top"`, `"Bottom"`, `"Left"`, `"TopRight"`. */
+  position: string
+  overlay: boolean
+}
+
+/** Manual layout positioning. */
+export interface JsManualLayout {
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+}
+
+/** Marker for a data point. */
+export interface JsMarker {
+  symbol?: string
+  size?: number
 }
 
 /** A merged cell region with structured coordinates. */
@@ -851,6 +1316,14 @@ export interface JsSheetProtection {
   pivotTables: boolean
 }
 
+/** A slot in the workbook tab bar. */
+export interface JsSheetSlot {
+  /** `"worksheet"` or `"chartsheet"`. */
+  slotType: string
+  /** Index into the respective collection. */
+  index: number
+}
+
 /** A cell with address and value. */
 export interface JsSpillSource {
   row: number
@@ -914,6 +1387,36 @@ export interface JsTableStyleInfo {
   showLastColumn: boolean
   showRowStripes: boolean
   showColumnStripes: boolean
+}
+
+/** A trendline attached to a data series. */
+export interface JsTrendline {
+  trendlineType: string
+  name?: string
+  order?: number
+  period?: number
+  forward?: number
+  backward?: number
+  intercept?: number
+  displayRSquared?: boolean
+  displayEquation?: boolean
+}
+
+/** Up-down bars (stock charts). */
+export interface JsUpDownBars {
+  gapWidth?: number
+  upBars?: JsChartLines
+  downBars?: JsChartLines
+}
+
+/** 3D view settings. */
+export interface JsView3D {
+  rotateX?: number
+  rotateY?: number
+  depthPercent?: number
+  heightPercent?: number
+  perspective?: number
+  rightAngleAxes?: boolean
 }
 
 /** Workbook-level settings. */
