@@ -135,7 +135,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 23
-
+          registry-url: https://registry.npmjs.org
       - run: npm install
 
       - run: npx napi create-npm-dirs
@@ -177,6 +177,6 @@ jobs:
       - name: Publish to npm
         run: |
           for dir in npm/*/; do
-            (cd "$dir" && npm publish --access public --provenance) || true
+            (cd "$dir" && npm publish --access public) || true
           done
-          npm publish --access public --provenance
+          npm publish --access public

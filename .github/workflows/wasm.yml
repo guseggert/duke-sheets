@@ -119,7 +119,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 23
-
+          registry-url: https://registry.npmjs.org
 
       - uses: actions/download-artifact@v4
         with:
@@ -142,7 +142,7 @@ jobs:
           # compatible with webpack 5 / Next.js without special loaders
           cd dist
           tar xzf dukelib-sheets-wasm-web.tgz
-          cd package && npm publish --access public --provenance
+          cd package && npm publish --access public
 
   deploy-pages:
     name: Deploy to GitHub Pages
