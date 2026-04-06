@@ -298,3 +298,13 @@ class TestIterateRows:
         assert [cell.col for cell in skip_blanks[0].cells] == [0]
         assert skip_blanks[0].cells[0].value == "merged"
         assert skip_blanks[1].cells[0].value == "42"
+
+
+class TestImages:
+    """Test embedded image access."""
+
+    def test_images_empty_by_default(self, workbook):
+        """Fresh workbook should have no embedded images."""
+        sheet = workbook.get_sheet(0)
+        images = sheet.images
+        assert images == []

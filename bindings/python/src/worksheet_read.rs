@@ -10,7 +10,7 @@ use crate::{
     PyComment, PyCommentEntry, PyConditionalFormatRule, PyDataValidation, PyFormulaCell,
     PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergeSpan, PyMergedRegion, PyPageBreak,
     PyPageSetup, PyRow, PyRowCell, PySelection, PySheetProtection, PySpillSource, PySplitPanes,
-    PyStyle, PyTable, PyChartEx, PyWorksheet,
+    PyStyle, PyTable, PyChartEx, PyEmbeddedImage, PyWorksheet,
 };
 
 const ROW_ITER_BATCH_SIZE: u32 = 1000;
@@ -975,5 +975,23 @@ impl PyWorksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
         Ok(ws.chart_ex_count() as u32)
+    }
+
+    #[getter]
+    fn images(&self) -> PyResult<Vec<PyEmbeddedImage>> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws.images().iter().map(PyEmbeddedImage::from).collect())
+    }
+
+    #[getter]
+    fn image_count(&self) -> PyResult<u32> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws.image_count() as u32)
     }
 }

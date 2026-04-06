@@ -3489,7 +3489,7 @@ mod tests {
     #[test]
     fn test_chart_roundtrip_column_clustered() {
         use duke_sheets_chart::{
-            Axis, Chart, ChartAnchor, ChartType, DataReference, DataSeries, Legend,
+            Axis, CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor, Legend,
             LegendPosition,
         };
 
@@ -3500,15 +3500,10 @@ mod tests {
 
         let mut chart = Chart::new(ChartType::ColumnClustered);
         chart.title = Some("Sales Chart".to_string());
-        chart.anchor = ChartAnchor {
-            from_col: 2,
-            from_row: 3,
-            from_col_offset: 100,
-            from_row_offset: 200,
-            to_col: 12,
-            to_row: 18,
-            to_col_offset: 300,
-            to_row_offset: 400,
+        chart.anchor = DrawingAnchor::TwoCell {
+            from: CellMarker { col: 2, col_offset_emu: 100, row: 3, row_offset_emu: 200 },
+            to: CellMarker { col: 12, col_offset_emu: 300, row: 18, row_offset_emu: 400 },
+            edit_as: None,
         };
         let s = DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$5"))
             .with_name("Sheet1!$B$1")
@@ -3548,14 +3543,18 @@ mod tests {
         assert_eq!(val_ax.minimum, Some(0.0));
         assert_eq!(val_ax.maximum, Some(100.0));
         assert_eq!(c.legend.as_ref().unwrap().position, LegendPosition::Bottom);
-        assert_eq!(c.anchor.from_col, 2);
-        assert_eq!(c.anchor.from_row, 3);
-        assert_eq!(c.anchor.from_col_offset, 100);
-        assert_eq!(c.anchor.from_row_offset, 200);
-        assert_eq!(c.anchor.to_col, 12);
-        assert_eq!(c.anchor.to_row, 18);
-        assert_eq!(c.anchor.to_col_offset, 300);
-        assert_eq!(c.anchor.to_row_offset, 400);
+        if let DrawingAnchor::TwoCell { from, to, .. } = &c.anchor {
+            assert_eq!(from.col, 2);
+            assert_eq!(from.row, 3);
+            assert_eq!(from.col_offset_emu, 100);
+            assert_eq!(from.row_offset_emu, 200);
+            assert_eq!(to.col, 12);
+            assert_eq!(to.row, 18);
+            assert_eq!(to.col_offset_emu, 300);
+            assert_eq!(to.row_offset_emu, 400);
+        } else {
+            panic!("expected TwoCell anchor");
+        }
     }
 
     #[test]

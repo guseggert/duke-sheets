@@ -2237,7 +2237,8 @@ fn roundtrip_dynamic_array_comparison_boolean() {
 #[test]
 fn test_roundtrip_chart_bar() {
     use duke_sheets_chart::{
-        Axis, Chart, ChartAnchor, ChartType, DataReference, DataSeries, Legend, LegendPosition,
+        Axis, CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor, Legend,
+        LegendPosition,
     };
 
     let mut wb = Workbook::new();
@@ -2248,15 +2249,10 @@ fn test_roundtrip_chart_bar() {
 
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.title = Some("Sales Chart".to_string());
-    chart.anchor = ChartAnchor {
-        from_col: 1,
-        from_row: 5,
-        from_col_offset: 0,
-        from_row_offset: 0,
-        to_col: 10,
-        to_row: 20,
-        to_col_offset: 0,
-        to_row_offset: 0,
+    chart.anchor = DrawingAnchor::TwoCell {
+        from: CellMarker { col: 1, col_offset_emu: 0, row: 5, row_offset_emu: 0 },
+        to: CellMarker { col: 10, col_offset_emu: 0, row: 20, row_offset_emu: 0 },
+        edit_as: None,
     };
     let s1 = DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$5"))
         .with_name("Sheet1!$B$1")
@@ -2300,10 +2296,14 @@ fn test_roundtrip_chart_bar() {
     assert_eq!(vax.minimum, Some(0.0));
     assert_eq!(vax.maximum, Some(50000.0));
     assert_eq!(c.legend.as_ref().unwrap().position, LegendPosition::Bottom);
-    assert_eq!(c.anchor.from_col, 1);
-    assert_eq!(c.anchor.from_row, 5);
-    assert_eq!(c.anchor.to_col, 10);
-    assert_eq!(c.anchor.to_row, 20);
+    if let DrawingAnchor::TwoCell { from, to, .. } = &c.anchor {
+        assert_eq!(from.col, 1);
+        assert_eq!(from.row, 5);
+        assert_eq!(to.col, 10);
+        assert_eq!(to.row, 20);
+    } else {
+        panic!("expected TwoCell anchor");
+    }
 }
 
 #[test]
@@ -2455,21 +2455,16 @@ fn test_roundtrip_multiple_charts() {
 
 #[test]
 fn test_roundtrip_chart_anchor_offsets() {
-    use duke_sheets_chart::{Chart, ChartAnchor, ChartType, DataReference, DataSeries};
+    use duke_sheets_chart::{CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor};
 
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
 
     let mut chart = Chart::new(ChartType::Line);
-    chart.anchor = ChartAnchor {
-        from_col: 3,
-        from_row: 7,
-        from_col_offset: 152400,
-        from_row_offset: 76200,
-        to_col: 15,
-        to_row: 25,
-        to_col_offset: 304800,
-        to_row_offset: 228600,
+    chart.anchor = DrawingAnchor::TwoCell {
+        from: CellMarker { col: 3, col_offset_emu: 152400, row: 7, row_offset_emu: 76200 },
+        to: CellMarker { col: 15, col_offset_emu: 304800, row: 25, row_offset_emu: 228600 },
+        edit_as: None,
     };
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
     sheet.add_chart(chart);
@@ -2479,14 +2474,18 @@ fn test_roundtrip_chart_anchor_offsets() {
     let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
     let c = &wb2.worksheet(0).unwrap().charts()[0];
 
-    assert_eq!(c.anchor.from_col, 3);
-    assert_eq!(c.anchor.from_row, 7);
-    assert_eq!(c.anchor.from_col_offset, 152400);
-    assert_eq!(c.anchor.from_row_offset, 76200);
-    assert_eq!(c.anchor.to_col, 15);
-    assert_eq!(c.anchor.to_row, 25);
-    assert_eq!(c.anchor.to_col_offset, 304800);
-    assert_eq!(c.anchor.to_row_offset, 228600);
+    if let DrawingAnchor::TwoCell { from, to, .. } = &c.anchor {
+        assert_eq!(from.col, 3);
+        assert_eq!(from.row, 7);
+        assert_eq!(from.col_offset_emu, 152400);
+        assert_eq!(from.row_offset_emu, 76200);
+        assert_eq!(to.col, 15);
+        assert_eq!(to.row, 25);
+        assert_eq!(to.col_offset_emu, 304800);
+        assert_eq!(to.row_offset_emu, 228600);
+    } else {
+        panic!("expected TwoCell anchor");
+    }
 }
 
 #[test]
@@ -5591,4 +5590,16 @@ fn test_roundtrip_data_label_position_pie() {
             pos,
         );
     }
+}
+
+#[test]
+fn test_images_empty_by_default() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "hello").unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let rt = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    assert!(rt.worksheet(0).unwrap().images().is_empty());
 }

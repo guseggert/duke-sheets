@@ -28,6 +28,9 @@ pub use crate::{
     Chart,
     ChartAnchor,
     ChartType,
+    DrawingAnchor,
+    EmbeddedImage,
+    ImageFormat,
 
     Color,
     ConditionalFormatRule,

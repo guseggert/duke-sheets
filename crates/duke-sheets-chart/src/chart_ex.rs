@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::chart::ChartAnchor;
+use crate::chart::DrawingAnchor;
 use crate::formatting::{ChartShapeProperties, NumberFormat};
 use crate::text_properties::TextProperties;
 
@@ -59,7 +59,7 @@ pub struct ChartEx {
     /// Legend (`cx:chart > cx:legend`)
     pub legend: Option<ChartExLegend>,
     /// Drawing anchor (cell positioning)
-    pub anchor: ChartAnchor,
+    pub anchor: DrawingAnchor,
     /// Chart-level shape properties (`cx:chartSpace > cx:spPr`)
     pub shape_properties: Option<ChartShapeProperties>,
     /// Chart-level text properties (`cx:chartSpace > cx:txPr`, raw XML bytes)

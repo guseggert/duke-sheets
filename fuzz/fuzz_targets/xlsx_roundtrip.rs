@@ -11,7 +11,7 @@ use std::io::Cursor;
 
 use duke_sheets_core::{CellValue, Style, Workbook};
 use duke_sheets_chart::{
-    Chart, ChartAnchor, ChartType, DataLabels, DataReference, DataSeries, Legend,
+    CellMarker, Chart, ChartType, DataLabels, DataReference, DataSeries, DrawingAnchor, Legend,
     LegendPosition, Marker, MarkerSymbol, Trendline, TrendlineType,
 };
 
@@ -449,12 +449,20 @@ fuzz_target!(|data: &[u8]| {
             if let Some(lp) = fchart.legend_pos {
                 chart.legend = Some(Legend::new(lp.into()));
             }
-            chart.anchor = ChartAnchor {
-                from_col: fchart.anchor.from_col,
-                from_row: fchart.anchor.from_row,
-                to_col: fchart.anchor.to_col,
-                to_row: fchart.anchor.to_row,
-                ..Default::default()
+            chart.anchor = DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col: fchart.anchor.from_col,
+                    col_offset_emu: 0,
+                    row: fchart.anchor.from_row,
+                    row_offset_emu: 0,
+                },
+                to: CellMarker {
+                    col: fchart.anchor.to_col,
+                    col_offset_emu: 0,
+                    row: fchart.anchor.to_row,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
             };
             for fs in &fchart.series {
                 let mut series = DataSeries::new(DataReference::from(&fs.values));
@@ -502,5 +510,21 @@ fuzz_target!(|data: &[u8]| {
 
     // Step 2: Read back — must not panic
     let written = output.into_inner();
-    let _ = duke_sheets_xlsx::XlsxReader::read(Cursor::new(&written));
+    let orig_wb = &workbook;
+    let rt_wb = match duke_sheets_xlsx::XlsxReader::read(Cursor::new(&written)) {
+        Ok(wb) => wb,
+        Err(_) => return,
+    };
+
+    // Compare images
+    for i in 0..orig_wb.sheet_count() {
+        let orig_ws = orig_wb.worksheet(i).unwrap();
+        let rt_ws = rt_wb.worksheet(i).unwrap();
+        assert_eq!(
+            orig_ws.images().len(),
+            rt_ws.images().len(),
+            "image count mismatch on sheet {}",
+            i
+        );
+    }
 });

@@ -2,7 +2,7 @@ use std::io::{Seek, Write};
 
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 
-use duke_sheets_chart::{Chart, ChartAnchor, ChartEx};
+use duke_sheets_chart::{CellMarker, Chart, ChartEx, DrawingAnchor};
 
 use super::{write_xml_part, XlsxResult, XmlWriter, NS_DOC_RELS, NS_RELATIONSHIPS, RT_CHART};
 
@@ -138,30 +138,22 @@ fn write_absolute_anchor(w: &mut XmlWriter, rid: &str, chart_idx: usize) -> Xlsx
 
 fn write_two_cell_anchor(
     w: &mut XmlWriter,
-    anchor: &ChartAnchor,
+    anchor: &DrawingAnchor,
     rid: &str,
     chart_idx: usize,
 ) -> XlsxResult<()> {
+    let (from, to) = match anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => (from.clone(), to.clone()),
+        _ => (CellMarker::default(), CellMarker::default()),
+    };
     w.write_event(Event::Start(BytesStart::new("xdr:twoCellAnchor")))?;
 
     w.write_event(Event::Start(BytesStart::new("xdr:from")))?;
-    write_anchor_point(
-        w,
-        anchor.from_col,
-        anchor.from_col_offset,
-        anchor.from_row,
-        anchor.from_row_offset,
-    )?;
+    write_cell_marker(w, &from)?;
     w.write_event(Event::End(BytesEnd::new("xdr:from")))?;
 
     w.write_event(Event::Start(BytesStart::new("xdr:to")))?;
-    write_anchor_point(
-        w,
-        anchor.to_col,
-        anchor.to_col_offset,
-        anchor.to_row,
-        anchor.to_row_offset,
-    )?;
+    write_cell_marker(w, &to)?;
     w.write_event(Event::End(BytesEnd::new("xdr:to")))?;
 
     w.write_event(Event::Start(BytesStart::new("xdr:graphicFrame")))?;
@@ -208,31 +200,23 @@ fn write_two_cell_anchor(
 
 fn write_chartex_two_cell_anchor(
     w: &mut XmlWriter,
-    anchor: &ChartAnchor,
+    anchor: &DrawingAnchor,
     rid: &str,
     obj_idx: usize,
     raw_mc_fallback: Option<&[u8]>,
 ) -> XlsxResult<()> {
+    let (from, to) = match anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => (from.clone(), to.clone()),
+        _ => (CellMarker::default(), CellMarker::default()),
+    };
     w.write_event(Event::Start(BytesStart::new("xdr:twoCellAnchor")))?;
 
     w.write_event(Event::Start(BytesStart::new("xdr:from")))?;
-    write_anchor_point(
-        w,
-        anchor.from_col,
-        anchor.from_col_offset,
-        anchor.from_row,
-        anchor.from_row_offset,
-    )?;
+    write_cell_marker(w, &from)?;
     w.write_event(Event::End(BytesEnd::new("xdr:from")))?;
 
     w.write_event(Event::Start(BytesStart::new("xdr:to")))?;
-    write_anchor_point(
-        w,
-        anchor.to_col,
-        anchor.to_col_offset,
-        anchor.to_row,
-        anchor.to_row_offset,
-    )?;
+    write_cell_marker(w, &to)?;
     w.write_event(Event::End(BytesEnd::new("xdr:to")))?;
 
     let mut mc_tag = BytesStart::new("mc:AlternateContent");
@@ -299,23 +283,20 @@ fn write_chartex_two_cell_anchor(
     Ok(())
 }
 
-fn write_anchor_point(
+fn write_cell_marker(
     w: &mut XmlWriter,
-    col: u16,
-    col_off: i64,
-    row: u32,
-    row_off: i64,
+    marker: &CellMarker,
 ) -> XlsxResult<()> {
-    let col_s = col.to_string();
+    let col_s = marker.col.to_string();
     w.create_element("xdr:col")
         .write_text_content(BytesText::new(&col_s))?;
-    let col_off_s = col_off.to_string();
+    let col_off_s = marker.col_offset_emu.to_string();
     w.create_element("xdr:colOff")
         .write_text_content(BytesText::new(&col_off_s))?;
-    let row_s = row.to_string();
+    let row_s = marker.row.to_string();
     w.create_element("xdr:row")
         .write_text_content(BytesText::new(&row_s))?;
-    let row_off_s = row_off.to_string();
+    let row_off_s = marker.row_offset_emu.to_string();
     w.create_element("xdr:rowOff")
         .write_text_content(BytesText::new(&row_off_s))?;
     Ok(())

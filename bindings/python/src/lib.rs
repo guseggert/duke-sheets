@@ -897,5 +897,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyChartExPageSetup>()?;
     m.add_class::<PyChartExPrintSettings>()?;
     m.add_class::<PyChartExPlotArea>()?;
+    m.add_class::<PyEmbeddedImage>()?;
     Ok(())
 }

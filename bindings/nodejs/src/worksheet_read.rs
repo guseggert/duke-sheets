@@ -8,7 +8,7 @@ use super::{
     JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
     JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsRow,
     JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle,
-    JsTable, JsChart, JsChartEx, Worksheet,
+    JsTable, JsChart, JsChartEx, JsEmbeddedImage, Worksheet,
 };
 
 #[napi]
@@ -1060,6 +1060,30 @@ impl Worksheet {
                 .worksheet(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             Ok(ws.chart_ex_count() as u32)
+        })
+    }
+
+    /// Get all embedded images in the worksheet.
+    #[napi(getter)]
+    pub fn images(&self) -> Result<Vec<JsEmbeddedImage>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.images().iter().map(JsEmbeddedImage::from).collect())
+        })
+    }
+
+    /// Number of embedded images in the worksheet.
+    #[napi(getter)]
+    pub fn image_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.image_count() as u32)
         })
     }
 }

@@ -9,7 +9,7 @@ use crate::{
         WasmConditionalFormatRule, WasmDataValidation, WasmFormulaCell, WasmFreezePanes,
         WasmHyperlink, WasmHyperlinkEntry, WasmImageInfo, WasmMergeSpan, WasmMergedRegion,
         WasmPageBreak, WasmPageSetup, WasmRow, WasmRowCell, WasmRowsOptions, WasmSelection,
-        WasmSheetProtection, WasmSpillSource, WasmSplitPanes, WasmStyle, WasmTable,
+        WasmSheetProtection, WasmSpillSource, WasmSplitPanes, WasmStyle, WasmTable, WasmEmbeddedImage,
     },
     Worksheet,
 };
@@ -898,5 +898,24 @@ impl Worksheet {
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         Ok(ws.chart_ex_count() as u32)
+    }
+
+    #[wasm_bindgen(getter, js_name = images)]
+    pub fn images(&self) -> Result<JsValue, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let images: Vec<WasmEmbeddedImage> = ws.images().iter().map(WasmEmbeddedImage::from).collect();
+        to_js_value(&images)
+    }
+
+    #[wasm_bindgen(getter, js_name = imageCount)]
+    pub fn image_count(&self) -> Result<u32, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws.image_count() as u32)
     }
 }

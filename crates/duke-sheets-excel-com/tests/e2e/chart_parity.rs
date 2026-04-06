@@ -14,23 +14,20 @@ use crate::{
     roundtrip_through_excel, temp_fixture,
 };
 use duke_sheets_chart::{
-    Axis, Chart, ChartAnchor, ChartType, DataLabels, DataReference, DataSeries, Legend,
-    LegendPosition, Marker, MarkerSymbol, Trendline, TrendlineType,
+    Axis, CellMarker, Chart, ChartType, DataLabels, DataReference, DataSeries, DrawingAnchor,
+    Legend, LegendPosition, Marker, MarkerSymbol, Trendline, TrendlineType,
 };
 use duke_sheets_core::{ChartSheet, SheetVisibility, Workbook};
 use duke_sheets_xlsx::XlsxWriter;
 
 const REPO_DATA_DIR: &str = "data";
 
-fn default_anchor(from_row: u32, to_row: u32) -> ChartAnchor {
-    ChartAnchor {
-        from_col: 5,
-        from_row,
-        from_col_offset: 0,
-        from_row_offset: 0,
-        to_col: 15,
-        to_row,
-        to_col_offset: 0,
+fn default_anchor(from_row: u32, to_row: u32) -> DrawingAnchor {
+    DrawingAnchor::TwoCell {
+        from: CellMarker { col: 5, col_offset_emu: 0, row: from_row, row_offset_emu: 0 },
+        to: CellMarker { col: 15, col_offset_emu: 0, row: to_row, row_offset_emu: 0 },
+        edit_as: None,
+    }
         to_row_offset: 0,
     }
 }
@@ -353,7 +350,7 @@ fn build_chart_parity_workbook() -> Workbook {
 
     let mut cs_chart = Chart::new(ChartType::ColumnClustered);
     cs_chart.title = Some("ChartSheet: Column".into());
-    cs_chart.anchor = ChartAnchor::default();
+    cs_chart.anchor = DrawingAnchor::default();
     cs_chart.add_series(sample_series("Data", "B"));
     cs_chart.add_series(sample_series("Data", "C"));
     cs_chart.legend = Some(Legend::new(LegendPosition::Bottom));
@@ -846,9 +843,10 @@ fn chart_minimal_excel_open() {
 
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.title = Some("Test".into());
-    chart.anchor = ChartAnchor {
-        from_col: 3, from_row: 0, from_col_offset: 0, from_row_offset: 0,
-        to_col: 10, to_row: 15, to_col_offset: 0, to_row_offset: 0,
+    chart.anchor = DrawingAnchor::TwoCell {
+        from: CellMarker { col: 3, col_offset_emu: 0, row: 0, row_offset_emu: 0 },
+        to: CellMarker { col: 10, col_offset_emu: 0, row: 15, row_offset_emu: 0 },
+        edit_as: None,
     };
     chart.add_series(
         DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$3".to_string()))

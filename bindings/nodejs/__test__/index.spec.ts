@@ -653,3 +653,11 @@ describe("Callback Functions", () => {
     expect(sheet.getCalculatedValue("A1").asNumber()).toBe(2);
   });
 });
+
+describe("EmbeddedImages", () => {
+  it("returns empty array for fresh workbook", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    expect(sheet.images).toEqual([]);
+  });
+});

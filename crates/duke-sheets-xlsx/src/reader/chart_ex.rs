@@ -7,12 +7,12 @@ use quick_xml::Writer;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_chart::chart_ex::*;
 use duke_sheets_chart::{ChartColor, ChartLine, ChartShapeProperties, NumberFormat};
-use duke_sheets_chart::ChartAnchor;
+use duke_sheets_chart::DrawingAnchor;
 
 pub(crate) fn read_chart_ex<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     chart_path: &str,
-    anchor: ChartAnchor,
+    anchor: DrawingAnchor,
 ) -> XlsxResult<Option<ChartEx>> {
     let file = match archive.by_name(chart_path) {
         Ok(f) => f,

@@ -1461,17 +1461,23 @@ pub struct PyChartAnchor {
     pub to_row_offset: i64,
 }
 
-impl From<&duke_sheets::ChartAnchor> for PyChartAnchor {
-    fn from(a: &duke_sheets::ChartAnchor) -> Self {
-        Self {
-            from_col: a.from_col,
-            from_row: a.from_row,
-            from_col_offset: a.from_col_offset,
-            from_row_offset: a.from_row_offset,
-            to_col: a.to_col,
-            to_row: a.to_row,
-            to_col_offset: a.to_col_offset,
-            to_row_offset: a.to_row_offset,
+impl From<&duke_sheets::DrawingAnchor> for PyChartAnchor {
+    fn from(a: &duke_sheets::DrawingAnchor) -> Self {
+        match a {
+            duke_sheets::DrawingAnchor::TwoCell { from, to, .. } => Self {
+                from_col: from.col,
+                from_row: from.row,
+                from_col_offset: from.col_offset_emu,
+                from_row_offset: from.row_offset_emu,
+                to_col: to.col,
+                to_row: to.row,
+                to_col_offset: to.col_offset_emu,
+                to_row_offset: to.row_offset_emu,
+            },
+            _ => Self {
+                from_col: 0, from_row: 0, from_col_offset: 0, from_row_offset: 0,
+                to_col: 0, to_row: 0, to_col_offset: 0, to_row_offset: 0,
+            },
         }
     }
 }
@@ -3145,6 +3151,60 @@ impl From<&chart::ChartEx> for PyChartEx {
             print_settings: c.print_settings.as_ref().map(PyChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),
+        }
+    }
+}
+
+#[pyclass(name = "EmbeddedImage")]
+#[derive(Clone)]
+pub struct PyEmbeddedImage {
+    #[pyo3(get)]
+    pub id: u32,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub description: Option<String>,
+    #[pyo3(get)]
+    pub anchor: PyChartAnchor,
+    #[pyo3(get)]
+    pub format: String,
+    #[pyo3(get)]
+    pub media_path: String,
+    #[pyo3(get)]
+    pub svg_media_path: Option<String>,
+    #[pyo3(get)]
+    pub width_emu: i64,
+    #[pyo3(get)]
+    pub height_emu: i64,
+    #[pyo3(get)]
+    pub rotation: Option<i32>,
+    #[pyo3(get)]
+    pub flip_h: bool,
+    #[pyo3(get)]
+    pub flip_v: bool,
+    #[pyo3(get)]
+    pub data: Vec<u8>,
+    #[pyo3(get)]
+    pub svg_data: Option<Vec<u8>>,
+}
+
+impl From<&duke_sheets::EmbeddedImage> for PyEmbeddedImage {
+    fn from(img: &duke_sheets::EmbeddedImage) -> Self {
+        PyEmbeddedImage {
+            id: img.id,
+            name: img.name.clone(),
+            description: img.description.clone(),
+            anchor: PyChartAnchor::from(&img.anchor),
+            format: img.format.as_str().to_string(),
+            media_path: img.media_path.clone(),
+            svg_media_path: img.svg_media_path.clone(),
+            width_emu: img.width_emu,
+            height_emu: img.height_emu,
+            rotation: img.rotation,
+            flip_h: img.flip_h,
+            flip_v: img.flip_v,
+            data: img.data().to_vec(),
+            svg_data: img.svg_data().map(|b| b.to_vec()),
         }
     }
 }

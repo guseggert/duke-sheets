@@ -18,8 +18,8 @@ mod types;
 
 pub use axis::{Axis, AxisCrosses, AxisPosition, AxisType, CrossBetween, TickLabelPosition, TickMark};
 pub use chart::{
-    BarShape, Chart, ChartAnchor, ChartAxis, ChartLines, ChartType, ChartTypeGroup, OfPieType,
-    SplitType, Surface, UpDownBars,
+    BarShape, CellMarker, Chart, ChartAnchor, ChartAxis, ChartLines, ChartType, ChartTypeGroup,
+    DrawingAnchor, EditAs, EmbeddedImage, ImageFormat, OfPieType, SplitType, Surface, UpDownBars,
 };
 pub use config::{ChartDataTable, DisplayBlanksAs, Layout, ManualLayout, View3D};
 pub use data_labels::{DataLabel, DataLabelPosition, DataLabels, DataPoint};

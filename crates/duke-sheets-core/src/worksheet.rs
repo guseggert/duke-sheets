@@ -5,6 +5,7 @@ use std::sync::RwLock;
 
 use duke_sheets_chart::Chart;
 use duke_sheets_chart::ChartEx;
+use duke_sheets_chart::EmbeddedImage;
 
 use crate::auto_filter::AutoFilter;
 use crate::cell::view::CellView;
@@ -72,6 +73,8 @@ pub struct Worksheet {
     charts: Vec<Chart>,
     /// Embedded ChartEx charts (Office 2016+ extended charts)
     charts_ex: Vec<ChartEx>,
+    /// Embedded images from drawing
+    images: Vec<EmbeddedImage>,
     /// Standalone auto-filter (dropdown filter on columns)
     auto_filter: Option<AutoFilter>,
     /// Horizontal page breaks (row breaks)
@@ -156,6 +159,7 @@ impl Worksheet {
             tables: Vec::new(),
             charts: Vec::new(),
             charts_ex: Vec::new(),
+            images: Vec::new(),
             auto_filter: None,
             row_breaks: Vec::new(),
             col_breaks: Vec::new(),
@@ -1287,6 +1291,21 @@ impl Worksheet {
     /// Get the number of ChartEx charts.
     pub fn chart_ex_count(&self) -> usize {
         self.charts_ex.len()
+    }
+
+    /// Add an embedded image to this worksheet.
+    pub fn add_image(&mut self, img: EmbeddedImage) {
+        self.images.push(img);
+    }
+
+    /// Get all embedded images.
+    pub fn images(&self) -> &[EmbeddedImage] {
+        &self.images
+    }
+
+    /// Get the number of embedded images.
+    pub fn image_count(&self) -> usize {
+        self.images.len()
     }
 
     /// Set the standalone auto-filter for this worksheet.

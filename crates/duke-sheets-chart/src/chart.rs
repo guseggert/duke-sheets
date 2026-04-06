@@ -129,7 +129,7 @@ pub struct Chart {
     /// Legend
     pub legend: Option<Legend>,
     /// Position anchor
-    pub anchor: ChartAnchor,
+    pub anchor: DrawingAnchor,
     pub data_labels: Option<DataLabels>,
     pub view_3d: Option<View3D>,
     pub data_table: Option<ChartDataTable>,
@@ -192,7 +192,7 @@ impl Chart {
             value_axis: None,
             series_axis: None,
             legend: None,
-            anchor: ChartAnchor::default(),
+            anchor: DrawingAnchor::default(),
             data_labels: None,
             view_3d: None,
             data_table: None,
@@ -248,29 +248,140 @@ impl Chart {
     }
 }
 
-/// Chart anchor position in a worksheet.
+/// A cell position marker for drawing anchors.
 ///
 /// Cell positions use zero-based column and row indices.
 /// Offsets are in EMU (English Metric Units, 1 inch = 914400 EMU)
-/// and represent sub-cell positioning within the from/to cells.
+/// and represent sub-cell positioning within the cell.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct ChartAnchor {
-    /// Start column (zero-based)
-    pub from_col: u16,
-    /// Start row (zero-based)
-    pub from_row: u32,
-    /// Offset within start column (EMU)
-    pub from_col_offset: i64,
-    /// Offset within start row (EMU)
-    pub from_row_offset: i64,
-    /// End column (zero-based)
-    pub to_col: u16,
-    /// End row (zero-based)
-    pub to_row: u32,
-    /// Offset within end column (EMU)
-    pub to_col_offset: i64,
-    /// Offset within end row (EMU)
-    pub to_row_offset: i64,
+pub struct CellMarker {
+    /// Column (zero-based)
+    pub col: u16,
+    /// Offset within column (EMU)
+    pub col_offset_emu: i64,
+    /// Row (zero-based)
+    pub row: u32,
+    /// Offset within row (EMU)
+    pub row_offset_emu: i64,
+}
+
+/// How the drawing should be resized when cells are resized.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EditAs {
+    TwoCell,
+    OneCell,
+    Absolute,
+}
+
+/// Drawing anchor position in a worksheet.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DrawingAnchor {
+    TwoCell {
+        from: CellMarker,
+        to: CellMarker,
+        edit_as: Option<EditAs>,
+    },
+    OneCell {
+        from: CellMarker,
+        width_emu: i64,
+        height_emu: i64,
+    },
+    Absolute {
+        x_emu: i64,
+        y_emu: i64,
+        width_emu: i64,
+        height_emu: i64,
+    },
+}
+
+impl Default for DrawingAnchor {
+    fn default() -> Self {
+        DrawingAnchor::TwoCell {
+            from: CellMarker::default(),
+            to: CellMarker::default(),
+            edit_as: None,
+        }
+    }
+}
+
+/// Backward-compatible alias for `DrawingAnchor`.
+pub type ChartAnchor = DrawingAnchor;
+
+/// Image format for embedded images.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImageFormat {
+    Png,
+    Jpeg,
+    Gif,
+    Bmp,
+    Emf,
+    Wmf,
+    Tiff,
+    Svg,
+}
+
+impl ImageFormat {
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "png" => Some(Self::Png),
+            "jpg" | "jpeg" => Some(Self::Jpeg),
+            "gif" => Some(Self::Gif),
+            "bmp" => Some(Self::Bmp),
+            "emf" => Some(Self::Emf),
+            "wmf" => Some(Self::Wmf),
+            "tif" | "tiff" => Some(Self::Tiff),
+            "svg" => Some(Self::Svg),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpeg",
+            Self::Gif => "gif",
+            Self::Bmp => "bmp",
+            Self::Emf => "emf",
+            Self::Wmf => "wmf",
+            Self::Tiff => "tiff",
+            Self::Svg => "svg",
+        }
+    }
+}
+
+/// An image embedded in a worksheet drawing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddedImage {
+    pub id: u32,
+    pub name: String,
+    pub description: Option<String>,
+    pub anchor: DrawingAnchor,
+    pub format: ImageFormat,
+    pub media_path: String,
+    pub svg_media_path: Option<String>,
+    pub width_emu: i64,
+    pub height_emu: i64,
+    pub rotation: Option<i32>,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    /// Raw image bytes (PNG, JPEG, etc.), loaded from the archive at parse time.
+    #[doc(hidden)]
+    pub data: Vec<u8>,
+    /// SVG image bytes when the image has an SVG variant.
+    #[doc(hidden)]
+    pub svg_data: Option<Vec<u8>>,
+}
+
+impl EmbeddedImage {
+    /// Raw image bytes (PNG, JPEG, EMF, etc.).
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// SVG image bytes, if the image has an SVG variant.
+    pub fn svg_data(&self) -> Option<&[u8]> {
+        self.svg_data.as_deref()
+    }
 }
 
 /// 3D chart surface (floor, side wall, back wall)

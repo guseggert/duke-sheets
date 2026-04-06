@@ -1307,17 +1307,23 @@ pub struct WasmChartAnchor {
     pub to_row_offset: i64,
 }
 
-impl From<&duke_sheets_chart::ChartAnchor> for WasmChartAnchor {
-    fn from(a: &duke_sheets_chart::ChartAnchor) -> Self {
-        Self {
-            from_col: a.from_col,
-            from_row: a.from_row,
-            from_col_offset: a.from_col_offset,
-            from_row_offset: a.from_row_offset,
-            to_col: a.to_col,
-            to_row: a.to_row,
-            to_col_offset: a.to_col_offset,
-            to_row_offset: a.to_row_offset,
+impl From<&duke_sheets_chart::DrawingAnchor> for WasmChartAnchor {
+    fn from(a: &duke_sheets_chart::DrawingAnchor) -> Self {
+        match a {
+            duke_sheets_chart::DrawingAnchor::TwoCell { from, to, .. } => Self {
+                from_col: from.col,
+                from_row: from.row,
+                from_col_offset: from.col_offset_emu,
+                from_row_offset: from.row_offset_emu,
+                to_col: to.col,
+                to_row: to.row,
+                to_col_offset: to.col_offset_emu,
+                to_row_offset: to.row_offset_emu,
+            },
+            _ => Self {
+                from_col: 0, from_row: 0, from_col_offset: 0, from_row_offset: 0,
+                to_col: 0, to_row: 0, to_col_offset: 0, to_row_offset: 0,
+            },
         }
     }
 }
@@ -2725,6 +2731,50 @@ impl From<&duke_sheets_chart::ChartEx> for WasmChartEx {
             print_settings: c.print_settings.as_ref().map(WasmChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmEmbeddedImage {
+    pub id: u32,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub anchor: WasmChartAnchor,
+    pub format: String,
+    pub media_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub svg_media_path: Option<String>,
+    pub width_emu: i64,
+    pub height_emu: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<i32>,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    pub data: Vec<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub svg_data: Option<Vec<u8>>,
+}
+
+impl From<&duke_sheets_chart::EmbeddedImage> for WasmEmbeddedImage {
+    fn from(img: &duke_sheets_chart::EmbeddedImage) -> Self {
+        WasmEmbeddedImage {
+            id: img.id,
+            name: img.name.clone(),
+            description: img.description.clone(),
+            anchor: WasmChartAnchor::from(&img.anchor),
+            format: img.format.as_str().to_string(),
+            media_path: img.media_path.clone(),
+            svg_media_path: img.svg_media_path.clone(),
+            width_emu: img.width_emu,
+            height_emu: img.height_emu,
+            rotation: img.rotation,
+            flip_h: img.flip_h,
+            flip_v: img.flip_v,
+            data: img.data().to_vec(),
+            svg_data: img.svg_data().map(|b| b.to_vec()),
         }
     }
 }

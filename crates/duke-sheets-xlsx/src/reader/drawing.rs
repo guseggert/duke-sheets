@@ -5,23 +5,24 @@ use quick_xml::reader::Reader;
 use quick_xml::Writer;
 
 use crate::error::{XlsxError, XlsxResult};
-use duke_sheets_chart::ChartAnchor;
+use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
 
 /// A chart reference discovered in a drawing XML, paired with its anchor position.
 pub(crate) struct DrawingChartRef {
     /// The relationship id (e.g. "rId1") pointing to the chart part.
     pub(crate) rel_id: String,
     /// The two-cell anchor positioning the chart in the worksheet.
-    pub(crate) anchor: ChartAnchor,
+    pub(crate) anchor: DrawingAnchor,
     /// Whether this references a ChartEx part (`cx:chart`) rather than a standard chart.
     pub(crate) is_chart_ex: bool,
     /// Raw `mc:Fallback` XML bytes for roundtrip (chartEx only).
     pub(crate) raw_mc_fallback: Option<Vec<u8>>,
 }
 
-/// Chart refs plus raw non-chart drawing anchors from a drawing XML.
+/// Chart refs, image refs, and raw non-chart drawing anchors from a drawing XML.
 pub(crate) struct DrawingContents {
     pub chart_refs: Vec<DrawingChartRef>,
+    pub images: Vec<EmbeddedImage>,
     pub raw_non_chart_anchors: Vec<Vec<u8>>,
 }
 
@@ -42,6 +43,7 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
         Err(_) => {
             return Ok(DrawingContents {
                 chart_refs: Vec::new(),
+                images: Vec::new(),
                 raw_non_chart_anchors: Vec::new(),
             })
         }
@@ -53,12 +55,14 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
 
     let mut buf = Vec::new();
     let mut chart_refs = Vec::new();
+    let mut images: Vec<EmbeddedImage> = Vec::new();
     let mut raw_non_chart_anchors: Vec<Vec<u8>> = Vec::new();
 
     let mut in_two_cell_anchor = false;
     let mut in_one_cell_anchor = false;
     let mut in_absolute_anchor = false;
-    let mut anchor = ChartAnchor::default();
+    let mut from = CellMarker::default();
+    let mut to = CellMarker::default();
     let mut in_from = false;
     let mut in_to = false;
     let mut in_col = false;
@@ -73,6 +77,22 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
     let mut fallback_capture: Option<Writer<Cursor<Vec<u8>>>> = None;
     let mut fallback_depth: u32 = 0;
     let mut raw_mc_fallback: Option<Vec<u8>> = None;
+
+    // Image (pic) parsing state
+    let mut in_pic = false;
+    let mut _in_grp_sp = false;
+    let mut pic_id: u32 = 0;
+    let mut pic_name = String::new();
+    let mut pic_descr: Option<String> = None;
+    let mut blip_rel_id: Option<String> = None;
+    let mut svg_blip_rel_id: Option<String> = None;
+    let mut pic_width_emu: i64 = 0;
+    let mut pic_height_emu: i64 = 0;
+    let mut pic_rotation: Option<i32> = None;
+    let mut pic_flip_h = false;
+    let mut pic_flip_v = false;
+    let mut in_sp_pr = false;
+    let mut sp_pr_depth: u32 = 0;
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
@@ -92,7 +112,8 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                 match e.name().local_name().as_ref() {
                     b"twoCellAnchor" => {
                         in_two_cell_anchor = true;
-                        anchor = ChartAnchor::default();
+                        from = CellMarker::default();
+                        to = CellMarker::default();
                         chart_rel_id = None;
                         is_chart_ex = false;
                         raw_mc_fallback = None;
@@ -102,7 +123,8 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                     }
                     b"oneCellAnchor" => {
                         in_one_cell_anchor = true;
-                        anchor = ChartAnchor::default();
+                        from = CellMarker::default();
+                        to = CellMarker::default();
                         chart_rel_id = None;
                         is_chart_ex = false;
                         raw_mc_fallback = None;
@@ -112,7 +134,8 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                     }
                     b"absoluteAnchor" => {
                         in_absolute_anchor = true;
-                        anchor = ChartAnchor::default();
+                        from = CellMarker::default();
+                        to = CellMarker::default();
                         chart_rel_id = None;
                         is_chart_ex = false;
                         raw_mc_fallback = None;
@@ -154,6 +177,76 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         fallback_depth = 1;
                         fallback_capture = Some(w);
                     }
+                    b"pic" if in_any_anchor => {
+                        in_pic = true;
+                        pic_id = 0;
+                        pic_name = String::new();
+                        pic_descr = None;
+                        blip_rel_id = None;
+                        svg_blip_rel_id = None;
+                        pic_width_emu = 0;
+                        pic_height_emu = 0;
+                        pic_rotation = None;
+                        pic_flip_h = false;
+                        pic_flip_v = false;
+                        in_sp_pr = false;
+                        sp_pr_depth = 0;
+                    }
+                    b"grpSp" if in_any_anchor => {
+                        _in_grp_sp = true;
+                    }
+                    b"cNvPr" if in_pic => {
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"id" => {
+                                    pic_id = attr.unescape_value().ok()
+                                        .and_then(|s| s.parse().ok()).unwrap_or(0);
+                                }
+                                b"name" => {
+                                    pic_name = attr.unescape_value()
+                                        .map(|s| s.to_string()).unwrap_or_default();
+                                }
+                                b"descr" => {
+                                    pic_descr = attr.unescape_value().ok()
+                                        .map(|s| s.to_string());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"blip" if in_pic => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"embed" {
+                                blip_rel_id = attr.unescape_value().ok().map(|s| s.to_string());
+                            }
+                        }
+                    }
+                    b"spPr" if in_pic => {
+                        in_sp_pr = true;
+                        sp_pr_depth = 1;
+                    }
+                    b"xfrm" if in_sp_pr => {
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"rot" => {
+                                    pic_rotation = attr.unescape_value().ok()
+                                        .and_then(|s| s.parse().ok());
+                                }
+                                b"flipH" => {
+                                    pic_flip_h = attr.unescape_value().ok()
+                                        .map(|s| s == "1" || s == "true").unwrap_or(false);
+                                }
+                                b"flipV" => {
+                                    pic_flip_v = attr.unescape_value().ok()
+                                        .map(|s| s == "1" || s == "true").unwrap_or(false);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ if in_sp_pr => {
+                        sp_pr_depth += 1;
+                    }
                     _ => {}
                 }
             }
@@ -163,7 +256,8 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                 } else if let Some(ref mut w) = capture {
                     let _ = w.write_event(Event::Empty(e.clone().into_owned()));
                 }
-                if in_graphic_data && e.name().local_name().as_ref() == b"chart" {
+                let local = e.name().local_name();
+                if in_graphic_data && local.as_ref() == b"chart" {
                     let uri = graphic_data_uri.as_deref().unwrap_or("");
                     match uri {
                         URI_CHART_EX => is_chart_ex = true,
@@ -173,6 +267,78 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         if attr.key.local_name().as_ref() == b"id" {
                             chart_rel_id = attr.unescape_value().ok().map(|s| s.to_string());
                         }
+                    }
+                }
+                if in_pic {
+                    match local.as_ref() {
+                        b"cNvPr" => {
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"id" => {
+                                        pic_id = attr.unescape_value().ok()
+                                            .and_then(|s| s.parse().ok()).unwrap_or(0);
+                                    }
+                                    b"name" => {
+                                        pic_name = attr.unescape_value()
+                                            .map(|s| s.to_string()).unwrap_or_default();
+                                    }
+                                    b"descr" => {
+                                        pic_descr = attr.unescape_value().ok()
+                                            .map(|s| s.to_string());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        b"blip" => {
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"embed" {
+                                    blip_rel_id = attr.unescape_value().ok().map(|s| s.to_string());
+                                }
+                            }
+                        }
+                        b"svgBlip" => {
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"embed" {
+                                    svg_blip_rel_id = attr.unescape_value().ok().map(|s| s.to_string());
+                                }
+                            }
+                        }
+                        b"ext" if in_sp_pr => {
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"cx" => {
+                                        pic_width_emu = attr.unescape_value().ok()
+                                            .and_then(|s| s.parse().ok()).unwrap_or(0);
+                                    }
+                                    b"cy" => {
+                                        pic_height_emu = attr.unescape_value().ok()
+                                            .and_then(|s| s.parse().ok()).unwrap_or(0);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        b"xfrm" if in_sp_pr => {
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"rot" => {
+                                        pic_rotation = attr.unescape_value().ok()
+                                            .and_then(|s| s.parse().ok());
+                                    }
+                                    b"flipH" => {
+                                        pic_flip_h = attr.unescape_value().ok()
+                                            .map(|s| s == "1" || s == "true").unwrap_or(false);
+                                    }
+                                    b"flipV" => {
+                                        pic_flip_v = attr.unescape_value().ok()
+                                            .map(|s| s == "1" || s == "true").unwrap_or(false);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -186,27 +352,27 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                     let text = text.trim();
                     if in_col {
                         if in_from {
-                            anchor.from_col = text.parse().unwrap_or(0);
+                            from.col = text.parse().unwrap_or(0);
                         } else if in_to {
-                            anchor.to_col = text.parse().unwrap_or(0);
+                            to.col = text.parse().unwrap_or(0);
                         }
                     } else if in_col_off {
                         if in_from {
-                            anchor.from_col_offset = text.parse().unwrap_or(0);
+                            from.col_offset_emu = text.parse().unwrap_or(0);
                         } else if in_to {
-                            anchor.to_col_offset = text.parse().unwrap_or(0);
+                            to.col_offset_emu = text.parse().unwrap_or(0);
                         }
                     } else if in_row {
                         if in_from {
-                            anchor.from_row = text.parse().unwrap_or(0);
+                            from.row = text.parse().unwrap_or(0);
                         } else if in_to {
-                            anchor.to_row = text.parse().unwrap_or(0);
+                            to.row = text.parse().unwrap_or(0);
                         }
                     } else if in_row_off {
                         if in_from {
-                            anchor.from_row_offset = text.parse().unwrap_or(0);
+                            from.row_offset_emu = text.parse().unwrap_or(0);
                         } else if in_to {
-                            anchor.to_row_offset = text.parse().unwrap_or(0);
+                            to.row_offset_emu = text.parse().unwrap_or(0);
                         }
                     }
                 }
@@ -224,11 +390,49 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                     let _ = w.write_event(Event::End(e.clone().into_owned()));
                 }
                 match e.name().local_name().as_ref() {
+                    b"pic" => {
+                        if in_pic {
+                            if let Some(rel_id) = blip_rel_id.take() {
+                                let anchor = DrawingAnchor::TwoCell {
+                                    from: from.clone(),
+                                    to: to.clone(),
+                                    edit_as: None,
+                                };
+                                images.push(EmbeddedImage {
+                                    id: pic_id,
+                                    name: std::mem::take(&mut pic_name),
+                                    description: pic_descr.take(),
+                                    anchor,
+                                    format: ImageFormat::Png, // placeholder, resolved later from media path
+                                    media_path: rel_id,
+                                    svg_media_path: svg_blip_rel_id.take(),
+                                    width_emu: pic_width_emu,
+                                    height_emu: pic_height_emu,
+                                    rotation: pic_rotation,
+                                    flip_h: pic_flip_h,
+                                    flip_v: pic_flip_v,
+                                    data: Vec::new(), // populated later from archive
+                                    svg_data: None,   // populated later from archive
+                                });
+                            }
+                            in_pic = false;
+                        }
+                    }
+                    b"grpSp" => {
+                        _in_grp_sp = false;
+                    }
+                    b"spPr" if in_pic && in_sp_pr => {
+                        in_sp_pr = false;
+                        sp_pr_depth = 0;
+                    }
+                    _ if in_sp_pr && in_pic => {
+                        sp_pr_depth = sp_pr_depth.saturating_sub(1);
+                    }
                     b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor" => {
                         if let Some(rel_id) = chart_rel_id.take() {
                             chart_refs.push(DrawingChartRef {
                                 rel_id,
-                                anchor: anchor.clone(),
+                                anchor: DrawingAnchor::TwoCell { from: from.clone(), to: to.clone(), edit_as: None },
                                 is_chart_ex,
                                 raw_mc_fallback: raw_mc_fallback.take(),
                             });
@@ -243,6 +447,8 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         in_to = false;
                         is_chart_ex = false;
                         raw_mc_fallback = None;
+                        in_pic = false;
+                        _in_grp_sp = false;
                     }
                     b"from" => in_from = false,
                     b"to" => in_to = false,
@@ -270,6 +476,7 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
 
     Ok(DrawingContents {
         chart_refs,
+        images,
         raw_non_chart_anchors,
     })
 }
@@ -335,14 +542,18 @@ mod tests {
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId1");
         assert!(!refs[0].is_chart_ex);
-        assert_eq!(refs[0].anchor.from_col, 1);
-        assert_eq!(refs[0].anchor.from_col_offset, 100);
-        assert_eq!(refs[0].anchor.from_row, 2);
-        assert_eq!(refs[0].anchor.from_row_offset, 200);
-        assert_eq!(refs[0].anchor.to_col, 10);
-        assert_eq!(refs[0].anchor.to_col_offset, 300);
-        assert_eq!(refs[0].anchor.to_row, 20);
-        assert_eq!(refs[0].anchor.to_row_offset, 400);
+        if let DrawingAnchor::TwoCell { from, to, .. } = &refs[0].anchor {
+            assert_eq!(from.col, 1);
+            assert_eq!(from.col_offset_emu, 100);
+            assert_eq!(from.row, 2);
+            assert_eq!(from.row_offset_emu, 200);
+            assert_eq!(to.col, 10);
+            assert_eq!(to.col_offset_emu, 300);
+            assert_eq!(to.row, 20);
+            assert_eq!(to.row_offset_emu, 400);
+        } else {
+            panic!("expected TwoCell anchor");
+        }
     }
 
     #[test]
@@ -376,12 +587,16 @@ mod tests {
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].rel_id, "rId2");
         assert!(!refs[0].is_chart_ex);
-        assert_eq!(refs[0].anchor.from_col, 1);
-        assert_eq!(refs[0].anchor.from_col_offset, 100);
-        assert_eq!(refs[0].anchor.from_row, 2);
-        assert_eq!(refs[0].anchor.from_row_offset, 200);
-        assert_eq!(refs[0].anchor.to_col, 0);
-        assert_eq!(refs[0].anchor.to_row, 0);
+        if let DrawingAnchor::TwoCell { from, to, .. } = &refs[0].anchor {
+            assert_eq!(from.col, 1);
+            assert_eq!(from.col_offset_emu, 100);
+            assert_eq!(from.row, 2);
+            assert_eq!(from.row_offset_emu, 200);
+            assert_eq!(to.col, 0);
+            assert_eq!(to.row, 0);
+        } else {
+            panic!("expected TwoCell anchor");
+        }
     }
 
     #[test]
@@ -442,10 +657,14 @@ mod tests {
         assert_eq!(refs[0].rel_id, "rId1");
         assert!(!refs[0].is_chart_ex);
         // absoluteAnchor defaults all anchor values to zero
-        assert_eq!(refs[0].anchor.from_col, 0);
-        assert_eq!(refs[0].anchor.from_row, 0);
-        assert_eq!(refs[0].anchor.to_col, 0);
-        assert_eq!(refs[0].anchor.to_row, 0);
+        if let DrawingAnchor::TwoCell { from, to, .. } = &refs[0].anchor {
+            assert_eq!(from.col, 0);
+            assert_eq!(from.row, 0);
+            assert_eq!(to.col, 0);
+            assert_eq!(to.row, 0);
+        } else {
+            panic!("expected TwoCell anchor");
+        }
     }
 
     #[test]
@@ -487,5 +706,105 @@ mod tests {
         assert_eq!(refs[0].rel_id, "rId3");
         assert!(refs[0].is_chart_ex);
         assert!(refs[0].raw_mc_fallback.is_some());
+    }
+
+    #[test]
+    fn test_parse_drawing_with_pic() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>1</xdr:col><xdr:colOff>100</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>200</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>5</xdr:col><xdr:colOff>300</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>400</xdr:rowOff></xdr:to>
+    <xdr:pic>
+      <xdr:nvPicPr>
+        <xdr:cNvPr id="2" name="Picture 1" descr="A test image"/>
+        <xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>
+      </xdr:nvPicPr>
+      <xdr:blipFill>
+        <a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/>
+      </xdr:blipFill>
+      <xdr:spPr>
+        <a:xfrm rot="5400000" flipH="1">
+          <a:off x="0" y="0"/>
+          <a:ext cx="1000000" cy="2000000"/>
+        </a:xfrm>
+      </xdr:spPr>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"#;
+
+        let mut archive = zip_with_entry("xl/drawings/drawing1.xml", xml);
+        let contents = read_drawing_contents(&mut archive, "xl/drawings/drawing1.xml").unwrap();
+
+        assert_eq!(contents.images.len(), 1);
+        assert!(contents.chart_refs.is_empty());
+        assert_eq!(contents.raw_non_chart_anchors.len(), 1);
+
+        let img = &contents.images[0];
+        assert_eq!(img.id, 2);
+        assert_eq!(img.name, "Picture 1");
+        assert_eq!(img.description, Some("A test image".to_string()));
+        assert_eq!(img.media_path, "rId1");
+        assert_eq!(img.width_emu, 1000000);
+        assert_eq!(img.height_emu, 2000000);
+        assert_eq!(img.rotation, Some(5400000));
+        assert!(img.flip_h);
+        assert!(!img.flip_v);
+        assert!(img.svg_media_path.is_none());
+
+        if let DrawingAnchor::TwoCell { from, to, .. } = &img.anchor {
+            assert_eq!(from.col, 1);
+            assert_eq!(from.col_offset_emu, 100);
+            assert_eq!(from.row, 2);
+            assert_eq!(from.row_offset_emu, 200);
+            assert_eq!(to.col, 5);
+            assert_eq!(to.col_offset_emu, 300);
+            assert_eq!(to.row, 10);
+            assert_eq!(to.row_offset_emu, 400);
+        } else {
+            panic!("expected TwoCell anchor");
+        }
+    }
+
+    #[test]
+    fn test_parse_drawing_with_pic_and_svg() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:pic>
+      <xdr:nvPicPr><xdr:cNvPr id="3" name="SVG Pic" descr="Has SVG"/><xdr:cNvPicPr/></xdr:nvPicPr>
+      <xdr:blipFill>
+        <a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId2">
+          <a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}">
+            <asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main"
+                          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                          r:embed="rId3"/>
+          </a:ext></a:extLst>
+        </a:blip>
+      </xdr:blipFill>
+      <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="500000" cy="500000"/></a:xfrm></xdr:spPr>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"#;
+
+        let mut archive = zip_with_entry("xl/drawings/drawing1.xml", xml);
+        let contents = read_drawing_contents(&mut archive, "xl/drawings/drawing1.xml").unwrap();
+
+        assert_eq!(contents.images.len(), 1);
+        assert!(contents.chart_refs.is_empty());
+
+        let img = &contents.images[0];
+        assert_eq!(img.id, 3);
+        assert_eq!(img.name, "SVG Pic");
+        assert_eq!(img.media_path, "rId2");
+        assert_eq!(img.svg_media_path, Some("rId3".to_string()));
+        assert_eq!(img.width_emu, 500000);
+        assert_eq!(img.height_emu, 500000);
     }
 }

@@ -343,6 +343,10 @@ export declare class Worksheet {
   get chartsEx(): Array<JsChartEx>
   /** Number of ChartEx charts in the worksheet. */
   get chartExCount(): number
+  /** Get all embedded images in the worksheet. */
+  get images(): Array<JsEmbeddedImage>
+  /** Number of embedded images in the worksheet. */
+  get imageCount(): number
   /** Get the worksheet name */
   get name(): string
   /**
@@ -994,6 +998,23 @@ export interface JsDataValidation {
   listSource?: string
   /** Custom formula (present when `validationType === "custom"`). */
   formula?: string
+}
+
+export interface JsEmbeddedImage {
+  id: number
+  name: string
+  description?: string
+  anchor: JsChartAnchor
+  format: string
+  mediaPath: string
+  svgMediaPath?: string
+  widthEmu: number
+  heightEmu: number
+  rotation?: number
+  flipH: boolean
+  flipV: boolean
+  data: Buffer
+  svgData?: Buffer
 }
 
 /** Error bars attached to a data series. */

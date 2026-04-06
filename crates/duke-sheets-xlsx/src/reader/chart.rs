@@ -7,12 +7,12 @@ use quick_xml::Writer;
 
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_chart::{
-    Axis, AxisCrosses, AxisPosition, AxisType, Chart, ChartAnchor, ChartAxis, ChartDataTable,
+    Axis, AxisCrosses, AxisPosition, AxisType, Chart, ChartAxis, ChartDataTable,
     ChartColor, ChartLine, ChartLines, ChartShapeProperties, ChartType, ChartTypeGroup,
     CrossBetween, DataLabelPosition, DataLabels, DataPoint, DataReference, DataSeries,
-    DisplayBlanksAs, ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType, Layout, Legend,
-    LegendPosition, ManualLayout, Marker, MarkerSymbol, NumberFormat, TickLabelPosition, TickMark,
-    Trendline, TrendlineType, UpDownBars, View3D,
+    DisplayBlanksAs, DrawingAnchor, ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType,
+    Layout, Legend, LegendPosition, ManualLayout, Marker, MarkerSymbol, NumberFormat,
+    TickLabelPosition, TickMark, Trendline, TrendlineType, UpDownBars, View3D,
 };
 
 /// Parsed chart data before anchor assignment.
@@ -57,7 +57,7 @@ struct ParsedChart {
 pub(crate) fn read_chart<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     chart_path: &str,
-    anchor: ChartAnchor,
+    anchor: DrawingAnchor,
 ) -> XlsxResult<Option<Chart>> {
     let file = match archive.by_name(chart_path) {
         Ok(f) => f,
@@ -1965,6 +1965,7 @@ mod tests {
     use std::io::{Cursor, Write};
 
     use super::*;
+    use duke_sheets_chart::ChartAnchor;
     use crate::reader::XlsxReader;
 
     fn zip_with_entry(path: &str, xml: &str) -> zip::ZipArchive<Cursor<Vec<u8>>> {
@@ -2301,10 +2302,14 @@ mod tests {
 
         assert_eq!(chart.series[1].name.as_deref(), Some("Sheet1!$C$1"));
 
-        assert_eq!(chart.anchor.from_col, 2);
-        assert_eq!(chart.anchor.from_row, 3);
-        assert_eq!(chart.anchor.to_col, 12);
-        assert_eq!(chart.anchor.to_row, 18);
+        if let DrawingAnchor::TwoCell { from, to, .. } = &chart.anchor {
+            assert_eq!(from.col, 2);
+            assert_eq!(from.row, 3);
+            assert_eq!(to.col, 12);
+            assert_eq!(to.row, 18);
+        } else {
+            panic!("expected TwoCell anchor");
+        }
 
         let val_ax = chart.value_axis.as_ref().unwrap();
         assert_eq!(val_ax.minimum, Some(0.0));

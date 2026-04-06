@@ -17,7 +17,7 @@ wheels = [
 
 [[package]]
 name = "duke-sheets"
-version = "0.1.2"
+version = "0.1.7"
 source = { editable = "." }
 
 [package.dev-dependencies]

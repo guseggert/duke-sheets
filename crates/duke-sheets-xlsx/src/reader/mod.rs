@@ -49,6 +49,8 @@ use shared_strings::SharedStringEntry;
 pub(crate) use theme::ThemePalette;
 use workbook::{read_sheet_rels, read_workbook_rels, read_workbook_xml, SheetRelationship};
 
+/// Resolve a relative path from a drawing's .rels against the drawing's own path.
+
 /// Decode Excel's `_xHHHH_` escape sequences in strings.
 ///
 /// Excel uses this format to encode special characters in XML:
@@ -298,10 +300,45 @@ impl XlsxReader {
                     for raw in drawing_contents.raw_non_chart_anchors {
                         workbook.worksheet_mut(sheet_idx).unwrap().raw_drawing_objects.push(raw);
                     }
-                    if drawing_contents.chart_refs.is_empty() {
+                    let has_charts = !drawing_contents.chart_refs.is_empty();
+                    let has_images = !drawing_contents.images.is_empty();
+                    if !has_charts && !has_images {
                         continue;
                     }
                     let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
+                    if has_images {
+                        let mut resolved_images = drawing_contents.images;
+                        for image in &mut resolved_images {
+                            if let Some(rel) = drawing_rels.get(&image.media_path) {
+                                let ext = rel.target.rsplit('.').next().unwrap_or("");
+                                if let Some(fmt) = duke_sheets_chart::ImageFormat::from_extension(ext) {
+                                    image.format = fmt;
+                                }
+                                image.media_path = rel.target.clone();
+                                if let Ok(mut f) = archive.by_name(&rel.target) {
+                                    let mut buf = Vec::new();
+                                    if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
+                                        image.data = buf;
+                                    }
+                                }
+                            }
+                            if let Some(svg_rel_id) = &image.svg_media_path {
+                                if let Some(rel) = drawing_rels.get(svg_rel_id.as_str()) {
+                                    image.svg_media_path = Some(rel.target.clone());
+                                    if let Ok(mut f) = archive.by_name(&rel.target) {
+                                        let mut buf = Vec::new();
+                                        if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
+                                            image.svg_data = Some(buf);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let ws = workbook.worksheet_mut(sheet_idx).unwrap();
+                        for img in resolved_images {
+                            ws.add_image(img);
+                        }
+                    }
                     for chart_ref in drawing_contents.chart_refs {
                         if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
                             if chart_ref.is_chart_ex {
