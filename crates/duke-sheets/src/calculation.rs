@@ -469,6 +469,11 @@ fn min_relative_row_delta(formula: &str, current_row: u32) -> i32 {
     let mut min_delta = 0i32;
 
     while i < bytes.len() {
+        if bytes[i] >= 0x80 {
+            let ch = formula[i..].chars().next().unwrap();
+            i += ch.len_utf8();
+            continue;
+        }
         let ch = bytes[i] as char;
         if ch == '"' {
             in_string = !in_string;
@@ -504,6 +509,12 @@ fn shift_a1_references_rows(formula: &str, row_delta: i32) -> String {
     let mut in_string = false;
 
     while i < bytes.len() {
+        if bytes[i] >= 0x80 {
+            let ch = formula[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
         let ch = bytes[i] as char;
         if ch == '"' {
             in_string = !in_string;
@@ -4122,6 +4133,35 @@ mod tests {
             tests.get_value_at(51, 0),
             CellValue::Boolean(true),
             "ISLOGICAL(Data!A52) should be true"
+        );
+    }
+
+    #[test]
+    fn test_multibyte_chars_in_formula_no_panic() {
+        let formula = "=VLOOKUP(B53,[\u{0002}JohnDeere\u{0003}JD Kernersville\u{0003}JDK零件清单.xls]美元!$B$2:$E$244,4,0)";
+        let delta = min_relative_row_delta(formula, 52);
+        assert!(delta <= 0);
+        let shifted = shift_a1_references_rows(formula, 0);
+        assert_eq!(shifted, formula);
+        let shifted = shift_a1_references_rows(formula, 1);
+        assert!(shifted.contains("零件清单"));
+        assert!(shifted.contains("美元"));
+    }
+
+    #[test]
+    fn test_multibyte_formula_calculate_no_panic() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet
+            .set_cell_formula("A1", "=LEN(\"零件清单\")").unwrap();
+        sheet
+            .set_cell_formula("A2", "=LEN(\"零件清单\")").unwrap();
+        let stats = wb.calculate().unwrap();
+        assert_eq!(stats.errors, 0);
+        let sheet = wb.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(4.0))
         );
     }
 }

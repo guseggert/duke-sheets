@@ -130,6 +130,12 @@ pub(super) fn shift_a1_references(formula: &str, row_delta: i32, col_delta: i32)
     let mut in_string = false;
 
     while i < bytes.len() {
+        if bytes[i] >= 0x80 {
+            let ch = formula[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
         let ch = bytes[i] as char;
 
         if ch == '"' {
