@@ -1,25 +1,23 @@
 [package]
-name = "duke-sheets-xlsx"
+name = "duke-sheets-xlsb"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "XLSX (Office Open XML) reader/writer for duke-sheets"
+description = "XLSB (Excel Binary Workbook) reader/writer for duke-sheets"
 
 [dependencies]
 duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
 duke-sheets-chart = { workspace = true, features = ["parse"] }
-thiserror.workspace = true
-quick-xml.workspace = true
 zip.workspace = true
+quick-xml.workspace = true
+thiserror.workspace = true
 chrono.workspace = true
 log.workspace = true
+encoding_rs = "0.8"
 
 [dev-dependencies]
 tempfile.workspace = true
 pretty_assertions.workspace = true
-duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
-libreoffice-urp = { path = "../libreoffice-urp" }
-tokio = { version = "1", features = ["full", "test-util"] }

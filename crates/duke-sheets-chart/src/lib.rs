@@ -2,6 +2,11 @@
 //!
 //! Chart support for duke-sheets.
 
+#[cfg(feature = "parse")]
+pub mod error;
+#[cfg(feature = "parse")]
+pub mod parse;
+
 mod axis;
 mod chart;
 pub mod chart_ex;
