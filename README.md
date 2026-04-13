@@ -72,24 +72,11 @@ conditional formatting, data validations, merged regions, page setup, and more.
 
 ## Python
 
-I haven't publisehd to PyPI yet. You can install from a [GitHub release](https://github.com/guseggert/duke-sheets/releases):
+Install from [PyPI](https://pypi.org/project/duke-sheets/):
 
 ```bash
-pip install https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.1/duke_sheets-0.1.1-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+pip install duke-sheets
 ```
-
-Wheels are available for Linux (x86_64, aarch64), macOS (x86_64, ARM), and Windows (x64).
-Pick the one matching your platform from the release assets.
-
-Or use as an inline script dependency with [uv](https://docs.astral.sh/uv/):
-
-```python
-# /// script
-# requires-python = ">=3.9"
-# dependencies = [
-#     "duke-sheets @ https://github.com/guseggert/duke-sheets/releases/download/python-v0.1.1/duke_sheets-0.1.1-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-# ]
-# ///
 
 ```python
 import duke_sheets
