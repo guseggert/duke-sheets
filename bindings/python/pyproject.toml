@@ -23,8 +23,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourorg/duke-sheets"
-Repository = "https://github.com/yourorg/duke-sheets"
+Homepage = "https://github.com/guseggert/duke-sheets"
+Repository = "https://github.com/guseggert/duke-sheets"
 
 [build-system]
 requires = ["maturin>=1.7,<2.0"]
