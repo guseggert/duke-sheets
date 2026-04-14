@@ -506,6 +506,15 @@
   - [x] `cargo test -p duke-sheets --features full --lib` passed (63 tests).
   - [x] `lsp_diagnostics` clean on all changed files.
 
+- [x] Fix BIFF12 formula decompilation for cce=0 records and tArray BIFF12 format.
+  - [x] Read formula tokens from rgcb when cce=0 (Excel stores tokens there for certain formulas).
+  - [x] Fix tArray placeholder size from 7 to 14 reserved bytes for BIFF12.
+  - [x] Fix tArray extra data parsing: BIFF12 uses u32 1-based cols/rows and different SerAr type codes.
+  - [x] Add tArray compilation support: emit 14 reserved bytes, u32 cols/rows, BIFF12 SerAr format.
+  - [x] Write full CellParsedFormula with cb+rgcb in writer for tArray extra data.
+  - [x] `cargo test -p duke-sheets-xlsb` passed (174 tests).
+  - [x] XLSB parity tests: all 4 pass including roundtrip.
+
 - [x] Fix BIFF12 formula token parser bugs causing 265 parity failures.
   - [x] Bug 1: tStr used u32 char count instead of u16 (ShortXLUnicodeString), causing parse loop to bail on string literals.
   - [x] Bug 2: IF/IFERROR/SUMIFS/COUNTIFS lost because tFuncVar tokens came after broken tStr — resolved by Bug 1 fix.
@@ -521,6 +530,130 @@
   - [x] Update XLSB reader to parse charts from drawing rels via shared parsers.
   - [x] All crates compile, all tests pass (chart 49, xlsx 63, xlsb 173, parity 5).
 
+- [x] Fix XLSB writer record payloads to match Excel output.
+  - [x] BrtRowHdr: fix layout to [MS-XLSB] spec (3-byte grbitRw with flags in byte[1], ccolspan+spans). Record grows from 17→25 bytes.
+  - [x] BrtWbProp: set default flags to 0x20 and byte[2]=0x01.
+  - [x] BrtWsProp: set default worksheet property flags and sentinel values.
+  - [x] BrtSheetView: set flags to 0x03DC, byte[13]=0x40, move zoom to offset 28.
+  - [x] Fix reader parse_row_hdr to match spec (flags at byte[11], bit 4=hidden, bit 5=custom height).
+  - [x] `cargo test -p duke-sheets-xlsb` passed (174 tests).
+  - [x] `cargo test -p duke-sheets --features full --test xlsb_parity -- --ignored` passed (4 tests).
+
+- [x] Fix XLSB writer styles.bin and sheet1.bin so Excel opens files without repair.
+  - [x] styles.bin: encode Color::Auto as Indexed(64) in BrtColor, match Excel wire format.
+  - [x] styles.bin: fix default fills to use theme colors (fg=theme 64, bg=theme 65).
+  - [x] styles.bin: fix default border edges to use Indexed(0) color instead of all-zero.
+  - [x] styles.bin: fix BrtXF byte 13 — encode fLocked/fHidden flags, set fLocked=1 for defaults.
+  - [x] sheet1.bin: fix BrtWsProp trailing bytes (positions 19-21: 0x00 not 0xFF).
+  - [x] sheet1.bin: fix BrtSheetView icvHdr at byte 14 (not 13), wScale at bytes 18-19 (not 28-29).
+  - [x] sheet1.bin: fix BrtSel sqrefCount at offset 16 (not 20).
+  - [x] sheet1.bin: add BrtWsFmtInfo (0x01E5) record before BrtBeginSheetData.
+  - [x] sheet1.bin: write compact 2-byte BrtPageSetup for default settings, reorder records.
+  - [x] sheet1.bin: skip BrtPrintOptions when no print options are set.
+  - [x] sheet1.bin: fix formula-only cell collection (cells removed from storage but with formula data).
+  - [x] `cargo test -p duke-sheets-xlsb` passed (174 tests).
+  - [x] `cargo test -p duke-sheets --features full --test xlsb_parity -- --ignored` passed (4 tests).
+  - [x] `cargo test -p duke-sheets-excel-com --test e2e test_xlsb_roundtrip_no_repair` passed.
+
 ## Known Issues
 
 - XLSB parity: 22 complex number (IM*) function precision mismatches remain — formula engine produces more digits than Excel's cached values.
+
+## XLSB Feature Matrix
+
+Features marked ✅ work in both reader and writer. Features marked
+📖 are read-only. Features marked ❌ are not handled.
+
+### Core data
+- ✅ Cell values (number, string, boolean, error, blank with style)
+- ✅ Shared string table (plain + rich text with font runs)
+- ✅ Inline strings
+- ✅ Cell formulas (regular, with cached values)
+- ✅ Formula token compilation (_xlfn.* functions, cross-sheet refs, all operators, 485 FTAB functions)
+- ✅ Array formula token compilation (tArray with BIFF12 extra data format)
+- 📖 Shared formulas (expanded to individual on write — no formula sharing optimization)
+- ✅ Rich text in SST (font runs with bold/italic/size/color/name)
+
+### Styles
+- ✅ Number formats (built-in 0-49, custom 164+)
+- ✅ Fonts (name, size, bold, italic, underline, strikethrough, color, family, charset, scheme, vertAlign)
+- ✅ Fills (solid, pattern, gradient with stops)
+- ✅ Borders (all 5 edges with u16 style + color, diagonal direction)
+- ✅ Cell alignment (horizontal, vertical, wrap, shrink, indent, rotation, reading order)
+- ✅ Cell protection (locked, hidden)
+- ✅ Theme colors (resolved via xl/theme/theme1.xml)
+- ✅ DXF styles (differential formats for CF — font and fill)
+
+### Worksheet features
+- ✅ Merged cells
+- ✅ Hyperlinks (external URLs + internal cell refs via sheet .rels)
+- ✅ Row heights (custom + default)
+- ✅ Row hidden
+- ✅ Column widths (custom + default)
+- ✅ Column hidden
+- ✅ Freeze panes
+- ✅ Autofilter range
+- ✅ Page margins
+- ✅ Page setup (paper size, orientation, scale, fit-to-page)
+- ✅ Print options (gridlines, headings)
+- ✅ Header/footer (odd/even/first)
+- ✅ Data validation (all 8 types, all operators, messages, formulas)
+- ✅ Cell comments (read + write BIFF12 binary, VML shapes for display)
+
+### Worksheet features — partial or missing
+- ✅ Tables (read from xl/tables/*.bin, written to xl/tables/table{N}.bin with .rels + content types)
+- ✅ Sheet visibility (visible, hidden, veryHidden)
+- ✅ Conditional formatting: cellIs, expression, colorScale, dataBar, iconSet, top10, aboveAverage, text rules, duplicates, blanks, errors
+- ✅ Row/column outline levels
+- ✅ Active cell / selection state
+- ✅ Zoom scale
+- ✅ Row/column page breaks
+- ✅ Conditional formatting: timePeriod rules
+- ❌ Autofilter sort state (no sort_state in core AutoFilter model)
+- ✅ Split panes
+- ✅ Tab selected state
+
+### Charts and drawings
+- ✅ Standard charts (via shared parser in duke-sheets-chart)
+- ✅ ChartEx (via shared parser)
+- ✅ Chart style/color XML (passthrough)
+- ✅ Drawing shapes (non-chart) — passthrough blob round-trip
+- ❌ Images (not read or written independently — only via drawing passthrough)
+- ❌ Programmatic shape creation/modification
+
+### Workbook features
+- ✅ Multiple sheets
+- ✅ Date 1904 system
+- ✅ BrtExternSheet (formula cross-sheet references)
+- ✅ BrtName (_xlfn.* function names)
+- ✅ User-defined named ranges (read + write with formula token compilation)
+- ✅ Sheet visibility (visible, hidden, veryHidden)
+- ❌ Workbook protection (no WorkbookProtection type in core model)
+- ✅ Sheet protection
+- ✅ Tab colors (RGB, theme, indexed)
+- ✅ Active sheet / book views (activeTab in BrtBookView)
+- ✅ Print area / print titles (builtin defined names)
+- ❌ External links
+- ❌ Custom views
+- ❌ Calculation properties (needs core CalcMode enum + WorkbookSettings field, plus XLSX reader/writer parity — currently both formats hardcode defaults)
+
+### Not implemented at all
+- ❌ Pivot tables
+- ❌ Sparklines
+- ❌ Slicers
+- ❌ Data connections / external data
+- ❌ VBA macros (macro-enabled workbooks lose macros on round-trip)
+- ❌ Form controls
+- ❌ OLE objects
+- ❌ Threaded comments (only legacy cell notes)
+
+### Ancillary parts (lost on round-trip)
+- ❌ Printer settings (xl/printerSettings/*.bin)
+- ❌ Custom XML parts (customXml/)
+- ❌ Document metadata (docMetadata/LabelInfo.xml)
+- ❌ Custom properties (docProps/custom.xml)
+- ❌ Calculation chain (xl/calcChain.bin)
+- ❌ Binary indices (xl/worksheets/binaryIndex*.bin)
+
+### Known issues
+None.

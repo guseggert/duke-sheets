@@ -275,7 +275,9 @@ fn now() -> Option<Instant> {
 }
 
 fn elapsed_ms(start: Option<Instant>) -> f64 {
-    start.map(|t| t.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0)
+    start
+        .map(|t| t.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
 }
 
 #[derive(Debug, Clone)]
@@ -1224,7 +1226,6 @@ impl CalculationEngine {
         if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
             sheet.clear_spill(cell_key.row, cell_key.col);
         }
-
 
         // Evaluate in a block so immutable borrows drop before we mutably store results.
         let result = {
@@ -4035,7 +4036,10 @@ mod tests {
         wb2.calculate().unwrap();
 
         for wb in [&mut wb1, &mut wb2] {
-            wb.worksheet_mut(0).unwrap().set_cell_value("A1", 99.0).unwrap();
+            wb.worksheet_mut(0)
+                .unwrap()
+                .set_cell_value("A1", 99.0)
+                .unwrap();
         }
 
         wb1.calculate().unwrap();
@@ -4043,7 +4047,8 @@ mod tests {
         wb2.calculate_with_options(&CalculationOptions {
             force_full_calculation: true,
             ..Default::default()
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_cached_vs_full_equivalence(&wb1, &wb2);
     }
@@ -4070,7 +4075,10 @@ mod tests {
         wb2.calculate().unwrap();
 
         for wb in [&mut wb1, &mut wb2] {
-            wb.worksheet_mut(1).unwrap().set_cell_value("A1", 999.0).unwrap();
+            wb.worksheet_mut(1)
+                .unwrap()
+                .set_cell_value("A1", 999.0)
+                .unwrap();
         }
 
         wb1.calculate().unwrap();
@@ -4078,7 +4086,8 @@ mod tests {
         wb2.calculate_with_options(&CalculationOptions {
             force_full_calculation: true,
             ..Default::default()
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_cached_vs_full_equivalence(&wb1, &wb2);
     }
@@ -4108,8 +4117,12 @@ mod tests {
                 .set_cell_formula_at(r, 0, &format!("=Data!A{}", r + 1))
                 .unwrap();
         }
-        tests.set_cell_formula_at(50, 0, "=ISTEXT(Data!A51)").unwrap();
-        tests.set_cell_formula_at(51, 0, "=ISLOGICAL(Data!A52)").unwrap();
+        tests
+            .set_cell_formula_at(50, 0, "=ISTEXT(Data!A51)")
+            .unwrap();
+        tests
+            .set_cell_formula_at(51, 0, "=ISLOGICAL(Data!A52)")
+            .unwrap();
 
         wb.calculate().unwrap();
 
@@ -4152,10 +4165,8 @@ mod tests {
     fn test_multibyte_formula_calculate_no_panic() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
-        sheet
-            .set_cell_formula("A1", "=LEN(\"零件清单\")").unwrap();
-        sheet
-            .set_cell_formula("A2", "=LEN(\"零件清单\")").unwrap();
+        sheet.set_cell_formula("A1", "=LEN(\"零件清单\")").unwrap();
+        sheet.set_cell_formula("A2", "=LEN(\"零件清单\")").unwrap();
         let stats = wb.calculate().unwrap();
         assert_eq!(stats.errors, 0);
         let sheet = wb.worksheet(0).unwrap();

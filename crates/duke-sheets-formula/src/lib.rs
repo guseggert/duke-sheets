@@ -18,12 +18,13 @@
 //! ```
 
 pub mod ast;
+pub mod decompile;
 pub mod dependency;
 pub mod error;
+pub mod eval_cache;
 pub mod evaluator;
 pub mod functions;
 pub mod parser;
-pub mod eval_cache;
 
 pub use ast::{
     BinaryOperator, CellReference, ExternalReference, FormulaExpr, RangeReference,
@@ -31,5 +32,7 @@ pub use ast::{
 };
 pub use error::{FormulaError, FormulaResult};
 pub use eval_cache::{EvalCache, LookupIndex, RangeKey};
-pub use evaluator::{evaluate, EvaluationContext, FormulaValue, ImageInfo, ImageSizing, RangeSource};
+pub use evaluator::{
+    evaluate, EvaluationContext, FormulaValue, ImageInfo, ImageSizing, RangeSource,
+};
 pub use parser::parse_formula;

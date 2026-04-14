@@ -1388,10 +1388,10 @@ mod tests {
     }
 
     fn arr(values: &[f64]) -> FormulaValue {
-        FormulaValue::Array { data: vec![values
-            .iter()
-            .map(|v| FormulaValue::Number(*v))
-            .collect()], source: None }
+        FormulaValue::Array {
+            data: vec![values.iter().map(|v| FormulaValue::Number(*v)).collect()],
+            source: None,
+        }
     }
 
     fn assert_close(v: FormulaValue, expected: f64, tol: f64) {
@@ -1470,10 +1470,19 @@ mod tests {
     #[test]
     fn test_chitest() {
         let ctx = EvaluationContext::simple();
-        let a = FormulaValue::Array { data: vec![vec![n(10.0), n(20.0)], vec![n(20.0), n(40.0)]], source: None };
-        let e = FormulaValue::Array { data: vec![vec![n(10.0), n(20.0)], vec![n(20.0), n(40.0)]], source: None };
+        let a = FormulaValue::Array {
+            data: vec![vec![n(10.0), n(20.0)], vec![n(20.0), n(40.0)]],
+            source: None,
+        };
+        let e = FormulaValue::Array {
+            data: vec![vec![n(10.0), n(20.0)], vec![n(20.0), n(40.0)]],
+            source: None,
+        };
         assert_close(fn_chitest(&[a.clone(), e], &ctx).unwrap(), 1.0, 1e-12);
-        let e2 = FormulaValue::Array { data: vec![vec![n(15.0), n(15.0)], vec![n(15.0), n(45.0)]], source: None };
+        let e2 = FormulaValue::Array {
+            data: vec![vec![n(15.0), n(15.0)], vec![n(15.0), n(45.0)]],
+            source: None,
+        };
         if let FormulaValue::Number(p) = fn_chitest(&[a, e2], &ctx).unwrap() {
             assert!(p < 1.0);
         } else {
@@ -1901,7 +1910,10 @@ mod tests {
     #[test]
     fn test_covar_errors() {
         let ctx = EvaluationContext::simple();
-        let bad = FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)]], source: None };
+        let bad = FormulaValue::Array {
+            data: vec![vec![n(1.0)], vec![n(2.0)]],
+            source: None,
+        };
         assert_eq!(
             fn_covar(&[bad, arr(&[1.0, 2.0])], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
@@ -2113,9 +2125,13 @@ mod tests {
     }
 
     fn arr2d(rows: &[&[f64]]) -> FormulaValue {
-        FormulaValue::Array { data: rows.iter()
-            .map(|row| row.iter().map(|v| FormulaValue::Number(*v)).collect())
-            .collect(), source: None }
+        FormulaValue::Array {
+            data: rows
+                .iter()
+                .map(|row| row.iter().map(|v| FormulaValue::Number(*v)).collect())
+                .collect(),
+            source: None,
+        }
     }
 
     // BETADIST docs: =BETADIST(2,8,10,1,3) = 0.6854706

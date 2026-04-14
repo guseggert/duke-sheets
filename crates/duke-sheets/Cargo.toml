@@ -14,8 +14,10 @@ duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
 duke-sheets-xlsx.workspace = true
 duke-sheets-xls = { workspace = true, optional = true }
+duke-sheets-xlsb = { workspace = true, optional = true }
 duke-sheets-csv.workspace = true
 duke-sheets-chart.workspace = true
+zip.workspace = true
 thiserror.workspace = true
 ahash.workspace = true
 dashmap.workspace = true
@@ -38,9 +40,10 @@ tokio = { version = "1", features = ["full", "test-util"] }
 default = ["xlsx", "csv"]
 xlsx = []
 xls = ["dep:duke-sheets-xls"]
+xlsb = ["dep:duke-sheets-xlsb"]
 csv = []
 parallel = ["dep:rayon"]
-full = ["xlsx", "xls", "csv", "parallel"]
+full = ["xlsx", "xls", "xlsb", "csv", "parallel"]
 
 [[bench]]
 name = "xlsx_read"

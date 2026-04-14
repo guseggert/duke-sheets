@@ -1293,7 +1293,6 @@ pub struct WasmMergeSpan {
     pub col_span: u32,
 }
 
-
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmDrawingAnchor {
@@ -1321,8 +1320,14 @@ impl From<&duke_sheets_chart::DrawingAnchor> for WasmDrawingAnchor {
                 to_row_offset: to.row_offset_emu,
             },
             _ => Self {
-                from_col: 0, from_row: 0, from_col_offset: 0, from_row_offset: 0,
-                to_col: 0, to_row: 0, to_col_offset: 0, to_row_offset: 0,
+                from_col: 0,
+                from_row: 0,
+                from_col_offset: 0,
+                from_row_offset: 0,
+                to_col: 0,
+                to_row: 0,
+                to_col_offset: 0,
+                to_row_offset: 0,
             },
         }
     }
@@ -1395,7 +1400,10 @@ impl From<&duke_sheets_chart::ChartShapeProperties> for WasmChartShapeProperties
             solid_fill_hex: sp.solid_fill.as_ref().map(|c| c.hex.clone()),
             no_fill: sp.no_fill,
             line_width: sp.line.as_ref().and_then(|l| l.width),
-            line_color_hex: sp.line.as_ref().and_then(|l| l.solid_fill.as_ref().map(|c| c.hex.clone())),
+            line_color_hex: sp
+                .line
+                .as_ref()
+                .and_then(|l| l.solid_fill.as_ref().map(|c| c.hex.clone())),
             line_no_fill: sp.line.as_ref().map(|l| l.no_fill).unwrap_or(false),
             line_dash_style: sp.line.as_ref().and_then(|l| l.dash_style.clone()),
         }
@@ -1686,7 +1694,10 @@ impl From<&duke_sheets_chart::DataSeries> for WasmDataSeries {
             smooth: s.smooth,
             explosion: s.explosion,
             invert_if_negative: s.invert_if_negative,
-            shape_properties: s.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: s
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -1774,7 +1785,10 @@ impl From<&duke_sheets_chart::Axis> for WasmAxis {
                 }
                 .into()
             }),
-            shape_properties: a.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: a
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -1965,7 +1979,10 @@ pub struct WasmChartLines {
 impl From<&duke_sheets_chart::ChartLines> for WasmChartLines {
     fn from(cl: &duke_sheets_chart::ChartLines) -> Self {
         Self {
-            shape_properties: cl.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: cl
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2148,7 +2165,12 @@ impl From<&duke_sheets_chart::ChartExScaling> for WasmChartExScaling {
                 major_unit: None,
                 minor_unit: None,
             },
-            duke_sheets_chart::ChartExScaling::Value { min, max, major_unit, minor_unit } => Self {
+            duke_sheets_chart::ChartExScaling::Value {
+                min,
+                max,
+                major_unit,
+                minor_unit,
+            } => Self {
                 scaling_type: "value".into(),
                 gap_width: None,
                 min: *min,
@@ -2171,9 +2193,14 @@ impl From<&duke_sheets_chart::ChartExAxisTitle> for WasmChartExAxisTitle {
     fn from(t: &duke_sheets_chart::ChartExAxisTitle) -> Self {
         Self {
             text: t.text.as_ref().and_then(|tx| {
-                tx.data.as_ref().and_then(|d| d.value.clone().or_else(|| d.formula.clone()))
+                tx.data
+                    .as_ref()
+                    .and_then(|d| d.value.clone().or_else(|| d.formula.clone()))
             }),
-            shape_properties: t.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: t
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2283,7 +2310,10 @@ impl From<&duke_sheets_chart::ChartExDataPoint> for WasmChartExDataPoint {
     fn from(p: &duke_sheets_chart::ChartExDataPoint) -> Self {
         Self {
             idx: p.idx,
-            shape_properties: p.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: p
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2311,7 +2341,10 @@ impl From<&duke_sheets_chart::ChartExDataLabel> for WasmChartExDataLabel {
             visibility_value: l.visibility_value,
             number_format: l.number_format.as_ref().map(WasmChartNumberFormat::from),
             separator: l.separator.clone(),
-            shape_properties: l.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: l
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2327,7 +2360,10 @@ impl From<&duke_sheets_chart::ChartExFormatOverride> for WasmChartExFormatOverri
     fn from(o: &duke_sheets_chart::ChartExFormatOverride) -> Self {
         Self {
             idx: o.idx,
-            shape_properties: o.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: o
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2449,7 +2485,10 @@ impl From<&duke_sheets_chart::ChartExPlotArea> for WasmChartExPlotArea {
             plot_surface: p.plot_surface.as_ref().map(WasmChartShapeProperties::from),
             series: p.series.iter().map(WasmChartExSeries::from).collect(),
             axes: p.axes.iter().map(WasmChartExAxis::from).collect(),
-            shape_properties: p.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: p
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2465,30 +2504,36 @@ pub struct WasmChartExDimension {
 impl From<&duke_sheets_chart::ChartExDimension> for WasmChartExDimension {
     fn from(d: &duke_sheets_chart::ChartExDimension) -> Self {
         match d {
-            duke_sheets_chart::ChartExDimension::String { dim_type, formula, nf_formula, .. } => {
-                Self {
-                    dim_type: match dim_type {
-                        duke_sheets_chart::StringDimType::Cat => "cat".into(),
-                        duke_sheets_chart::StringDimType::ColorStr => "colorStr".into(),
-                        duke_sheets_chart::StringDimType::EntityId => "entityId".into(),
-                    },
-                    formula: formula.clone(),
-                    nf_formula: nf_formula.clone(),
-                }
-            }
-            duke_sheets_chart::ChartExDimension::Numeric { dim_type, formula, nf_formula, .. } => {
-                Self {
-                    dim_type: match dim_type {
-                        duke_sheets_chart::NumericDimType::Val => "val".into(),
-                        duke_sheets_chart::NumericDimType::X => "x".into(),
-                        duke_sheets_chart::NumericDimType::Y => "y".into(),
-                        duke_sheets_chart::NumericDimType::Size => "size".into(),
-                        duke_sheets_chart::NumericDimType::ColorVal => "colorVal".into(),
-                    },
-                    formula: formula.clone(),
-                    nf_formula: nf_formula.clone(),
-                }
-            }
+            duke_sheets_chart::ChartExDimension::String {
+                dim_type,
+                formula,
+                nf_formula,
+                ..
+            } => Self {
+                dim_type: match dim_type {
+                    duke_sheets_chart::StringDimType::Cat => "cat".into(),
+                    duke_sheets_chart::StringDimType::ColorStr => "colorStr".into(),
+                    duke_sheets_chart::StringDimType::EntityId => "entityId".into(),
+                },
+                formula: formula.clone(),
+                nf_formula: nf_formula.clone(),
+            },
+            duke_sheets_chart::ChartExDimension::Numeric {
+                dim_type,
+                formula,
+                nf_formula,
+                ..
+            } => Self {
+                dim_type: match dim_type {
+                    duke_sheets_chart::NumericDimType::Val => "val".into(),
+                    duke_sheets_chart::NumericDimType::X => "x".into(),
+                    duke_sheets_chart::NumericDimType::Y => "y".into(),
+                    duke_sheets_chart::NumericDimType::Size => "size".into(),
+                    duke_sheets_chart::NumericDimType::ColorVal => "colorVal".into(),
+                },
+                formula: formula.clone(),
+                nf_formula: nf_formula.clone(),
+            },
         }
     }
 }
@@ -2504,7 +2549,11 @@ impl From<&duke_sheets_chart::ChartExData> for WasmChartExData {
     fn from(d: &duke_sheets_chart::ChartExData) -> Self {
         Self {
             id: d.id,
-            dimensions: d.dimensions.iter().map(WasmChartExDimension::from).collect(),
+            dimensions: d
+                .dimensions
+                .iter()
+                .map(WasmChartExDimension::from)
+                .collect(),
         }
     }
 }
@@ -2532,7 +2581,10 @@ impl From<&duke_sheets_chart::ChartExDataLabels> for WasmChartExDataLabels {
             visibility_value: l.visibility_value,
             number_format: l.number_format.as_ref().map(WasmChartNumberFormat::from),
             separator: l.separator.clone(),
-            shape_properties: l.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: l
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
             overrides: l.overrides.iter().map(WasmChartExDataLabel::from).collect(),
             hidden_labels: l.hidden_labels.clone(),
         }
@@ -2558,7 +2610,10 @@ impl From<&duke_sheets_chart::ChartExTitle> for WasmChartExTitle {
             align: t.align.clone(),
             overlay: t.overlay,
             offset: t.offset.as_ref().map(WasmChartExOffset::from),
-            shape_properties: t.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: t
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2580,7 +2635,10 @@ impl From<&duke_sheets_chart::ChartExLegend> for WasmChartExLegend {
             align: l.align.clone(),
             overlay: l.overlay,
             offset: l.offset.as_ref().map(WasmChartExOffset::from),
-            shape_properties: l.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: l
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2638,13 +2696,22 @@ impl From<&duke_sheets_chart::ChartExAxis> for WasmChartExAxis {
             scaling: WasmChartExScaling::from(&a.scaling),
             title: a.title.as_ref().map(WasmChartExAxisTitle::from),
             units: a.units.as_ref().map(WasmChartExAxisUnits::from),
-            major_gridlines: a.major_gridlines.as_ref().map(WasmChartShapeProperties::from),
-            minor_gridlines: a.minor_gridlines.as_ref().map(WasmChartShapeProperties::from),
+            major_gridlines: a
+                .major_gridlines
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
+            minor_gridlines: a
+                .minor_gridlines
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
             major_tick_marks: a.major_tick_marks.clone(),
             minor_tick_marks: a.minor_tick_marks.clone(),
             tick_labels: a.tick_labels,
             number_format: a.number_format.as_ref().map(WasmChartNumberFormat::from),
-            shape_properties: a.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: a
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2679,12 +2746,22 @@ impl From<&duke_sheets_chart::ChartExSeries> for WasmChartExSeries {
             format_idx: s.format_idx,
             text: s.text.as_ref().map(WasmChartExText::from),
             data_labels: s.data_labels.as_ref().map(WasmChartExDataLabels::from),
-            data_points: s.data_points.iter().map(WasmChartExDataPoint::from).collect(),
+            data_points: s
+                .data_points
+                .iter()
+                .map(WasmChartExDataPoint::from)
+                .collect(),
             layout_properties: s.layout_properties.as_ref().map(WasmChartExLayoutPr::from),
             axis_ids: s.axis_ids.clone(),
             value_colors: s.value_colors.is_some(),
-            value_color_positions: s.value_color_positions.as_ref().map(WasmChartExValueColorPositions::from),
-            shape_properties: s.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            value_color_positions: s
+                .value_color_positions
+                .as_ref()
+                .map(WasmChartExValueColorPositions::from),
+            shape_properties: s
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2726,9 +2803,19 @@ impl From<&duke_sheets_chart::ChartEx> for WasmChartEx {
             plot_area: WasmChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(WasmChartExLegend::from),
             anchor: WasmDrawingAnchor::from(&c.anchor),
-            shape_properties: c.shape_properties.as_ref().map(WasmChartShapeProperties::from),
-            format_overrides: c.format_overrides.iter().map(WasmChartExFormatOverride::from).collect(),
-            print_settings: c.print_settings.as_ref().map(WasmChartExPrintSettings::from),
+            shape_properties: c
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
+            format_overrides: c
+                .format_overrides
+                .iter()
+                .map(WasmChartExFormatOverride::from)
+                .collect(),
+            print_settings: c
+                .print_settings
+                .as_ref()
+                .map(WasmChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),
         }

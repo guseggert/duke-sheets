@@ -1,6 +1,9 @@
 use wasm_bindgen::prelude::*;
 
-use crate::{to_js_value, types::WasmChartSheet, types::WasmNamedRange, types::WasmSheetSlot, types::WasmWorkbookSettings, Workbook};
+use crate::{
+    to_js_value, types::WasmChartSheet, types::WasmNamedRange, types::WasmSheetSlot,
+    types::WasmWorkbookSettings, Workbook,
+};
 
 #[wasm_bindgen]
 impl Workbook {
@@ -42,7 +45,8 @@ impl Workbook {
     #[wasm_bindgen(getter, js_name = chartsheets)]
     pub fn chartsheets(&self) -> Result<JsValue, JsError> {
         let wb = self.inner.borrow();
-        let sheets: Vec<WasmChartSheet> = wb.chartsheets().iter().map(WasmChartSheet::from).collect();
+        let sheets: Vec<WasmChartSheet> =
+            wb.chartsheets().iter().map(WasmChartSheet::from).collect();
         to_js_value(&sheets)
     }
 

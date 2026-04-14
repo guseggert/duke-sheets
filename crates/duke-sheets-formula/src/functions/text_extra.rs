@@ -367,7 +367,10 @@ pub fn fn_textsplit(
         }
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// UNICHAR(number)
@@ -983,10 +986,13 @@ mod tests {
         .unwrap();
         assert_eq!(
             out,
-            FormulaValue::Array { data: vec![
-                vec![s("a"), s("b")],
-                vec![s("c"), FormulaValue::Error(CellError::Na)]
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![s("a"), s("b")],
+                    vec![s("c"), FormulaValue::Error(CellError::Na)]
+                ],
+                source: None
+            }
         );
 
         let out2 = fn_textsplit(
@@ -999,7 +1005,13 @@ mod tests {
             &EvaluationContext::simple(),
         )
         .unwrap();
-        assert_eq!(out2, FormulaValue::Array { data: vec![vec![s("a"), s("b")]], source: None });
+        assert_eq!(
+            out2,
+            FormulaValue::Array {
+                data: vec![vec![s("a"), s("b")]],
+                source: None
+            }
+        );
 
         let arr = eval("={\"X\",\"Y\"}").unwrap();
         if let FormulaValue::Array { data: rows, .. } = arr {

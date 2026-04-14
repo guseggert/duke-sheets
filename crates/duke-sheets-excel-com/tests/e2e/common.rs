@@ -47,7 +47,7 @@ pub fn excel_bridge() -> &'static Mutex<ExcelBridge> {
 pub struct TempFixture {
     pub host_path: PathBuf,
     pub vm_path: String,
-    name: String,
+    pub name: String,
 }
 
 /// Generate a unique temp fixture with both host and VM paths.
@@ -68,6 +68,19 @@ pub fn temp_fixture_xls() -> TempFixture {
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
     let pid = std::process::id();
     let name = format!("test_{pid}_{n}.xls");
+    let _ = std::fs::create_dir_all(HOST_DIR);
+    TempFixture {
+        host_path: PathBuf::from(format!("{HOST_DIR}/{name}")),
+        vm_path: format!("{VM_DIR}\\{name}"),
+        name: name.clone(),
+    }
+}
+
+/// Generate a unique temp fixture with .xlsb extension for XLSB format tests.
+pub fn temp_fixture_xlsb() -> TempFixture {
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let pid = std::process::id();
+    let name = format!("test_{pid}_{n}.xlsb");
     let _ = std::fs::create_dir_all(HOST_DIR);
     TempFixture {
         host_path: PathBuf::from(format!("{HOST_DIR}/{name}")),
@@ -146,6 +159,23 @@ pub fn push_file_to_vm(fixture: &TempFixture) {
         b64_path = b64_path,
     );
     run_winrm_ps(&ps).expect("WinRM base64 decode failed");
+
+    let verify_ps = format!(
+        "(Get-Item '{}' -ErrorAction SilentlyContinue).Length",
+        fixture.vm_path
+    );
+    let verify = run_winrm_ps(&verify_ps).unwrap_or_default();
+    eprintln!(
+        "[push_file_to_vm] {} -> {} (VM size: {})",
+        fixture.host_path.display(),
+        fixture.vm_path,
+        verify.trim()
+    );
+    assert!(
+        verify.trim().parse::<usize>().unwrap_or(0) > 0,
+        "File push failed: {} not found on VM",
+        fixture.vm_path
+    );
 }
 
 /// Clean up fixture files on both host and VM. Ignores errors.
@@ -212,6 +242,51 @@ pub fn roundtrip_through_excel(wb: &duke_sheets_core::Workbook) -> duke_sheets_c
     // Pull the re-saved file back and read with duke-sheets
     pull_file_from_vm(&output);
     let result = XlsxReader::read_file(&output.host_path).expect("XlsxReader::read_file");
+
+    cleanup_fixture(&input);
+    cleanup_fixture(&output);
+
+    result
+}
+
+/// Write a workbook as XLSB with duke-sheets, push to the VM, open in real
+/// Excel (asserting no repair), re-save as XLSB (FileFormat=50), pull back,
+/// and read with `XlsbReader`.
+pub fn roundtrip_through_excel_xlsb(wb: &duke_sheets_core::Workbook) -> duke_sheets_core::Workbook {
+    use duke_sheets_xlsb::{XlsbReader, XlsbWriter};
+    use std::io::Cursor;
+
+    let input = temp_fixture_xlsb();
+    let output = temp_fixture_xlsb();
+
+    let mut buf = Vec::new();
+    XlsbWriter::write(wb, Cursor::new(&mut buf)).expect("XlsbWriter::write");
+    std::fs::write(&input.host_path, &buf)
+        .unwrap_or_else(|e| panic!("write {}: {e}", input.host_path.display()));
+
+    ensure_vm_temp_dir();
+    push_file_to_vm(&input);
+
+    let bridge = excel_bridge();
+    let excel = bridge.lock().unwrap();
+    let opened = excel
+        .open_workbook(&input.vm_path)
+        .expect("Excel should open our XLSB without error");
+
+    let wb_name = opened.name().expect("get workbook name");
+    assert!(
+        !wb_name.contains("Repaired"),
+        "Excel repaired the XLSB file! Workbook name: {wb_name}"
+    );
+
+    // FileFormat=50 = xlExcel12 (.xlsb)
+    opened
+        .save_as(&output.vm_path, 50)
+        .expect("Excel SaveAs xlsb");
+    opened.close().expect("close workbook");
+
+    pull_file_from_vm(&output);
+    let result = XlsbReader::read_file(&output.host_path).expect("XlsbReader::read_file");
 
     cleanup_fixture(&input);
     cleanup_fixture(&output);

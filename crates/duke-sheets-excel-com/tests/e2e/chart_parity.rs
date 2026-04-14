@@ -24,11 +24,19 @@ const REPO_DATA_DIR: &str = "data";
 
 fn default_anchor(from_row: u32, to_row: u32) -> DrawingAnchor {
     DrawingAnchor::TwoCell {
-        from: CellMarker { col: 5, col_offset_emu: 0, row: from_row, row_offset_emu: 0 },
-        to: CellMarker { col: 15, col_offset_emu: 0, row: to_row, row_offset_emu: 0 },
+        from: CellMarker {
+            col: 5,
+            col_offset_emu: 0,
+            row: from_row,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: 15,
+            col_offset_emu: 0,
+            row: to_row,
+            row_offset_emu: 0,
+        },
         edit_as: None,
-    }
-        to_row_offset: 0,
     }
 }
 
@@ -359,7 +367,8 @@ fn build_chart_parity_workbook() -> Workbook {
         chart: cs_chart,
         visibility: SheetVisibility::Visible,
         raw_drawing_objects: Vec::new(),
-    }).unwrap();
+    })
+    .unwrap();
 
     wb
 }
@@ -442,10 +451,7 @@ fn chart_roundtrip_through_excel() {
         );
 
         // Title
-        assert_eq!(
-            &c.title, &orig.title,
-            "chart {i} ({label}) title mismatch"
-        );
+        assert_eq!(&c.title, &orig.title, "chart {i} ({label}) title mismatch");
 
         // Series count
         assert_eq!(
@@ -479,22 +485,32 @@ fn chart_roundtrip_through_excel() {
         }
 
         // Anchor: col/row positions must survive (EMU offsets may change)
-        assert_eq!(
-            c.anchor.from_col, orig.anchor.from_col,
-            "chart {i} ({label}) anchor from_col"
-        );
-        assert_eq!(
-            c.anchor.to_col, orig.anchor.to_col,
-            "chart {i} ({label}) anchor to_col"
-        );
-        assert_eq!(
-            c.anchor.from_row, orig.anchor.from_row,
-            "chart {i} ({label}) anchor from_row"
-        );
-        assert_eq!(
-            c.anchor.to_row, orig.anchor.to_row,
-            "chart {i} ({label}) anchor to_row"
-        );
+        if let (
+            DrawingAnchor::TwoCell { from, to, .. },
+            DrawingAnchor::TwoCell {
+                from: orig_from,
+                to: orig_to,
+                ..
+            },
+        ) = (&c.anchor, &orig.anchor)
+        {
+            assert_eq!(
+                from.col, orig_from.col,
+                "chart {i} ({label}) anchor from_col"
+            );
+            assert_eq!(to.col, orig_to.col, "chart {i} ({label}) anchor to_col");
+            assert_eq!(
+                from.row, orig_from.row,
+                "chart {i} ({label}) anchor from_row"
+            );
+            assert_eq!(to.row, orig_to.row, "chart {i} ({label}) anchor to_row");
+        } else {
+            assert_eq!(
+                std::mem::discriminant(&c.anchor),
+                std::mem::discriminant(&orig.anchor),
+                "chart {i} ({label}) anchor type mismatch"
+            );
+        }
     }
 
     // 0: ColumnClustered — axis titles + legend
@@ -531,18 +547,21 @@ fn chart_roundtrip_through_excel() {
             c.category_axis.is_some(),
             "chart 6 (Line) missing category_axis"
         );
-        assert!(
-            c.value_axis.is_some(),
-            "chart 6 (Line) missing value_axis"
-        );
+        assert!(c.value_axis.is_some(), "chart 6 (Line) missing value_axis");
     }
 
     // 8: Pie — legend=Right, no axes
     {
         let c = &charts[8];
         assert_legend_pos(c, LegendPosition::Right, "chart 8 (Pie)");
-        assert!(c.category_axis.is_none(), "chart 8 (Pie) should have no category_axis");
-        assert!(c.value_axis.is_none(), "chart 8 (Pie) should have no value_axis");
+        assert!(
+            c.category_axis.is_none(),
+            "chart 8 (Pie) should have no category_axis"
+        );
+        assert!(
+            c.value_axis.is_none(),
+            "chart 8 (Pie) should have no value_axis"
+        );
     }
 
     // 9: PieExploded — explosion=25
@@ -615,11 +634,7 @@ fn chart_roundtrip_through_excel() {
             .data_labels
             .as_ref()
             .expect("chart 20 (Line+Trendline) missing data_labels");
-        assert_eq!(
-            dl.show_value,
-            Some(true),
-            "chart 20 data_labels.show_value"
-        );
+        assert_eq!(dl.show_value, Some(true), "chart 20 data_labels.show_value");
     }
 
     // ChartSheet: full verification
@@ -844,13 +859,23 @@ fn chart_minimal_excel_open() {
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.title = Some("Test".into());
     chart.anchor = DrawingAnchor::TwoCell {
-        from: CellMarker { col: 3, col_offset_emu: 0, row: 0, row_offset_emu: 0 },
-        to: CellMarker { col: 10, col_offset_emu: 0, row: 15, row_offset_emu: 0 },
+        from: CellMarker {
+            col: 3,
+            col_offset_emu: 0,
+            row: 0,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: 10,
+            col_offset_emu: 0,
+            row: 15,
+            row_offset_emu: 0,
+        },
         edit_as: None,
     };
     chart.add_series(
         DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$3".to_string()))
-            .with_categories(DataReference::formula("Sheet1!$A$2:$A$3".to_string()))
+            .with_categories(DataReference::formula("Sheet1!$A$2:$A$3".to_string())),
     );
     sheet.add_chart(chart);
 
@@ -858,7 +883,11 @@ fn chart_minimal_excel_open() {
     let mut buf = Vec::new();
     XlsxWriter::write(&wb, std::io::Cursor::new(&mut buf)).expect("write xlsx");
     std::fs::write(&fixture.host_path, &buf).expect("write to disk");
-    eprintln!("Wrote {} bytes to {}", buf.len(), fixture.host_path.display());
+    eprintln!(
+        "Wrote {} bytes to {}",
+        buf.len(),
+        fixture.host_path.display()
+    );
 
     // Also save a copy for manual inspection
     let _ = std::fs::write("/tmp/duke-sheets-excel/chart-debug.xlsx", &buf);
@@ -874,8 +903,14 @@ fn chart_minimal_excel_open() {
 
     let name = opened.name().unwrap_or_default();
     eprintln!("Excel opened: {name}");
-    assert!(!name.contains("Repaired"), "Excel repaired the file: {name}");
-    assert!(!opened.is_read_only().unwrap_or(false), "Excel opened read-only");
+    assert!(
+        !name.contains("Repaired"),
+        "Excel repaired the file: {name}"
+    );
+    assert!(
+        !opened.is_read_only().unwrap_or(false),
+        "Excel opened read-only"
+    );
 
     opened.close().expect("close");
     cleanup_fixture(&fixture);
@@ -922,9 +957,15 @@ fn chart_types_bisect() {
         for i in 0..6 {
             let row = i + 2;
             let r = format!("{row}");
-            sheet.set_cell_value(&format!("E{r}"), scatter_x[i as usize]).unwrap();
-            sheet.set_cell_value(&format!("F{r}"), scatter_y[i as usize]).unwrap();
-            sheet.set_cell_value(&format!("G{r}"), bubble_sz[i as usize]).unwrap();
+            sheet
+                .set_cell_value(&format!("E{r}"), scatter_x[i as usize])
+                .unwrap();
+            sheet
+                .set_cell_value(&format!("F{r}"), scatter_y[i as usize])
+                .unwrap();
+            sheet
+                .set_cell_value(&format!("G{r}"), bubble_sz[i as usize])
+                .unwrap();
         }
 
         // Stock data in H-K (open, high, low, close)
@@ -1306,7 +1347,12 @@ fn chart_types_bisect() {
     eprintln!("{}", "-".repeat(80));
     let mut fail_count = 0;
     for (name, pass, detail) in &results {
-        let tag = if *pass { "PASS" } else { fail_count += 1; "FAIL" };
+        let tag = if *pass {
+            "PASS"
+        } else {
+            fail_count += 1;
+            "FAIL"
+        };
         eprintln!("{:<30} {:<6} {}", name, tag, detail);
     }
     eprintln!("{}", "-".repeat(80));
@@ -1319,7 +1365,11 @@ fn chart_types_bisect() {
     eprintln!();
 
     if fail_count > 0 {
-        let failed: Vec<&str> = results.iter().filter(|(_, p, _)| !p).map(|(n, _, _)| *n).collect();
+        let failed: Vec<&str> = results
+            .iter()
+            .filter(|(_, p, _)| !p)
+            .map(|(n, _, _)| *n)
+            .collect();
         panic!(
             "{fail_count} chart type(s) failed to open in Excel: {}",
             failed.join(", ")
@@ -1331,8 +1381,7 @@ fn chart_types_bisect() {
 /// VM, verify Excel opens without repair.
 #[test]
 fn chart_ex_corpus_roundtrip_excel() {
-    let corpus = std::env::var("DUKE_CORPUS_DIR")
-        .unwrap_or_else(|_| "data/excel-corpus".into());
+    let corpus = std::env::var("DUKE_CORPUS_DIR").unwrap_or_else(|_| "data/excel-corpus".into());
     let dir = std::path::Path::new(&corpus);
     if !dir.is_dir() {
         eprintln!("corpus not found, skipping");
@@ -1344,10 +1393,7 @@ fn chart_ex_corpus_roundtrip_excel() {
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| {
-            p.extension().and_then(|e| e.to_str()) == Some("xlsx")
-                && has_chartex(p)
-        })
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("xlsx") && has_chartex(p))
         .collect();
 
     assert!(!chartex_files.is_empty(), "no chartEx files in corpus");
@@ -1359,11 +1405,14 @@ fn chart_ex_corpus_roundtrip_excel() {
         .min_by_key(|p| p.metadata().map(|m| m.len()).unwrap_or(u64::MAX))
         .unwrap();
 
-    eprintln!("Testing: {}", smallest.file_name().unwrap_or_default().to_string_lossy());
+    eprintln!(
+        "Testing: {}",
+        smallest.file_name().unwrap_or_default().to_string_lossy()
+    );
 
     // Read with duke-sheets
     let wb = duke_sheets_core::Workbook::from(
-        duke_sheets_xlsx::XlsxReader::read_file(smallest).expect("read")
+        duke_sheets_xlsx::XlsxReader::read_file(smallest).expect("read"),
     );
 
     // Write back
@@ -1384,7 +1433,10 @@ fn chart_ex_corpus_roundtrip_excel() {
         .expect("Excel should open chartEx roundtrip file");
     let name = opened.name().unwrap_or_default();
     eprintln!("Excel opened: {name}");
-    assert!(!name.contains("Repaired"), "Excel repaired the file: {name}");
+    assert!(
+        !name.contains("Repaired"),
+        "Excel repaired the file: {name}"
+    );
     assert!(!opened.is_read_only().unwrap_or(false), "read-only");
     opened.close().expect("close");
     cleanup_fixture(&fixture);
@@ -1392,8 +1444,14 @@ fn chart_ex_corpus_roundtrip_excel() {
 }
 
 fn has_chartex(path: &std::path::Path) -> bool {
-    let Ok(file) = std::fs::File::open(path) else { return false };
-    let Ok(archive) = zip::ZipArchive::new(file) else { return false };
-    let result = archive.file_names().any(|n| n.starts_with("xl/charts/chartEx") && n.ends_with(".xml"));
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let Ok(archive) = zip::ZipArchive::new(file) else {
+        return false;
+    };
+    let result = archive
+        .file_names()
+        .any(|n| n.starts_with("xl/charts/chartEx") && n.ends_with(".xml"));
     result
 }

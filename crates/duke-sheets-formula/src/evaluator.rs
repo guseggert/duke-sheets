@@ -2234,7 +2234,10 @@ fn evaluate_function(
         if args.is_empty() {
             return Ok(FormulaValue::Boolean(false));
         }
-        return Ok(FormulaValue::Boolean(matches!(&args[0], FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_))));
+        return Ok(FormulaValue::Boolean(matches!(
+            &args[0],
+            FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_)
+        )));
     }
 
     // Evaluate arguments

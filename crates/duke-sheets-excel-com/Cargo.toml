@@ -15,5 +15,6 @@ base64 = "0.22.1"
 duke-sheets-core = { path = "../duke-sheets-core" }
 duke-sheets-chart = { path = "../duke-sheets-chart" }
 duke-sheets-xls = { path = "../duke-sheets-xls" }
+duke-sheets-xlsb = { path = "../duke-sheets-xlsb" }
 duke-sheets-xlsx = { path = "../duke-sheets-xlsx" }
 zip.workspace = true
