@@ -637,8 +637,8 @@ Features marked ✅ work in both reader and writer. Features marked
 - ❌ Custom views
 - ❌ Calculation properties (needs core CalcMode enum + WorkbookSettings field, plus XLSX reader/writer parity — currently both formats hardcode defaults)
 
-### Not implemented at all
-- ❌ Pivot tables
+### Not implemented at all (any format)
+- ❌ Pivot tables (cell values are read but pivot definitions, caches, and recalculation are not supported in any format)
 - ❌ Sparklines
 - ❌ Slicers
 - ❌ Data connections / external data
