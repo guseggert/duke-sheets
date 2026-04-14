@@ -395,7 +395,10 @@ pub fn fn_choosecols(
         out.push(new_row);
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// CHOOSEROWS(array, row_num1, ...)
@@ -425,7 +428,10 @@ pub fn fn_chooserows(
         out.push(array[idx as usize].clone());
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// DROP(array, rows, [columns])
@@ -475,7 +481,10 @@ pub fn fn_drop(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
         out.push(row[col_start..col_end].to_vec());
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// EXPAND(array, rows, [columns], [pad_with])
@@ -511,7 +520,10 @@ pub fn fn_expand(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
             out[r][c] = array[r][c].clone();
         }
     }
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// FILTER(array, include, [if_empty])
@@ -572,7 +584,10 @@ pub fn fn_filter(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
                 .cloned()
                 .unwrap_or(FormulaValue::Error(CellError::Calc)));
         }
-        Ok(FormulaValue::Array { data: out, source: None })
+        Ok(FormulaValue::Array {
+            data: out,
+            source: None,
+        })
     } else {
         // Column filter: keep only columns where include is TRUE
         let mut col_indices = Vec::new();
@@ -601,7 +616,10 @@ pub fn fn_filter(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
                 .collect();
             out.push(filtered_row);
         }
-        Ok(FormulaValue::Array { data: out, source: None })
+        Ok(FormulaValue::Array {
+            data: out,
+            source: None,
+        })
     }
 }
 
@@ -646,7 +664,10 @@ pub fn fn_hstack(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         out.push(row);
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// LOOKUP(lookup_value, lookup_vector, [result_vector])
@@ -706,7 +727,13 @@ pub fn fn_sort(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     };
 
     if by_col {
-        let t = fn_transpose(&[FormulaValue::Array { data: arr, source: None }], _ctx)?;
+        let t = fn_transpose(
+            &[FormulaValue::Array {
+                data: arr,
+                source: None,
+            }],
+            _ctx,
+        )?;
         if let FormulaValue::Array { data: mut tr, .. } = t {
             let idx = (sort_index - 1) as usize;
             if tr.is_empty() || idx >= tr[0].len() {
@@ -716,7 +743,13 @@ pub fn fn_sort(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
             if sort_order == -1 {
                 tr.reverse();
             }
-            return fn_transpose(&[FormulaValue::Array { data: tr, source: None }], _ctx);
+            return fn_transpose(
+                &[FormulaValue::Array {
+                    data: tr,
+                    source: None,
+                }],
+                _ctx,
+            );
         }
         return Ok(FormulaValue::Error(CellError::Value));
     }
@@ -729,14 +762,20 @@ pub fn fn_sort(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
     if sort_order == -1 {
         arr.reverse();
     }
-    Ok(FormulaValue::Array { data: arr, source: None })
+    Ok(FormulaValue::Array {
+        data: arr,
+        source: None,
+    })
 }
 
 /// SORTBY(array, by_array1, [sort_order1], ...)
 pub fn fn_sortby(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let arr = as_array(args.first().unwrap());
     if arr.is_empty() {
-        return Ok(FormulaValue::Array { data: arr, source: None });
+        return Ok(FormulaValue::Array {
+            data: arr,
+            source: None,
+        });
     }
 
     let mut keys: Vec<(Vec<FormulaValue>, i64)> = Vec::new();
@@ -771,7 +810,10 @@ pub fn fn_sortby(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     });
 
     let sorted = idxs.into_iter().map(|ix| arr[ix].clone()).collect();
-    Ok(FormulaValue::Array { data: sorted, source: None })
+    Ok(FormulaValue::Array {
+        data: sorted,
+        source: None,
+    })
 }
 
 /// TAKE(array, rows, [columns])
@@ -816,7 +858,10 @@ pub fn fn_take(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult
         out.push(row[col_slice.0..col_slice.1].to_vec());
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 fn flatten_with_ignore(arr: &[Vec<FormulaValue>], ignore: i64, by_col: bool) -> Vec<FormulaValue> {
@@ -854,7 +899,10 @@ pub fn fn_tocol(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         .into_iter()
         .map(|v| vec![v])
         .collect();
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// TOROW(array, [ignore], [scan_by_column])
@@ -875,9 +923,10 @@ pub fn fn_torow(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         None => false,
     };
 
-    Ok(FormulaValue::Array { data: vec![flatten_with_ignore(
-        &arr, ignore, by_col,
-    )], source: None })
+    Ok(FormulaValue::Array {
+        data: vec![flatten_with_ignore(&arr, ignore, by_col)],
+        source: None,
+    })
 }
 
 /// TRANSPOSE(array)
@@ -893,7 +942,10 @@ pub fn fn_transpose(
             out[c][r] = v.clone();
         }
     }
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// UNIQUE(array, [by_col], [exactly_once])
@@ -915,11 +967,23 @@ pub fn fn_unique(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
     };
 
     if by_col {
-        let t = fn_transpose(&[FormulaValue::Array { data: arr, source: None }], _ctx)?;
-        if let FormulaValue::Array { data: transposed, .. } = t {
+        let t = fn_transpose(
+            &[FormulaValue::Array {
+                data: arr,
+                source: None,
+            }],
+            _ctx,
+        )?;
+        if let FormulaValue::Array {
+            data: transposed, ..
+        } = t
+        {
             let unique_rows = fn_unique(
                 &[
-                    FormulaValue::Array { data: transposed, source: None },
+                    FormulaValue::Array {
+                        data: transposed,
+                        source: None,
+                    },
                     FormulaValue::Boolean(false),
                     FormulaValue::Boolean(exactly_once),
                 ],
@@ -949,7 +1013,10 @@ pub fn fn_unique(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         }
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// VSTACK(array1, array2, ...)
@@ -972,7 +1039,10 @@ pub fn fn_vstack(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         }
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// WRAPCOLS(vector, wrap_count, [pad_with])
@@ -997,7 +1067,10 @@ pub fn fn_wrapcols(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
         out[row][col] = v;
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// WRAPROWS(vector, wrap_count, [pad_with])
@@ -1022,7 +1095,10 @@ pub fn fn_wraprows(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
         out[row][col] = v;
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 /// HYPERLINK(link_location, [friendly_name])
@@ -1289,11 +1365,7 @@ fn parse_xpath(xpath: &str) -> Option<Vec<XPathStep>> {
     Some(steps)
 }
 
-fn append_xml_node(
-    node: XmlNode,
-    stack: &mut [XmlNode],
-    root: &mut Option<XmlNode>,
-) -> Option<()> {
+fn append_xml_node(node: XmlNode, stack: &mut [XmlNode], root: &mut Option<XmlNode>) -> Option<()> {
     if let Some(parent) = stack.last_mut() {
         parent.children.push(XmlChild::Element(node));
     } else if root.is_none() {
@@ -1691,7 +1763,10 @@ pub fn fn_trimrange(
         out.push(row[col_start..col_end].to_vec());
     }
 
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 #[cfg(test)]
@@ -1749,63 +1824,102 @@ mod tests {
 
     #[test]
     fn test_choosecols_rows_take_drop_expand() {
-        let arr = FormulaValue::Array { data: vec![vec![n(1.0), n(2.0)], vec![n(3.0), n(4.0)]], source: None };
+        let arr = FormulaValue::Array {
+            data: vec![vec![n(1.0), n(2.0)], vec![n(3.0), n(4.0)]],
+            source: None,
+        };
         assert_eq!(
             fn_choosecols(&[arr.clone(), n(2.0)], &EvaluationContext::simple()).unwrap(),
-            FormulaValue::Array { data: vec![vec![n(2.0)], vec![n(4.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(2.0)], vec![n(4.0)]],
+                source: None
+            }
         );
         assert_eq!(
             fn_chooserows(&[arr.clone(), n(-1.0)], &EvaluationContext::simple()).unwrap(),
-            FormulaValue::Array { data: vec![vec![n(3.0), n(4.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(3.0), n(4.0)]],
+                source: None
+            }
         );
         assert_eq!(
             fn_take(&[arr.clone(), n(1.0), n(1.0)], &EvaluationContext::simple()).unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)]],
+                source: None
+            }
         );
         assert_eq!(
             fn_drop(&[arr.clone(), n(1.0), n(0.0)], &EvaluationContext::simple()).unwrap(),
-            FormulaValue::Array { data: vec![vec![n(3.0), n(4.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(3.0), n(4.0)]],
+                source: None
+            }
         );
         assert_eq!(
             fn_expand(&[arr, n(3.0), n(3.0), s("x")], &EvaluationContext::simple()).unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(2.0), s("x")],
-                vec![n(3.0), n(4.0), s("x")],
-                vec![s("x"), s("x"), s("x")]
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(2.0), s("x")],
+                    vec![n(3.0), n(4.0), s("x")],
+                    vec![s("x"), s("x"), s("x")]
+                ],
+                source: None
+            }
         );
     }
 
     #[test]
     fn test_filter_stack_and_transforms() {
-        let arr = FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)]], source: None };
-        let include = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Boolean(false)],
-            vec![FormulaValue::Boolean(true)],
-            vec![FormulaValue::Boolean(true)],
-        ], source: None };
+        let arr = FormulaValue::Array {
+            data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)]],
+            source: None,
+        };
+        let include = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Boolean(false)],
+                vec![FormulaValue::Boolean(true)],
+                vec![FormulaValue::Boolean(true)],
+            ],
+            source: None,
+        };
         assert_eq!(
             fn_filter(&[arr.clone(), include], &EvaluationContext::simple()).unwrap(),
-            FormulaValue::Array { data: vec![vec![n(2.0)], vec![n(3.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(2.0)], vec![n(3.0)]],
+                source: None
+            }
         );
 
         let h = fn_hstack(
             &[
-                FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)]], source: None },
-                FormulaValue::Array { data: vec![vec![n(10.0)], vec![n(20.0)]], source: None },
+                FormulaValue::Array {
+                    data: vec![vec![n(1.0)], vec![n(2.0)]],
+                    source: None,
+                },
+                FormulaValue::Array {
+                    data: vec![vec![n(10.0)], vec![n(20.0)]],
+                    source: None,
+                },
             ],
             &EvaluationContext::simple(),
         )
         .unwrap();
         assert_eq!(
             h,
-            FormulaValue::Array { data: vec![vec![n(1.0), n(10.0)], vec![n(2.0), n(20.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(10.0)], vec![n(2.0), n(20.0)]],
+                source: None
+            }
         );
 
         let t = fn_transpose(&[h], &EvaluationContext::simple()).unwrap();
         assert_eq!(
             t,
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0)], vec![n(10.0), n(20.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0)], vec![n(10.0), n(20.0)]],
+                source: None
+            }
         );
     }
 
@@ -1814,8 +1928,14 @@ mod tests {
         let lookup = fn_lookup(
             &[
                 n(2.5),
-                FormulaValue::Array { data: vec![vec![n(1.0), n(2.0), n(3.0)]], source: None },
-                FormulaValue::Array { data: vec![vec![s("a"), s("b"), s("c")]], source: None },
+                FormulaValue::Array {
+                    data: vec![vec![n(1.0), n(2.0), n(3.0)]],
+                    source: None,
+                },
+                FormulaValue::Array {
+                    data: vec![vec![s("a"), s("b"), s("c")]],
+                    source: None,
+                },
             ],
             &EvaluationContext::simple(),
         )
@@ -1824,7 +1944,10 @@ mod tests {
 
         let sorted = fn_sort(
             &[
-                FormulaValue::Array { data: vec![vec![n(2.0)], vec![n(1.0)]], source: None },
+                FormulaValue::Array {
+                    data: vec![vec![n(2.0)], vec![n(1.0)]],
+                    source: None,
+                },
                 n(1.0),
                 n(1.0),
             ],
@@ -1833,23 +1956,34 @@ mod tests {
         .unwrap();
         assert_eq!(
             sorted,
-            FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(2.0)]],
+                source: None
+            }
         );
 
         let uniq = fn_unique(
-            &[FormulaValue::Array { data: vec![
-                vec![n(1.0)],
-                vec![n(1.0)],
-                vec![n(2.0)],
-            ], source: None }],
+            &[FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(1.0)], vec![n(2.0)]],
+                source: None,
+            }],
             &EvaluationContext::simple(),
         )
         .unwrap();
-        assert_eq!(uniq, FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)]], source: None });
+        assert_eq!(
+            uniq,
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(2.0)]],
+                source: None
+            }
+        );
 
         let wrapped = fn_wraprows(
             &[
-                FormulaValue::Array { data: vec![vec![n(1.0), n(2.0), n(3.0)]], source: None },
+                FormulaValue::Array {
+                    data: vec![vec![n(1.0), n(2.0), n(3.0)]],
+                    source: None,
+                },
                 n(2.0),
             ],
             &EvaluationContext::simple(),
@@ -1857,32 +1991,47 @@ mod tests {
         .unwrap();
         assert_eq!(
             wrapped,
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(2.0)],
-                vec![n(3.0), FormulaValue::Error(CellError::Na)]
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(2.0)],
+                    vec![n(3.0), FormulaValue::Error(CellError::Na)]
+                ],
+                source: None
+            }
         );
     }
 
     #[test]
     fn test_tocol_torow_sortby_vstack() {
-        let arr = FormulaValue::Array { data: vec![
-            vec![n(1.0), n(2.0)],
-            vec![n(3.0), FormulaValue::Empty],
-        ], source: None };
+        let arr = FormulaValue::Array {
+            data: vec![vec![n(1.0), n(2.0)], vec![n(3.0), FormulaValue::Empty]],
+            source: None,
+        };
         assert_eq!(
             fn_tocol(&[arr.clone(), n(1.0)], &EvaluationContext::simple()).unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)]],
+                source: None
+            }
         );
         assert_eq!(
             fn_torow(&[arr, n(1.0)], &EvaluationContext::simple()).unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0), n(3.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0), n(3.0)]],
+                source: None
+            }
         );
 
         let sorted = fn_sortby(
             &[
-                FormulaValue::Array { data: vec![vec![s("b")], vec![s("a")]], source: None },
-                FormulaValue::Array { data: vec![vec![n(2.0)], vec![n(1.0)]], source: None },
+                FormulaValue::Array {
+                    data: vec![vec![s("b")], vec![s("a")]],
+                    source: None,
+                },
+                FormulaValue::Array {
+                    data: vec![vec![n(2.0)], vec![n(1.0)]],
+                    source: None,
+                },
                 n(1.0),
             ],
             &EvaluationContext::simple(),
@@ -1890,23 +2039,35 @@ mod tests {
         .unwrap();
         assert_eq!(
             sorted,
-            FormulaValue::Array { data: vec![vec![s("a")], vec![s("b")]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![s("a")], vec![s("b")]],
+                source: None
+            }
         );
 
         let v = fn_vstack(
             &[
-                FormulaValue::Array { data: vec![vec![n(1.0)]], source: None },
-                FormulaValue::Array { data: vec![vec![n(2.0), n(3.0)]], source: None },
+                FormulaValue::Array {
+                    data: vec![vec![n(1.0)]],
+                    source: None,
+                },
+                FormulaValue::Array {
+                    data: vec![vec![n(2.0), n(3.0)]],
+                    source: None,
+                },
             ],
             &EvaluationContext::simple(),
         )
         .unwrap();
         assert_eq!(
             v,
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), FormulaValue::Error(CellError::Na)],
-                vec![n(2.0), n(3.0)]
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), FormulaValue::Error(CellError::Na)],
+                    vec![n(2.0), n(3.0)]
+                ],
+                source: None
+            }
         );
     }
 
@@ -2152,7 +2313,10 @@ mod tests {
         // Test ROW with array arg: 3-row column -> {1;2;3}
         assert_eq!(
             eval("=ROW({0;0;0})").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)],], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)],],
+                source: None
+            }
         );
     }
 
@@ -2162,7 +2326,10 @@ mod tests {
         // Test COLUMN with array arg: 1x3 row -> {1,2,3}
         assert_eq!(
             eval("=COLUMN({0,0,0})").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0), n(3.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0), n(3.0)]],
+                source: None
+            }
         );
     }
 
@@ -2199,17 +2366,23 @@ mod tests {
         // Docs Example 1: 6x2 array, select rows 1, 3, 5, 1
         assert_eq!(
             eval("=CHOOSEROWS({1,2;3,4;5,6;7,8;9,10;11,12},1,3,5,1)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(2.0)],
-                vec![n(5.0), n(6.0)],
-                vec![n(9.0), n(10.0)],
-                vec![n(1.0), n(2.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(2.0)],
+                    vec![n(5.0), n(6.0)],
+                    vec![n(9.0), n(10.0)],
+                    vec![n(1.0), n(2.0)],
+                ],
+                source: None
+            }
         );
         // Docs Example 3: select rows -1 (last), -2 (second-to-last)
         assert_eq!(
             eval("=CHOOSEROWS({1,2;3,4;5,6;7,8;9,10;11,12},-1,-2)").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(11.0), n(12.0)], vec![n(9.0), n(10.0)],], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(11.0), n(12.0)], vec![n(9.0), n(10.0)],],
+                source: None
+            }
         );
     }
 
@@ -2218,22 +2391,34 @@ mod tests {
         // Docs: drop first 2 rows
         assert_eq!(
             eval("=DROP({1,2,3;4,5,6;7,8,9},2)").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(7.0), n(8.0), n(9.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(7.0), n(8.0), n(9.0)]],
+                source: None
+            }
         );
         // Docs: drop first 2 columns
         assert_eq!(
             eval("=DROP({1,2,3;4,5,6;7,8,9},,2)").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(3.0)], vec![n(6.0)], vec![n(9.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(3.0)], vec![n(6.0)], vec![n(9.0)]],
+                source: None
+            }
         );
         // Docs: drop last 2 rows
         assert_eq!(
             eval("=DROP({1,2,3;4,5,6;7,8,9},-2)").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0), n(3.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0), n(3.0)]],
+                source: None
+            }
         );
         // Docs: drop first 2 rows and first 2 columns
         assert_eq!(
             eval("=DROP({1,2,3;4,5,6;7,8,9},2,2)").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(9.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(9.0)]],
+                source: None
+            }
         );
     }
 
@@ -2242,32 +2427,38 @@ mod tests {
         // Docs: take first 2 rows
         assert_eq!(
             eval("=TAKE({1,2,3;4,5,6;7,8,9},2)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(2.0), n(3.0)],
-                vec![n(4.0), n(5.0), n(6.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0), n(3.0)], vec![n(4.0), n(5.0), n(6.0)],],
+                source: None
+            }
         );
         // Docs: take first 2 columns
         assert_eq!(
             eval("=TAKE({1,2,3;4,5,6;7,8,9},,2)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(2.0)],
-                vec![n(4.0), n(5.0)],
-                vec![n(7.0), n(8.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(2.0)],
+                    vec![n(4.0), n(5.0)],
+                    vec![n(7.0), n(8.0)],
+                ],
+                source: None
+            }
         );
         // Docs: take last 2 rows
         assert_eq!(
             eval("=TAKE({1,2,3;4,5,6;7,8,9},-2)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(4.0), n(5.0), n(6.0)],
-                vec![n(7.0), n(8.0), n(9.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(4.0), n(5.0), n(6.0)], vec![n(7.0), n(8.0), n(9.0)],],
+                source: None
+            }
         );
         // Docs: take first 2 rows and first 2 columns
         assert_eq!(
             eval("=TAKE({1,2,3;4,5,6;7,8,9},2,2)").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0)], vec![n(4.0), n(5.0)],], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0)], vec![n(4.0), n(5.0)],],
+                source: None
+            }
         );
     }
 
@@ -2276,24 +2467,30 @@ mod tests {
         // Docs: expand 2x2 to 3x3, pad with #N/A
         assert_eq!(
             eval("=EXPAND({1,2;3,4},3,3)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(2.0), FormulaValue::Error(CellError::Na)],
-                vec![n(3.0), n(4.0), FormulaValue::Error(CellError::Na)],
-                vec![
-                    FormulaValue::Error(CellError::Na),
-                    FormulaValue::Error(CellError::Na),
-                    FormulaValue::Error(CellError::Na)
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(2.0), FormulaValue::Error(CellError::Na)],
+                    vec![n(3.0), n(4.0), FormulaValue::Error(CellError::Na)],
+                    vec![
+                        FormulaValue::Error(CellError::Na),
+                        FormulaValue::Error(CellError::Na),
+                        FormulaValue::Error(CellError::Na)
+                    ],
                 ],
-            ], source: None }
+                source: None
+            }
         );
         // Docs: expand scalar 1 to 3x3, pad with "-"
         assert_eq!(
             eval("=EXPAND(1,3,3,\"-\")").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), s("-"), s("-")],
-                vec![s("-"), s("-"), s("-")],
-                vec![s("-"), s("-"), s("-")],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), s("-"), s("-")],
+                    vec![s("-"), s("-"), s("-")],
+                    vec![s("-"), s("-"), s("-")],
+                ],
+                source: None
+            }
         );
     }
 
@@ -2302,20 +2499,26 @@ mod tests {
         // Docs: wrap 7 elements into columns of 3, pad #N/A
         assert_eq!(
             eval("=WRAPCOLS({\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\"},3)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![s("A"), s("D"), s("G")],
-                vec![s("B"), s("E"), FormulaValue::Error(CellError::Na)],
-                vec![s("C"), s("F"), FormulaValue::Error(CellError::Na)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![s("A"), s("D"), s("G")],
+                    vec![s("B"), s("E"), FormulaValue::Error(CellError::Na)],
+                    vec![s("C"), s("F"), FormulaValue::Error(CellError::Na)],
+                ],
+                source: None
+            }
         );
         // Docs: wrap 7 elements into columns of 3, pad "x"
         assert_eq!(
             eval("=WRAPCOLS({\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\"},3,\"x\")").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![s("A"), s("D"), s("G")],
-                vec![s("B"), s("E"), s("x")],
-                vec![s("C"), s("F"), s("x")],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![s("A"), s("D"), s("G")],
+                    vec![s("B"), s("E"), s("x")],
+                    vec![s("C"), s("F"), s("x")],
+                ],
+                source: None
+            }
         );
     }
 
@@ -2324,24 +2527,30 @@ mod tests {
         // Docs: wrap 7 elements into rows of 3, pad #N/A
         assert_eq!(
             eval("=WRAPROWS({\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\"},3)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![s("A"), s("B"), s("C")],
-                vec![s("D"), s("E"), s("F")],
-                vec![
-                    s("G"),
-                    FormulaValue::Error(CellError::Na),
-                    FormulaValue::Error(CellError::Na)
+            FormulaValue::Array {
+                data: vec![
+                    vec![s("A"), s("B"), s("C")],
+                    vec![s("D"), s("E"), s("F")],
+                    vec![
+                        s("G"),
+                        FormulaValue::Error(CellError::Na),
+                        FormulaValue::Error(CellError::Na)
+                    ],
                 ],
-            ], source: None }
+                source: None
+            }
         );
         // Docs: wrap 7 elements into rows of 3, pad "x"
         assert_eq!(
             eval("=WRAPROWS({\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\"},3,\"x\")").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![s("A"), s("B"), s("C")],
-                vec![s("D"), s("E"), s("F")],
-                vec![s("G"), s("x"), s("x")],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![s("A"), s("B"), s("C")],
+                    vec![s("D"), s("E"), s("F")],
+                    vec![s("G"), s("x"), s("x")],
+                ],
+                source: None
+            }
         );
     }
 
@@ -2350,20 +2559,29 @@ mod tests {
         // Docs: TRANSPOSE(A1:B4) — 4-row × 2-col transposed to 2-row × 4-col
         assert_eq!(
             eval("=TRANSPOSE({1,2;3,4;5,6;7,8})").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(3.0), n(5.0), n(7.0)],
-                vec![n(2.0), n(4.0), n(6.0), n(8.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(3.0), n(5.0), n(7.0)],
+                    vec![n(2.0), n(4.0), n(6.0), n(8.0)],
+                ],
+                source: None
+            }
         );
         // 2×2 transpose: rows become columns
         assert_eq!(
             eval("=TRANSPOSE({1,2;3,4})").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(3.0)], vec![n(2.0), n(4.0)],], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(3.0)], vec![n(2.0), n(4.0)],],
+                source: None
+            }
         );
         // Single row → single column
         assert_eq!(
             eval("=TRANSPOSE({1,2,3,4})").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)], vec![n(4.0)],], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)], vec![n(4.0)],],
+                source: None
+            }
         );
     }
 
@@ -2381,31 +2599,40 @@ mod tests {
         // Numeric 2×3, scan by row (default)
         assert_eq!(
             eval("=TOCOL({1,2,3;4,5,6})").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0)],
-                vec![n(2.0)],
-                vec![n(3.0)],
-                vec![n(4.0)],
-                vec![n(5.0)],
-                vec![n(6.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0)],
+                    vec![n(2.0)],
+                    vec![n(3.0)],
+                    vec![n(4.0)],
+                    vec![n(5.0)],
+                    vec![n(6.0)],
+                ],
+                source: None
+            }
         );
         // Docs Example 4 pattern: scan by column (scan_by_column=TRUE)
         assert_eq!(
             eval("=TOCOL({1,2,3;4,5,6},,TRUE)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0)],
-                vec![n(4.0)],
-                vec![n(2.0)],
-                vec![n(5.0)],
-                vec![n(3.0)],
-                vec![n(6.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0)],
+                    vec![n(4.0)],
+                    vec![n(2.0)],
+                    vec![n(5.0)],
+                    vec![n(3.0)],
+                    vec![n(6.0)],
+                ],
+                source: None
+            }
         );
         // Docs: ignore=0 keeps all values (explicit default)
         assert_eq!(
             eval("=TOCOL({1,2;3,4},0)").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)], vec![n(4.0)],], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)], vec![n(4.0)],],
+                source: None
+            }
         );
         // Docs Example 4: scan by column on 3×4 text grid
         assert_eq!(
@@ -2433,17 +2660,26 @@ mod tests {
         // Numeric 2×3, scan by row (default)
         assert_eq!(
             eval("=TOROW({1,2,3;4,5,6})").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0), n(3.0), n(4.0), n(5.0), n(6.0),]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0), n(3.0), n(4.0), n(5.0), n(6.0),]],
+                source: None
+            }
         );
         // Docs Example 4 pattern: scan by column
         assert_eq!(
             eval("=TOROW({1,2,3;4,5,6},,TRUE)").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(4.0), n(2.0), n(5.0), n(3.0), n(6.0),]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(4.0), n(2.0), n(5.0), n(3.0), n(6.0),]],
+                source: None
+            }
         );
         // Docs: ignore=0 keeps all values (explicit default)
         assert_eq!(
             eval("=TOROW({1,2;3,4},0)").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0), n(3.0), n(4.0),]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0), n(3.0), n(4.0),]],
+                source: None
+            }
         );
         // Docs Example 4: scan by column on 3×4 text grid
         assert_eq!(
@@ -2462,42 +2698,51 @@ mod tests {
         // Docs Example 1: Two 2×3 text arrays horizontally appended
         assert_eq!(
             eval(r#"=HSTACK({"A","B","C";"D","E","F"},{"AA","BB","CC";"DD","EE","FF"})"#).unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![s("A"), s("B"), s("C"), s("AA"), s("BB"), s("CC")],
-                vec![s("D"), s("E"), s("F"), s("DD"), s("EE"), s("FF")],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![s("A"), s("B"), s("C"), s("AA"), s("BB"), s("CC")],
+                    vec![s("D"), s("E"), s("F"), s("DD"), s("EE"), s("FF")],
+                ],
+                source: None
+            }
         );
         // Docs Example 2: Three arrays, different row counts (3,2,1), #N/A fill
         assert_eq!(
             eval(r#"=HSTACK({1,2;3,4;5,6},{"A","B";"C","D"},{"X","Y"})"#).unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(2.0), s("A"), s("B"), s("X"), s("Y")],
-                vec![
-                    n(3.0),
-                    n(4.0),
-                    s("C"),
-                    s("D"),
-                    FormulaValue::Error(CellError::Na),
-                    FormulaValue::Error(CellError::Na)
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(2.0), s("A"), s("B"), s("X"), s("Y")],
+                    vec![
+                        n(3.0),
+                        n(4.0),
+                        s("C"),
+                        s("D"),
+                        FormulaValue::Error(CellError::Na),
+                        FormulaValue::Error(CellError::Na)
+                    ],
+                    vec![
+                        n(5.0),
+                        n(6.0),
+                        FormulaValue::Error(CellError::Na),
+                        FormulaValue::Error(CellError::Na),
+                        FormulaValue::Error(CellError::Na),
+                        FormulaValue::Error(CellError::Na)
+                    ],
                 ],
-                vec![
-                    n(5.0),
-                    n(6.0),
-                    FormulaValue::Error(CellError::Na),
-                    FormulaValue::Error(CellError::Na),
-                    FormulaValue::Error(CellError::Na),
-                    FormulaValue::Error(CellError::Na)
-                ],
-            ], source: None }
+                source: None
+            }
         );
         // Docs Example 3 variant: scalar appended horizontally
         assert_eq!(
             eval("=HSTACK({1;2;3},4)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(4.0)],
-                vec![n(2.0), FormulaValue::Error(CellError::Na)],
-                vec![n(3.0), FormulaValue::Error(CellError::Na)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(4.0)],
+                    vec![n(2.0), FormulaValue::Error(CellError::Na)],
+                    vec![n(3.0), FormulaValue::Error(CellError::Na)],
+                ],
+                source: None
+            }
         );
     }
 
@@ -2506,44 +2751,56 @@ mod tests {
         // Docs Example 1: Two 2×3 text arrays vertically appended
         assert_eq!(
             eval(r#"=VSTACK({"A","B","C";"D","E","F"},{"AA","BB","CC";"DD","EE","FF"})"#).unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![s("A"), s("B"), s("C")],
-                vec![s("D"), s("E"), s("F")],
-                vec![s("AA"), s("BB"), s("CC")],
-                vec![s("DD"), s("EE"), s("FF")],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![s("A"), s("B"), s("C")],
+                    vec![s("D"), s("E"), s("F")],
+                    vec![s("AA"), s("BB"), s("CC")],
+                    vec![s("DD"), s("EE"), s("FF")],
+                ],
+                source: None
+            }
         );
         // Docs Example 2: Three arrays, all 2 cols (3+2+1=6 rows)
         assert_eq!(
             eval(r#"=VSTACK({1,2;3,4;5,6},{"A","B";"C","D"},{"X","Y"})"#).unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(2.0)],
-                vec![n(3.0), n(4.0)],
-                vec![n(5.0), n(6.0)],
-                vec![s("A"), s("B")],
-                vec![s("C"), s("D")],
-                vec![s("X"), s("Y")],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(2.0)],
+                    vec![n(3.0), n(4.0)],
+                    vec![n(5.0), n(6.0)],
+                    vec![s("A"), s("B")],
+                    vec![s("C"), s("D")],
+                    vec![s("X"), s("Y")],
+                ],
+                source: None
+            }
         );
         // Docs Example 3: Different column counts (2 vs 3), #N/A column padding
         assert_eq!(
             eval(r#"=VSTACK({1,2;3,4;5,6},{"A","B","C";"D","E","F"})"#).unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(2.0), FormulaValue::Error(CellError::Na)],
-                vec![n(3.0), n(4.0), FormulaValue::Error(CellError::Na)],
-                vec![n(5.0), n(6.0), FormulaValue::Error(CellError::Na)],
-                vec![s("A"), s("B"), s("C")],
-                vec![s("D"), s("E"), s("F")],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(2.0), FormulaValue::Error(CellError::Na)],
+                    vec![n(3.0), n(4.0), FormulaValue::Error(CellError::Na)],
+                    vec![n(5.0), n(6.0), FormulaValue::Error(CellError::Na)],
+                    vec![s("A"), s("B"), s("C")],
+                    vec![s("D"), s("E"), s("F")],
+                ],
+                source: None
+            }
         );
         // Docs Example 3 variant: scalar appended vertically
         assert_eq!(
             eval("=VSTACK({1,2;3,4},5)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), n(2.0)],
-                vec![n(3.0), n(4.0)],
-                vec![n(5.0), FormulaValue::Error(CellError::Na)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), n(2.0)],
+                    vec![n(3.0), n(4.0)],
+                    vec![n(5.0), FormulaValue::Error(CellError::Na)],
+                ],
+                source: None
+            }
         );
     }
 
@@ -2552,43 +2809,52 @@ mod tests {
         // Ascending (default sort_order=1)
         assert_eq!(
             eval("=SORT({622;961;691;445;378;483;650;783;142;404})").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(142.0)],
-                vec![n(378.0)],
-                vec![n(404.0)],
-                vec![n(445.0)],
-                vec![n(483.0)],
-                vec![n(622.0)],
-                vec![n(650.0)],
-                vec![n(691.0)],
-                vec![n(783.0)],
-                vec![n(961.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(142.0)],
+                    vec![n(378.0)],
+                    vec![n(404.0)],
+                    vec![n(445.0)],
+                    vec![n(483.0)],
+                    vec![n(622.0)],
+                    vec![n(650.0)],
+                    vec![n(691.0)],
+                    vec![n(783.0)],
+                    vec![n(961.0)],
+                ],
+                source: None
+            }
         );
         // Descending (sort_order=-1) — exact docs example
         assert_eq!(
             eval("=SORT({622;961;691;445;378;483;650;783;142;404},1,-1)").unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(961.0)],
-                vec![n(783.0)],
-                vec![n(691.0)],
-                vec![n(650.0)],
-                vec![n(622.0)],
-                vec![n(483.0)],
-                vec![n(445.0)],
-                vec![n(404.0)],
-                vec![n(378.0)],
-                vec![n(142.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(961.0)],
+                    vec![n(783.0)],
+                    vec![n(691.0)],
+                    vec![n(650.0)],
+                    vec![n(622.0)],
+                    vec![n(483.0)],
+                    vec![n(445.0)],
+                    vec![n(404.0)],
+                    vec![n(378.0)],
+                    vec![n(142.0)],
+                ],
+                source: None
+            }
         );
         // Multi-column sort by first column ascending (docs behavior pattern)
         assert_eq!(
             eval(r#"=SORT({3,"c";1,"a";2,"b"},1)"#).unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), s("a")],
-                vec![n(2.0), s("b")],
-                vec![n(3.0), s("c")],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), s("a")],
+                    vec![n(2.0), s("b")],
+                    vec![n(3.0), s("c")],
+                ],
+                source: None
+            }
         );
     }
 
@@ -2597,12 +2863,18 @@ mod tests {
         // Simple ascending sort by separate by_array
         assert_eq!(
             eval(r#"=SORTBY({"b";"a";"c"},{2;1;3})"#).unwrap(),
-            FormulaValue::Array { data: vec![vec![s("a")], vec![s("b")], vec![s("c")]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![s("a")], vec![s("b")], vec![s("c")]],
+                source: None
+            }
         );
         // Descending sort
         assert_eq!(
             eval(r#"=SORTBY({"b";"a";"c"},{2;1;3},-1)"#).unwrap(),
-            FormulaValue::Array { data: vec![vec![s("c")], vec![s("b")], vec![s("a")]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![s("c")], vec![s("b")], vec![s("a")]],
+                source: None
+            }
         );
         // Full docs example: 8 people sorted by age ascending
         assert_eq!(
@@ -2612,16 +2884,19 @@ mod tests {
                 "{52;65;22;73;19;39;19;66})"
             ))
             .unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![s("Fritz"), n(19.0)],
-                vec![s("Xi"), n(19.0)],
-                vec![s("Amy"), n(22.0)],
-                vec![s("Sravan"), n(39.0)],
-                vec![s("Tom"), n(52.0)],
-                vec![s("Fred"), n(65.0)],
-                vec![s("Hector"), n(66.0)],
-                vec![s("Sal"), n(73.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![s("Fritz"), n(19.0)],
+                    vec![s("Xi"), n(19.0)],
+                    vec![s("Amy"), n(22.0)],
+                    vec![s("Sravan"), n(39.0)],
+                    vec![s("Tom"), n(52.0)],
+                    vec![s("Fred"), n(65.0)],
+                    vec![s("Hector"), n(66.0)],
+                    vec![s("Sal"), n(73.0)],
+                ],
+                source: None
+            }
         );
     }
 
@@ -2630,17 +2905,26 @@ mod tests {
         // Basic: extract distinct values preserving first-occurrence order
         assert_eq!(
             eval("=UNIQUE({1;2;1;3;2})").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)]],
+                source: None
+            }
         );
         // exactly_once=TRUE: only values appearing exactly once
         assert_eq!(
             eval("=UNIQUE({1;2;1;3;2;4},,TRUE)").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(3.0)], vec![n(4.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(3.0)], vec![n(4.0)]],
+                source: None
+            }
         );
         // Unique strings (docs pattern: unique product names)
         assert_eq!(
             eval(r#"=UNIQUE({"Apple";"Grape";"Apple";"Banana";"Grape"})"#).unwrap(),
-            FormulaValue::Array { data: vec![vec![s("Apple")], vec![s("Grape")], vec![s("Banana")],], source: None }
+            FormulaValue::Array {
+                data: vec![vec![s("Apple")], vec![s("Grape")], vec![s("Banana")],],
+                source: None
+            }
         );
     }
 
@@ -2649,12 +2933,18 @@ mod tests {
         // Column filter with boolean include
         assert_eq!(
             eval("=FILTER({1;2;3},{TRUE;FALSE;TRUE})").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(3.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(3.0)]],
+                source: None
+            }
         );
         // Row filter
         assert_eq!(
             eval("=FILTER({1,2,3},{TRUE,FALSE,TRUE})").unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(3.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(3.0)]],
+                source: None
+            }
         );
         // Multi-column filter (docs pattern: filter sales rows by product)
         assert_eq!(
@@ -2704,28 +2994,37 @@ mod tests {
         //   "" 3  4
         assert_eq!(
             fn_trimrange(
-                &[FormulaValue::Array { data: vec![
-                    vec![e.clone(), e.clone(), e.clone()],
-                    vec![e.clone(), n(1.0), n(2.0)],
-                    vec![e.clone(), n(3.0), n(4.0)],
-                ], source: None }],
+                &[FormulaValue::Array {
+                    data: vec![
+                        vec![e.clone(), e.clone(), e.clone()],
+                        vec![e.clone(), n(1.0), n(2.0)],
+                        vec![e.clone(), n(3.0), n(4.0)],
+                    ],
+                    source: None
+                }],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0)], vec![n(3.0), n(4.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0)], vec![n(3.0), n(4.0)]],
+                source: None
+            }
         );
 
         // Already trimmed array — no change
         assert_eq!(
             fn_trimrange(
-                &[FormulaValue::Array { data: vec![
-                    vec![n(1.0), n(2.0)],
-                    vec![n(3.0), n(4.0)],
-                ], source: None }],
+                &[FormulaValue::Array {
+                    data: vec![vec![n(1.0), n(2.0)], vec![n(3.0), n(4.0)],],
+                    source: None
+                }],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0)], vec![n(3.0), n(4.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0)], vec![n(3.0), n(4.0)]],
+                source: None
+            }
         );
 
         // Trailing blank rows and cols only
@@ -2735,15 +3034,21 @@ mod tests {
         //   "" "" ""
         assert_eq!(
             fn_trimrange(
-                &[FormulaValue::Array { data: vec![
-                    vec![n(1.0), n(2.0), e.clone()],
-                    vec![n(3.0), n(4.0), e.clone()],
-                    vec![e.clone(), e.clone(), e.clone()],
-                ], source: None }],
+                &[FormulaValue::Array {
+                    data: vec![
+                        vec![n(1.0), n(2.0), e.clone()],
+                        vec![n(3.0), n(4.0), e.clone()],
+                        vec![e.clone(), e.clone(), e.clone()],
+                    ],
+                    source: None
+                }],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0)], vec![n(3.0), n(4.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0)], vec![n(3.0), n(4.0)]],
+                source: None
+            }
         );
 
         // Single non-blank cell surrounded by blanks
@@ -2753,24 +3058,30 @@ mod tests {
         //   "" "" ""
         assert_eq!(
             fn_trimrange(
-                &[FormulaValue::Array { data: vec![
-                    vec![e.clone(), e.clone(), e.clone()],
-                    vec![e.clone(), n(42.0), e.clone()],
-                    vec![e.clone(), e.clone(), e.clone()],
-                ], source: None }],
+                &[FormulaValue::Array {
+                    data: vec![
+                        vec![e.clone(), e.clone(), e.clone()],
+                        vec![e.clone(), n(42.0), e.clone()],
+                        vec![e.clone(), e.clone(), e.clone()],
+                    ],
+                    source: None
+                }],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![vec![n(42.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(42.0)]],
+                source: None
+            }
         );
 
         // All blank → #CALC!
         assert_eq!(
             fn_trimrange(
-                &[FormulaValue::Array { data: vec![
-                    vec![e.clone(), e.clone()],
-                    vec![e.clone(), e.clone()],
-                ], source: None }],
+                &[FormulaValue::Array {
+                    data: vec![vec![e.clone(), e.clone()], vec![e.clone(), e.clone()],],
+                    source: None
+                }],
                 &ctx,
             )
             .unwrap(),
@@ -2780,7 +3091,10 @@ mod tests {
         // Single cell with value — unchanged
         assert_eq!(
             fn_trimrange(&[n(5.0)], &ctx).unwrap(),
-            FormulaValue::Array { data: vec![vec![n(5.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(5.0)]],
+                source: None
+            }
         );
 
         // --- Docs: trim_rows parameter ---
@@ -2794,17 +3108,23 @@ mod tests {
         assert_eq!(
             fn_trimrange(
                 &[
-                    FormulaValue::Array { data: vec![
-                        vec![e.clone(), n(1.0), e.clone()],
-                        vec![e.clone(), n(2.0), e.clone()],
-                        vec![e.clone(), n(3.0), e.clone()],
-                    ], source: None },
+                    FormulaValue::Array {
+                        data: vec![
+                            vec![e.clone(), n(1.0), e.clone()],
+                            vec![e.clone(), n(2.0), e.clone()],
+                            vec![e.clone(), n(3.0), e.clone()],
+                        ],
+                        source: None
+                    },
                     n(0.0),
                 ],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)],], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0)], vec![n(2.0)], vec![n(3.0)],],
+                source: None
+            }
         );
 
         // trim_rows=1: Trims leading blank rows only
@@ -2812,18 +3132,24 @@ mod tests {
         assert_eq!(
             fn_trimrange(
                 &[
-                    FormulaValue::Array { data: vec![
-                        vec![e.clone(), e.clone()],
-                        vec![n(1.0), n(2.0)],
-                        vec![e.clone(), e.clone()],
-                    ], source: None },
+                    FormulaValue::Array {
+                        data: vec![
+                            vec![e.clone(), e.clone()],
+                            vec![n(1.0), n(2.0)],
+                            vec![e.clone(), e.clone()],
+                        ],
+                        source: None
+                    },
                     n(1.0),
                     n(1.0),
                 ],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), n(2.0)], vec![e.clone(), e.clone()]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), n(2.0)], vec![e.clone(), e.clone()]],
+                source: None
+            }
         );
 
         // trim_rows=2: Trims trailing blank rows only
@@ -2831,18 +3157,24 @@ mod tests {
         assert_eq!(
             fn_trimrange(
                 &[
-                    FormulaValue::Array { data: vec![
-                        vec![e.clone(), e.clone()],
-                        vec![n(1.0), n(2.0)],
-                        vec![e.clone(), e.clone()],
-                    ], source: None },
+                    FormulaValue::Array {
+                        data: vec![
+                            vec![e.clone(), e.clone()],
+                            vec![n(1.0), n(2.0)],
+                            vec![e.clone(), e.clone()],
+                        ],
+                        source: None
+                    },
                     n(2.0),
                     n(2.0),
                 ],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![vec![e.clone(), e.clone()], vec![n(1.0), n(2.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![e.clone(), e.clone()], vec![n(1.0), n(2.0)]],
+                source: None
+            }
         );
 
         // --- Docs: trim_cols parameter ---
@@ -2851,122 +3183,161 @@ mod tests {
         assert_eq!(
             fn_trimrange(
                 &[
-                    FormulaValue::Array { data: vec![
-                        vec![e.clone(), n(1.0), e.clone()],
-                        vec![e.clone(), n(2.0), e.clone()],
-                    ], source: None },
+                    FormulaValue::Array {
+                        data: vec![
+                            vec![e.clone(), n(1.0), e.clone()],
+                            vec![e.clone(), n(2.0), e.clone()],
+                        ],
+                        source: None
+                    },
                     n(3.0),
                     n(0.0),
                 ],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![e.clone(), n(1.0), e.clone()],
-                vec![e.clone(), n(2.0), e.clone()],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![e.clone(), n(1.0), e.clone()],
+                    vec![e.clone(), n(2.0), e.clone()],
+                ],
+                source: None
+            }
         );
 
         // trim_cols=1: Trims leading blank columns only
         assert_eq!(
             fn_trimrange(
                 &[
-                    FormulaValue::Array { data: vec![
-                        vec![e.clone(), n(1.0), e.clone()],
-                        vec![e.clone(), n(2.0), e.clone()],
-                    ], source: None },
+                    FormulaValue::Array {
+                        data: vec![
+                            vec![e.clone(), n(1.0), e.clone()],
+                            vec![e.clone(), n(2.0), e.clone()],
+                        ],
+                        source: None
+                    },
                     n(3.0),
                     n(1.0),
                 ],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![vec![n(1.0), e.clone()], vec![n(2.0), e.clone()]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(1.0), e.clone()], vec![n(2.0), e.clone()]],
+                source: None
+            }
         );
 
         // trim_cols=2: Trims trailing blank columns only
         assert_eq!(
             fn_trimrange(
                 &[
-                    FormulaValue::Array { data: vec![
-                        vec![e.clone(), n(1.0), e.clone()],
-                        vec![e.clone(), n(2.0), e.clone()],
-                    ], source: None },
+                    FormulaValue::Array {
+                        data: vec![
+                            vec![e.clone(), n(1.0), e.clone()],
+                            vec![e.clone(), n(2.0), e.clone()],
+                        ],
+                        source: None
+                    },
                     n(3.0),
                     n(2.0),
                 ],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![vec![e.clone(), n(1.0)], vec![e.clone(), n(2.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![e.clone(), n(1.0)], vec![e.clone(), n(2.0)]],
+                source: None
+            }
         );
 
         // --- Docs: Trim Refs equivalences ---
 
         // Trim All (.:.) — TRIMRANGE(range,3,3)
         // 4x3 with data in center, blanks on all edges
-        let arr_with_edges = FormulaValue::Array { data: vec![
-            vec![e.clone(), e.clone(), e.clone()],
-            vec![e.clone(), s("X"), e.clone()],
-            vec![e.clone(), s("Y"), e.clone()],
-            vec![e.clone(), e.clone(), e.clone()],
-        ], source: None };
+        let arr_with_edges = FormulaValue::Array {
+            data: vec![
+                vec![e.clone(), e.clone(), e.clone()],
+                vec![e.clone(), s("X"), e.clone()],
+                vec![e.clone(), s("Y"), e.clone()],
+                vec![e.clone(), e.clone(), e.clone()],
+            ],
+            source: None,
+        };
         assert_eq!(
             fn_trimrange(&[arr_with_edges.clone(), n(3.0), n(3.0)], &ctx).unwrap(),
-            FormulaValue::Array { data: vec![vec![s("X")], vec![s("Y")]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![s("X")], vec![s("Y")]],
+                source: None
+            }
         );
 
         // Trim Trailing (:.) — TRIMRANGE(range,2,2)
         assert_eq!(
             fn_trimrange(&[arr_with_edges.clone(), n(2.0), n(2.0)], &ctx).unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![e.clone(), e.clone()],
-                vec![e.clone(), s("X")],
-                vec![e.clone(), s("Y")],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![e.clone(), e.clone()],
+                    vec![e.clone(), s("X")],
+                    vec![e.clone(), s("Y")],
+                ],
+                source: None
+            }
         );
 
         // Trim Leading (.:) — TRIMRANGE(range,1,1)
         assert_eq!(
             fn_trimrange(&[arr_with_edges, n(1.0), n(1.0)], &ctx).unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![s("X"), e.clone()],
-                vec![s("Y"), e.clone()],
-                vec![e.clone(), e.clone()],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![s("X"), e.clone()],
+                    vec![s("Y"), e.clone()],
+                    vec![e.clone(), e.clone()],
+                ],
+                source: None
+            }
         );
 
         // Empty strings also count as blank
         assert_eq!(
             fn_trimrange(
-                &[FormulaValue::Array { data: vec![
-                    vec![s(""), s("")],
-                    vec![s(""), n(7.0)],
-                ], source: None }],
+                &[FormulaValue::Array {
+                    data: vec![vec![s(""), s("")], vec![s(""), n(7.0)],],
+                    source: None
+                }],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![vec![n(7.0)]], source: None }
+            FormulaValue::Array {
+                data: vec![vec![n(7.0)]],
+                source: None
+            }
         );
 
         // Interior blank rows/cols are preserved
         assert_eq!(
             fn_trimrange(
-                &[FormulaValue::Array { data: vec![
-                    vec![e.clone(), e.clone(), e.clone()],
-                    vec![n(1.0), e.clone(), n(2.0)],
-                    vec![e.clone(), e.clone(), e.clone()],
-                    vec![n(3.0), e.clone(), n(4.0)],
-                    vec![e.clone(), e.clone(), e.clone()],
-                ], source: None }],
+                &[FormulaValue::Array {
+                    data: vec![
+                        vec![e.clone(), e.clone(), e.clone()],
+                        vec![n(1.0), e.clone(), n(2.0)],
+                        vec![e.clone(), e.clone(), e.clone()],
+                        vec![n(3.0), e.clone(), n(4.0)],
+                        vec![e.clone(), e.clone(), e.clone()],
+                    ],
+                    source: None
+                }],
                 &ctx,
             )
             .unwrap(),
-            FormulaValue::Array { data: vec![
-                vec![n(1.0), e.clone(), n(2.0)],
-                vec![e.clone(), e.clone(), e.clone()],
-                vec![n(3.0), e.clone(), n(4.0)],
-            ], source: None }
+            FormulaValue::Array {
+                data: vec![
+                    vec![n(1.0), e.clone(), n(2.0)],
+                    vec![e.clone(), e.clone(), e.clone()],
+                    vec![n(3.0), e.clone(), n(4.0)],
+                ],
+                source: None
+            }
         );
     }
 
@@ -3022,9 +3393,7 @@ mod tests {
 
     #[test]
     fn test_areas_docs() {
-        use crate::ast::{
-            BinaryOperator, CellReference, FormulaExpr, RangeReference,
-        };
+        use crate::ast::{BinaryOperator, CellReference, FormulaExpr, RangeReference};
         use duke_sheets_core::{CellAddress, CellRange};
 
         // Helper to build a Function AST node for AREAS with a single arg.
@@ -3089,5 +3458,5 @@ mod tests {
             eval("=AREAS(#REF!)").unwrap(),
             FormulaValue::Error(CellError::Ref)
         );
-}
+    }
 }

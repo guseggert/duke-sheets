@@ -27,10 +27,6 @@ pub use crate::{
     // Chart types
     Chart,
     ChartType,
-    DrawingAnchor,
-    EmbeddedImage,
-    ImageFormat,
-
     Color,
     ConditionalFormatRule,
 
@@ -40,6 +36,8 @@ pub use crate::{
     // Data validation types
     DataValidation,
 
+    DrawingAnchor,
+    EmbeddedImage,
     // Error types
     Error,
     // Format detection
@@ -49,6 +47,8 @@ pub use crate::{
     HorizontalAlignment,
     Hyperlink,
     IconSetStyle,
+    ImageFormat,
+
     ImageInfo,
     ImageSizing,
     NumberFormat,

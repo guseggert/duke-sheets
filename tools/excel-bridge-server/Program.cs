@@ -189,7 +189,10 @@ class Program
         }
         catch (Exception ex)
         {
-            return (Response.Error(id, $"{req.Cmd}: {ex.Message}"), false);
+            var msg = ex.InnerException != null
+                ? $"{req.Cmd}: {ex.InnerException.Message}"
+                : $"{req.Cmd}: {ex.Message}";
+            return (Response.Error(id, msg), false);
         }
     }
 }

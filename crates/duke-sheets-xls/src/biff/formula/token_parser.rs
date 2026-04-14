@@ -5,175 +5,7 @@
 //! that the decompiler can process via a stack machine.
 
 use super::ptg;
-
-/// A parsed formula token with its associated data.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParsedToken {
-    // --- Binary operators ---
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Power,
-    Concat,
-    Lt,
-    Le,
-    Eq,
-    Ge,
-    Gt,
-    Ne,
-    Isect, // intersection (space)
-    List,  // union (comma)
-    Range, // colon
-
-    // --- Unary operators ---
-    Uplus,
-    Uminus,
-    Percent,
-    Paren,
-
-    // --- Constants ---
-    MissArg,
-    Str(String),
-    Err(u8), // error code byte
-    Bool(bool),
-    Int(u16),
-    Num(f64),
-
-    // --- Cell references ---
-    Ref {
-        row: u16,
-        col: u16,
-        row_relative: bool,
-        col_relative: bool,
-    },
-    Area {
-        first_row: u16,
-        last_row: u16,
-        first_col: u16,
-        last_col: u16,
-        first_row_rel: bool,
-        first_col_rel: bool,
-        last_row_rel: bool,
-        last_col_rel: bool,
-    },
-    RefErr,
-    AreaErr,
-
-    // --- Functions ---
-    Func {
-        /// Function index in the BIFF8 function table.
-        func_idx: u16,
-    },
-    FuncVar {
-        /// Number of arguments actually passed.
-        argc: u8,
-        /// Function index (bits 0-14). Bit 15 = CE (command-equivalent) flag.
-        func_idx: u16,
-    },
-
-    // --- tAttr sub-types ---
-    AttrVolatile,
-    AttrIf {
-        offset: u16,
-    },
-    AttrChoose {
-        count: u16,
-        offsets: Vec<u16>,
-    },
-    AttrSkip {
-        offset: u16,
-    },
-    AttrSum,
-    AttrAssign,
-    AttrSpace {
-        space_type: u8,
-        count: u8,
-    },
-
-    // --- Phase 2/3 stubs (skip data, emit placeholder) ---
-    /// Named range reference (Phase 2).
-    Name {
-        name_idx: u16,
-    },
-    /// External name reference (Phase 2).
-    NameX {
-        extern_sheet_idx: u16,
-        name_idx: u16,
-    },
-    /// 3D cell reference (Phase 2).
-    Ref3d {
-        extern_sheet_idx: u16,
-        row: u16,
-        col: u16,
-        row_relative: bool,
-        col_relative: bool,
-    },
-    /// 3D area reference (Phase 2).
-    Area3d {
-        extern_sheet_idx: u16,
-        first_row: u16,
-        last_row: u16,
-        first_col: u16,
-        last_col: u16,
-        first_row_rel: bool,
-        first_col_rel: bool,
-        last_row_rel: bool,
-        last_col_rel: bool,
-    },
-    /// Deleted 3D ref (Phase 2).
-    RefErr3d {
-        extern_sheet_idx: u16,
-    },
-    /// Deleted 3D area (Phase 2).
-    AreaErr3d {
-        extern_sheet_idx: u16,
-    },
-    /// Relative cell reference for shared formulas (tRefN).
-    /// Offsets are signed when used with a base cell.
-    RefN {
-        /// Signed row offset (relative to shared formula origin).
-        row_offset: i16,
-        /// Signed column offset (relative to shared formula origin).
-        col_offset: i16,
-        row_relative: bool,
-        col_relative: bool,
-    },
-    /// Relative area reference for shared formulas (tAreaN).
-    AreaN {
-        first_row_offset: i16,
-        last_row_offset: i16,
-        first_col_offset: i16,
-        last_col_offset: i16,
-        first_row_rel: bool,
-        first_col_rel: bool,
-        last_row_rel: bool,
-        last_col_rel: bool,
-    },
-
-    /// Array constant (tArray) with pre-formatted text like `{1,2,3;4,5,6}`.
-    Array {
-        text: String,
-    },
-
-    /// Array/shared formula indicator (tExp).
-    Exp {
-        row: u16,
-        col: u16,
-    },
-    Table {
-        row: u16,
-        col: u16,
-    },
-    /// Memory function — the decompiler treats this as a no-op; the
-    /// sub-expression tokens that follow produce the actual reference.
-    MemFunc {
-        subexpr_len: u16,
-    },
-
-    /// Unknown token — skipped. Carries original byte for debugging.
-    Unknown(u8),
-}
+pub use duke_sheets_formula::decompile::ParsedToken;
 
 /// Parse a BIFF8 formula token byte stream into structured tokens.
 ///
@@ -352,7 +184,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 let (row, col, row_rel, col_rel) = parse_ref_fields(&data[pos..]);
                 pos += 4;
                 tokens.push(ParsedToken::Ref {
-                    row,
+                    row: row as u32,
                     col,
                     row_relative: row_rel,
                     col_relative: col_rel,
@@ -366,8 +198,8 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 let (fr, lr, fc, lc, frr, fcr, lrr, lcr) = parse_area_fields(&data[pos..]);
                 pos += 8;
                 tokens.push(ParsedToken::Area {
-                    first_row: fr,
-                    last_row: lr,
+                    first_row: fr as u32,
+                    last_row: lr as u32,
                     first_col: fc,
                     last_col: lc,
                     first_row_rel: frr,
@@ -448,7 +280,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 pos += 6;
                 tokens.push(ParsedToken::Ref3d {
                     extern_sheet_idx,
-                    row,
+                    row: row as u32,
                     col,
                     row_relative: row_rel,
                     col_relative: col_rel,
@@ -464,8 +296,8 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 pos += 10;
                 tokens.push(ParsedToken::Area3d {
                     extern_sheet_idx,
-                    first_row: fr,
-                    last_row: lr,
+                    first_row: fr as u32,
+                    last_row: lr as u32,
                     first_col: fc,
                     last_col: lc,
                     first_row_rel: frr,
@@ -501,7 +333,10 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 let row = u16::from_le_bytes([data[pos], data[pos + 1]]);
                 let col = u16::from_le_bytes([data[pos + 2], data[pos + 3]]);
                 pos += 4;
-                tokens.push(ParsedToken::Exp { row, col });
+                tokens.push(ParsedToken::Exp {
+                    row: row as u32,
+                    col,
+                });
             }
 
             // ---- Memory tokens (Phase 3 — skip sub-expression bytes) ----
@@ -537,7 +372,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 let (row_off, col_off, row_rel, col_rel) = parse_refn_fields(&data[pos..]);
                 pos += 4;
                 tokens.push(ParsedToken::RefN {
-                    row_offset: row_off,
+                    row_offset: row_off as i32,
                     col_offset: col_off,
                     row_relative: row_rel,
                     col_relative: col_rel,
@@ -552,8 +387,8 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 let (fro, lro, fco, lco, frr, fcr, lrr, lcr) = parse_arean_fields(&data[pos..]);
                 pos += 8;
                 tokens.push(ParsedToken::AreaN {
-                    first_row_offset: fro,
-                    last_row_offset: lro,
+                    first_row_offset: fro as i32,
+                    last_row_offset: lro as i32,
                     first_col_offset: fco,
                     last_col_offset: lco,
                     first_row_rel: frr,
@@ -581,7 +416,10 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 let row = u16::from_le_bytes([data[pos], data[pos + 1]]);
                 let col = u16::from_le_bytes([data[pos + 2], data[pos + 3]]);
                 pos += 4;
-                tokens.push(ParsedToken::Table { row, col });
+                tokens.push(ParsedToken::Table {
+                    row: row as u32,
+                    col,
+                });
             }
 
             _ => {

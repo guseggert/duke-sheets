@@ -132,7 +132,10 @@ mod tests {
         let result = fn_reduce(
             &[
                 FormulaValue::Number(0.0),
-                FormulaValue::Array { data: vec![vec![FormulaValue::Number(1.0)]], source: None },
+                FormulaValue::Array {
+                    data: vec![vec![FormulaValue::Number(1.0)]],
+                    source: None,
+                },
                 FormulaValue::String("lambda".into()),
             ],
             &ctx,
@@ -147,7 +150,10 @@ mod tests {
         let result = fn_scan(
             &[
                 FormulaValue::Number(0.0),
-                FormulaValue::Array { data: vec![vec![FormulaValue::Number(1.0)]], source: None },
+                FormulaValue::Array {
+                    data: vec![vec![FormulaValue::Number(1.0)]],
+                    source: None,
+                },
                 FormulaValue::String("lambda".into()),
             ],
             &ctx,
@@ -161,7 +167,10 @@ mod tests {
         let ctx = EvaluationContext::simple();
         let result = fn_bycol(
             &[
-                FormulaValue::Array { data: vec![vec![FormulaValue::Number(1.0)]], source: None },
+                FormulaValue::Array {
+                    data: vec![vec![FormulaValue::Number(1.0)]],
+                    source: None,
+                },
                 FormulaValue::String("lambda".into()),
             ],
             &ctx,
@@ -175,7 +184,10 @@ mod tests {
         let ctx = EvaluationContext::simple();
         let result = fn_byrow(
             &[
-                FormulaValue::Array { data: vec![vec![FormulaValue::Number(1.0)]], source: None },
+                FormulaValue::Array {
+                    data: vec![vec![FormulaValue::Number(1.0)]],
+                    source: None,
+                },
                 FormulaValue::String("lambda".into()),
             ],
             &ctx,

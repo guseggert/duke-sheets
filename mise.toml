@@ -248,6 +248,51 @@ fi
 cargo test -p duke-sheets --test formula_parity -- --nocapture --ignored
 """
 
+[tasks."generate:xlsb-parity"]
+description = "Convert formula-parity.xlsx to .xlsb via Excel COM"
+run = """
+#!/bin/bash
+set -e
+
+if [ ! -f data/formula-parity.xlsx ]; then
+    echo "data/formula-parity.xlsx not found, generating first..."
+    mise run generate:formula-parity
+fi
+
+bridge_ready() {
+    echo '{"id":1,"cmd":"Init","params":{}}' | nc -w2 localhost 9876 2>/dev/null | grep -q '"ok"'
+}
+if ! bridge_ready; then
+    echo "Bridge not responsive, starting VM..."
+    if ! nc -z localhost 9876 2>/dev/null; then
+        mise run vm:start &
+    fi
+    for i in $(seq 1 90); do
+        if bridge_ready; then echo "Bridge ready (took ${i}s)"; break; fi
+        [ "$i" -eq 90 ] && { echo "ERROR: Timeout"; exit 1; }
+        sleep 2
+    done
+else
+    echo "Bridge already running"
+fi
+
+cargo test -p duke-sheets-excel-com --test e2e generate_xlsb_parity_from_xlsx -- --test-threads=1 --nocapture
+"""
+
+[tasks."test:xlsb-parity"]
+description = "Run XLSB parity test (requires data/formula-parity.xlsb)"
+run = """
+#!/bin/bash
+set -e
+
+if [ ! -f data/formula-parity.xlsb ]; then
+    echo "data/formula-parity.xlsb not found, generating..."
+    mise run generate:xlsb-parity
+fi
+
+cargo test -p duke-sheets --test xlsb_parity -- --nocapture --ignored
+"""
+
 [tasks."test:corpus-charts"]
 description = "Run chart corpus smoke test against real Excel files"
 run = 'cargo test -p duke-sheets --test chart_corpus -- --ignored --nocapture'

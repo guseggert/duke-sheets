@@ -15,6 +15,7 @@ members = [
     "crates/libreoffice-urp",
     "crates/duke-sheets-libreoffice",
     "crates/duke-sheets-html",
+    "crates/duke-sheets-xlsb",
     "crates/ssfmt",
 ]
 # Bindings are excluded from the default workspace build
@@ -40,6 +41,7 @@ duke-sheets-xls = { path = "crates/duke-sheets-xls" }
 duke-sheets-csv = { path = "crates/duke-sheets-csv" }
 duke-sheets-chart = { path = "crates/duke-sheets-chart" }
 duke-sheets-html = { path = "crates/duke-sheets-html" }
+duke-sheets-xlsb = { path = "crates/duke-sheets-xlsb" }
 
 # Error handling
 thiserror = "1.0"
@@ -56,6 +58,9 @@ quick-xml = "0.37"
 # `time` feature removed: it calls SystemTime::now() via DateTime::default_for_write(),
 # which panics on wasm32-unknown-unknown. Without it, zip uses a fixed date (1980-01-01).
 zip = { version = "2.1", default-features = false, features = ["deflate"] }
+
+# Text encoding
+encoding_rs = "0.8"
 
 # CSV handling
 csv = "1.3"

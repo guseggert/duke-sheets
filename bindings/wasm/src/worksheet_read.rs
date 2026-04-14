@@ -6,10 +6,10 @@ use crate::{
     to_js_error, to_js_value,
     types::{
         WasmAutoFilter, WasmChart, WasmChartEx, WasmColor, WasmComment, WasmCommentEntry,
-        WasmConditionalFormatRule, WasmDataValidation, WasmFormulaCell, WasmFreezePanes,
-        WasmHyperlink, WasmHyperlinkEntry, WasmImageInfo, WasmMergeSpan, WasmMergedRegion,
-        WasmPageBreak, WasmPageSetup, WasmRow, WasmRowCell, WasmRowsOptions, WasmSelection,
-        WasmSheetProtection, WasmSpillSource, WasmSplitPanes, WasmStyle, WasmTable, WasmEmbeddedImage,
+        WasmConditionalFormatRule, WasmDataValidation, WasmEmbeddedImage, WasmFormulaCell,
+        WasmFreezePanes, WasmHyperlink, WasmHyperlinkEntry, WasmImageInfo, WasmMergeSpan,
+        WasmMergedRegion, WasmPageBreak, WasmPageSetup, WasmRow, WasmRowCell, WasmRowsOptions,
+        WasmSelection, WasmSheetProtection, WasmSpillSource, WasmSplitPanes, WasmStyle, WasmTable,
     },
     Worksheet,
 };
@@ -906,7 +906,8 @@ impl Worksheet {
         let ws = wb
             .worksheet(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
-        let images: Vec<WasmEmbeddedImage> = ws.images().iter().map(WasmEmbeddedImage::from).collect();
+        let images: Vec<WasmEmbeddedImage> =
+            ws.images().iter().map(WasmEmbeddedImage::from).collect();
         to_js_value(&images)
     }
 

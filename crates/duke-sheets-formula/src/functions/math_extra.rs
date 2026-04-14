@@ -1106,7 +1106,10 @@ pub fn fn_minverse(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
             inv[r][c] = FormulaValue::Number(aug[r][n + c]);
         }
     }
-    Ok(FormulaValue::Array { data: inv, source: None })
+    Ok(FormulaValue::Array {
+        data: inv,
+        source: None,
+    })
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -1136,7 +1139,10 @@ pub fn fn_mmult(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
             out[r][c] = FormulaValue::Number(sum);
         }
     }
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 pub fn fn_munit(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -1152,7 +1158,10 @@ pub fn fn_munit(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     for (i, row) in out.iter_mut().enumerate() {
         row[i] = FormulaValue::Number(1.0);
     }
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 pub fn fn_randarray(
@@ -1227,7 +1236,10 @@ pub fn fn_randarray(
             *cell = FormulaValue::Number(n);
         }
     }
-    Ok(FormulaValue::Array { data: out, source: None })
+    Ok(FormulaValue::Array {
+        data: out,
+        source: None,
+    })
 }
 
 pub fn fn_seriessum(
@@ -1873,10 +1885,13 @@ mod tests {
     #[test]
     fn test_matrix_functions() {
         let ctx = EvaluationContext::simple();
-        let matrix = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)],
-            vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
-        ], source: None };
+        let matrix = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)],
+                vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
+            ],
+            source: None,
+        };
         let det = num(fn_mdeterm(std::slice::from_ref(&matrix), &ctx).unwrap());
         assert!((det + 2.0).abs() < 1e-10);
         let inv = fn_minverse(std::slice::from_ref(&matrix), &ctx).unwrap();
@@ -1932,11 +1947,14 @@ mod tests {
         } else {
             panic!("expected array");
         }
-        let coeffs = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(1.0),
-            FormulaValue::Number(2.0),
-            FormulaValue::Number(3.0),
-        ]], source: None };
+        let coeffs = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(1.0),
+                FormulaValue::Number(2.0),
+                FormulaValue::Number(3.0),
+            ]],
+            source: None,
+        };
         let s = num(fn_seriessum(
             &[
                 FormulaValue::Number(2.0),
@@ -1953,14 +1971,14 @@ mod tests {
     #[test]
     fn test_cross_array_functions() {
         let ctx = EvaluationContext::simple();
-        let x = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(1.0),
-            FormulaValue::Number(2.0),
-        ]], source: None };
-        let y = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(3.0),
-            FormulaValue::Number(4.0),
-        ]], source: None };
+        let x = FormulaValue::Array {
+            data: vec![vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)]],
+            source: None,
+        };
+        let y = FormulaValue::Array {
+            data: vec![vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)]],
+            source: None,
+        };
         assert_eq!(
             fn_sumx2my2(&[x.clone(), y.clone()], &ctx).unwrap(),
             FormulaValue::Number(-20.0)
@@ -1978,10 +1996,13 @@ mod tests {
     #[test]
     fn test_aggregate_and_subtotal() {
         let ctx = EvaluationContext::simple();
-        let data = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)],
-            vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
-        ], source: None };
+        let data = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)],
+                vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
+            ],
+            source: None,
+        };
         assert_eq!(
             fn_aggregate(
                 &[
@@ -3014,12 +3035,15 @@ mod tests {
         // Approximate COS(PI/4) using first 4 terms of Taylor series:
         // SERIESSUM(PI()/4, 0, 2, {1, -1/FACT(2), 1/FACT(4), -1/FACT(6)})
         let x = std::f64::consts::FRAC_PI_4;
-        let coeffs = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(1.0),
-            FormulaValue::Number(-1.0 / 2.0),   // -1/2!
-            FormulaValue::Number(1.0 / 24.0),   // 1/4!
-            FormulaValue::Number(-1.0 / 720.0), // -1/6!
-        ]], source: None };
+        let coeffs = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(1.0),
+                FormulaValue::Number(-1.0 / 2.0),   // -1/2!
+                FormulaValue::Number(1.0 / 24.0),   // 1/4!
+                FormulaValue::Number(-1.0 / 720.0), // -1/6!
+            ]],
+            source: None,
+        };
         let s = num(fn_seriessum(
             &[
                 FormulaValue::Number(x),
@@ -3042,24 +3066,30 @@ mod tests {
         let ctx = EvaluationContext::simple();
         // Docs: array_x = {2,3,9,1,8,7,5}, array_y = {6,5,11,7,5,4,4}
         // SUM(x²-y²) = (4-36)+(9-25)+(81-121)+(1-49)+(64-25)+(49-16)+(25-16) = -55
-        let x = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(2.0),
-            FormulaValue::Number(3.0),
-            FormulaValue::Number(9.0),
-            FormulaValue::Number(1.0),
-            FormulaValue::Number(8.0),
-            FormulaValue::Number(7.0),
-            FormulaValue::Number(5.0),
-        ]], source: None };
-        let y = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(6.0),
-            FormulaValue::Number(5.0),
-            FormulaValue::Number(11.0),
-            FormulaValue::Number(7.0),
-            FormulaValue::Number(5.0),
-            FormulaValue::Number(4.0),
-            FormulaValue::Number(4.0),
-        ]], source: None };
+        let x = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(2.0),
+                FormulaValue::Number(3.0),
+                FormulaValue::Number(9.0),
+                FormulaValue::Number(1.0),
+                FormulaValue::Number(8.0),
+                FormulaValue::Number(7.0),
+                FormulaValue::Number(5.0),
+            ]],
+            source: None,
+        };
+        let y = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(6.0),
+                FormulaValue::Number(5.0),
+                FormulaValue::Number(11.0),
+                FormulaValue::Number(7.0),
+                FormulaValue::Number(5.0),
+                FormulaValue::Number(4.0),
+                FormulaValue::Number(4.0),
+            ]],
+            source: None,
+        };
         assert_eq!(
             fn_sumx2my2(&[x, y], &ctx).unwrap(),
             FormulaValue::Number(-55.0)
@@ -3074,24 +3104,30 @@ mod tests {
         let ctx = EvaluationContext::simple();
         // Docs: same data as SUMX2MY2
         // SUM(x²+y²) = (4+36)+(9+25)+(81+121)+(1+49)+(64+25)+(49+16)+(25+16) = 521
-        let x = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(2.0),
-            FormulaValue::Number(3.0),
-            FormulaValue::Number(9.0),
-            FormulaValue::Number(1.0),
-            FormulaValue::Number(8.0),
-            FormulaValue::Number(7.0),
-            FormulaValue::Number(5.0),
-        ]], source: None };
-        let y = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(6.0),
-            FormulaValue::Number(5.0),
-            FormulaValue::Number(11.0),
-            FormulaValue::Number(7.0),
-            FormulaValue::Number(5.0),
-            FormulaValue::Number(4.0),
-            FormulaValue::Number(4.0),
-        ]], source: None };
+        let x = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(2.0),
+                FormulaValue::Number(3.0),
+                FormulaValue::Number(9.0),
+                FormulaValue::Number(1.0),
+                FormulaValue::Number(8.0),
+                FormulaValue::Number(7.0),
+                FormulaValue::Number(5.0),
+            ]],
+            source: None,
+        };
+        let y = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(6.0),
+                FormulaValue::Number(5.0),
+                FormulaValue::Number(11.0),
+                FormulaValue::Number(7.0),
+                FormulaValue::Number(5.0),
+                FormulaValue::Number(4.0),
+                FormulaValue::Number(4.0),
+            ]],
+            source: None,
+        };
         assert_eq!(
             fn_sumx2py2(&[x, y], &ctx).unwrap(),
             FormulaValue::Number(521.0)
@@ -3106,24 +3142,30 @@ mod tests {
         let ctx = EvaluationContext::simple();
         // Docs: same data
         // SUM((x-y)²) = (2-6)²+(3-5)²+...+(5-4)² = 16+4+4+36+9+9+1 = 79
-        let x = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(2.0),
-            FormulaValue::Number(3.0),
-            FormulaValue::Number(9.0),
-            FormulaValue::Number(1.0),
-            FormulaValue::Number(8.0),
-            FormulaValue::Number(7.0),
-            FormulaValue::Number(5.0),
-        ]], source: None };
-        let y = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(6.0),
-            FormulaValue::Number(5.0),
-            FormulaValue::Number(11.0),
-            FormulaValue::Number(7.0),
-            FormulaValue::Number(5.0),
-            FormulaValue::Number(4.0),
-            FormulaValue::Number(4.0),
-        ]], source: None };
+        let x = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(2.0),
+                FormulaValue::Number(3.0),
+                FormulaValue::Number(9.0),
+                FormulaValue::Number(1.0),
+                FormulaValue::Number(8.0),
+                FormulaValue::Number(7.0),
+                FormulaValue::Number(5.0),
+            ]],
+            source: None,
+        };
+        let y = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(6.0),
+                FormulaValue::Number(5.0),
+                FormulaValue::Number(11.0),
+                FormulaValue::Number(7.0),
+                FormulaValue::Number(5.0),
+                FormulaValue::Number(4.0),
+                FormulaValue::Number(4.0),
+            ]],
+            source: None,
+        };
         assert_eq!(
             fn_sumxmy2(&[x, y], &ctx).unwrap(),
             FormulaValue::Number(79.0)
@@ -3137,43 +3179,52 @@ mod tests {
     fn test_mdeterm_docs() {
         let ctx = EvaluationContext::simple();
         // Docs: {1,3;7,2} -> det = 1*2 - 3*7 = -19
-        let m = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(1.0), FormulaValue::Number(3.0)],
-            vec![FormulaValue::Number(7.0), FormulaValue::Number(2.0)],
-        ], source: None };
+        let m = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(1.0), FormulaValue::Number(3.0)],
+                vec![FormulaValue::Number(7.0), FormulaValue::Number(2.0)],
+            ],
+            source: None,
+        };
         assert!((num(fn_mdeterm(std::slice::from_ref(&m), &ctx).unwrap()) - (-19.0)).abs() < 1e-10);
         // 3x3: {3,6,1;1,1,0;-1,2,3} -> det = 3*(3-0) - 6*(3-0) + 1*(2-(-1)) = 9-18+3 = -6
-        let m3 = FormulaValue::Array { data: vec![
-            vec![
-                FormulaValue::Number(3.0),
-                FormulaValue::Number(6.0),
-                FormulaValue::Number(1.0),
+        let m3 = FormulaValue::Array {
+            data: vec![
+                vec![
+                    FormulaValue::Number(3.0),
+                    FormulaValue::Number(6.0),
+                    FormulaValue::Number(1.0),
+                ],
+                vec![
+                    FormulaValue::Number(1.0),
+                    FormulaValue::Number(1.0),
+                    FormulaValue::Number(0.0),
+                ],
+                vec![
+                    FormulaValue::Number(-1.0),
+                    FormulaValue::Number(2.0),
+                    FormulaValue::Number(3.0),
+                ],
             ],
-            vec![
-                FormulaValue::Number(1.0),
-                FormulaValue::Number(1.0),
-                FormulaValue::Number(0.0),
-            ],
-            vec![
-                FormulaValue::Number(-1.0),
-                FormulaValue::Number(2.0),
-                FormulaValue::Number(3.0),
-            ],
-        ], source: None };
+            source: None,
+        };
         assert!((num(fn_mdeterm(std::slice::from_ref(&m3), &ctx).unwrap()) - (-6.0)).abs() < 1e-10);
         // Non-square matrix -> #VALUE!
-        let nonsq = FormulaValue::Array { data: vec![
-            vec![
-                FormulaValue::Number(1.0),
-                FormulaValue::Number(2.0),
-                FormulaValue::Number(3.0),
+        let nonsq = FormulaValue::Array {
+            data: vec![
+                vec![
+                    FormulaValue::Number(1.0),
+                    FormulaValue::Number(2.0),
+                    FormulaValue::Number(3.0),
+                ],
+                vec![
+                    FormulaValue::Number(4.0),
+                    FormulaValue::Number(5.0),
+                    FormulaValue::Number(6.0),
+                ],
             ],
-            vec![
-                FormulaValue::Number(4.0),
-                FormulaValue::Number(5.0),
-                FormulaValue::Number(6.0),
-            ],
-        ], source: None };
+            source: None,
+        };
         assert_eq!(
             fn_mdeterm(std::slice::from_ref(&nonsq), &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
@@ -3187,10 +3238,13 @@ mod tests {
     fn test_minverse_docs() {
         let ctx = EvaluationContext::simple();
         // {4, -1; 2, 0} -> inverse is {0, 0.5; -1, 2} (det=2)
-        let m = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(4.0), FormulaValue::Number(-1.0)],
-            vec![FormulaValue::Number(2.0), FormulaValue::Number(0.0)],
-        ], source: None };
+        let m = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(4.0), FormulaValue::Number(-1.0)],
+                vec![FormulaValue::Number(2.0), FormulaValue::Number(0.0)],
+            ],
+            source: None,
+        };
         let inv = fn_minverse(std::slice::from_ref(&m), &ctx).unwrap();
         if let FormulaValue::Array { data: rows, .. } = inv {
             assert!((num(rows[0][0].clone()) - 0.0).abs() < 1e-10);
@@ -3201,10 +3255,13 @@ mod tests {
             panic!("expected array");
         }
         // {1, 2; 3, 4} -> inverse is {-2, 1; 1.5, -0.5} (det=-2)
-        let m2 = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)],
-            vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
-        ], source: None };
+        let m2 = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(1.0), FormulaValue::Number(2.0)],
+                vec![FormulaValue::Number(3.0), FormulaValue::Number(4.0)],
+            ],
+            source: None,
+        };
         let inv2 = fn_minverse(std::slice::from_ref(&m2), &ctx).unwrap();
         if let FormulaValue::Array { data: rows, .. } = inv2 {
             assert!((num(rows[0][0].clone()) - (-2.0)).abs() < 1e-10);
@@ -3223,14 +3280,20 @@ mod tests {
     fn test_mmult_docs() {
         let ctx = EvaluationContext::simple();
         // {1, 3; 7, 2} * {2, 0; 0, 2} = {2, 6; 14, 4}
-        let a = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(1.0), FormulaValue::Number(3.0)],
-            vec![FormulaValue::Number(7.0), FormulaValue::Number(2.0)],
-        ], source: None };
-        let b = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(2.0), FormulaValue::Number(0.0)],
-            vec![FormulaValue::Number(0.0), FormulaValue::Number(2.0)],
-        ], source: None };
+        let a = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(1.0), FormulaValue::Number(3.0)],
+                vec![FormulaValue::Number(7.0), FormulaValue::Number(2.0)],
+            ],
+            source: None,
+        };
+        let b = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(2.0), FormulaValue::Number(0.0)],
+                vec![FormulaValue::Number(0.0), FormulaValue::Number(2.0)],
+            ],
+            source: None,
+        };
         let result = fn_mmult(&[a, b], &ctx).unwrap();
         if let FormulaValue::Array { data: rows, .. } = result {
             assert_eq!(rows[0][0], FormulaValue::Number(2.0));
@@ -3270,13 +3333,16 @@ mod tests {
     fn test_aggregate_docs() {
         let ctx = EvaluationContext::simple();
         // Data with errors: 72, 50, 96, 57, 83
-        let data = FormulaValue::Array { data: vec![
-            vec![FormulaValue::Number(72.0)],
-            vec![FormulaValue::Number(50.0)],
-            vec![FormulaValue::Number(96.0)],
-            vec![FormulaValue::Number(57.0)],
-            vec![FormulaValue::Number(83.0)],
-        ], source: None };
+        let data = FormulaValue::Array {
+            data: vec![
+                vec![FormulaValue::Number(72.0)],
+                vec![FormulaValue::Number(50.0)],
+                vec![FormulaValue::Number(96.0)],
+                vec![FormulaValue::Number(57.0)],
+                vec![FormulaValue::Number(83.0)],
+            ],
+            source: None,
+        };
         // AGGREGATE(4, 6, data) = MAX ignoring errors = 96
         assert_eq!(
             num(fn_aggregate(
@@ -3519,24 +3585,30 @@ mod tests {
         // Subset: Bib-Shorts(7600) + Bike Racks(56100) = 63700
         // All: 7600+56100+2100+11100+55900+59600+74800+48300+9700+61400+7000+48500 = 442100
         // Result: 63700/442100 ≈ 0.14407 (displayed as 14.41%)
-        let subset = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(7600.0),
-            FormulaValue::Number(56100.0),
-        ]], source: None };
-        let all = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(7600.0),
-            FormulaValue::Number(56100.0),
-            FormulaValue::Number(2100.0),
-            FormulaValue::Number(11100.0),
-            FormulaValue::Number(55900.0),
-            FormulaValue::Number(59600.0),
-            FormulaValue::Number(74800.0),
-            FormulaValue::Number(48300.0),
-            FormulaValue::Number(9700.0),
-            FormulaValue::Number(61400.0),
-            FormulaValue::Number(7000.0),
-            FormulaValue::Number(48500.0),
-        ]], source: None };
+        let subset = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(7600.0),
+                FormulaValue::Number(56100.0),
+            ]],
+            source: None,
+        };
+        let all = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(7600.0),
+                FormulaValue::Number(56100.0),
+                FormulaValue::Number(2100.0),
+                FormulaValue::Number(11100.0),
+                FormulaValue::Number(55900.0),
+                FormulaValue::Number(59600.0),
+                FormulaValue::Number(74800.0),
+                FormulaValue::Number(48300.0),
+                FormulaValue::Number(9700.0),
+                FormulaValue::Number(61400.0),
+                FormulaValue::Number(7000.0),
+                FormulaValue::Number(48500.0),
+            ]],
+            source: None,
+        };
         let result = num(fn_percentof(&[subset, all], &ctx).unwrap());
         // 63700 / 442100 = 0.144073717...
         assert!((result - 63700.0 / 442100.0).abs() < 1e-10);
@@ -3553,16 +3625,19 @@ mod tests {
         );
 
         // Half of total
-        let half_sub = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(10.0),
-            FormulaValue::Number(10.0),
-        ]], source: None };
-        let half_all = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(10.0),
-            FormulaValue::Number(10.0),
-            FormulaValue::Number(10.0),
-            FormulaValue::Number(10.0),
-        ]], source: None };
+        let half_sub = FormulaValue::Array {
+            data: vec![vec![FormulaValue::Number(10.0), FormulaValue::Number(10.0)]],
+            source: None,
+        };
+        let half_all = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(10.0),
+                FormulaValue::Number(10.0),
+                FormulaValue::Number(10.0),
+                FormulaValue::Number(10.0),
+            ]],
+            source: None,
+        };
         assert!((num(fn_percentof(&[half_sub, half_all], &ctx).unwrap()) - 0.5).abs() < 1e-10);
 
         // Division by zero: all values sum to 0 -> #DIV/0!
@@ -3612,25 +3687,34 @@ mod tests {
         );
 
         // Subset equals all -> 100%
-        let same = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(10.0),
-            FormulaValue::Number(20.0),
-            FormulaValue::Number(30.0),
-        ]], source: None };
+        let same = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(10.0),
+                FormulaValue::Number(20.0),
+                FormulaValue::Number(30.0),
+            ]],
+            source: None,
+        };
         assert!((num(fn_percentof(&[same.clone(), same], &ctx).unwrap()) - 1.0).abs() < 1e-10);
 
         // Non-numeric values in arrays are ignored (text, booleans, empty)
-        let subset_mixed = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(10.0),
-            FormulaValue::String("text".to_string()),
-            FormulaValue::Boolean(true),
-            FormulaValue::Empty,
-        ]], source: None };
-        let all_mixed = FormulaValue::Array { data: vec![vec![
-            FormulaValue::Number(10.0),
-            FormulaValue::Number(40.0),
-            FormulaValue::String("ignored".to_string()),
-        ]], source: None };
+        let subset_mixed = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(10.0),
+                FormulaValue::String("text".to_string()),
+                FormulaValue::Boolean(true),
+                FormulaValue::Empty,
+            ]],
+            source: None,
+        };
+        let all_mixed = FormulaValue::Array {
+            data: vec![vec![
+                FormulaValue::Number(10.0),
+                FormulaValue::Number(40.0),
+                FormulaValue::String("ignored".to_string()),
+            ]],
+            source: None,
+        };
         assert!((num(fn_percentof(&[subset_mixed, all_mixed], &ctx).unwrap()) - 0.2).abs() < 1e-10);
     }
 }

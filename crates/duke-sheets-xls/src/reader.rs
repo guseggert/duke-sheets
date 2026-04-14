@@ -242,12 +242,9 @@ impl XlsReader {
                 if let Some(range) =
                     Self::extract_filter_db_range(&name_rec.formula_body, &formula_ctx)
                 {
-                    let sheet_0based = if name_rec.sheet_idx > 0 {
-                        (name_rec.sheet_idx - 1) as usize
-                    } else {
-                        0
-                    };
-                    filter_db_ranges.insert(sheet_0based, range);
+                    if name_rec.sheet_idx != 0xFFFFFFFF {
+                        filter_db_ranges.insert(name_rec.sheet_idx as usize, range);
+                    }
                 }
             }
         }
@@ -264,21 +261,19 @@ impl XlsReader {
             if name_rec.formula_body.is_empty() {
                 continue;
             }
-            let sheet_0based = if name_rec.sheet_idx > 0 {
-                (name_rec.sheet_idx - 1) as usize
-            } else {
-                0
-            };
-            if name_rec.name == "Print_Area" {
-                if let Some(range) =
-                    Self::extract_filter_db_range(&name_rec.formula_body, &formula_ctx)
-                {
-                    print_area_ranges.insert(sheet_0based, range);
-                }
-            } else if name_rec.name == "Print_Titles" {
-                let titles = Self::extract_print_titles(&name_rec.formula_body);
-                if titles.0.is_some() || titles.1.is_some() {
-                    print_titles.insert(sheet_0based, titles);
+            if name_rec.sheet_idx != 0xFFFFFFFF {
+                let sheet = name_rec.sheet_idx as usize;
+                if name_rec.name == "Print_Area" {
+                    if let Some(range) =
+                        Self::extract_filter_db_range(&name_rec.formula_body, &formula_ctx)
+                    {
+                        print_area_ranges.insert(sheet, range);
+                    }
+                } else if name_rec.name == "Print_Titles" {
+                    let titles = Self::extract_print_titles(&name_rec.formula_body);
+                    if titles.0.is_some() || titles.1.is_some() {
+                        print_titles.insert(sheet, titles);
+                    }
                 }
             }
         }
@@ -1181,7 +1176,7 @@ impl XlsReader {
                     {
                         // Try to resolve the shared formula
                         if let Some(shared_tokens) =
-                            shared_formulas.get(&(*master_row, *master_col))
+                            shared_formulas.get(&(*master_row as u16, *master_col))
                         {
                             // Shared formula found — decompile with base cell
                             let shared_ctx = FormulaContext {
@@ -1189,7 +1184,7 @@ impl XlsReader {
                                 extern_sheet: formula_ctx.extern_sheet.clone(),
                                 supbooks: formula_ctx.supbooks.clone(),
                                 names: formula_ctx.names.clone(),
-                                base_cell: Some((row as u16, col)),
+                                base_cell: Some((row, col)),
                             };
                             let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
                             if text.is_empty() {
@@ -1212,7 +1207,7 @@ impl XlsReader {
                             return Ok(FormulaResult::SharedPending {
                                 cell_row: row,
                                 cell_col: col,
-                                master_row: *master_row,
+                                master_row: *master_row as u16,
                                 master_col: *master_col,
                             });
                         }
@@ -1233,7 +1228,7 @@ impl XlsReader {
                 {
                     // tExp without fShared → array formula (CSE)
                     if let Some((arr_tokens, arr_extra)) =
-                        array_formulas.get(&(*master_row, *master_col))
+                        array_formulas.get(&(*master_row as u16, *master_col))
                     {
                         let text = crate::biff::formula::decompile_with_extra(
                             arr_tokens,
@@ -1260,7 +1255,7 @@ impl XlsReader {
                         return Ok(FormulaResult::SharedPending {
                             cell_row: row,
                             cell_col: col,
-                            master_row: *master_row,
+                            master_row: *master_row as u16,
                             master_col: *master_col,
                         });
                     }
@@ -1270,7 +1265,9 @@ impl XlsReader {
                 }) = tokens.first()
                 {
                     // Data table formula (tTbl)
-                    if let Some((input1, input2)) = data_tables.get(&(*master_row, *master_col)) {
+                    if let Some((input1, input2)) =
+                        data_tables.get(&(*master_row as u16, *master_col))
+                    {
                         format!("=TABLE({},{})", input1, input2)
                     } else {
                         // TABLE record not seen yet — write cell with empty text
@@ -1286,7 +1283,7 @@ impl XlsReader {
                         return Ok(FormulaResult::TablePending {
                             cell_row: row,
                             cell_col: col,
-                            master_row: *master_row,
+                            master_row: *master_row as u16,
                             master_col: *master_col,
                         });
                     }
@@ -1459,7 +1456,7 @@ impl XlsReader {
             extern_sheet: formula_ctx.extern_sheet.clone(),
             supbooks: formula_ctx.supbooks.clone(),
             names: formula_ctx.names.clone(),
-            base_cell: Some((cell_row as u16, cell_col)),
+            base_cell: Some((cell_row, cell_col)),
         };
         let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
         let formula_text = if text.is_empty() {
@@ -1745,7 +1742,11 @@ impl XlsReader {
 
         Ok(NameRecord {
             name,
-            sheet_idx: itab,
+            sheet_idx: if itab == 0 {
+                0xFFFFFFFF
+            } else {
+                (itab - 1) as u32
+            },
             is_builtin,
             formula_body,
         })

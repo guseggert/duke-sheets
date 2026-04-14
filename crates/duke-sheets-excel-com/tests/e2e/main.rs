@@ -34,5 +34,6 @@ mod selections;
 mod smoke;
 mod writing;
 mod xls_reader;
+mod xlsb_parity;
 
 pub use common::*;

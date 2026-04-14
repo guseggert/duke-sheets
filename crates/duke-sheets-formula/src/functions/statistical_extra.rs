@@ -522,7 +522,10 @@ fn linest_impl(
 
     let coef_row = reverse_slopes_with_intercept(&fit.slopes, fit.intercept);
     if !with_stats {
-        return Ok(FormulaValue::Array { data: vec![as_formula_row(&coef_row)], source: None });
+        return Ok(FormulaValue::Array {
+            data: vec![as_formula_row(&coef_row)],
+            source: None,
+        });
     }
 
     let stderr_row = reverse_slopes_with_intercept(&fit.stderr_slopes, fit.stderr_intercept);
@@ -543,13 +546,16 @@ fn linest_impl(
         row5[1] = fit.ss_res;
     }
 
-    Ok(FormulaValue::Array { data: vec![
-        as_formula_row(&coef_row),
-        as_formula_row(&stderr_row),
-        as_formula_row(&row3),
-        as_formula_row(&row4),
-        as_formula_row(&row5),
-    ], source: None })
+    Ok(FormulaValue::Array {
+        data: vec![
+            as_formula_row(&coef_row),
+            as_formula_row(&stderr_row),
+            as_formula_row(&row3),
+            as_formula_row(&row4),
+            as_formula_row(&row5),
+        ],
+        source: None,
+    })
 }
 
 fn logest_impl(
@@ -563,9 +569,13 @@ fn logest_impl(
     if y.is_empty() || y.iter().any(|v| *v <= 0.0) {
         return Err(FormulaValue::Error(CellError::Num));
     }
-    let log_y = FormulaValue::Array { data: y.iter()
-        .map(|v| vec![FormulaValue::Number(v.ln())])
-        .collect::<Vec<_>>(), source: None };
+    let log_y = FormulaValue::Array {
+        data: y
+            .iter()
+            .map(|v| vec![FormulaValue::Number(v.ln())])
+            .collect::<Vec<_>>(),
+        source: None,
+    };
 
     let line = linest_impl(&log_y, known_x, include_const, with_stats)?;
     match line {
@@ -577,7 +587,10 @@ fn logest_impl(
                     }
                 }
             }
-            Ok(FormulaValue::Array { data: rows, source: None })
+            Ok(FormulaValue::Array {
+                data: rows,
+                source: None,
+            })
         }
         _ => Err(FormulaValue::Error(CellError::Value)),
     }
@@ -730,8 +743,13 @@ fn fit_holt(values: &[f64]) -> HoltResult {
         let mut e_hi = holt_with_params(values, alpha, hi).rmse;
         while (hi - lo) > RESOLUTION {
             let mid = (lo + hi) / 2.0;
-            if e_hi > e_lo { hi = mid; e_hi = holt_with_params(values, alpha, hi).rmse; }
-            else { lo = mid; e_lo = holt_with_params(values, alpha, lo).rmse; }
+            if e_hi > e_lo {
+                hi = mid;
+                e_hi = holt_with_params(values, alpha, hi).rmse;
+            } else {
+                lo = mid;
+                e_lo = holt_with_params(values, alpha, lo).rmse;
+            }
         }
         (lo + hi) / 2.0
     };
@@ -742,8 +760,13 @@ fn fit_holt(values: &[f64]) -> HoltResult {
     let mut e_hi = holt_with_params(values, hi, optimize_beta(hi)).rmse;
     while (hi - lo) > RESOLUTION {
         let mid = (lo + hi) / 2.0;
-        if e_hi > e_lo { hi = mid; e_hi = holt_with_params(values, hi, optimize_beta(hi)).rmse; }
-        else { lo = mid; e_lo = holt_with_params(values, lo, optimize_beta(lo)).rmse; }
+        if e_hi > e_lo {
+            hi = mid;
+            e_hi = holt_with_params(values, hi, optimize_beta(hi)).rmse;
+        } else {
+            lo = mid;
+            e_lo = holt_with_params(values, lo, optimize_beta(lo)).rmse;
+        }
     }
     let best_alpha = (lo + hi) / 2.0;
     holt_with_params(values, best_alpha, optimize_beta(best_alpha))
@@ -912,7 +935,10 @@ pub fn fn_growth(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
         .into_iter()
         .map(|v| vec![FormulaValue::Number(v)])
         .collect::<Vec<_>>();
-    Ok(FormulaValue::Array { data: arr, source: None })
+    Ok(FormulaValue::Array {
+        data: arr,
+        source: None,
+    })
 }
 
 pub fn fn_trend(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
@@ -950,7 +976,10 @@ pub fn fn_trend(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
         .into_iter()
         .map(|v| vec![FormulaValue::Number(v)])
         .collect::<Vec<_>>();
-    Ok(FormulaValue::Array { data: arr, source: None })
+    Ok(FormulaValue::Array {
+        data: arr,
+        source: None,
+    })
 }
 
 pub fn fn_forecast_ets(
@@ -1110,7 +1139,10 @@ pub fn fn_forecast_ets_stat(
         FormulaValue::Number(rmse),
         FormulaValue::Number(step_size),
     ];
-    Ok(FormulaValue::Array { data: vec![row], source: None })
+    Ok(FormulaValue::Array {
+        data: vec![row],
+        source: None,
+    })
 }
 
 #[cfg(test)]

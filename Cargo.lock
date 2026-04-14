@@ -692,6 +692,7 @@ dependencies = [
  "duke-sheets-formula",
  "duke-sheets-libreoffice",
  "duke-sheets-xls",
+ "duke-sheets-xlsb",
  "duke-sheets-xlsx",
  "libreoffice-urp",
  "pretty_assertions",
@@ -710,6 +711,7 @@ name = "duke-sheets-chart"
 version = "0.1.0"
 dependencies = [
  "pretty_assertions",
+ "quick-xml 0.37.5",
  "serde",
  "thiserror 1.0.69",
 ]
@@ -757,6 +759,7 @@ dependencies = [
  "duke-sheets-chart",
  "duke-sheets-core",
  "duke-sheets-xls",
+ "duke-sheets-xlsb",
  "duke-sheets-xlsx",
  "excel-com-protocol",
  "serde",
@@ -827,6 +830,23 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "duke-sheets-xlsb"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "duke-sheets-chart",
+ "duke-sheets-core",
+ "duke-sheets-formula",
+ "encoding_rs",
+ "log",
+ "pretty_assertions",
+ "quick-xml 0.37.5",
+ "tempfile",
+ "thiserror 1.0.69",
+ "zip",
 ]
 
 [[package]]

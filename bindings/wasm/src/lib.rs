@@ -11,6 +11,7 @@ use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
+use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
 
 mod types;
@@ -481,6 +482,14 @@ impl Workbook {
         let wb = self.inner.borrow();
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
+        Ok(buf)
+    }
+
+    #[wasm_bindgen(js_name = saveXlsbBytes)]
+    pub fn save_xlsb_bytes(&self) -> Result<Vec<u8>, JsError> {
+        let wb = self.inner.borrow();
+        let mut buf = Vec::new();
+        XlsbWriter::write(&wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
         Ok(buf)
     }
 
