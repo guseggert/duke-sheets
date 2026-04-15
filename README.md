@@ -1,34 +1,32 @@
 # Duke Sheets
 
-A library for reading, writing, and manipulating Excel spreadsheets with full formula evaluation.
+A library for reading, writing, manipulating, and evaluating Excel spreadsheets.
 
 Includes bindings for:
 
-- Python
-- NodeJS
-- WebAssembly
+- [Python](https://pypi.org/project/duke-sheets/)
+- [NodeJS](https://www.npmjs.com/package/@dukelib/sheets)
+- [WebAssembly](https://www.npmjs.com/package/@dukelib/sheets-wasm)
 - Rust
 
 Duke Sheets includes an extensive test suite:
 
 - Formula tests covering Excel's documentation cases
-- Compatibility tests against both LibreOffice and Excel
+- Compatibility & parity tests against both LibreOffice and Excel
 - Fuzz testing
 - Performance benchmarks
-- [Performance regression workflow](docs/PERF_REGRESSION.md)
 - Corpus testing on real-world spreadsheets
 
-Duke Sheets has a high-performance multithreaded formula engine which can evaluate millions of formulas in seconds, and has been profiled against some of the most complex financial spreadsheets in the world.
+Duke Sheets has a multithreaded formula engine which can evaluate millions of formulas per second, and has been profiled against some of the most complex financial spreadsheets in the world.
 
-Supported file formats: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xls`, `.csv`
+Supported file formats: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xls`, `xlsb`, `.csv`
 
-Additional supported features:
+Duke Sheets supports all formulas, except ones that don't make sense such as `CALL` and `REGISTER.ID`. Even formulas such as [WEBSERVICE](https://support.microsoft.com/en-us/office/webservice-function-0546a35a-ecc6-4739-aed7-c0b7ce1562c4) are supported. Most workbook metadata is also supported such as formatting, images, charts, etc. Some advanced features are still in progress (e.g., pivot tables).
 
-- Styling (fonts, colors, borders, number formatting)
+> [!WARNING]
+> Duke Sheets is in alpha. Its internals are heavily tested but its API is not yet stable.
 
 ## Node.js / TypeScript
-
-Install from [npm](https://www.npmjs.com/package/@dukelib/sheets):
 
 ```bash
 npm install @dukelib/sheets
@@ -72,8 +70,6 @@ conditional formatting, data validations, merged regions, page setup, and more.
 
 ## Python
 
-Install from [PyPI](https://pypi.org/project/duke-sheets/):
-
 ```bash
 pip install duke-sheets
 ```
@@ -107,8 +103,6 @@ values, comments, hyperlinks, tables, freeze panes, page setup, etc.
 
 ## WebAssembly
 
-Install from [npm](https://www.npmjs.com/package/@dukelib/sheets-wasm):
-
 ```bash
 npm install @dukelib/sheets-wasm
 ```
@@ -137,9 +131,6 @@ const wb2 = Workbook.loadCsvString('a,b,c\n1,2,3');
 const xlsxBytes = wb.saveXlsxBytes();   // Uint8Array
 const csvString = wb.saveCsvString();    // string
 ```
-
-Full API parity with the Node.js bindings, including all read-only
-accessors (returned as plain JS objects via structured serialization).
 
 ## Rust
 
@@ -175,19 +166,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 ```
-
-## Crate Structure
-
-| Crate | Description |
-|-------|-------------|
-| `duke-sheets` | Main API crate (re-exports all functionality) |
-| `duke-sheets-core` | Core data structures |
-| `duke-sheets-formula` | Formula parser and evaluator |
-| `duke-sheets-xlsx` | XLSX reader/writer |
-| `duke-sheets-xls` | XLS reader (legacy format) |
-| `duke-sheets-csv` | CSV reader/writer |
-| `duke-sheets-chart` | Chart support |
-| `duke-sheets-html` | HTML table export |
 
 <!-- BENCHMARKS:START -->
 ### Benchmarks
@@ -251,4 +229,4 @@ fn main() -> Result<()> {
 
 ## License
 
-MIT OR Apache-2.0
+MIT
