@@ -81,7 +81,7 @@ fn format_ref(row: u32, col: u16, row_rel: bool, col_rel: bool) -> String {
         col_prefix,
         col_to_letter(col),
         row_prefix,
-        row + 1
+        row.saturating_add(1)
     )
 }
 

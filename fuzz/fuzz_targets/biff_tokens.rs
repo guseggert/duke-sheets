@@ -50,7 +50,7 @@ struct FuzzContext {
     extern_entries: Vec<FuzzExternEntry>,
     supbook_count: u8,
     names: Vec<FuzzName>,
-    base_cell: Option<(u16, u16)>,
+    base_cell: Option<(u32, u16)>,
 }
 
 impl<'a> Arbitrary<'a> for FuzzContext {
@@ -111,7 +111,7 @@ struct FuzzExternEntry {
 #[derive(Debug)]
 struct FuzzName {
     name: String,
-    sheet_idx: u16,
+    sheet_idx: u32,
     is_builtin: bool,
     formula_body: Vec<u8>,
 }
