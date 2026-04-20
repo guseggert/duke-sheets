@@ -143,24 +143,12 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         let _ = w.write_event(Event::Start(e.clone().into_owned()));
                         capture = Some(w);
                     }
-                    b"from" if in_two_cell_anchor || in_one_cell_anchor => {
-                        in_from = true;
-                    }
-                    b"to" if in_two_cell_anchor => {
-                        in_to = true;
-                    }
-                    b"col" if in_from || in_to => {
-                        in_col = true;
-                    }
-                    b"colOff" if in_from || in_to => {
-                        in_col_off = true;
-                    }
-                    b"row" if in_from || in_to => {
-                        in_row = true;
-                    }
-                    b"rowOff" if in_from || in_to => {
-                        in_row_off = true;
-                    }
+                    b"from" if in_two_cell_anchor || in_one_cell_anchor => in_from = true,
+                    b"to" if in_two_cell_anchor => in_to = true,
+                    b"col" if in_from || in_to => in_col = true,
+                    b"colOff" if in_from || in_to => in_col_off = true,
+                    b"row" if in_from || in_to => in_row = true,
+                    b"rowOff" if in_from || in_to => in_row_off = true,
                     b"graphicData" if in_any_anchor => {
                         in_graphic_data = true;
                         graphic_data_uri = None;
@@ -192,23 +180,25 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         in_sp_pr = false;
                         sp_pr_depth = 0;
                     }
-                    b"grpSp" if in_any_anchor => {
-                        _in_grp_sp = true;
-                    }
+                    b"grpSp" if in_any_anchor => _in_grp_sp = true,
                     b"cNvPr" if in_pic => {
                         for attr in e.attributes().flatten() {
                             match attr.key.local_name().as_ref() {
                                 b"id" => {
-                                    pic_id = attr.unescape_value().ok()
-                                        .and_then(|s| s.parse().ok()).unwrap_or(0);
+                                    pic_id = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0);
                                 }
                                 b"name" => {
-                                    pic_name = attr.unescape_value()
-                                        .map(|s| s.to_string()).unwrap_or_default();
+                                    pic_name = attr
+                                        .unescape_value()
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_default();
                                 }
                                 b"descr" => {
-                                    pic_descr = attr.unescape_value().ok()
-                                        .map(|s| s.to_string());
+                                    pic_descr = attr.unescape_value().ok().map(|s| s.to_string());
                                 }
                                 _ => {}
                             }
@@ -229,24 +219,28 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         for attr in e.attributes().flatten() {
                             match attr.key.local_name().as_ref() {
                                 b"rot" => {
-                                    pic_rotation = attr.unescape_value().ok()
-                                        .and_then(|s| s.parse().ok());
+                                    pic_rotation =
+                                        attr.unescape_value().ok().and_then(|s| s.parse().ok());
                                 }
                                 b"flipH" => {
-                                    pic_flip_h = attr.unescape_value().ok()
-                                        .map(|s| s == "1" || s == "true").unwrap_or(false);
+                                    pic_flip_h = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .map(|s| s == "1" || s == "true")
+                                        .unwrap_or(false);
                                 }
                                 b"flipV" => {
-                                    pic_flip_v = attr.unescape_value().ok()
-                                        .map(|s| s == "1" || s == "true").unwrap_or(false);
+                                    pic_flip_v = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .map(|s| s == "1" || s == "true")
+                                        .unwrap_or(false);
                                 }
                                 _ => {}
                             }
                         }
                     }
-                    _ if in_sp_pr => {
-                        sp_pr_depth += 1;
-                    }
+                    _ if in_sp_pr => sp_pr_depth += 1,
                     _ => {}
                 }
             }
@@ -275,16 +269,21 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
                                     b"id" => {
-                                        pic_id = attr.unescape_value().ok()
-                                            .and_then(|s| s.parse().ok()).unwrap_or(0);
+                                        pic_id = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse().ok())
+                                            .unwrap_or(0);
                                     }
                                     b"name" => {
-                                        pic_name = attr.unescape_value()
-                                            .map(|s| s.to_string()).unwrap_or_default();
+                                        pic_name = attr
+                                            .unescape_value()
+                                            .map(|s| s.to_string())
+                                            .unwrap_or_default();
                                     }
                                     b"descr" => {
-                                        pic_descr = attr.unescape_value().ok()
-                                            .map(|s| s.to_string());
+                                        pic_descr =
+                                            attr.unescape_value().ok().map(|s| s.to_string());
                                     }
                                     _ => {}
                                 }
@@ -300,7 +299,8 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         b"svgBlip" => {
                             for attr in e.attributes().flatten() {
                                 if attr.key.local_name().as_ref() == b"embed" {
-                                    svg_blip_rel_id = attr.unescape_value().ok().map(|s| s.to_string());
+                                    svg_blip_rel_id =
+                                        attr.unescape_value().ok().map(|s| s.to_string());
                                 }
                             }
                         }
@@ -308,12 +308,18 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
                                     b"cx" => {
-                                        pic_width_emu = attr.unescape_value().ok()
-                                            .and_then(|s| s.parse().ok()).unwrap_or(0);
+                                        pic_width_emu = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse().ok())
+                                            .unwrap_or(0);
                                     }
                                     b"cy" => {
-                                        pic_height_emu = attr.unescape_value().ok()
-                                            .and_then(|s| s.parse().ok()).unwrap_or(0);
+                                        pic_height_emu = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse().ok())
+                                            .unwrap_or(0);
                                     }
                                     _ => {}
                                 }
@@ -323,16 +329,22 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                             for attr in e.attributes().flatten() {
                                 match attr.key.local_name().as_ref() {
                                     b"rot" => {
-                                        pic_rotation = attr.unescape_value().ok()
-                                            .and_then(|s| s.parse().ok());
+                                        pic_rotation =
+                                            attr.unescape_value().ok().and_then(|s| s.parse().ok());
                                     }
                                     b"flipH" => {
-                                        pic_flip_h = attr.unescape_value().ok()
-                                            .map(|s| s == "1" || s == "true").unwrap_or(false);
+                                        pic_flip_h = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .map(|s| s == "1" || s == "true")
+                                            .unwrap_or(false);
                                     }
                                     b"flipV" => {
-                                        pic_flip_v = attr.unescape_value().ok()
-                                            .map(|s| s == "1" || s == "true").unwrap_or(false);
+                                        pic_flip_v = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .map(|s| s == "1" || s == "true")
+                                            .unwrap_or(false);
                                     }
                                     _ => {}
                                 }
@@ -418,9 +430,7 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                             in_pic = false;
                         }
                     }
-                    b"grpSp" => {
-                        _in_grp_sp = false;
-                    }
+                    b"grpSp" => _in_grp_sp = false,
                     b"spPr" if in_pic && in_sp_pr => {
                         in_sp_pr = false;
                         sp_pr_depth = 0;
@@ -432,7 +442,11 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         if let Some(rel_id) = chart_rel_id.take() {
                             chart_refs.push(DrawingChartRef {
                                 rel_id,
-                                anchor: DrawingAnchor::TwoCell { from: from.clone(), to: to.clone(), edit_as: None },
+                                anchor: DrawingAnchor::TwoCell {
+                                    from: from.clone(),
+                                    to: to.clone(),
+                                    edit_as: None,
+                                },
                                 is_chart_ex,
                                 raw_mc_fallback: raw_mc_fallback.take(),
                             });

@@ -11,7 +11,7 @@ use super::conditional_format::parse_color_element;
 use super::decode_excel_escapes;
 use crate::error::{XlsxError, XlsxResult};
 
-/// Entry in the shared string table — either plain text or rich text with runs.
+/// Entry in the shared string table - either plain text or rich text with runs.
 #[derive(Debug, Clone)]
 pub(crate) enum SharedStringEntry {
     Plain(String),
@@ -82,9 +82,7 @@ pub(crate) fn read_shared_strings<R: Read + Seek>(
                     in_run_t = true;
                 }
                 // <rPr> children that use Start+End (rare, but handle defensively)
-                name if in_rpr => {
-                    parse_rpr_element(name, &e, &mut run_font);
-                }
+                name if in_rpr => parse_rpr_element(name, &e, &mut run_font),
                 _ => {}
             },
             Ok(Event::End(e)) => match e.name().local_name().as_ref() {
@@ -102,12 +100,8 @@ pub(crate) fn read_shared_strings<R: Read + Seek>(
                     plain_text.clear();
                     in_si = false;
                 }
-                b"t" if in_run_t => {
-                    in_run_t = false;
-                }
-                b"t" if in_t => {
-                    in_t = false;
-                }
+                b"t" if in_run_t => in_run_t = false,
+                b"t" if in_t => in_t = false,
                 b"r" if in_r => {
                     // Finish current run
                     let font = run_font
@@ -119,9 +113,7 @@ pub(crate) fn read_shared_strings<R: Read + Seek>(
                     });
                     in_r = false;
                 }
-                b"rPr" => {
-                    in_rpr = false;
-                }
+                b"rPr" => in_rpr = false,
                 _ => {}
             },
             Ok(Event::Empty(e)) => {
@@ -130,7 +122,7 @@ pub(crate) fn read_shared_strings<R: Read + Seek>(
                 if in_rpr {
                     parse_rpr_element(name, &e, &mut run_font);
                 } else if name == b"t" && in_si && !in_r {
-                    // Empty <t/> means empty string — valid
+                    // Empty <t/> means empty string - valid
                 } else if name == b"t" && in_r {
                     // Empty <t/> within a run
                 }
@@ -184,9 +176,6 @@ pub(crate) fn parse_rpr_element(name: &[u8], e: &BytesStart, font: &mut Option<R
         b"charset" => f.charset = parse_val_u8(e),
         b"scheme" => f.scheme = parse_val_string(e),
         b"color" => {
-            // Reuse the existing color parser from conditional_format.
-            // Pass None for theme palette — we store Color::Theme as-is
-            // for roundtrip fidelity (resolved at render time).
             let color = parse_color_element(e, None);
             if color != Color::Auto {
                 f.color = Some(color);
@@ -200,19 +189,20 @@ pub(crate) fn parse_rpr_element(name: &[u8], e: &BytesStart, font: &mut Option<R
                 _ => None,
             });
         }
-        // Skip macOS-only: outline, shadow, condense, extend
         _ => {}
     }
 }
 
-/// Parse a boolean property attribute. Bare `<b/>` = true, `<b val="0"/>` = false.
 fn parse_bool_attr(e: &BytesStart) -> bool {
     for attr in e.attributes().flatten() {
         if attr.key.local_name().as_ref() == b"val" {
-            return !matches!(attr.unescape_value().ok().as_deref(), Some("0") | Some("false"));
+            return !matches!(
+                attr.unescape_value().ok().as_deref(),
+                Some("0") | Some("false")
+            );
         }
     }
-    true // No val attribute means true
+    true
 }
 
 /// Parse underline style from `<u/>` or `<u val="double"/>`.

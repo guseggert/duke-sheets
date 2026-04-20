@@ -9,12 +9,8 @@ pub(super) fn parse_data_validation_attrs(e: &quick_xml::events::BytesStart) -> 
 
     for attr in e.attributes().flatten() {
         match attr.key.local_name().as_ref() {
-            b"type" => {
-                dv_type = attr.unescape_value().ok().map(|s| s.to_string());
-            }
-            b"operator" => {
-                operator = attr.unescape_value().ok().map(|s| s.to_string());
-            }
+            b"type" => dv_type = attr.unescape_value().ok().map(|s| s.to_string()),
+            b"operator" => operator = attr.unescape_value().ok().map(|s| s.to_string()),
             b"allowBlank" => {
                 validation.allow_blank = attr.unescape_value().ok().is_some_and(|s| s == "1");
             }
@@ -26,8 +22,7 @@ pub(super) fn parse_data_validation_attrs(e: &quick_xml::events::BytesStart) -> 
                     attr.unescape_value().ok().is_some_and(|s| s == "1");
             }
             b"showErrorMessage" => {
-                validation.show_error_alert =
-                    attr.unescape_value().ok().is_some_and(|s| s == "1");
+                validation.show_error_alert = attr.unescape_value().ok().is_some_and(|s| s == "1");
             }
             b"errorStyle" => {
                 if let Ok(style) = attr.unescape_value() {

@@ -17,6 +17,7 @@ use duke_sheets_core::{
     CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, Style, Workbook,
 };
 
+
 use crate::biff::formula::token_parser::ParsedToken;
 use crate::biff::formula::{ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES};
 use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32, read_u8};
@@ -585,33 +586,15 @@ impl XlsReader {
                         });
                     }
                 }
-                records::MERGECELLS => {
-                    Self::parse_mergecells(&rec.data, ws)?;
-                }
-                records::ROW => {
-                    Self::parse_row(&rec.data, ws)?;
-                }
-                records::COLINFO => {
-                    Self::parse_colinfo(&rec.data, ws)?;
-                }
-                records::DEFCOLWIDTH => {
-                    Self::parse_defcolwidth(&rec.data, ws)?;
-                }
-                records::DEFAULTROWHEIGHT => {
-                    Self::parse_defaultrowheight(&rec.data, ws)?;
-                }
-                records::WINDOW2 => {
-                    window2_frozen = Self::parse_window2(&rec.data);
-                }
-                records::PANE => {
-                    Self::parse_pane(&rec.data, ws, window2_frozen)?;
-                }
-                records::SELECTION => {
-                    Self::parse_selection(&rec.data, ws)?;
-                }
-                records::SHEETLAYOUT => {
-                    Self::parse_sheetlayout(&rec.data, ws);
-                }
+                records::MERGECELLS => Self::parse_mergecells(&rec.data, ws)?,
+                records::ROW => Self::parse_row(&rec.data, ws)?,
+                records::COLINFO => Self::parse_colinfo(&rec.data, ws)?,
+                records::DEFCOLWIDTH => Self::parse_defcolwidth(&rec.data, ws)?,
+                records::DEFAULTROWHEIGHT => Self::parse_defaultrowheight(&rec.data, ws)?,
+                records::WINDOW2 => window2_frozen = Self::parse_window2(&rec.data),
+                records::PANE => Self::parse_pane(&rec.data, ws, window2_frozen)?,
+                records::SELECTION => Self::parse_selection(&rec.data, ws)?,
+                records::SHEETLAYOUT => Self::parse_sheetlayout(&rec.data, ws),
                 records::PROTECT => {
                     if rec.data.len() >= 2 {
                         let val = u16::from_le_bytes([rec.data[0], rec.data[1]]);
@@ -627,9 +610,7 @@ impl XlsReader {
                     }
                 }
                 // ── Comments (OBJ → TXO → NOTE) ──────────────────────
-                records::OBJ => {
-                    last_obj_id = Self::parse_obj_id(&rec.data);
-                }
+                records::OBJ => last_obj_id = Self::parse_obj_id(&rec.data),
                 records::TXO => {
                     if let Some(oid) = last_obj_id.take() {
                         if let Some(text) = Self::parse_txo_text(&rec.data, &rec.continue_offsets) {
@@ -637,31 +618,22 @@ impl XlsReader {
                         }
                     }
                 }
-                records::NOTE => {
-                    Self::parse_note(&rec.data, ws, &obj_texts)?;
-                }
+                records::NOTE => Self::parse_note(&rec.data, ws, &obj_texts)?,
                 // ── Hyperlinks ──────────────────────────────────────
-                records::HLINK => {
-                    Self::parse_hlink(&rec.data, ws)?;
-                }
+                records::HLINK => Self::parse_hlink(&rec.data, ws)?,
                 records::HLINKTOOLTIP => {
                     Self::parse_hlinktooltip(&rec.data, &mut hlink_tooltips);
                 }
                 // ── Conditional formatting ──────────────────────────
-                records::CONDFMT => {
-                    cf_ranges = Self::parse_condfmt(&rec.data);
-                }
-                records::CF => {
-                    Self::parse_cf(&rec.data, ws, &cf_ranges, formula_ctx);
-                }
+                records::CONDFMT => cf_ranges = Self::parse_condfmt(&rec.data),
+                records::CF => Self::parse_cf(&rec.data, ws, &cf_ranges, formula_ctx),
                 // ── Data validation ─────────────────────────────────
                 records::DVAL => {
-                    // Header only — DV records follow with actual rules
+                    // Header only - DV records follow with actual rules
                 }
-                records::DV => {
-                    Self::parse_dv(&rec.data, ws, formula_ctx)?;
+                records::DV => Self::parse_dv(&rec.data, ws, formula_ctx)?,
+                records::AUTOFILTERINFO => {
                 }
-                records::AUTOFILTERINFO => {}
                 records::AUTOFILTER => {
                     if let Some(fc) = Self::parse_autofilter(&rec.data) {
                         auto_filter_columns.push(fc);
@@ -774,7 +746,8 @@ impl XlsReader {
                         }
                     }
                 }
-                records::HCENTER | records::VCENTER => {}
+                records::HCENTER | records::VCENTER => {
+                }
                 records::SCL => {
                     // Zoom: numerator(u16) + denominator(u16)
                     if rec.data.len() >= 4 {
@@ -806,12 +779,8 @@ impl XlsReader {
                         }
                     }
                 }
-                records::HPAGEBREAKS => {
-                    Self::parse_page_breaks(&rec.data, ws, true);
-                }
-                records::VPAGEBREAKS => {
-                    Self::parse_page_breaks(&rec.data, ws, false);
-                }
+                records::HPAGEBREAKS => Self::parse_page_breaks(&rec.data, ws, true),
+                records::VPAGEBREAKS => Self::parse_page_breaks(&rec.data, ws, false),
                 _ => {
                     // Skip unknown/unhandled records
                 }
@@ -1178,7 +1147,7 @@ impl XlsReader {
                         if let Some(shared_tokens) =
                             shared_formulas.get(&(*master_row as u16, *master_col))
                         {
-                            // Shared formula found — decompile with base cell
+                            // Shared formula found - decompile with base cell
                             let shared_ctx = FormulaContext {
                                 sheet_names: formula_ctx.sheet_names.clone(),
                                 extern_sheet: formula_ctx.extern_sheet.clone(),
@@ -1193,7 +1162,7 @@ impl XlsReader {
                                 format!("={}", text)
                             }
                         } else {
-                            // SHAREDFMLA not seen yet — write cell now with
+                            // SHAREDFMLA not seen yet - write cell now with
                             // empty text; caller will backfill later.
                             Self::write_formula_cell(
                                 ws,
@@ -1212,7 +1181,7 @@ impl XlsReader {
                             });
                         }
                     } else {
-                        // fShared set but no tExp — decompile normally
+                        // fShared set but no tExp - decompile normally
                         let text =
                             crate::biff::formula::decompiler::decompile(&tokens, formula_ctx);
                         if text.is_empty() {
@@ -1241,7 +1210,7 @@ impl XlsReader {
                             format!("{{={}}}", text)
                         }
                     } else {
-                        // ARRAY record not seen yet — write cell with empty
+                        // ARRAY record not seen yet - write cell with empty
                         // text; caller will backfill later.
                         Self::write_formula_cell(
                             ws,
@@ -1270,7 +1239,7 @@ impl XlsReader {
                     {
                         format!("=TABLE({},{})", input1, input2)
                     } else {
-                        // TABLE record not seen yet — write cell with empty text
+                        // TABLE record not seen yet - write cell with empty text
                         Self::write_formula_cell(
                             ws,
                             row,
@@ -1288,7 +1257,7 @@ impl XlsReader {
                         });
                     }
                 } else {
-                    // Normal formula — decompile from already-parsed tokens
+                    // Normal formula - decompile from already-parsed tokens
                     let text = crate::biff::formula::decompiler::decompile(&tokens, formula_ctx);
                     if text.is_empty() {
                         String::new()
@@ -1781,9 +1750,7 @@ impl XlsReader {
                     }
                     break;
                 }
-                _ => {
-                    break;
-                }
+                _ => break,
             }
         }
         None
@@ -1834,7 +1801,7 @@ impl XlsReader {
                     }
                     pos += 11; // skip full tArea3d
                 }
-                // tMemFunc: size(2) — skip the size field, tokens follow inline
+                // tMemFunc: size(2) - skip the size field, tokens follow inline
                 0x29 => {
                     if pos + 3 <= formula_body.len() {
                         pos += 3; // token(1) + cce(2)
@@ -1842,13 +1809,9 @@ impl XlsReader {
                         break;
                     }
                 }
-                // tList (union operator) — 1 byte, skip
-                0x10 => {
-                    pos += 1;
-                }
-                _ => {
-                    break;
-                }
+                // tList (union operator) - 1 byte, skip
+                0x10 => pos += 1,
+                _ => break,
             }
         }
 
@@ -2309,7 +2272,7 @@ impl XlsReader {
         let text_start = if !continue_offsets.is_empty() {
             continue_offsets[0]
         } else if data.len() > 18 {
-            18 // No CONTINUE marker — text follows header directly
+            18 // No CONTINUE marker - text follows header directly
         } else {
             return None;
         };
@@ -2558,12 +2521,12 @@ impl XlsReader {
             let trimmed = short_path.trim_end_matches('\0');
             Ok(format!("{}{}", prefix, trimmed))
         } else {
-            // Unknown moniker type — skip
+            // Unknown moniker type - skip
             Ok(String::new())
         }
     }
 
-    /// Parse HLINKTOOLTIP (0x0800) — FRT record with tooltip text.
+    /// Parse HLINKTOOLTIP (0x0800) - FRT record with tooltip text.
     fn parse_hlinktooltip(
         data: &[u8],
         tooltips: &mut std::collections::HashMap<(u32, u16), String>,
@@ -2598,7 +2561,7 @@ impl XlsReader {
 
     // ── Conditional formatting record parsers ────────────────────────────
 
-    /// Parse CONDFMT (0x01B0) — conditional formatting range header.
+    /// Parse CONDFMT (0x01B0) - conditional formatting range header.
     ///
     /// Format: cCF(2) + flags(2) + enclosing_range(8) + range_count(2) + ranges.
     fn parse_condfmt(data: &[u8]) -> Vec<CellRange> {
@@ -2606,7 +2569,7 @@ impl XlsReader {
             return Vec::new();
         }
         let mut off = 4; // skip cCF(2) + flags(2)
-                         // Skip enclosing range (8 bytes) — individual ranges are more precise
+                         // Skip enclosing range (8 bytes) - individual ranges are more precise
         off += 8;
         let range_count = u16::from_le_bytes([data[off], data[off + 1]]) as usize;
         off += 2;
@@ -2629,7 +2592,7 @@ impl XlsReader {
         ranges
     }
 
-    /// Parse CF (0x01B1) — conditional formatting rule.
+    /// Parse CF (0x01B1) - conditional formatting rule.
     ///
     /// Format: ct(1) + cp(1) + cce1(2) + cce2(2) + [dxf_data] + formula1 + formula2.
     fn parse_cf(
@@ -2680,7 +2643,7 @@ impl XlsReader {
 
         let rule_type = match ct {
             0 | 1 => {
-                // CellIs — map CP to CfOperator
+                // CellIs - map CP to CfOperator
                 let operator = match cp {
                     1 => CfOperator::Between,
                     2 => CfOperator::NotBetween,
@@ -2714,7 +2677,7 @@ impl XlsReader {
 
     // ── Data validation record parsers ───────────────────────────────────
 
-    /// Parse a DV record (0x01BE) — data validation criteria.
+    /// Parse a DV record (0x01BE) - data validation criteria.
     ///
     /// Format: flags(4) + input_title + error_title + input_msg + error_msg +
     /// cce1(2) + unused(2) + formula1 + cce2(2) + unused(2) + formula2 +
@@ -2833,7 +2796,7 @@ impl XlsReader {
                 value2: f2,
             },
             3 => {
-                // List — formula1 may be a comma-separated string or formula
+                // List - formula1 may be a comma-separated string or formula
                 let source = if is_explicit_list {
                     // Inline list: strip surrounding quotes if present
                     f1.trim_matches('"').to_string()
@@ -3240,7 +3203,7 @@ mod tests {
 
     #[test]
     fn test_parse_note_no_text() {
-        // NOTE without matching OBJ/TXO — should produce empty comment text
+        // NOTE without matching OBJ/TXO - should produce empty comment text
         let mut note_data = Vec::new();
         note_data.extend_from_slice(&0u16.to_le_bytes()); // row
         note_data.extend_from_slice(&0u16.to_le_bytes()); // col
@@ -3382,7 +3345,7 @@ mod tests {
         data.push(operator); // cp
         data.extend_from_slice(&(formula1.len() as u16).to_le_bytes()); // cce1
         data.extend_from_slice(&(formula2.len() as u16).to_le_bytes()); // cce2
-                                                                        // No DXF data for this test — formulas are at the end
+                                                                        // No DXF data for this test - formulas are at the end
         data.extend_from_slice(formula1);
         data.extend_from_slice(formula2);
         data
@@ -3434,9 +3397,7 @@ mod tests {
         let cf_rules = ws.conditional_formats();
         assert_eq!(cf_rules.len(), 1);
         match &cf_rules[0].rule_type {
-            CfRuleType::Expression { formula } => {
-                assert_eq!(formula, "1");
-            }
+            CfRuleType::Expression { formula } => assert_eq!(formula, "1"),
             _ => panic!("Expected Expression rule type"),
         }
     }
@@ -3630,9 +3591,7 @@ mod tests {
         let validations = ws.data_validations();
         assert_eq!(validations.len(), 1);
         match &validations[0].validation_type {
-            ValidationType::Custom { formula } => {
-                assert_eq!(formula, "0");
-            }
+            ValidationType::Custom { formula } => assert_eq!(formula, "0"),
             _ => panic!("Expected Custom validation"),
         }
     }
@@ -3952,7 +3911,7 @@ mod tests {
         let runs = XlsReader::sst_runs_to_rich_text("Hello World", &formatting_runs, &style_ctx);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].text, "Hello ");
-        // Font 0 is "normal" — no bold/italic, so RunFont will have
+        // Font 0 is "normal" - no bold/italic, so RunFont will have
         // size + name set but no bold.
         let f0 = runs[0].font.as_ref().unwrap();
         assert_eq!(f0.name, Some("Calibri".to_string()));

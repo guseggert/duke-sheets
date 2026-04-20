@@ -220,9 +220,7 @@ fn write_layout(w: &mut XmlWriter, layout: &Option<Layout>) -> XlsxResult<()> {
                 w.write_event(Event::Empty(BytesStart::new("c:layout")))?;
             }
         }
-        None => {
-            w.write_event(Event::Empty(BytesStart::new("c:layout")))?;
-        }
+        None => w.write_event(Event::Empty(BytesStart::new("c:layout")))?,
     }
     Ok(())
 }
@@ -263,7 +261,6 @@ fn write_chart_type_group(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
             .with_attribute(("val", s.as_str()))
             .write_empty()?;
     }
-
 
     write_chart_lines_for_legacy(w, chart)?;
 
@@ -347,7 +344,6 @@ fn write_combo_chart_type_group(w: &mut XmlWriter, group: &ChartTypeGroup) -> Xl
             .write_empty()?;
     }
 
-
     write_chart_lines_for_group(w, group)?;
 
     for ax_id in &group.axis_ids {
@@ -393,56 +389,98 @@ fn write_chart_type_props_for_group(
 ) -> XlsxResult<()> {
     match chart_type {
         ChartType::ColumnClustered => {
-            w.create_element("c:barDir").with_attribute(("val", "col")).write_empty()?;
-            w.create_element("c:grouping").with_attribute(("val", "clustered")).write_empty()?;
+            w.create_element("c:barDir")
+                .with_attribute(("val", "col"))
+                .write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "clustered"))
+                .write_empty()?;
         }
         ChartType::ColumnStacked => {
-            w.create_element("c:barDir").with_attribute(("val", "col")).write_empty()?;
-            w.create_element("c:grouping").with_attribute(("val", "stacked")).write_empty()?;
+            w.create_element("c:barDir")
+                .with_attribute(("val", "col"))
+                .write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "stacked"))
+                .write_empty()?;
         }
         ChartType::ColumnPercentStacked => {
-            w.create_element("c:barDir").with_attribute(("val", "col")).write_empty()?;
-            w.create_element("c:grouping").with_attribute(("val", "percentStacked")).write_empty()?;
+            w.create_element("c:barDir")
+                .with_attribute(("val", "col"))
+                .write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "percentStacked"))
+                .write_empty()?;
         }
         ChartType::BarClustered => {
-            w.create_element("c:barDir").with_attribute(("val", "bar")).write_empty()?;
-            w.create_element("c:grouping").with_attribute(("val", "clustered")).write_empty()?;
+            w.create_element("c:barDir")
+                .with_attribute(("val", "bar"))
+                .write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "clustered"))
+                .write_empty()?;
         }
         ChartType::BarStacked => {
-            w.create_element("c:barDir").with_attribute(("val", "bar")).write_empty()?;
-            w.create_element("c:grouping").with_attribute(("val", "stacked")).write_empty()?;
+            w.create_element("c:barDir")
+                .with_attribute(("val", "bar"))
+                .write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "stacked"))
+                .write_empty()?;
         }
         ChartType::BarPercentStacked => {
-            w.create_element("c:barDir").with_attribute(("val", "bar")).write_empty()?;
-            w.create_element("c:grouping").with_attribute(("val", "percentStacked")).write_empty()?;
+            w.create_element("c:barDir")
+                .with_attribute(("val", "bar"))
+                .write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "percentStacked"))
+                .write_empty()?;
         }
         ChartType::Line => {
-            w.create_element("c:grouping").with_attribute(("val", "standard")).write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "standard"))
+                .write_empty()?;
         }
         ChartType::LineStacked => {
-            w.create_element("c:grouping").with_attribute(("val", "stacked")).write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "stacked"))
+                .write_empty()?;
         }
         ChartType::Area => {
-            w.create_element("c:grouping").with_attribute(("val", "standard")).write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "standard"))
+                .write_empty()?;
         }
         ChartType::AreaStacked => {
-            w.create_element("c:grouping").with_attribute(("val", "stacked")).write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "stacked"))
+                .write_empty()?;
         }
         ChartType::AreaPercentStacked => {
-            w.create_element("c:grouping").with_attribute(("val", "percentStacked")).write_empty()?;
+            w.create_element("c:grouping")
+                .with_attribute(("val", "percentStacked"))
+                .write_empty()?;
         }
         ChartType::ScatterMarkers => {
-            w.create_element("c:scatterStyle").with_attribute(("val", "marker")).write_empty()?;
+            w.create_element("c:scatterStyle")
+                .with_attribute(("val", "marker"))
+                .write_empty()?;
         }
         ChartType::ScatterSmooth => {
-            w.create_element("c:scatterStyle").with_attribute(("val", "smoothMarker")).write_empty()?;
+            w.create_element("c:scatterStyle")
+                .with_attribute(("val", "smoothMarker"))
+                .write_empty()?;
         }
         ChartType::ScatterLines => {
-            w.create_element("c:scatterStyle").with_attribute(("val", "lineMarker")).write_empty()?;
+            w.create_element("c:scatterStyle")
+                .with_attribute(("val", "lineMarker"))
+                .write_empty()?;
         }
         ChartType::Radar => {
             let style = radar_style.unwrap_or("marker");
-            w.create_element("c:radarStyle").with_attribute(("val", style)).write_empty()?;
+            w.create_element("c:radarStyle")
+                .with_attribute(("val", style))
+                .write_empty()?;
         }
         ChartType::Pie
         | ChartType::PieExploded
@@ -467,7 +505,11 @@ fn write_combo_axes(w: &mut XmlWriter, axes: &[ChartAxis]) -> XlsxResult<()> {
         let default_pos = match chart_axis.axis.axis_type {
             AxisType::Value => {
                 val_axis_count += 1;
-                if val_axis_count == 1 { "l" } else { "r" }
+                if val_axis_count == 1 {
+                    "l"
+                } else {
+                    "r"
+                }
             }
             _ => "b",
         };
@@ -482,7 +524,13 @@ fn write_combo_axes(w: &mut XmlWriter, axes: &[ChartAxis]) -> XlsxResult<()> {
         }
         let axis_opt = Some(axis);
         if matches!(chart_axis.axis.axis_type, AxisType::Value) {
-            write_val_ax(w, chart_axis.id, default_pos, chart_axis.cross_id, &axis_opt)?;
+            write_val_ax(
+                w,
+                chart_axis.id,
+                default_pos,
+                chart_axis.cross_id,
+                &axis_opt,
+            )?;
         } else {
             write_cat_ax(w, tag, chart_axis.id, chart_axis.cross_id, &axis_opt)?;
         }
@@ -498,13 +546,21 @@ fn chart_element_name(ct: &ChartType, is_3d: bool) -> Option<&'static str> {
         | ChartType::BarClustered
         | ChartType::BarStacked
         | ChartType::BarPercentStacked => Some(if is_3d { "c:bar3DChart" } else { "c:barChart" }),
-        ChartType::Line | ChartType::LineStacked => {
-            Some(if is_3d { "c:line3DChart" } else { "c:lineChart" })
+        ChartType::Line | ChartType::LineStacked => Some(if is_3d {
+            "c:line3DChart"
+        } else {
+            "c:lineChart"
+        }),
+        ChartType::Pie | ChartType::PieExploded => {
+            Some(if is_3d { "c:pie3DChart" } else { "c:pieChart" })
         }
-        ChartType::Pie | ChartType::PieExploded => Some(if is_3d { "c:pie3DChart" } else { "c:pieChart" }),
         ChartType::Doughnut => Some("c:doughnutChart"),
         ChartType::Area | ChartType::AreaStacked | ChartType::AreaPercentStacked => {
-            Some(if is_3d { "c:area3DChart" } else { "c:areaChart" })
+            Some(if is_3d {
+                "c:area3DChart"
+            } else {
+                "c:areaChart"
+            })
         }
         ChartType::ScatterMarkers | ChartType::ScatterSmooth | ChartType::ScatterLines => {
             Some("c:scatterChart")
@@ -512,7 +568,11 @@ fn chart_element_name(ct: &ChartType, is_3d: bool) -> Option<&'static str> {
         ChartType::Bubble => Some("c:bubbleChart"),
         ChartType::Radar => Some("c:radarChart"),
         ChartType::Stock => Some("c:stockChart"),
-        ChartType::Surface => Some(if is_3d { "c:surface3DChart" } else { "c:surfaceChart" }),
+        ChartType::Surface => Some(if is_3d {
+            "c:surface3DChart"
+        } else {
+            "c:surfaceChart"
+        }),
         ChartType::Unsupported(_) => None,
     }
 }
@@ -795,7 +855,6 @@ fn write_data_labels(w: &mut XmlWriter, dl: &DataLabels) -> XlsxResult<()> {
         w.create_element("c:separator")
             .write_text_content(BytesText::new(sep))?;
     }
-
 
     if let Some(ref ll) = dl.leader_lines {
         write_chart_lines_element(w, "c:leaderLines", ll)?;
@@ -1375,7 +1434,6 @@ fn write_val_ax(
         }
     }
 
-
     if let Some(ref ax) = axis {
         if let Some(ref sp) = ax.shape_properties {
             write_shape_properties(w, sp)?;
@@ -1554,8 +1612,8 @@ mod tests {
     use std::io::Cursor;
 
     use duke_sheets_chart::{
-        Axis, AxisType, Chart, DrawingAnchor, ChartColor, ChartLine, ChartLines,
-        ChartShapeProperties, ChartType, DataLabels, DataReference, DataSeries, UpDownBars,
+        Axis, AxisType, Chart, ChartColor, ChartLine, ChartLines, ChartShapeProperties, ChartType,
+        DataLabels, DataReference, DataSeries, DrawingAnchor, UpDownBars,
     };
 
     use super::write_chart_part;
@@ -1566,14 +1624,27 @@ mod tests {
         // Build a chart with raw extension data at multiple levels
         let mut chart = Chart::new(ChartType::ColumnClustered);
         let mut ser = DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3"));
-        ser.raw_ext = Some(b"<c:extLst><c:ext uri=\"{ser-ext}\"><serData/></c:ext></c:extLst>".to_vec());
+        ser.raw_ext =
+            Some(b"<c:extLst><c:ext uri=\"{ser-ext}\"><serData/></c:ext></c:extLst>".to_vec());
         chart.series.push(ser);
 
         let mut exts = HashMap::new();
-        exts.insert("chartType".to_string(), b"<c:extLst><c:ext uri=\"{ct-ext}\"><ctData/></c:ext></c:extLst>".to_vec());
-        exts.insert("plotArea".to_string(), b"<c:extLst><c:ext uri=\"{pa-ext}\"><paData/></c:ext></c:extLst>".to_vec());
-        exts.insert("chart".to_string(), b"<c:extLst><c:ext uri=\"{ch-ext}\"><chData/></c:ext></c:extLst>".to_vec());
-        exts.insert("chartSpace".to_string(), b"<c:extLst><c:ext uri=\"{cs-ext}\"><csData/></c:ext></c:extLst>".to_vec());
+        exts.insert(
+            "chartType".to_string(),
+            b"<c:extLst><c:ext uri=\"{ct-ext}\"><ctData/></c:ext></c:extLst>".to_vec(),
+        );
+        exts.insert(
+            "plotArea".to_string(),
+            b"<c:extLst><c:ext uri=\"{pa-ext}\"><paData/></c:ext></c:extLst>".to_vec(),
+        );
+        exts.insert(
+            "chart".to_string(),
+            b"<c:extLst><c:ext uri=\"{ch-ext}\"><chData/></c:ext></c:extLst>".to_vec(),
+        );
+        exts.insert(
+            "chartSpace".to_string(),
+            b"<c:extLst><c:ext uri=\"{cs-ext}\"><csData/></c:ext></c:extLst>".to_vec(),
+        );
         chart.raw_extensions = exts;
 
         // Write to a zip
@@ -1594,21 +1665,40 @@ mod tests {
         .unwrap();
 
         // Verify series extLst survived
-        let ser_ext = reparsed.series[0].raw_ext.as_ref().expect("series extLst lost");
+        let ser_ext = reparsed.series[0]
+            .raw_ext
+            .as_ref()
+            .expect("series extLst lost");
         let ser_str = std::str::from_utf8(ser_ext).unwrap();
-        assert!(ser_str.contains("ser-ext"), "series ext content lost: {}", ser_str);
+        assert!(
+            ser_str.contains("ser-ext"),
+            "series ext content lost: {}",
+            ser_str
+        );
 
         // Verify chart-level extensions survived
-        let ct = reparsed.raw_extensions.get("chartType").expect("chartType extLst lost");
+        let ct = reparsed
+            .raw_extensions
+            .get("chartType")
+            .expect("chartType extLst lost");
         assert!(std::str::from_utf8(ct).unwrap().contains("ct-ext"));
 
-        let pa = reparsed.raw_extensions.get("plotArea").expect("plotArea extLst lost");
+        let pa = reparsed
+            .raw_extensions
+            .get("plotArea")
+            .expect("plotArea extLst lost");
         assert!(std::str::from_utf8(pa).unwrap().contains("pa-ext"));
 
-        let ch = reparsed.raw_extensions.get("chart").expect("chart extLst lost");
+        let ch = reparsed
+            .raw_extensions
+            .get("chart")
+            .expect("chart extLst lost");
         assert!(std::str::from_utf8(ch).unwrap().contains("ch-ext"));
 
-        let cs = reparsed.raw_extensions.get("chartSpace").expect("chartSpace extLst lost");
+        let cs = reparsed
+            .raw_extensions
+            .get("chartSpace")
+            .expect("chartSpace extLst lost");
         assert!(std::str::from_utf8(cs).unwrap().contains("cs-ext"));
     }
 
@@ -1710,15 +1800,21 @@ mod tests {
         write_chart_part(&mut zip_writer, chart, 1).unwrap();
         let cursor = zip_writer.finish().unwrap();
         let mut archive = zip::ZipArchive::new(cursor).unwrap();
-        read_chart(&mut archive, "xl/charts/chart1.xml", DrawingAnchor::default())
-            .unwrap()
-            .unwrap()
+        read_chart(
+            &mut archive,
+            "xl/charts/chart1.xml",
+            DrawingAnchor::default(),
+        )
+        .unwrap()
+        .unwrap()
     }
 
     #[test]
     fn test_roundtrip_drop_lines() {
         let mut chart = Chart::new(ChartType::Line);
-        chart.series.push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+        chart
+            .series
+            .push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
         chart.category_axis = Some(Axis::new());
         chart.value_axis = Some(Axis::new());
         chart.drop_lines = Some(ChartLines {
@@ -1727,7 +1823,9 @@ mod tests {
                 no_fill: false,
                 line: Some(ChartLine {
                     width: Some(12700),
-                    solid_fill: Some(ChartColor { hex: "FF0000".into() }),
+                    solid_fill: Some(ChartColor {
+                        hex: "FF0000".into(),
+                    }),
                     no_fill: false,
                     dash_style: Some("dash".into()),
                 }),
@@ -1746,7 +1844,9 @@ mod tests {
     #[test]
     fn test_roundtrip_high_low_lines() {
         let mut chart = Chart::new(ChartType::Stock);
-        chart.series.push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+        chart
+            .series
+            .push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
         chart.category_axis = Some(Axis::new());
         chart.value_axis = Some(Axis::new());
         chart.high_low_lines = Some(ChartLines {
@@ -1761,7 +1861,9 @@ mod tests {
     #[test]
     fn test_roundtrip_series_lines() {
         let mut chart = Chart::new(ChartType::BarStacked);
-        chart.series.push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
+        chart
+            .series
+            .push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
         chart.category_axis = Some(Axis::new());
         chart.value_axis = Some(Axis::new());
         let group1 = duke_sheets_chart::ChartTypeGroup {
@@ -1782,7 +1884,9 @@ mod tests {
             high_low_lines: None,
             series_lines: Some(ChartLines {
                 shape_properties: Some(ChartShapeProperties {
-                    solid_fill: Some(ChartColor { hex: "00FF00".into() }),
+                    solid_fill: Some(ChartColor {
+                        hex: "00FF00".into(),
+                    }),
                     no_fill: false,
                     line: None,
                 }),
@@ -1830,7 +1934,11 @@ mod tests {
         };
         chart.type_groups = vec![group1, group2];
         chart.axes = vec![
-            duke_sheets_chart::ChartAxis { id: 1, cross_id: 2, axis: Axis::new() },
+            duke_sheets_chart::ChartAxis {
+                id: 1,
+                cross_id: 2,
+                axis: Axis::new(),
+            },
             duke_sheets_chart::ChartAxis {
                 id: 2,
                 cross_id: 1,
@@ -1844,7 +1952,10 @@ mod tests {
 
         let reparsed = roundtrip_chart(&chart);
         assert!(reparsed.type_groups.len() >= 2);
-        let sl = reparsed.type_groups[0].series_lines.as_ref().expect("series_lines lost");
+        let sl = reparsed.type_groups[0]
+            .series_lines
+            .as_ref()
+            .expect("series_lines lost");
         let sp = sl.shape_properties.as_ref().expect("serLines spPr lost");
         assert_eq!(sp.solid_fill.as_ref().unwrap().hex, "00FF00");
     }
@@ -1852,21 +1963,27 @@ mod tests {
     #[test]
     fn test_roundtrip_up_down_bars() {
         let mut chart = Chart::new(ChartType::Stock);
-        chart.series.push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+        chart
+            .series
+            .push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
         chart.category_axis = Some(Axis::new());
         chart.value_axis = Some(Axis::new());
         chart.up_down_bars = Some(UpDownBars {
             gap_width: Some(150),
             up_bars: Some(ChartLines {
                 shape_properties: Some(ChartShapeProperties {
-                    solid_fill: Some(ChartColor { hex: "00FF00".into() }),
+                    solid_fill: Some(ChartColor {
+                        hex: "00FF00".into(),
+                    }),
                     no_fill: false,
                     line: None,
                 }),
             }),
             down_bars: Some(ChartLines {
                 shape_properties: Some(ChartShapeProperties {
-                    solid_fill: Some(ChartColor { hex: "FF0000".into() }),
+                    solid_fill: Some(ChartColor {
+                        hex: "FF0000".into(),
+                    }),
                     no_fill: false,
                     line: None,
                 }),
@@ -1877,15 +1994,35 @@ mod tests {
         let udb = reparsed.up_down_bars.expect("up_down_bars lost");
         assert_eq!(udb.gap_width, Some(150));
         let ub = udb.up_bars.expect("up_bars lost");
-        assert_eq!(ub.shape_properties.as_ref().unwrap().solid_fill.as_ref().unwrap().hex, "00FF00");
+        assert_eq!(
+            ub.shape_properties
+                .as_ref()
+                .unwrap()
+                .solid_fill
+                .as_ref()
+                .unwrap()
+                .hex,
+            "00FF00"
+        );
         let db = udb.down_bars.expect("down_bars lost");
-        assert_eq!(db.shape_properties.as_ref().unwrap().solid_fill.as_ref().unwrap().hex, "FF0000");
+        assert_eq!(
+            db.shape_properties
+                .as_ref()
+                .unwrap()
+                .solid_fill
+                .as_ref()
+                .unwrap()
+                .hex,
+            "FF0000"
+        );
     }
 
     #[test]
     fn test_roundtrip_leader_lines() {
         let mut chart = Chart::new(ChartType::Pie);
-        chart.series.push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
+        chart
+            .series
+            .push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
         chart.data_labels = Some(DataLabels {
             show_value: Some(true),
             leader_lines: Some(ChartLines {
@@ -1894,7 +2031,9 @@ mod tests {
                     no_fill: false,
                     line: Some(ChartLine {
                         width: Some(9525),
-                        solid_fill: Some(ChartColor { hex: "808080".into() }),
+                        solid_fill: Some(ChartColor {
+                            hex: "808080".into(),
+                        }),
                         no_fill: false,
                         dash_style: None,
                     }),

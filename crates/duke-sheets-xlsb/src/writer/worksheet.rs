@@ -15,6 +15,7 @@ use duke_sheets_core::validation::{ValidationErrorStyle, ValidationOperator, Val
 use duke_sheets_core::worksheet::PageOrientation;
 use duke_sheets_core::{CellAddress, CellError, CellValue, Worksheet};
 
+
 use super::shared_strings::SstMap;
 use super::styles::StyleMapping;
 
@@ -57,10 +58,12 @@ pub(crate) fn write_worksheet<W: Write + Seek>(
     write_col_infos(&mut rw, ws)?;
 
     #[rustfmt::skip]
-    rw.write_record(records::BRT_WS_FMT_INFO, &[
-        0xff, 0xff, 0xff, 0xff, 0x08, 0x00, 0x2c, 0x01,
-        0x00, 0x00, 0x00, 0x00,
-    ])?;
+    rw.write_record(
+        records::BRT_WS_FMT_INFO,
+        &[
+            0xff, 0xff, 0xff, 0xff, 0x08, 0x00, 0x2c, 0x01, 0x00, 0x00, 0x00, 0x00,
+        ],
+    )?;
 
     rw.write_record(records::BRT_BEGIN_SHEET_DATA, &[])?;
 
@@ -196,9 +199,7 @@ fn encode_brt_color_ws(color: &duke_sheets_core::style::Color) -> [u8; 8] {
     use duke_sheets_core::style::Color;
     let mut buf = [0u8; 8];
     match color {
-        Color::Auto => {
-            buf[0] = 0;
-        }
+        Color::Auto => buf[0] = 0,
         Color::Indexed(idx) => {
             buf[0] = 1;
             buf[1] = *idx;

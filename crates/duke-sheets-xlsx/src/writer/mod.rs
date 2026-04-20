@@ -1,4 +1,4 @@
-//! XLSX writer — generates OOXML SpreadsheetML using quick-xml Writer API.
+//! XLSX writer - generates OOXML SpreadsheetML using quick-xml Writer API.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
@@ -13,17 +13,14 @@ use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
 use duke_sheets_core::style::Color;
 use duke_sheets_core::{CellAddress, CellRange, SheetSlot, Workbook};
 
+mod chart;
+mod chart_ex;
 mod comments;
 mod conditional_format;
 mod data_validation;
-mod tables;
-mod chart;
-mod chart_ex;
 mod drawing;
+mod tables;
 
-// ---------------------------------------------------------------------------
-// OOXML namespace URIs
-// ---------------------------------------------------------------------------
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const NS_RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 const NS_DOC_RELS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -50,8 +47,7 @@ const RT_SHEET_METADATA: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata";
 const RT_DRAWING: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
-const RT_CHART: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+const RT_CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
 const RT_CHARTSHEET: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet";
 
@@ -74,15 +70,12 @@ const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+
 const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 const CT_CHARTSHEET: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml";
-const RT_CHART_STYLE: &str =
-    "http://schemas.microsoft.com/office/2011/relationships/chartStyle";
+const RT_CHART_STYLE: &str = "http://schemas.microsoft.com/office/2011/relationships/chartStyle";
 const RT_CHART_COLOR_STYLE: &str =
     "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
 const CT_CHART_STYLE: &str = "application/vnd.ms-office.chartstyle+xml";
 const CT_CHART_COLOR_STYLE: &str = "application/vnd.ms-office.chartcolorstyle+xml";
 const CT_CHART_EX: &str = "application/vnd.ms-office.chartex+xml";
-const RT_CHART_EX: &str =
-    "http://schemas.microsoft.com/office/2014/relationships/chartEx";
 
 const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
@@ -370,11 +363,7 @@ const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 /// Alias for the XML writer backed by an in-memory buffer.
 pub(super) type XmlWriter = Writer<Cursor<Vec<u8>>>;
 
-// ---------------------------------------------------------------------------
-// Shared string table
-// ---------------------------------------------------------------------------
-
-/// Shared string table — maps string content to SST index.
+/// Shared string table - maps string content to SST index.
 pub(super) struct SharedStringTable {
     strings: Vec<String>,
     index: HashMap<String, u32>,
@@ -391,9 +380,7 @@ pub(super) struct WorksheetRelationship {
 pub(super) fn write_color_element(w: &mut XmlWriter, tag: &str, color: &Color) -> XlsxResult<()> {
     let mut el = BytesStart::new(tag);
     match color {
-        Color::Auto => {
-            el.push_attribute(("indexed", "64"));
-        }
+        Color::Auto => el.push_attribute(("indexed", "64")),
         Color::Rgb { r, g, b } => {
             let v = format!("FF{:02X}{:02X}{:02X}", r, g, b);
             el.push_attribute(("rgb", v.as_str()));
@@ -470,10 +457,6 @@ impl SharedStringTable {
         self.strings.is_empty()
     }
 }
-
-// ---------------------------------------------------------------------------
-// XLSX file writer
-// ---------------------------------------------------------------------------
 
 /// XLSX file writer
 pub struct XlsxWriter;
@@ -553,7 +536,10 @@ impl XlsxWriter {
         let mut cs_drawing_numbering: Vec<(usize, usize)> = Vec::new();
         let mut cs_chart_numbering: Vec<(usize, usize)> = Vec::new();
         for (i, cs) in workbook.chartsheets().iter().enumerate() {
-            let has_chart = !matches!(cs.chart.chart_type, duke_sheets_chart::ChartType::Unsupported(_));
+            let has_chart = !matches!(
+                cs.chart.chart_type,
+                duke_sheets_chart::ChartType::Unsupported(_)
+            );
             let has_raw_objects = !cs.raw_drawing_objects.is_empty();
             if has_chart || has_raw_objects {
                 cs_drawing_numbering.push((i, global_drawing_num));
@@ -574,7 +560,7 @@ impl XlsxWriter {
             &drawing_numbering,
             &chart_numbering,
             &chart_ex_numbering,
-            global_chart_num - 1,  // total standard charts (for style/color numbering)
+            global_chart_num - 1, // total standard charts (for style/color numbering)
             &cs_drawing_numbering,
             &cs_chart_numbering,
             needs_metadata,
@@ -653,10 +639,8 @@ impl XlsxWriter {
                     .iter()
                     .map(|&(ji, _)| &sheet.charts()[ji])
                     .collect();
-                let chart_global_nums: Vec<usize> = sheet_chart_globals
-                    .iter()
-                    .map(|&(_, gn)| gn)
-                    .collect();
+                let chart_global_nums: Vec<usize> =
+                    sheet_chart_globals.iter().map(|&(_, gn)| gn).collect();
                 let sheet_chartex_globals: Vec<(usize, usize)> = chart_ex_numbering
                     .iter()
                     .filter(|(si, _, _)| *si == i)
@@ -666,12 +650,21 @@ impl XlsxWriter {
                     .iter()
                     .map(|&(ji, _)| &sheet.charts_ex()[ji])
                     .collect();
-                let chartex_global_nums: Vec<usize> = sheet_chartex_globals
-                    .iter()
-                    .map(|&(_, gn)| gn)
-                    .collect();
-                drawing::write_drawing(&mut zip, &chart_refs, &chartex_refs, &sheet.raw_drawing_objects, dn)?;
-                drawing::write_drawing_rels(&mut zip, dn, &chart_global_nums, &chartex_global_nums)?;
+                let chartex_global_nums: Vec<usize> =
+                    sheet_chartex_globals.iter().map(|&(_, gn)| gn).collect();
+                drawing::write_drawing(
+                    &mut zip,
+                    &chart_refs,
+                    &chartex_refs,
+                    &sheet.raw_drawing_objects,
+                    dn,
+                )?;
+                drawing::write_drawing_rels(
+                    &mut zip,
+                    dn,
+                    &chart_global_nums,
+                    &chartex_global_nums,
+                )?;
                 for &(ji, gn) in &sheet_chart_globals {
                     chart::write_chart_part(&mut zip, &sheet.charts()[ji], gn)?;
                     Self::write_chart_style_color_parts(&mut zip, &sheet.charts()[ji], gn)?;
@@ -679,38 +672,55 @@ impl XlsxWriter {
                 for &(ji, gn) in &sheet_chartex_globals {
                     chart_ex::write_chart_ex_part(&mut zip, &sheet.charts_ex()[ji], gn)?;
                     let style_num = (global_chart_num - 1) + gn;
-                    chart_ex::write_chart_ex_style_color_parts(&mut zip, &sheet.charts_ex()[ji], gn, style_num)?;
+                    chart_ex::write_chart_ex_style_color_parts(
+                        &mut zip,
+                        &sheet.charts_ex()[ji],
+                        gn,
+                        style_num,
+                    )?;
                 }
             }
         }
 
         // Write chart sheets and their drawings/charts
         for (i, cs) in workbook.chartsheets().iter().enumerate() {
-            let cs_dn = cs_drawing_numbering.iter().find(|(ci, _)| *ci == i).map(|(_, dn)| *dn);
-            let cs_cn = cs_chart_numbering.iter().find(|(ci, _)| *ci == i).map(|(_, cn)| *cn);
+            let cs_dn = cs_drawing_numbering
+                .iter()
+                .find(|(ci, _)| *ci == i)
+                .map(|(_, dn)| *dn);
+            let cs_cn = cs_chart_numbering
+                .iter()
+                .find(|(ci, _)| *ci == i)
+                .map(|(_, cn)| *cn);
 
             Self::write_chartsheet_xml(&mut zip, i, cs_dn)?;
 
             if let (Some(dn), Some(cn)) = (cs_dn, cs_cn) {
                 Self::write_chartsheet_rels(&mut zip, i, dn)?;
-                drawing::write_chartsheet_drawing(&mut zip, &cs.chart, &cs.raw_drawing_objects, dn)?;
+                drawing::write_chartsheet_drawing(
+                    &mut zip,
+                    &cs.chart,
+                    &cs.raw_drawing_objects,
+                    dn,
+                )?;
                 drawing::write_drawing_rels(&mut zip, dn, &[cn], &[])?;
                 chart::write_chart_part(&mut zip, &cs.chart, cn)?;
                 Self::write_chart_style_color_parts(&mut zip, &cs.chart, cn)?;
             } else if let Some(dn) = cs_dn {
                 // Drawing-only (raw objects, no chart)
                 Self::write_chartsheet_rels(&mut zip, i, dn)?;
-                drawing::write_chartsheet_drawing(&mut zip, &cs.chart, &cs.raw_drawing_objects, dn)?;
+                drawing::write_chartsheet_drawing(
+                    &mut zip,
+                    &cs.chart,
+                    &cs.raw_drawing_objects,
+                    dn,
+                )?;
                 drawing::write_drawing_rels(&mut zip, dn, &[], &[])?;
             }
         }
         zip.finish()?;
         Ok(())
     }
-
-    // -----------------------------------------------------------------------
-    // [Content_Types].xml
-    // -----------------------------------------------------------------------
 
     fn write_content_types<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
@@ -815,7 +825,6 @@ impl XlsxWriter {
                     .write_empty()?;
             }
 
-
             for &(sheet_idx, chart_in_sheet_idx, global_num) in chart_numbering {
                 let part = format!("/xl/charts/chart{}.xml", global_num);
                 w.create_element("Override")
@@ -873,14 +882,18 @@ impl XlsxWriter {
                 if let Some(sheet) = workbook.worksheet(sheet_idx) {
                     let cx = &sheet.charts_ex()[chart_ex_in_sheet_idx];
                     if cx.raw_chart_style.is_some() {
-                        let style_part = format!("/xl/charts/style{}.xml", total_standard_charts + global_num);
+                        let style_part =
+                            format!("/xl/charts/style{}.xml", total_standard_charts + global_num);
                         w.create_element("Override")
                             .with_attribute(("PartName", style_part.as_str()))
                             .with_attribute(("ContentType", CT_CHART_STYLE))
                             .write_empty()?;
                     }
                     if cx.raw_chart_color_style.is_some() {
-                        let color_part = format!("/xl/charts/colors{}.xml", total_standard_charts + global_num);
+                        let color_part = format!(
+                            "/xl/charts/colors{}.xml",
+                            total_standard_charts + global_num
+                        );
                         w.create_element("Override")
                             .with_attribute(("PartName", color_part.as_str()))
                             .with_attribute(("ContentType", CT_CHART_COLOR_STYLE))
@@ -901,10 +914,6 @@ impl XlsxWriter {
         })
     }
 
-    // -----------------------------------------------------------------------
-    // _rels/.rels
-    // -----------------------------------------------------------------------
-
     fn write_root_rels<W: Write + Seek>(zip: &mut zip::ZipWriter<W>) -> XlsxResult<()> {
         write_xml_part(zip, "_rels/.rels", |w| {
             let mut tag = BytesStart::new("Relationships");
@@ -921,10 +930,6 @@ impl XlsxWriter {
             Ok(())
         })
     }
-
-    // -----------------------------------------------------------------------
-    // xl/workbook.xml
-    // -----------------------------------------------------------------------
 
     fn write_workbook_xml<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
@@ -955,7 +960,7 @@ impl XlsxWriter {
                 w.write_event(Event::End(BytesEnd::new("bookViews")))?;
             }
 
-            // sheets — emit in tab-bar order
+            // sheets - emit in tab-bar order
             let order = Self::effective_sheet_order(workbook);
             w.write_event(Event::Start(BytesStart::new("sheets")))?;
             for (tab_idx, slot) in order.iter().enumerate() {
@@ -1053,10 +1058,6 @@ impl XlsxWriter {
         })
     }
 
-    // -----------------------------------------------------------------------
-    // xl/_rels/workbook.xml.rels
-    // -----------------------------------------------------------------------
-
     fn write_workbook_rels<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
@@ -1085,7 +1086,10 @@ impl XlsxWriter {
                     SheetSlot::ChartSheet(cs_idx) => {
                         let _ = cs_idx;
                         cs_part_num += 1;
-                        (RT_CHARTSHEET, format!("chartsheets/sheet{}.xml", cs_part_num))
+                        (
+                            RT_CHARTSHEET,
+                            format!("chartsheets/sheet{}.xml", cs_part_num),
+                        )
                     }
                 };
                 w.create_element("Relationship")
@@ -1336,10 +1340,6 @@ impl XlsxWriter {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // xl/sharedStrings.xml
-    // -----------------------------------------------------------------------
-
     fn write_shared_strings<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         sst: &SharedStringTable,
@@ -1478,10 +1478,6 @@ impl XlsxWriter {
         })
     }
 
-    // -----------------------------------------------------------------------
-    // xl/styles.xml
-    // -----------------------------------------------------------------------
-
     fn write_styles_xml<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         style_table: &XlsxStyleTable,
@@ -1502,10 +1498,6 @@ impl XlsxWriter {
         }
         Ok(())
     }
-
-    // -----------------------------------------------------------------------
-    // xl/worksheets/sheet{N}.xml
-    // -----------------------------------------------------------------------
 
     fn write_worksheet<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
@@ -2392,9 +2384,7 @@ impl XlsxWriter {
             duke_sheets_core::Color::Indexed(idx) => {
                 tag.push_attribute(("indexed", idx.to_string().as_str()));
             }
-            duke_sheets_core::Color::Auto => {
-                tag.push_attribute(("auto", "1"));
-            }
+            duke_sheets_core::Color::Auto => tag.push_attribute(("auto", "1")),
         }
         w.write_event(Event::Empty(tag))?;
         Ok(())
@@ -2867,10 +2857,6 @@ impl XlsxWriter {
     fn is_external_target(target: &str) -> bool {
         target.contains("://") || target.starts_with("mailto:") || target.starts_with("file:")
     }
-
-    // -----------------------------------------------------------------------
-    // Worksheet relationships
-    // -----------------------------------------------------------------------
 
     fn write_worksheet_rels<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
@@ -3455,7 +3441,7 @@ mod tests {
             zip.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
             zip.write_all(br#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#).unwrap();
 
-            // xl/theme/theme1.xml — the custom theme
+            // xl/theme/theme1.xml - the custom theme
             zip.start_file("xl/theme/theme1.xml", opts).unwrap();
             zip.write_all(custom_theme.as_bytes()).unwrap();
 
@@ -3501,8 +3487,18 @@ mod tests {
         let mut chart = Chart::new(ChartType::ColumnClustered);
         chart.title = Some("Sales Chart".to_string());
         chart.anchor = DrawingAnchor::TwoCell {
-            from: CellMarker { col: 2, col_offset_emu: 100, row: 3, row_offset_emu: 200 },
-            to: CellMarker { col: 12, col_offset_emu: 300, row: 18, row_offset_emu: 400 },
+            from: CellMarker {
+                col: 2,
+                col_offset_emu: 100,
+                row: 3,
+                row_offset_emu: 200,
+            },
+            to: CellMarker {
+                col: 12,
+                col_offset_emu: 300,
+                row: 18,
+                row_offset_emu: 400,
+            },
             edit_as: None,
         };
         let s = DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$5"))
@@ -3565,8 +3561,7 @@ mod tests {
         let sheet = wb.worksheet_mut(0).unwrap();
         let mut chart = Chart::new(ChartType::Pie);
         chart.title = Some("Pie Chart".to_string());
-        let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$3"))
-            .with_name("Slices");
+        let s = DataSeries::new(DataReference::formula("Sheet1!$B$1:$B$3")).with_name("Slices");
         chart.add_series(s);
         sheet.add_chart(chart);
 
@@ -3615,7 +3610,9 @@ mod tests {
 
     #[test]
     fn test_chart_roundtrip_multiple_charts() {
-        use duke_sheets_chart::{Chart, ChartType, DataReference, DataSeries, Legend, LegendPosition};
+        use duke_sheets_chart::{
+            Chart, ChartType, DataReference, DataSeries, Legend, LegendPosition,
+        };
 
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
@@ -3699,7 +3696,12 @@ mod tests {
         sheet.set_cell_value("A2", "Alice").unwrap();
         sheet.set_cell_value("B2", 95.0).unwrap();
 
-        sheet.set_comment("A1", duke_sheets_core::comment::CellComment::new("", "A comment")).unwrap();
+        sheet
+            .set_comment(
+                "A1",
+                duke_sheets_core::comment::CellComment::new("", "A comment"),
+            )
+            .unwrap();
 
         let mut table = Table::new(1, "Scores", CellRange::parse("A1:B3").unwrap());
         table.columns = vec![TableColumn::new(1, "Name"), TableColumn::new(2, "Score")];
@@ -3735,9 +3737,15 @@ mod tests {
         let bytes = out.into_inner();
 
         let ct = read_zip_entry(bytes.clone(), "[Content_Types].xml");
-        assert!(ct.contains("/xl/drawings/drawing1.xml"), "missing drawing content type");
+        assert!(
+            ct.contains("/xl/drawings/drawing1.xml"),
+            "missing drawing content type"
+        );
         assert!(ct.contains(CT_DRAWING), "wrong drawing content type");
-        assert!(ct.contains("/xl/charts/chart1.xml"), "missing chart content type");
+        assert!(
+            ct.contains("/xl/charts/chart1.xml"),
+            "missing chart content type"
+        );
         assert!(ct.contains(CT_CHART), "wrong chart content type");
 
         let sheet_rels = read_zip_entry(bytes.clone(), "xl/worksheets/_rels/sheet1.xml.rels");
@@ -3755,6 +3763,9 @@ mod tests {
         );
 
         let sheet_xml = read_zip_entry(bytes, "xl/worksheets/sheet1.xml");
-        assert!(sheet_xml.contains("<drawing r:id="), "missing drawing element in worksheet");
+        assert!(
+            sheet_xml.contains("<drawing r:id="),
+            "missing drawing element in worksheet"
+        );
     }
 }

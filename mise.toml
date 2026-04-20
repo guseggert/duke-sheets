@@ -8,9 +8,7 @@ node = "20"
 "cargo:wasm-pack" = "latest"
 dotnet = "8"
 
-# =============================================================================
 # Setup Tasks
-# =============================================================================
 
 [tasks.setup]
 description = "Install all binding dependencies (run once)"
@@ -43,9 +41,7 @@ echo "  mise run build:python   # Build Python bindings only"
 echo "  mise run build:wasm     # Build WASM bindings only"
 """
 
-# =============================================================================
 # Build Tasks
-# =============================================================================
 
 [tasks.build]
 description = "Build all bindings"
@@ -74,9 +70,7 @@ wasm-pack build --target web --release --out-dir pkg-web
 wasm-pack build --target nodejs --release --out-dir pkg
 '''
 
-# =============================================================================
 # Test Tasks
-# =============================================================================
 
 [tasks.test]
 description = "Build and test all bindings"
@@ -124,9 +118,11 @@ alias = "tr"
 description = "Run all Rust tests and print a per-crate summary report"
 run = "bash tools/test-report.sh"
 
-# =============================================================================
+[tasks."features:verify"]
+description = "Parse FEATURES.md, run tests linked from rows claiming support, fail if any claim's test fails or any claim has no linked test"
+run = "python3 tools/features_verify.py"
+
 # Clean Tasks
-# =============================================================================
 
 [tasks.clean]
 description = "Clean all binding build artifacts"
@@ -153,9 +149,7 @@ rm -rf target/
 rm -rf pkg/
 """
 
-# =============================================================================
 # Development Tasks
-# =============================================================================
 
 [tasks.demo]
 description = "Build WASM bindings and serve the demo at http://localhost:8080"
@@ -175,17 +169,13 @@ depends = ["build:python", "test:python"]
 description = "WASM development cycle"
 depends = ["build:wasm", "test:wasm:node"]
 
-# =============================================================================
 # Docker Image Tasks
-# =============================================================================
 
 [tasks."docker:build"]
 description = "Build the PyUNO Docker image (LibreOffice + URP)"
 run = "docker build -t duke-sheets-pyuno tests/fixtures/pyuno"
 
-# =============================================================================
 # E2E Test Tasks
-# =============================================================================
 
 [tasks."test:e2e"]
 description = "Run E2E tests for XLSX and XLS readers (requires LibreOffice via urp:start)"
@@ -363,9 +353,7 @@ echo ""
 echo "=== All tests passed ==="
 """
 
-# =============================================================================
 # Windows VM Tasks (Excel COM bridge via QEMU/KVM)
-# =============================================================================
 
 [tasks."vm:build-qemu"]
 description = "Build QEMU 9.2.3 into .qemu/ (survives reboots)"
@@ -471,9 +459,7 @@ else
 fi
 """
 
-# =============================================================================
 # URP Bridge Tasks (LibreOffice direct connection via UNO Remote Protocol)
-# =============================================================================
 
 [tasks."urp:start"]
 description = "Start LibreOffice in Docker with URP socket on port 2002 and shared /tmp volume"
@@ -790,9 +776,7 @@ if result["regressed"]:
 PY
 '''
 
-# =============================================================================
 # Release Tasks
-# =============================================================================
 
 [tasks."release:node"]
 description = "Bump Node.js binding version and rebuild"
