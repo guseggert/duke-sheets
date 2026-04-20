@@ -2,7 +2,7 @@
 #
 # IMPORTANT: The bridge must run in the interactive desktop session (Session 1),
 # NOT from WinRM (Session 0). Excel COM automation requires an interactive
-# desktop — it will crash with APPCRASH if launched from a non-interactive session.
+# desktop - it will crash with APPCRASH if launched from a non-interactive session.
 #
 # This script creates a scheduled task with LogonType Interactive to ensure
 # the bridge always runs in the correct session.
@@ -40,7 +40,7 @@ if (-not (Test-Path $BridgePath)) {
 }
 
 # 2. Disable Windows Firewall entirely (simplest for test VM)
-#    Individual firewall rules are unreliable — Windows may still block connections
+#    Individual firewall rules are unreliable - Windows may still block connections
 #    even with rules added, depending on network profile detection.
 Write-Host "Disabling Windows Firewall (test VM only)..."
 Set-NetFirewallProfile -All -Enabled False
@@ -93,7 +93,7 @@ if ($task.State -eq "Running") {
 } else {
     Write-Host "  Task state: $($task.State)" -ForegroundColor Yellow
     Write-Host "  The bridge will start automatically at next interactive login."
-    Write-Host "  If running via WinRM, this is expected — the task needs Session 1."
+    Write-Host "  If running via WinRM, this is expected - the task needs Session 1."
 }
 
 Write-Host ""

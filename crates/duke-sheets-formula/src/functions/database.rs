@@ -870,7 +870,6 @@ mod tests {
 
     #[test]
     fn test_dcounta_docs() {
-        // === Main example ===
         // DB with Profit column; Tree="Apple" AND Height>10 AND Height<16
         // Only Apple,14,15,10,75 matches → Profit=75 non-blank → 1
         let db_profit = r#"{"Tree","Height","Age","Yield","Profit";"Apple",18,20,14,105;"Pear",12,12,10,96;"Cherry",13,14,9,105;"Apple",14,15,10,75;"Pear",9,8,8,76.8;"Apple",8,9,6,45}"#;
@@ -886,7 +885,7 @@ mod tests {
         // Criteria examples share a 4-row sales database
         let db4 = r#"{"Category","Salesperson","Sales";"Beverages","Suyama",5122;"Meat","Davolio",450;"produce","Buchanan",6328;"Produce","Davolio",6544}"#;
 
-        // === Multiple criteria in one column (OR) ===
+        // Multiple criteria in one column (OR)
         // Salesperson="Davolio" OR Salesperson="Buchanan" → 3
         assert_eq!(
             eval(&format!(
@@ -897,7 +896,7 @@ mod tests {
             FormulaValue::Number(3.0)
         );
 
-        // === Multiple criteria AND, field=1 ===
+        // Multiple criteria AND, field=1
         // 6-row DB; Category="Produce" AND Sales>2000 → 2
         let db6 = r#"{"Category","Salesperson","Sales";"Beverages","Suyama",5122;"Meat","Davolio",450;"Produce","Buchanan",935;"Produce","Davolio",6544;"Beverages","Buchanan",3677;"Produce","Davolio",3186}"#;
         assert_eq!(
@@ -909,7 +908,7 @@ mod tests {
             FormulaValue::Number(2.0)
         );
 
-        // === Multiple sets with AND per row, OR between rows, field=1 ===
+        // Multiple sets with AND per row, OR between rows, field=1
         // (Davolio AND Sales>3000) OR (Buchanan AND Sales>1500) → 2
         assert_eq!(
             eval(&format!(
@@ -920,7 +919,7 @@ mod tests {
             FormulaValue::Number(2.0)
         );
 
-        // === Duplicate column headers for range criteria, field=1 ===
+        // Duplicate column headers for range criteria, field=1
         // (Sales>6000 AND Sales<6500) OR Sales<500 → 2
         assert_eq!(
             eval(&format!(
@@ -931,7 +930,7 @@ mod tests {
             FormulaValue::Number(2.0)
         );
 
-        // === Wildcard criteria, field=1 ===
+        // Wildcard criteria, field=1
         // Category starts with "Me" OR Salesperson matches ?u* → 3
         assert_eq!(
             eval(&format!(
@@ -942,7 +941,7 @@ mod tests {
             FormulaValue::Number(3.0)
         );
 
-        // === Formula-based criteria (pre-computed average = 4611) ===
+        // Formula-based criteria (pre-computed average = 4611)
         // field=1; Sales > 4611 → 3
         assert_eq!(
             eval(&format!(r#"=DCOUNTA({}, 1, {{"Sales";">4611"}})"#, db4)).unwrap(),

@@ -64,7 +64,6 @@ impl ConditionalFormatRule {
         }
     }
 
-    // === Cell Is rules ===
 
     /// Highlight cells greater than a value
     pub fn cell_is_greater_than(value: impl Into<String>) -> Self {
@@ -102,7 +101,6 @@ impl ConditionalFormatRule {
         })
     }
 
-    // === Expression rule ===
 
     /// Highlight cells where formula evaluates to TRUE
     pub fn expression(formula: impl Into<String>) -> Self {
@@ -111,7 +109,6 @@ impl ConditionalFormatRule {
         })
     }
 
-    // === Color Scale rules ===
 
     /// Create a 2-color scale (min to max)
     pub fn color_scale_2(min_color: Color, max_color: Color) -> Self {
@@ -134,7 +131,6 @@ impl ConditionalFormatRule {
         })
     }
 
-    // === Data Bar rule ===
 
     /// Create a data bar
     pub fn data_bar(color: Color) -> Self {
@@ -149,7 +145,6 @@ impl ConditionalFormatRule {
         })
     }
 
-    // === Icon Set rule ===
 
     /// Create an icon set
     pub fn icon_set(style: IconSetStyle) -> Self {
@@ -184,7 +179,7 @@ impl ConditionalFormatRule {
         })
     }
 
-    // === Top/Bottom rules ===
+    // Top/Bottom rules
 
     /// Highlight top N values
     pub fn top_n(n: u32) -> Self {
@@ -213,7 +208,7 @@ impl ConditionalFormatRule {
         })
     }
 
-    // === Above/Below Average rules ===
+    // Above/Below Average rules
 
     /// Highlight cells above average
     pub fn above_average() -> Self {
@@ -233,7 +228,6 @@ impl ConditionalFormatRule {
         })
     }
 
-    // === Text rules ===
 
     /// Highlight cells containing text
     pub fn contains_text(text: impl Into<String>) -> Self {
@@ -250,7 +244,7 @@ impl ConditionalFormatRule {
         Self::new(CfRuleType::EndsWith { text: text.into() })
     }
 
-    // === Duplicate/Unique rules ===
+    // Duplicate/Unique rules
 
     /// Highlight duplicate values
     pub fn duplicate_values() -> Self {
@@ -262,7 +256,7 @@ impl ConditionalFormatRule {
         Self::new(CfRuleType::UniqueValues)
     }
 
-    // === Blanks/Errors rules ===
+    // Blanks/Errors rules
 
     /// Highlight blank cells
     pub fn contains_blanks() -> Self {
@@ -274,7 +268,6 @@ impl ConditionalFormatRule {
         Self::new(CfRuleType::ContainsErrors)
     }
 
-    // === Builder methods ===
 
     /// Add a cell range to this rule
     pub fn with_range(mut self, range: CellRange) -> Self {

@@ -1,4 +1,4 @@
-//! CSV read and write benchmarks (duke-sheets only — no comparable Rust
+//! CSV read and write benchmarks (duke-sheets only - no comparable Rust
 //! spreadsheet-oriented CSV competitor).
 
 #[path = "helpers.rs"]

@@ -4,7 +4,7 @@
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Marker {
     pub symbol: Option<MarkerSymbol>,
-    /// Size in points (2–72)
+    /// Size in points (2-72)
     pub size: Option<u8>,
 }
 

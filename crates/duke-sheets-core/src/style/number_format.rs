@@ -244,7 +244,7 @@ impl NumberFormat {
                 }
                 // Date/time tokens
                 b'y' | b'Y' | b'd' | b'D' => return true,
-                // m/M is date (month) — could be minutes after h, but either way it's date/time
+                // m/M is date (month) - could be minutes after h, but either way it's date/time
                 b'm' | b'M' => return true,
                 // h/H and s/S are time tokens
                 b'h' | b'H' | b's' | b'S' => return true,

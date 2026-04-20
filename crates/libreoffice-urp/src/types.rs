@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-/// UNO TypeClass — identifies the kind of a UNO type.
+/// UNO TypeClass - identifies the kind of a UNO type.
 /// Values match the wire format encoding (bits 6..0 of the type byte).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -210,7 +210,7 @@ impl fmt::Display for Type {
     }
 }
 
-/// A UNO value — the Rust representation of any value that can be
+/// A UNO value - the Rust representation of any value that can be
 /// sent/received over URP.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnoValue {
@@ -338,7 +338,7 @@ impl UnoValue {
     }
 }
 
-/// A typed UNO value — wraps a value with its type descriptor.
+/// A typed UNO value - wraps a value with its type descriptor.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Any {
     pub type_desc: Type,

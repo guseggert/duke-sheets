@@ -130,13 +130,13 @@ fn test_read_rich_text_from_excel() {
         let wb = excel.create_workbook().expect("create workbook");
 
         // Set plain text first, then format substrings.
-        // A1: "Normal Bold Normal" — make "Bold" (chars 8-11) bold
+        // A1: "Normal Bold Normal" - make "Bold" (chars 8-11) bold
         wb.set_cell_value("A1", "Normal Bold Normal")
             .expect("set A1");
         wb.set_character_font_property("A1", 8, 4, "Bold", serde_json::Value::from(true))
             .expect("set A1 bold chars");
 
-        // A2: "Small BIG Small" — make "BIG" (chars 7-9) larger
+        // A2: "Small BIG Small" - make "BIG" (chars 7-9) larger
         wb.set_cell_value("A2", "Small BIG Small").expect("set A2");
         wb.set_character_font_property("A2", 7, 3, "Size", serde_json::Value::from(20.0))
             .expect("set A2 size chars");
@@ -168,7 +168,7 @@ fn test_read_rich_text_from_excel() {
             assert!(has_bold, "A1 should have a bold run, got: {runs:#?}");
         }
         CellValue::String(s) => {
-            // Characters API may not have worked — just verify text
+            // Characters API may not have worked - just verify text
             assert_eq!(
                 s.as_ref(),
                 "Normal Bold Normal",

@@ -1,6 +1,6 @@
 //! Common utilities for XLS E2E tests.
 //!
-//! Mirrors the XLSX E2E common module — reuses the same LO bridge singleton.
+//! Mirrors the XLSX E2E common module - reuses the same LO bridge singleton.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};

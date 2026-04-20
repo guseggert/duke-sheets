@@ -40,7 +40,7 @@ pub struct Workbook {
     /// Stored as type-erased `Box<dyn Any>` so the core crate needs no dependency
     /// on `duke-sheets-formula`.
     calc_cache: Option<Box<dyn Any + Send + Sync>>,
-    /// Structural generation counter — incremented when sheets are added, removed,
+    /// Structural generation counter - incremented when sheets are added, removed,
     /// reordered, or renamed. The calculation engine uses this to detect stale caches.
     structural_generation: u64,
     /// Unique identity for roundtrip state lookup (not persisted).
@@ -141,7 +141,7 @@ impl Workbook {
         self.worksheets.iter_mut()
     }
 
-    /// Structural generation counter — incremented when sheets are added,
+    /// Structural generation counter - incremented when sheets are added,
     /// removed, reordered, or renamed.
     pub fn structural_generation(&self) -> u64 {
         self.structural_generation
@@ -559,7 +559,7 @@ impl Default for WorkbookSettings {
     }
 }
 
-/// A chart sheet — a sheet that contains only a chart, no cell data.
+/// A chart sheet - a sheet that contains only a chart, no cell data.
 #[derive(Debug, Clone)]
 pub struct ChartSheet {
     /// Sheet name (as it appears on the tab)
@@ -674,7 +674,7 @@ mod tests {
         wb.sheet_order_mut().push(SheetSlot::Worksheet(1));
         // Remove worksheet 0 (Sheet1)
         wb.remove_worksheet(0).unwrap();
-        // Expected: sheet_order should have [Worksheet(0)] — the old index 1 became 0
+        // Expected: sheet_order should have [Worksheet(0)] - the old index 1 became 0
         assert_eq!(wb.sheet_order().len(), 1);
         assert_eq!(wb.sheet_order()[0], SheetSlot::Worksheet(0));
         assert_eq!(wb.worksheet(0).unwrap().name(), "Sheet2");

@@ -990,7 +990,6 @@ fn test_auto_filter_multiple_columns() {
     ));
 }
 
-// --- Formula cached value roundtrip tests ---
 
 /// Test roundtrip of formula with numeric cached value
 #[test]
@@ -1604,7 +1603,7 @@ fn roundtrip_mixed_breaks() {
     assert_eq!(ws2.col_breaks()[0].id, 2);
 }
 
-// Dynamic array spilling — XLSX metadata roundtrip
+// Dynamic array spilling - XLSX metadata roundtrip
 
 /// Verify that SEQUENCE formula produces spilled values that survive roundtrip.
 /// After calculate→write→read, the anchor cell keeps its formula and the
@@ -1878,7 +1877,7 @@ fn roundtrip_dynamic_array_boolean_spill() {
         let ws2 = wb2.worksheet(0).unwrap();
         assert!(formula_text_at(ws2, "A1").is_some());
     } else {
-        // Engine produces scalar (implicit intersection) — single cached value
+        // Engine produces scalar (implicit intersection) - single cached value
         // Still verify roundtrip works without crash
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
@@ -1916,7 +1915,7 @@ fn roundtrip_dynamic_array_spill_error() {
         let zip = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
         // The workbook has a formula with a #SPILL! cached error but no
         // array_result, so has_dynamic_arrays should return false.
-        // However, the formula itself exists — just verify the file is valid.
+        // However, the formula itself exists - just verify the file is valid.
         let _ = zip;
     }
 
@@ -1969,7 +1968,7 @@ fn roundtrip_dynamic_array_multiple_on_same_sheet() {
             .unwrap()
             .read_to_string(&mut sheet_xml)
             .unwrap();
-        // Count cm="1" occurrences (should be 2 — one per anchor)
+        // Count cm="1" occurrences (should be 2 - one per anchor)
         let cm1_count = sheet_xml.matches("cm=\"1\"").count();
         assert_eq!(cm1_count, 2, "should have 2 anchor cells with cm=1");
         // Ghost cell count: A2,A3 + C2,D1,D2 = 5
@@ -4608,7 +4607,7 @@ fn test_roundtrip_empty_sheet_order_uses_default() {
     };
     wb.add_chartsheet(cs).unwrap();
 
-    // Don't set sheet_order — writer should synthesize default (worksheets first)
+    // Don't set sheet_order - writer should synthesize default (worksheets first)
     assert!(wb.sheet_order().is_empty());
 
     let mut buf = Vec::new();
@@ -5249,7 +5248,7 @@ fn test_roundtrip_chart_empty_series_name() {
     let c = &wb2.worksheet(0).unwrap().charts()[0];
 
     assert_eq!(c.series.len(), 1);
-    // Empty string name may come back as Some("") or None — either is acceptable
+    // Empty string name may come back as Some("") or None - either is acceptable
     // as long as the roundtrip doesn't crash
     if let Some(name) = c.series[0].name.as_deref() {
         assert_eq!(name, "");

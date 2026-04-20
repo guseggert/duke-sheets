@@ -4,7 +4,7 @@
 //! argument count.
 //!
 //! Argument count encoding:
-//! - 0–253: fixed argument count
+//! - 0-253: fixed argument count
 //! - 254: variable args (minimum from table, actual count in tFuncVar)
 //! - 255: variable args (0 or more)
 
@@ -502,7 +502,7 @@ static FTAB: [&str; 485] = [
 ];
 
 /// Argument count for each function.
-/// - 0–253: fixed count
+/// - 0-253: fixed count
 /// - 254: variable (min from this table)
 /// - 255: variable (0 or more)
 static FTAB_ARGC: [u16; 485] = [

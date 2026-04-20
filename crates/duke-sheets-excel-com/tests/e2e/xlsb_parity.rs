@@ -18,7 +18,7 @@ fn generate_xlsb_parity_from_xlsx() {
         .join("../..")
         .join(XLSX_FIXTURE_PATH);
     if !xlsx_path.exists() {
-        panic!("{XLSX_FIXTURE_PATH} not found — run `mise run generate:formula-parity` first");
+        panic!("{XLSX_FIXTURE_PATH} not found - run `mise run generate:formula-parity` first");
     }
 
     let bridge = excel_bridge();
@@ -61,7 +61,7 @@ fn generate_xlsb_chart_parity_from_xlsx() {
         .join("../..")
         .join(CHART_XLSX_PATH);
     if !xlsx_path.exists() {
-        panic!("{CHART_XLSX_PATH} not found — run `mise run generate:chart-parity` first");
+        panic!("{CHART_XLSX_PATH} not found - run `mise run generate:chart-parity` first");
     }
 
     let bridge = excel_bridge();

@@ -23,9 +23,7 @@ use duke_sheets_core::style::{
 };
 use duke_sheets_core::{CellRange, CellValue, Style, Worksheet};
 
-// ---------------------------------------------------------------------------
 // Public API
-// ---------------------------------------------------------------------------
 
 /// Options controlling HTML generation.
 #[derive(Debug, Clone)]
@@ -37,7 +35,7 @@ pub struct HtmlOptions {
     /// Document `<title>` (defaults to the sheet name).
     pub title: Option<String>,
 
-    /// Use Excel number-formatted values (dates, percentages, currencies …).
+    /// Use Excel number-formatted values (dates, percentages, currencies ...).
     /// When `false`, raw values are emitted (numbers as plain floats, dates as
     /// serial numbers).
     pub formatted: bool,
@@ -70,9 +68,7 @@ pub fn worksheet_to_html(sheet: &Worksheet, options: &HtmlOptions) -> String {
     buf
 }
 
-// ---------------------------------------------------------------------------
 // Document wrapper
-// ---------------------------------------------------------------------------
 
 fn write_document_open(buf: &mut String, options: &HtmlOptions, sheet_name: &str) {
     buf.push_str("<!DOCTYPE html>\n<html>\n<head>\n");
@@ -88,9 +84,7 @@ fn write_document_open(buf: &mut String, options: &HtmlOptions, sheet_name: &str
     buf.push_str("</head>\n<body>\n");
 }
 
-// ---------------------------------------------------------------------------
 // Table generation
-// ---------------------------------------------------------------------------
 
 fn write_table(buf: &mut String, sheet: &Worksheet, options: &HtmlOptions) {
     let used_range = match sheet.used_range() {
@@ -152,9 +146,7 @@ fn write_colgroup(buf: &mut String, sheet: &Worksheet, max_col: u16) {
     buf.push_str("</colgroup>\n");
 }
 
-// ---------------------------------------------------------------------------
 // Cell rendering
-// ---------------------------------------------------------------------------
 
 fn write_cell(
     buf: &mut String,
@@ -188,7 +180,7 @@ fn write_cell(
     // Cell content
     let text = cell_display_text(sheet, row, col, options);
     if !text.is_empty() {
-        // Check for rich text — if the raw value is RichText, render with spans
+        // Check for rich text - if the raw value is RichText, render with spans
         let raw = sheet.get_value_at(row, col);
         if let CellValue::RichText(runs) = &raw {
             write_rich_text(buf, runs);
@@ -287,9 +279,7 @@ fn run_font_to_css(font: &duke_sheets_core::RunFont) -> String {
     css
 }
 
-// ---------------------------------------------------------------------------
 // Style → CSS conversion
-// ---------------------------------------------------------------------------
 
 fn style_to_css(style: &Style) -> String {
     let mut css = String::new();
@@ -448,9 +438,7 @@ fn push_text_decoration(css: &mut String, underline: bool, strikethrough: bool) 
     }
 }
 
-// ---------------------------------------------------------------------------
 // Merged-cell bookkeeping
-// ---------------------------------------------------------------------------
 
 enum MergeInfo {
     /// Top-left cell of a merged region.
@@ -490,9 +478,7 @@ fn build_merge_map(
     map
 }
 
-// ---------------------------------------------------------------------------
 // Unit conversions
-// ---------------------------------------------------------------------------
 
 /// Convert Excel column-width (in character units) to pixels.
 ///
@@ -517,9 +503,7 @@ fn css_hex(color: &duke_sheets_core::Color) -> String {
     format!("{r:02X}{g:02X}{b:02X}")
 }
 
-// ---------------------------------------------------------------------------
 // HTML escaping
-// ---------------------------------------------------------------------------
 
 fn escape_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -535,9 +519,7 @@ fn escape_html(s: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

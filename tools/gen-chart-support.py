@@ -299,12 +299,12 @@ def format_item(t, idx, schema_file):
     src = f"{schema_file}#Types[{idx}]"
 
     if is_abstract:
-        return f"  - _abstract base: `{cls}`_ — {summary} (`{src}`)"
+        return f"  - _abstract base: `{cls}`_ - {summary} (`{src}`)"
 
     implemented = cls in IMPLEMENTED_CLASSNAMES or tag in IMPLEMENTED_TAGS
     checkbox = "[x]" if implemented else "[ ]"
     tag_display = f"`{tag}`" if tag else f"`{xsd_type(name)}`"
-    return f"- {checkbox} {tag_display} — **{cls}**: {summary} (`{src}`)"
+    return f"- {checkbox} {tag_display} - **{cls}**: {summary} (`{src}`)"
 
 
 def extract_enum_refs(types_list):
@@ -500,7 +500,7 @@ def main():
 
     # Build output
     lines = []
-    lines.append("# Chart Support — OpenXML Type Checklist")
+    lines.append("# Chart Support - OpenXML Type Checklist")
     lines.append("")
     lines.append(
         "> Auto-generated from [Open-XML-SDK `data/schemas/`]"
@@ -515,7 +515,7 @@ def main():
     lines.append("## 1. Package Structure")
     lines.append("")
     lines.append("Relationships, content types, and part paths needed to embed")
-    lines.append("charts in an XLSX file. These are not in the XSD schemas —")
+    lines.append("charts in an XLSX file. These are not in the XSD schemas -")
     lines.append("they come from the SDK's part class definitions.")
     lines.append("")
     lines.append("- [x] `xl/drawings/drawingN.xml` \u2014 DrawingsPart")
@@ -677,7 +677,7 @@ def main():
             lines.append(format_item(t, idx, a_filename))
             a_included += 1
     if a_included == 0:
-        lines.append("_(no direct references found — check child element scan)_")
+        lines.append("_(no direct references found - check child element scan)_")
     lines.append("")
 
     # Section 20+: Extension schemas

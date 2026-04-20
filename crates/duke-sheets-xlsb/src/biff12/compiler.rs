@@ -283,7 +283,7 @@ fn emit_unary_op(op: UnaryOperator, out: &mut Vec<u8>) -> Result<(), String> {
         UnaryOperator::Percent => ptg::PTG_PERCENT,
         UnaryOperator::ImplicitIntersection | UnaryOperator::SpillRange => {
             // These are dynamic array operators with no classical Ptg encoding.
-            // Skip silently — the formula still evaluates via the cached value.
+            // Skip silently - the formula still evaluates via the cached value.
             return Ok(());
         }
     };

@@ -35,12 +35,8 @@ pub(crate) fn read_table<R: Read + Seek>(
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
-                b"table" if table.is_none() => {
-                    table = Some(parse_table_attrs(&e)?);
-                }
-                b"tableColumn" => {
-                    current_column = Some(parse_table_column_attrs(&e)?);
-                }
+                b"table" if table.is_none() => table = Some(parse_table_attrs(&e)?),
+                b"tableColumn" => current_column = Some(parse_table_column_attrs(&e)?),
                 b"calculatedColumnFormula" => {
                     in_calculated_column_formula = true;
                     formula_text.clear();
@@ -52,19 +48,15 @@ pub(crate) fn read_table<R: Read + Seek>(
                 _ => {}
             },
             Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
-                b"table" if table.is_none() => {
-                    table = Some(parse_table_attrs(&e)?);
-                }
+                b"table" if table.is_none() => table = Some(parse_table_attrs(&e)?),
                 b"tableColumn" => {
                     let col = parse_table_column_attrs(&e)?;
                     columns.push(col);
                 }
-                b"tableStyleInfo" => {
-                    style_info = Some(parse_table_style_info(&e));
-                }
+                b"tableStyleInfo" => style_info = Some(parse_table_style_info(&e)),
                 b"autoFilter" => {
                     // We note the autoFilter exists but don't need to parse
-                    // filter criteria for now — the ref is on the table itself.
+                    // filter criteria for now - the ref is on the table itself.
                 }
                 _ => {}
             },
@@ -170,9 +162,7 @@ fn parse_table_column_attrs(e: &quick_xml::events::BytesStart) -> XlsxResult<Tab
             b"totalsRowFunction" => {
                 totals_row_function = TotalsRowFunction::from_ooxml(&val);
             }
-            b"totalsRowLabel" => {
-                totals_row_label = Some(val.into_owned());
-            }
+            b"totalsRowLabel" => totals_row_label = Some(val.into_owned()),
             _ => {}
         }
     }

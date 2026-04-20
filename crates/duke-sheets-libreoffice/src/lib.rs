@@ -2,7 +2,7 @@
 //!
 //! This crate provides a high-level Rust API for controlling LibreOffice via
 //! the UNO Remote Protocol (URP). It can create/open spreadsheets, manipulate
-//! cells, and save files — all without Python or any other scripting language.
+//! cells, and save files - all without Python or any other scripting language.
 //!
 //! # Architecture
 //!

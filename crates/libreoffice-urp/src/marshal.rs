@@ -126,7 +126,7 @@ pub fn read_type(buf: &mut Bytes) -> Result<(Type, u16, bool)> {
             let name = read_string(buf)?;
             Ok((Type { class: tc, name }, cache_index, true))
         } else {
-            // Must read from cache — caller is responsible
+            // Must read from cache - caller is responsible
             Ok((
                 Type {
                     class: tc,
@@ -193,7 +193,7 @@ pub fn write_value_cached(
         UnoValue::Exception(exc) => {
             // Exception = Message (string) + Context (interface, null)
             write_string(buf, &exc.message);
-            // Null XInterface for Context — always uncached
+            // Null XInterface for Context - always uncached
             write_string(buf, "");
             buf.put_u16(0xFFFF);
         }
@@ -223,7 +223,7 @@ pub fn write_value_cached(
             // Uses the shared OID cache (same as message header) when available.
             if let Some(cache) = oid_cache {
                 if oid.is_empty() {
-                    // Null interface — no caching
+                    // Null interface - no caching
                     write_string(buf, "");
                     buf.put_u16(0xFFFF);
                 } else {
@@ -239,7 +239,7 @@ pub fn write_value_cached(
                     }
                 }
             } else {
-                // No cache available — always write full OID
+                // No cache available - always write full OID
                 write_string(buf, oid);
                 buf.put_u16(0xFFFF);
             }
@@ -399,7 +399,7 @@ pub fn read_value_cached(
                     String::new()
                 }
             } else {
-                // New OID — populate cache if index is valid and in-bounds
+                // New OID - populate cache if index is valid and in-bounds
                 if cache_index != 0xFFFF && !oid_str.is_empty() {
                     let idx = cache_index as usize;
                     if idx < oid_cache.len() {

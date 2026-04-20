@@ -692,7 +692,7 @@ impl<'a> EvaluationContext<'a> {
             };
         }
 
-        // Fallback — unrecognized specifier combination.
+        // Fallback - unrecognized specifier combination.
         Ok(FormulaValue::Error(CellError::Ref))
     }
 
@@ -759,14 +759,12 @@ impl<'a> EvaluationContext<'a> {
 /// Evaluate a formula expression
 pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     match expr {
-        // === Literals ===
         FormulaExpr::Number(n) => Ok(FormulaValue::Number(*n)),
         FormulaExpr::String(s) => Ok(FormulaValue::String(s.clone())),
         FormulaExpr::Boolean(b) => Ok(FormulaValue::Boolean(*b)),
         FormulaExpr::Error(e) => Ok(FormulaValue::Error(*e)),
         FormulaExpr::Empty => Ok(FormulaValue::Empty),
 
-        // === References ===
         FormulaExpr::CellRef(cell_ref) => Ok(ctx.get_cell_value(
             cell_ref.sheet.as_deref(),
             cell_ref.address.row,
@@ -789,18 +787,15 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
         // Structured table references (e.g., Table1[Revenue], Table1[@Col]).
         FormulaExpr::StructuredRef(sr) => ctx.resolve_structured_ref(sr),
 
-        // External workbook references — external books are not loaded
+        // External workbook references - external books are not loaded
         FormulaExpr::ExternalRef(_) => Ok(FormulaValue::Error(CellError::Ref)),
 
-        // === Operators ===
         FormulaExpr::BinaryOp { op, left, right } => evaluate_binary_op(*op, left, right, ctx),
 
         FormulaExpr::UnaryOp { op, operand } => evaluate_unary_op(*op, operand, ctx),
 
-        // === Functions ===
         FormulaExpr::Function { name, args } => evaluate_function(name, args, ctx),
 
-        // === Arrays ===
         FormulaExpr::Array(rows) => {
             let mut result_rows = Vec::new();
             for row in rows {
@@ -1081,7 +1076,7 @@ fn evaluate_unary_op(
     ctx: &EvaluationContext,
 ) -> FormulaResult<FormulaValue> {
     // The # (SpillRange) operator must inspect the operand AST to get the
-    // cell reference, not the evaluated value — handle it before evaluating.
+    // cell reference, not the evaluated value - handle it before evaluating.
     if op == UnaryOperator::SpillRange {
         return evaluate_spill_range(operand, ctx);
     }
@@ -1128,16 +1123,16 @@ fn evaluate_unary_op(
                     let num_rows = rows.len();
                     let num_cols = rows[0].len();
                     if num_rows == 1 && num_cols == 1 {
-                        // 1x1 array — return the single element
+                        // 1x1 array - return the single element
                         return Ok(rows[0][0].clone());
                     }
                     if num_rows == 1 {
-                        // Single row — select by column (use formula's column offset)
+                        // Single row - select by column (use formula's column offset)
                         // For simplicity, return the first element
                         return Ok(rows[0].first().cloned().unwrap_or(FormulaValue::Empty));
                     }
                     if num_cols == 1 {
-                        // Single column — select by row (use formula's row)
+                        // Single column - select by row (use formula's row)
                         // For simplicity, return the first element
                         return Ok(rows
                             .first()
@@ -1215,7 +1210,7 @@ fn evaluate_spill_range(
             source: None,
         })
     } else {
-        // Not a spill source — return just the single cell value (1x1)
+        // Not a spill source - return just the single cell value (1x1)
         Ok(FormulaValue::from(worksheet.get_value_at_ref(row, col)))
     }
 }
@@ -1555,7 +1550,7 @@ fn evaluate_match_fast(
         },
     };
 
-    // Skip fast path for wildcard patterns — they need linear scan.
+    // Skip fast path for wildcard patterns - they need linear scan.
     let is_wildcard =
         matches!(&lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
     if match_type == 0 && !is_wildcard {
@@ -2105,9 +2100,9 @@ fn evaluate_function(
 ) -> FormulaResult<FormulaValue> {
     let registry = get_function_registry();
 
-    // Strip Excel future function prefixes — Excel stores newer functions
+    // Strip Excel future function prefixes - Excel stores newer functions
     // like IFNA, IFS, SWITCH, TEXTJOIN with _xlfn. (or _xlws.) in XML.
-    // Some functions have both: _xlfn._xlws.FILTER — strip in sequence.
+    // Some functions have both: _xlfn._xlws.FILTER - strip in sequence.
     // Note: function names are already uppercased by the parser.
     let lookup_name = name.strip_prefix("_XLFN.").unwrap_or(name);
     let lookup_name = lookup_name.strip_prefix("_XLWS.").unwrap_or(lookup_name);

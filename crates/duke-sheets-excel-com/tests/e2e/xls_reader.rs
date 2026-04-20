@@ -403,7 +403,7 @@ fn test_xls_data_table_formula() {
 
         let h = wb.handle();
 
-        // Get a handle to Range("A1") — the column-input cell for the data table.
+        // Get a handle to Range("A1") - the column-input cell for the data table.
         // Use navigate() to walk the chain and store the endpoint as a handle.
         let a1_handle = excel
             .navigate(
@@ -571,7 +571,7 @@ fn test_xls_pattern_fills() {
             } => {
                 assert_eq!(
                     *pattern, expected_pattern,
-                    "{cell}: wrong PatternType — got {pattern:?}, expected {expected_pattern:?}"
+                    "{cell}: wrong PatternType - got {pattern:?}, expected {expected_pattern:?}"
                 );
 
                 // Verify foreground (pattern line) color

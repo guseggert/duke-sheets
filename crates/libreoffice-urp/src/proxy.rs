@@ -14,7 +14,7 @@ use crate::types::{Type, TypeClass, UnoValue};
 
 /// A proxy handle for a remote UNO object.
 ///
-/// This is a lightweight reference — the actual communication goes through
+/// This is a lightweight reference - the actual communication goes through
 /// the `Connection` which holds the transport and protocol state.
 #[derive(Debug, Clone)]
 pub struct UnoProxy {

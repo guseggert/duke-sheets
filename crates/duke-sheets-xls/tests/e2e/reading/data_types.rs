@@ -59,7 +59,7 @@ fn test_xls_large_sst_with_continue() {
     let path = temp_fixture_path();
 
     // Generate 300 unique strings. Each is ~30 chars, so 300 × 33 bytes ≈ 9900
-    // bytes of SST data — well above the 8224-byte record limit, forcing at
+    // bytes of SST data - well above the 8224-byte record limit, forcing at
     // least one CONTINUE record.
     //
     // We also mix in Unicode strings (every 10th string) to exercise encoding
@@ -120,7 +120,7 @@ fn test_xls_boolean_values() {
         let lo = lo_bridge().await.unwrap();
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
-        // LO doesn't have a direct "set boolean" — use formulas
+        // LO doesn't have a direct "set boolean" - use formulas
         wb.set_cell_formula("A1", "=TRUE()").await.unwrap();
         wb.set_cell_formula("B1", "=FALSE()").await.unwrap();
         wb.save_as_xls(path.to_str().unwrap()).await.unwrap();

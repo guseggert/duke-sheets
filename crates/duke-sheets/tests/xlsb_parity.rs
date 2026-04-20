@@ -13,7 +13,7 @@ struct ParityCase {
 }
 
 #[test]
-#[ignore = "requires data/formula-parity.xlsb — run `mise run generate:xlsb-parity`"]
+#[ignore = "requires data/formula-parity.xlsb - run `mise run generate:xlsb-parity`"]
 fn xlsb_parity_matches_excel_cached_values() {
     let fixture_path = formula_parity_path();
     if !fixture_path.exists() {
@@ -60,7 +60,7 @@ fn xlsb_parity_matches_excel_cached_values() {
 }
 
 #[test]
-#[ignore = "requires data/formula-parity.xlsb — run `mise run generate:xlsb-parity`"]
+#[ignore = "requires data/formula-parity.xlsb - run `mise run generate:xlsb-parity`"]
 fn xlsb_roundtrip_preserves_values() {
     let fixture_path = formula_parity_path();
     if !fixture_path.exists() {
@@ -110,7 +110,7 @@ fn xlsb_roundtrip_preserves_values() {
 }
 
 #[test]
-#[ignore = "requires data/chart-parity.xlsb — run generate:xlsb-parity"]
+#[ignore = "requires data/chart-parity.xlsb - run generate:xlsb-parity"]
 fn xlsb_chart_parity_reads_successfully() {
     let path = chart_parity_path();
     if !path.exists() {
@@ -185,7 +185,7 @@ fn xlsb_chart_parity_reads_successfully() {
 }
 
 #[test]
-#[ignore = "requires data/chart-parity.xlsb — run generate:xlsb-parity"]
+#[ignore = "requires data/chart-parity.xlsb - run generate:xlsb-parity"]
 fn xlsb_chart_roundtrip_preserves_data() {
     let path = chart_parity_path();
     if !path.exists() {

@@ -5,7 +5,7 @@
 //! crate's FTAB (MIT-licensed).
 //!
 //! Argument count encoding:
-//! - 0–253: fixed argument count
+//! - 0-253: fixed argument count
 //! - 254: variable args (minimum from table, actual count in tFuncVar)
 //! - 255: variable args (0 or more)
 
@@ -500,7 +500,7 @@ static FTAB: [&str; 485] = [
 ];
 
 /// Argument count for each BIFF8 function.
-/// - 0–253: fixed count
+/// - 0-253: fixed count
 /// - 254: variable (min from this table)
 /// - 255: variable (0 or more)
 static FTAB_ARGC: [u16; 485] = [
@@ -575,12 +575,12 @@ pub fn function_name(idx: u16) -> &'static str {
     if i < FTAB.len() {
         let name = FTAB[i];
         if name.is_empty() {
-            // Reserved slot — should not appear in real files
+            // Reserved slot - should not appear in real files
             return "";
         }
         name
     } else {
-        // Future function or add-in — out of range
+        // Future function or add-in - out of range
         ""
     }
 }

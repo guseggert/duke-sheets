@@ -286,7 +286,7 @@ pub fn fn_match(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResult
             let is_wildcard = matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
 
             if !is_wildcard {
-                // Hash index (Tier 2) — only for non-wildcard lookups
+                // Hash index (Tier 2) - only for non-wildcard lookups
                 if let Some(cache) = ctx.eval_cache {
                     let array_arg = args.get(1).unwrap();
                     if let FormulaValue::Array {
@@ -635,7 +635,7 @@ pub fn fn_vlookup(args: &[FormulaValue], ctx: &EvaluationContext) -> FormulaResu
             matches!(lookup_value, FormulaValue::String(s) if s.contains('*') || s.contains('?'));
 
         if !is_wildcard {
-            // Hash index (Tier 2) — only for non-wildcard lookups
+            // Hash index (Tier 2) - only for non-wildcard lookups
             if let Some(cache) = ctx.eval_cache {
                 let array_arg = args.get(1).unwrap();
                 if let FormulaValue::Array {
@@ -1068,7 +1068,7 @@ pub fn fn_offset(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResu
 /// Reference: Microsoft SEQUENCE function, LibreOffice SEQUENCE
 ///
 /// - rows: Number of rows to return (required, must be >= 1)
-/// - columns: Number of columns to return (default 1, must be >= 1)  
+/// - columns: Number of columns to return (default 1, must be >= 1)
 /// - start: Starting number (default 1)
 /// - step: Increment between numbers (default 1)
 ///
@@ -1434,7 +1434,7 @@ mod tests {
         );
     }
 
-    // ===== DOCS-BASED TESTS =====
+    // DOCS-BASED TESTS
 
     #[test]
     fn test_index_docs() {

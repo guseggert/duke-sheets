@@ -5600,7 +5600,7 @@ mod tests {
         }
     }
 
-    // ===== Docs-based tests for compatibility aliases (MODE, QUARTILE, RANK, etc.) =====
+    // Docs-based tests for compatibility aliases (MODE, QUARTILE, RANK, etc.)
 
     fn n(x: f64) -> FormulaValue {
         FormulaValue::Number(x)
@@ -5638,7 +5638,7 @@ mod tests {
         );
     }
 
-    // MODE: no repeated values — our impl returns smallest instead of #N/A
+    // MODE: no repeated values - our impl returns smallest instead of #N/A
     #[test]
     fn test_mode_docs_no_repeat() {
         let ctx = EvaluationContext::simple();
@@ -5742,7 +5742,7 @@ mod tests {
         );
     }
 
-    // RANK: value not found — our impl returns rank 1 instead of #N/A
+    // RANK: value not found - our impl returns rank 1 instead of #N/A
     #[test]
     fn test_rank_docs_not_found() {
         let ctx = EvaluationContext::simple();
@@ -5929,11 +5929,11 @@ mod tests {
         );
     }
 
-    // ===== DOCS-BASED TESTS =====
+    // DOCS-BASED TESTS
     // Tests derived from official Microsoft Excel documentation examples.
     // Each test name uses the _docs suffix to distinguish from existing basic tests.
 
-    // --- AVERAGE, AVERAGEA, AVEDEV ---
+    // AVERAGE, AVERAGEA, AVEDEV
 
     #[test]
     fn test_average_docs() {
@@ -5978,7 +5978,7 @@ mod tests {
         }
     }
 
-    // --- COUNT, COUNTA ---
+    // COUNT, COUNTA
 
     #[test]
     fn test_count_docs() {
@@ -5996,9 +5996,9 @@ mod tests {
         assert_eq!(eval("=COUNTA(1,2,3)").unwrap(), FormulaValue::Number(3.0));
     }
 
-    // COUNTBLANK, COUNTIF, COUNTIFS require cell context — tested via direct fn_ calls
+    // COUNTBLANK, COUNTIF, COUNTIFS require cell context - tested via direct fn_ calls
 
-    // --- NORM.DIST, NORM.INV, NORM.S.DIST, NORM.S.INV, PHI, GAUSS, STANDARDIZE ---
+    // NORM.DIST, NORM.INV, NORM.S.DIST, NORM.S.INV, PHI, GAUSS, STANDARDIZE
 
     #[test]
     fn test_norm_dist_docs() {
@@ -6082,7 +6082,7 @@ mod tests {
         }
     }
 
-    // --- BINOM.DIST, BINOM.DIST.RANGE, BINOM.INV, NEGBINOM.DIST, POISSON.DIST, HYPGEOM.DIST ---
+    // BINOM.DIST, BINOM.DIST.RANGE, BINOM.INV, NEGBINOM.DIST, POISSON.DIST, HYPGEOM.DIST
 
     #[test]
     fn test_binom_dist_docs() {
@@ -6167,7 +6167,7 @@ mod tests {
         }
     }
 
-    // --- CHISQ.DIST, CHISQ.DIST.RT, CHISQ.INV, CHISQ.INV.RT, CHISQ.TEST ---
+    // CHISQ.DIST, CHISQ.DIST.RT, CHISQ.INV, CHISQ.INV.RT, CHISQ.TEST
 
     #[test]
     fn test_chisq_dist_docs() {
@@ -6233,7 +6233,7 @@ mod tests {
         }
     }
 
-    // --- T.DIST, T.DIST.2T, T.DIST.RT, T.INV, T.INV.2T, T.TEST ---
+    // T.DIST, T.DIST.2T, T.DIST.RT, T.INV, T.INV.2T, T.TEST
 
     #[test]
     fn test_t_dist_docs() {
@@ -6303,7 +6303,7 @@ mod tests {
         }
     }
 
-    // --- F.DIST, F.DIST.RT, F.INV, F.INV.RT, F.TEST ---
+    // F.DIST, F.DIST.RT, F.INV, F.INV.RT, F.TEST
 
     #[test]
     fn test_f_dist_docs() {
@@ -6361,7 +6361,7 @@ mod tests {
         }
     }
 
-    // --- GAMMA, GAMMA.DIST, GAMMA.INV, GAMMALN, GAMMALN.PRECISE, BETA.DIST, EXPON.DIST, WEIBULL.DIST ---
+    // GAMMA, GAMMA.DIST, GAMMA.INV, GAMMALN, GAMMALN.PRECISE, BETA.DIST, EXPON.DIST, WEIBULL.DIST
 
     #[test]
     fn test_gamma_docs() {
@@ -6483,7 +6483,7 @@ mod tests {
         }
     }
 
-    // --- CORREL, COVARIANCE.P, COVARIANCE.S, PEARSON, RSQ, FISHER, FISHERINV ---
+    // CORREL, COVARIANCE.P, COVARIANCE.S, PEARSON, RSQ, FISHER, FISHERINV
 
     #[test]
     fn test_correl_docs() {
@@ -6556,7 +6556,7 @@ mod tests {
         }
     }
 
-    // --- SLOPE, INTERCEPT, STEYX, FORECAST.LINEAR ---
+    // SLOPE, INTERCEPT, STEYX, FORECAST.LINEAR
 
     #[test]
     fn test_slope_docs() {
@@ -6608,7 +6608,7 @@ mod tests {
         }
     }
 
-    // --- STDEV.S, STDEV.P, VAR.S, VAR.P, STDEVA, STDEVPA, VARA, VARPA ---
+    // STDEV.S, STDEV.P, VAR.S, VAR.P, STDEVA, STDEVPA, VARA, VARPA
 
     #[test]
     fn test_stdev_s_docs() {
@@ -6706,7 +6706,7 @@ mod tests {
         }
     }
 
-    // --- MEDIAN, MODE.SNGL, MODE.MULT, LARGE, SMALL, MAX, MAXA, MIN, MINA ---
+    // MEDIAN, MODE.SNGL, MODE.MULT, LARGE, SMALL, MAX, MAXA, MIN, MINA
 
     #[test]
     fn test_median_docs() {
@@ -6824,8 +6824,8 @@ mod tests {
         );
     }
 
-    // --- RANK.EQ, RANK.AVG, PERCENTILE.INC, PERCENTILE.EXC, PERCENTRANK.INC, PERCENTRANK.EXC ---
-    // --- QUARTILE.INC, QUARTILE.EXC ---
+    // RANK.EQ, RANK.AVG, PERCENTILE.INC, PERCENTILE.EXC, PERCENTRANK.INC, PERCENTRANK.EXC
+    // QUARTILE.INC, QUARTILE.EXC
 
     #[test]
     fn test_rank_eq_docs() {
@@ -6944,7 +6944,7 @@ mod tests {
         );
     }
 
-    // --- PERMUT, PERMUTATIONA, PROB, CONFIDENCE.NORM, CONFIDENCE.T ---
+    // PERMUT, PERMUTATIONA, PROB, CONFIDENCE.NORM, CONFIDENCE.T
 
     #[test]
     fn test_permut_docs() {
@@ -7006,7 +7006,7 @@ mod tests {
         }
     }
 
-    // --- MAXIFS, MINIFS ---
+    // MAXIFS, MINIFS
 
     #[test]
     fn test_maxifs_docs() {
@@ -7026,7 +7026,7 @@ mod tests {
         );
     }
 
-    // --- DEVSQ, GEOMEAN, HARMEAN, KURT, SKEW, SKEW.P, TRIMMEAN, FREQUENCY ---
+    // DEVSQ, GEOMEAN, HARMEAN, KURT, SKEW, SKEW.P, TRIMMEAN, FREQUENCY
 
     #[test]
     fn test_devsq_docs() {

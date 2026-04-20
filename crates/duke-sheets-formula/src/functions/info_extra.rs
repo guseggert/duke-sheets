@@ -235,7 +235,7 @@ pub fn fn_isomitted(
     Ok(FormulaValue::Boolean(false))
 }
 
-// ---------- Stubs for functions that require external services ----------
+// Stubs for functions that require external services
 // These return #N/A because they cannot work as standalone computations.
 
 /// Helper: stub that propagates errors, otherwise returns #N/A.
@@ -248,7 +248,7 @@ fn stub_na(args: &[FormulaValue]) -> FormulaResult<FormulaValue> {
     Ok(FormulaValue::Error(CellError::Na))
 }
 
-/// STOCKHISTORY(...) — Stub: requires Microsoft's live stock data feed.
+/// STOCKHISTORY(...) - Stub: requires Microsoft's live stock data feed.
 pub fn fn_stockhistory(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
@@ -256,12 +256,12 @@ pub fn fn_stockhistory(
     stub_na(args)
 }
 
-/// CALL(...) — Stub: calls a Windows DLL procedure at runtime.
+/// CALL(...) - Stub: calls a Windows DLL procedure at runtime.
 pub fn fn_call(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     stub_na(args)
 }
 
-/// REGISTER.ID(...) — Stub: returns the register ID of a loaded DLL.
+/// REGISTER.ID(...) - Stub: returns the register ID of a loaded DLL.
 pub fn fn_register_id(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
@@ -269,7 +269,7 @@ pub fn fn_register_id(
     stub_na(args)
 }
 
-/// CUBEKPIMEMBER(...) — Stub: requires OLAP server connection.
+/// CUBEKPIMEMBER(...) - Stub: requires OLAP server connection.
 pub fn fn_cubekpimember(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
@@ -277,7 +277,7 @@ pub fn fn_cubekpimember(
     stub_na(args)
 }
 
-/// CUBEMEMBER(...) — Stub: requires OLAP server connection.
+/// CUBEMEMBER(...) - Stub: requires OLAP server connection.
 pub fn fn_cubemember(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
@@ -285,7 +285,7 @@ pub fn fn_cubemember(
     stub_na(args)
 }
 
-/// CUBEMEMBERPROPERTY(...) — Stub: requires OLAP server connection.
+/// CUBEMEMBERPROPERTY(...) - Stub: requires OLAP server connection.
 pub fn fn_cubememberproperty(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
@@ -293,7 +293,7 @@ pub fn fn_cubememberproperty(
     stub_na(args)
 }
 
-/// CUBERANKEDMEMBER(...) — Stub: requires OLAP server connection.
+/// CUBERANKEDMEMBER(...) - Stub: requires OLAP server connection.
 pub fn fn_cuberankedmember(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
@@ -301,12 +301,12 @@ pub fn fn_cuberankedmember(
     stub_na(args)
 }
 
-/// CUBESET(...) — Stub: requires OLAP server connection.
+/// CUBESET(...) - Stub: requires OLAP server connection.
 pub fn fn_cubeset(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     stub_na(args)
 }
 
-/// CUBESETCOUNT(...) — Stub: requires OLAP server connection.
+/// CUBESETCOUNT(...) - Stub: requires OLAP server connection.
 pub fn fn_cubesetcount(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
@@ -314,7 +314,7 @@ pub fn fn_cubesetcount(
     stub_na(args)
 }
 
-/// CUBEVALUE(...) — Stub: requires OLAP server connection.
+/// CUBEVALUE(...) - Stub: requires OLAP server connection.
 pub fn fn_cubevalue(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
@@ -724,7 +724,7 @@ mod tests {
         assert_eq!(eval("=NA()").unwrap(), FormulaValue::Error(CellError::Na));
     }
 
-    // ---------- Stub tests: explicitly skipped external-service functions ----------
+    // Stub tests: explicitly skipped external-service functions
     // These functions are registered so formulas parse, but return #N/A because
     // they require runtime resources unavailable in a standalone spreadsheet engine.
 
@@ -808,7 +808,7 @@ mod tests {
         assert_eq!(eval("=ISERR(TRUE)").unwrap(), FormulaValue::Boolean(false));
         assert_eq!(eval("=ISERR(FALSE)").unwrap(), FormulaValue::Boolean(false));
 
-        // #VALUE! error is caught by ISERR — test via direct function call
+        // #VALUE! error is caught by ISERR - test via direct function call
         let ctx = EvaluationContext::simple();
         assert_eq!(
             fn_iserr(&[FormulaValue::Error(CellError::Value)], &ctx).unwrap(),
@@ -990,7 +990,7 @@ mod tests {
         // =TYPE("Smith") → 2 (Text)
         assert_eq!(eval("=TYPE(\"Smith\")").unwrap(), FormulaValue::Number(2.0));
 
-        // =TYPE(error) → 16 (Error) — use direct call since 2+"Smith" propagates error
+        // =TYPE(error) → 16 (Error) - use direct call since 2+"Smith" propagates error
         let ctx = EvaluationContext::simple();
         assert_eq!(
             fn_type(&[FormulaValue::Error(CellError::Value)], &ctx).unwrap(),
@@ -1014,34 +1014,34 @@ mod tests {
 
     #[test]
     fn test_cell_docs() {
-        // === Tests using EvaluationContext::simple() (row=0, col=0, sheet=0) ===
+        // Tests using EvaluationContext::simple() (row=0, col=0, sheet=0)
         let ctx = EvaluationContext::simple();
 
-        // "address" — returns "$A$1" for cell at (row=0, col=0)
+        // "address" - returns "$A$1" for cell at (row=0, col=0)
         assert_eq!(
             fn_cell(&[FormulaValue::String("address".to_string())], &ctx).unwrap(),
             FormulaValue::String("$A$1".to_string())
         );
 
-        // "col" — column number, 1-based (col=0 → 1)
+        // "col" - column number, 1-based (col=0 → 1)
         assert_eq!(
             fn_cell(&[FormulaValue::String("col".to_string())], &ctx).unwrap(),
             FormulaValue::Number(1.0)
         );
 
-        // "row" — row number, 1-based (row=0 → 1)
+        // "row" - row number, 1-based (row=0 → 1)
         assert_eq!(
             fn_cell(&[FormulaValue::String("row".to_string())], &ctx).unwrap(),
             FormulaValue::Number(1.0)
         );
 
-        // "contents" — with no reference, returns 0 (Empty → 0 like Excel)
+        // "contents" - with no reference, returns 0 (Empty → 0 like Excel)
         assert_eq!(
             fn_cell(&[FormulaValue::String("contents".to_string())], &ctx).unwrap(),
             FormulaValue::Number(0.0)
         );
 
-        // "contents" — with a number reference
+        // "contents" - with a number reference
         assert_eq!(
             fn_cell(
                 &[
@@ -1054,7 +1054,7 @@ mod tests {
             FormulaValue::Number(42.0)
         );
 
-        // "contents" — with a string reference
+        // "contents" - with a string reference
         assert_eq!(
             fn_cell(
                 &[
@@ -1067,13 +1067,13 @@ mod tests {
             FormulaValue::String("hello".to_string())
         );
 
-        // "type" — "b" for blank (empty/no reference)
+        // "type" - "b" for blank (empty/no reference)
         assert_eq!(
             fn_cell(&[FormulaValue::String("type".to_string())], &ctx).unwrap(),
             FormulaValue::String("b".to_string())
         );
 
-        // "type" — "l" for label (text)
+        // "type" - "l" for label (text)
         assert_eq!(
             fn_cell(
                 &[
@@ -1086,7 +1086,7 @@ mod tests {
             FormulaValue::String("l".to_string())
         );
 
-        // "type" — "v" for value (number)
+        // "type" - "v" for value (number)
         assert_eq!(
             fn_cell(
                 &[
@@ -1099,7 +1099,7 @@ mod tests {
             FormulaValue::String("v".to_string())
         );
 
-        // "type" — "v" for boolean
+        // "type" - "v" for boolean
         assert_eq!(
             fn_cell(
                 &[
@@ -1112,7 +1112,7 @@ mod tests {
             FormulaValue::String("v".to_string())
         );
 
-        // "type" — "b" for empty string (treated as blank)
+        // "type" - "b" for empty string (treated as blank)
         assert_eq!(
             fn_cell(
                 &[
@@ -1125,49 +1125,49 @@ mod tests {
             FormulaValue::String("b".to_string())
         );
 
-        // "filename" — returns empty string (no file context)
+        // "filename" - returns empty string (no file context)
         assert_eq!(
             fn_cell(&[FormulaValue::String("filename".to_string())], &ctx).unwrap(),
             FormulaValue::String(String::new())
         );
 
-        // "format" — returns "G" (General)
+        // "format" - returns "G" (General)
         assert_eq!(
             fn_cell(&[FormulaValue::String("format".to_string())], &ctx).unwrap(),
             FormulaValue::String("G".to_string())
         );
 
-        // "width" — returns 8 (default column width)
+        // "width" - returns 8 (default column width)
         assert_eq!(
             fn_cell(&[FormulaValue::String("width".to_string())], &ctx).unwrap(),
             FormulaValue::Number(8.0)
         );
 
-        // "protect" — returns 1 (default protected)
+        // "protect" - returns 1 (default protected)
         assert_eq!(
             fn_cell(&[FormulaValue::String("protect".to_string())], &ctx).unwrap(),
             FormulaValue::Number(1.0)
         );
 
-        // "prefix" — returns empty string
+        // "prefix" - returns empty string
         assert_eq!(
             fn_cell(&[FormulaValue::String("prefix".to_string())], &ctx).unwrap(),
             FormulaValue::String(String::new())
         );
 
-        // "parentheses" — returns 0
+        // "parentheses" - returns 0
         assert_eq!(
             fn_cell(&[FormulaValue::String("parentheses".to_string())], &ctx,).unwrap(),
             FormulaValue::Number(0.0)
         );
 
-        // "color" — returns 0
+        // "color" - returns 0
         assert_eq!(
             fn_cell(&[FormulaValue::String("color".to_string())], &ctx).unwrap(),
             FormulaValue::Number(0.0)
         );
 
-        // === Case-insensitive info_type ===
+        // Case-insensitive info_type
         assert_eq!(
             fn_cell(&[FormulaValue::String("ROW".to_string())], &ctx).unwrap(),
             FormulaValue::Number(1.0)
@@ -1177,13 +1177,12 @@ mod tests {
             FormulaValue::String("$A$1".to_string())
         );
 
-        // === Unknown info_type → #VALUE! ===
+        // Unknown info_type → #VALUE!
         assert_eq!(
             fn_cell(&[FormulaValue::String("unknown".to_string())], &ctx,).unwrap(),
             FormulaValue::Error(CellError::Value)
         );
 
-        // === Error propagation from reference arg ===
         assert_eq!(
             fn_cell(
                 &[
@@ -1196,7 +1195,7 @@ mod tests {
             FormulaValue::Error(CellError::Div0)
         );
 
-        // === Non-string info_type → #VALUE! ===
+        // Non-string info_type → #VALUE!
         assert_eq!(
             fn_cell(&[FormulaValue::Number(1.0)], &ctx).unwrap(),
             FormulaValue::Error(CellError::Value)
@@ -1206,7 +1205,6 @@ mod tests {
             FormulaValue::Error(CellError::Value)
         );
 
-        // === With a different cell position ===
         let ctx2 = EvaluationContext::new(None, 0, 4, 2); // row=4, col=2 → C5
         assert_eq!(
             fn_cell(&[FormulaValue::String("address".to_string())], &ctx2).unwrap(),
@@ -1221,7 +1219,7 @@ mod tests {
             FormulaValue::Number(3.0)
         );
 
-        // === MS docs example: =IF(CELL("type",A1)="v",A1*2,0) ===
+        // MS docs example: =IF(CELL("type",A1)="v",A1*2,0)
         // Simulate with value reference (number → "v")
         assert_eq!(
             fn_cell(

@@ -508,7 +508,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    // Step 2: Read back — must not panic
+    // Step 2: Read back - must not panic
     let written = output.into_inner();
     let orig_wb = &workbook;
     let rt_wb = match duke_sheets_xlsx::XlsxReader::read(Cursor::new(&written)) {

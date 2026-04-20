@@ -6,7 +6,6 @@
 /// A parsed formula token with its associated data.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedToken {
-    // --- Binary operators ---
     Add,
     Sub,
     Mul,
@@ -23,13 +22,11 @@ pub enum ParsedToken {
     List,  // union (comma)
     Range, // colon
 
-    // --- Unary operators ---
     Uplus,
     Uminus,
     Percent,
     Paren,
 
-    // --- Constants ---
     MissArg,
     Str(String),
     Err(u8), // error code byte
@@ -37,7 +34,6 @@ pub enum ParsedToken {
     Int(u16),
     Num(f64),
 
-    // --- Cell references ---
     Ref {
         row: u32,
         col: u16,
@@ -57,7 +53,6 @@ pub enum ParsedToken {
     RefErr,
     AreaErr,
 
-    // --- Functions ---
     Func {
         /// Function index in the BIFF8 function table.
         func_idx: u16,
@@ -69,7 +64,7 @@ pub enum ParsedToken {
         func_idx: u16,
     },
 
-    // --- tAttr sub-types ---
+    // tAttr sub-types
     AttrVolatile,
     AttrIf {
         offset: u16,
@@ -88,7 +83,7 @@ pub enum ParsedToken {
         count: u8,
     },
 
-    // --- Phase 2/3 stubs (skip data, emit placeholder) ---
+    // Phase 2/3 stubs (skip data, emit placeholder)
     /// Named range reference (Phase 2).
     Name {
         name_idx: u16,
@@ -162,12 +157,12 @@ pub enum ParsedToken {
         row: u32,
         col: u16,
     },
-    /// Memory function — the decompiler treats this as a no-op; the
+    /// Memory function - the decompiler treats this as a no-op; the
     /// sub-expression tokens that follow produce the actual reference.
     MemFunc {
         subexpr_len: u16,
     },
 
-    /// Unknown token — skipped. Carries original byte for debugging.
+    /// Unknown token - skipped. Carries original byte for debugging.
     Unknown(u8),
 }

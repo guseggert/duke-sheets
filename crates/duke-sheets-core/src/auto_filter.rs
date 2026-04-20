@@ -74,7 +74,7 @@ pub enum ColumnFilter {
     Color(ColorFilter),
 }
 
-/// Discrete value filter — show rows matching any of the listed values.
+/// Discrete value filter - show rows matching any of the listed values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValueFilter {
     /// The allowed values. Rows not matching any value are hidden.

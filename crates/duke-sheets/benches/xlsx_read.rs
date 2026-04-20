@@ -1,4 +1,4 @@
-//! XLSX read benchmarks — duke-sheets vs calamine vs umya-spreadsheet.
+//! XLSX read benchmarks - duke-sheets vs calamine vs umya-spreadsheet.
 
 #[path = "helpers.rs"]
 mod helpers;

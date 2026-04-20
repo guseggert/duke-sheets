@@ -291,7 +291,7 @@ pub fn fn_atanh(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     Ok(FormulaValue::Number(x.atanh()))
 }
 
-/// ACOTH(number) — inverse hyperbolic cotangent
+/// ACOTH(number) - inverse hyperbolic cotangent
 pub fn fn_acoth(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let x = match get_number(args.first()) {
         Ok(v) => v,
@@ -304,7 +304,7 @@ pub fn fn_acoth(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResul
     Ok(FormulaValue::Number((1.0 / x).atanh()))
 }
 
-/// ACOT(number) — inverse cotangent (arccotangent)
+/// ACOT(number) - inverse cotangent (arccotangent)
 pub fn fn_acot(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let x = match get_number(args.first()) {
         Ok(v) => v,
@@ -1572,7 +1572,7 @@ pub fn fn_subtotal(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     fn_aggregate(&agg_args, _ctx)
 }
 
-/// PERCENTOF(data_subset, data_all) — percentage that a subset makes up of a given data set
+/// PERCENTOF(data_subset, data_all) - percentage that a subset makes up of a given data set
 pub fn fn_percentof(
     args: &[FormulaValue],
     _ctx: &EvaluationContext,
@@ -2075,9 +2075,7 @@ mod tests {
         );
     }
 
-    // ================================================================
     // Docs-based tests (from Microsoft support pages)
-    // ================================================================
 
     // ── MROUND docs ──
     // https://support.microsoft.com/en-us/office/mround-function-c299c3b0-15a5-426d-aa4b-d2d5b3baf427

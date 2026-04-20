@@ -112,7 +112,6 @@ impl<'a> FormulaParser<'a> {
         parser
     }
 
-    // === Token scanning ===
 
     fn advance_token(&mut self) {
         self.skip_whitespace();
@@ -190,7 +189,7 @@ impl<'a> FormulaParser<'a> {
                 return self.scan_bracket_expr();
             }
             ']' => {
-                // Stray ']' without matching '[' — treat as unknown
+                // Stray ']' without matching '[' - treat as unknown
                 self.advance();
                 return Token::Unknown(']');
             }
@@ -252,7 +251,7 @@ impl<'a> FormulaParser<'a> {
             return self.scan_identifier_or_ref();
         }
 
-        // Unknown character — emit Token::Unknown for better error messages
+        // Unknown character - emit Token::Unknown for better error messages
         let unknown = c;
         self.advance();
         Token::Unknown(unknown)
@@ -299,7 +298,7 @@ impl<'a> FormulaParser<'a> {
                         name.push('\'');
                         self.advance();
                     } else {
-                        // End of quoted name — expect '!' next
+                        // End of quoted name - expect '!' next
                         break;
                     }
                 }
@@ -308,7 +307,7 @@ impl<'a> FormulaParser<'a> {
                     self.advance();
                 }
                 None => {
-                    // Unterminated quoted sheet name — return as unknown
+                    // Unterminated quoted sheet name - return as unknown
                     return Token::Unknown('\'');
                 }
             }
@@ -319,7 +318,7 @@ impl<'a> FormulaParser<'a> {
             self.advance();
             Token::SheetRef(name)
         } else {
-            // Quoted string without '!' — not a sheet ref
+            // Quoted string without '!' - not a sheet ref
             // Return as unknown since we've consumed the content
             Token::Unknown('\'')
         }
@@ -492,7 +491,6 @@ impl<'a> FormulaParser<'a> {
         i == chars.len()
     }
 
-    // === Helper methods ===
 
     fn peek_char(&self) -> Option<char> {
         self.input[self.pos..].chars().next()
@@ -541,7 +539,6 @@ impl<'a> FormulaParser<'a> {
         }
     }
 
-    // === Expression parsing with precedence ===
     // Precedence (lowest to highest):
     // 1. Comparison: =, <>, <, <=, >, >=
     // 2. Concatenation: &
@@ -981,7 +978,7 @@ impl<'a> FormulaParser<'a> {
                 Ok(FormulaExpr::NameRef(format!("[{}]{}", content, name)))
             }
             _ => {
-                // Not followed by a reference — unqualified structured ref
+                // Not followed by a reference - unqualified structured ref
                 self.parse_structured_ref_content(None, &content)
             }
         }
@@ -1543,7 +1540,7 @@ mod tests {
 
     #[test]
     fn test_parse_structured_ref_this_row() {
-        // Table1[@Column1] — shorthand for this-row
+        // Table1[@Column1] - shorthand for this-row
         let ast = parse_formula("=Table1[@Column1]").unwrap();
         if let FormulaExpr::StructuredRef(sr) = ast {
             assert_eq!(sr.table, Some("Table1".to_string()));
@@ -1595,7 +1592,7 @@ mod tests {
 
     #[test]
     fn test_parse_unqualified_structured_ref() {
-        // [Column1] — no table name
+        // [Column1] - no table name
         let ast = parse_formula("=[Column1]").unwrap();
         if let FormulaExpr::StructuredRef(sr) = ast {
             assert!(sr.table.is_none());
@@ -1636,7 +1633,7 @@ mod tests {
 
     #[test]
     fn test_parse_empty_args_middle() {
-        // XLOOKUP(x,a,b,,1) — 4th arg is empty
+        // XLOOKUP(x,a,b,,1) - 4th arg is empty
         let ast = parse_formula("=FUNC(1,2,,4)").unwrap();
         if let FormulaExpr::Function { name, args } = ast {
             assert_eq!(name, "FUNC");
@@ -1652,7 +1649,7 @@ mod tests {
 
     #[test]
     fn test_parse_empty_args_leading() {
-        // FUNC(,1) — 1st arg is empty
+        // FUNC(,1) - 1st arg is empty
         let ast = parse_formula("=FUNC(,1)").unwrap();
         if let FormulaExpr::Function { name, args } = ast {
             assert_eq!(name, "FUNC");
@@ -1666,7 +1663,7 @@ mod tests {
 
     #[test]
     fn test_parse_empty_args_trailing() {
-        // FUNC(1,) — 2nd arg is empty
+        // FUNC(1,) - 2nd arg is empty
         let ast = parse_formula("=FUNC(1,)").unwrap();
         if let FormulaExpr::Function { name, args } = ast {
             assert_eq!(name, "FUNC");
@@ -1680,7 +1677,7 @@ mod tests {
 
     #[test]
     fn test_parse_empty_args_multiple_consecutive() {
-        // FUNC(1,,,4) — 2nd and 3rd args are empty
+        // FUNC(1,,,4) - 2nd and 3rd args are empty
         let ast = parse_formula("=FUNC(1,,,4)").unwrap();
         if let FormulaExpr::Function { name, args } = ast {
             assert_eq!(name, "FUNC");
@@ -1696,7 +1693,7 @@ mod tests {
 
     #[test]
     fn test_parse_empty_args_all_empty() {
-        // FUNC(,,) — all 3 args empty
+        // FUNC(,,) - all 3 args empty
         let ast = parse_formula("=FUNC(,,)").unwrap();
         if let FormulaExpr::Function { name, args } = ast {
             assert_eq!(name, "FUNC");
@@ -1711,7 +1708,7 @@ mod tests {
 
     #[test]
     fn test_parse_empty_args_no_args_still_works() {
-        // FUNC() — zero args, no empties
+        // FUNC() - zero args, no empties
         let ast = parse_formula("=FUNC()").unwrap();
         if let FormulaExpr::Function { name, args } = ast {
             assert_eq!(name, "FUNC");

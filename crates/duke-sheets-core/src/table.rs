@@ -128,21 +128,21 @@ impl TableColumn {
 /// Built-in aggregate functions for the totals row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TotalsRowFunction {
-    /// SUBTOTAL(109, ...) — average
+    /// SUBTOTAL(109, ...) - average
     Average,
-    /// SUBTOTAL(103, ...) — count non-empty
+    /// SUBTOTAL(103, ...) - count non-empty
     Count,
-    /// SUBTOTAL(102, ...) — count numbers
+    /// SUBTOTAL(102, ...) - count numbers
     CountNums,
-    /// SUBTOTAL(104, ...) — max
+    /// SUBTOTAL(104, ...) - max
     Max,
-    /// SUBTOTAL(105, ...) — min
+    /// SUBTOTAL(105, ...) - min
     Min,
-    /// SUBTOTAL(109, ...) — sum
+    /// SUBTOTAL(109, ...) - sum
     Sum,
-    /// SUBTOTAL(107, ...) — standard deviation
+    /// SUBTOTAL(107, ...) - standard deviation
     StdDev,
-    /// SUBTOTAL(110, ...) — variance
+    /// SUBTOTAL(110, ...) - variance
     Var,
     /// Custom formula (see `TableColumn::totals_row_formula`)
     Custom,

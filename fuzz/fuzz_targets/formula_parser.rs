@@ -146,7 +146,6 @@ fn arbitrary_expr(u: &mut Unstructured, depth: usize) -> arbitrary::Result<Expr>
     }
 }
 
-// --- Rendering ---
 
 const FUNC_NAMES: &[&str] = &[
     "SUM",

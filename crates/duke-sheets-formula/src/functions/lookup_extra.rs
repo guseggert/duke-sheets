@@ -638,7 +638,7 @@ pub fn fn_formulatext(
     if let Some(FormulaValue::Error(e)) = args.first() {
         return Ok(FormulaValue::Error(*e));
     }
-    // With pre-evaluated args the original reference is lost — return #N/A.
+    // With pre-evaluated args the original reference is lost - return #N/A.
     Ok(FormulaValue::Error(CellError::Na))
 }
 
@@ -2214,7 +2214,7 @@ mod tests {
         );
     }
 
-    // ===== DOCS-BASED TESTS =====
+    // DOCS-BASED TESTS
 
     #[test]
     fn test_address_docs() {
@@ -2309,7 +2309,7 @@ mod tests {
 
     #[test]
     fn test_row_docs() {
-        // Docs: ROW(C10)=10, ROW()=current — need cell context, skip those.
+        // Docs: ROW(C10)=10, ROW()=current - need cell context, skip those.
         // Test ROW with array arg: 3-row column -> {1;2;3}
         assert_eq!(
             eval("=ROW({0;0;0})").unwrap(),
@@ -2322,7 +2322,7 @@ mod tests {
 
     #[test]
     fn test_column_docs() {
-        // Docs: COLUMN(D10)=4 — need cell context, skip.
+        // Docs: COLUMN(D10)=4 - need cell context, skip.
         // Test COLUMN with array arg: 1x3 row -> {1,2,3}
         assert_eq!(
             eval("=COLUMN({0,0,0})").unwrap(),
@@ -2556,7 +2556,7 @@ mod tests {
 
     #[test]
     fn test_transpose_docs() {
-        // Docs: TRANSPOSE(A1:B4) — 4-row × 2-col transposed to 2-row × 4-col
+        // Docs: TRANSPOSE(A1:B4) - 4-row × 2-col transposed to 2-row × 4-col
         assert_eq!(
             eval("=TRANSPOSE({1,2;3,4;5,6;7,8})").unwrap(),
             FormulaValue::Array {
@@ -2587,7 +2587,7 @@ mod tests {
 
     #[test]
     fn test_tocol_docs() {
-        // Docs Example 1: =TOCOL(A2:D4) — 3×4 text array, scan by row (default)
+        // Docs Example 1: =TOCOL(A2:D4) - 3×4 text array, scan by row (default)
         assert_eq!(
             eval(r#"=TOCOL({"Ben","Peter","Mary","Sam";"John","Hillary","Jenny","James";"Agnes","Harry","Felicity","Joe"})"#).unwrap(),
             FormulaValue::Array { data: vec![
@@ -2648,7 +2648,7 @@ mod tests {
 
     #[test]
     fn test_torow_docs() {
-        // Docs Example 1: =TOROW(A2:D4) — 3×4 text array, scan by row (default)
+        // Docs Example 1: =TOROW(A2:D4) - 3×4 text array, scan by row (default)
         assert_eq!(
             eval(r#"=TOROW({"Ben","Peter","Mary","Sam";"John","Hillary","Jenny","James";"Agnes","Harry","Felicity","Joe"})"#).unwrap(),
             FormulaValue::Array { data: vec![vec![
@@ -2825,7 +2825,7 @@ mod tests {
                 source: None
             }
         );
-        // Descending (sort_order=-1) — exact docs example
+        // Descending (sort_order=-1) - exact docs example
         assert_eq!(
             eval("=SORT({622;961;691;445;378;483;650;783;142;404},1,-1)").unwrap(),
             FormulaValue::Array {
@@ -2985,7 +2985,7 @@ mod tests {
         let e = FormulaValue::Empty;
         let ctx = EvaluationContext::simple();
 
-        // --- Docs: TRIMRANGE trims blank rows/cols from edges ---
+        // Docs: TRIMRANGE trims blank rows/cols from edges
 
         // Basic: leading and trailing blank rows and columns trimmed (default trim_rows=3, trim_cols=3)
         // Array layout (3x3):
@@ -3011,7 +3011,7 @@ mod tests {
             }
         );
 
-        // Already trimmed array — no change
+        // Already trimmed array - no change
         assert_eq!(
             fn_trimrange(
                 &[FormulaValue::Array {
@@ -3088,7 +3088,7 @@ mod tests {
             FormulaValue::Error(CellError::Calc)
         );
 
-        // Single cell with value — unchanged
+        // Single cell with value - unchanged
         assert_eq!(
             fn_trimrange(&[n(5.0)], &ctx).unwrap(),
             FormulaValue::Array {
@@ -3097,14 +3097,14 @@ mod tests {
             }
         );
 
-        // --- Docs: trim_rows parameter ---
+        // Docs: trim_rows parameter
 
         // Docs table: TRIMRANGE(range,3,3) = Trim All (default)
         // Equivalent to A1.:.E10
         // Already tested above
 
-        // trim_rows=0: None — don't trim any rows (cols still trimmed)
-        // Array: ["",1,""; "",2,""; "",3,""] — col 0 and col 2 are all blank
+        // trim_rows=0: None - don't trim any rows (cols still trimmed)
+        // Array: ["",1,""; "",2,""; "",3,""] - col 0 and col 2 are all blank
         assert_eq!(
             fn_trimrange(
                 &[
@@ -3177,9 +3177,9 @@ mod tests {
             }
         );
 
-        // --- Docs: trim_cols parameter ---
+        // Docs: trim_cols parameter
 
-        // trim_cols=0: None — don't trim any columns
+        // trim_cols=0: None - don't trim any columns
         assert_eq!(
             fn_trimrange(
                 &[
@@ -3251,9 +3251,9 @@ mod tests {
             }
         );
 
-        // --- Docs: Trim Refs equivalences ---
+        // Docs: Trim Refs equivalences
 
-        // Trim All (.:.) — TRIMRANGE(range,3,3)
+        // Trim All (.:.) - TRIMRANGE(range,3,3)
         // 4x3 with data in center, blanks on all edges
         let arr_with_edges = FormulaValue::Array {
             data: vec![
@@ -3272,7 +3272,7 @@ mod tests {
             }
         );
 
-        // Trim Trailing (:.) — TRIMRANGE(range,2,2)
+        // Trim Trailing (:.) - TRIMRANGE(range,2,2)
         assert_eq!(
             fn_trimrange(&[arr_with_edges.clone(), n(2.0), n(2.0)], &ctx).unwrap(),
             FormulaValue::Array {
@@ -3285,7 +3285,7 @@ mod tests {
             }
         );
 
-        // Trim Leading (.:) — TRIMRANGE(range,1,1)
+        // Trim Leading (.:) - TRIMRANGE(range,1,1)
         assert_eq!(
             fn_trimrange(&[arr_with_edges, n(1.0), n(1.0)], &ctx).unwrap(),
             FormulaValue::Array {

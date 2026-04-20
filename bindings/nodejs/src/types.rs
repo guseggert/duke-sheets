@@ -86,7 +86,7 @@ pub struct JsColor {
     pub g: Option<u32>,
     pub b: Option<u32>,
     pub a: Option<u32>,
-    /// Theme color index (0–9), present when `colorType === "theme"`.
+    /// Theme color index (0-9), present when `colorType === "theme"`.
     pub theme_index: Option<u32>,
     /// Tint percentage (-100 to 100), present when `colorType === "theme"`.
     pub tint: Option<i32>,
@@ -681,7 +681,7 @@ pub struct JsPageSetup {
     pub paper_size: u32,
     /// `"portrait"` or `"landscape"`.
     pub orientation: String,
-    /// Scale percentage (10–400).
+    /// Scale percentage (10-400).
     pub scale: u32,
     pub fit_to_width: Option<u32>,
     pub fit_to_height: Option<u32>,
@@ -1264,7 +1264,7 @@ impl From<&core::RichTextRun> for JsRichTextRun {
     }
 }
 
-/// Font properties for a rich text run (all fields optional — unset inherits cell style).
+/// Font properties for a rich text run (all fields optional - unset inherits cell style).
 #[napi(object)]
 pub struct JsRunFont {
     pub bold: Option<bool>,
@@ -1931,7 +1931,7 @@ impl From<&duke_sheets_chart::UpDownBars> for JsUpDownBars {
     }
 }
 
-/// A chart sheet — a sheet that contains only a chart.
+/// A chart sheet - a sheet that contains only a chart.
 #[napi(object)]
 pub struct JsChartSheet {
     pub name: String,

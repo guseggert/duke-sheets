@@ -3,7 +3,7 @@
 #
 # Builds QEMU from source (with KVM + slirp user networking), creates a
 # qcow2 disk, generates an unattended install floppy, and boots the VM to
-# install Windows 11 in BIOS mode (SeaBIOS — no UEFI/TPM needed).
+# install Windows 11 in BIOS mode (SeaBIOS - no UEFI/TPM needed).
 #
 # Tested on Amazon Linux 2023. Should work on any RPM-based distro with KVM.
 #
@@ -198,7 +198,7 @@ step_create_unattend() {
     local FLOPPY="$DUKE_DIR/autounattend.img"
     local XML="$DUKE_DIR/autounattend.xml"
 
-    # Write autounattend.xml — BIOS/MBR mode, bypasses TPM/SecureBoot/RAM/CPU,
+    # Write autounattend.xml - BIOS/MBR mode, bypasses TPM/SecureBoot/RAM/CPU,
     # creates local admin, enables WinRM + SSH, opens firewall for bridge port
     cat > "$XML" << 'XMLEOF'
 <?xml version="1.0" encoding="utf-8"?>
@@ -280,7 +280,7 @@ step_create_unattend() {
       </UserData>
     </component>
   </settings>
-  <!-- specialize runs as SYSTEM — full admin, perfect for registry/firewall -->
+  <!-- specialize runs as SYSTEM - full admin, perfect for registry/firewall -->
   <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup"
                processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35"
@@ -422,7 +422,7 @@ step_boot_vm() {
 
     export LD_LIBRARY_PATH="/usr/local/lib64:/usr/local/lib:${LD_LIBRARY_PATH:-}"
 
-    # BIOS mode (SeaBIOS) — no UEFI/TPM needed, bypasses handled in autounattend.
+    # BIOS mode (SeaBIOS) - no UEFI/TPM needed, bypasses handled in autounattend.
     # Uses q35 machine with Hyper-V enlightenments for best Windows performance.
     "$QEMU_INSTALL/qemu-system-x86_64" \
         -M q35,usb=on,acpi=on,hpet=off \

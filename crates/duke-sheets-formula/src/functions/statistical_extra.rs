@@ -1339,7 +1339,7 @@ mod tests {
         }
     }
 
-    // ===== DOCS-BASED TESTS =====
+    // DOCS-BASED TESTS
 
     #[test]
     fn test_lognorm_dist_docs() {
@@ -1374,7 +1374,7 @@ mod tests {
 
     #[test]
     fn test_linest_docs() {
-        // --- Example 1: slope and y-intercept ---
+        // Example 1: slope and y-intercept
         // known_y={1,9,5,7}, known_x={0,4,2,3} -> slope=2, intercept=1
         let result = eval("=LINEST({1,9,5,7},{0,4,2,3})").unwrap();
         match result {
@@ -1394,7 +1394,7 @@ mod tests {
             _ => panic!("Expected Array"),
         }
 
-        // --- Example 2: simple linear regression ---
+        // Example 2: simple linear regression
         // months 1-6, sales {3100,4500,4400,5400,7500,8100}
         // Docs: =SUM(LINEST(B1:B6,A1:A6)*{9,1}) = $11,000
         let result = eval("=LINEST({3100,4500,4400,5400,7500,8100},{1,2,3,4,5,6})").unwrap();
@@ -1412,7 +1412,7 @@ mod tests {
             _ => panic!("Expected Array"),
         }
 
-        // --- Example 3: multiple linear regression with stats ---
+        // Example 3: multiple linear regression with stats
         // Docs first-column values: m4=-234.2371645, se4=13.26801148,
         // r^2=0.996747993, F=459.7536742, ssreg=1732393319
         let result = eval(concat!(
@@ -1481,7 +1481,6 @@ mod tests {
 
     #[test]
     fn test_growth_docs() {
-        // --- Fitting example ---
         // Docs: GROWTH(B2:B7,A2:A7) fitted values
         // Month={11,...,16}, Units={33100,...,220000}
         // Expected: {32618, 47729, 69841, 102197, 149542, 218822}
@@ -1502,7 +1501,6 @@ mod tests {
             _ => panic!("Expected Array"),
         }
 
-        // --- Prediction example ---
         // Docs: GROWTH(B2:B7,A2:A7,A9:A10) for months 17, 18
         // Expected: {320197, 468536}
         let result =
@@ -1527,7 +1525,7 @@ mod tests {
     #[test]
     fn test_trend_docs() {
         // From LINEST Example 2: months 1-6, sales {3100,4500,4400,5400,7500,8100}
-        // Docs: SUM(LINEST(...)*{9,1}) = $11,000 — TREND for month 9 must match
+        // Docs: SUM(LINEST(...)*{9,1}) = $11,000 - TREND for month 9 must match
         let result = eval("=TREND({3100,4500,4400,5400,7500,8100},{1,2,3,4,5,6},{9})").unwrap();
         match result {
             FormulaValue::Array { data: rows, .. } => {

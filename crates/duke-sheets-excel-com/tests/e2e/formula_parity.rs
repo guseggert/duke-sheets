@@ -3646,7 +3646,7 @@ fn static_formula_cases() -> Vec<FormulaCase> {
             "=SWITCH(1/0,1,\"one\",\"err\")",
             "error",
         ),
-        // === Wave 5: Remaining untested functions ===
+        // Wave 5: Remaining untested functions
         // Legacy statistical aliases
         case(
             "BETADIST_compat",

@@ -13,7 +13,7 @@ use duke_sheets_libreoffice::bridge::LibreOfficeBridge;
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 
-/// Shared Docker volume path — accessible from both the host and the
+/// Shared Docker volume path - accessible from both the host and the
 /// LibreOffice Docker container.
 const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
 

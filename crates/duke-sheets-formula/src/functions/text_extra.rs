@@ -403,7 +403,7 @@ pub fn fn_unicode(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRes
     }
 }
 
-// ---------- Half-width / Full-width character conversion ----------
+// Half-width / Full-width character conversion
 
 /// Map a single full-width character to its half-width equivalent(s).
 /// Returns None if the character should pass through unchanged.
@@ -628,7 +628,7 @@ fn halfwidth_to_fullwidth(ch: char, next: Option<char>) -> (Option<char>, bool) 
     }
 }
 
-/// ASC(text) — Convert full-width characters to half-width.
+/// ASC(text) - Convert full-width characters to half-width.
 pub fn fn_asc(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let text = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
@@ -648,7 +648,7 @@ pub fn fn_asc(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
     Ok(FormulaValue::String(out))
 }
 
-/// JIS(text) — Convert half-width characters to full-width.
+/// JIS(text) - Convert half-width characters to full-width.
 pub fn fn_jis(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let text = match scalar_string(args.first().unwrap()) {
         Ok(v) => v,
@@ -674,12 +674,11 @@ pub fn fn_jis(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<
     Ok(FormulaValue::String(out))
 }
 
-/// DBCS(text) — Alias for JIS. Convert half-width characters to full-width.
+/// DBCS(text) - Alias for JIS. Convert half-width characters to full-width.
 pub fn fn_dbcs(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     fn_jis(args, _ctx)
 }
 
-// ---------- BAHTTEXT ----------
 
 /// Thai digit words.
 const THAI_DIGITS: [&str; 10] = [
@@ -792,7 +791,7 @@ fn number_to_bahttext(value: f64) -> String {
     }
 }
 
-/// BAHTTEXT(number) — Convert a number to Thai Baht text.
+/// BAHTTEXT(number) - Convert a number to Thai Baht text.
 pub fn fn_bahttext(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaResult<FormulaValue> {
     let value = match args.first().unwrap() {
         FormulaValue::Error(e) => return Ok(FormulaValue::Error(*e)),
@@ -810,7 +809,7 @@ pub fn fn_bahttext(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
     }
 }
 
-/// PHONETIC(text) — Stub: returns empty string.
+/// PHONETIC(text) - Stub: returns empty string.
 /// Furigana (phonetic readings) are stored as cell metadata (`<rPh>` in XLSX),
 /// not derivable from the text content. Would need EvaluationContext access to
 /// cell-level rich text metadata to implement fully.
@@ -1041,7 +1040,6 @@ mod tests {
         );
     }
 
-    // ---------- ASC tests ----------
 
     #[test]
     fn test_asc_fullwidth_ascii() {
@@ -1089,7 +1087,6 @@ mod tests {
         assert_eq!(eval("=ASC(\"\u{FF21}B\u{FF23}\")").unwrap(), s("ABC"));
     }
 
-    // ---------- JIS tests ----------
 
     #[test]
     fn test_jis_halfwidth_ascii() {
@@ -1133,7 +1130,6 @@ mod tests {
         assert_eq!(eval("=JIS(\"\")").unwrap(), s(""));
     }
 
-    // ---------- DBCS tests ----------
 
     #[test]
     fn test_dbcs_same_as_jis() {
@@ -1146,7 +1142,7 @@ mod tests {
         assert_eq!(eval("=DBCS(\" \")").unwrap(), s("\u{3000}"));
     }
 
-    // ---------- ASC/JIS roundtrip ----------
+    // ASC/JIS roundtrip
 
     #[test]
     fn test_asc_jis_roundtrip() {
@@ -1158,7 +1154,6 @@ mod tests {
         assert_eq!(jis_result, s(original));
     }
 
-    // ---------- BAHTTEXT tests ----------
 
     #[test]
     fn test_bahttext_zero() {
@@ -1235,7 +1230,6 @@ mod tests {
         );
     }
 
-    // ---------- PHONETIC stub test ----------
 
     #[test]
     fn test_phonetic_stub_returns_empty() {
@@ -1246,7 +1240,7 @@ mod tests {
         assert_eq!(eval("=PHONETIC(\"\")").unwrap(), s(""));
     }
 
-    // ========== Docs-based tests ==========
+    // Docs-based tests
 
     #[test]
     fn test_replace_docs() {
@@ -1481,7 +1475,7 @@ mod tests {
 
     #[test]
     fn test_asc_docs() {
-        // MS Docs: =ASC("EXCEL") — ASCII passes through unchanged
+        // MS Docs: =ASC("EXCEL") - ASCII passes through unchanged
         assert_eq!(eval("=ASC(\"EXCEL\")").unwrap(), s("EXCEL"));
         // MS Docs: =ASC("エクセル") → "ｴｸｾﾙ"
         assert_eq!(

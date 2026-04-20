@@ -15,7 +15,7 @@ use duke_sheets::{AxisPosition, DataReference};
 use duke_sheets_chart::{AxisType, LegendPosition};
 
 #[test]
-#[ignore = "requires data/chart-parity.xlsx — generate with Excel COM first"]
+#[ignore = "requires data/chart-parity.xlsx - generate with Excel COM first"]
 fn chart_parity_matches_excel() {
     let fixture_path = chart_parity_path();
     if !fixture_path.exists() {
@@ -193,7 +193,7 @@ fn chart_parity_matches_excel() {
         }
     }
 
-    // Chart 3: Pie (pieChart) — no axes, has legend
+    // Chart 3: Pie (pieChart) - no axes, has legend
     {
         let c = &charts[3];
         check!(c.title.as_deref() == Some("Pie"), "chart 3 title: {:?}", c.title);
@@ -221,7 +221,7 @@ fn chart_parity_matches_excel() {
         }
     }
 
-    // Chart 4: Doughnut (doughnutChart) — has legend, hole size
+    // Chart 4: Doughnut (doughnutChart) - has legend, hole size
     {
         let c = &charts[4];
         check!(c.title.as_deref() == Some("Doughnut"), "chart 4 title: {:?}", c.title);
@@ -252,7 +252,7 @@ fn chart_parity_matches_excel() {
         }
     }
 
-    // Chart 5: Scatter (scatterChart) — value axis only, no category axis
+    // Chart 5: Scatter (scatterChart) - value axis only, no category axis
     {
         let c = &charts[5];
         check!(c.title.as_deref() == Some("XYScatter"), "chart 5 title: {:?}", c.title);

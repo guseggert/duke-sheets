@@ -476,7 +476,7 @@ fn write_data_label_override(w: &mut XmlWriter, dl: &ChartExDataLabel) -> XlsxRe
         // position is on the parent dataLabel, not visibility.
         // We already wrote idx above; need to write pos attr on a layout wrapper
         // Actually, per spec, position on a dataLabel is an attr on the element itself.
-        // Let's handle this differently — we set pos on the cx:dataLabel element.
+        // Let's handle this differently - we set pos on the cx:dataLabel element.
         // But we already opened cx:dataLabel without pos. Let's just emit visibility.
         let _ = pos; // pos is on the dataLabel attr, but we already opened the tag
         w.write_event(Event::Empty(vis_tag))?;
@@ -763,7 +763,7 @@ fn write_axis(w: &mut XmlWriter, axis: &ChartExAxis) -> XlsxResult<()> {
         w.write_event(Event::End(BytesEnd::new("cx:majorGridlines")))?;
     } else if axis.major_gridlines.is_none() {
         // Only emit empty element if the axis had major gridlines read
-        // Actually, we don't emit anything if None — only if Some
+        // Actually, we don't emit anything if None - only if Some
     }
 
     if let Some(ref sp) = axis.minor_gridlines {

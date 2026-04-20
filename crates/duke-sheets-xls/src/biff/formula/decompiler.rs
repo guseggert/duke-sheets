@@ -134,7 +134,7 @@ fn format_error(code: u8) -> &'static str {
 /// default `Display` which already produces a compact representation.
 fn format_number(val: f64) -> String {
     if val == val.trunc() && val.abs() < 1e15 {
-        // Integer value — no decimal point needed
+        // Integer value - no decimal point needed
         format!("{}", val as i64)
     } else {
         // Use enough precision to round-trip, then strip trailing zeros
@@ -155,7 +155,6 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
 
     for token in tokens {
         match token {
-            // ---- Binary operators ----
             ParsedToken::Add => binary_op(&mut stack, "+", PREC_ADD),
             ParsedToken::Sub => binary_op(&mut stack, "-", PREC_ADD),
             ParsedToken::Mul => binary_op(&mut stack, "*", PREC_MUL),
@@ -200,7 +199,6 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 ));
             }
 
-            // ---- Unary operators ----
             ParsedToken::Uplus => {
                 let operand = stack.pop().unwrap_or_else(|| StackEntry::atom("?".into()));
                 stack.push(StackEntry::with_prec(
@@ -227,7 +225,6 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 stack.push(StackEntry::atom(format!("({})", operand.text)));
             }
 
-            // ---- Constants ----
             ParsedToken::MissArg => {
                 stack.push(StackEntry::atom(String::new()));
             }
@@ -251,7 +248,6 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 stack.push(StackEntry::atom(format_number(*val)));
             }
 
-            // ---- Cell references ----
             ParsedToken::Ref {
                 row,
                 col,
@@ -286,7 +282,6 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                     *last_col_rel,
                 )));
             }
-            // ---- Shared formula relative references ----
             ParsedToken::RefN {
                 row_offset,
                 col_offset,
@@ -329,7 +324,6 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 stack.push(StackEntry::atom("#REF!".to_string()));
             }
 
-            // ---- Functions ----
             ParsedToken::Func { func_idx } => {
                 let name = function_table::function_name(*func_idx);
                 let argc = function_table::function_argc(*func_idx);
@@ -342,7 +336,7 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 decompile_function(&mut stack, name, raw_idx, *argc as usize);
             }
 
-            // ---- tAttr sub-types ----
+            // tAttr sub-types
             ParsedToken::AttrSum => {
                 // Optimized SUM with single argument
                 decompile_function(&mut stack, "SUM", 4, 1);
@@ -352,13 +346,12 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
             | ParsedToken::AttrChoose { .. }
             | ParsedToken::AttrSkip { .. }
             | ParsedToken::AttrAssign => {
-                // No-ops for decompilation — these are optimization hints
+                // No-ops for decompilation - these are optimization hints
             }
             ParsedToken::AttrSpace { .. } => {
-                // Whitespace preservation — ignore for now
+                // Whitespace preservation - ignore for now
             }
 
-            // ---- Defined names ----
             ParsedToken::Name { name_idx } => {
                 // name_idx is 1-based
                 let idx = (*name_idx as usize).wrapping_sub(1);
@@ -379,7 +372,7 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 stack.push(StackEntry::atom(resolved));
             }
 
-            // ---- 3D references ----
+            // 3D references
             ParsedToken::Ref3d {
                 extern_sheet_idx,
                 row,
@@ -427,12 +420,12 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 stack.push(StackEntry::atom("#REF!".to_string()));
             }
 
-            // tArray — array constant with pre-formatted text
+            // tArray - array constant with pre-formatted text
             ParsedToken::Array { text } => {
                 stack.push(StackEntry::atom(text.clone()));
             }
 
-            // tExp — array/shared formula indicator
+            // tExp - array/shared formula indicator
             ParsedToken::Exp { .. } => {
                 // This means the cell's formula is stored elsewhere
                 // (ARRAY or SHAREDFMLA record). We can't decompile it from
@@ -444,7 +437,7 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
                 stack.push(StackEntry::atom(format!("TABLE({})", addr)));
             }
 
-            // MemFunc — no-op for decompilation; sub-expression tokens handle it
+            // MemFunc - no-op for decompilation; sub-expression tokens handle it
             ParsedToken::MemFunc { .. } => {}
 
             ParsedToken::Unknown(byte) => {
@@ -458,7 +451,7 @@ pub fn decompile(tokens: &[ParsedToken], ctx: &FormulaContext) -> String {
         0 => String::new(),
         1 => stack.pop().unwrap().text,
         _ => {
-            // Multiple entries — shouldn't happen for valid formulas.
+            // Multiple entries - shouldn't happen for valid formulas.
             // Join them to avoid losing data.
             stack
                 .into_iter()
@@ -553,7 +546,7 @@ fn resolve_sheet_prefix(ctx: &FormulaContext, extern_sheet_idx: u16) -> String {
 
     match supbook {
         SupBook::SelfRef { .. } => {
-            // 0xFFFE means workbook-level (e.g. workbook-scoped name) — no sheet prefix
+            // 0xFFFE means workbook-level (e.g. workbook-scoped name) - no sheet prefix
             if entry.first_sheet == 0xFFFE {
                 return String::new();
             }
@@ -591,7 +584,7 @@ fn resolve_sheet_prefix(ctx: &FormulaContext, extern_sheet_idx: u16) -> String {
             }
         }
         SupBook::AddIn => {
-            // Add-in function — no sheet prefix needed
+            // Add-in function - no sheet prefix needed
             String::new()
         }
         SupBook::External { path, sheets } => {
@@ -663,7 +656,7 @@ fn resolve_refn_offset(ctx: &FormulaContext, row_off: i16, col_off: i16) -> (u16
             (row, col)
         }
         None => {
-            // No base cell — treat offsets as unsigned (best effort for non-shared context)
+            // No base cell - treat offsets as unsigned (best effort for non-shared context)
             (row_off as u16, col_off as u16)
         }
     }
@@ -1111,7 +1104,7 @@ mod tests {
 
     #[test]
     fn test_3d_ref_fallback_no_externsheet() {
-        // No EXTERNSHEET data — falls back to direct sheet_names lookup
+        // No EXTERNSHEET data - falls back to direct sheet_names lookup
         let ctx = ctx_with_sheets(vec!["Sheet1".to_string(), "Sheet2".to_string()]);
         let tokens = vec![ParsedToken::Ref3d {
             extern_sheet_idx: 1,
@@ -1190,7 +1183,7 @@ mod tests {
     #[test]
     fn test_name_lookup_unknown() {
         let ctx = empty_ctx();
-        // No names defined — should fall back to placeholder
+        // No names defined - should fall back to placeholder
         let tokens = vec![ParsedToken::Name { name_idx: 5 }];
         assert_eq!(decompile(&tokens, &ctx), "_name5");
     }
@@ -1335,7 +1328,7 @@ mod tests {
 
     #[test]
     fn test_refn_without_base_cell() {
-        // No base cell — offsets treated as raw unsigned (best effort)
+        // No base cell - offsets treated as raw unsigned (best effort)
         let ctx = empty_ctx();
         let tokens = vec![ParsedToken::RefN {
             row_offset: 5,
@@ -1360,7 +1353,7 @@ mod tests {
         assert_eq!(decompile(&tokens, &ctx), "_xlfn.FUNC1()");
     }
 
-    // ---- Tests for decompiler edge case fixes ----
+    // Tests for decompiler edge case fixes
 
     #[test]
     fn test_error_code_calc() {
@@ -1444,7 +1437,7 @@ mod tests {
         let result = decompile(&tokens, &ctx);
         assert!(
             !result.starts_with('!'),
-            "got '{}' — should not have leading '!'",
+            "got '{}' - should not have leading '!'",
             result
         );
         assert_eq!(result, "$A$1");
@@ -1478,7 +1471,7 @@ mod tests {
         let result = decompile(&tokens, &ctx);
         assert!(
             !result.starts_with('!'),
-            "got '{}' — should not have leading '!'",
+            "got '{}' - should not have leading '!'",
             result
         );
         assert_eq!(result, "$A$1:$B$2");
@@ -1491,7 +1484,7 @@ mod tests {
         let result = decompile(&tokens, &ctx);
         assert!(
             result.contains("0xAB"),
-            "got '{}' — should contain hex byte",
+            "got '{}' - should contain hex byte",
             result
         );
         assert_eq!(result, "<?0xAB>");

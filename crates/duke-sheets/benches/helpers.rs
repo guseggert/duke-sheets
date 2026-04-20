@@ -114,7 +114,7 @@ pub fn complex_formulas() -> Vec<&'static str> {
 
 // ── Calculation benchmark workbooks ─────────────────────────────────
 
-/// Linear chain: A1=1, A2=A1+1, A3=A2+1, …
+/// Linear chain: A1=1, A2=A1+1, A3=A2+1, ...
 pub fn generate_linear_chain(depth: u32) -> Workbook {
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();

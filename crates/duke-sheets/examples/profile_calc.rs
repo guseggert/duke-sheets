@@ -452,7 +452,7 @@ fn main() {
 
     if !cli.json {
         eprintln!();
-        eprintln!("Calculating (first run — cold)...");
+        eprintln!("Calculating (first run - cold)...");
     }
     let t1 = Instant::now();
     let stats = workbook
@@ -526,7 +526,7 @@ fn main() {
         eprintln!("Open time:   {:.2?}", open_time);
         eprintln!("Total time:  {:.2?}", t0.elapsed());
         eprintln!();
-        eprintln!("Calculating (second run — cached)...");
+        eprintln!("Calculating (second run - cached)...");
     }
 
     let t2 = Instant::now();

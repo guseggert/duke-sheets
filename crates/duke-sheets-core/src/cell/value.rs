@@ -37,7 +37,7 @@ impl FormulaData {
 
 /// Represents the value stored in a cell.
 ///
-/// This enum holds only leaf values — no formula text or metadata.
+/// This enum holds only leaf values - no formula text or metadata.
 /// Formulas are stored separately in [`CellStorage`](super::CellStorage).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum CellValue {
@@ -154,7 +154,7 @@ impl CellValue {
         }
     }
 
-    /// Get the effective value — for leaf values, returns self.
+    /// Get the effective value - for leaf values, returns self.
     ///
     /// (Formulas are now stored separately; this is identity for all variants.)
     pub fn effective_value(&self) -> &CellValue {

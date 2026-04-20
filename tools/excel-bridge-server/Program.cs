@@ -1,4 +1,4 @@
-// Excel COM Bridge Server — Generic COM Proxy
+// Excel COM Bridge Server - Generic COM Proxy
 //
 // A TCP server that navigates COM objects via Get/Set/Invoke commands.
 // All Excel-specific knowledge lives in the client; this server is a
@@ -87,7 +87,7 @@ class Program
     }
 
     // -----------------------------------------------------------------------
-    // Command dispatch — just 6 cases, all generic
+    // Command dispatch - just 6 cases, all generic
     // -----------------------------------------------------------------------
 
     static (Response resp, bool shutdown) Dispatch(ComObjectStore store, Request req)

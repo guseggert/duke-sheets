@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_multi_byte_length() {
-        // 200 bytes payload — length needs 2 bytes (200 > 127)
+        // 200 bytes payload - length needs 2 bytes (200 > 127)
         let payload: Vec<u8> = (0..200).map(|i| (i & 0xFF) as u8).collect();
         let data = build_record(10, &payload);
         let mut iter = RecordIter::new(Cursor::new(data));
@@ -272,7 +272,7 @@ mod tests {
         let data = build_record(1, &[0xAA]);
         let mut iter = RecordIter::new(Cursor::new(data));
         let mut buf = Vec::new();
-        // Looking for type 99 which doesn't exist — should hit EOF
+        // Looking for type 99 which doesn't exist - should hit EOF
         let result = iter.skip_to(99, &[], &mut buf);
         assert!(result.is_err());
     }

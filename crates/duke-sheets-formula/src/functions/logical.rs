@@ -683,7 +683,7 @@ mod tests {
         // #N/A with numeric alternate value
         assert_eq!(eval("=IFNA(NA(), 0)").unwrap(), FormulaValue::Number(0.0));
 
-        // Other errors NOT caught by IFNA — they propagate
+        // Other errors NOT caught by IFNA - they propagate
         // #DIV/0!
         assert_eq!(
             eval("=IFNA(1/0, \"Not found\")").unwrap(),

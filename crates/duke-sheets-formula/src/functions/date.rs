@@ -935,7 +935,7 @@ pub fn fn_timevalue(
         .or_else(|_| chrono::NaiveTime::parse_from_str(&upper, "%I:%M:%S %p"))
         .or_else(|_| chrono::NaiveTime::parse_from_str(&upper, "%I:%M %p"))
         .or_else(|_| {
-            // "Date information in time_text is ignored" — try datetime formats
+            // "Date information in time_text is ignored" - try datetime formats
             // and extract just the time portion.
             chrono::NaiveDateTime::parse_from_str(&upper, "%d-%b-%Y %I:%M %p")
                 .or_else(|_| chrono::NaiveDateTime::parse_from_str(&upper, "%d-%b-%Y %I:%M:%S %p"))
@@ -1535,37 +1535,37 @@ mod tests {
     /// https://support.microsoft.com/en-us/office/datedif-function-25dba1a4-2812-480b-84dd-8b32a451b35c
     #[test]
     fn test_datedif_docs() {
-        // Example 1: "Y" – two complete years in the period (2)
+        // Example 1: "Y" - two complete years in the period (2)
         assert_eq!(
             eval("=DATEDIF(DATE(2001,1,1),DATE(2003,1,1),\"Y\")").unwrap(),
             FormulaValue::Number(2.0)
         );
 
-        // Example 2: "D" – 440 days between June 1, 2001 and August 15, 2002 (440)
+        // Example 2: "D" - 440 days between June 1, 2001 and August 15, 2002 (440)
         assert_eq!(
             eval("=DATEDIF(DATE(2001,6,1),DATE(2002,8,15),\"D\")").unwrap(),
             FormulaValue::Number(440.0)
         );
 
-        // Example 3: "YD" – 75 days between June 1 and August 15, ignoring years (75)
+        // Example 3: "YD" - 75 days between June 1 and August 15, ignoring years (75)
         assert_eq!(
             eval("=DATEDIF(DATE(2001,6,1),DATE(2002,8,15),\"YD\")").unwrap(),
             FormulaValue::Number(75.0)
         );
 
-        // "M" – complete months for example-1 dates: 1/1/2001 to 1/1/2003 = 24
+        // "M" - complete months for example-1 dates: 1/1/2001 to 1/1/2003 = 24
         assert_eq!(
             eval("=DATEDIF(DATE(2001,1,1),DATE(2003,1,1),\"M\")").unwrap(),
             FormulaValue::Number(24.0)
         );
 
-        // "YM" – month diff ignoring days/years for example-2 dates: Jun to Aug = 2
+        // "YM" - month diff ignoring days/years for example-2 dates: Jun to Aug = 2
         assert_eq!(
             eval("=DATEDIF(DATE(2001,6,1),DATE(2002,8,15),\"YM\")").unwrap(),
             FormulaValue::Number(2.0)
         );
 
-        // "MD" – day diff ignoring months/years for example-2 dates: 15 - 1 = 14
+        // "MD" - day diff ignoring months/years for example-2 dates: 15 - 1 = 14
         assert_eq!(
             eval("=DATEDIF(DATE(2001,6,1),DATE(2002,8,15),\"MD\")").unwrap(),
             FormulaValue::Number(14.0)
@@ -1599,7 +1599,7 @@ mod tests {
         // Microsoft docs: YEARFRAC function
         // https://support.microsoft.com/en-us/office/yearfrac-function-3844141e-c76d-4143-82b6-208454ddc6a8
 
-        // --- Example table (start_date=1/1/2012, end_date=7/30/2012) ---
+        // Example table (start_date=1/1/2012, end_date=7/30/2012)
 
         // =YEARFRAC(A2,A3) → 0.58055556 (basis omitted, defaults to 0: US 30/360)
         // 30/360 days: (7-1)*30 + (30-1) = 209, 209/360 = 0.58055556
@@ -1644,7 +1644,6 @@ mod tests {
         // Microsoft docs: DATEVALUE function
         // https://support.microsoft.com/en-us/office/datevalue-function-df8b07d4-7761-4a93-bc33-b7471bbff252
 
-        // --- Example table ---
 
         // =DATEVALUE("8/22/2011") → 40777
         assert_eq!(
@@ -1671,7 +1670,6 @@ mod tests {
             FormulaValue::Number(40850.0)
         );
 
-        // --- Description examples ---
 
         // =DATEVALUE("1/1/2008") returns 39448
         assert_eq!(
@@ -1679,21 +1677,20 @@ mod tests {
             FormulaValue::Number(39448.0)
         );
 
-        // --- Syntax section: mentioned valid formats ---
+        // Syntax section: mentioned valid formats
 
-        // "1/30/2008" – m/d/Y format
+        // "1/30/2008" - m/d/Y format
         assert_eq!(
             eval("=DATEVALUE(\"1/30/2008\")").unwrap(),
             FormulaValue::Number(39477.0)
         );
 
-        // "30-Jan-2008" – d-MMM-YYYY format (same date as above)
+        // "30-Jan-2008" - d-MMM-YYYY format (same date as above)
         assert_eq!(
             eval("=DATEVALUE(\"30-Jan-2008\")").unwrap(),
             FormulaValue::Number(39477.0)
         );
 
-        // --- Remarks section ---
 
         // "January 1, 1900 is serial number 1"
         assert_eq!(
@@ -1707,7 +1704,7 @@ mod tests {
             FormulaValue::Number(39448.0)
         );
 
-        // --- Error cases (docs: returns #VALUE! for invalid date_text) ---
+        // Error cases (docs: returns #VALUE! for invalid date_text)
 
         assert_eq!(
             eval("=DATEVALUE(\"not a date\")").unwrap(),
@@ -1725,8 +1722,8 @@ mod tests {
             FormulaValue::Error(CellError::Value)
         );
 
-        // --- Year-dependent example (skipped: "5-JUL" depends on current year,
-        //     docs serial 39634 is inconsistent with stated year 2011) ---
+        // Year-dependent example (skipped: "5-JUL" depends on current year,
+        // docs serial 39634 is inconsistent with stated year 2011)
     }
 
     #[test]
@@ -2009,7 +2006,7 @@ mod tests {
     fn test_date_docs() {
         // https://support.microsoft.com/en-us/office/date-function-e36c0c8c-4104-49da-ab83-82328b832349
 
-        // === Reference serial numbers stated in docs ===
+        // Reference serial numbers stated in docs
         // "January 1, 1900 is serial number 1"
         assert_eq!(eval("=DATE(1900,1,1)").unwrap(), FormulaValue::Number(1.0));
 
@@ -2019,7 +2016,7 @@ mod tests {
             FormulaValue::Number(39448.0)
         );
 
-        // === Year argument: values 0-1899 add 1900 ===
+        // Year argument: values 0-1899 add 1900
         // "DATE(108,1,2) returns January 2, 2008 (1900+108)"
         // Jan 2, 2008 = 39448 + 1 = 39449
         assert_eq!(
@@ -2039,7 +2036,7 @@ mod tests {
             FormulaValue::Number(2.0)
         );
 
-        // === Year argument: values 1900-9999 used directly ===
+        // Year argument: values 1900-9999 used directly
         // "DATE(2008,1,2) returns January 2, 2008"
         assert_eq!(
             eval("=DATE(2008,1,2)").unwrap(),
@@ -2065,7 +2062,7 @@ mod tests {
             FormulaValue::Number(3799.0)
         );
 
-        // === Year argument: error conditions ===
+        // Year argument: error conditions
         // "If year is less than 0 ... Excel returns the #NUM! error value"
         assert_eq!(
             eval("=DATE(-1,1,1)").unwrap(),
@@ -2090,7 +2087,7 @@ mod tests {
             FormulaValue::Error(CellError::Num)
         );
 
-        // === Month overflow (month > 12) ===
+        // Month overflow (month > 12)
         // "DATE(2008,14,2) returns the serial number representing February 2, 2009"
         // 2008 is a leap year (366 days). Jan 1, 2009 = 39448+366 = 39814.
         // Feb 2, 2009 = 39814 + 31 (Jan) + 1 = 39846
@@ -2111,7 +2108,7 @@ mod tests {
             FormulaValue::Number(2.0)
         );
 
-        // === Month underflow (negative month) ===
+        // Month underflow (negative month)
         // "DATE(2008,-3,2) returns the serial number representing September 2, 2007"
         // Jan 1, 2007 = 39448-365 = 39083. Sep 2, 2007 = 39083 + 243 (Jan-Aug) + 1 = 39327
         assert_eq!(
@@ -2131,7 +2128,7 @@ mod tests {
             FormulaValue::Number(2.0)
         );
 
-        // === Day overflow (day > days in month) ===
+        // Day overflow (day > days in month)
         // "DATE(2008,1,35) returns the serial number representing February 4, 2008"
         // Jan has 31 days; 35-31 = 4 days into Feb. Serial = 39448 + 34 = 39482
         assert_eq!(
@@ -2151,7 +2148,7 @@ mod tests {
             FormulaValue::Number(4.0)
         );
 
-        // === Day underflow (negative day) ===
+        // Day underflow (negative day)
         // "DATE(2008,1,-15) returns the serial number representing December 16, 2007"
         // Serial = 39448 + (-15) - 1 = 39432. Verify: Dec 31, 2007 = 39447; 39447-15 = 39432
         assert_eq!(
@@ -2171,7 +2168,7 @@ mod tests {
             FormulaValue::Number(16.0)
         );
 
-        // === Docs composite example: anniversary calculation ===
+        // Docs composite example: anniversary calculation
         // "DATE(YEAR(C2)+5,MONTH(C2),DAY(C2))" with date 3/14/2012 gives 3/14/2017
         assert_eq!(
             eval("=DATE(YEAR(DATE(2012,3,14))+5,MONTH(DATE(2012,3,14)),DAY(DATE(2012,3,14)))")
@@ -2198,7 +2195,7 @@ mod tests {
             FormulaValue::Number(14.0)
         );
 
-        // === Additional edge cases implied by docs behavioral notes ===
+        // Additional edge cases implied by docs behavioral notes
 
         // Month = 0: underflows to December of prior year
         // "month subtracts the magnitude of that number of months, plus 1, from the first month"
@@ -2366,7 +2363,7 @@ mod tests {
         // https://support.microsoft.com/en-us/office/today-function-5eb3078d-a82c-4736-8930-2f51a028fdd9
 
         // Docs: "The TODAY function returns the serial number of the current date."
-        // Syntax: TODAY() — no arguments.
+        // Syntax: TODAY() - no arguments.
         let today = number(eval("=TODAY()").unwrap());
 
         // Docs: serial number is the date-time code used for date/time calculations.
@@ -2534,7 +2531,7 @@ mod tests {
             FormulaValue::Number(20.0)
         );
 
-        // --- Weekend number values (docs table) using Example 1 date range ---
+        // Weekend number values (docs table) using Example 1 date range
 
         // Weekend 1 (Saturday, Sunday) - explicit, same as omitted
         assert_eq!(
@@ -2578,7 +2575,7 @@ mod tests {
             FormulaValue::Number(23.0)
         );
 
-        // --- Single-day weekend codes (docs table) ---
+        // Single-day weekend codes (docs table)
 
         // Weekend 11 (Sunday only)
         assert_eq!(
@@ -2622,7 +2619,7 @@ mod tests {
             FormulaValue::Number(27.0)
         );
 
-        // --- Weekend string patterns (docs) ---
+        // Weekend string patterns (docs)
 
         // "0000011" = Saturday and Sunday (docs example, equivalent to code 1)
         assert_eq!(
@@ -2636,7 +2633,7 @@ mod tests {
             FormulaValue::Number(0.0)
         );
 
-        // --- Error cases (docs Remarks section) ---
+        // Error cases (docs Remarks section)
 
         // "If a weekend string is of invalid length ... returns the #VALUE! error"
         assert_eq!(

@@ -959,7 +959,7 @@ impl Worksheet {
         })
     }
 
-    // Merged Regions (read — supplements existing mergeCells/unmergeCells)
+    // Merged Regions (read - supplements existing mergeCells/unmergeCells)
 
     /// Get all merged regions as structured objects with start/end row/col.
     #[napi(getter)]

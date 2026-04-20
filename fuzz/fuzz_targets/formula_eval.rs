@@ -14,7 +14,7 @@ use duke_sheets_core::{CellValue, Workbook};
 
 const MAX_DEPTH: usize = 4;
 
-// --- Formula generation (reused structure from formula_parser target) ---
+// Formula generation (reused structure from formula_parser target)
 
 const FUNC_NAMES: &[&str] = &[
     "SUM",
@@ -176,7 +176,7 @@ impl Expr {
 }
 
 /// Populate a 5×10 grid with mixed seed data so formulas have something
-/// to reference. The data pattern is deterministic — the fuzzer only
+/// to reference. The data pattern is deterministic - the fuzzer only
 /// varies the formulas, not the seed values.
 fn populate_seed_data(wb: &mut Workbook) {
     let sheet = wb.worksheet_mut(0).unwrap();
@@ -189,7 +189,7 @@ fn populate_seed_data(wb: &mut Workbook) {
         let _ = sheet.set_cell_value_at(row, 2, CellValue::String(format!("txt{}", row).into()));
         // Col D: booleans (alternating)
         let _ = sheet.set_cell_value_at(row, 3, CellValue::Boolean(row % 2 == 0));
-        // Col E: empty (left default) — tests ISBLANK, empty-cell coercion
+        // Col E: empty (left default) - tests ISBLANK, empty-cell coercion
     }
 }
 
@@ -225,7 +225,7 @@ fuzz_target!(|data: &[u8]| {
         let _ = sheet.set_cell_formula_at(end_row, 0, &format!("=SUM(A11:A{})", end_row));
     }
 
-    // Run calculation — must not panic
+    // Run calculation - must not panic
     let opts = CalculationOptions {
         // Enable iterative calc so circular refs don't panic
         iterative: true,

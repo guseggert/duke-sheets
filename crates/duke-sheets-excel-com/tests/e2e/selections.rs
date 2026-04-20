@@ -226,7 +226,7 @@ fn test_read_freeze_panes_and_selection_from_excel() {
         wb.set_cell_value("B2", 20.0).unwrap();
         wb.set_cell_value("C3", "Data").unwrap();
 
-        // Select cell C3 — freeze boundary will be at C3
+        // Select cell C3 - freeze boundary will be at C3
         // (rows 1-2 frozen, columns A-B frozen)
         excel
             .invoke(

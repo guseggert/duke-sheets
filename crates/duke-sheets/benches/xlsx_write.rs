@@ -1,4 +1,4 @@
-//! XLSX write benchmarks — duke-sheets vs rust_xlsxwriter vs umya-spreadsheet.
+//! XLSX write benchmarks - duke-sheets vs rust_xlsxwriter vs umya-spreadsheet.
 
 #[path = "helpers.rs"]
 mod helpers;

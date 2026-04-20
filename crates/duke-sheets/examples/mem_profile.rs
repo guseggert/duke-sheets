@@ -74,7 +74,7 @@ fn main() {
             }
 
             let non_empty = numbers + strings + booleans + errors + richtext + spill;
-            eprintln!("Sheet {}: \"{}\" — {} stored, {} non-empty, {} empty-styled, {} formulas, max_col={}",
+            eprintln!("Sheet {}: \"{}\" - {} stored, {} non-empty, {} empty-styled, {} formulas, max_col={}",
                 i, sheet.name(), cell_count, non_empty, empty_styled, formula_count, max_col);
             if max_col > 50 { eprintln!("  types: num={} str={} bool={} err={} rich={} spill={}", numbers, strings, booleans, errors, richtext, spill); }
 

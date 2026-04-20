@@ -1345,9 +1345,6 @@ mod tests {
     }
 
 
-
-
-
     fn count_xfs_in_binary(data: &[u8]) -> u32 {
         use crate::biff12::records;
         let mut iter = crate::biff12::RecordIter::new(std::io::Cursor::new(data));
@@ -1915,7 +1912,6 @@ mod tests {
         assert_eq!(ws2.column_outline_level(2), 1);
         assert_eq!(ws2.column_outline_level(0), 0);
     }
-
 
 
     #[test]

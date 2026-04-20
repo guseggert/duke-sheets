@@ -142,7 +142,7 @@ async fn test_save_and_read_back_with_duke_sheets() {
     let workbook = Workbook::open(path_str).expect("open with duke-sheets");
     let sheet = workbook.worksheet(0).expect("first sheet");
 
-    // Check numeric value — A1 is row=0, col=0
+    // Check numeric value - A1 is row=0, col=0
     let a1 = sheet.get_value_at(0, 0);
     match a1 {
         CellValue::Number(n) => {
@@ -151,7 +151,7 @@ async fn test_save_and_read_back_with_duke_sheets() {
         other => panic!("A1 should be Number(3.14), got {other:?}"),
     }
 
-    // Check string value — A2 is row=1, col=0
+    // Check string value - A2 is row=1, col=0
     let a2 = sheet.get_value_at(1, 0);
     match &a2 {
         CellValue::String(s) => {
@@ -220,7 +220,7 @@ async fn test_set_array_formula() {
         .await
         .expect("set_array_formula");
 
-    // Read back — LO wraps array formulas in braces
+    // Read back - LO wraps array formulas in braces
     let formula = wb.get_cell_formula("C1").await.expect("get_cell_formula");
     assert_eq!(formula, "{=SUM(A1:A2*B1:B2)}");
 
