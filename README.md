@@ -29,7 +29,7 @@ See [FEATURES.md](FEATURES.md) for the per-feature support matrix across
 XLSX, XLSB, XLS, and ODS.
 
 > [!WARNING]
-> Duke Sheets is in alpha. Its internals are heavily tested but its API is not yet stable.
+> Duke Sheets is in alpha. Its API is not yet stable.
 
 ## Node.js / TypeScript
 
