@@ -5,6 +5,7 @@ use duke_sheets_core::{CellAddress, Worksheet};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+
 use crate::biff12::records;
 use crate::biff12::{parser, RecordIter};
 use crate::error::XlsbResult;
@@ -56,7 +57,8 @@ fn read_comments_bin<R: Read>(reader: R, ws: &mut Worksheet) -> XlsbResult<()> {
                 }
             }
             records::BRT_END_COMMENT_AUTHORS => break,
-            records::BRT_BEGIN_COMMENT_AUTHORS => {}
+            records::BRT_BEGIN_COMMENT_AUTHORS => {
+            }
             _ => {
                 if len == 0 && typ == 0 {
                     return Ok(());

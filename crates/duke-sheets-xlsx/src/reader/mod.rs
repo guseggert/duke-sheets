@@ -31,18 +31,18 @@ use formulas::{
 };
 use theme::{read_theme_palette, resolve_style_theme_colors};
 
-mod comments;
 pub(crate) mod chart;
 pub(crate) mod chart_ex;
-mod drawing;
+mod chartsheet;
+mod comments;
 mod conditional_format;
 mod data_validation;
+mod drawing;
 mod formulas;
 mod shared_strings;
 mod table;
 mod theme;
 mod workbook;
-mod chartsheet;
 
 pub(crate) use formulas::CellFormulaState;
 use shared_strings::SharedStringEntry;
@@ -244,7 +244,9 @@ impl XlsxReader {
                     .worksheet_mut(sheet_idx)
                     .unwrap()
                     .set_visibility(sheet_entry.visibility);
-                workbook.sheet_order_mut().push(SheetSlot::Worksheet(sheet_idx));
+                workbook
+                    .sheet_order_mut()
+                    .push(SheetSlot::Worksheet(sheet_idx));
                 let sheet_rels = read_sheet_rels(&mut archive, path)?;
                 Self::read_worksheet(
                     &mut archive,
@@ -294,11 +296,19 @@ impl XlsxReader {
 
                 // Read charts for this worksheet (if present).
                 // Sheet → drawing relationship → drawing XML → chart relationships → chart XML.
-                for drawing_rel in sheet_rels.values().filter(|r| r.rel_type.ends_with("/drawing")) {
+                for drawing_rel in sheet_rels
+                    .values()
+                    .filter(|r| r.rel_type.ends_with("/drawing"))
+                {
                     let drawing_path = &drawing_rel.target;
-                    let drawing_contents = drawing::read_drawing_contents(&mut archive, drawing_path)?;
+                    let drawing_contents =
+                        drawing::read_drawing_contents(&mut archive, drawing_path)?;
                     for raw in drawing_contents.raw_non_chart_anchors {
-                        workbook.worksheet_mut(sheet_idx).unwrap().raw_drawing_objects.push(raw);
+                        workbook
+                            .worksheet_mut(sheet_idx)
+                            .unwrap()
+                            .raw_drawing_objects
+                            .push(raw);
                     }
                     let has_charts = !drawing_contents.chart_refs.is_empty();
                     let has_images = !drawing_contents.images.is_empty();
@@ -311,7 +321,9 @@ impl XlsxReader {
                         for image in &mut resolved_images {
                             if let Some(rel) = drawing_rels.get(&image.media_path) {
                                 let ext = rel.target.rsplit('.').next().unwrap_or("");
-                                if let Some(fmt) = duke_sheets_chart::ImageFormat::from_extension(ext) {
+                                if let Some(fmt) =
+                                    duke_sheets_chart::ImageFormat::from_extension(ext)
+                                {
                                     image.format = fmt;
                                 }
                                 image.media_path = rel.target.clone();
@@ -342,12 +354,22 @@ impl XlsxReader {
                     for chart_ref in drawing_contents.chart_refs {
                         if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
                             if chart_ref.is_chart_ex {
-                                if let Some(mut cx) = chart_ex::read_chart_ex(&mut archive, &dr.target, chart_ref.anchor)? {
+                                if let Some(mut cx) = chart_ex::read_chart_ex(
+                                    &mut archive,
+                                    &dr.target,
+                                    chart_ref.anchor,
+                                )? {
                                     cx.raw_mc_fallback = chart_ref.raw_mc_fallback;
-                                    read_chart_style_color_for_chart_ex(&mut archive, &dr.target, &mut cx);
+                                    read_chart_style_color_for_chart_ex(
+                                        &mut archive,
+                                        &dr.target,
+                                        &mut cx,
+                                    );
                                     workbook.worksheet_mut(sheet_idx).unwrap().add_chart_ex(cx);
                                 }
-                            } else if let Some(mut c) = chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)? {
+                            } else if let Some(mut c) =
+                                chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)?
+                            {
                                 read_chart_style_color(&mut archive, &dr.target, &mut c);
                                 workbook.worksheet_mut(sheet_idx).unwrap().add_chart(c);
                             }
@@ -361,25 +383,32 @@ impl XlsxReader {
                     let cs_rels = read_sheet_rels(&mut archive, cs_path)?;
                     if let Some(drawing_rel) = cs_rels.get(&rid) {
                         let drawing_path = &drawing_rel.target;
-                        let drawing_contents = drawing::read_drawing_contents(&mut archive, drawing_path)?;
+                        let drawing_contents =
+                            drawing::read_drawing_contents(&mut archive, drawing_path)?;
                         let raw_anchors = drawing_contents.raw_non_chart_anchors;
                         let drawing_rels = read_sheet_rels(&mut archive, drawing_path)?;
                         for chart_ref in drawing_contents.chart_refs {
                             if let Some(dr) = drawing_rels.get(&chart_ref.rel_id) {
                                 if chart_ref.is_chart_ex {
-                                    // ChartEx in a chartsheet — skip for now (chartsheets
+                                    // ChartEx in a chartsheet - skip for now (chartsheets
                                     // require a standard Chart). Parse it but don't embed.
                                     continue;
                                 }
-                                if let Some(mut c) = chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)? {
+                                if let Some(mut c) =
+                                    chart::read_chart(&mut archive, &dr.target, chart_ref.anchor)?
+                                {
                                     read_chart_style_color(&mut archive, &dr.target, &mut c);
-                                    let cs_idx = workbook.add_chartsheet_unchecked(duke_sheets_core::ChartSheet {
-                                        name: sheet_entry.name.clone(),
-                                        chart: c,
-                                        visibility: sheet_entry.visibility,
-                                        raw_drawing_objects: raw_anchors.clone(),
-                                    });
-                                    workbook.sheet_order_mut().push(SheetSlot::ChartSheet(cs_idx));
+                                    let cs_idx = workbook.add_chartsheet_unchecked(
+                                        duke_sheets_core::ChartSheet {
+                                            name: sheet_entry.name.clone(),
+                                            chart: c,
+                                            visibility: sheet_entry.visibility,
+                                            raw_drawing_objects: raw_anchors.clone(),
+                                        },
+                                    );
+                                    workbook
+                                        .sheet_order_mut()
+                                        .push(SheetSlot::ChartSheet(cs_idx));
                                     chart_found = true;
                                     break; // chartsheet has exactly one chart
                                 }
@@ -390,11 +419,15 @@ impl XlsxReader {
                 if !chart_found {
                     let cs_idx = workbook.add_chartsheet_unchecked(duke_sheets_core::ChartSheet {
                         name: sheet_entry.name.clone(),
-                        chart: duke_sheets_chart::Chart::new(duke_sheets_chart::ChartType::Unsupported("missing".into())),
+                        chart: duke_sheets_chart::Chart::new(
+                            duke_sheets_chart::ChartType::Unsupported("missing".into()),
+                        ),
                         visibility: sheet_entry.visibility,
                         raw_drawing_objects: Vec::new(),
                     });
-                    workbook.sheet_order_mut().push(SheetSlot::ChartSheet(cs_idx));
+                    workbook
+                        .sheet_order_mut()
+                        .push(SheetSlot::ChartSheet(cs_idx));
                 }
             }
         }
@@ -515,7 +548,7 @@ impl XlsxReader {
         let mut inline_run_font: Option<duke_sheets_core::RunFont> = None;
         let mut shared_formula_masters: HashMap<u32, SharedFormulaMaster> = HashMap::new();
 
-        // Pending array/dataTable formulas with ref ranges — post-processed after all cells.
+        // Pending array/dataTable formulas with ref ranges - post-processed after all cells.
         // Each entry: (anchor_cell_ref, ref_range, kind, formula_text, r1, r2)
         #[allow(clippy::type_complexity)]
         let mut pending_array_formulas: Vec<(
@@ -586,536 +619,543 @@ impl XlsxReader {
 
         loop {
             match xml_reader.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
-                    b"sheetView" => {
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"tabSelected" => {
-                                    if attr.unescape_value().ok().as_deref() == Some("1") {
-                                        worksheet.set_selected(true);
+                Ok(Event::Start(e)) => {
+                    match e.name().local_name().as_ref() {
+                        b"sheetView" => {
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"tabSelected" => {
+                                        if attr.unescape_value().ok().as_deref() == Some("1") {
+                                            worksheet.set_selected(true);
+                                        }
                                     }
-                                }
-                                b"zoomScale" => {
-                                    if let Some(z) = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<u16>().ok())
-                                    {
-                                        worksheet.set_zoom_scale(Some(z));
+                                    b"zoomScale" => {
+                                        if let Some(z) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u16>().ok())
+                                        {
+                                            worksheet.set_zoom_scale(Some(z));
+                                        }
                                     }
+                                    b"showFormulas" => {
+                                    }
+                                    b"showGridLines" => {
+                                    }
+                                    b"showZeros" => {
+                                    }
+                                    b"showRuler" => {
+                                    }
+                                    b"showOutlineSymbols" => {
+                                    }
+                                    b"showRowColHeaders" => {
+                                    }
+                                    b"showWhiteSpace" => {
+                                    }
+                                    b"topLeftCell" => {
+                                    }
+                                    b"view" => {
+                                        if let Ok(v) = attr.unescape_value() {
+                                            match v.as_ref() {
+                                                "normal" => {
+                                                }
+                                                "pageBreakPreview" => {
+                                                }
+                                                "pageLayout" => {
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    b"windowProtection" => {
+                                    }
+                                    b"workbookViewId" => {
+                                    }
+                                    b"rightToLeft" => {
+                                    }
+                                    b"zoomScaleNormal" => {
+                                    }
+                                    b"zoomScalePageLayoutView" => {
+                                    }
+                                    b"zoomScaleSheetLayoutView" => {
+                                    }
+                                    b"colorId" => {
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
-                    }
-                    b"selection" => {
-                        Self::parse_sheet_selection_attrs(&e, worksheet);
-                    }
-                    b"pane" => {
-                        Self::parse_pane_attrs(&e, worksheet);
-                    }
-                    b"autoFilter" => {
-                        in_auto_filter = true;
-                        auto_filter_range = None;
-                        auto_filter_columns.clear();
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"ref" {
-                                if let Ok(value) = attr.unescape_value() {
-                                    match CellRange::parse(value.as_ref()) {
-                                        Ok(range) => auto_filter_range = Some(range),
-                                        Err(err) => log::warn!(
-                                            "Invalid autoFilter ref '{}': {}",
-                                            value,
-                                            err
-                                        ),
+                        b"selection" => Self::parse_sheet_selection_attrs(&e, worksheet),
+                        b"pane" => Self::parse_pane_attrs(&e, worksheet),
+                        b"autoFilter" => {
+                            in_auto_filter = true;
+                            auto_filter_range = None;
+                            auto_filter_columns.clear();
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"ref" {
+                                    if let Ok(value) = attr.unescape_value() {
+                                        match CellRange::parse(value.as_ref()) {
+                                            Ok(range) => auto_filter_range = Some(range),
+                                            Err(err) => log::warn!(
+                                                "Invalid autoFilter ref '{}': {}",
+                                                value,
+                                                err
+                                            ),
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    b"filterColumn" if in_auto_filter => {
-                        current_af_col_id = None;
-                        current_af_hidden_button = false;
-                        current_af_show_button = true;
-                        current_af_filter_values.clear();
-                        current_af_blank = false;
-                        current_af_custom_and = false;
-                        current_af_custom_conditions.clear();
-                        current_af_column_filter = None;
-                        in_af_filters = false;
-                        in_af_custom_filters = false;
+                        b"filterColumn" if in_auto_filter => {
+                            current_af_col_id = None;
+                            current_af_hidden_button = false;
+                            current_af_show_button = true;
+                            current_af_filter_values.clear();
+                            current_af_blank = false;
+                            current_af_custom_and = false;
+                            current_af_custom_conditions.clear();
+                            current_af_column_filter = None;
+                            in_af_filters = false;
+                            in_af_custom_filters = false;
 
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"colId" => {
-                                    current_af_col_id = attr
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"colId" => {
+                                        current_af_col_id = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u32>().ok());
+                                    }
+                                    b"hiddenButton" => {
+                                        current_af_hidden_button =
+                                            attr.unescape_value().ok().is_some_and(|s| {
+                                                s.as_ref() == "1" || s.as_ref() == "true"
+                                            });
+                                    }
+                                    b"showButton" => {
+                                        current_af_show_button =
+                                            attr.unescape_value().ok().is_none_or(|s| {
+                                                !(s.as_ref() == "0" || s.as_ref() == "false")
+                                            });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        b"filters" if in_auto_filter => {
+                            in_af_filters = true;
+                            current_af_filter_values.clear();
+                            current_af_blank = false;
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"blank" {
+                                    current_af_blank = attr
                                         .unescape_value()
                                         .ok()
-                                        .and_then(|s| s.parse::<u32>().ok());
+                                        .is_some_and(|s| s.as_ref() == "1" || s.as_ref() == "true");
                                 }
-                                b"hiddenButton" => {
-                                    current_af_hidden_button =
-                                        attr.unescape_value().ok().is_some_and(|s| {
+                            }
+                        }
+                        b"customFilters" if in_auto_filter => {
+                            in_af_custom_filters = true;
+                            current_af_custom_conditions.clear();
+                            current_af_custom_and = false;
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"and" {
+                                    current_af_custom_and = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .is_some_and(|s| s.as_ref() == "1" || s.as_ref() == "true");
+                                }
+                            }
+                        }
+                        b"hyperlink" => {
+                            Self::parse_hyperlink_element(worksheet, &e, sheet_rels);
+                        }
+                        b"pageMargins" => {
+                            let mut ps = worksheet.page_setup().clone();
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"left" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.left_margin = v;
+                                        }
+                                    }
+                                    b"right" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.right_margin = v;
+                                        }
+                                    }
+                                    b"top" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.top_margin = v;
+                                        }
+                                    }
+                                    b"bottom" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.bottom_margin = v;
+                                        }
+                                    }
+                                    b"header" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.header_margin = v;
+                                        }
+                                    }
+                                    b"footer" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok())
+                                        {
+                                            ps.footer_margin = v;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            worksheet.set_page_setup(ps);
+                        }
+                        b"pageSetup" => {
+                            let mut ps = worksheet.page_setup().clone();
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"paperSize" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u8>().ok())
+                                        {
+                                            ps.paper_size = v;
+                                        }
+                                    }
+                                    b"orientation" => {
+                                        if let Ok(v) = attr.unescape_value() {
+                                            ps.orientation = if v.as_ref() == "landscape" {
+                                                duke_sheets_core::PageOrientation::Landscape
+                                            } else {
+                                                duke_sheets_core::PageOrientation::Portrait
+                                            };
+                                        }
+                                    }
+                                    b"scale" => {
+                                        if let Some(v) = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u16>().ok())
+                                        {
+                                            ps.scale = v;
+                                        }
+                                    }
+                                    b"fitToWidth" => {
+                                        ps.fit_to_width = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u16>().ok());
+                                    }
+                                    b"fitToHeight" => {
+                                        ps.fit_to_height = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u16>().ok());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            worksheet.set_page_setup(ps);
+                        }
+                        b"printOptions" => {
+                            let mut ps = worksheet.page_setup().clone();
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"gridLines" => {
+                                        if let Ok(v) = attr.unescape_value() {
+                                            ps.print_gridlines =
+                                                v.as_ref() == "1" || v.as_ref() == "true";
+                                        }
+                                    }
+                                    b"headings" => {
+                                        if let Ok(v) = attr.unescape_value() {
+                                            ps.print_headings =
+                                                v.as_ref() == "1" || v.as_ref() == "true";
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            worksheet.set_page_setup(ps);
+                        }
+                        b"headerFooter" => {
+                            let mut ps = worksheet.page_setup().clone();
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"differentOddEven" => {
+                                        if let Ok(v) = attr.unescape_value() {
+                                            ps.different_odd_even =
+                                                v.as_ref() == "1" || v.as_ref() == "true";
+                                        }
+                                    }
+                                    b"differentFirst" => {
+                                        if let Ok(v) = attr.unescape_value() {
+                                            ps.different_first =
+                                                v.as_ref() == "1" || v.as_ref() == "true";
+                                        }
+                                    }
+                                    b"scaleWithDoc" => {
+                                        if let Ok(v) = attr.unescape_value() {
+                                            ps.scale_with_doc =
+                                                v.as_ref() == "1" || v.as_ref() == "true";
+                                        }
+                                    }
+                                    b"alignWithMargins" => {
+                                        if let Ok(v) = attr.unescape_value() {
+                                            ps.align_with_margins =
+                                                v.as_ref() == "1" || v.as_ref() == "true";
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            worksheet.set_page_setup(ps);
+                        }
+                        b"rowBreaks" => in_row_breaks = true,
+                        b"colBreaks" => in_col_breaks = true,
+                        b"brk" if in_row_breaks || in_col_breaks => {
+                            if let Some(brk) = Self::parse_page_break_attrs(&e) {
+                                if in_row_breaks {
+                                    let mut breaks = worksheet.row_breaks().to_vec();
+                                    breaks.push(brk);
+                                    worksheet.set_row_breaks(breaks);
+                                } else {
+                                    let mut breaks = worksheet.col_breaks().to_vec();
+                                    breaks.push(brk);
+                                    worksheet.set_col_breaks(breaks);
+                                }
+                            }
+                        }
+                        b"oddHeader" => in_odd_header = true,
+                        b"oddFooter" => in_odd_footer = true,
+                        b"evenHeader" => in_even_header = true,
+                        b"evenFooter" => in_even_footer = true,
+                        b"firstHeader" => in_first_header = true,
+                        b"firstFooter" => in_first_footer = true,
+                        b"row" => {
+                            // Parse row dimensions: ht, customHeight, hidden
+                            let mut row_num: Option<u32> = None;
+                            let mut ht: Option<f64> = None;
+                            let mut custom_height = false;
+                            let mut hidden = false;
+                            let mut outline_level: Option<u8> = None;
+                            let mut collapsed = false;
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"r" => {
+                                        row_num = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u32>().ok());
+                                    }
+                                    b"ht" => {
+                                        ht = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<f64>().ok());
+                                    }
+                                    b"customHeight" => {
+                                        custom_height =
+                                            attr.unescape_value().ok().is_some_and(|s| {
+                                                s.as_ref() == "1" || s.as_ref() == "true"
+                                            });
+                                    }
+                                    b"hidden" => {
+                                        hidden = attr.unescape_value().ok().is_some_and(|s| {
                                             s.as_ref() == "1" || s.as_ref() == "true"
                                         });
-                                }
-                                b"showButton" => {
-                                    current_af_show_button =
-                                        attr.unescape_value().ok().is_none_or(|s| {
-                                            !(s.as_ref() == "0" || s.as_ref() == "false")
+                                    }
+                                    b"outlineLevel" => {
+                                        outline_level = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u8>().ok());
+                                    }
+                                    b"collapsed" => {
+                                        collapsed = attr.unescape_value().ok().is_some_and(|s| {
+                                            s.as_ref() == "1" || s.as_ref() == "true"
                                         });
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
+                            }
+                            if let Some(r) = row_num {
+                                let row_idx = r.saturating_sub(1); // 1-based to 0-based
+                                if custom_height {
+                                    if let Some(h) = ht {
+                                        worksheet.set_row_height(row_idx, h);
+                                    }
+                                }
+                                if hidden {
+                                    worksheet.set_row_hidden(row_idx, true);
+                                }
+                                if let Some(level) = outline_level {
+                                    worksheet.set_row_outline_level(row_idx, level);
+                                }
+                                if collapsed {
+                                    worksheet.set_row_collapsed(row_idx, true);
+                                }
                             }
                         }
-                    }
-                    b"filters" if in_auto_filter => {
-                        in_af_filters = true;
-                        current_af_filter_values.clear();
-                        current_af_blank = false;
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"blank" {
-                                current_af_blank = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .is_some_and(|s| s.as_ref() == "1" || s.as_ref() == "true");
-                            }
-                        }
-                    }
-                    b"customFilters" if in_auto_filter => {
-                        in_af_custom_filters = true;
-                        current_af_custom_conditions.clear();
-                        current_af_custom_and = false;
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"and" {
-                                current_af_custom_and = attr
-                                    .unescape_value()
-                                    .ok()
-                                    .is_some_and(|s| s.as_ref() == "1" || s.as_ref() == "true");
-                            }
-                        }
-                    }
-                    b"hyperlink" => {
-                        Self::parse_hyperlink_element(worksheet, &e, sheet_rels);
-                    }
-                    b"pageMargins" => {
-                        let mut ps = worksheet.page_setup().clone();
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"left" => {
-                                    if let Some(v) = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                    {
-                                        ps.left_margin = v;
-                                    }
-                                }
-                                b"right" => {
-                                    if let Some(v) = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                    {
-                                        ps.right_margin = v;
-                                    }
-                                }
-                                b"top" => {
-                                    if let Some(v) = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                    {
-                                        ps.top_margin = v;
-                                    }
-                                }
-                                b"bottom" => {
-                                    if let Some(v) = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                    {
-                                        ps.bottom_margin = v;
-                                    }
-                                }
-                                b"header" => {
-                                    if let Some(v) = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                    {
-                                        ps.header_margin = v;
-                                    }
-                                }
-                                b"footer" => {
-                                    if let Some(v) = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                    {
-                                        ps.footer_margin = v;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        worksheet.set_page_setup(ps);
-                    }
-                    b"pageSetup" => {
-                        let mut ps = worksheet.page_setup().clone();
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"paperSize" => {
-                                    if let Some(v) = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<u8>().ok())
-                                    {
-                                        ps.paper_size = v;
-                                    }
-                                }
-                                b"orientation" => {
-                                    if let Ok(v) = attr.unescape_value() {
-                                        ps.orientation = if v.as_ref() == "landscape" {
-                                            duke_sheets_core::PageOrientation::Landscape
-                                        } else {
-                                            duke_sheets_core::PageOrientation::Portrait
-                                        };
-                                    }
-                                }
-                                b"scale" => {
-                                    if let Some(v) = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<u16>().ok())
-                                    {
-                                        ps.scale = v;
-                                    }
-                                }
-                                b"fitToWidth" => {
-                                    ps.fit_to_width = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<u16>().ok());
-                                }
-                                b"fitToHeight" => {
-                                    ps.fit_to_height = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<u16>().ok());
-                                }
-                                _ => {}
-                            }
-                        }
-                        worksheet.set_page_setup(ps);
-                    }
-                    b"printOptions" => {
-                        let mut ps = worksheet.page_setup().clone();
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"gridLines" => {
-                                    if let Ok(v) = attr.unescape_value() {
-                                        ps.print_gridlines =
-                                            v.as_ref() == "1" || v.as_ref() == "true";
-                                    }
-                                }
-                                b"headings" => {
-                                    if let Ok(v) = attr.unescape_value() {
-                                        ps.print_headings =
-                                            v.as_ref() == "1" || v.as_ref() == "true";
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        worksheet.set_page_setup(ps);
-                    }
-                    b"headerFooter" => {
-                        // Parse headerFooter attributes
-                        let mut ps = worksheet.page_setup().clone();
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"differentOddEven" => {
-                                    if let Ok(v) = attr.unescape_value() {
-                                        ps.different_odd_even =
-                                            v.as_ref() == "1" || v.as_ref() == "true";
-                                    }
-                                }
-                                b"differentFirst" => {
-                                    if let Ok(v) = attr.unescape_value() {
-                                        ps.different_first =
-                                            v.as_ref() == "1" || v.as_ref() == "true";
-                                    }
-                                }
-                                b"scaleWithDoc" => {
-                                    if let Ok(v) = attr.unescape_value() {
-                                        ps.scale_with_doc =
-                                            v.as_ref() == "1" || v.as_ref() == "true";
-                                    }
-                                }
-                                b"alignWithMargins" => {
-                                    if let Ok(v) = attr.unescape_value() {
-                                        ps.align_with_margins =
-                                            v.as_ref() == "1" || v.as_ref() == "true";
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        worksheet.set_page_setup(ps);
-                    }
-                    b"rowBreaks" => {
-                        in_row_breaks = true;
-                    }
-                    b"colBreaks" => {
-                        in_col_breaks = true;
-                    }
-                    b"brk" if in_row_breaks || in_col_breaks => {
-                        if let Some(brk) = Self::parse_page_break_attrs(&e) {
-                            if in_row_breaks {
-                                let mut breaks = worksheet.row_breaks().to_vec();
-                                breaks.push(brk);
-                                worksheet.set_row_breaks(breaks);
-                            } else {
-                                let mut breaks = worksheet.col_breaks().to_vec();
-                                breaks.push(brk);
-                                worksheet.set_col_breaks(breaks);
-                            }
-                        }
-                    }
-                    b"oddHeader" => {
-                        in_odd_header = true;
-                    }
-                    b"oddFooter" => {
-                        in_odd_footer = true;
-                    }
-                    b"evenHeader" => {
-                        in_even_header = true;
-                    }
-                    b"evenFooter" => {
-                        in_even_footer = true;
-                    }
-                    b"firstHeader" => {
-                        in_first_header = true;
-                    }
-                    b"firstFooter" => {
-                        in_first_footer = true;
-                    }
-                    b"row" => {
-                        // Parse row dimensions: ht, customHeight, hidden
-                        let mut row_num: Option<u32> = None;
-                        let mut ht: Option<f64> = None;
-                        let mut custom_height = false;
-                        let mut hidden = false;
-                        let mut outline_level: Option<u8> = None;
-                        let mut collapsed = false;
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"r" => {
-                                    row_num = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<u32>().ok());
-                                }
-                                b"ht" => {
-                                    ht = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<f64>().ok());
-                                }
-                                b"customHeight" => {
-                                    custom_height = attr.unescape_value().ok().is_some_and(|s| {
-                                        s.as_ref() == "1" || s.as_ref() == "true"
-                                    });
-                                }
-                                b"hidden" => {
-                                    hidden = attr.unescape_value().ok().is_some_and(|s| {
-                                        s.as_ref() == "1" || s.as_ref() == "true"
-                                    });
-                                }
-                                b"outlineLevel" => {
-                                    outline_level = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<u8>().ok());
-                                }
-                                b"collapsed" => {
-                                    collapsed = attr.unescape_value().ok().is_some_and(|s| {
-                                        s.as_ref() == "1" || s.as_ref() == "true"
-                                    });
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(r) = row_num {
-                            let row_idx = r.saturating_sub(1); // 1-based to 0-based
-                            if custom_height {
-                                if let Some(h) = ht {
-                                    worksheet.set_row_height(row_idx, h);
-                                }
-                            }
-                            if hidden {
-                                worksheet.set_row_hidden(row_idx, true);
-                            }
-                            if let Some(level) = outline_level {
-                                worksheet.set_row_outline_level(row_idx, level);
-                            }
-                            if collapsed {
-                                worksheet.set_row_collapsed(row_idx, true);
-                            }
-                        }
-                    }
-                    b"c" => {
-                        in_cell = true;
-                        current_cell_ref = None;
-                        current_cell_type = None;
-                        current_cell_style = None;
-                        current_cell_cm = None;
-                        current_value = None;
-                        current_formula = None;
-                        current_formula_state = CellFormulaState::default();
+                        b"c" => {
+                            in_cell = true;
+                            current_cell_ref = None;
+                            current_cell_type = None;
+                            current_cell_style = None;
+                            current_cell_cm = None;
+                            current_value = None;
+                            current_formula = None;
+                            current_formula_state = CellFormulaState::default();
 
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"r" => {
-                                    current_cell_ref =
-                                        attr.unescape_value().ok().map(|s| s.to_string());
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"r" => {
+                                        current_cell_ref =
+                                            attr.unescape_value().ok().map(|s| s.to_string());
+                                    }
+                                    b"t" => {
+                                        current_cell_type =
+                                            attr.unescape_value().ok().map(|s| s.to_string());
+                                    }
+                                    b"s" => {
+                                        current_cell_style = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u32>().ok());
+                                    }
+                                    b"cm" => {
+                                        current_cell_cm = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse::<u32>().ok());
+                                    }
+                                    _ => {}
                                 }
-                                b"t" => {
-                                    current_cell_type =
-                                        attr.unescape_value().ok().map(|s| s.to_string());
-                                }
-                                b"s" => {
-                                    current_cell_style = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<u32>().ok());
-                                }
-                                b"cm" => {
-                                    current_cell_cm = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| s.parse::<u32>().ok());
-                                }
-                                _ => {}
                             }
                         }
-                    }
-                    b"v" if in_cell => {
-                        in_value = true;
-                    }
-                    b"f" if in_cell => {
-                        current_formula_state = parse_cell_formula_state(&e);
-                        in_formula = true;
-                    }
-                    b"is" if in_cell => {
-                        in_inline_str = true;
-                        has_inline_runs = false;
-                        inline_runs.clear();
-                    }
-                    b"r" if in_inline_str => {
-                        in_inline_r = true;
-                        has_inline_runs = true;
-                        inline_run_text.clear();
-                        inline_run_font = None;
-                    }
-                    b"rPr" if in_inline_r => {
-                        in_inline_rpr = true;
-                        inline_run_font = Some(duke_sheets_core::RunFont::default());
-                    }
-                    b"t" if in_inline_r && !in_inline_rpr => {
-                        in_inline_run_t = true;
-                    }
-                    b"t" if in_inline_str && !in_inline_r => {
-                        in_inline_text = true;
-                    }
-                    // rPr children that use Start+End (rare, but handle defensively)
-                    name if in_inline_rpr => {
-                        shared_strings::parse_rpr_element(name, &e, &mut inline_run_font);
-                    }
-                    // Data validation parsing
-                    b"dataValidation" => {
-                        in_data_validation = true;
-                        dv_formula1 = None;
-                        dv_formula2 = None;
-                        current_validation = Some(parse_data_validation_attrs(&e));
-                    }
-                    b"formula1" if in_data_validation => {
-                        in_dv_formula1 = true;
-                    }
-                    b"formula2" if in_data_validation => {
-                        in_dv_formula2 = true;
-                    }
-                    // Conditional formatting parsing
-                    b"conditionalFormatting" => {
-                        in_cond_formatting = true;
-                        cf_sqref = None;
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"sqref" {
-                                cf_sqref = attr.unescape_value().ok().map(|s| s.to_string());
+                        b"v" if in_cell => in_value = true,
+                        b"f" if in_cell => {
+                            current_formula_state = parse_cell_formula_state(&e);
+                            in_formula = true;
+                        }
+                        b"is" if in_cell => {
+                            in_inline_str = true;
+                            has_inline_runs = false;
+                            inline_runs.clear();
+                        }
+                        b"r" if in_inline_str => {
+                            in_inline_r = true;
+                            has_inline_runs = true;
+                            inline_run_text.clear();
+                            inline_run_font = None;
+                        }
+                        b"rPr" if in_inline_r => {
+                            in_inline_rpr = true;
+                            inline_run_font = Some(duke_sheets_core::RunFont::default());
+                        }
+                        b"t" if in_inline_r && !in_inline_rpr => in_inline_run_t = true,
+                        b"t" if in_inline_str && !in_inline_r => in_inline_text = true,
+                        // rPr children that use Start+End (rare, but handle defensively)
+                        name if in_inline_rpr => {
+                            shared_strings::parse_rpr_element(name, &e, &mut inline_run_font);
+                        }
+                        b"dataValidation" => {
+                            in_data_validation = true;
+                            dv_formula1 = None;
+                            dv_formula2 = None;
+                            current_validation = Some(parse_data_validation_attrs(&e));
+                        }
+                        b"formula1" if in_data_validation => in_dv_formula1 = true,
+                        b"formula2" if in_data_validation => in_dv_formula2 = true,
+                        b"conditionalFormatting" => {
+                            in_cond_formatting = true;
+                            cf_sqref = None;
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"sqref" {
+                                    cf_sqref = attr.unescape_value().ok().map(|s| s.to_string());
+                                }
                             }
                         }
-                    }
-                    b"cfRule" if in_cond_formatting => {
-                        in_cf_rule = true;
-                        cf_formulas.clear();
-                        cf_cfvo_values.clear();
-                        cf_colors.clear();
-                        icon_set_style = None;
-                        icon_set_reverse = false;
-                        icon_set_show_value = true;
-                        data_bar_color = None;
-                        data_bar_show_value = true;
-                        current_cf_rule = Some(parse_cf_rule_attrs(&e, cf_sqref.as_deref()));
-                    }
-                    b"formula" if in_cf_rule => {
-                        in_cf_formula = true;
-                    }
-                    b"colorScale" if in_cf_rule => {
-                        in_color_scale = true;
-                    }
-                    b"dataBar" if in_cf_rule => {
-                        in_data_bar = true;
-                        // Parse dataBar attributes
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"showValue" {
-                                data_bar_show_value =
-                                    attr.unescape_value().ok().is_none_or(|s| s != "0");
-                            }
+                        b"cfRule" if in_cond_formatting => {
+                            in_cf_rule = true;
+                            cf_formulas.clear();
+                            cf_cfvo_values.clear();
+                            cf_colors.clear();
+                            icon_set_style = None;
+                            icon_set_reverse = false;
+                            icon_set_show_value = true;
+                            data_bar_color = None;
+                            data_bar_show_value = true;
+                            current_cf_rule = Some(parse_cf_rule_attrs(&e, cf_sqref.as_deref()));
                         }
-                    }
-                    b"iconSet" if in_cf_rule => {
-                        in_icon_set = true;
-                        // Parse iconSet attributes
-                        for attr in e.attributes().flatten() {
-                            match attr.key.local_name().as_ref() {
-                                b"iconSet" => {
-                                    icon_set_style = attr
-                                        .unescape_value()
-                                        .ok()
-                                        .and_then(|s| IconSetStyle::from_xlsx(&s));
-                                }
-                                b"reverse" => {
-                                    icon_set_reverse =
-                                        attr.unescape_value().ok().is_some_and(|s| s == "1");
-                                }
-                                b"showValue" => {
-                                    icon_set_show_value =
+                        b"formula" if in_cf_rule => in_cf_formula = true,
+                        b"colorScale" if in_cf_rule => in_color_scale = true,
+                        b"dataBar" if in_cf_rule => {
+                            in_data_bar = true;
+                            for attr in e.attributes().flatten() {
+                                if attr.key.local_name().as_ref() == b"showValue" {
+                                    data_bar_show_value =
                                         attr.unescape_value().ok().is_none_or(|s| s != "0");
                                 }
-                                _ => {}
                             }
                         }
+                        b"iconSet" if in_cf_rule => {
+                            in_icon_set = true;
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"iconSet" => {
+                                        icon_set_style = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| IconSetStyle::from_xlsx(&s));
+                                    }
+                                    b"reverse" => {
+                                        icon_set_reverse =
+                                            attr.unescape_value().ok().is_some_and(|s| s == "1");
+                                    }
+                                    b"showValue" => {
+                                        icon_set_show_value =
+                                            attr.unescape_value().ok().is_none_or(|s| s != "0");
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                },
+                }
                 Ok(Event::End(e)) => {
                     match e.name().local_name().as_ref() {
                         b"c" => {
                             // Process the cell
                             if let Some(ref cell_ref) = current_cell_ref {
                                 if has_inline_runs {
-                                    // Inline rich text — set directly, bypassing process_cell
+                                    // Inline rich text - set directly, bypassing process_cell
                                     if let Ok(addr) = CellAddress::parse(cell_ref) {
                                         let runs = std::mem::take(&mut inline_runs);
                                         let resolved_formula = resolve_cell_formula(
@@ -1227,20 +1267,12 @@ impl XlsxReader {
                             }
                             in_cell = false;
                         }
-                        b"v" => {
-                            in_value = false;
-                        }
-                        b"f" => {
-                            in_formula = false;
-                        }
-                        b"rPr" if in_inline_rpr => {
-                            in_inline_rpr = false;
-                        }
-                        b"t" if in_inline_run_t => {
-                            in_inline_run_t = false;
-                        }
+                        b"v" => in_value = false,
+                        b"f" => in_formula = false,
+                        b"rPr" if in_inline_rpr => in_inline_rpr = false,
+                        b"t" if in_inline_run_t => in_inline_run_t = false,
                         b"r" if in_inline_r => {
-                            // Finish current run — mirrors SST parser
+                            // Finish current run - mirrors SST parser
                             let font = inline_run_font.take().and_then(|f| {
                                 if f.is_empty() {
                                     None
@@ -1254,12 +1286,8 @@ impl XlsxReader {
                             });
                             in_inline_r = false;
                         }
-                        b"is" => {
-                            in_inline_str = false;
-                        }
-                        b"t" if in_inline_str => {
-                            in_inline_text = false;
-                        }
+                        b"is" => in_inline_str = false,
+                        b"t" if in_inline_str => in_inline_text = false,
                         // Data validation end events
                         b"dataValidation" => {
                             if let Some(mut validation) = current_validation.take() {
@@ -1273,12 +1301,8 @@ impl XlsxReader {
                             }
                             in_data_validation = false;
                         }
-                        b"formula1" if in_data_validation => {
-                            in_dv_formula1 = false;
-                        }
-                        b"formula2" if in_data_validation => {
-                            in_dv_formula2 = false;
-                        }
+                        b"formula1" if in_data_validation => in_dv_formula1 = false,
+                        b"formula2" if in_data_validation => in_dv_formula2 = false,
                         // Conditional formatting end events
                         b"colorScale" => {
                             // Build ColorScale rule type from collected cfvo and color values
@@ -1352,33 +1376,15 @@ impl XlsxReader {
                             in_cond_formatting = false;
                             cf_sqref = None;
                         }
-                        b"formula" if in_cf_rule => {
-                            in_cf_formula = false;
-                        }
-                        b"oddHeader" => {
-                            in_odd_header = false;
-                        }
-                        b"oddFooter" => {
-                            in_odd_footer = false;
-                        }
-                        b"evenHeader" => {
-                            in_even_header = false;
-                        }
-                        b"evenFooter" => {
-                            in_even_footer = false;
-                        }
-                        b"firstHeader" => {
-                            in_first_header = false;
-                        }
-                        b"firstFooter" => {
-                            in_first_footer = false;
-                        }
-                        b"rowBreaks" => {
-                            in_row_breaks = false;
-                        }
-                        b"colBreaks" => {
-                            in_col_breaks = false;
-                        }
+                        b"formula" if in_cf_rule => in_cf_formula = false,
+                        b"oddHeader" => in_odd_header = false,
+                        b"oddFooter" => in_odd_footer = false,
+                        b"evenHeader" => in_even_header = false,
+                        b"evenFooter" => in_even_footer = false,
+                        b"firstHeader" => in_first_header = false,
+                        b"firstFooter" => in_first_footer = false,
+                        b"rowBreaks" => in_row_breaks = false,
+                        b"colBreaks" => in_col_breaks = false,
                         b"filters" if in_auto_filter => {
                             in_af_filters = false;
                             current_af_column_filter =
@@ -1720,19 +1726,58 @@ impl XlsxReader {
                                             worksheet.set_zoom_scale(Some(z));
                                         }
                                     }
+                                    b"showFormulas" => {
+                                    }
+                                    b"showGridLines" => {
+                                    }
+                                    b"showZeros" => {
+                                    }
+                                    b"showRuler" => {
+                                    }
+                                    b"showOutlineSymbols" => {
+                                    }
+                                    b"showRowColHeaders" => {
+                                    }
+                                    b"showWhiteSpace" => {
+                                    }
+                                    b"topLeftCell" => {
+                                    }
+                                    b"view" => {
+                                        if let Ok(v) = attr.unescape_value() {
+                                            match v.as_ref() {
+                                                "normal" => {
+                                                }
+                                                "pageBreakPreview" => {
+                                                }
+                                                "pageLayout" => {
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    b"windowProtection" => {
+                                    }
+                                    b"workbookViewId" => {
+                                    }
+                                    b"rightToLeft" => {
+                                    }
+                                    b"zoomScaleNormal" => {
+                                    }
+                                    b"zoomScalePageLayoutView" => {
+                                    }
+                                    b"zoomScaleSheetLayoutView" => {
+                                    }
+                                    b"colorId" => {
+                                    }
                                     _ => {}
                                 }
                             }
                         }
-                        b"selection" => {
-                            Self::parse_sheet_selection_attrs(&e, worksheet);
-                        }
+                        b"selection" => Self::parse_sheet_selection_attrs(&e, worksheet),
                         b"hyperlink" => {
                             Self::parse_hyperlink_element(worksheet, &e, sheet_rels);
                         }
-                        b"pane" => {
-                            Self::parse_pane_attrs(&e, worksheet);
-                        }
+                        b"pane" => Self::parse_pane_attrs(&e, worksheet),
                         b"f" if in_cell => {
                             // Self-closing formula elements appear for shared formula
                             // follower cells: <f t="shared" si="0"/>
@@ -1740,7 +1785,7 @@ impl XlsxReader {
                             in_formula = false;
                         }
                         b"row" => {
-                            // Self-closing <row .../> with no cells — may have dimensions
+                            // Self-closing <row .../> with no cells - may have dimensions
                             let mut row_num: Option<u32> = None;
                             let mut ht: Option<f64> = None;
                             let mut custom_height = false;
@@ -2015,10 +2060,9 @@ impl XlsxReader {
                                             });
                                     }
                                     b"showButton" => {
-                                        show_button =
-                                            attr.unescape_value().ok().is_none_or(|s| {
-                                                !(s.as_ref() == "0" || s.as_ref() == "false")
-                                            });
+                                        show_button = attr.unescape_value().ok().is_none_or(|s| {
+                                            !(s.as_ref() == "0" || s.as_ref() == "false")
+                                        });
                                     }
                                     _ => {}
                                 }
@@ -2047,10 +2091,10 @@ impl XlsxReader {
                             current_af_blank = false;
                             for attr in e.attributes().flatten() {
                                 if attr.key.local_name().as_ref() == b"blank" {
-                                    current_af_blank =
-                                        attr.unescape_value().ok().is_some_and(|s| {
-                                            s.as_ref() == "1" || s.as_ref() == "true"
-                                        });
+                                    current_af_blank = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .is_some_and(|s| s.as_ref() == "1" || s.as_ref() == "true");
                                 }
                             }
                             in_af_filters = false;
@@ -2076,10 +2120,10 @@ impl XlsxReader {
                             current_af_custom_and = false;
                             for attr in e.attributes().flatten() {
                                 if attr.key.local_name().as_ref() == b"and" {
-                                    current_af_custom_and =
-                                        attr.unescape_value().ok().is_some_and(|s| {
-                                            s.as_ref() == "1" || s.as_ref() == "true"
-                                        });
+                                    current_af_custom_and = attr
+                                        .unescape_value()
+                                        .ok()
+                                        .is_some_and(|s| s.as_ref() == "1" || s.as_ref() == "true");
                                 }
                             }
                             in_af_custom_filters = false;
@@ -2401,15 +2445,11 @@ impl XlsxReader {
 
         for attr in e.attributes().flatten() {
             match attr.key.local_name().as_ref() {
-                b"pane" => {
-                    pane = attr.unescape_value().ok().map(|s| s.to_string());
-                }
+                b"pane" => pane = attr.unescape_value().ok().map(|s| s.to_string()),
                 b"activeCell" => {
                     active_cell = attr.unescape_value().ok().map(|s| s.to_string());
                 }
-                b"sqref" => {
-                    sqref = attr.unescape_value().ok().map(|s| s.to_string());
-                }
+                b"sqref" => sqref = attr.unescape_value().ok().map(|s| s.to_string()),
                 _ => {}
             }
         }
@@ -2435,9 +2475,7 @@ impl XlsxReader {
 
         for attr in e.attributes().flatten() {
             match attr.key.local_name().as_ref() {
-                b"state" => {
-                    state = attr.unescape_value().ok().map(|s| s.to_string());
-                }
+                b"state" => state = attr.unescape_value().ok().map(|s| s.to_string()),
                 b"xSplit" => {
                     x_split_raw = attr
                         .unescape_value()
@@ -2551,7 +2589,9 @@ impl XlsxReader {
                 b"id" => rel_id = attr.unescape_value().ok().map(|s| s.to_string()),
                 b"display" => display = attr.unescape_value().ok().map(|s| s.to_string()),
                 b"tooltip" => tooltip = attr.unescape_value().ok().map(|s| s.to_string()),
-                b"location" => location = attr.unescape_value().ok().map(|s| s.to_string()),
+                b"location" => {
+                    location = attr.unescape_value().ok().map(|s| s.to_string());
+                }
                 _ => {}
             }
         }
@@ -2663,52 +2703,60 @@ impl XlsxReader {
                 return Ok(());
             }
         } else if let Some(value) = value {
-            // Process value based on type
             let cell_value = match cell_type {
-                // Shared string
-                Some("s") => match value.parse::<usize>() {
-                    Ok(idx) => match shared_strings.get(idx) {
-                        Some(SharedStringEntry::Plain(s)) => CellValue::String(s.clone().into()),
-                        Some(SharedStringEntry::Rich(runs)) => CellValue::rich_text(runs.clone()),
-                        None => {
+                Some("s") => {
+                    match value.parse::<usize>() {
+                        Ok(idx) => match shared_strings.get(idx) {
+                            Some(SharedStringEntry::Plain(s)) => {
+                                CellValue::String(s.clone().into())
+                            }
+                            Some(SharedStringEntry::Rich(runs)) => {
+                                CellValue::rich_text(runs.clone())
+                            }
+                            None => {
+                                log::warn!(
+                                    "Cell {}: shared string index {} out of bounds (max {}), using #REF!",
+                                    cell_ref, idx, shared_strings.len()
+                                );
+                                CellValue::Error(CellError::Ref)
+                            }
+                        },
+                        Err(_) => {
                             log::warn!(
-                                "Cell {}: shared string index {} out of bounds (max {}), using #REF!",
-                                cell_ref, idx, shared_strings.len()
+                                "Cell {}: invalid shared string index '{}', using #REF!",
+                                cell_ref,
+                                value
                             );
                             CellValue::Error(CellError::Ref)
                         }
-                    },
-                    Err(_) => {
-                        log::warn!(
-                            "Cell {}: invalid shared string index '{}', using #REF!",
-                            cell_ref,
-                            value
-                        );
-                        CellValue::Error(CellError::Ref)
                     }
-                },
+                }
 
-                // Boolean
-                Some("b") => CellValue::Boolean(value == "1" || value.eq_ignore_ascii_case("true")),
+                Some("b") => {
+                    CellValue::Boolean(value == "1" || value.eq_ignore_ascii_case("true"))
+                }
 
-                // Error
-                Some("e") => CellError::parse(value)
-                    .map(CellValue::Error)
-                    .unwrap_or_else(|| CellValue::String(value.to_string().into())),
+                Some("e") => {
+                    CellError::parse(value)
+                        .map(CellValue::Error)
+                        .unwrap_or_else(|| CellValue::String(value.to_string().into()))
+                }
 
-                // Inline string - decode Excel escape sequences
-                Some("inlineStr") => CellValue::String(decode_excel_escapes(value).into()),
+                Some("inlineStr") => {
+                    CellValue::String(decode_excel_escapes(value).into())
+                }
 
-                // String (explicit type) - decode Excel escape sequences
-                Some("str") => CellValue::String(decode_excel_escapes(value).into()),
+                Some("str") => {
+                    CellValue::String(decode_excel_escapes(value).into())
+                }
 
-                // Number (default type or explicit "n")
-                None | Some("n") => match value.parse::<f64>() {
-                    Ok(n) => CellValue::Number(n),
-                    Err(_) => CellValue::String(value.to_string().into()),
-                },
+                None | Some("n") => {
+                    match value.parse::<f64>() {
+                        Ok(n) => CellValue::Number(n),
+                        Err(_) => CellValue::String(value.to_string().into()),
+                    }
+                }
 
-                // Unknown type - treat as string
                 Some(_) => CellValue::String(value.to_string().into()),
             };
 

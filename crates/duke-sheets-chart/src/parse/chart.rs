@@ -355,15 +355,9 @@ fn parse_chart_xml_inner<R: Read>(
                 let local = e.name().local_name();
                 let tag = local.as_ref();
                 match tag {
-                    b"chartSpace" => {
-                        in_chart_space = true;
-                    }
-                    b"chart" if !in_chart => {
-                        in_chart = true;
-                    }
-                    b"plotArea" if in_chart => {
-                        in_plot_area = true;
-                    }
+                    b"chartSpace" => in_chart_space = true,
+                    b"chart" if !in_chart => in_chart = true,
+                    b"plotArea" if in_chart => in_plot_area = true,
                     b"title"
                         if in_chart
                             && !in_plot_area
@@ -376,27 +370,13 @@ fn parse_chart_xml_inner<R: Read>(
                         title_depth = 1;
                         title_text.clear();
                     }
-                    b"tx" if in_chart_title && title_depth == 1 => {
-                        in_title_tx = true;
-                    }
-                    b"rich" if in_title_tx => {
-                        in_title_rich = true;
-                    }
-                    b"p" if in_title_rich => {
-                        in_title_p = true;
-                    }
-                    b"r" if in_title_p => {
-                        in_title_r = true;
-                    }
-                    b"t" if in_title_r => {
-                        in_title_t = true;
-                    }
-                    b"strRef" if in_title_tx => {
-                        in_title_str_ref = true;
-                    }
-                    b"f" if in_title_str_ref => {
-                        in_title_str_ref_f = true;
-                    }
+                    b"tx" if in_chart_title && title_depth == 1 => in_title_tx = true,
+                    b"rich" if in_title_tx => in_title_rich = true,
+                    b"p" if in_title_rich => in_title_p = true,
+                    b"r" if in_title_p => in_title_r = true,
+                    b"t" if in_title_r => in_title_t = true,
+                    b"strRef" if in_title_tx => in_title_str_ref = true,
+                    b"f" if in_title_str_ref => in_title_str_ref_f = true,
                     // View 3D
                     b"view3D" if in_chart && !in_plot_area => {
                         in_view_3d = true;
@@ -440,9 +420,7 @@ fn parse_chart_xml_inner<R: Read>(
                         in_dlbls = true;
                         dlbls = DataLabels::default();
                     }
-                    b"separator" if in_dlbls => {
-                        in_dlbls_separator = true;
-                    }
+                    b"separator" if in_dlbls => in_dlbls_separator = true,
                     b"numFmt" if in_dlbls => {
                         dlbls.number_format = Some(parse_num_fmt(&e));
                     }
@@ -472,9 +450,7 @@ fn parse_chart_xml_inner<R: Read>(
                         in_down_bars = true;
                         had_down_bars = true;
                     }
-                    b"leaderLines" if in_dlbls => {
-                        in_leader_lines = true;
-                    }
+                    b"leaderLines" if in_dlbls => in_leader_lines = true,
                     b"ser" if in_chart_type_element => {
                         in_ser = true;
                         ser_name = None;
@@ -492,18 +468,10 @@ fn parse_chart_xml_inner<R: Read>(
                         ser_raw_ext = None;
                         ser_invert_if_negative = None;
                     }
-                    b"tx" if in_ser => {
-                        in_ser_tx = true;
-                    }
-                    b"strRef" if in_ser_tx => {
-                        in_ser_tx_str_ref = true;
-                    }
-                    b"f" if in_ser_tx_str_ref => {
-                        in_ser_tx_str_ref_f = true;
-                    }
-                    b"v" if in_ser_tx && !in_ser_tx_str_ref => {
-                        in_ser_tx_v = true;
-                    }
+                    b"tx" if in_ser => in_ser_tx = true,
+                    b"strRef" if in_ser_tx => in_ser_tx_str_ref = true,
+                    b"f" if in_ser_tx_str_ref => in_ser_tx_str_ref_f = true,
+                    b"v" if in_ser_tx && !in_ser_tx_str_ref => in_ser_tx_v = true,
                     // Data points
                     b"dPt" if in_ser => {
                         in_dpt = true;
@@ -524,9 +492,7 @@ fn parse_chart_xml_inner<R: Read>(
                         trendline_disp_r_sqr = None;
                         trendline_disp_eq = None;
                     }
-                    b"name" if in_trendline => {
-                        in_trendline_name = true;
-                    }
+                    b"name" if in_trendline => in_trendline_name = true,
                     // Error bars
                     b"errBars" if in_ser => {
                         in_err_bars = true;
@@ -542,44 +508,25 @@ fn parse_chart_xml_inner<R: Read>(
                         marker_symbol = None;
                         marker_size = None;
                     }
-                    b"val" if in_err_bars => {
-                        err_val = get_val_f64(&e);
-                    }
-                    b"val" if in_ser && !in_err_bars => {
-                        in_ser_val = true;
-                    }
-                    b"yVal" if in_ser => {
-                        in_ser_yval = true;
-                    }
-                    b"numRef" if in_ser_val || in_ser_yval => {
-                        in_ser_val_num_ref = true;
-                    }
-                    b"f" if in_ser_val_num_ref => {
-                        in_ser_val_num_ref_f = true;
-                    }
-                    b"numCache" if in_ser_val_num_ref => {
-                        in_ser_val_num_cache = true;
-                    }
-                    b"pt" if in_ser_val_num_cache => {
-                        in_ser_val_pt = true;
-                    }
-                    b"v" if in_ser_val_pt => {
-                        in_ser_val_pt_v = true;
-                    }
-                    b"cat" if in_ser => {
-                        in_ser_cat = true;
-                    }
-                    b"xVal" if in_ser => {
-                        in_ser_xval = true;
-                    }
+                    b"val" if in_err_bars => err_val = get_val_f64(&e),
+                    b"val" if in_ser && !in_err_bars => in_ser_val = true,
+                    b"yVal" if in_ser => in_ser_yval = true,
+                    b"numRef" if in_ser_val || in_ser_yval => in_ser_val_num_ref = true,
+                    b"f" if in_ser_val_num_ref => in_ser_val_num_ref_f = true,
+                    b"numCache" if in_ser_val_num_ref => in_ser_val_num_cache = true,
+                    b"pt" if in_ser_val_num_cache => in_ser_val_pt = true,
+                    b"v" if in_ser_val_pt => in_ser_val_pt_v = true,
+                    b"cat" if in_ser => in_ser_cat = true,
+                    b"xVal" if in_ser => in_ser_xval = true,
                     b"strRef" | b"numRef" if in_ser_cat || in_ser_xval => {
                         in_ser_cat_ref = true;
                     }
-                    b"f" if in_ser_cat_ref => {
-                        in_ser_cat_ref_f = true;
-                    }
+                    b"f" if in_ser_cat_ref => in_ser_cat_ref_f = true,
                     // Axis elements
                     b"catAx" | b"dateAx" if in_plot_area => {
+                        if tag == b"catAx" {
+                        } else {
+                        }
                         in_cat_ax = true;
                         is_date_ax = tag == b"dateAx";
                         ax_title_text.clear();
@@ -646,24 +593,12 @@ fn parse_chart_xml_inner<R: Read>(
                         ax_id = None;
                         ax_cross_id = None;
                     }
-                    b"title" if in_cat_ax || in_val_ax || in_ser_ax => {
-                        in_ax_title = true;
-                    }
-                    b"tx" if in_ax_title => {
-                        in_ax_title_tx = true;
-                    }
-                    b"rich" if in_ax_title_tx => {
-                        in_ax_title_rich = true;
-                    }
-                    b"p" if in_ax_title_rich => {
-                        in_ax_title_p = true;
-                    }
-                    b"r" if in_ax_title_p => {
-                        in_ax_title_r = true;
-                    }
-                    b"t" if in_ax_title_r => {
-                        in_ax_title_t = true;
-                    }
+                    b"title" if in_cat_ax || in_val_ax || in_ser_ax => in_ax_title = true,
+                    b"tx" if in_ax_title => in_ax_title_tx = true,
+                    b"rich" if in_ax_title_tx => in_ax_title_rich = true,
+                    b"p" if in_ax_title_rich => in_ax_title_p = true,
+                    b"r" if in_ax_title_p => in_ax_title_r = true,
+                    b"t" if in_ax_title_r => in_ax_title_t = true,
                     b"scaling" if in_cat_ax || in_val_ax || in_ser_ax => {
                         in_ax_scaling = true;
                     }
@@ -742,12 +677,8 @@ fn parse_chart_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"solidFill" if in_sp_pr && !in_sp_ln => {
-                        sp_pr_depth += 1;
-                    }
-                    b"solidFill" if in_sp_ln => {
-                        sp_pr_depth += 1;
-                    }
+                    b"solidFill" if in_sp_pr && !in_sp_ln => sp_pr_depth += 1,
+                    b"solidFill" if in_sp_ln => sp_pr_depth += 1,
                     b"extLst" => {
                         if let Some(raw) = capture_extlst(xml_reader, &e)? {
                             if in_ser {
@@ -858,18 +789,14 @@ fn parse_chart_xml_inner<R: Read>(
                     b"showLegendKey" if in_dlbls => {
                         dlbls.show_legend_key = get_val_bool(&e);
                     }
-                    b"showVal" if in_dlbls => {
-                        dlbls.show_value = get_val_bool(&e);
-                    }
+                    b"showVal" if in_dlbls => dlbls.show_value = get_val_bool(&e),
                     b"showCatName" if in_dlbls => {
                         dlbls.show_category_name = get_val_bool(&e);
                     }
                     b"showSerName" if in_dlbls => {
                         dlbls.show_series_name = get_val_bool(&e);
                     }
-                    b"showPercent" if in_dlbls => {
-                        dlbls.show_percent = get_val_bool(&e);
-                    }
+                    b"showPercent" if in_dlbls => dlbls.show_percent = get_val_bool(&e),
                     b"showBubbleSize" if in_dlbls => {
                         dlbls.show_bubble_size = get_val_bool(&e);
                     }
@@ -884,47 +811,27 @@ fn parse_chart_xml_inner<R: Read>(
                         dlbls.show_leader_lines = get_val_bool(&e);
                     }
                     // Data point children
-                    b"idx" if in_dpt => {
-                        dpt_index = get_val_u32(&e).unwrap_or(0);
-                    }
-                    b"explosion" if in_dpt => {
-                        dpt_explosion = get_val_u32(&e);
-                    }
-                    b"explosion" if in_ser && !in_dpt => {
-                        ser_explosion = get_val_u32(&e);
-                    }
+                    b"idx" if in_dpt => dpt_index = get_val_u32(&e).unwrap_or(0),
+                    b"explosion" if in_dpt => dpt_explosion = get_val_u32(&e),
+                    b"explosion" if in_ser && !in_dpt => ser_explosion = get_val_u32(&e),
                     // Marker children
                     b"symbol" if in_marker => {
                         marker_symbol = get_val_attr(&e).and_then(|s| parse_marker_symbol(&s));
                     }
-                    b"size" if in_marker => {
-                        marker_size = get_val_u8(&e);
-                    }
+                    b"size" if in_marker => marker_size = get_val_u8(&e),
                     // Trendline children
                     b"trendlineType" if in_trendline => {
                         trendline_type = get_val_attr(&e).and_then(|s| parse_trendline_type(&s));
                     }
-                    b"order" if in_trendline => {
-                        trendline_order = get_val_u32(&e);
-                    }
-                    b"period" if in_trendline => {
-                        trendline_period = get_val_u32(&e);
-                    }
-                    b"forward" if in_trendline => {
-                        trendline_forward = get_val_f64(&e);
-                    }
-                    b"backward" if in_trendline => {
-                        trendline_backward = get_val_f64(&e);
-                    }
-                    b"intercept" if in_trendline => {
-                        trendline_intercept = get_val_f64(&e);
-                    }
+                    b"order" if in_trendline => trendline_order = get_val_u32(&e),
+                    b"period" if in_trendline => trendline_period = get_val_u32(&e),
+                    b"forward" if in_trendline => trendline_forward = get_val_f64(&e),
+                    b"backward" if in_trendline => trendline_backward = get_val_f64(&e),
+                    b"intercept" if in_trendline => trendline_intercept = get_val_f64(&e),
                     b"dispRSqr" if in_trendline => {
                         trendline_disp_r_sqr = get_val_bool(&e);
                     }
-                    b"dispEq" if in_trendline => {
-                        trendline_disp_eq = get_val_bool(&e);
-                    }
+                    b"dispEq" if in_trendline => trendline_disp_eq = get_val_bool(&e),
                     // Error bar children
                     b"errDir" if in_err_bars => {
                         err_dir = get_val_attr(&e).and_then(|s| match s.as_str() {
@@ -951,16 +858,10 @@ fn parse_chart_xml_inner<R: Read>(
                             _ => None,
                         });
                     }
-                    b"val" if in_err_bars => {
-                        err_val = get_val_f64(&e);
-                    }
-                    b"noEndCap" if in_err_bars => {
-                        err_no_end_cap = get_val_bool(&e);
-                    }
+                    b"val" if in_err_bars => err_val = get_val_f64(&e),
+                    b"noEndCap" if in_err_bars => err_no_end_cap = get_val_bool(&e),
                     // Series smooth
-                    b"smooth" if in_ser => {
-                        ser_smooth = get_val_bool(&e);
-                    }
+                    b"smooth" if in_ser => ser_smooth = get_val_bool(&e),
                     b"invertIfNegative" if in_ser => {
                         ser_invert_if_negative = get_val_bool(&e);
                     }
@@ -1005,21 +906,13 @@ fn parse_chart_xml_inner<R: Read>(
                         });
                     }
                     // View 3D children
-                    b"rotX" if in_view_3d => {
-                        view_3d.rotate_x = get_val_i32(&e);
-                    }
-                    b"rotY" if in_view_3d => {
-                        view_3d.rotate_y = get_val_i32(&e);
-                    }
+                    b"rotX" if in_view_3d => view_3d.rotate_x = get_val_i32(&e),
+                    b"rotY" if in_view_3d => view_3d.rotate_y = get_val_i32(&e),
                     b"depthPercent" if in_view_3d => {
                         view_3d.depth_percent = get_val_u32(&e);
                     }
-                    b"hPercent" if in_view_3d => {
-                        view_3d.height_percent = get_val_u32(&e);
-                    }
-                    b"perspective" if in_view_3d => {
-                        view_3d.perspective = get_val_u32(&e);
-                    }
+                    b"hPercent" if in_view_3d => view_3d.height_percent = get_val_u32(&e),
+                    b"perspective" if in_view_3d => view_3d.perspective = get_val_u32(&e),
                     b"rAngAx" if in_view_3d => {
                         view_3d.right_angle_axes = get_val_bool(&e);
                     }
@@ -1046,18 +939,10 @@ fn parse_chart_xml_inner<R: Read>(
                             });
                     }
                     // Manual layout children
-                    b"x" if in_manual_layout => {
-                        manual_layout.x = get_val_f64(&e);
-                    }
-                    b"y" if in_manual_layout => {
-                        manual_layout.y = get_val_f64(&e);
-                    }
-                    b"w" if in_manual_layout => {
-                        manual_layout.width = get_val_f64(&e);
-                    }
-                    b"h" if in_manual_layout => {
-                        manual_layout.height = get_val_f64(&e);
-                    }
+                    b"x" if in_manual_layout => manual_layout.x = get_val_f64(&e),
+                    b"y" if in_manual_layout => manual_layout.y = get_val_f64(&e),
+                    b"w" if in_manual_layout => manual_layout.width = get_val_f64(&e),
+                    b"h" if in_manual_layout => manual_layout.height = get_val_f64(&e),
                     // Data table children
                     b"showHorzBorder" if in_d_table => {
                         d_table.show_horizontal_border = get_val_bool(&e);
@@ -1068,9 +953,7 @@ fn parse_chart_xml_inner<R: Read>(
                     b"showOutline" if in_d_table => {
                         d_table.show_outline = get_val_bool(&e);
                     }
-                    b"showKeys" if in_d_table => {
-                        d_table.show_keys = get_val_bool(&e);
-                    }
+                    b"showKeys" if in_d_table => d_table.show_keys = get_val_bool(&e),
                     b"srgbClr" if in_sp_pr && !in_sp_ln => {
                         if let Some(hex) = get_val_attr(&e) {
                             sp_solid_fill = Some(ChartColor { hex });
@@ -1081,15 +964,9 @@ fn parse_chart_xml_inner<R: Read>(
                             sp_ln_solid_fill = Some(ChartColor { hex });
                         }
                     }
-                    b"noFill" if in_sp_pr && !in_sp_ln => {
-                        sp_no_fill = true;
-                    }
-                    b"noFill" if in_sp_ln => {
-                        sp_ln_no_fill = true;
-                    }
-                    b"prstDash" if in_sp_ln => {
-                        sp_ln_dash = get_val_attr(&e);
-                    }
+                    b"noFill" if in_sp_pr && !in_sp_ln => sp_no_fill = true,
+                    b"noFill" if in_sp_ln => sp_ln_no_fill = true,
+                    b"prstDash" if in_sp_ln => sp_ln_dash = get_val_attr(&e),
                     b"axPos" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
                         ax_position = get_val_attr(&e).and_then(|s| match s.as_str() {
                             "b" => Some(AxisPosition::Bottom),
@@ -1105,9 +982,7 @@ fn parse_chart_xml_inner<R: Read>(
                     b"minorUnit" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
                         ax_minor_unit = get_val_f64(&e);
                     }
-                    b"overlay" if in_legend => {
-                        legend_overlay = get_val_bool(&e);
-                    }
+                    b"overlay" if in_legend => legend_overlay = get_val_bool(&e),
                     b"varyColors" if in_chart_type_element && !in_ser => {
                         vary_colors = get_val_bool(&e);
                     }
@@ -1143,12 +1018,8 @@ fn parse_chart_xml_inner<R: Read>(
                     b"leaderLines" if in_dlbls => {
                         dlbls.leader_lines = Some(ChartLines::default());
                     }
-                    b"upBars" if in_up_down_bars => {
-                        had_up_bars = true;
-                    }
-                    b"downBars" if in_up_down_bars => {
-                        had_down_bars = true;
-                    }
+                    b"upBars" if in_up_down_bars => had_up_bars = true,
+                    b"downBars" if in_up_down_bars => had_down_bars = true,
                     _ => {}
                 }
             }
@@ -1184,12 +1055,8 @@ fn parse_chart_xml_inner<R: Read>(
                 let local = e.name().local_name();
                 let tag = local.as_ref();
                 match tag {
-                    b"chart" => {
-                        in_chart = false;
-                    }
-                    b"plotArea" => {
-                        in_plot_area = false;
-                    }
+                    b"chart" => in_chart = false,
+                    b"plotArea" => in_plot_area = false,
                     b"view3D" if in_view_3d => {
                         result.view_3d = Some(view_3d.clone());
                         in_view_3d = false;
@@ -1204,16 +1071,12 @@ fn parse_chart_xml_inner<R: Read>(
                         manual_layout = ManualLayout::default();
                         in_layout = false;
                     }
-                    b"manualLayout" if in_manual_layout => {
-                        in_manual_layout = false;
-                    }
+                    b"manualLayout" if in_manual_layout => in_manual_layout = false,
                     b"dTable" if in_d_table => {
                         result.data_table = Some(d_table.clone());
                         in_d_table = false;
                     }
-                    b"title" if in_ax_title => {
-                        in_ax_title = false;
-                    }
+                    b"title" if in_ax_title => in_ax_title = false,
                     b"title" if in_chart_title => {
                         title_depth = title_depth.saturating_sub(1);
                         if title_depth == 0 {
@@ -1295,12 +1158,8 @@ fn parse_chart_xml_inner<R: Read>(
                         }
                         in_ser_lines = false;
                     }
-                    b"upBars" if in_up_bars => {
-                        in_up_bars = false;
-                    }
-                    b"downBars" if in_down_bars => {
-                        in_down_bars = false;
-                    }
+                    b"upBars" if in_up_bars => in_up_bars = false,
+                    b"downBars" if in_down_bars => in_down_bars = false,
                     b"upDownBars" if in_up_down_bars => {
                         let up = up_bars_sp
                             .take()
@@ -1338,9 +1197,7 @@ fn parse_chart_xml_inner<R: Read>(
                         in_leader_lines = false;
                     }
                     // Data labels
-                    b"separator" if in_dlbls_separator => {
-                        in_dlbls_separator = false;
-                    }
+                    b"separator" if in_dlbls_separator => in_dlbls_separator = false,
                     b"dLbls" if in_dlbls => {
                         if in_ser {
                             ser_data_labels = Some(dlbls.clone());
@@ -1372,9 +1229,7 @@ fn parse_chart_xml_inner<R: Read>(
                         in_dpt = false;
                     }
                     // Trendline
-                    b"name" if in_trendline_name => {
-                        in_trendline_name = false;
-                    }
+                    b"name" if in_trendline_name => in_trendline_name = false,
                     b"trendline" if in_trendline => {
                         if let Some(tt) = trendline_type.take() {
                             ser_trendline = Some(Trendline {
@@ -1654,12 +1509,8 @@ fn parse_chart_xml_inner<R: Read>(
                                             shape_properties: Some(props),
                                         });
                                     }
-                                    SpPrContext::UpBars => {
-                                        up_bars_sp = Some(props);
-                                    }
-                                    SpPrContext::DownBars => {
-                                        down_bars_sp = Some(props);
-                                    }
+                                    SpPrContext::UpBars => up_bars_sp = Some(props),
+                                    SpPrContext::DownBars => down_bars_sp = Some(props),
                                     SpPrContext::LeaderLines => {
                                         dlbls.leader_lines = Some(ChartLines {
                                             shape_properties: Some(props),
@@ -1803,9 +1654,7 @@ fn capture_extlst<R: Read>(
                 }
             }
             Ok(Event::Eof) => return Ok(None),
-            Ok(ref ev) => {
-                writer.write_event(ev.clone())?;
-            }
+            Ok(ref ev) => writer.write_event(ev.clone())?,
             Err(e) => return Err(ChartParseError::Xml(e)),
         }
     }

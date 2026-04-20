@@ -24,8 +24,6 @@ pub(crate) type XmlWriter = Writer<Cursor<Vec<u8>>>;
 
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
-// === Writing ===
-
 #[derive(Debug)]
 pub(crate) struct XlsxStyleTable {
     /// Global, deduplicated styles. Index corresponds to the cellXfs index (xfId).
@@ -94,10 +92,6 @@ fn roundtrip_style_data_for(workbook: &Workbook) -> Option<RoundtripStyleData> {
     let key = workbook_style_fingerprint(workbook);
     style_data_store().lock().ok()?.get(&key).cloned()
 }
-
-// ---------------------------------------------------------------------------
-// Theme XML roundtrip store
-// ---------------------------------------------------------------------------
 
 static ROUNDTRIP_THEME_DATA: OnceLock<Mutex<HashMap<u64, Vec<u8>>>> = OnceLock::new();
 
@@ -480,9 +474,7 @@ impl XlsxStyleTable {
 fn write_color_xml(w: &mut XmlWriter, tag: &str, color: &Color) -> std::io::Result<()> {
     let mut el = BytesStart::new(tag);
     match color {
-        Color::Auto => {
-            el.push_attribute(("indexed", "64"));
-        }
+        Color::Auto => el.push_attribute(("indexed", "64")),
         Color::Rgb { r, g, b } => {
             let v = format!("FF{:02X}{:02X}{:02X}", r, g, b);
             el.push_attribute(("rgb", v.as_str()));
@@ -521,9 +513,7 @@ fn write_font_xml(w: &mut XmlWriter, font: &FontStyle) -> std::io::Result<()> {
     }
     match font.underline {
         Underline::None => {}
-        Underline::Single => {
-            w.write_event(Event::Empty(BytesStart::new("u")))?;
-        }
+        Underline::Single => w.write_event(Event::Empty(BytesStart::new("u")))?,
         Underline::Double => {
             w.create_element("u")
                 .with_attribute(("val", "double"))
@@ -662,9 +652,7 @@ fn write_fill_xml(w: &mut XmlWriter, fill: &FillStyle) -> std::io::Result<()> {
                         tag.push_attribute(("degree", angle_s.as_str()));
                     }
                 }
-                GradientType::Path => {
-                    tag.push_attribute(("type", "path"));
-                }
+                GradientType::Path => tag.push_attribute(("type", "path")),
             }
             if stops.is_empty() {
                 w.write_event(Event::Empty(tag))?;
@@ -712,9 +700,7 @@ fn write_border_edge_xml(
     edge: &Option<BorderEdge>,
 ) -> std::io::Result<()> {
     match edge {
-        None => {
-            w.write_event(Event::Empty(BytesStart::new(tag)))?;
-        }
+        None => w.write_event(Event::Empty(BytesStart::new(tag)))?,
         Some(e) => {
             let style_attr = border_style_to_str(e.style);
             if style_attr.is_none() {
@@ -737,12 +723,8 @@ fn write_border_xml(w: &mut XmlWriter, border: &BorderStyle) -> std::io::Result<
     let mut tag = BytesStart::new("border");
     match border.diagonal_direction {
         DiagonalDirection::None => {}
-        DiagonalDirection::Down => {
-            tag.push_attribute(("diagonalDown", "1"));
-        }
-        DiagonalDirection::Up => {
-            tag.push_attribute(("diagonalUp", "1"));
-        }
+        DiagonalDirection::Down => tag.push_attribute(("diagonalDown", "1")),
+        DiagonalDirection::Up => tag.push_attribute(("diagonalUp", "1")),
         DiagonalDirection::Both => {
             tag.push_attribute(("diagonalDown", "1"));
             tag.push_attribute(("diagonalUp", "1"));
@@ -811,12 +793,8 @@ fn write_alignment_xml(w: &mut XmlWriter, al: &Alignment) -> std::io::Result<boo
     }
     match al.reading_order {
         ReadingOrder::ContextDependent => {}
-        ReadingOrder::LeftToRight => {
-            el.push_attribute(("readingOrder", "1"));
-        }
-        ReadingOrder::RightToLeft => {
-            el.push_attribute(("readingOrder", "2"));
-        }
+        ReadingOrder::LeftToRight => el.push_attribute(("readingOrder", "1")),
+        ReadingOrder::RightToLeft => el.push_attribute(("readingOrder", "2")),
     }
     w.write_event(Event::Empty(el))?;
     Ok(true)
@@ -955,8 +933,6 @@ fn write_dxf_xml(w: &mut XmlWriter, style: &Style) -> std::io::Result<()> {
     Ok(())
 }
 
-// === Reading ===
-
 /// Result of reading styles.xml, containing both cell styles and DXF styles
 #[derive(Debug)]
 pub(crate) struct ParsedStyles {
@@ -984,8 +960,7 @@ enum XfTarget {
     Cell,
 }
 
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 struct ParsedXf {
     num_fmt_id: u32,
     font_id: u32,
@@ -1001,7 +976,6 @@ struct ParsedXf {
     alignment: Alignment,
     protection: Protection,
 }
-
 
 pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     let mut xml_reader = Reader::from_reader(BufReader::new(reader));
@@ -1062,27 +1036,22 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
-                b"numFmts" | b"fonts" | b"fills" | b"borders" => {}
+                b"numFmts" => {}
+                b"fonts" => {}
+                b"fills" => {}
+                b"borders" => {}
 
-                b"cellXfs" => {
-                    in_cell_xfs = true;
-                }
+                b"cellXfs" => in_cell_xfs = true,
 
-                b"cellStyleXfs" => {
-                    in_cell_style_xfs = true;
-                }
+                b"cellStyleXfs" => in_cell_style_xfs = true,
 
-                b"cellStyles" => {
-                    in_cell_styles = true;
-                }
+                b"cellStyles" => in_cell_styles = true,
 
                 b"cellStyle" if in_cell_styles => {
                     named_styles.push(parse_named_cell_style_attrs(&e));
                 }
 
-                b"dxfs" => {
-                    in_dxfs = true;
-                }
+                b"dxfs" => in_dxfs = true,
 
                 b"dxf" if in_dxfs => {
                     in_dxf = true;
@@ -1096,9 +1065,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     dxf_border_edge = None;
                 }
 
-                b"font" if in_dxf => {
-                    dxf_font = Some(FontStyle::default());
-                }
+                b"font" if in_dxf => dxf_font = Some(FontStyle::default()),
 
                 b"fill" if in_dxf => {
                     in_dxf_fill = true;
@@ -1176,9 +1143,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     dxf_border = Some(b);
                 }
 
-                b"font" => {
-                    current_font = Some(FontStyle::default());
-                }
+                b"font" => current_font = Some(FontStyle::default()),
 
                 b"fill" => {
                     in_fill = true;
@@ -1310,6 +1275,9 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                 }
 
                 b"xf" if in_cell_xfs || in_cell_style_xfs => {
+                    if in_cell_style_xfs {
+                    } else {
+                    }
                     current_xf = Some(parse_xf_attrs(&e));
                     current_xf_target = Some(if in_cell_style_xfs {
                         XfTarget::CellStyle
@@ -1792,7 +1760,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     }
                 }
 
-                // gradientFill can be self-closing (no stops — degenerate case)
+                // gradientFill can be self-closing (no stops - degenerate case)
                 b"gradientFill" => {
                     // Self-closing gradientFill with no stops is a no-op,
                     // but parse attributes in case we need them.
@@ -1805,6 +1773,9 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
 
                 // xf can be empty (no child elements)
                 b"xf" if in_cell_xfs || in_cell_style_xfs => {
+                    if in_cell_style_xfs {
+                    } else {
+                    }
                     let xf = parse_xf_attrs(&e);
                     if in_cell_style_xfs {
                         cell_style_xf_defs.push(xf);
@@ -1896,9 +1867,7 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                     }
                     in_dxf = false;
                 }
-                b"dxfs" => {
-                    in_dxfs = false;
-                }
+                b"dxfs" => in_dxfs = false,
                 b"xf" => {
                     if let Some(xf) = current_xf.take() {
                         match current_xf_target.take() {
@@ -1908,15 +1877,9 @@ pub(crate) fn read_styles_xml<R: Read>(reader: R) -> XlsxResult<ParsedStyles> {
                         }
                     }
                 }
-                b"cellXfs" => {
-                    in_cell_xfs = false;
-                }
-                b"cellStyleXfs" => {
-                    in_cell_style_xfs = false;
-                }
-                b"cellStyles" => {
-                    in_cell_styles = false;
-                }
+                b"cellXfs" => in_cell_xfs = false,
+                b"cellStyleXfs" => in_cell_style_xfs = false,
+                b"cellStyles" => in_cell_styles = false,
                 _ => {}
             },
 
@@ -2143,9 +2106,7 @@ fn parse_color_attrs(e: &quick_xml::events::BytesStart<'_>) -> Color {
 
     for attr in e.attributes().flatten() {
         match attr.key.local_name().as_ref() {
-            b"rgb" => {
-                rgb = attr.unescape_value().ok().map(|s| s.to_string());
-            }
+            b"rgb" => rgb = attr.unescape_value().ok().map(|s| s.to_string()),
             b"theme" => {
                 theme = attr
                     .unescape_value()
@@ -2164,9 +2125,7 @@ fn parse_color_attrs(e: &quick_xml::events::BytesStart<'_>) -> Color {
                     .ok()
                     .and_then(|s| s.parse::<u8>().ok());
             }
-            b"auto" => {
-                auto = attr.unescape_value().ok().as_deref() == Some("1");
-            }
+            b"auto" => auto = attr.unescape_value().ok().as_deref() == Some("1"),
             _ => {}
         }
     }
@@ -2426,12 +2385,8 @@ fn parse_alignment_attrs(e: &quick_xml::events::BytesStart<'_>, align: &mut Alig
             b"shrinkToFit" => {
                 align.shrink_to_fit = val.as_ref() == "1" || val.as_ref() == "true";
             }
-            b"indent" => {
-                align.indent = val.parse::<u8>().unwrap_or(0);
-            }
-            b"textRotation" => {
-                align.rotation = val.parse::<i16>().unwrap_or(0);
-            }
+            b"indent" => align.indent = val.parse::<u8>().unwrap_or(0),
+            b"textRotation" => align.rotation = val.parse::<i16>().unwrap_or(0),
             b"readingOrder" => {
                 align.reading_order = match val.as_ref() {
                     "1" => ReadingOrder::LeftToRight,

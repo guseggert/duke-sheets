@@ -7,6 +7,7 @@ use duke_sheets_core::style::{
     Underline, VerticalAlignment,
 };
 
+
 use crate::biff12::parser;
 use crate::biff12::records;
 use crate::biff12::RecordIter;
@@ -102,9 +103,7 @@ pub(crate) fn read_styles<R: Read + Seek>(
                     cell_xfs.push(parse_xf(&buf[..len]));
                 }
             }
-            0x01FB if section == Section::Dxfs => {
-                dxf_styles.push(parse_dxf(&buf[..len]));
-            }
+            0x01FB if section == Section::Dxfs => dxf_styles.push(parse_dxf(&buf[..len])),
             _ => {}
         }
     }
@@ -219,16 +218,16 @@ fn parse_fmt(buf: &[u8], numfmts: &mut HashMap<u32, String>) {
 /// Parse BrtXF record.
 ///
 /// Layout per [MS-XLSB] 2.4.876:
-///   0..2   ixfeParent (u16) — parent cellStyleXf index (0xFFFF = none)
-///   2..4   iFmt (u16) — number format id
+///   0..2   ixfeParent (u16) - parent cellStyleXf index (0xFFFF = none)
+///   2..4   iFmt (u16) - number format id
 ///   4..6   iFont (u16)
 ///   6..8   iFill (u16)
 ///   8..10  ixBorder (u16)
-///  10      trot (u8) — text rotation
+///  10      trot (u8) - text rotation
 ///  11      indent (u8, lower 4 bits)
 ///  11      bit fields: alc (3 bits), alcv (3 bits), fWrap, fJustLast, fShrinkToFit, ...
 ///  12      more flags: fMergeCell, readingOrder, ...
-///  13      xfGrbitAtr (6 bits) — apply flags
+///  13      xfGrbitAtr (6 bits) - apply flags
 ///  14..16  unused
 fn parse_xf(buf: &[u8]) -> RawXf {
     let xf_id = parser::read_u16(buf, 0);
@@ -326,15 +325,15 @@ fn parse_xf(buf: &[u8]) -> RawXf {
 /// Parse BrtFont record.
 ///
 /// Layout per [MS-XLSB] 2.4.690:
-///   0..2   dyHeight (u16) — height in twips (1/20 pt)
-///   2..4   grbit (u16) — flags: bit 0=bold, bit 1=italic
-///   4..6   bls (u16) — font weight (400=normal, 700=bold)
-///   6..8   sss (u16) — superscript/subscript (0=none, 1=super, 2=sub)
-///   8      uls (u8) — underline style
-///   9      bFamily (u8) — font family
-///  10      bCharSet (u8) — charset
+///   0..2   dyHeight (u16) - height in twips (1/20 pt)
+///   2..4   grbit (u16) - flags: bit 0=bold, bit 1=italic
+///   4..6   bls (u16) - font weight (400=normal, 700=bold)
+///   6..8   sss (u16) - superscript/subscript (0=none, 1=super, 2=sub)
+///   8      uls (u8) - underline style
+///   9      bFamily (u8) - font family
+///  10      bCharSet (u8) - charset
 ///  11      unused
-///  12..16  brtColor — font color (xColorType u8, index/theme u8, tint i16, rgba 4 bytes)
+///  12..16  brtColor - font color (xColorType u8, index/theme u8, tint i16, rgba 4 bytes)
 ///  20      bFontScheme (u8)
 ///  21..    name (XLWideString)
 fn parse_font(buf: &[u8]) -> FontStyle {
@@ -407,9 +406,9 @@ fn parse_font(buf: &[u8]) -> FontStyle {
 /// Parse a BrtColor structure (8 bytes starting at `off`).
 ///
 /// Layout:
-///   off+0: xColorType (u8) — 0=auto, 1=indexed, 2=rgb, 3=theme
-///   off+1: index (u8) — indexed color or theme index
-///   off+2..off+4: nTintAndShade (i16) — tint value
+///   off+0: xColorType (u8) - 0=auto, 1=indexed, 2=rgb, 3=theme
+///   off+1: index (u8) - indexed color or theme index
+///   off+2..off+4: nTintAndShade (i16) - tint value
 ///   off+4..off+8: bRed, bGreen, bBlue, bAlpha
 fn parse_brt_color(buf: &[u8], off: usize) -> Color {
     if off + 8 > buf.len() {
@@ -457,7 +456,7 @@ fn parse_brt_color(buf: &[u8], off: usize) -> Color {
 /// Parse BrtFill record.
 ///
 /// Layout per [MS-XLSB] 2.4.681:
-///   0..4   fls (u32) — fill pattern type
+///   0..4   fls (u32) - fill pattern type
 ///   4..12  BrtColor foreground
 ///  12..20  BrtColor background
 fn parse_fill(buf: &[u8]) -> FillStyle {
@@ -544,7 +543,7 @@ fn parse_fill(buf: &[u8]) -> FillStyle {
 /// Parse BrtBorder record.
 ///
 /// Layout per [MS-XLSB] 2.4.314:
-///   0      flags (u8) — bit 0: diagonalDown, bit 1: diagonalUp
+///   0      flags (u8) - bit 0: diagonalDown, bit 1: diagonalUp
 ///   1..10  top edge (1 byte style + 8 bytes BrtColor)
 ///   10..19 bottom edge
 ///   19..28 left edge
@@ -623,7 +622,7 @@ fn parse_border_edge(buf: &[u8], off: usize) -> Option<BorderEdge> {
 ///
 /// The BrtDxf payload uses a sequence of optional sub-structures, each preceded
 /// by flag bits indicating which parts are present. The layout:
-///   [0..4] flags (u32) — bit mask of present parts
+///   [0..4] flags (u32) - bit mask of present parts
 ///     bit 0: has font, bit 1: has numfmt, bit 2: has fill, bit 3: has alignment
 ///     bit 4: has border, bit 5: has protection
 ///   Then each present sub-structure follows in order.

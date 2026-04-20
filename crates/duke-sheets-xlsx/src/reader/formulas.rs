@@ -35,10 +35,18 @@ pub(super) fn parse_cell_formula_state(e: &quick_xml::events::BytesStart<'_>) ->
             b"t" => {
                 if let Ok(v) = attr.unescape_value() {
                     state.kind = match v.as_ref() {
-                        "shared" => CellFormulaKind::Shared,
-                        "array" => CellFormulaKind::Array,
-                        "dataTable" => CellFormulaKind::DataTable,
-                        _ => CellFormulaKind::Normal,
+                        "shared" => {
+                            CellFormulaKind::Shared
+                        }
+                        "array" => {
+                            CellFormulaKind::Array
+                        }
+                        "dataTable" => {
+                            CellFormulaKind::DataTable
+                        }
+                        _ => {
+                            CellFormulaKind::Normal
+                        }
                     };
                 }
             }
@@ -54,9 +62,7 @@ pub(super) fn parse_cell_formula_state(e: &quick_xml::events::BytesStart<'_>) ->
             b"r2" => {
                 state.data_table_input2_ref = attr.unescape_value().ok().map(|s| s.to_string());
             }
-            b"ref" => {
-                state.array_ref = attr.unescape_value().ok().map(|s| s.to_string());
-            }
+            b"ref" => state.array_ref = attr.unescape_value().ok().map(|s| s.to_string()),
             _ => {}
         }
     }
@@ -548,7 +554,7 @@ mod tests {
 
     #[test]
     fn test_read_array_formula_single_cell_ref() {
-        // Array formula with ref=single cell — no spill targets needed
+        // Array formula with ref=single cell - no spill targets needed
         let sheet_xml = r#"<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>

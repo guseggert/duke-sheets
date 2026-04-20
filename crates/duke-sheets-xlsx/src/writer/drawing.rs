@@ -283,10 +283,7 @@ fn write_chartex_two_cell_anchor(
     Ok(())
 }
 
-fn write_cell_marker(
-    w: &mut XmlWriter,
-    marker: &CellMarker,
-) -> XlsxResult<()> {
+fn write_cell_marker(w: &mut XmlWriter, marker: &CellMarker) -> XlsxResult<()> {
     let col_s = marker.col.to_string();
     w.create_element("xdr:col")
         .write_text_content(BytesText::new(&col_s))?;

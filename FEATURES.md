@@ -1,0 +1,542 @@
+# Duke Sheets Feature Matrix
+
+`✔` supported · `●` partial (see Notes) · `✖` not yet · `-` N/A.
+
+## Cell values
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Number values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_numbers` | §18.3.1.4 |
+| String values (SST) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_strings` | §18.4.8 |
+| Inline strings | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_e2e::data_types::string_values` | §18.3.1.53 |
+| Boolean values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_booleans` | §18.18.11 |
+| Error values (#REF!, #VALUE!, etc.) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_types::error_values` | §18.18.11 |
+| Formula cells with cached values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_formula_cached_number` | §18.3.1.40 |
+| Formula cells without cached values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_formula_no_cached_value` | §18.3.1.40 |
+| Empty cells (formatting only) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_style_only_cells` | §18.3.1.4 |
+| Date values (stored as numbers) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::number_formats::date_format` | §18.17.4 |
+| Rich text values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.1 |
+| Cell metadata index (`cm`) | R✔ W✔ | R✖ W✖ | R- W- | R- W- | `xlsx_e2e::formula_metadata::reader_parses_cm_attribute` | §18.3.1.4 |
+| Value metadata index (`vm`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
+| Phonetic hint (`ph`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
+| Large row/column indices | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_large_indices` | - |
+| Sparse data (non-contiguous cells) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_sparse_data` | - |
+
+## Formulas
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Arithmetic operators (+ - * / ^) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_evaluate_simple_formulas` | §18.17.2 |
+| Comparison operators (= <> > < >= <=) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_boolean_functions` | §18.17.2 |
+| String concatenation (&) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_string_operations` | §18.17.2 |
+| Percent operator (%) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_evaluate_simple_formulas` | §18.17.2 |
+| Cell references (A1) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_evaluate_with_cell_references` | §18.17.2.3 |
+| Range references (A1:B2) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_evaluate_with_range_references` | §18.17.2.3 |
+| Full row/column refs (A:A, 1:1) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_evaluate_sum` | §18.17.2.3 |
+| Cross-sheet references | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_ref` | §18.17.2.3 |
+| Quoted sheet names | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_quoted_name` | §18.17.2.3 |
+| 3D references (Sheet1:Sheet3!A1) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.3 | Parses but evaluation limited |
+| Named range refs in formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression` | §18.2.5 |
+| Structured references (tables) | R✔ W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_with_calculated_column` | §18.17.2.3 | XLSB compiler drops structured refs |
+| Shared formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::shared_formula` | §18.3.1.40 |
+| Array formulas (CSE) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::cse_array_formula` | §18.3.1.40 |
+| Dynamic array formulas (spill) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::roundtrip_dynamic_array_sequence` | [MS-XLSX] §2.6.3 |
+| Data table formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::data_table_formula` | §18.3.1.72 |
+| External workbook refs `[book]!A1` | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.3 | XLSB reader captures, XLSX parser doesn't |
+| Defined name refs in formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::named_range` | §18.2.5 |
+| R1C1 reference mode (storage) | R✖ W✖ | R- W- | R- W- | R- W- | - | §18.2.29 |
+| Array constants in formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::array_constant` | §18.17.2.5 |
+| Intersection operator (space) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.2 |
+| Range union operator (comma) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.2 |
+| Formula evaluation (on read) | ✔ | ✔ | - | - | `formula_parity::formula_parity_matches_excel_cached_values` | - |
+| Workbook recalculation | ✔ | ✔ | - | - | `calculation::test_workbook_calculate_*` | - |
+| Circular references | ✔ | ✔ | - | - | `calculation::circular_ref*` | - |
+| Iterative calculation | ✖ | ✖ | - | - | - | §18.2.2 | Settings parsed, limited evaluator support |
+| Volatile function tracking (NOW, RAND, TODAY) | ✔ | ✔ | - | - | `formula_evaluation::test_evaluate_simple_formulas` | - |
+| Dependency tracking | ✔ | ✔ | - | - | `calculation::dependency*` | - |
+| Spill blocking detection | ✔ | ✔ | - | - | `calculation::spill*` | - |
+
+## Formula functions
+
+One row per category, backed by the formula engine test suite. Individual function coverage lives in the evaluator unit tests (~1,100 tests).
+
+| Category | Runtime | Tests | Notes |
+|----------|---------|-------|-------|
+| Math (SUM, ROUND, ABS, POWER, TRIG, ...) | ✔ | `duke-sheets-formula::functions::math` (~96 fns) | |
+| Statistical (AVERAGE, STDEV, NORM.DIST, ...) | ✔ | `duke-sheets-formula::functions::statistical` (~200 tests) | |
+| Logical (IF, AND, OR, IFS, IFERROR, ...) | ✔ | `formula_evaluation::test_evaluate_if` | |
+| Text (LEFT, MID, CONCAT, TEXTJOIN, ...) | ✔ | `duke-sheets-formula::functions::text` (~74 tests) | |
+| Date/time (YEAR, DATE, WEEKDAY, DATEDIF, NETWORKDAYS, ...) | ✔ | `duke-sheets-formula::functions::date` (~42 tests) | |
+| Financial (PMT, NPV, IRR, FV, ...) | ✔ | `duke-sheets-formula::functions::financial` (~152 tests) | |
+| Lookup/reference (VLOOKUP, INDEX, XLOOKUP, OFFSET, ...) | ✔ | `duke-sheets-formula::functions::lookup` (~52 tests) | |
+| Engineering (CONVERT, BIN2DEC, IMABS, ...) | ✔ | `duke-sheets-formula::functions::engineering` (~112 tests) | |
+| Information (ISBLANK, ISERROR, CELL, ...) | ✔ | `duke-sheets-formula::functions::info` (~7 tests) | |
+| Database (DSUM, DAVERAGE, ...) | ✔ | `duke-sheets-formula::functions::database` (~25 tests) | |
+| Compatibility (legacy aliases) | ✔ | `duke-sheets-formula::functions::compatibility` (~108 tests) | |
+| Dynamic array (SEQUENCE, FILTER, SORT, UNIQUE, TRANSPOSE, RANDARRAY) | ✔ | `calculation::spill*` | |
+| Statistical advanced (LINEST, LOGEST, FORECAST.ETS, ...) | ✔ | `duke-sheets-formula::functions::statistical_extra` (~16 tests) | |
+| LAMBDA (define) | ✖ | - | Parses as function token; evaluation passes through |
+| LET | ✖ | - | Parses; passthrough only; no named binding |
+| MAP, REDUCE, SCAN, BYCOL, BYROW, MAKEARRAY | ✖ | - | Stub returns #N/A; needs evaluator lazy-eval |
+| Cube functions (CUBEVALUE, CUBEMEMBER, ...) | ✖ | - | Requires OLAP server; returns #N/A |
+| STOCKHISTORY | ✖ | - | Requires Microsoft service; returns #N/A |
+| CALL, REGISTER.ID (DLL interop) | ✖ | - | Not supported by design; returns #N/A |
+| WEBSERVICE, ENCODEURL, FILTERXML | ✖ | - | Not implemented |
+
+## Rich text
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Rich text in shared strings | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.2 |
+| Rich text in inline strings | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.4 |
+| Rich text in comments | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `com_e2e::rich_text::read_rich_text_from_excel` | §18.7.5 |
+| Run properties: bold/italic | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.7 |
+| Run properties: font size/name/color | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.7 |
+| Run properties: underline styles | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles` | §18.4.7 |
+| Run properties: strikethrough | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles` | §18.4.7 |
+| Run properties: sub/superscript | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_vertical_align` | §18.4.7 |
+| Run properties: shadow/outline/emboss/engrave | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.4.7 |
+| Line breaks within a cell | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_strings` | - |
+| Phonetic guide (Japanese furigana) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.4.3 |
+
+## Cell styles
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Font: bold | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles` | §18.8.22 |
+| Font: italic | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles` | §18.8.22 |
+| Font: size | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::font_size` | §18.8.29 |
+| Font: name/family | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::font_name` | §18.8.22 |
+| Font: color (RGB) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::font_color` | §18.8.19 |
+| Font: color (theme) | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_chart_style_color_passthrough` | §18.8.19 |
+| Font: color (indexed) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::font_color` | §18.8.19 |
+| Font: underline (single) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::underline_single` | §18.4.13 |
+| Font: underline (double) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::font_underline_double` | §18.4.13 |
+| Font: underline (accounting single/double) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles` | §18.4.13 |
+| Font: strikethrough | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::strikethrough` | §18.8.37 |
+| Font: superscript | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::superscript` | §18.18.85 |
+| Font: subscript | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::subscript` | §18.18.85 |
+| Fill: solid color | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::fill_styles::solid_fill_red` | §18.8.20 |
+| Fill: pattern fill | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::fill_pattern_fills` | §18.8.22 |
+| Fill: gradient fill | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_gradient_fill` | §18.8.24 |
+| Border: all sides (top/bottom/left/right) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::border_styles::thin_border_all_sides` | §18.8.4 |
+| Border: diagonal | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::diagonal_border_down` | §18.8.4 |
+| Border: styles (thin/medium/thick/dashed/dotted/double) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_border_styles` | §18.18.3 |
+| Border: color | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::border_styles::border_color` | §18.8.4 |
+| Alignment: horizontal (left/center/right/justify/fill) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::horizontal_center` | §18.18.40 |
+| Alignment: vertical (top/center/bottom) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::vertical_bottom` | §18.18.88 |
+| Alignment: wrap text | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::wrap_text` | §18.8.1 |
+| Alignment: shrink to fit | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::shrink_to_fit` | §18.8.1 |
+| Alignment: rotation | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::rotation` | §18.8.1 |
+| Alignment: indent | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::indent` | §18.8.1 |
+| Alignment: reading order (LTR/RTL) | R● W✔ | R● W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::reading_order_rtl` | §18.8.1 |
+| Alignment: justifyLastLine | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.8.1 |
+| Number format: builtin IDs (0-49, 164+) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_number_format_styles` | §18.8.31 |
+| Number format: custom format strings | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::number_formats::custom_decimal_format` | §18.8.31 |
+| Cell protection: locked | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::cell_protection_locked` | §18.8.33 |
+| Cell protection: formula hidden | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::cell_protection_formula_hidden` | §18.8.33 |
+| Named cell styles (cellStyleXf) | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `xlsx_e2e::named_cell_styles_roundtrip::roundtrip_preserves_cell_style_xfs_and_named_styles` | §18.8.8 |
+| Differential formats (DXF) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_formatting_roundtrip::test_roundtrip_dxf_styles` | §18.8.14 |
+| Table cell style (tableStyleInfo) | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_basic` | §18.8.42 |
+
+## Themes and theme colors
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Theme color scheme (12 slots) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_style_color_passthrough` | §20.1.6.2 (DrawingML) |
+| Theme font scheme | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §20.1.4.1.18 (DrawingML) |
+| Theme format scheme (fills/lines/effects) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §20.1.4.1.8 (DrawingML) |
+| Theme override per-sheet | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.2.4 |
+| Custom theme (replace default) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §20.1.6.9 (DrawingML) |
+
+## Row/column dimensions
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Custom row heights | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_row_heights_column_widths` | §18.3.1.73 |
+| Custom column widths | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_row_heights_column_widths` | §18.3.1.13 |
+| Hidden rows | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_hidden_rows_columns` | §18.3.1.73 |
+| Hidden columns | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_hidden_rows_columns` | §18.3.1.13 |
+| Outline levels / grouping | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_outline_metadata` | §18.3.1.73 |
+| Collapsed outline state | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::formula_metadata::outline_and_sheet_view_metadata` | §18.3.1.73 |
+| Default row height | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.30 |
+| Default column width | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.30 |
+| Outline summary position | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.3.1.35 |
+
+## Merged cells
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Basic merged cell ranges | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::merged_cells::merged_cells_horizontal` | §18.3.1.55 |
+| Merge spanning many rows/cols | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::merged_cells::merged_cells_block` | §18.3.1.55 |
+| Multiple merged regions per sheet | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::merged_cells::multiple_merged_regions` | §18.3.1.55 |
+
+## Hyperlinks
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| External URL hyperlinks | R✔ W● | R✔ W✖ | R✔ W✖ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*` | §18.3.1.36 | Reader preserves; writer round-trip incomplete |
+| Internal hyperlinks (Sheet!A1) | R✔ W● | R✔ W✖ | R✔ W✖ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*` | §18.3.1.36 | |
+| Mailto hyperlinks | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
+| Hyperlink tooltips | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
+| Hyperlink display text | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
+| Hyperlinks in rich text runs | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.4.7 |
+
+## Comments
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Plain-text comments with author | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_cell_comments` | §18.7.5 |
+| Comments with Unicode text | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::comments::comment_unicode` | §18.7.5 |
+| Rich text in comments | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `com_e2e::rich_text::read_rich_text_from_excel` | §18.7.5 |
+| Multiple comments per sheet | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::comments::multiple_comments` | §18.7.5 |
+| VML legacy drawing for comments | R✔ W✔ | R- W- | R- W- | R- W- | `xlsx_formatting_roundtrip::test_comments_emit_vml_and_legacy_drawing` | §14.1 (VML) |
+| Comment positioning (anchor) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §14.1 (VML) |
+| Threaded comments (modern) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-XLSX] §2.3.19 |
+| Threaded comments: mentions | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-XLSX] §2.3.19 |
+
+## Named ranges
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Workbook-scoped names | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges` | §18.2.5 |
+| Sheet-scoped names | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges` | §18.2.5 |
+| Names with formula bodies | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression` | §18.2.5 |
+| Names referencing ranges | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges` | §18.2.5 |
+| Hidden / built-in names (_xlnm.*) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area` | §18.2.5 |
+| Names with comments | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.2.5 |
+
+## Tables
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Basic tables with headers | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_basic` | §18.5.1 |
+| Totals row | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_with_totals` | §18.5.1 |
+| Totals row functions (SUM/AVG/COUNT/MIN/MAX/STDEV/VAR/CUSTOM) | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_with_totals` | §18.5.1.1 |
+| Calculated columns (formula) | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_with_calculated_column` | §18.5.1.1 |
+| Header row visibility | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_basic` | §18.5.1 |
+| Table styles (built-in names) | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_basic` | §18.8.42 |
+| Table styles: showFirstColumn/showLastColumn | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_basic` | §18.8.42 |
+| Table styles: showRowStripes/showColumnStripes | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_basic` | §18.8.42 |
+| Custom table styles (tableStyle + dxf) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.8.40 |
+| Multiple tables per sheet | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multiple_tables` | - |
+| Table AutoFilter integration | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_range_only` | §18.3.2 |
+
+## Conditional formatting
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| cellIs rules (comparison operators) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_conditional_format_cell_is` | §18.3.1.10 |
+| Formula-based (expression) rules | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_conditional_format_expression` | §18.3.1.43 |
+| beginsWith / endsWith | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
+| containsText / notContainsText | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
+| containsBlanks / notContainsBlanks | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
+| containsErrors / notContainsErrors | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
+| timePeriod rules (today/yesterday/...) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
+| aboveAverage / belowAverage | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
+| top10 / bottom10 | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
+| duplicateValues / uniqueValues | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
+| Color scale (2-color) | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_color_scale` | §18.3.1.16 |
+| Color scale (3-color) | R● W● | R● W● | R✖ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_color_scale` | §18.3.1.16 | Midpoint config limited |
+| Data bars (solid) | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_bar` | §18.3.1.28 |
+| Data bars (gradient) | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.3.1.28 |
+| Data bars (negative bar color/config) | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.6.7 |
+| Data bars (axis position) | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.6.7 |
+| Icon set: 3 arrows / 3 arrows gray | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_icon_set` | §18.3.1.49 |
+| Icon set: 3 traffic lights | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_icon_set` | §18.3.1.49 |
+| Icon set: 3 signs / symbols / flags | R● W● | R● W● | R✖ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_icon_set` | §18.3.1.49 | Not all variants tagged |
+| Icon set: 4 variants | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.49 |
+| Icon set: 5 variants | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.49 |
+| Icon set: custom icons (MS-XLSX ext) | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.6.8 |
+| Multiple CF rules per range | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_multiple_rules` | §18.3.1.18 |
+| Rule priority / stopIfTrue | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_multiple_rules` | §18.3.1.10 |
+| Extension-list CF rules (x14) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-XLSX] §2.6.4 |
+
+## Data validation
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| List validation (inline values) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_list` | §18.3.1.32 |
+| List validation (cell-range source) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_validation::list_validation` | §18.3.1.32 |
+| List validation (named range source) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
+| Whole number validation | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_number` | §18.3.1.32 |
+| Decimal validation | R● W● | R● W● | R● W✖ | R✖ W✖ | `xlsx_e2e::data_validation::whole_number_validation` | §18.3.1.32 |
+| Date validation | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
+| Time validation | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
+| Text length validation | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_validation::text_length_validation` | §18.3.1.32 |
+| Custom formula validation | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
+| Input messages (prompt) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_validation::validation_with_messages` | §18.3.1.32 |
+| Error alerts (stop/warning/info styles) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_validation::validation_with_messages` | §18.3.1.32 |
+| Drop-down arrow visibility | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
+| Extension-list validation (x14 custom) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-XLSX] §2.6.5 |
+
+## AutoFilter
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Filter range | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_range_only` | §18.3.2 |
+| Value filter (includes) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_value_filter` | §18.3.2.8 |
+| Custom filter (operator-based) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_custom_filter` | §18.3.2.1 |
+| Top 10 filter | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_top10` | §18.3.2.10 |
+| Dynamic filter (above/below avg, etc.) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_dynamic` | §18.3.2.5 |
+| Date group filter (year/month/day) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.2.6 |
+| Color filter | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.3.2.2 |
+| Icon filter | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.3.2.7 |
+| Multiple column filters | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_multiple_columns` | §18.3.2 |
+| Sort state on autofilter | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.68 |
+
+## Sheet views
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Freeze panes (rows) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes` | §18.3.1.66 |
+| Freeze panes (columns) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes` | §18.3.1.66 |
+| Freeze + split combination | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_split_panes_and_selection` | §18.3.1.66 |
+| Split panes | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_split_panes_and_selection` | §18.3.1.66 |
+| Active cell / active range | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_range_sqref` | §18.3.1.78 |
+| Multi-range selection (sqref) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_range_sqref` | §18.3.1.78 |
+| Zoom level (normal/page-layout/page-break) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `com_e2e::xls_reader::xls_zoom` | §18.3.1.87 |
+| View mode (normal/pageBreakPreview/pageLayout) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |
+| Gridlines visibility | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |
+| Row/column header visibility | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |
+| Right-to-left view | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |
+| Tab color | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.82 |
+| Sheet visibility (visible/hidden/veryHidden) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::sheet_properties::hidden_sheet` | §18.2.19 |
+| Named sheet views (x16 ext) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-XLSX] §2.3.17 |
+
+## Page setup and print
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Page orientation (portrait/landscape) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.62 |
+| Paper size | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.62 |
+| Scale percentage | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.62 |
+| Fit to width/height | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
+| Margins | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.59 |
+| Center horizontally / vertically on page | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.61 |
+| Print area | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area` | §18.2.5 |
+| Print titles: repeat rows | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_repeat_rows` | §18.2.5 |
+| Print titles: repeat columns | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_repeat_cols` | §18.2.5 |
+| Print gridlines | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `com_e2e::xls_reader::xls_print_gridlines` | §18.3.1.70 |
+| Print row/column headings | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `com_e2e::xls_reader::xls_print_headings` | §18.3.1.70 |
+| Black and white printing | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
+| Draft quality | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
+| Comments printing option | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
+| Cell errors display (blank/dash/#N/A) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
+| Page order (downThenOver/overThenDown) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
+| Header/footer: odd pages | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_header_footer_odd_only_defaults` | §18.3.1.46 |
+| Header/footer: even pages | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_header_footer_even_first_and_flags` | §18.3.1.46 |
+| Header/footer: first page different | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_header_footer_even_first_and_flags` | §18.3.1.46 |
+| Header/footer: scaleWithDoc / alignWithMargins | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.3.1.46 |
+| Header/footer: formatting codes (bold, color, font) | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.46 |
+| Row page breaks | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::roundtrip_row_breaks` | §18.3.1.74 |
+| Column page breaks | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::roundtrip_col_breaks` | §18.3.1.16 |
+
+## Workbook and sheet protection
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Sheet protection flag | R✔ W● | R✖ W✖ | R✔ W✖ | R✖ W✖ | `xls_e2e::sheet_properties::sheet_protection` | §18.3.1.79 |
+| Sheet protection: password hash | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.79 |
+| Sheet protection: specific permissions (objects/scenarios/formatCells/...) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.79 |
+| Protected ranges (protectedRange) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.64 |
+| Workbook structure protection | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.30 |
+| Workbook window protection | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.30 |
+| File-level encryption (password) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | [MS-OFFCRYPTO] |
+| Write-reservation password | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.5.3 |
+
+## Charts - types
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Bar: clustered | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_chart_bar` | §21.2.2.27 |
+| Bar: stacked | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_bar_stacked` | §21.2.2.27 |
+| Bar: 100% stacked | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_bar_percent_stacked` | §21.2.2.27 |
+| Column: clustered/stacked/100% | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_column_stacked` | §21.2.2.27 |
+| Line: basic | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_chart_line` | §21.2.2.48 |
+| Line: stacked / 100% stacked | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_line_stacked` | §21.2.2.48 |
+| Line: smooth | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_chart_series_smooth` | §21.2.2.48 |
+| Pie | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_chart_pie` | §21.2.2.57 |
+| Pie: exploded | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_pie_exploded` | §21.2.2.57 |
+| Pie: 3D | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_3d_chart` | §21.2.2.58 |
+| Doughnut | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §21.2.2.37 |
+| Area: basic / stacked / 100% stacked | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_area_stacked` | §21.2.2.5 |
+| Scatter: markers | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_chart_scatter` | §21.2.2.64 |
+| Scatter: lines | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_scatter_lines` | §21.2.2.64 |
+| Scatter: smooth lines | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_scatter_smooth` | §21.2.2.64 |
+| Bubble | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_bubble` | §21.2.2.29 |
+| Radar | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_radar` | §21.2.2.62 |
+| Stock | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_stock` | §21.2.2.77 |
+| Surface | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_surface` | §21.2.2.80 |
+| 3D chart variants | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_3d_chart` | §21.2.2 |
+| Combo (mixed bar + line) | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_combo_bar_line` | - |
+| Combo: secondary axis | R✔ W✔ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_combo_secondary_axis_position` | - |
+| ChartEx: Funnel | R● W● | R● W● | R- W- | R- W- | `chart_corpus::chart_corpus_chartex_read` | [MS-ODRAWXML] §5.22 | Reader only, write partial |
+| ChartEx: Treemap | R● W● | R● W● | R- W- | R- W- | `chart_corpus::chart_corpus_chartex_read` | [MS-ODRAWXML] §5.22 |
+| ChartEx: Sunburst | R● W● | R● W● | R- W- | R- W- | `chart_corpus::chart_corpus_chartex_read` | [MS-ODRAWXML] §5.22 |
+| ChartEx: Waterfall | R● W● | R● W● | R- W- | R- W- | `chart_corpus::chart_corpus_chartex_read` | [MS-ODRAWXML] §5.22 |
+| ChartEx: Box and Whisker | R● W● | R● W● | R- W- | R- W- | `chart_corpus::chart_corpus_chartex_read` | [MS-ODRAWXML] §5.22 |
+| ChartEx: Histogram / Pareto | R● W● | R● W● | R- W- | R- W- | `chart_corpus::chart_corpus_chartex_read` | [MS-ODRAWXML] §5.22 |
+| ChartEx: Region Map | R● W● | R● W● | R- W- | R- W- | `chart_corpus::chart_corpus_chartex_read` | [MS-ODRAWXML] §5.22 |
+| ChartEx: Clustered Column | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-ODRAWXML] §5.22 |
+
+## Charts - elements and options
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Chart title | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_bar` | §21.2.2.83 |
+| Axis titles | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §21.2.2.26 |
+| Legend (position, overlay) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_legend_positions` | §21.2.2.47 |
+| Data labels (chart-wide) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_data_labels` | §21.2.2.34 |
+| Data labels (per series) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_series_data_labels` | §21.2.2.34 |
+| Data labels (per point) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_data_points` | §21.2.2.34 |
+| Data label number format | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_data_label_number_format` | §21.2.2.34 |
+| Data label leader lines | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_leader_lines` | §21.2.2.50 |
+| Data label positions (inEnd/outEnd/ctr/etc.) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_data_label_positions` | §21.2.2.34 |
+| Axis: min / max / scaling | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_axis_enhancements` | §21.2.2.65 |
+| Axis: major / minor tick marks | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_axis_tick_marks_cross_none` | §21.2.2.52 |
+| Axis: label positions | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_axis_label_positions` | §21.2.2.85 |
+| Axis: date type | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_axis_date_type` | §21.2.2.32 |
+| Axis: crossing at max / min | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_axis_crosses_min_max` | §21.2.2.30 |
+| Axis: deleted | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_axis_delete` | §21.2.2.36 |
+| Trendline: linear | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_trendline` | §21.2.2.93 |
+| Trendline: polynomial / log / power / moving avg | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_trendline_polynomial` | §21.2.2.93 |
+| Error bars (std error, percentage, stddev, custom) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_error_bars` | §21.2.2.42 |
+| Markers (symbol types, sizes) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_marker_symbols` | §21.2.2.51 |
+| Drop lines | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_drop_lines` | §21.2.2.38 |
+| High-low lines | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_high_low_lines` | §21.2.2.43 |
+| Series lines | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_series_lines` | §21.2.2.71 |
+| Up/down bars | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_up_down_bars` | §21.2.2.96 |
+| 3D view (rotX/rotY/perspective/depthPercent) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_view_3d` | §21.2.2.99 |
+| Gap width / overlap | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_vary_colors_gap_overlap` | §21.2.2.41 |
+| First slice angle / hole size | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_first_slice_angle_hole_size` | §21.2.2.41 |
+| Chart layout (manual positioning) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_layout` | §21.2.2.55 |
+| Chart styles (built-in style ID) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_style_color_passthrough` | §21.2.2.84 |
+| Shape properties (fill, line) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_shape_properties` | §21.2.2.72 |
+| Invert-if-negative | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_invert_if_negative` | §21.2.2.45 |
+| Data table displayed below chart | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_data_table` | §21.2.2.33 |
+| Display blanks as (gap/zero/span) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_display_blanks_as_span` | §21.2.2.39 |
+| Chartsheet (chart-only sheet) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chartsheet` | §18.3.1.12 |
+| Multiple chartsheets | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_multiple_chartsheets` | §18.3.1.12 |
+
+## Images and drawings
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Image parsing (PNG/JPEG) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_images_empty_by_default` | §20.4 (DrawingML) |
+| Image positioning (two-cell anchor) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.4.2.10 |
+| Image positioning (one-cell anchor) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.4.2.1 |
+| Image positioning (absolute anchor) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.4.2.3 |
+| Image editAs (move/size with cells) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.4.2.8 |
+| SVG image support | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.3.18 |
+| Shapes (rectangles, arrows, ...) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.1.2.2 |
+| Text boxes | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.1.2.2 |
+| SmartArt diagrams | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §21.4 |
+| WordArt | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.1.2.2 |
+| Form controls (buttons, checkboxes, ...) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.26 |
+| ActiveX controls | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.26 |
+| OLE objects (embedded files) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.56 |
+
+## Pivot tables
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Pivot cache (source data) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
+| Pivot table definition | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
+| Row / column / value fields | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
+| Filter (page) fields | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
+| Aggregate functions (Sum/Count/Avg/...) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
+| Pivot table styles | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
+| Calculated fields | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
+| Grouping (dates, numbers) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
+| Slicers | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.3.16 |
+| Timelines | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.3.20 |
+| PivotChart | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §21.3 |
+
+## External workbook links
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| External workbook reference metadata | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.14 |
+| Cached values from external books | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.14.4 |
+| External-book formula parsing | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.3 |
+| External named ranges | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.14.4 |
+| OLE/DDE links | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.14.2 |
+| Data connections (database) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.13 |
+| Web queries | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.13 |
+| Query tables | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.15 |
+
+## Workbook calculation settings
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Calculation mode (auto/manual) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.2 |
+| Iterate calculation enable | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.2 |
+| Iteration count and delta | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.2 |
+| Full precision flag | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.2 |
+| A1 / R1C1 reference mode | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.2 |
+| calcCompleted flag | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.2.2 |
+| fullCalcOnLoad flag | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.2.2 |
+| concurrentCalc flag | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.2.2 |
+
+## Workbook structure
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Multiple worksheets | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multiple_sheets` | §18.2.20 |
+| Sheet order preservation | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_interleaved_tab_order` | §18.2.20 |
+| Special / XML-unsafe sheet names | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_xml_special_chars_in_sheet_names` | §18.2.19 |
+| Active sheet | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::sheet_properties::active_sheet` | §18.2.27 |
+| Book view: window position / size | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.27 |
+| Book view: tabRatio | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.27 |
+| Book view: minimized / maximized | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.27 |
+| 1904 date system | R✖ W✖ | R✖ W✖ | R✖ W✖ | R- W- | - | §18.2.28 |
+
+## Document properties
+
+| Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
+|---------|------|------|-----|-----|------|------|
+| Core properties (title, author, subject, keywords) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | [OPC] §11.1 |
+| Extended properties (application, version, ...) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | [OPC] §11.2 |
+| Custom properties | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | [OPC] §11.3 |
+| Last modified by / created | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | [OPC] §11.1 |
+| Revision count | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | [OPC] §11.1 |
+
+## MS-XLSX / OOXML extensions
+
+Each row represents one [MS-XLSX] Appendix A extension namespace. These are the modern ("Excel 2014+", "Excel 2018+") extensions stored in `<extLst>` blocks.
+
+| Feature | XLSX | XLSB | Test | Spec |
+|---------|------|------|------|------|
+| Dynamic array properties (2017) | R✔ W✔ | R✔ W✔ | `xlsx_roundtrip::roundtrip_dynamic_array_sequence` | [MS-XLSX] §2.6.3 |
+| LAMBDA calc features (2018) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.6.9 |
+| Threaded comments (2018) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.3.19 |
+| Rich data / data types (2017) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.6.12 |
+| Rich data web images (2020) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.6.14 |
+| Rich data refresh (2020) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.6.15 |
+| Pivot 2014/2017/2020/2022/2023 | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.3.* |
+| Named sheet views (2019) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.3.17 |
+| External link props (2019, 2021) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.3.14 |
+| Python in Excel (2023) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.6.19 |
+| Feature property bag (2022) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.6.18 |
+| MSForms (2023) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.6.20 |
+| External code service (2023, 2025) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.6.21 |
+| Slicers (2010) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.3.16 |
+| Timeline slicers (2012) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.3.20 |
+| Sparklines | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.3.11 |
+| Conditional formatting ext (x14) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.6.4 |
+| Data validation ext (x14) | R✖ W✖ | R✖ W✖ | - | [MS-XLSX] §2.6.5 |
+
+## File formats (top-level support)
+
+| Feature | Read | Write | Notes |
+|---------|------|-------|-------|
+| XLSX (OOXML SpreadsheetML) | ✔ | ✔ | Primary format |
+| XLSB (binary OOXML) | ✔ | ✔ | |
+| XLS (BIFF8) | ✔ | ✖ | Read-only; writer is a 3-line stub |
+| XLS (BIFF5, BIFF7) | ✖ | ✖ | Older binary variants |
+| ODS (OpenDocument) | ✖ | ✖ | No implementation |
+| CSV import/export | ✖ | ✖ | No implementation in duke-sheets (use std/csv crates) |
+| Encrypted files (password-protected) | ✖ | ✖ | |
+
+

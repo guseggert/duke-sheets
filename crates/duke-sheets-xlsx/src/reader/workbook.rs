@@ -57,23 +57,14 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Empty(ref e)) => match e.name().local_name().as_ref() {
-                b"sheet" => {
-                    parse_sheet_element(e, &mut sheets);
-                }
-                b"workbookPr" => {
-                    parse_workbook_pr(e, &mut date_1904);
-                }
+                b"sheet" => parse_sheet_element(e, &mut sheets),
+                b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
                 _ => {}
             },
             Ok(Event::Start(ref e)) => match e.name().local_name().as_ref() {
-                b"sheet" => {
-                    parse_sheet_element(e, &mut sheets);
-                }
-                b"workbookPr" => {
-                    parse_workbook_pr(e, &mut date_1904);
-                }
+                b"sheet" => parse_sheet_element(e, &mut sheets),
+                b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
                 b"definedName" => {
-                    // Parse attributes
                     let mut dn_name = None;
                     let mut local_sheet_id: Option<usize> = None;
                     let mut comment = None;
@@ -141,12 +132,8 @@ fn parse_sheet_element(e: &quick_xml::events::BytesStart<'_>, sheets: &mut Vec<S
 
     for attr in e.attributes().flatten() {
         match attr.key.local_name().as_ref() {
-            b"name" => {
-                name = attr.unescape_value().ok().map(|s| s.to_string());
-            }
-            b"id" => {
-                r_id = attr.unescape_value().ok().map(|s| s.to_string());
-            }
+            b"name" => name = attr.unescape_value().ok().map(|s| s.to_string()),
+            b"id" => r_id = attr.unescape_value().ok().map(|s| s.to_string()),
             b"state" => {
                 if let Ok(val) = attr.unescape_value() {
                     visibility = match val.as_ref() {
@@ -171,10 +158,13 @@ fn parse_sheet_element(e: &quick_xml::events::BytesStart<'_>, sheets: &mut Vec<S
 
 fn parse_workbook_pr(e: &quick_xml::events::BytesStart<'_>, date_1904: &mut bool) {
     for attr in e.attributes().flatten() {
-        if attr.key.local_name().as_ref() == b"date1904" {
-            if let Ok(val) = attr.unescape_value() {
-                *date_1904 = val.as_ref() == "1" || val.eq_ignore_ascii_case("true");
+        match attr.key.local_name().as_ref() {
+            b"date1904" => {
+                if let Ok(val) = attr.unescape_value() {
+                    *date_1904 = val.as_ref() == "1" || val.eq_ignore_ascii_case("true");
+                }
             }
+            _ => {}
         }
     }
 }
@@ -206,9 +196,7 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
 
                 for attr in e.attributes().flatten() {
                     match attr.key.local_name().as_ref() {
-                        b"Id" => {
-                            id = attr.unescape_value().ok().map(|s| s.to_string());
-                        }
+                        b"Id" => id = attr.unescape_value().ok().map(|s| s.to_string()),
                         b"Target" => {
                             target = attr.unescape_value().ok().map(|s| s.to_string());
                         }

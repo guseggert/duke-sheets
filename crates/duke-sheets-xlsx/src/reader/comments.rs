@@ -39,9 +39,7 @@ pub(crate) fn read_worksheet_comments<R: Read + Seek>(
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
-                b"author" => {
-                    in_author = true;
-                }
+                b"author" => in_author = true,
                 b"comment" => {
                     in_comment = true;
                     current_ref = None;
@@ -61,19 +59,12 @@ pub(crate) fn read_worksheet_comments<R: Read + Seek>(
                         }
                     }
                 }
-                b"text" if in_comment => {
-                    in_text = true;
-                }
-                b"t" if in_text => {
-                    in_t = true;
-                }
-                b"r" if in_text => {}
+                b"text" if in_comment => in_text = true,
+                b"t" if in_text => in_t = true,
                 _ => {}
             },
             Ok(Event::End(e)) => match e.name().local_name().as_ref() {
-                b"author" => {
-                    in_author = false;
-                }
+                b"author" => in_author = false,
                 b"comment" => {
                     if let Some(ref cell_ref) = current_ref {
                         match CellAddress::parse(cell_ref) {
@@ -97,12 +88,8 @@ pub(crate) fn read_worksheet_comments<R: Read + Seek>(
                     in_comment = false;
                     current_text.clear();
                 }
-                b"text" => {
-                    in_text = false;
-                }
-                b"t" => {
-                    in_t = false;
-                }
+                b"text" => in_text = false,
+                b"t" => in_t = false,
                 _ => {}
             },
             Ok(Event::Text(e)) => {
@@ -195,12 +182,8 @@ pub(crate) fn read_comment_visibility_map<R: Read + Seek>(
                         current_col = None;
                     }
                 }
-                b"Row" if in_client_data_note => {
-                    in_row = true;
-                }
-                b"Column" if in_client_data_note => {
-                    in_col = true;
-                }
+                b"Row" if in_client_data_note => in_row = true,
+                b"Column" if in_client_data_note => in_col = true,
                 b"Visible" if in_client_data_note => {
                     // <x:Visible/> element explicitly marks the note as visible
                     current_visible = true;

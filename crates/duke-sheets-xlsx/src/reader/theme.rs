@@ -122,7 +122,14 @@ pub(super) fn parse_theme_palette<R: Read>(reader: R) -> XlsxResult<ThemePalette
                 b"accent6" if in_clr_scheme => current_slot = Some(9),
                 b"hlink" if in_clr_scheme => current_slot = Some(10),
                 b"folHlink" if in_clr_scheme => current_slot = Some(11),
-                b"srgbClr" | b"sysClr" if in_clr_scheme => {
+                b"srgbClr" if in_clr_scheme => {
+                    if let Some(slot) = current_slot {
+                        if let Some(rgb) = extract_theme_rgb_from_attrs(&e) {
+                            palette.colors[slot] = rgb;
+                        }
+                    }
+                }
+                b"sysClr" if in_clr_scheme => {
                     if let Some(slot) = current_slot {
                         if let Some(rgb) = extract_theme_rgb_from_attrs(&e) {
                             palette.colors[slot] = rgb;
@@ -132,7 +139,14 @@ pub(super) fn parse_theme_palette<R: Read>(reader: R) -> XlsxResult<ThemePalette
                 _ => {}
             },
             Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
-                b"srgbClr" | b"sysClr" if in_clr_scheme => {
+                b"srgbClr" if in_clr_scheme => {
+                    if let Some(slot) = current_slot {
+                        if let Some(rgb) = extract_theme_rgb_from_attrs(&e) {
+                            palette.colors[slot] = rgb;
+                        }
+                    }
+                }
+                b"sysClr" if in_clr_scheme => {
                     if let Some(slot) = current_slot {
                         if let Some(rgb) = extract_theme_rgb_from_attrs(&e) {
                             palette.colors[slot] = rgb;
@@ -192,9 +206,7 @@ pub(super) fn resolve_style_theme_colors(style: &mut Style, theme: &ThemePalette
 
     match &mut style.fill {
         FillStyle::None => {}
-        FillStyle::Solid { color } => {
-            *color = resolve_color_theme(*color, theme);
-        }
+        FillStyle::Solid { color } => *color = resolve_color_theme(*color, theme),
         FillStyle::Pattern {
             foreground,
             background,
@@ -216,7 +228,10 @@ pub(super) fn resolve_style_theme_colors(style: &mut Style, theme: &ThemePalette
         &mut style.border.top,
         &mut style.border.bottom,
         &mut style.border.diagonal,
-    ].into_iter().flatten() {
+    ]
+    .into_iter()
+    .flatten()
+    {
         edge.color = resolve_color_theme(edge.color, theme);
     }
 }
