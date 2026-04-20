@@ -3,7 +3,7 @@ name = "duke-sheets-nodejs"
 version = "0.1.0"
 edition = "2021"
 description = "Node.js/TypeScript bindings for duke-sheets - high-performance Excel library"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 publish = false
 
 [lib]
