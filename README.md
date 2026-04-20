@@ -23,13 +23,12 @@ Supported file formats: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`, `.c
 
 Duke Sheets supports all formulas, except ones that don't make sense such as `CALL` and `REGISTER.ID`. Even formulas such as [WEBSERVICE](https://support.microsoft.com/en-us/office/webservice-function-0546a35a-ecc6-4739-aed7-c0b7ce1562c4) are supported. Most workbook metadata is also supported such as formatting, images, charts, etc. Some advanced features are still in progress (e.g., pivot tables).
 
-### Feature Coverage
-
-See [FEATURES.md](FEATURES.md) for the per-feature support matrix across
-XLSX, XLSB, XLS, and ODS.
-
 > [!WARNING]
 > Duke Sheets is in alpha. Its API is not yet stable.
+
+### Feature Coverage
+
+See [FEATURES.md](FEATURES.md) for the per-feature support matrix.
 
 ## Node.js / TypeScript
 
