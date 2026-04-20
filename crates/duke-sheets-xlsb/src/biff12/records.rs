@@ -37,6 +37,11 @@ pub const BRT_BUNDLE_SH: u16 = 0x009C;
 pub const BRT_BEGIN_SST: u16 = 0x009F;
 
 pub const BRT_EXTERN_SHEET: u16 = 0x016A;
+pub const BRT_BEGIN_SUP_BOOK: u16 = 0x01AE;
+pub const BRT_END_SUP_BOOK: u16 = 0x01AF;
+pub const BRT_SUP_SELF: u16 = 0x016F;
+pub const BRT_SUP_BOOK_SRC: u16 = 0x016E;
+pub const BRT_SUP_ADDIN: u16 = 0x01B5;
 pub const BRT_BEGIN_FILLS: u16 = 0x025B;
 pub const BRT_END_FILLS: u16 = 0x025C;
 pub const BRT_BEGIN_FONTS: u16 = 0x0263;

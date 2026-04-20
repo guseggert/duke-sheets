@@ -7,6 +7,7 @@ use duke_sheets_formula::decompile::{
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+
 use crate::biff12::parser;
 use crate::biff12::records;
 use crate::biff12::token_parser;
@@ -112,6 +113,9 @@ pub(crate) fn read_workbook<R: Read + Seek>(
     let mut active_sheet: usize = 0;
     let mut extern_sheet_entries = Vec::new();
     let mut names = Vec::new();
+    let mut supbooks: Vec<SupBook> = Vec::new();
+    let mut in_sup_book = false;
+    let mut current_sup_book: Option<SupBook> = None;
 
     let mut name_hidden_flags: Vec<bool> = Vec::new();
 
@@ -167,9 +171,7 @@ pub(crate) fn read_workbook<R: Read + Seek>(
                     visibility,
                 });
             }
-            records::BRT_END_BUNDLE_SHS => {
-                past_bundle_shs = true;
-            }
+            records::BRT_END_BUNDLE_SHS => past_bundle_shs = true,
             records::BRT_EXTERN_SHEET => {
                 parse_extern_sheet(&buf[..len], &mut extern_sheet_entries);
             }
@@ -180,6 +182,37 @@ pub(crate) fn read_workbook<R: Read + Seek>(
                     name_hidden_flags.push(hidden);
                 }
             }
+            records::BRT_BEGIN_SUP_BOOK => {
+                in_sup_book = true;
+                current_sup_book = None;
+            }
+            records::BRT_SUP_SELF => {
+                if in_sup_book {
+                    current_sup_book = Some(SupBook::SelfRef { sheet_count: 0 });
+                }
+            }
+            records::BRT_SUP_ADDIN => {
+                if in_sup_book {
+                    current_sup_book = Some(SupBook::AddIn);
+                }
+            }
+            records::BRT_SUP_BOOK_SRC => {
+                if in_sup_book && len >= 4 {
+                    let path = parser::wide_str(&buf, 0)
+                        .map(|(s, _)| s)
+                        .unwrap_or_default();
+                    current_sup_book = Some(SupBook::External {
+                        path,
+                        sheets: Vec::new(),
+                    });
+                }
+            }
+            records::BRT_END_SUP_BOOK => {
+                if let Some(sb) = current_sup_book.take() {
+                    supbooks.push(sb);
+                }
+                in_sup_book = false;
+            }
             0x0084 => break,
             _ => {}
         }
@@ -188,7 +221,14 @@ pub(crate) fn read_workbook<R: Read + Seek>(
     let sheet_names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
     let sheet_count = sheet_names.len() as u16;
 
-    let supbooks = vec![SupBook::SelfRef { sheet_count }];
+    if supbooks.is_empty() {
+        supbooks.push(SupBook::SelfRef { sheet_count });
+    }
+    for sb in &mut supbooks {
+        if let SupBook::SelfRef { sheet_count: sc } = sb {
+            *sc = sheet_count;
+        }
+    }
 
     let formula_ctx = FormulaContext {
         sheet_names,
