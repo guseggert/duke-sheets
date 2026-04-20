@@ -37,7 +37,7 @@ libreoffice-urp = { path = "../libreoffice-urp" }
 tokio = { version = "1", features = ["full", "test-util"] }
 
 [features]
-default = ["xlsx", "csv"]
+default = ["full"]
 xlsx = []
 xls = ["dep:duke-sheets-xls"]
 xlsb = ["dep:duke-sheets-xlsb"]
