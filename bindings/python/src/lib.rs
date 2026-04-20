@@ -486,7 +486,7 @@ impl PyWorksheet {
     ///     col: Zero-based column index
     ///
     /// Returns:
-    ///     Dict with keys: source, alt_text, sizing, width, height — or None
+    ///     Dict with keys: source, alt_text, sizing, width, height - or None
     #[pyo3(signature = (row, col))]
     fn get_image_at(&self, row: u32, col: u32, py: Python<'_>) -> PyResult<Option<PyObject>> {
         let wb = self.workbook.read().map_err(to_py_err)?;

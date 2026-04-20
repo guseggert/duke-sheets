@@ -75,8 +75,8 @@ def collect_results(criterion_dir: Path) -> list[BenchResult]:
         value_str: str | None = bench.get("value_str")
         median_ns: float = estimates["median"]["point_estimate"]
 
-        case = value_str or "—"
-        library = function_id or "—"
+        case = value_str or "-"
+        library = function_id or "-"
 
         results.append(
             BenchResult(

@@ -2579,7 +2579,6 @@ mod tests {
         assert_finite("=YIELDMAT(45474,45658,45292,0.08,98,0)");
     }
 
-    // ---------- EUROCONVERT tests ----------
 
     #[test]
     fn test_euroconvert_same_currency() {
@@ -2712,7 +2711,7 @@ mod tests {
         }
     }
 
-    // ===== Docs-based tests =====
+    // Docs-based tests
 
     fn n(x: f64) -> FormulaValue {
         FormulaValue::Number(x)
@@ -3068,7 +3067,7 @@ mod tests {
         );
     }
 
-    // ===== Batch 8 docs tests: DISC, DURATION, MDURATION, PRICE, RECEIVED =====
+    // Batch 8 docs tests: DISC, DURATION, MDURATION, PRICE, RECEIVED
 
     // DISC docs: DATE(2018,7,1)=43282, DATE(2048,1,1)=54058
     #[test]
@@ -3219,7 +3218,7 @@ mod tests {
         );
     }
 
-    // ===== Batch 9 docs tests: PRICEDISC, PRICEMAT, TBILLEQ, TBILLPRICE, TBILLYIELD =====
+    // Batch 9 docs tests: PRICEDISC, PRICEMAT, TBILLEQ, TBILLPRICE, TBILLYIELD
 
     // PRICEDISC docs: DATE(2008,2,16)=39494, DATE(2008,3,1)=39508
     #[test]
@@ -3291,7 +3290,7 @@ mod tests {
         );
     }
 
-    // ===== Batch 10 docs tests: YIELD, YIELDDISC, YIELDMAT, AMORDEGRC, AMORLINC =====
+    // Batch 10 docs tests: YIELD, YIELDDISC, YIELDMAT, AMORDEGRC, AMORLINC
 
     // YIELD docs: DATE(2008,2,15)=39493, DATE(2016,11,15)=42689
     #[test]

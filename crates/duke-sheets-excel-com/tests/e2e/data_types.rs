@@ -94,7 +94,7 @@ fn test_boolean_values() {
     let workbook = XlsxReader::read_file(&fixture.host_path).expect("read workbook");
     let sheet = workbook.worksheet(0).expect("worksheet");
 
-    // Check effective values — could be Boolean or Number (1/0)
+    // Check effective values - could be Boolean or Number (1/0)
     let mut found_true = false;
     let mut found_false = false;
     for row in 0..5 {

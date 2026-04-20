@@ -19,7 +19,7 @@ const DEFAULT_CORPUS_DIR: &str = "data/excel-corpus";
 const SLOW_THRESHOLD_SECS: f64 = 10.0;
 
 #[test]
-#[ignore = "requires Excel corpus — run with: cargo test -p duke-sheets --test chart_corpus -- --ignored --nocapture"]
+#[ignore = "requires Excel corpus - run with: cargo test -p duke-sheets --test chart_corpus -- --ignored --nocapture"]
 fn chart_corpus_smoke() {
     let corpus_dir =
         std::env::var("DUKE_CORPUS_DIR").unwrap_or_else(|_| DEFAULT_CORPUS_DIR.to_string());
@@ -430,7 +430,7 @@ fn has_chartex_entries(path: &Path) -> std::result::Result<bool, String> {
 /// Read → write → read roundtrip on real chart files from the corpus.
 /// Asserts that every chart survives a write-back cycle: no data loss.
 #[test]
-#[ignore = "requires Excel corpus — run with: cargo test --release -p duke-sheets --test chart_corpus chart_corpus_roundtrip -- --ignored --nocapture"]
+#[ignore = "requires Excel corpus - run with: cargo test --release -p duke-sheets --test chart_corpus chart_corpus_roundtrip -- --ignored --nocapture"]
 fn chart_corpus_roundtrip() {
     let corpus_dir =
         std::env::var("DUKE_CORPUS_DIR").unwrap_or_else(|_| DEFAULT_CORPUS_DIR.to_string());
@@ -589,7 +589,7 @@ fn chart_corpus_roundtrip() {
     println!("Roundtrip pass rate: {passed}/{total_compared} ({pass_rate:.1}%)");
 
     // Fail on panics in write/read-back (those are bugs)
-    // Mismatches are reported but don't fail the test yet — we need to
+    // Mismatches are reported but don't fail the test yet - we need to
     // triage them first to separate real bugs from known limitations.
 }
 

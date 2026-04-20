@@ -78,7 +78,7 @@ pub use style::{
 /// Maximum number of rows in a worksheet (Excel limit)
 pub const MAX_ROWS: u32 = 1_048_576;
 
-/// Maximum number of columns in a worksheet (Excel limit)  
+/// Maximum number of columns in a worksheet (Excel limit)
 pub const MAX_COLS: u16 = 16_384;
 
 /// Maximum length of a sheet name

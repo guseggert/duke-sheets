@@ -2772,7 +2772,6 @@ mod tests {
             );
         }
 
-        // ===== Base conversion =====
 
         #[test]
         fn test_bin2dec_docs() {
@@ -2856,7 +2855,6 @@ mod tests {
             assert_eq!(eval("=OCT2HEX(7777777533)").unwrap(), s("FFFFFFFF5B"));
         }
 
-        // ===== Bitwise =====
 
         #[test]
         fn test_bitand_docs() {
@@ -2884,7 +2882,7 @@ mod tests {
             assert_eq!(eval("=BITRSHIFT(13,2)").unwrap(), n(3.0));
         }
 
-        // ===== Delta / Gestep / ERF =====
+        // Delta / Gestep / ERF
 
         #[test]
         fn test_delta_docs() {
@@ -2923,7 +2921,6 @@ mod tests {
             assert_close_num(eval("=ERFC.PRECISE(1)").unwrap(), 0.15729921);
         }
 
-        // ===== Complex number functions =====
 
         #[test]
         fn test_complex_docs() {
@@ -3121,7 +3118,6 @@ mod tests {
             );
         }
 
-        // ===== Bessel =====
 
         #[test]
         fn test_besseli_docs() {
@@ -3145,7 +3141,6 @@ mod tests {
             assert_close_num(eval("=BESSELY(2.5, 1)").unwrap(), 0.145918138);
         }
 
-        // ===== CONVERT =====
 
         #[test]
         fn test_convert_docs() {

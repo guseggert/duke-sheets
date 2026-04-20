@@ -1,7 +1,7 @@
 //! Shared formula decompiler infrastructure.
 //!
 //! Converts parsed formula tokens (RPN) into human-readable infix formula
-//! strings. This module is format-agnostic — it works with `ParsedToken`
+//! strings. This module is format-agnostic - it works with `ParsedToken`
 //! values produced by any binary parser (BIFF8, BIFF12, etc.).
 
 pub mod decompiler;

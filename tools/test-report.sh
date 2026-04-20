@@ -14,7 +14,7 @@ run() { "$@" 2>&1 | tee -a "$LOGFILE"; }
 
 # Phase 1: Unit tests, doc-tests, and non-e2e integration tests.
 # Exclude crates whose test targets need external services or corpus
-# data — those deadlock or take too long for a quick report.
+# data - those deadlock or take too long for a quick report.
 #   - duke-sheets-xlsx/xls/excel-com/libreoffice: e2e needs LO/COM
 #   - duke-sheets: corpus tests are slow and need excel_samples/
 run cargo test --workspace \
@@ -113,6 +113,6 @@ if [ "$ANY_FAIL" = true ]; then
     echo "═══════════════════════════════════════════════════════════"
     exit 1
 else
-    printf "  TOTAL: %d passed, %d ignored — all ok ✅\n" "$TOTAL_PASS" "$TOTAL_IGNORE"
+    printf "  TOTAL: %d passed, %d ignored - all ok ✅\n" "$TOTAL_PASS" "$TOTAL_IGNORE"
     echo "═══════════════════════════════════════════════════════════"
 fi

@@ -533,7 +533,7 @@ impl<'a> Workbook<'a> {
             )
             .await?;
 
-        // Note: setAuthor is not reliably supported in LO — the Python code
+        // Note: setAuthor is not reliably supported in LO - the Python code
         // wraps it in try/except. We skip it for now.
 
         Ok(())
@@ -971,7 +971,7 @@ impl<'a> Workbook<'a> {
             .await?;
         }
 
-        // Borders — all sides
+        // Borders - all sides
         if let Some(ref style_name) = spec.border_style {
             let color = spec.border_color.unwrap_or(0x000000);
             let (line_style, line_width) = uno_types::border_line_style::from_name(style_name);

@@ -95,7 +95,7 @@ impl SpillInfo {
 /// Structure: `HashMap<(row_index, col_index), CellData>`
 #[derive(Debug)]
 pub struct CellStorage {
-    /// Flat cell map keyed by (row, col) — uses ahash for fast integer hashing
+    /// Flat cell map keyed by (row, col) - uses ahash for fast integer hashing
     cells: AHashMap<(u32, u16), CellData>,
 
     /// Shared string pool for deduplication
@@ -689,9 +689,7 @@ impl CellStorage {
         self.spill_sources.iter().map(|(k, v)| (*k, v))
     }
 
-    // ---------------------------------------------------------------
     // Formula side table
-    // ---------------------------------------------------------------
 
     /// Check if a cell has a formula.
     pub fn has_formula(&self, row: u32, col: u16) -> bool {

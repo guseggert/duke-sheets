@@ -1,4 +1,4 @@
-//! Workbook handle — ergonomic API for working with an Excel workbook via the bridge.
+//! Workbook handle - ergonomic API for working with an Excel workbook via the bridge.
 
 use excel_com_protocol::{CellValue, ChainStep, ResponseData, SheetRef};
 
@@ -110,9 +110,7 @@ impl<'a> Workbook<'a> {
         self.bridge.get_cell_value(self.handle, sheet, cell)
     }
 
-    // -------------------------------------------------------------------------
     // Font styling
-    // -------------------------------------------------------------------------
 
     /// Set font bold on a cell.
     pub fn set_font_bold(&self, cell: &str, bold: bool) -> Result<(), BridgeError> {
@@ -219,9 +217,7 @@ impl<'a> Workbook<'a> {
         )
     }
 
-    // -------------------------------------------------------------------------
     // Fill styling
-    // -------------------------------------------------------------------------
 
     /// Set fill (background) color on a cell (RGB as 0xRRGGBB).
     pub fn set_fill_color(&self, cell: &str, color: u32) -> Result<(), BridgeError> {
@@ -233,9 +229,7 @@ impl<'a> Workbook<'a> {
         )
     }
 
-    // -------------------------------------------------------------------------
     // Border styling
-    // -------------------------------------------------------------------------
 
     /// Set border on all four sides of a cell.
     /// `line_style`: xlContinuous=1, xlDash=-4115, xlDot=-4118, etc.
@@ -315,9 +309,7 @@ impl<'a> Workbook<'a> {
         Ok(())
     }
 
-    // -------------------------------------------------------------------------
     // Alignment styling
-    // -------------------------------------------------------------------------
 
     /// Set horizontal alignment.
     /// `align`: xlLeft=-4131, xlCenter=-4108, xlRight=-4152, xlGeneral=1
@@ -387,9 +379,7 @@ impl<'a> Workbook<'a> {
         )
     }
 
-    // -------------------------------------------------------------------------
     // Number format
-    // -------------------------------------------------------------------------
 
     /// Set number format on a cell (e.g., "0.00%", "#,##0.00", "YYYY-MM-DD").
     pub fn set_number_format(&self, cell: &str, format: &str) -> Result<(), BridgeError> {
@@ -402,9 +392,7 @@ impl<'a> Workbook<'a> {
         )
     }
 
-    // -------------------------------------------------------------------------
     // Row/Column dimensions
-    // -------------------------------------------------------------------------
 
     /// Set row height (in points). Row is 0-based.
     pub fn set_row_height(&self, row: u32, height: f64) -> Result<(), BridgeError> {
@@ -424,9 +412,7 @@ impl<'a> Workbook<'a> {
             .set_column_width(self.handle, self.active_sheet.clone(), col + 1, width)
     }
 
-    // -------------------------------------------------------------------------
     // Page setup
-    // -------------------------------------------------------------------------
 
     /// Set a property on the active sheet's PageSetup object.
     ///
@@ -443,9 +429,7 @@ impl<'a> Workbook<'a> {
         self.bridge.set(self.handle, chain, property, value)
     }
 
-    // -------------------------------------------------------------------------
     // Merged cells
-    // -------------------------------------------------------------------------
 
     /// Merge a range of cells (e.g., "A1:C3").
     pub fn merge_range(&self, range: &str) -> Result<(), BridgeError> {
@@ -453,9 +437,7 @@ impl<'a> Workbook<'a> {
             .merge_range(self.handle, self.active_sheet.clone(), range)
     }
 
-    // -------------------------------------------------------------------------
     // Comments
-    // -------------------------------------------------------------------------
 
     /// Add a comment to a cell.
     pub fn add_comment(&self, cell: &str, text: &str) -> Result<(), BridgeError> {
@@ -463,9 +445,7 @@ impl<'a> Workbook<'a> {
             .add_comment(self.handle, self.active_sheet.clone(), cell, text)
     }
 
-    // -------------------------------------------------------------------------
     // Rich text (per-character formatting via Characters API)
-    // -------------------------------------------------------------------------
 
     /// Set a font property on a substring of a cell's text.
     ///
@@ -506,9 +486,7 @@ impl<'a> Workbook<'a> {
         result
     }
 
-    // -------------------------------------------------------------------------
     // Conditional formatting
-    // -------------------------------------------------------------------------
 
     /// Add a conditional format rule and return a handle to style it.
     ///
@@ -536,9 +514,7 @@ impl<'a> Workbook<'a> {
         })
     }
 
-    // -------------------------------------------------------------------------
     // Data validation
-    // -------------------------------------------------------------------------
 
     /// Add data validation to a range.
     ///
@@ -620,9 +596,7 @@ impl<'a> Workbook<'a> {
         )
     }
 
-    // -------------------------------------------------------------------------
     // File operations
-    // -------------------------------------------------------------------------
 
     /// Save the workbook to a Windows file path.
     ///
@@ -640,9 +614,7 @@ impl<'a> Workbook<'a> {
         self.bridge.save_workbook(self.handle, windows_path, format)
     }
 
-    // -------------------------------------------------------------------------
     // Workbook properties (read)
-    // -------------------------------------------------------------------------
 
     /// Get the workbook's name (e.g., "Book1.xlsx").
     ///
@@ -675,7 +647,7 @@ impl<'a> Workbook<'a> {
     }
 }
 
-// FormatCondition — handle to a CF rule for styling
+// FormatCondition - handle to a CF rule for styling
 
 /// A handle to a FormatCondition COM object, used to style a conditional
 /// formatting rule after creation.

@@ -17,10 +17,10 @@ use crate::biff::parser::{read_u16, read_u32};
 use crate::biff::strings::{read_short_string, read_unicode_string};
 use crate::error::{XlsError, XlsResult};
 
-// Default BIFF8 color palette (56 entries, indices 8–63)
+// Default BIFF8 color palette (56 entries, indices 8-63)
 
-/// The standard BIFF8 color palette.  Indices 8–63 in the workbook map to
-/// entries 0–55 here.  A PALETTE record can override individual entries.
+/// The standard BIFF8 color palette.  Indices 8-63 in the workbook map to
+/// entries 0-55 here.  A PALETTE record can override individual entries.
 pub(crate) const DEFAULT_PALETTE: [(u8, u8, u8); 56] = [
     (0, 0, 0),       //  8: Black
     (255, 255, 255), //  9: White
@@ -115,7 +115,7 @@ pub(crate) struct BiffXf {
     pub indent: u8,
     pub rotation: u8,
     pub reading_order: u8,
-    // Borders — line style codes (0–13)
+    // Borders - line style codes (0-13)
     pub border_left: u8,
     pub border_right: u8,
     pub border_top: u8,
@@ -176,7 +176,7 @@ impl StyleContext {
 
     fn resolve_font(&self, font_index: u16) -> FontStyle {
         // BIFF8 quirk: font index 4 is skipped in the file.
-        // Indices 0–3 map directly; index 5 → fonts[4], index 6 → fonts[5], etc.
+        // Indices 0-3 map directly; index 5 → fonts[4], index 6 → fonts[5], etc.
         let actual = if font_index >= 5 {
             (font_index - 1) as usize
         } else {
@@ -357,7 +357,7 @@ impl StyleContext {
             _ => VerticalAlignment::Bottom,
         };
 
-        // BIFF rotation: 0 = none, 1–90 = CCW degrees, 91–180 = CW as -(val-90),
+        // BIFF rotation: 0 = none, 1-90 = CCW degrees, 91-180 = CW as -(val-90),
         // 255 = vertical text.
         let rotation = match xf.rotation {
             0 => 0i16,
@@ -394,7 +394,7 @@ impl StyleContext {
         if let Some(code) = self.formats.get(&fmt_id) {
             return NumberFormat::Custom(code.clone());
         }
-        // Built-in format ID (1–49 are well-known).
+        // Built-in format ID (1-49 are well-known).
         NumberFormat::BuiltIn(fmt_id as u32)
     }
 
@@ -417,8 +417,8 @@ impl StyleContext {
             },
             // 0x7FFF = automatic
             0x7FFF => Color::Auto,
-            // Indices 0–7: EGA colors (rarely referenced directly in BIFF8,
-            // but some writers use them). Map to the same values as 8–15.
+            // Indices 0-7: EGA colors (rarely referenced directly in BIFF8,
+            // but some writers use them). Map to the same values as 8-15.
             0..=7 => {
                 let ega: [(u8, u8, u8); 8] = [
                     (0, 0, 0),
@@ -443,16 +443,16 @@ impl StyleContext {
 /// Parse a FONT record (0x0031).
 ///
 /// Layout:
-///   0  u16  dyHeight   — font height in twips (1/20 pt)
-///   2  u16  grbit      — flags (bit 1 = italic, bit 3 = strikethrough)
-///   4  u16  icv        — color index
-///   6  u16  bls        — bold weight (400 = normal, 700 = bold)
-///   8  u16  sss        — super/subscript (0/1/2)
-///  10  u8   uls        — underline type
-///  11  u8   bFamily    — font family (ignored)
-///  12  u8   bCharSet   — character set (ignored)
+///   0  u16  dyHeight   - font height in twips (1/20 pt)
+///   2  u16  grbit      - flags (bit 1 = italic, bit 3 = strikethrough)
+///   4  u16  icv        - color index
+///   6  u16  bls        - bold weight (400 = normal, 700 = bold)
+///   8  u16  sss        - super/subscript (0/1/2)
+///  10  u8   uls        - underline type
+///  11  u8   bFamily    - font family (ignored)
+///  12  u8   bCharSet   - character set (ignored)
 ///  13  u8   reserved
-///  14  ...  font name  — short string (1-byte length prefix)
+///  14  ...  font name  - short string (1-byte length prefix)
 pub(crate) fn parse_font(data: &[u8]) -> XlsResult<BiffFont> {
     if data.len() < 15 {
         return Err(XlsError::Parse("FONT record too short".into()));
@@ -494,7 +494,7 @@ pub(crate) fn parse_font(data: &[u8]) -> XlsResult<BiffFont> {
 /// Parse a FORMAT record (0x041E).
 ///
 /// Layout:
-///   0  u16  ifmt   — format index
+///   0  u16  ifmt   - format index
 ///   2  ...  format string (unicode string, 2-byte length prefix)
 pub(crate) fn parse_format(data: &[u8]) -> XlsResult<(u16, String)> {
     let mut off = 0;
@@ -506,13 +506,13 @@ pub(crate) fn parse_format(data: &[u8]) -> XlsResult<(u16, String)> {
 /// Parse an XF record (0x00E0, always 20 bytes in BIFF8).
 ///
 /// Layout (see [MS-XLS] §2.4.353):
-///   0   u16  ifnt          — font index
-///   2   u16  ifmt          — format index
-///   4   u16  type/protect  — bits 0-1 lock/hidden, bit 2 style-xf
-///   6   u8   alignment1    — bits 0-2 halign, bit 3 wrap, bits 4-6 valign
-///   7   u8   trot          — text rotation
-///   8   u8   alignment2    — bits 0-3 indent, bit 4 shrink, bits 6-7 reading order
-///   9   u8   used_attribs  — (ignored)
+///   0   u16  ifnt          - font index
+///   2   u16  ifmt          - format index
+///   4   u16  type/protect  - bits 0-1 lock/hidden, bit 2 style-xf
+///   6   u8   alignment1    - bits 0-2 halign, bit 3 wrap, bits 4-6 valign
+///   7   u8   trot          - text rotation
+///   8   u8   alignment2    - bits 0-3 indent, bit 4 shrink, bits 6-7 reading order
+///   9   u8   used_attribs  - (ignored)
 ///  10   u32  border lines/colors 1
 ///  14   u32  border lines/colors 2 + fill pattern
 ///  18   u16  fill colors
@@ -554,7 +554,7 @@ pub(crate) fn parse_xf(data: &[u8]) -> XlsResult<BiffXf> {
     // Byte 9: used attributes (skip)
     off += 1;
 
-    // Bytes 10–13: border & color block 1
+    // Bytes 10-13: border & color block 1
     let border1 = read_u32(data, &mut off)?;
     let border_left = (border1 & 0x0F) as u8;
     let border_right = ((border1 >> 4) & 0x0F) as u8;
@@ -564,7 +564,7 @@ pub(crate) fn parse_xf(data: &[u8]) -> XlsResult<BiffXf> {
     let icv_right = ((border1 >> 23) & 0x7F) as u16;
     let diagonal_dir = ((border1 >> 30) & 0x03) as u8;
 
-    // Bytes 14–17: border & color block 2 + fill pattern
+    // Bytes 14-17: border & color block 2 + fill pattern
     let border2 = read_u32(data, &mut off)?;
     let icv_top = (border2 & 0x7F) as u16;
     let icv_bottom = ((border2 >> 7) & 0x7F) as u16;
@@ -572,7 +572,7 @@ pub(crate) fn parse_xf(data: &[u8]) -> XlsResult<BiffXf> {
     let border_diag = ((border2 >> 21) & 0x0F) as u8;
     let fill_pattern = ((border2 >> 26) & 0x3F) as u8;
 
-    // Bytes 18–19: fill colors
+    // Bytes 18-19: fill colors
     let fill_colors = read_u16(data, &mut off)?;
     let icv_fore = fill_colors & 0x7F;
     let icv_back = (fill_colors >> 7) & 0x7F;
@@ -610,8 +610,8 @@ pub(crate) fn parse_xf(data: &[u8]) -> XlsResult<BiffXf> {
 /// Apply a PALETTE record to the style context.
 ///
 /// Layout:
-///   0  u16  ccv    — number of colors (typically 56)
-///   2  ...  colors — array of ccv × 4-byte entries (R, G, B, 0x00)
+///   0  u16  ccv    - number of colors (typically 56)
+///   2  ...  colors - array of ccv × 4-byte entries (R, G, B, 0x00)
 pub(crate) fn apply_palette(data: &[u8], palette: &mut [(u8, u8, u8); 56]) -> XlsResult<()> {
     if data.len() < 2 {
         return Err(XlsError::Parse("PALETTE record too short".into()));
@@ -634,7 +634,7 @@ pub(crate) fn apply_palette(data: &[u8], palette: &mut [(u8, u8, u8); 56]) -> Xl
 
 // Mapping helpers
 
-/// Map a BIFF border line code (0–13) to a `BorderLineStyle`.
+/// Map a BIFF border line code (0-13) to a `BorderLineStyle`.
 fn border_line_from_biff(code: u8) -> BorderLineStyle {
     match code {
         0 => BorderLineStyle::None,
@@ -655,7 +655,7 @@ fn border_line_from_biff(code: u8) -> BorderLineStyle {
     }
 }
 
-/// Map a BIFF fill pattern code (0–18) to a `PatternType`.
+/// Map a BIFF fill pattern code (0-18) to a `PatternType`.
 fn pattern_from_biff(code: u8) -> PatternType {
     match code {
         0 => PatternType::None,

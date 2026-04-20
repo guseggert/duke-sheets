@@ -1,7 +1,7 @@
 //! BIFF8 formula token (Ptg) byte constants and helpers.
 //!
-//! Token bytes 0x00–0x1F are unclassified (operators, constants, tAttr).
-//! Token bytes 0x20–0x7F are classified: the base type is `byte & 0x1F`
+//! Token bytes 0x00-0x1F are unclassified (operators, constants, tAttr).
+//! Token bytes 0x20-0x7F are classified: the base type is `byte & 0x1F`
 //! (when base >= 0x20), with class bits in bits 5-6:
 //!   - 0x00 = Reference (R)
 //!   - 0x20 = Value (V)
@@ -9,9 +9,7 @@
 //!
 //! For decompilation the class does not affect the output string.
 
-// ---------------------------------------------------------------------------
-// Unclassified operators (0x01–0x15) — all 1 byte, no data
-// ---------------------------------------------------------------------------
+// Unclassified operators (0x01-0x15) - all 1 byte, no data
 pub const PTG_EXP: u8 = 0x01; // Array/shared formula indicator
 pub const PTG_TBL: u8 = 0x02; // Data table indicator
 pub const PTG_ADD: u8 = 0x03;
@@ -34,9 +32,7 @@ pub const PTG_UMINUS: u8 = 0x13;
 pub const PTG_PERCENT: u8 = 0x14;
 pub const PTG_PAREN: u8 = 0x15;
 
-// ---------------------------------------------------------------------------
-// Unclassified constants (0x16–0x1F)
-// ---------------------------------------------------------------------------
+// Unclassified constants (0x16-0x1F)
 pub const PTG_MISS_ARG: u8 = 0x16; // 1 byte (no data)
 pub const PTG_STR: u8 = 0x17; // variable: 1-byte len + BIFF8 string
 pub const PTG_ATTR: u8 = 0x19; // variable (sub-types below)
@@ -45,9 +41,7 @@ pub const PTG_BOOL: u8 = 0x1D; // 2 bytes: 0 or 1
 pub const PTG_INT: u8 = 0x1E; // 3 bytes: u16 value
 pub const PTG_NUM: u8 = 0x1F; // 9 bytes: f64 value
 
-// ---------------------------------------------------------------------------
 // tAttr sub-type flags (byte at offset +1 after 0x19)
-// ---------------------------------------------------------------------------
 pub const ATTR_VOLATILE: u8 = 0x01;
 pub const ATTR_IF: u8 = 0x02;
 pub const ATTR_CHOOSE: u8 = 0x04;
@@ -56,12 +50,10 @@ pub const ATTR_SUM: u8 = 0x10;
 pub const ATTR_ASSIGN: u8 = 0x20;
 pub const ATTR_SPACE: u8 = 0x40;
 
-// ---------------------------------------------------------------------------
-// Classified operand tokens — base values (before R/V/A class offset)
+// Classified operand tokens - base values (before R/V/A class offset)
 // Strip class with: base = byte & 0x1F  (only when byte >= 0x20)
 //
 // The actual byte in the stream is base + 0x00 (R), + 0x20 (V), or + 0x40 (A).
-// ---------------------------------------------------------------------------
 pub const PTG_ARRAY: u8 = 0x20; // 7 bytes data (extra data after token stream)
 pub const PTG_FUNC: u8 = 0x21; // 2 bytes: function index (u16)
 pub const PTG_FUNC_VAR: u8 = 0x22; // 3 bytes: argc(u8) + func_idx(u16)
@@ -84,7 +76,7 @@ pub const PTG_AREA_ERR_3D: u8 = 0x3D; // 10 bytes
 
 /// Strip the R/V/A class bits from a classified token byte.
 ///
-/// For bytes >= 0x20, returns the base token type (0x20–0x3F range).
+/// For bytes >= 0x20, returns the base token type (0x20-0x3F range).
 /// For bytes < 0x20 (unclassified), returns the byte unchanged.
 #[inline]
 pub fn base_ptg(byte: u8) -> u8 {
@@ -103,7 +95,7 @@ pub fn base_ptg(byte: u8) -> u8 {
 /// special handling, or for completely unknown tokens.
 pub fn token_data_size(base: u8) -> Option<usize> {
     match base {
-        // Unclassified operators — no data bytes
+        // Unclassified operators - no data bytes
         PTG_ADD | PTG_SUB | PTG_MUL | PTG_DIV | PTG_POWER | PTG_CONCAT | PTG_LT | PTG_LE
         | PTG_EQ | PTG_GE | PTG_GT | PTG_NE | PTG_ISECT | PTG_LIST | PTG_RANGE | PTG_UPLUS
         | PTG_UMINUS | PTG_PERCENT | PTG_PAREN => Some(0),

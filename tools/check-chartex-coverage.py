@@ -252,7 +252,7 @@ SPEC_TO_RUST = {
     "FirstFooterXsdstring": None,  # leaf
     "CopyrightXsdstring": None,  # leaf
     "ColorMappingType": None,  # raw bytes
-    # Geo types — all raw passthrough inside geoCache
+    # Geo types - all raw passthrough inside geoCache
     "GeoData": None,
     "GeoDataEntityQuery": None,
     "GeoDataEntityQueryResult": None,
@@ -488,7 +488,7 @@ def main():
         "rich",
     )
 
-    # Enum types exposed as flattened structs or string conversions —
+    # Enum types exposed as flattened structs or string conversions -
     # skip field-level checks ("fields" are variant names, not struct fields)
     ENUM_TYPES = {"ChartExLayout", "ChartExDimension"}
 
@@ -567,7 +567,7 @@ def main():
         elif rust_name:
             print(f"  ❌ {spec_name} → {rust_name}: NOT FOUND")
         else:
-            # Enums stored as strings — check that the plan says so
+            # Enums stored as strings - check that the plan says so
             print(f"  ℹ️  {spec_name}: stored as String (not a Rust enum)")
 
 

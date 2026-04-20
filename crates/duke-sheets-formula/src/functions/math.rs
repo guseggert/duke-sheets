@@ -1131,7 +1131,7 @@ mod tests {
         }
     }
 
-    // ===== Batch 1 docs tests: ABS, ROUND, ROUNDUP, ROUNDDOWN, TRUNC, SIGN =====
+    // Batch 1 docs tests: ABS, ROUND, ROUNDUP, ROUNDDOWN, TRUNC, SIGN
 
     #[test]
     fn test_abs_docs() {
@@ -1393,7 +1393,7 @@ mod tests {
         );
     }
 
-    // ===== Batch 2 docs tests: MOD, INT, EVEN, ODD, POWER, SQRT =====
+    // Batch 2 docs tests: MOD, INT, EVEN, ODD, POWER, SQRT
 
     #[test]
     fn test_mod_docs() {
@@ -1549,7 +1549,7 @@ mod tests {
         );
     }
 
-    // ===== Batch 3 docs tests: SIN, COS, TAN, ASIN, ACOS, ATAN, ATAN2 =====
+    // Batch 3 docs tests: SIN, COS, TAN, ASIN, ACOS, ATAN, ATAN2
 
     #[test]
     fn test_sin_docs() {
@@ -1634,7 +1634,7 @@ mod tests {
         assert!((v * 180.0 / std::f64::consts::PI - (-135.0)).abs() < 1e-10);
     }
 
-    // ===== Batch 4 docs tests: DEGREES, RADIANS, EXP, LN, LOG, LOG10, PI =====
+    // Batch 4 docs tests: DEGREES, RADIANS, EXP, LN, LOG, LOG10, PI
 
     #[test]
     fn test_degrees_docs() {
@@ -1708,7 +1708,7 @@ mod tests {
         assert!((v - std::f64::consts::PI).abs() < 1e-10);
     }
 
-    // ===== Batch 5 docs tests: CEILING.MATH, FLOOR.MATH, SUM, SUMIF =====
+    // Batch 5 docs tests: CEILING.MATH, FLOOR.MATH, SUM, SUMIF
 
     #[test]
     fn test_ceiling_math_docs() {
@@ -1882,7 +1882,7 @@ mod tests {
         );
     }
 
-    // ===== Batch 6 docs tests: SUMIFS, SUMPRODUCT =====
+    // Batch 6 docs tests: SUMIFS, SUMPRODUCT
 
     #[test]
     fn test_sumifs_docs() {
@@ -2003,7 +2003,7 @@ mod tests {
         );
     }
 
-    // ===== Batch 14 docs tests: RAND, RANDBETWEEN =====
+    // Batch 14 docs tests: RAND, RANDBETWEEN
 
     #[test]
     fn test_rand_docs() {

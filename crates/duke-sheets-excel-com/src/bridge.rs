@@ -128,9 +128,7 @@ impl ExcelBridge {
         })
     }
 
-    // -----------------------------------------------------------------------
     // Low-level generic COM proxy operations
-    // -----------------------------------------------------------------------
 
     /// Send a command and wait for the response.
     fn send_command(&self, command: Command) -> Result<Option<ResponseData>, BridgeError> {
@@ -232,9 +230,7 @@ impl ExcelBridge {
         Ok(())
     }
 
-    // -----------------------------------------------------------------------
     // High-level Excel convenience methods
-    // -----------------------------------------------------------------------
 
     /// Create a new empty workbook. Returns a `Workbook` handle.
     ///
@@ -594,9 +590,7 @@ impl ExcelBridge {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Create a `ChainStep::Property`.
 fn cs_prop(name: &str) -> ChainStep {

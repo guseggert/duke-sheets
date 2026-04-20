@@ -92,7 +92,7 @@ fn test_xls_formula_if_and_comparison() {
     let path = temp_fixture_path();
 
     // LO uses semicolons as argument separators (locale-dependent), but
-    // BIFF8 token streams are locale-independent — the decompiler always
+    // BIFF8 token streams are locale-independent - the decompiler always
     // produces commas.
     runtime().block_on(async {
         let lo = lo_bridge().await.unwrap();
@@ -131,7 +131,7 @@ fn test_xls_formula_string_concat() {
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
         wb.set_cell_value("A1", "hello").await.unwrap();
-        // B1 = CONCATENATE(A1;" world") — use function form for locale safety
+        // B1 = CONCATENATE(A1;" world") - use function form for locale safety
         wb.set_cell_formula("B1", "=CONCATENATE(A1;\" world\")")
             .await
             .unwrap();
@@ -162,9 +162,9 @@ fn test_xls_formula_nested_functions() {
         wb.set_cell_value("A1", "hello").await.unwrap();
         // B1 = LEN(A1)
         wb.set_cell_formula("B1", "=LEN(A1)").await.unwrap();
-        // C1 = LEFT(A1;3) — semicolon for LO locale
+        // C1 = LEFT(A1;3) - semicolon for LO locale
         wb.set_cell_formula("C1", "=LEFT(A1;3)").await.unwrap();
-        // D1 = MID(A1;2;3) — semicolons for LO locale
+        // D1 = MID(A1;2;3) - semicolons for LO locale
         wb.set_cell_formula("D1", "=MID(A1;2;3)").await.unwrap();
         wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();
@@ -254,7 +254,7 @@ fn test_xls_formula_cached_values() {
         let mut wb = b.create_workbook().await.unwrap();
         wb.set_cell_value("A1", 10.0).await.unwrap();
         wb.set_cell_value("A2", 20.0).await.unwrap();
-        // B1 = SUM(A1:A2) — cached numeric result should be 30
+        // B1 = SUM(A1:A2) - cached numeric result should be 30
         wb.set_cell_formula("B1", "=SUM(A1:A2)").await.unwrap();
         wb.save_as_xls(path.to_str().unwrap()).await.unwrap();
         wb.close().await.unwrap();
@@ -426,7 +426,7 @@ fn test_xls_formula_named_range_in_expression() {
     cleanup_fixture(&path);
 }
 
-/// Phase 3: Array constant in formula — `=SUM({1;2;3})` uses tArray tokens.
+/// Phase 3: Array constant in formula - `=SUM({1;2;3})` uses tArray tokens.
 /// LO semicolons separate rows in array constants (same as args).
 #[test]
 fn test_xls_formula_array_constant() {
@@ -437,7 +437,7 @@ fn test_xls_formula_array_constant() {
         let lo = lo_bridge().await.unwrap();
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
-        // SUM({1;2;3}) — column array constant (LO uses ; for row separator)
+        // SUM({1;2;3}) - column array constant (LO uses ; for row separator)
         // In LO locale, both arg separator and array row separator are ;
         // so =SUM({1;2;3}) means SUM of a 3x1 column array = 6
         wb.set_cell_formula("A1", "=SUM({1;2;3})").await.unwrap();
@@ -463,7 +463,7 @@ fn test_xls_formula_array_constant() {
     cleanup_fixture(&path);
 }
 
-/// Phase 3: CSE array formula — entered with Ctrl+Shift+Enter.
+/// Phase 3: CSE array formula - entered with Ctrl+Shift+Enter.
 /// LO stores these as FORMULA records with tExp + ARRAY record.
 #[test]
 fn test_xls_formula_cse_array_formula() {
@@ -505,7 +505,7 @@ fn test_xls_formula_cse_array_formula() {
     cleanup_fixture(&path);
 }
 
-/// Phase 3: Shared formulas — when a column has the same formula pattern,
+/// Phase 3: Shared formulas - when a column has the same formula pattern,
 /// Excel stores a single SHAREDFMLA record and each cell uses tExp + tRefN.
 /// LO does this automatically when adjacent cells have the same pattern.
 #[test]
@@ -523,7 +523,7 @@ fn test_xls_formula_shared_formula() {
                 .await
                 .unwrap();
         }
-        // B1:B5 = A1*2, A2*2, ... — LO will generate a shared formula
+        // B1:B5 = A1*2, A2*2, ... - LO will generate a shared formula
         for i in 1..=5 {
             wb.set_cell_formula(&format!("B{i}"), &format!("=A{i}*2"))
                 .await

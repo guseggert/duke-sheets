@@ -1,9 +1,9 @@
 //! Evaluation cache for a single `calculate()` pass.
 //!
 //! Provides three layers of caching:
-//! - **Tier 1**: Range materialization cache — avoids re-reading cells for the same range
-//! - **Tier 2**: Lookup hash index — O(1) exact-match lookups for MATCH/VLOOKUP/XLOOKUP
-//! - **Tier 3**: Sheet name → index cache — avoids linear scan for cross-sheet references
+//! - **Tier 1**: Range materialization cache - avoids re-reading cells for the same range
+//! - **Tier 2**: Lookup hash index - O(1) exact-match lookups for MATCH/VLOOKUP/XLOOKUP
+//! - **Tier 3**: Sheet name → index cache - avoids linear scan for cross-sheet references
 
 use std::sync::Arc;
 
@@ -89,7 +89,7 @@ impl LookupIndex {
         let mut index = AHashMap::with_capacity(values.len());
         for (i, v) in values.iter().enumerate() {
             let key = LookupKey::from(v);
-            // Only insert if not present — first occurrence wins
+            // Only insert if not present - first occurrence wins
             index.entry(key).or_insert(i);
         }
         Self { index }

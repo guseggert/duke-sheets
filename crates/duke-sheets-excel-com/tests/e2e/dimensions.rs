@@ -54,7 +54,7 @@ fn test_custom_column_width() {
     let workbook = XlsxReader::read_file(&fixture.host_path).expect("read");
     let sheet = workbook.worksheet(0).expect("worksheet");
     let width = sheet.column_width(0);
-    // Excel's column width conversion is approximate — allow some tolerance
+    // Excel's column width conversion is approximate - allow some tolerance
     assert!(
         width > 15.0,
         "Column width should be significantly wider than default (8.43), got {}",

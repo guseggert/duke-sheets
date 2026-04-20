@@ -207,7 +207,7 @@ impl Locale {
         ssfmt::Locale {
             decimal_separator: self.decimal_separator,
             thousands_separator: self.thousands_separator,
-            // ssfmt uses &'static str — we leak the string to satisfy the
+            // ssfmt uses &'static str - we leak the string to satisfy the
             // lifetime.  This is fine: locales are long-lived and few in
             // number (typically one per workbook).
             currency_symbol: leak_str(&self.currency_symbol),
@@ -221,7 +221,6 @@ impl Locale {
     }
 }
 
-// ---- Helpers ----
 
 fn arr_s<const N: usize>(src: [&str; N]) -> [String; N] {
     src.map(String::from)

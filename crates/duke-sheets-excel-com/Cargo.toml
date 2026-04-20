@@ -2,7 +2,7 @@
 name = "duke-sheets-excel-com"
 version = "0.1.0"
 edition = "2021"
-description = "Excel COM automation via C# bridge in Windows VM — native Linux client library"
+description = "Excel COM automation via C# bridge in Windows VM - native Linux client library"
 
 [dependencies]
 excel-com-protocol = { path = "../excel-com-protocol" }

@@ -29,7 +29,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
         let base = ptg::base_ptg(raw_byte);
 
         match base {
-            // ---- Binary operators (1 byte each, no data) ----
+            // Binary operators (1 byte each, no data)
             ptg::PTG_ADD => tokens.push(ParsedToken::Add),
             ptg::PTG_SUB => tokens.push(ParsedToken::Sub),
             ptg::PTG_MUL => tokens.push(ParsedToken::Mul),
@@ -46,13 +46,11 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
             ptg::PTG_LIST => tokens.push(ParsedToken::List),
             ptg::PTG_RANGE => tokens.push(ParsedToken::Range),
 
-            // ---- Unary operators ----
             ptg::PTG_UPLUS => tokens.push(ParsedToken::Uplus),
             ptg::PTG_UMINUS => tokens.push(ParsedToken::Uminus),
             ptg::PTG_PERCENT => tokens.push(ParsedToken::Percent),
             ptg::PTG_PAREN => tokens.push(ParsedToken::Paren),
 
-            // ---- Constants ----
             ptg::PTG_MISS_ARG => tokens.push(ParsedToken::MissArg),
 
             ptg::PTG_STR => {
@@ -127,7 +125,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 tokens.push(ParsedToken::Num(val));
             }
 
-            // ---- tAttr (0x19) — sub-types ----
+            // tAttr (0x19) - sub-types
             ptg::PTG_ATTR => {
                 if pos + 3 > data.len() {
                     break;
@@ -176,7 +174,6 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 }
             }
 
-            // ---- Cell references ----
             ptg::PTG_REF => {
                 if pos + 4 > data.len() {
                     break;
@@ -210,7 +207,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
             }
 
             ptg::PTG_REF_ERR => {
-                // 4 bytes of deleted ref data — skip
+                // 4 bytes of deleted ref data - skip
                 if pos + 4 > data.len() {
                     break;
                 }
@@ -219,7 +216,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
             }
 
             ptg::PTG_AREA_ERR => {
-                // 8 bytes of deleted area data — skip
+                // 8 bytes of deleted area data - skip
                 if pos + 8 > data.len() {
                     break;
                 }
@@ -227,7 +224,6 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 tokens.push(ParsedToken::AreaErr);
             }
 
-            // ---- Functions ----
             ptg::PTG_FUNC => {
                 if pos + 2 > data.len() {
                     break;
@@ -248,7 +244,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 tokens.push(ParsedToken::FuncVar { argc, func_idx });
             }
 
-            // ---- Phase 2 tokens: parse data, emit stubs ----
+            // Phase 2 tokens: parse data, emit stubs
             ptg::PTG_NAME => {
                 if pos + 4 > data.len() {
                     break;
@@ -325,7 +321,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 tokens.push(ParsedToken::AreaErr3d { extern_sheet_idx });
             }
 
-            // ---- tExp: array/shared formula indicator ----
+            // tExp: array/shared formula indicator
             ptg::PTG_EXP => {
                 if pos + 4 > data.len() {
                     break;
@@ -339,14 +335,14 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 });
             }
 
-            // ---- Memory tokens (Phase 3 — skip sub-expression bytes) ----
+            // Memory tokens (Phase 3 - skip sub-expression bytes)
             ptg::PTG_MEM_FUNC => {
                 if pos + 2 > data.len() {
                     break;
                 }
                 let subexpr_len = u16::from_le_bytes([data[pos], data[pos + 1]]);
                 pos += 2;
-                // Don't skip the sub-expression — it contains real tokens
+                // Don't skip the sub-expression - it contains real tokens
                 // that the decompiler needs to process. MemFunc is just a
                 // hint to Excel's evaluator.
                 tokens.push(ParsedToken::MemFunc { subexpr_len });
@@ -363,7 +359,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 tokens.push(ParsedToken::MemFunc { subexpr_len });
             }
 
-            // ---- Phase 3 stubs: relative refs, array, table ----
+            // Phase 3 stubs: relative refs, array, table
             ptg::PTG_REF_N => {
                 // tRefN: 4 bytes with signed offsets for shared formulas.
                 if pos + 4 > data.len() {
@@ -423,7 +419,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
             }
 
             _ => {
-                // Truly unknown token — can't determine size, stop parsing
+                // Truly unknown token - can't determine size, stop parsing
                 tokens.push(ParsedToken::Unknown(raw_byte));
                 break;
             }
@@ -467,7 +463,7 @@ fn parse_array_constant(extra: &[u8], epos: &mut usize) -> String {
             *epos += 1;
             let val_str = match type_byte {
                 0x00 => {
-                    // Empty — some implementations write 8 padding bytes
+                    // Empty - some implementations write 8 padding bytes
                     if *epos + 8 <= extra.len() {
                         *epos += 8;
                     }
@@ -558,7 +554,7 @@ fn parse_array_constant(extra: &[u8], epos: &mut usize) -> String {
                     }
                 }
                 _ => {
-                    // Unknown element type — skip 8 bytes (common padding)
+                    // Unknown element type - skip 8 bytes (common padding)
                     if *epos + 8 <= extra.len() {
                         *epos += 8;
                     }

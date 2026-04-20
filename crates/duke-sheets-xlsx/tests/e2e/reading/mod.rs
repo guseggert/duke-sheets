@@ -1,4 +1,4 @@
-//! Reading tests — create XLSX fixtures via LibreOffice URP bridge, read them
+//! Reading tests - create XLSX fixtures via LibreOffice URP bridge, read them
 //! back with `XlsxReader`, and assert correctness.
 
 mod alignment;

@@ -34,7 +34,7 @@ pub struct Layout {
     pub manual_layout: Option<ManualLayout>,
 }
 
-/// Manual positioning (fractional coordinates 0.0–1.0)
+/// Manual positioning (fractional coordinates 0.0-1.0)
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ManualLayout {
     pub x: Option<f64>,

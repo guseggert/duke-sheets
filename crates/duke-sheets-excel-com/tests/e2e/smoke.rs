@@ -104,7 +104,7 @@ fn smoke_test_round_trip() {
     // Strings
     assert_string(&sheet, 0, 1, "Hello", "B1");
     assert_string(&sheet, 1, 1, "World with spaces", "B2");
-    // B3 (empty string) — Excel may not write a cell for "" at all
+    // B3 (empty string) - Excel may not write a cell for "" at all
     let b3 = sheet.cell_at(2, 1);
     assert!(
         b3.is_none()
@@ -120,7 +120,7 @@ fn smoke_test_round_trip() {
     assert_bool(&sheet, 0, 2, true, "C1");
     assert_bool(&sheet, 1, 2, false, "C2");
 
-    // Formulas — check the cached computed values
+    // Formulas - check the cached computed values
     assert_number(&sheet, 0, 3, 42.0 + 3.14159, "D1");
     assert_number(&sheet, 1, 3, 42.0 + 3.14159 - 100.0, "D2");
     assert_number(&sheet, 2, 3, 84.0, "D3");

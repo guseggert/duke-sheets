@@ -1,4 +1,4 @@
-# BIFF8 Formula Token Parser — Implementation Checklist
+# BIFF8 Formula Token Parser - Implementation Checklist
 
 This document is a comprehensive reference and checklist for implementing the
 BIFF8 formula token (Ptg) parser. The goal is to decompile the raw RPN byte
@@ -6,7 +6,7 @@ stream stored in FORMULA records into human-readable formula text (e.g.,
 `=SUM(A1:A10)`).
 
 **Scope**: Read-only decompilation. We do NOT need to compile text→tokens or
-evaluate tokens — we already have cached formula results from the FORMULA
+evaluate tokens - we already have cached formula results from the FORMULA
 record.
 
 ---
@@ -15,11 +15,11 @@ record.
 
 ```
 crates/duke-sheets-xls/src/biff/formula/
-  mod.rs            — public API: decompile(data, ctx) -> String
-  ptg.rs            — token type enum (~39 base types + tAttr sub-types)
-  function_table.rs — BIFF8 function index -> name (485 entries)
-  token_parser.rs   — byte stream -> Vec<Token>
-  decompiler.rs     — RPN token stack -> infix formula string
+  mod.rs            - public API: decompile(data, ctx) -> String
+  ptg.rs            - token type enum (~39 base types + tAttr sub-types)
+  function_table.rs - BIFF8 function index -> name (485 entries)
+  token_parser.rs   - byte stream -> Vec<Token>
+  decompiler.rs     - RPN token stack -> infix formula string
 ```
 
 ### Context struct needed by `decompile()`:
@@ -37,14 +37,14 @@ pub struct FormulaContext<'a> {
 
 ---
 
-## Phase 1 — MVP (~1,200 lines)
+## Phase 1 - MVP (~1,200 lines)
 
 Covers: literals, all operators, cell/area refs, basic functions.
 This phase handles ~90% of real-world formulas.
 
 ### Token Types
 
-#### Unary/Binary Operators (unclassified, base 0x00–0x13)
+#### Unary/Binary Operators (unclassified, base 0x00-0x13)
 
 | Byte | Name        | Description               | Size | Status |
 |------|-------------|---------------------------|------|--------|
@@ -68,7 +68,7 @@ This phase handles ~90% of real-world formulas.
 | 0x14 | tPercent    | Percent (%)               | 1    | [x]    |
 | 0x15 | tParen      | Parentheses (display)     | 1    | [x]    |
 
-#### Constant Operands (unclassified, 0x16–0x1E)
+#### Constant Operands (unclassified, 0x16-0x1E)
 
 | Byte | Name        | Description               | Size | Status |
 |------|-------------|---------------------------|------|--------|
@@ -94,7 +94,7 @@ The tAttr token has a flags byte at offset +1 that determines the sub-type:
 | 0x20  | tAttrAssign    | Assign to name (macro sheets)        | 2           | [x]    |
 | 0x40  | tAttrSpace     | Whitespace/formatting preservation   | 2           | [x]    |
 
-#### Classified Operand Tokens (base 0x20–0x3F, with R/V/A variants)
+#### Classified Operand Tokens (base 0x20-0x3F, with R/V/A variants)
 
 These tokens have three class variants, determined by adding 0x00 (R),
 0x20 (V), or 0x40 (A) to the base byte:
@@ -123,7 +123,7 @@ These tokens have three class variants, determined by adding 0x00 (R),
 
 > **Class variants**: R (reference) = base+0x00, V (value) = base+0x20,
 > A (array) = base+0x40. For decompilation purposes the class does not affect
-> the output string — strip with `base = byte & 0x1F` when byte >= 0x20.
+> the output string - strip with `base = byte & 0x1F` when byte >= 0x20.
 
 ### Decompiler Stack Machine
 
@@ -142,8 +142,8 @@ a string stack:
 
 ```
 tRef (4 bytes after ptg byte):
-  row:     u16  (bytes 0-1) — 0-based row index (0–65535)
-  col_rw:  u16  (bytes 2-3) — bits 0-7: column (0-255)
+  row:     u16  (bytes 0-1) - 0-based row index (0-65535)
+  col_rw:  u16  (bytes 2-3) - bits 0-7: column (0-255)
                                bit 14: row is relative
                                bit 15: column is relative
 
@@ -151,19 +151,19 @@ tArea (8 bytes after ptg byte):
   first_row: u16, last_row: u16, first_col_rw: u16, last_col_rw: u16
 ```
 
-For decompilation in non-shared formulas, relative flags are ignored — always
+For decompilation in non-shared formulas, relative flags are ignored - always
 emit absolute-style A1 notation (e.g., `A1`, `B2:C10`).
 
 ### Phase 1 Implementation Steps
 
 - [x] Create `crates/duke-sheets-xls/src/biff/formula/` directory
-- [x] `mod.rs` — `pub fn decompile(data: &[u8], sheet_names: &[String]) -> String`
-- [x] `ptg.rs` — token byte constants, `base_ptg()` class stripper, `token_data_size()`
-- [x] `function_table.rs` — `fn function_name(idx: u16) -> &'static str` (all 485 entries)
-- [x] `token_parser.rs` — `fn parse_tokens(data: &[u8]) -> Vec<ParsedToken>`
+- [x] `mod.rs` - `pub fn decompile(data: &[u8], sheet_names: &[String]) -> String`
+- [x] `ptg.rs` - token byte constants, `base_ptg()` class stripper, `token_data_size()`
+- [x] `function_table.rs` - `fn function_name(idx: u16) -> &'static str` (all 485 entries)
+- [x] `token_parser.rs` - `fn parse_tokens(data: &[u8]) -> Vec<ParsedToken>`
   - ParsedToken enum with all Phase 1 token types + Phase 2/3 stubs
   - Handles R/V/A class variants transparently
-- [x] `decompiler.rs` — `fn decompile(tokens: &[ParsedToken], sheet_names: &[String]) -> String`
+- [x] `decompiler.rs` - `fn decompile(tokens: &[ParsedToken], sheet_names: &[String]) -> String`
   - RPN stack machine → infix string with operator precedence
 - [x] Hook into `reader.rs`: extract `cce` + token bytes from FORMULA record, call `decompile()`
 - [x] Operator precedence table for minimal parenthesization
@@ -185,18 +185,18 @@ emit absolute-style A1 notation (e.g., `A1`, `B2:C10`).
 
 ---
 
-## Phase 2 — 3D References & Names (~700 lines)
+## Phase 2 - 3D References & Names (~700 lines)
 
 Covers: cross-sheet refs, defined names, external refs. Requires parsing
 additional global records (EXTERNSHEET, NAME).
 
 ### New Global Records to Parse
 
-- [x] **EXTERNSHEET** (0x0017) — Maps sheet reference indices to actual sheets.
+- [x] **EXTERNSHEET** (0x0017) - Maps sheet reference indices to actual sheets.
   Format: `num_entries: u16`, then for each: `sup_book_idx: u16`,
   `first_sheet: u16`, `last_sheet: u16`.
-- [x] **SUPBOOK** (0x01AE) — Supporting workbook record (self-ref, add-in, external).
-- [x] **NAME** (0x0018/0x0218) — Defined name records.
+- [x] **SUPBOOK** (0x01AE) - Supporting workbook record (self-ref, add-in, external).
+- [x] **NAME** (0x0018/0x0218) - Defined name records.
   Format: flags, keyboard_shortcut, name_length, formula_length,
   sheet_index, name_string, formula_tokens.
 
@@ -230,14 +230,14 @@ extern_sheet_idx → (sup_book, first_sheet, last_sheet)
 ### Phase 2 Test Cases
 
 - [x] Cross-sheet ref: `=Sheet2!A1` (E2E: `test_xls_formula_cross_sheet_ref`)
-- [ ] Multi-sheet range: `=SUM(Sheet1:Sheet3!A1)` (unit test only — LO bridge can't create multi-sheet formulas)
+- [ ] Multi-sheet range: `=SUM(Sheet1:Sheet3!A1)` (unit test only - LO bridge can't create multi-sheet formulas)
 - [x] Sheet name with spaces: `='My Sheet'!A1` (E2E: `test_xls_formula_cross_sheet_quoted_name`)
 - [x] Defined name: `=MyRange*2` (E2E: `test_xls_formula_named_range`, `test_xls_formula_named_range_in_expression`)
-- [ ] External name: `=[Book1.xlsx]Sheet1!A1` (unit test only — requires external workbook)
+- [ ] External name: `=[Book1.xlsx]Sheet1!A1` (unit test only - requires external workbook)
 
 ---
 
-## Phase 3 — Edge Cases (~650 lines)
+## Phase 3 - Edge Cases (~650 lines)
 
 Covers: shared formulas, array constants, memory tokens, range operators.
 
@@ -296,7 +296,7 @@ Output: `{1,2,3;4,5,6}` (semicolons separate rows, commas separate columns)
 485 BIFF8 built-in functions. Index is the `iftab` field in tFunc/tFuncVar.
 
 **Argument count encoding:**
-- 0–253: exact fixed argument count
+- 0-253: exact fixed argument count
 - 254: variable args, minimum from argc, actual count in tFuncVar token
 - 255: variable args (0 or more)
 - 128: paired variable args (COUNTIFS-style: 128 + min_pairs)
@@ -507,7 +507,7 @@ Values: 0-253 = fixed; 254 = variable (min from table); 255 = variable (0+);
 - [x] Parse NAME records in globals section of reader.rs
 - [x] Build `FormulaContext` from parsed globals
 - [x] In FORMULA record handler: call `decompile()` with `FormulaContext`
-- [x] Handle decompile failures gracefully — fall back to empty string, log warning
+- [x] Handle decompile failures gracefully - fall back to empty string, log warning
 - [ ] Remove "formula text partial" known issue from TODO.md when Phase 3 complete
 - [x] Add `formula` module to `biff/mod.rs` exports
 
@@ -520,15 +520,15 @@ Values: 0-253 = fixed; 254 = variable (min from table); 255 = variable (0+);
 | 1     | ~1,200      | ~30            | ~90%                |
 | 2     | ~700        | ~6             | ~98%                |
 | 3     | ~650        | ~7             | ~100%               |
-| **Total** | **~2,550** | **~43**     | —                   |
+| **Total** | **~2,550** | **~43**     | -                   |
 
 ---
 
 ## References
 
-- [MS-XLS] §2.5.198 — Rgce (formula token stream)
-- [MS-XLS] §2.5.198.1–198.93 — Individual Ptg definitions
-- [MS-XLS] §2.4.168 — NAME record
-- [MS-XLS] §2.4.106 — EXTERNSHEET record
-- calamine `src/utils.rs` — FTAB/FTAB_ARGC arrays (MIT license)
-- calamine `src/xls/mod.rs` — reference parser implementation
+- [MS-XLS] §2.5.198 - Rgce (formula token stream)
+- [MS-XLS] §2.5.198.1-198.93 - Individual Ptg definitions
+- [MS-XLS] §2.4.168 - NAME record
+- [MS-XLS] §2.4.106 - EXTERNSHEET record
+- calamine `src/utils.rs` - FTAB/FTAB_ARGC arrays (MIT license)
+- calamine `src/xls/mod.rs` - reference parser implementation

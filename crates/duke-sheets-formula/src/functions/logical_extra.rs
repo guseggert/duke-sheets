@@ -229,7 +229,7 @@ mod tests {
         .unwrap();
         assert_eq!(result, FormulaValue::Number(6.0));
 
-        // Via eval — string name, inline SUM(5,1)
+        // Via eval - string name, inline SUM(5,1)
         assert_eq!(
             eval("=LET(\"x\",5,SUM(5,1))").unwrap(),
             FormulaValue::Number(6.0)
@@ -309,7 +309,7 @@ mod tests {
             FormulaValue::Error(CellError::Div0)
         );
 
-        // Error in name position is NOT checked — passes through to last arg
+        // Error in name position is NOT checked - passes through to last arg
         let result = fn_let(
             &[
                 FormulaValue::Error(CellError::Value),

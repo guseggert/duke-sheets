@@ -164,7 +164,7 @@ npm test                   # Run tests (119 tests)
 
 ### Package: `@dukelib/sheets`
 
-- **Async API**: `openAsync()`, `calculateAsync()`, `saveAsync()` — run on libuv thread pool
+- **Async API**: `openAsync()`, `calculateAsync()`, `saveAsync()` - run on libuv thread pool
 - **Read-only accessors**: 50+ methods for inspecting styles, comments, hyperlinks, tables, etc.
 - **Multi-platform CI**: GitHub Actions builds for Linux, macOS, and Windows
 - **Consumable from GitHub Releases** without publishing to npm

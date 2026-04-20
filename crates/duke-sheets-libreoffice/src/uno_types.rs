@@ -11,7 +11,7 @@ use libreoffice_urp::types::UnoValue;
 
 // UNO Structs
 
-/// `com.sun.star.table.CellAddress` — identifies a single cell by sheet, column, row.
+/// `com.sun.star.table.CellAddress` - identifies a single cell by sheet, column, row.
 ///
 /// Wire format: Struct(Short, Long, Long)
 #[derive(Debug, Clone, Copy)]
@@ -36,7 +36,7 @@ impl CellAddress {
     }
 }
 
-/// `com.sun.star.table.BorderLine2` — describes a border line on a cell.
+/// `com.sun.star.table.BorderLine2` - describes a border line on a cell.
 ///
 /// Wire format: Struct(Long color, Short innerLineWidth, Short outerLineWidth,
 ///                     Short lineDistance, Short lineStyle, Long lineWidth)
@@ -83,7 +83,7 @@ impl BorderLine2 {
     }
 }
 
-/// `com.sun.star.lang.Locale` — specifies a language/country locale.
+/// `com.sun.star.lang.Locale` - specifies a language/country locale.
 ///
 /// Wire format: Struct(String language, String country, String variant)
 ///
@@ -126,7 +126,7 @@ impl Locale {
 
 // UNO Enum Constants
 
-/// `com.sun.star.awt.FontWeight` — font weight constants.
+/// `com.sun.star.awt.FontWeight` - font weight constants.
 ///
 /// These are float values in UNO but sent as property values (typically as floats).
 /// The Python code uses raw numeric value 150 for BOLD.
@@ -137,7 +137,7 @@ pub mod font_weight {
     pub const BOLD: f32 = 150.0;
 }
 
-/// `com.sun.star.awt.FontSlant` — font slant (posture) constants.
+/// `com.sun.star.awt.FontSlant` - font slant (posture) constants.
 ///
 /// These are enum ordinal values sent as integers.
 pub mod font_slant {
@@ -147,7 +147,7 @@ pub mod font_slant {
     pub const ITALIC: i16 = 2;
 }
 
-/// `com.sun.star.awt.FontUnderline` — underline style constants.
+/// `com.sun.star.awt.FontUnderline` - underline style constants.
 pub mod font_underline {
     pub const NONE: i16 = 0;
     pub const SINGLE: i16 = 1;
@@ -168,13 +168,13 @@ pub mod font_underline {
     }
 }
 
-/// `com.sun.star.awt.FontStrikeout` — strikethrough constants.
+/// `com.sun.star.awt.FontStrikeout` - strikethrough constants.
 pub mod font_strikeout {
     pub const NONE: i16 = 0;
     pub const SINGLE: i16 = 1;
 }
 
-/// `com.sun.star.table.CellHoriJustify` — horizontal alignment constants.
+/// `com.sun.star.table.CellHoriJustify` - horizontal alignment constants.
 ///
 /// IDL enum ordinals: STANDARD=0, LEFT=1, CENTER=2, RIGHT=3, BLOCK=4, REPEAT=5.
 ///
@@ -207,7 +207,7 @@ pub mod hori_justify {
     }
 }
 
-/// `com.sun.star.table.CellVertJustify` — vertical alignment constants.
+/// `com.sun.star.table.CellVertJustify` - vertical alignment constants.
 ///
 /// IDL enum ordinals: STANDARD=0, TOP=1, CENTER=2, BOTTOM=3.
 ///
@@ -235,7 +235,7 @@ pub mod vert_justify {
     }
 }
 
-/// `com.sun.star.table.BorderLineStyle` — border line style constants.
+/// `com.sun.star.table.BorderLineStyle` - border line style constants.
 ///
 /// IDL constants group (NOT a sequential enum):
 ///   SOLID=0, DOTTED=1, DASHED=2, DOUBLE=3, DOUBLE_THIN=15, NONE=0x7FFF
@@ -278,7 +278,7 @@ pub mod border_line_style {
     }
 }
 
-/// `com.sun.star.sheet.ConditionOperator` — conditional format operator constants.
+/// `com.sun.star.sheet.ConditionOperator` - conditional format operator constants.
 ///
 /// These are UNO enum values (sent as i32 over URP).
 pub mod condition_operator {
@@ -311,7 +311,7 @@ pub mod condition_operator {
     }
 }
 
-/// `com.sun.star.sheet.ValidationType` — data validation type constants.
+/// `com.sun.star.sheet.ValidationType` - data validation type constants.
 pub mod validation_type {
     pub const ANY: i32 = 0;
     pub const LIST: i32 = 6;
@@ -338,7 +338,7 @@ pub mod validation_type {
     }
 }
 
-/// `com.sun.star.sheet.ValidationAlertStyle` — error alert style constants.
+/// `com.sun.star.sheet.ValidationAlertStyle` - error alert style constants.
 pub mod validation_alert_style {
     pub const STOP: i32 = 0;
     pub const WARNING: i32 = 1;
@@ -357,7 +357,7 @@ pub mod validation_alert_style {
     }
 }
 
-/// `com.sun.star.awt.Gradient` — describes a gradient fill.
+/// `com.sun.star.awt.Gradient` - describes a gradient fill.
 ///
 /// Wire format: Struct(Enum style, Long startColor, Long endColor, Short angle,
 ///                     Short border, Short xOffset, Short yOffset,
@@ -420,7 +420,7 @@ impl GradientSpec {
     }
 }
 
-/// `com.sun.star.drawing.FillStyle` — enum for fill type on cell backgrounds.
+/// `com.sun.star.drawing.FillStyle` - enum for fill type on cell backgrounds.
 pub mod drawing_fill_style {
     pub const NONE: i32 = 0;
     pub const SOLID: i32 = 1;
@@ -449,7 +449,7 @@ pub mod struct_type_names {
     pub const CELL_STYLE: &str = "com.sun.star.style.CellStyle";
 }
 
-// StyleSpec — Rust port of Python's StyleSpec dataclass
+// StyleSpec - Rust port of Python's StyleSpec dataclass
 
 /// Specification for cell/range styling, mirroring the Python `StyleSpec` dataclass.
 ///
@@ -464,7 +464,7 @@ pub struct StyleSpec {
     pub font_color: Option<i32>,
     pub font_size: Option<f32>,
     pub font_name: Option<String>,
-    /// "superscript" or "subscript" — sets CharEscapement/CharEscapementHeight
+    /// "superscript" or "subscript" - sets CharEscapement/CharEscapementHeight
     pub font_vertical_align: Option<String>,
 
     // Fill

@@ -152,7 +152,7 @@ impl DependencyGraph {
     ///
     /// Returns the set of cells that belong to any strongly connected component
     /// with 2+ members, plus self-referential cells with a direct self-edge.
-    /// Runs in O(V+E) — single pass over the entire graph, much faster than
+    /// Runs in O(V+E) - single pass over the entire graph, much faster than
     /// per-cell cycle detection.
     pub fn find_circular_cells(&self) -> HashSet<CellKey> {
         self.ensure_circular_cells_cache();
@@ -278,7 +278,7 @@ impl TarjanState<'_> {
                 frame.neighbor_idx += 1;
 
                 if !self.indices.contains_key(&w) {
-                    // w not yet visited — "recurse"
+                    // w not yet visited - "recurse"
                     self.indices.insert(w, self.index_counter);
                     self.lowlinks.insert(w, self.index_counter);
                     self.index_counter += 1;
@@ -290,7 +290,7 @@ impl TarjanState<'_> {
                         neighbor_idx: 0,
                     });
                 } else if self.on_stack.contains(&w) {
-                    // w is on stack — back edge
+                    // w is on stack - back edge
                     let w_index = self.indices[&w];
                     let v_lowlink = self.lowlinks.get_mut(&v).unwrap();
                     if w_index < *v_lowlink {

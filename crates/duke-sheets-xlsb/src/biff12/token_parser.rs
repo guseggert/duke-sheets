@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn test_parse_ref_large_row() {
-        // Row 100000 — beyond BIFF8 u16 range
+        // Row 100000 - beyond BIFF8 u16 range
         let mut data = vec![0x44];
         data.extend_from_slice(&make_ref(100_000, 5, true, true));
         let tokens = parse_tokens(&data);

@@ -1,6 +1,6 @@
 //! BIFF8 record type constants.
 //!
-//! Reference: [MS-XLS] §2.3 — Record Enumeration
+//! Reference: [MS-XLS] §2.3 - Record Enumeration
 
 // ── Stream structure ────────────────────────────────────────────────────
 pub const BOF: u16 = 0x0809;
@@ -10,7 +10,7 @@ pub const CONTINUE: u16 = 0x003C;
 // ── Workbook globals ────────────────────────────────────────────────────
 pub const BOUNDSHEET: u16 = 0x0085; // Sheet name, type, visibility, stream offset
 pub const SST: u16 = 0x00FC; // Shared String Table
-pub const EXTSST: u16 = 0x00FF; // Extended SST (hash table — we skip it)
+pub const EXTSST: u16 = 0x00FF; // Extended SST (hash table - we skip it)
 pub const DATEMODE: u16 = 0x0022; // 1900 vs 1904 date system (a.k.a. DATE1904)
 pub const CODEPAGE: u16 = 0x0042; // Code page (should be 1200 = UTF-16 for BIFF8)
 pub const PALETTE: u16 = 0x0092; // Custom color palette (overrides default 56)

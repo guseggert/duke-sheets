@@ -815,7 +815,7 @@ export interface JsChartShapeProperties {
   lineDashStyle?: string
 }
 
-/** A chart sheet — a sheet that contains only a chart. */
+/** A chart sheet - a sheet that contains only a chart. */
 export interface JsChartSheet {
   name: string
   chart: JsChart
@@ -856,7 +856,7 @@ export interface JsColor {
   g?: number
   b?: number
   a?: number
-  /** Theme color index (0–9), present when `colorType === "theme"`. */
+  /** Theme color index (0-9), present when `colorType === "theme"`. */
   themeIndex?: number
   /** Tint percentage (-100 to 100), present when `colorType === "theme"`. */
   tint?: number
@@ -1216,7 +1216,7 @@ export interface JsPageSetup {
   paperSize: number
   /** `"portrait"` or `"landscape"`. */
   orientation: string
-  /** Scale percentage (10–400). */
+  /** Scale percentage (10-400). */
   scale: number
   fitToWidth?: number
   fitToHeight?: number
@@ -1300,7 +1300,7 @@ export interface JsRowsOptions {
   skipBlankValues?: boolean
 }
 
-/** Font properties for a rich text run (all fields optional — unset inherits cell style). */
+/** Font properties for a rich text run (all fields optional - unset inherits cell style). */
 export interface JsRunFont {
   bold?: boolean
   italic?: boolean

@@ -111,7 +111,7 @@ public sealed class ComObjectStore : IDisposable
 
     /// <summary>
     /// Release a handle, freeing the COM reference.
-    /// Handle 0 (Excel.Application) cannot be released — use Dispose().
+    /// Handle 0 (Excel.Application) cannot be released - use Dispose().
     /// </summary>
     public void Release(ulong handle)
     {

@@ -564,7 +564,7 @@ impl<T: Clone + PartialEq> LruCache<T> {
             }
         }
 
-        // Not cached — insert at next_index (round-robin eviction)
+        // Not cached - insert at next_index (round-robin eviction)
         let index = self.next_index;
         self.entries[index as usize] = Some(value);
         self.next_index = (self.next_index + 1) % 256;

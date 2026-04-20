@@ -140,7 +140,7 @@ pub struct ChartExExternalData {
     pub auto_update: Option<bool>,
 }
 
-/// A data dimension — either string-typed or numeric-typed.
+/// A data dimension - either string-typed or numeric-typed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChartExDimension {
     /// String dimension (`cx:strDim`)
@@ -294,7 +294,7 @@ pub struct ChartExValueColorPositions {
     pub max: Option<ChartExColorPosition>,
 }
 
-/// A color position stop — extreme value, absolute number, or percentage.
+/// A color position stop - extreme value, absolute number, or percentage.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChartExColorPosition {
     /// Extreme (min or max) data value
@@ -416,7 +416,7 @@ pub struct ChartExAxis {
     pub extensions: Option<Vec<u8>>,
 }
 
-/// Axis scaling — either category-based or value-based.
+/// Axis scaling - either category-based or value-based.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChartExScaling {
     /// Category scaling (`cx:catScaling`)

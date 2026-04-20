@@ -28,11 +28,11 @@ Port forwarding (host → VM):
 
 ## Prerequisites
 
-- **KVM support** — `/dev/kvm` must exist. On EC2 use a `.metal` instance.
-- **sudo access** — needed for installing packages, mounting floppy images.
-- **Windows 11 ISO** — consumer or enterprise, any edition. Set `WIN_ISO`
+- **KVM support** - `/dev/kvm` must exist. On EC2 use a `.metal` instance.
+- **sudo access** - needed for installing packages, mounting floppy images.
+- **Windows 11 ISO** - consumer or enterprise, any edition. Set `WIN_ISO`
   env var or place at `~/Win11.iso`.
-- **~20 GB free disk space** — for QEMU build + Windows qcow2 disk.
+- **~20 GB free disk space** - for QEMU build + Windows qcow2 disk.
 
 On Amazon Linux 2023, QEMU and libslirp are not in repos and must be built
 from source. The `setup.sh` script handles this automatically.
@@ -62,7 +62,7 @@ BypassTPMCheck, BypassSecureBootCheck, BypassRAMCheck, BypassCPUCheck
 We boot in **legacy BIOS mode (SeaBIOS)** rather than UEFI (OVMF) because:
 
 1. OVMF UEFI CD-ROM boot is broken/unreliable with QEMU's IDE, SCSI, and
-   USB CD emulation — we consistently hit "Time out" errors trying to boot
+   USB CD emulation - we consistently hit "Time out" errors trying to boot
    the Windows ISO across multiple OVMF builds (retrage nightly, Fedora 41
    edk2-ovmf) and device types (IDE, AHCI, virtio-scsi, USB storage).
 2. SeaBIOS "just works" with `-cdrom` and a standard consumer Win11 ISO.
@@ -87,16 +87,16 @@ hv_spinlocks=0x1fff,hv_synic,hv_runtime,hv_time,hv_stimer,hv_vapic \
     -nic user,model=e1000,...
 ```
 
-- **`-M q35`** — modern PCIe chipset, best Windows compatibility.
-- **`-cpu host,hv_*`** — Hyper-V enlightenments. Windows detects these and
+- **`-M q35`** - modern PCIe chipset, best Windows compatibility.
+- **`-cpu host,hv_*`** - Hyper-V enlightenments. Windows detects these and
   uses optimized code paths for timers, IPIs, TLB flushes, etc. Significant
   performance improvement over plain `-cpu host`.
-- **`-device usb-tablet`** — absolute pointing device, avoids mouse capture.
-- **`-device VGA,vgamem_mb=256`** — more VRAM for the Win11 desktop.
-- **`-nic user,model=e1000`** — user-mode networking with Intel e1000 NIC
+- **`-device usb-tablet`** - absolute pointing device, avoids mouse capture.
+- **`-device VGA,vgamem_mb=256`** - more VRAM for the Win11 desktop.
+- **`-nic user,model=e1000`** - user-mode networking with Intel e1000 NIC
   (has in-box Windows driver, no virtio drivers needed).
-- **No OVMF/pflash** — SeaBIOS is built into QEMU, nothing extra needed.
-- **No virtio drivers** — we use default IDE disk and e1000 NIC. Virtio
+- **No OVMF/pflash** - SeaBIOS is built into QEMU, nothing extra needed.
+- **No virtio drivers** - we use default IDE disk and e1000 NIC. Virtio
   would be faster but requires installing guest drivers, which adds
   complexity for minimal benefit in a test VM.
 
@@ -128,7 +128,7 @@ by name:
 ```
 
 You also need a generic product key for the edition. For Pro:
-`W269N-WFGWX-YVC9B-4J6C9-T83GX` (well-known KMS/generic key — allows
+`W269N-WFGWX-YVC9B-4J6C9-T83GX` (well-known KMS/generic key - allows
 install without activation).
 
 To check which editions are in your ISO:
@@ -154,7 +154,7 @@ with open('/mnt/iso/sources/install.wim', 'rb') as f:
 #### MBR partitioning (not GPT)
 
 Since we're in BIOS mode, the disk must use MBR. Create a single active
-Primary partition — Windows will set up its own boot files:
+Primary partition - Windows will set up its own boot files:
 
 ```xml
 <DiskConfiguration>
@@ -182,7 +182,7 @@ Primary partition — Windows will set up its own boot files:
 </DiskConfiguration>
 ```
 
-Do **not** create EFI or MSR partitions in BIOS mode — the installer
+Do **not** create EFI or MSR partitions in BIOS mode - the installer
 will show "Windows 11 can't be installed" if you do.
 
 #### Passwords
@@ -201,9 +201,9 @@ fine for a local test VM:
 
 #### specialize vs FirstLogonCommands
 
-The `specialize` pass runs as **SYSTEM** — use it for registry
+The `specialize` pass runs as **SYSTEM** - use it for registry
 settings, firewall rules, and anything that doesn't need the network
-stack running. **Do not use specialize for WinRM** — `winrm
+stack running. **Do not use specialize for WinRM** - `winrm
 quickconfig` fails there because the network profile isn't set yet.
 
 WinRM setup goes in `FirstLogonCommands` (oobeSystem pass). UAC
@@ -319,7 +319,7 @@ interaction with the specific ISO format.
 
 We also tried creating a bootable GPT disk image with a FAT32 EFI
 partition + NTFS data partition (using Docker + ntfs-3g to handle
-install.wim > 4GB). This partially worked — UEFI found the Windows
+install.wim > 4GB). This partially worked - UEFI found the Windows
 Boot Manager but failed with "BCD missing" until we copied the full
 `\EFI\Microsoft\Boot\` directory. At that point the VM crashed on
 boot.
@@ -335,7 +335,7 @@ user-mode networking.
 
 **IMPORTANT**: Offline installer ISOs (like `HomeBusinessRetail.img`)
 are old Click-to-Run media whose format is incompatible with current
-ODT. Don't try to use them — just let ODT download fresh.
+ODT. Don't try to use them - just let ODT download fresh.
 
 From a WinRM session (or the helper script `winrm-exec.py`):
 
@@ -403,12 +403,12 @@ cp bin/Release/net8.0/win-x64/publish/ExcelBridgeServer.exe \
 
 The bridge server **must run in the logged-in user's desktop session**
 (Session 1), not from WinRM (Session 0). Excel COM automation requires
-an interactive desktop — it will hang or crash in a service session.
+an interactive desktop - it will hang or crash in a service session.
 
 Use a scheduled task with `LogonType Interactive`:
 
 ```powershell
-# Via WinRM — creates a task that runs in the desktop session
+# Via WinRM - creates a task that runs in the desktop session
 Copy-Item "\\10.0.2.4\qemu\ExcelBridgeServer.exe" C:\ExcelBridgeServer.exe
 $action = New-ScheduledTaskAction -Execute "C:\ExcelBridgeServer.exe"
 $principal = New-ScheduledTaskPrincipal -UserId "user" `
@@ -437,7 +437,7 @@ These were hard-won and cost significant debugging time:
 
 - **Use reflection-based JSON serializer**, not source-generated
   (`JsonSerializerContext`). Source-gen can't polymorphically
-  serialize `object?` properties — a `ValueData { Value = 3.0 }`
+  serialize `object?` properties - a `ValueData { Value = 3.0 }`
   silently serializes as `{}` instead of `{"value": 3}`.
 
 - **Tuple deconstruction fails with `dynamic`**. If a method takes

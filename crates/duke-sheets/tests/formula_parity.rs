@@ -12,7 +12,7 @@ struct ParityCase {
 }
 
 #[test]
-#[ignore = "requires data/formula-parity.xlsx — run `mise run test:excel` to generate"]
+#[ignore = "requires data/formula-parity.xlsx - run `mise run test:excel` to generate"]
 fn formula_parity_matches_excel_cached_values() {
     let fixture_path = formula_parity_path();
     if !fixture_path.exists() {

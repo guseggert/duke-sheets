@@ -30,7 +30,7 @@ static BRIDGE: OnceLock<Mutex<ExcelBridge>> = OnceLock::new();
 
 /// Get the global Excel bridge, connecting on first call.
 ///
-/// Panics if the bridge server is not available — tests require a running
+/// Panics if the bridge server is not available - tests require a running
 /// Windows VM with the bridge server on localhost:9876.
 pub fn excel_bridge() -> &'static Mutex<ExcelBridge> {
     BRIDGE.get_or_init(|| {
@@ -188,9 +188,7 @@ pub fn cleanup_fixture(fixture: &TempFixture) {
     let _ = run_winrm_ps(&ps);
 }
 
-// ---------------------------------------------------------------------------
 // Writer E2E helper: duke-sheets write → Excel open+re-save → duke-sheets read
-// ---------------------------------------------------------------------------
 
 /// Write a workbook with duke-sheets, push to the VM, open in real Excel
 /// (asserting no repair), re-save to a second file, pull back, and read
@@ -294,9 +292,7 @@ pub fn roundtrip_through_excel_xlsb(wb: &duke_sheets_core::Workbook) -> duke_she
     result
 }
 
-// ---------------------------------------------------------------------------
 // WinRM helper (raw SOAP/WS-Man over HTTP, Basic auth)
-// ---------------------------------------------------------------------------
 
 /// Run a PowerShell command on the VM via WinRM and return stdout.
 pub fn run_winrm_ps(script: &str) -> Result<String, String> {
@@ -459,9 +455,7 @@ fn soap_envelope(action: &str, shell_id: Option<&str>, body: &str) -> String {
     )
 }
 
-// ---------------------------------------------------------------------------
 // Minimal XML / UUID helpers
-// ---------------------------------------------------------------------------
 
 /// Extract a simple XML element value by tag name (handles namespace prefixes).
 fn extract_xml_value(xml: &str, tag: &str) -> Option<String> {
@@ -513,9 +507,7 @@ fn simple_uuid() -> String {
     )
 }
 
-// ---------------------------------------------------------------------------
 // Assertion helpers for tests
-// ---------------------------------------------------------------------------
 
 pub fn assert_number(
     sheet: &duke_sheets_core::Worksheet,

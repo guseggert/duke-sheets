@@ -11,7 +11,7 @@
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
 
-    <!-- DO NOT trim — COM interop relies on reflection/dynamic dispatch
+    <!-- DO NOT trim - COM interop relies on reflection/dynamic dispatch
          that is fundamentally incompatible with IL trimming -->
     <PublishTrimmed>false</PublishTrimmed>
 

@@ -1,7 +1,7 @@
 //! Text properties for chart text elements (titles, labels, axes).
 
 /// Simplified text properties for chart text (titles, labels, axes).
-/// Full DrawingML text model is huge — we capture the most common properties.
+/// Full DrawingML text model is huge - we capture the most common properties.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TextProperties {
     /// Rotation in 60,000ths of a degree

@@ -13,10 +13,10 @@ fn test_xls_hidden_sheet() {
         let mut b = lo.lock().await;
         let mut wb = b.create_workbook().await.unwrap();
 
-        // Sheet 0 (default) — visible
+        // Sheet 0 (default) - visible
         wb.set_cell_value("A1", "Visible sheet").await.unwrap();
 
-        // Add sheet 1 — will be hidden
+        // Add sheet 1 - will be hidden
         wb.add_sheet("Hidden").await.unwrap();
         let cell = wb.get_cell_on_sheet(1, 0, 0).await.unwrap();
         wb.set_cell_value_on_proxy(&cell, "Hidden sheet data".into())

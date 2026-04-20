@@ -1,4 +1,4 @@
-//! Calculation engine benchmarks — dependency resolution and evaluation.
+//! Calculation engine benchmarks - dependency resolution and evaluation.
 
 #[path = "helpers.rs"]
 mod helpers;
@@ -9,7 +9,7 @@ mod perf_fixtures;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use duke_sheets::WorkbookCalculationExt;
 
-/// Linear chain: A1=1, A2=A1+1, … AN=A(N-1)+1.
+/// Linear chain: A1=1, A2=A1+1, ... AN=A(N-1)+1.
 fn bench_calc_linear(c: &mut Criterion) {
     let depths: &[u32] = &[100, 500, 1000];
     let mut group = c.benchmark_group("calculation/linear_chain");

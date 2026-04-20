@@ -513,7 +513,7 @@ fn chart_roundtrip_through_excel() {
         }
     }
 
-    // 0: ColumnClustered — axis titles + legend
+    // 0: ColumnClustered - axis titles + legend
     {
         let c = &charts[0];
         let cat_ax = c
@@ -537,10 +537,10 @@ fn chart_roundtrip_through_excel() {
         assert_legend_pos(c, LegendPosition::Bottom, "chart 0 (ColumnClustered)");
     }
 
-    // 3: BarClustered — legend position
+    // 3: BarClustered - legend position
     assert_legend_pos(&charts[3], LegendPosition::Right, "chart 3 (BarClustered)");
 
-    // 6: Line — axes present (no titles, just existence)
+    // 6: Line - axes present (no titles, just existence)
     {
         let c = &charts[6];
         assert!(
@@ -550,7 +550,7 @@ fn chart_roundtrip_through_excel() {
         assert!(c.value_axis.is_some(), "chart 6 (Line) missing value_axis");
     }
 
-    // 8: Pie — legend=Right, no axes
+    // 8: Pie - legend=Right, no axes
     {
         let c = &charts[8];
         assert_legend_pos(c, LegendPosition::Right, "chart 8 (Pie)");
@@ -564,7 +564,7 @@ fn chart_roundtrip_through_excel() {
         );
     }
 
-    // 9: PieExploded — explosion=25
+    // 9: PieExploded - explosion=25
     {
         let explosion = charts[9].series[0]
             .explosion
@@ -572,7 +572,7 @@ fn chart_roundtrip_through_excel() {
         assert_eq!(explosion, 25, "chart 9 explosion");
     }
 
-    // 10: Doughnut — hole_size=50
+    // 10: Doughnut - hole_size=50
     {
         let hole = charts[10]
             .hole_size
@@ -580,7 +580,7 @@ fn chart_roundtrip_through_excel() {
         assert_eq!(hole, 50, "chart 10 hole_size");
     }
 
-    // 14-16: Scatter variants — series[0].name = "Data!$F$1"
+    // 14-16: Scatter variants - series[0].name = "Data!$F$1"
     for i in [14, 15, 16] {
         let c = &charts[i];
         assert_eq!(
@@ -591,7 +591,7 @@ fn chart_roundtrip_through_excel() {
         );
     }
 
-    // 16: ScatterMarkers — marker symbol + size
+    // 16: ScatterMarkers - marker symbol + size
     {
         let marker = charts[16].series[0]
             .marker
@@ -605,7 +605,7 @@ fn chart_roundtrip_through_excel() {
         assert_eq!(marker.size, Some(8), "chart 16 marker size");
     }
 
-    // 19: Stock — 3 series with specific names
+    // 19: Stock - 3 series with specific names
     {
         let c = &charts[19];
         let expected_names = ["Data!$I$1", "Data!$J$1", "Data!$K$1"];
@@ -618,7 +618,7 @@ fn chart_roundtrip_through_excel() {
         }
     }
 
-    // 20: Line+Trendline+Labels — trendline type + data_labels.show_value
+    // 20: Line+Trendline+Labels - trendline type + data_labels.show_value
     {
         let c = &charts[20];
         let trendline = c.series[0]
@@ -923,7 +923,7 @@ fn chart_types_bisect() {
     let bridge = excel_bridge();
     ensure_vm_temp_dir();
 
-    // Build shared data workbook once — each iteration clones & adds one chart
+    // Build shared data workbook once - each iteration clones & adds one chart
     fn make_data_workbook() -> Workbook {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();

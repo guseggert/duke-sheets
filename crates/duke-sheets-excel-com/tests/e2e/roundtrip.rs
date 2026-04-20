@@ -1,7 +1,7 @@
 //! Roundtrip fidelity test: write XLSX with duke-sheets, open in real Excel,
 //! verify no repair warning, verify data survives.
 //!
-//! This is the ultimate compatibility test — if Excel can open our file
+//! This is the ultimate compatibility test - if Excel can open our file
 //! without repairing it, the OOXML we produce is spec-compliant.
 
 use crate::{
@@ -84,7 +84,7 @@ fn test_roundtrip_no_repair() {
             .unwrap();
         sheet.set_cell_value("A7", "Merged region").unwrap();
 
-        // NOTE: Comments omitted — our writer produces comments1.xml but not
+        // NOTE: Comments omitted - our writer produces comments1.xml but not
         // the required VML drawing (vmlDrawing1.vml), which Excel rejects.
         // TODO: add VML drawing support to the writer.
 

@@ -1,4 +1,4 @@
-//! Cell view — a lightweight borrow wrapper that provides access to
+//! Cell view - a lightweight borrow wrapper that provides access to
 //! a cell's value, style, and formatted display string.
 
 use crate::cell::value::CellValue;
@@ -8,7 +8,7 @@ use crate::style::{NumberFormat, Style};
 /// A read-only view of a cell, providing access to its value, style,
 /// and formatted display string.
 ///
-/// This is a lightweight borrow — no allocation or copying.
+/// This is a lightweight borrow - no allocation or copying.
 /// Obtain one via [`Worksheet::cell_view_at`] or [`Worksheet::cell_view`].
 ///
 /// # Example
@@ -193,16 +193,12 @@ mod tests {
     use super::*;
     use crate::cell::value::CellError;
 
-    // ---------------------------------------------------------------
     // Helper
-    // ---------------------------------------------------------------
     fn fmt(value: &CellValue, format: &NumberFormat, date_1904: bool) -> String {
         format_cell_value(value, format, date_1904, &Locale::en_us())
     }
 
-    // ---------------------------------------------------------------
     // General format
-    // ---------------------------------------------------------------
 
     #[test]
     fn general_integer() {
@@ -285,9 +281,7 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------
     // Built-in number formats
-    // ---------------------------------------------------------------
 
     #[test]
     fn builtin_integer_format() {
@@ -329,9 +323,7 @@ mod tests {
         assert_eq!(result, "1,234,567.89");
     }
 
-    // ---------------------------------------------------------------
     // Percentage formats
-    // ---------------------------------------------------------------
 
     #[test]
     fn builtin_percent_integer() {
@@ -351,9 +343,7 @@ mod tests {
         assert_eq!(result, "12.34%");
     }
 
-    // ---------------------------------------------------------------
     // Scientific notation format
-    // ---------------------------------------------------------------
 
     #[test]
     fn builtin_scientific() {
@@ -366,9 +356,7 @@ mod tests {
         assert_eq!(result, "1.23E+04");
     }
 
-    // ---------------------------------------------------------------
     // Date formats (1900 date system)
-    // ---------------------------------------------------------------
 
     #[test]
     fn builtin_date_short_1900() {
@@ -415,9 +403,7 @@ mod tests {
         assert_eq!(result, "Jan-23");
     }
 
-    // ---------------------------------------------------------------
     // Date formats (1904 date system)
-    // ---------------------------------------------------------------
 
     #[test]
     fn builtin_date_short_1904() {
@@ -431,9 +417,7 @@ mod tests {
         assert_eq!(result, "01-01-23");
     }
 
-    // ---------------------------------------------------------------
     // Time formats
-    // ---------------------------------------------------------------
 
     #[test]
     fn builtin_time_ampm() {
@@ -458,9 +442,7 @@ mod tests {
         assert_eq!(result, "12:00:00");
     }
 
-    // ---------------------------------------------------------------
     // Custom format strings
-    // ---------------------------------------------------------------
 
     #[test]
     fn custom_percent_format() {
@@ -491,9 +473,7 @@ mod tests {
         assert_eq!(result, "$1,234.50");
     }
 
-    // ---------------------------------------------------------------
     // Non-numeric cell types (passthrough)
-    // ---------------------------------------------------------------
 
     #[test]
     fn string_passthrough() {
@@ -596,9 +576,7 @@ mod tests {
         assert_eq!(fmt(&val, &NumberFormat::General, false), "");
     }
 
-    // ---------------------------------------------------------------
     // CellView API
-    // ---------------------------------------------------------------
 
     // Cached ssfmt locale for CellView tests (CellView takes &ssfmt::Locale
     // internally since the worksheet caches the conversion).
@@ -649,9 +627,7 @@ mod tests {
         assert!(view_no_style.style().is_none());
     }
 
-    // ---------------------------------------------------------------
     // Accounting / currency built-in formats
-    // ---------------------------------------------------------------
 
     #[test]
     fn builtin_currency_format_5() {
@@ -663,7 +639,7 @@ mod tests {
 
     #[test]
     fn builtin_accounting_negative() {
-        // Format ID 37: "#,##0_);(#,##0)" — negative in parens
+        // Format ID 37: "#,##0_);(#,##0)" - negative in parens
         let result = fmt(
             &CellValue::Number(-1234.0),
             &NumberFormat::BuiltIn(37),
@@ -677,9 +653,7 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------
     // Edge cases
-    // ---------------------------------------------------------------
 
     #[test]
     fn negative_zero() {
@@ -708,7 +682,7 @@ mod tests {
 
     #[test]
     fn text_format_id_49() {
-        // Format ID 49: "@" — text format, numbers should still format
+        // Format ID 49: "@" - text format, numbers should still format
         let result = fmt(&CellValue::Number(42.0), &NumberFormat::BuiltIn(49), false);
         // ssfmt with "@" format on a number typically returns the number as text
         assert!(!result.is_empty(), "expected non-empty for text format");

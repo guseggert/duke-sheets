@@ -4,7 +4,7 @@ use crate::style::{Color, FontVerticalAlign, Underline};
 
 /// Font properties for a single rich text run.
 ///
-/// All fields are optional — unset properties inherit from the cell's style.
+/// All fields are optional - unset properties inherit from the cell's style.
 /// This mirrors the OOXML `CT_RPrElt` (run properties element) where each
 /// property is independently optional.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -25,7 +25,7 @@ pub struct RunFont {
     pub strikethrough: Option<bool>,
     /// Superscript/subscript
     pub vertical_align: Option<FontVerticalAlign>,
-    /// Font family classification (OOXML `family` value: 0–5)
+    /// Font family classification (OOXML `family` value: 0-5)
     pub family: Option<u8>,
     /// Font charset (Windows charset ID)
     pub charset: Option<u8>,

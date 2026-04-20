@@ -27,7 +27,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Creating workbook...");
     let wb = bridge.create_workbook()?;
 
-    // --- Set up test data ---
     println!("Setting up test data...");
 
     // Headers
@@ -84,11 +83,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wb.set_cell_value("A11", "Conditional")?;
     wb.set_cell_formula("B11", "=IF(F6>10000,\"Above Target\",\"Below Target\")")?;
 
-    // --- Force recalculation ---
     println!("Recalculating...");
     bridge.recalculate()?;
 
-    // --- Read back values ---
     println!("\n--- Results from Excel ---\n");
 
     let test_cells = [
@@ -112,12 +109,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {label:20} ({cell}): {value:>12}  formula: {formula}");
     }
 
-    // --- Save the workbook via shared SMB mount ---
+    // Save the workbook via shared SMB mount
     println!("\nSaving workbook...");
     wb.save(r"\\10.0.2.4\qemu\parity_test.xlsx")?;
     println!("Saved to shared folder (host: /tmp/duke-sheets-excel/parity_test.xlsx)");
 
-    // --- Clean up ---
     println!("\nShutting down...");
     bridge.shutdown()?;
 

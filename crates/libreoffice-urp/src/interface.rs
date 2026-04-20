@@ -2,7 +2,7 @@
 //!
 //! Each interface definition includes:
 //! - The fully-qualified type name
-//! - The base interface(s) — for computing cumulative method indices
+//! - The base interface(s) - for computing cumulative method indices
 //! - Method signatures (name, parameter types, return type, one-way flag)
 //!
 //! Method indices are cumulative: XInterface has methods 0-2 (queryInterface,
@@ -97,7 +97,7 @@ pub fn release() -> MethodDef {
 // Actually, the spec says requestChange=4, commitChange=5 as absolute indices.
 // XProtocolProperties extends XInterface, and XInterface has 3 methods (0,1,2).
 // XProtocolProperties adds: requestChange(3), commitChange(4)
-// BUT the spec uses IDs 4 and 5 — this is because there's an intermediate
+// BUT the spec uses IDs 4 and 5 - this is because there's an intermediate
 // interface. Looking at the LO source, the IDs are hardcoded as 4 and 5.
 
 pub fn request_change() -> MethodDef {
@@ -297,7 +297,7 @@ pub fn cell_get_type() -> MethodDef {
     }
 }
 
-// XText / XSimpleText / XTextRange — for setting string cell values
+// XText / XSimpleText / XTextRange - for setting string cell values
 // XTextRange extends XInterface: getString(3), setString(4)
 // XSimpleText extends XTextRange: createTextCursor(5), ...
 // XText extends XSimpleText: ...
@@ -427,7 +427,7 @@ pub fn insert_new_by_name() -> MethodDef {
     }
 }
 
-// XCellRange — getCellRangeByName
+// XCellRange - getCellRangeByName
 // Extends XInterface (0-2)
 // Methods: getCellByPosition(3), getCellRangeByPosition(4), getCellRangeByName(5)
 
@@ -641,7 +641,7 @@ pub fn get_style_families() -> MethodDef {
     }
 }
 
-// XModel — com.sun.star.frame.XModel
+// XModel - com.sun.star.frame.XModel
 // Extends XComponent(3..5) extends XInterface(0..2)
 // Methods: attachResource(6), getURL(7), getArgs(8), connectController(9),
 //          disconnectController(10), lock(11), unlock(12),
@@ -658,7 +658,7 @@ pub fn get_current_controller() -> MethodDef {
     }
 }
 
-// XSpreadsheetView — com.sun.star.sheet.XSpreadsheetView
+// XSpreadsheetView - com.sun.star.sheet.XSpreadsheetView
 // Extends XInterface(0..2)
 // Methods: getActiveSheet(3), setActiveSheet(4)
 
@@ -682,7 +682,7 @@ pub fn set_active_sheet() -> MethodDef {
     }
 }
 
-// XProtectable — com.sun.star.util.XProtectable
+// XProtectable - com.sun.star.util.XProtectable
 // Extends XInterface(0..2)
 // Methods: protect(3), unprotect(4), isProtected(5)
 
@@ -716,14 +716,14 @@ pub fn protectable_is_protected() -> MethodDef {
     }
 }
 
-// XNamedRanges — com.sun.star.sheet.XNamedRanges
+// XNamedRanges - com.sun.star.sheet.XNamedRanges
 // Extends XNameAccess -> XElementAccess -> XInterface
 // XElementAccess: getElementType(3), hasElements(4)
 // XNameAccess: getByName(5), getElementNames(6), hasByName(7)
 // XNamedRanges: addNewByName(8), addNewFromTitles(9), removeByName(10),
 //               outputList(11)
 
-// XArrayFormulaRange — com.sun.star.sheet.XArrayFormulaRange
+// XArrayFormulaRange - com.sun.star.sheet.XArrayFormulaRange
 // Extends XInterface (3 base methods)
 // getArrayFormula(3), setArrayFormula(4), getArrayTokens(5), setArrayTokens(6)
 
@@ -752,7 +752,7 @@ pub fn named_ranges_add_new_by_name() -> MethodDef {
     }
 }
 
-// XCellRange — getCellRangeByPosition
+// XCellRange - getCellRangeByPosition
 // Index 4 on XCellRange (extends XInterface: 0-2, getCellByPosition=3, getCellRangeByPosition=4)
 
 pub fn get_cell_range_by_position() -> MethodDef {
@@ -770,7 +770,7 @@ pub fn get_cell_range_by_position() -> MethodDef {
     }
 }
 
-// XCellRangeData — getDataArray / setDataArray
+// XCellRangeData - getDataArray / setDataArray
 // Extends XInterface (0-2)
 // Methods: getDataArray(3), setDataArray(4)
 //
@@ -787,11 +787,11 @@ pub fn get_data_array() -> MethodDef {
     }
 }
 
-// XCellRangeFormula — getFormulaArray / setFormulaArray
+// XCellRangeFormula - getFormulaArray / setFormulaArray
 // Extends XInterface (0-2)
 // Methods: getFormulaArray(3), setFormulaArray(4)
 //
-// getFormulaArray returns sequence<sequence<string>> — the formula strings.
+// getFormulaArray returns sequence<sequence<string>> - the formula strings.
 // For non-formula cells, it returns the display value as a string.
 
 pub fn get_formula_array() -> MethodDef {

@@ -5,7 +5,6 @@ use duke_sheets_core::{CellAddress, CellError, CellRange};
 /// Formula expression AST
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormulaExpr {
-    // === Literals ===
     /// Numeric literal
     Number(f64),
     /// String literal
@@ -15,7 +14,6 @@ pub enum FormulaExpr {
     /// Error literal
     Error(CellError),
 
-    // === References ===
     /// Single cell reference
     CellRef(CellReference),
     /// Range reference
@@ -27,7 +25,6 @@ pub enum FormulaExpr {
     /// External workbook reference (e.g., [Book.xlsx]Sheet1!A1)
     ExternalRef(ExternalReference),
 
-    // === Operators ===
     /// Binary operation
     BinaryOp {
         op: BinaryOperator,
@@ -40,13 +37,11 @@ pub enum FormulaExpr {
         operand: Box<FormulaExpr>,
     },
 
-    // === Function call ===
     Function {
         name: String,
         args: Vec<FormulaExpr>,
     },
 
-    // === Array ===
     Array(Vec<Vec<FormulaExpr>>),
 
     /// Empty/omitted argument (e.g., the missing 4th arg in `XLOOKUP(x,a,b,,1)`)
@@ -131,8 +126,8 @@ pub struct ExternalReference {
 pub enum UnaryOperator {
     Negate,
     Percent,
-    /// Implicit intersection operator (@) — selects a single value from a range
+    /// Implicit intersection operator (@) - selects a single value from a range
     ImplicitIntersection,
-    /// Spill range operator (#) — references the entire spill range of a cell
+    /// Spill range operator (#) - references the entire spill range of a cell
     SpillRange,
 }

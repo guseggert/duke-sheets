@@ -107,7 +107,7 @@ echo "VM started (PID $(cat "$PID_FILE"))"
 echo ""
 echo "Waiting for WinRM on port 5985 (VM boot)..."
 
-# Wait for WinRM to be reachable — this means Windows has finished booting
+# Wait for WinRM to be reachable - this means Windows has finished booting
 # and the network stack is up. Note: nc -z gives false positives with QEMU
 # user-net (the host-side port is always open), so we send a real HTTP request.
 for i in $(seq 1 180); do

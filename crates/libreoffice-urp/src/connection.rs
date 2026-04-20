@@ -93,7 +93,7 @@ impl UrpConnection {
 
         self.transport.send_message(&msg).await?;
 
-        // Read response — could be a reply to our requestChange, or an incoming
+        // Read response - could be a reply to our requestChange, or an incoming
         // requestChange from the other side
         loop {
             let data = self.transport.recv_message().await?;
@@ -103,7 +103,7 @@ impl UrpConnection {
                 UrpMessage::Reply(reply) => {
                     if reply.is_exception {
                         // The other side doesn't support protocol properties negotiation.
-                        // This is fine — we just skip CurrentContext mode.
+                        // This is fine - we just skip CurrentContext mode.
                         tracing::debug!(
                             "Protocol negotiation: exception in reply, skipping CurrentContext"
                         );
@@ -124,14 +124,14 @@ impl UrpConnection {
 
                     match result {
                         UnoValue::Long(1) => {
-                            // We won — send commitChange
+                            // We won - send commitChange
                             tracing::debug!("Protocol negotiation: we won, sending commitChange");
                             self.send_commit_change(&tid, &proto_type).await?;
                             self.current_context_mode = true;
                             return Ok(());
                         }
                         UnoValue::Long(0) => {
-                            // We lost — wait for their commitChange, then reply
+                            // We lost - wait for their commitChange, then reply
                             tracing::debug!(
                                 "Protocol negotiation: we lost, waiting for their commitChange"
                             );
@@ -140,7 +140,7 @@ impl UrpConnection {
                             return Ok(());
                         }
                         UnoValue::Long(-1) => {
-                            // Tie — retry with new random number
+                            // Tie - retry with new random number
                             tracing::debug!("Protocol negotiation: tie, retrying");
                             // For simplicity in the prototype, just accept without CurrentContext
                             return Ok(());
@@ -194,7 +194,7 @@ impl UrpConnection {
                         self.transport.send_message(&reply_msg).await?;
 
                         if reply_val == 1 {
-                            // They won — wait for their commitChange
+                            // They won - wait for their commitChange
                             tracing::debug!(
                                 "Protocol negotiation: they won, waiting for commitChange"
                             );
@@ -270,7 +270,7 @@ impl UrpConnection {
                     }
                 }
                 UrpMessage::Reply(_reply) => {
-                    // This is the reply to our requestChange — ignore it and keep waiting
+                    // This is the reply to our requestChange - ignore it and keep waiting
                     tracing::trace!("Ignoring reply while waiting for commitChange");
                 }
             }
@@ -374,13 +374,13 @@ impl UrpConnection {
                     // Handle incoming requests while waiting for our reply.
                     // The most common case is `release` (fire-and-forget).
                     if req.function_id == protocol::FN_RELEASE {
-                        // Ignore release — we don't track local objects
+                        // Ignore release - we don't track local objects
                         tracing::trace!("Ignoring incoming release for OID={}", req.oid);
                         continue;
                     }
 
                     // For other incoming requests, send back a void reply
-                    // (this is a simplification — a full impl would dispatch to handlers)
+                    // (this is a simplification - a full impl would dispatch to handlers)
                     if req.must_reply {
                         let reply_msg = self.writer_state.encode_reply(&req.tid, false, &[]);
                         self.transport.send_message(&reply_msg).await?;

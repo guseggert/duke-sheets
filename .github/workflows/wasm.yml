@@ -138,7 +138,7 @@ jobs:
 
       - name: Publish to npm
         run: |
-          # Publish the web target — uses init() to load wasm,
+          # Publish the web target - uses init() to load wasm,
           # compatible with webpack 5 / Next.js without special loaders
           cd dist
           tar xzf dukelib-sheets-wasm-web.tgz

@@ -1,7 +1,7 @@
 //! Generic COM proxy protocol for remote Excel automation.
 //!
 //! Instead of having a specific command for every Excel operation, this protocol
-//! provides three generic primitives — `Get`, `Set`, and `Invoke` — that navigate
+//! provides three generic primitives - `Get`, `Set`, and `Invoke` - that navigate
 //! a chain of COM object properties from a stored handle. This means the bridge
 //! server is a thin, stable COM proxy that never needs modification when new
 //! Excel features are added. All Excel-specific knowledge lives in the client.
@@ -40,9 +40,7 @@
 
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
 // Request
-// ---------------------------------------------------------------------------
 
 /// A request sent from the client to the bridge server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +101,7 @@ pub enum Command {
     /// Release a stored COM object handle.
     ///
     /// Frees the server-side reference. The handle becomes invalid.
-    /// Handle 0 (Excel.Application) cannot be released — use `Shutdown` instead.
+    /// Handle 0 (Excel.Application) cannot be released - use `Shutdown` instead.
     Release { handle: u64 },
 
     /// Navigate a chain from a stored handle and store the endpoint as a new handle.
@@ -138,9 +136,7 @@ pub enum ChainStep {
     Indexed(String, serde_json::Value),
 }
 
-// ---------------------------------------------------------------------------
 // Response
-// ---------------------------------------------------------------------------
 
 /// A response sent from the bridge server to the client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,11 +172,9 @@ pub enum ResponseData {
     Value { value: serde_json::Value },
 }
 
-// ---------------------------------------------------------------------------
 // Convenience types for the client
-// ---------------------------------------------------------------------------
 
-/// Reference to a worksheet — by 0-based index or by name.
+/// Reference to a worksheet - by 0-based index or by name.
 ///
 /// This is a client-side convenience; the wire protocol uses raw JSON values.
 /// Use `SheetRef::to_chain_step()` to convert to a `ChainStep` for navigation.

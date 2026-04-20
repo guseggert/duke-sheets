@@ -349,12 +349,8 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"f" if (in_str_dim || in_num_dim) && !in_lvl => {
-                        in_dim_f = true;
-                    }
-                    b"nf" if (in_str_dim || in_num_dim) && !in_lvl => {
-                        in_dim_nf = true;
-                    }
+                    b"f" if (in_str_dim || in_num_dim) && !in_lvl => in_dim_f = true,
+                    b"nf" if (in_str_dim || in_num_dim) && !in_lvl => in_dim_nf = true,
                     b"lvl" if in_str_dim || in_num_dim => {
                         in_lvl = true;
                         lvl_pt_count = 0;
@@ -396,9 +392,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         }
                         in_lvl_pt_text = true;
                     }
-                    b"chart" if in_chart_space && !in_chart => {
-                        in_chart = true;
-                    }
+                    b"chart" if in_chart_space && !in_chart => in_chart = true,
                     b"title" if in_chart && !in_plot_area && !in_axis && !in_title => {
                         in_title = true;
                         title_pos = None;
@@ -423,24 +417,12 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"tx" if in_title && !in_series => {
-                        in_title_tx = true;
-                    }
-                    b"txData" if in_title_tx && !in_series => {
-                        in_title_tx_data = true;
-                    }
-                    b"v" if in_title_tx_data && !in_series => {
-                        in_title_tx_data_v = true;
-                    }
-                    b"f" if in_title_tx_data && !in_series => {
-                        in_title_tx_data_f = true;
-                    }
-                    b"plotArea" if in_chart => {
-                        in_plot_area = true;
-                    }
-                    b"plotAreaRegion" if in_plot_area => {
-                        in_plot_area_region = true;
-                    }
+                    b"tx" if in_title && !in_series => in_title_tx = true,
+                    b"txData" if in_title_tx && !in_series => in_title_tx_data = true,
+                    b"v" if in_title_tx_data && !in_series => in_title_tx_data_v = true,
+                    b"f" if in_title_tx_data && !in_series => in_title_tx_data_f = true,
+                    b"plotArea" if in_chart => in_plot_area = true,
+                    b"plotAreaRegion" if in_plot_area => in_plot_area_region = true,
                     b"plotSurface" if in_plot_area && !in_plot_area_region => {
                         in_plot_surface = true;
                     }
@@ -495,15 +477,9 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         ser_tx_value = None;
                         ser_tx_formula = None;
                     }
-                    b"txData" if in_ser_tx => {
-                        in_ser_tx_data = true;
-                    }
-                    b"v" if in_ser_tx_data => {
-                        in_ser_tx_data_v = true;
-                    }
-                    b"f" if in_ser_tx_data => {
-                        in_ser_tx_data_f = true;
-                    }
+                    b"txData" if in_ser_tx => in_ser_tx_data = true,
+                    b"v" if in_ser_tx_data => in_ser_tx_data_v = true,
+                    b"f" if in_ser_tx_data => in_ser_tx_data_f = true,
                     b"dataId" if in_series && !in_data_labels => {
                         in_data_id = true;
                         for attr in e.attributes().flatten() {
@@ -530,9 +506,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"separator" if in_data_labels => {
-                        in_dlbl_separator = true;
-                    }
+                    b"separator" if in_data_labels => in_dlbl_separator = true,
                     b"dataPt" if in_series && !in_data_labels => {
                         in_data_pt = true;
                         dpt_idx = 0;
@@ -551,12 +525,8 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         in_layout_pr = true;
                         layout_pr = ChartExLayoutPr::default();
                     }
-                    b"subtotals" if in_layout_pr => {
-                        in_subtotals = true;
-                    }
-                    b"idx" if in_subtotals => {
-                        in_subtotal_idx = true;
-                    }
+                    b"subtotals" if in_layout_pr => in_subtotals = true,
+                    b"idx" if in_subtotals => in_subtotal_idx = true,
                     b"binning" if in_layout_pr => {
                         in_binning = true;
                         let mut binning = ChartExBinning::default();
@@ -579,12 +549,8 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         }
                         layout_pr.binning = Some(binning);
                     }
-                    b"binSize" if in_binning => {
-                        in_bin_size = true;
-                    }
-                    b"binCount" if in_binning => {
-                        in_bin_count = true;
-                    }
+                    b"binSize" if in_binning => in_bin_size = true,
+                    b"binCount" if in_binning => in_bin_count = true,
                     b"geography" if in_layout_pr => {
                         in_geography = true;
                         let mut geo = ChartExGeography::default();
@@ -648,9 +614,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         }
                         layout_pr.visibility = Some(vis);
                     }
-                    b"axisId" if in_series && !in_axis => {
-                        in_axis_id = true;
-                    }
+                    b"axisId" if in_series && !in_axis => in_axis_id = true,
                     b"valueColors" if in_series => {
                         in_value_colors = true;
                         ser_value_colors = Some(ChartExValueColors::default());
@@ -674,15 +638,9 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"min" if in_value_color_positions => {
-                        in_vcp_min = true;
-                    }
-                    b"mid" if in_value_color_positions => {
-                        in_vcp_mid = true;
-                    }
-                    b"max" if in_value_color_positions => {
-                        in_vcp_max = true;
-                    }
+                    b"min" if in_value_color_positions => in_vcp_min = true,
+                    b"mid" if in_value_color_positions => in_vcp_mid = true,
+                    b"max" if in_value_color_positions => in_vcp_max = true,
                     b"axis" if in_plot_area && !in_plot_area_region => {
                         in_axis = true;
                         ax_id = 0;
@@ -761,15 +719,9 @@ fn parse_chart_ex_xml_inner<R: Read>(
                         in_ax_title = true;
                         ax_title_text = None;
                     }
-                    b"tx" if in_ax_title => {
-                        in_ax_title_tx = true;
-                    }
-                    b"txData" if in_ax_title_tx => {
-                        in_ax_title_tx_data = true;
-                    }
-                    b"v" if in_ax_title_tx_data => {
-                        in_ax_title_tx_data_v = true;
-                    }
+                    b"tx" if in_ax_title => in_ax_title_tx = true,
+                    b"txData" if in_ax_title_tx => in_ax_title_tx_data = true,
+                    b"v" if in_ax_title_tx_data => in_ax_title_tx_data_v = true,
                     b"units" if in_axis => {
                         in_units = true;
                         units_unit = None;
@@ -779,12 +731,8 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"majorGridlines" if in_axis => {
-                        in_major_gridlines = true;
-                    }
-                    b"minorGridlines" if in_axis => {
-                        in_minor_gridlines = true;
-                    }
+                    b"majorGridlines" if in_axis => in_major_gridlines = true,
+                    b"minorGridlines" if in_axis => in_minor_gridlines = true,
                     b"legend" if in_chart && !in_plot_area => {
                         in_legend = true;
                         legend_pos = None;
@@ -882,9 +830,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"solidFill" if in_sp_pr => {
-                        sp_pr_depth += 1;
-                    }
+                    b"solidFill" if in_sp_pr => sp_pr_depth += 1,
                     b"txPr" if !skipping => {
                         skipping = true;
                         skip_depth = 1;
@@ -977,9 +923,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"numFmt" if in_data_labels => {
-                        dlbl_num_fmt = Some(parse_num_fmt(e));
-                    }
+                    b"numFmt" if in_data_labels => dlbl_num_fmt = Some(parse_num_fmt(e)),
                     b"numFmt" if in_axis && !in_data_labels => {
                         ax_num_fmt = Some(parse_num_fmt(e));
                     }
@@ -1003,9 +947,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                     b"regionLabelLayout" if in_layout_pr => {
                         layout_pr.region_label_layout = get_val_attr(e);
                     }
-                    b"aggregation" if in_layout_pr => {
-                        layout_pr.aggregation = true;
-                    }
+                    b"aggregation" if in_layout_pr => layout_pr.aggregation = true,
                     b"statistics" if in_layout_pr => {
                         let mut stats = ChartExStatistics::default();
                         for attr in e.attributes().flatten() {
@@ -1070,9 +1012,7 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             }
                         }
                     }
-                    b"tickLabels" if in_axis => {
-                        ax_tick_labels = true;
-                    }
+                    b"tickLabels" if in_axis => ax_tick_labels = true,
                     b"majorGridlines" if in_axis => {
                         ax_major_gridlines = Some(ChartShapeProperties::default());
                     }
@@ -1089,15 +1029,9 @@ fn parse_chart_ex_xml_inner<R: Read>(
                             sp_ln_solid_fill = Some(ChartColor { hex });
                         }
                     }
-                    b"noFill" if in_sp_pr && !in_sp_ln => {
-                        sp_no_fill = true;
-                    }
-                    b"noFill" if in_sp_ln => {
-                        sp_ln_no_fill = true;
-                    }
-                    b"prstDash" if in_sp_ln => {
-                        sp_ln_dash = get_val_attr(e);
-                    }
+                    b"noFill" if in_sp_pr && !in_sp_ln => sp_no_fill = true,
+                    b"noFill" if in_sp_ln => sp_ln_no_fill = true,
+                    b"prstDash" if in_sp_ln => sp_ln_dash = get_val_attr(e),
                     b"pageMargins" if in_print_settings => {
                         let mut pm = ChartExPageMargins::default();
                         for attr in e.attributes().flatten() {

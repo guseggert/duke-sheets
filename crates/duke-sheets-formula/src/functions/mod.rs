@@ -424,7 +424,7 @@ impl FunctionRegistry {
             implementation: math::fn_even,
             volatile: false,
         });
-        // --- math_extra functions ---
+        // math_extra functions
         self.register(FunctionDef {
             name: "ACOSH",
             min_args: 1,
@@ -841,7 +841,7 @@ impl FunctionRegistry {
             implementation: logical::fn_switch,
             volatile: false,
         });
-        // --- logical_extra functions ---
+        // logical_extra functions
         self.register(FunctionDef {
             name: "LET",
             min_args: 3,
@@ -1183,7 +1183,7 @@ impl FunctionRegistry {
             implementation: text::fn_mid,
             volatile: false,
         });
-        // --- text_extra functions ---
+        // text_extra functions
         self.register(FunctionDef {
             name: "REPLACE",
             min_args: 4,
@@ -1324,7 +1324,7 @@ impl FunctionRegistry {
             implementation: info::fn_na,
             volatile: false,
         });
-        // --- info_extra functions ---
+        // info_extra functions
         self.register(FunctionDef {
             name: "ISERR",
             min_args: 1,
@@ -1423,7 +1423,7 @@ impl FunctionRegistry {
             implementation: info_extra::fn_isomitted,
             volatile: false,
         });
-        // --- Stubs: external-service-dependent functions ---
+        // Stubs: external-service-dependent functions
         self.register(FunctionDef {
             name: "STOCKHISTORY",
             min_args: 1,
@@ -1686,7 +1686,7 @@ impl FunctionRegistry {
             implementation: date::fn_today,
             volatile: true,
         });
-        // --- date functions from lookup_extra ---
+        // date functions from lookup_extra
         self.register(FunctionDef {
             name: "NETWORKDAYS.INTL",
             min_args: 2,
@@ -1824,7 +1824,7 @@ impl FunctionRegistry {
             implementation: lookup::fn_offset,
             volatile: true,
         });
-        // --- lookup_extra functions ---
+        // lookup_extra functions
         self.register(FunctionDef {
             name: "ADDRESS",
             min_args: 2,
@@ -2774,7 +2774,7 @@ impl FunctionRegistry {
             implementation: statistical::fn_varpa,
             volatile: false,
         });
-        // --- statistical_extra functions ---
+        // statistical_extra functions
         self.register(FunctionDef {
             name: "LOGNORM.DIST",
             min_args: 4,
@@ -3027,7 +3027,7 @@ impl FunctionRegistry {
             implementation: financial::fn_pduration,
             volatile: false,
         });
-        // --- financial_extra functions ---
+        // financial_extra functions
         self.register(FunctionDef {
             name: "ACCRINT",
             min_args: 6,

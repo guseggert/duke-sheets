@@ -1,8 +1,8 @@
 //! Block-layer framing for URP over TCP.
 //!
 //! The URP block layer wraps messages in blocks with 8-byte headers:
-//! - Bytes 0..4: Block size (u32 BE) — number of bytes after the header
-//! - Bytes 4..8: Message count (u32 BE) — number of messages in this block
+//! - Bytes 0..4: Block size (u32 BE) - number of bytes after the header
+//! - Bytes 4..8: Message count (u32 BE) - number of messages in this block
 //!
 //! In practice, LibreOffice sends one message per block.
 
@@ -12,7 +12,7 @@ use tokio::net::TcpStream;
 
 use crate::error::{Result, UrpError};
 
-/// A URP transport — handles block-layer framing over a TCP connection.
+/// A URP transport - handles block-layer framing over a TCP connection.
 pub struct Transport {
     stream: TcpStream,
 }

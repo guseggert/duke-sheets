@@ -26,9 +26,9 @@ pub enum SheetVisibility {
     /// Sheet tab is visible (default).
     #[default]
     Visible,
-    /// Hidden via the UI — users can right-click to unhide.
+    /// Hidden via the UI - users can right-click to unhide.
     Hidden,
-    /// Very hidden — only accessible through the VBA editor.
+    /// Very hidden - only accessible through the VBA editor.
     VeryHidden,
 }
 
@@ -90,10 +90,10 @@ pub struct Worksheet {
     locale: Locale,
     /// Cached ssfmt locale (rebuilt on set_locale).
     ssfmt_locale: ssfmt::Locale,
-    /// Mutation generation counter — incremented on user-facing cell/formula edits.
+    /// Mutation generation counter - incremented on user-facing cell/formula edits.
     /// The calculation engine uses this to detect stale caches.
     mutation_count: u64,
-    /// Topology generation counter — incremented only when formula/dependency
+    /// Topology generation counter - incremented only when formula/dependency
     /// structure changes. Used to validate cached calc plans across value-only edits.
     topology_generation: u64,
     /// Value-edit ranges since the last successful calculation.
@@ -174,13 +174,13 @@ impl Worksheet {
         }
     }
 
-    /// Mutation generation counter — incremented on user-facing cell/formula edits.
+    /// Mutation generation counter - incremented on user-facing cell/formula edits.
     /// The calculation engine uses this to detect stale caches.
     pub fn mutation_count(&self) -> u64 {
         self.mutation_count
     }
 
-    /// Topology generation counter — incremented on formula/layout edits that
+    /// Topology generation counter - incremented on formula/layout edits that
     /// can change dependency planning, but not on ordinary value-only edits.
     pub fn topology_generation(&self) -> u64 {
         self.topology_generation
@@ -976,7 +976,7 @@ impl Worksheet {
         let addr = CellAddress::new(row, col);
         for region in self.cells.merged_regions() {
             if region.contains(&addr) {
-                // It's in this region — check if it's NOT the origin
+                // It's in this region - check if it's NOT the origin
                 if region.start.row != row || region.start.col != col {
                     return true;
                 }
@@ -1566,7 +1566,7 @@ impl Worksheet {
     ///
     /// # Arguments
     /// * `row` - Row of the source formula cell
-    /// * `col` - Column of the source formula cell  
+    /// * `col` - Column of the source formula cell
     /// * `array` - The array result (outer vec is rows, inner vec is columns)
     ///
     /// # Returns

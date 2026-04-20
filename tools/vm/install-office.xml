@@ -14,7 +14,7 @@
   <Add OfficeClientEdition="64" Channel="Current">
     <Product ID="O365ProPlusRetail">
       <Language ID="en-us" />
-      <!-- Only install Excel — exclude everything else -->
+      <!-- Only install Excel - exclude everything else -->
       <ExcludeApp ID="Access" />
       <ExcludeApp ID="Groove" />
       <ExcludeApp ID="Lync" />

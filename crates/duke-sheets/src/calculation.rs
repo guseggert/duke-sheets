@@ -166,7 +166,7 @@ impl WorkbookCalculationExt for Workbook {
     }
 }
 
-/// Pre-computed evaluation plan — the expensive DFS result that can be cached.
+/// Pre-computed evaluation plan - the expensive DFS result that can be cached.
 struct EvalPlan {
     eval_order: Vec<CellKey>,
     idx_to_cell: Vec<CellKey>,
@@ -715,7 +715,7 @@ impl CalculationEngine {
         let mut affected_flags: Option<Vec<bool>> = None;
         if let Some(mut cache) = cached {
             trace.cache_hit = true;
-            // Cache hit — restore parsed formulas + plan from cache.
+            // Cache hit - restore parsed formulas + plan from cache.
             self.parsed_formulas = std::mem::take(&mut cache.parsed_formulas);
             self.volatile_cells = std::mem::take(&mut cache.volatile_cells);
             self.circular_cells = std::mem::take(&mut cache.circular_cells);
@@ -734,7 +734,7 @@ impl CalculationEngine {
                 }
             }
         } else {
-            // Cache miss — full parse + DFS.
+            // Cache miss - full parse + DFS.
             let t_parse = now();
             self.parse_formulas(workbook, &mut stats)?;
             if trace_enabled {
@@ -991,7 +991,7 @@ impl CalculationEngine {
         let dep_materialize_ms = elapsed_ms(t_dep);
         let edge_count = precedents.iter().map(|deps| deps.len()).sum();
 
-        // Phase 1 — build evaluation order via iterative post-order DFS.
+        // Phase 1 - build evaluation order via iterative post-order DFS.
         //
         // Each cell's formula-cell dependencies are extracted on-the-fly
         // (no persistent precedent map).  Every cell is visited at most
@@ -1037,7 +1037,7 @@ impl CalculationEngine {
                 };
 
                 // Mark all cells on the stack from the back-edge target
-                // to the top — they all participate in the cycle.
+                // to the top - they all participate in the cycle.
                 if let Some(target_idx) = back_edge_idx {
                     let mut marking = false;
                     for &(_, si, _) in stack.iter() {
@@ -1054,7 +1054,7 @@ impl CalculationEngine {
                     state[di as usize] = 1; // in_stack
                     stack.push((dep, di, 0));
                 } else {
-                    // All deps visited — emit this cell.
+                    // All deps visited - emit this cell.
                     let (cell, ci, _) = stack.pop().unwrap();
                     state[ci as usize] = 2; // visited
                                             // Depth = 1 + max depth of formula-cell deps.
@@ -1169,7 +1169,7 @@ impl CalculationEngine {
             }
         }
 
-        // Phase 3 — targeted spill fixup: only re-evaluate formulas whose
+        // Phase 3 - targeted spill fixup: only re-evaluate formulas whose
         // ASTs reference cells inside a spill range.
         let t_spill = now();
         if !spill_ranges.is_empty() {
@@ -1218,7 +1218,7 @@ impl CalculationEngine {
             None => return false,
         };
 
-        // Circular reference cells are evaluated normally — their self-references
+        // Circular reference cells are evaluated normally - their self-references
         // read the cached value from the file (the "previous iteration" result).
         // This handles the common Excel pattern =IF(cond, val, SELF) correctly.
 
@@ -1320,7 +1320,7 @@ impl CalculationEngine {
     #[cfg(feature = "parallel")]
     /// Evaluate a single formula (read-only) and return the result.
     /// Used by the parallel path to separate evaluation from storage.
-    /// Returns `(value, was_eval_error)` — the bool is `true` only when
+    /// Returns `(value, was_eval_error)` - the bool is `true` only when
     /// `evaluate()` itself returned `Err`, NOT when the formula legitimately
     /// produces an error value like `=1/0`.
     fn evaluate_formula(
@@ -1443,7 +1443,7 @@ impl CalculationEngine {
                 }
 
                 // Evaluate all cells at this level in parallel.
-                // Each evaluation only reads from the workbook — all
+                // Each evaluation only reads from the workbook - all
                 // deps at lower depths have already been written.
                 let wb_ref: &Workbook = workbook;
                 let t_eval = now();
@@ -1626,7 +1626,7 @@ fn extract_references_recursive(
                 .unwrap_or(current_sheet);
 
             let key = CellKey::new(sheet_idx, cell_ref.address.row, cell_ref.address.col);
-            // Only track deps on formula cells — static cells never change
+            // Only track deps on formula cells - static cells never change
             if formula_cells.contains(&key) {
                 refs.push(key);
             }
@@ -3115,7 +3115,7 @@ mod tests {
         // =Sales[@Revenue] in a data row should return the Revenue value for that row
         let mut workbook = workbook_with_sales_table(false);
         let sheet = workbook.worksheet_mut(0).unwrap();
-        // Put formula in D2 (row 1, col 3) — inside the table's row range
+        // Put formula in D2 (row 1, col 3) - inside the table's row range
         sheet.set_cell_formula("D2", "=Sales[@Revenue]").unwrap();
 
         workbook.calculate().unwrap();
@@ -3835,7 +3835,7 @@ mod tests {
     #[test]
     fn test_array_cross_reference_with_arithmetic() {
         // A1: =SEQUENCE(3)  → {1,2,3}
-        // B1: =A1:A3*10     — but this is a range × scalar, not array lifting
+        // B1: =A1:A3*10     - but this is a range × scalar, not array lifting
         // Instead test: B1: =SEQUENCE(3)*10 and C1: =A1+B1 (spill + spill addition)
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();

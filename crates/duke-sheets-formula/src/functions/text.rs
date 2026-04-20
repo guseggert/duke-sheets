@@ -1229,8 +1229,8 @@ mod tests {
             eval(r#"=SEARCH("m","MIRIAM")"#).unwrap(),
             FormulaValue::Number(1.0)
         );
-        // Wildcard ? — our SEARCH doesn't support wildcards, skip
-        // Tilde escapes — skip (requires wildcard support)
+        // Wildcard ? - our SEARCH doesn't support wildcards, skip
+        // Tilde escapes - skip (requires wildcard support)
         // Error: not found
         assert_eq!(
             eval(r#"=SEARCH("z","printer")"#).unwrap(),
@@ -1293,7 +1293,7 @@ mod tests {
 
     #[test]
     fn test_value_docs() {
-        // VALUE("$1,000") — our impl doesn't handle currency symbols
+        // VALUE("$1,000") - our impl doesn't handle currency symbols
         // Test with plain numeric text instead
         assert_eq!(
             eval("=VALUE(\"1000\")").unwrap(),

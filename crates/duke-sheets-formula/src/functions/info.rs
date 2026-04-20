@@ -114,7 +114,7 @@ mod tests {
         assert_eq!(eval("=ISNUMBER(0)").unwrap(), FormulaValue::Boolean(true));
         assert_eq!(eval("=ISNUMBER(-5)").unwrap(), FormulaValue::Boolean(true));
 
-        // Docs remark: numeric text is NOT converted — remains text
+        // Docs remark: numeric text is NOT converted - remains text
         assert_eq!(
             eval("=ISNUMBER(\"19\")").unwrap(),
             FormulaValue::Boolean(false)
@@ -185,10 +185,10 @@ mod tests {
         // #DIV/0!
         assert_eq!(eval("=ISERROR(1/0)").unwrap(), FormulaValue::Boolean(true));
 
-        // #N/A — ISERROR catches it (unlike ISERR)
+        // #N/A - ISERROR catches it (unlike ISERR)
         assert_eq!(eval("=ISERROR(NA())").unwrap(), FormulaValue::Boolean(true));
 
-        // #VALUE! — test via direct function call since arithmetic error propagates
+        // #VALUE! - test via direct function call since arithmetic error propagates
         let ctx = EvaluationContext::simple();
         assert_eq!(
             fn_iserror(&[FormulaValue::Error(CellError::Value)], &ctx).unwrap(),
@@ -218,7 +218,7 @@ mod tests {
         // #DIV/0! is NOT #N/A
         assert_eq!(eval("=ISNA(1/0)").unwrap(), FormulaValue::Boolean(false));
 
-        // #VALUE! is NOT #N/A — test via direct function call
+        // #VALUE! is NOT #N/A - test via direct function call
         let ctx = EvaluationContext::simple();
         assert_eq!(
             fn_isna(&[FormulaValue::Error(CellError::Value)], &ctx).unwrap(),

@@ -67,7 +67,7 @@ fn gregorian_to_jdn(year: i32, month: u32, day: u32) -> i32 {
     }
 
     // Calculate Julian Day Number
-    
+
 
     ((365.25 * (y + 4716) as f64).floor() as i32)
         + ((30.6001 * (m + 1) as f64).floor() as i32)
