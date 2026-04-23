@@ -92,3 +92,103 @@ pub fn parse_bof(data: &[u8]) -> XlsResult<(u16, u16)> {
     let dt = u16::from_le_bytes([data[2], data[3]]);
     Ok((version, dt))
 }
+
+/// Check the workbook globals block for a FILEPASS record and return a clean
+/// `Encrypted` error if one is present. Per [MS-XLS] §2.1.7.4 a FILEPASS record
+/// directly after the globals BOF marks the entire stream (except the header
+/// records) as ciphertext. Without decryption we cannot make sense of anything
+/// that follows, so fail fast rather than emitting garbage parse errors.
+pub fn check_not_encrypted(records: &[BiffRecord]) -> XlsResult<()> {
+    for rec in records {
+        if rec.record_type == records::EOF {
+            // Only inspect the globals block; subsequent EOF-terminated substreams
+            // cannot introduce new encryption.
+            break;
+        }
+        if rec.record_type == records::FILEPASS {
+            let enc_kind = if rec.data.len() >= 2 {
+                match u16::from_le_bytes([rec.data[0], rec.data[1]]) {
+                    0 => "XOR obfuscation",
+                    1 => "RC4",
+                    other => {
+                        return Err(XlsError::Encrypted(format!(
+                            "workbook is password-protected (unknown encryption type {other:#x})"
+                        )));
+                    }
+                }
+            } else {
+                "unknown"
+            };
+            return Err(XlsError::Encrypted(format!(
+                "workbook is password-protected ({enc_kind})"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(ty: u16, data: Vec<u8>) -> BiffRecord {
+        BiffRecord {
+            record_type: ty,
+            data,
+            stream_offset: 0,
+            continue_offsets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn check_not_encrypted_accepts_clean_stream() {
+        let recs = vec![
+            record(records::BOF, vec![0x00, 0x06, 0x05, 0x00, 0, 0, 0, 0]),
+            record(records::FONT, vec![0; 26]),
+            record(records::EOF, vec![]),
+        ];
+        check_not_encrypted(&recs).expect("clean stream must parse");
+    }
+
+    #[test]
+    fn check_not_encrypted_rejects_rc4() {
+        // Encryption type 1 = RC4.
+        let recs = vec![
+            record(records::BOF, vec![0x00, 0x06, 0x05, 0x00, 0, 0, 0, 0]),
+            record(records::FILEPASS, vec![0x01, 0x00]),
+            record(records::EOF, vec![]),
+        ];
+        let err = check_not_encrypted(&recs).unwrap_err();
+        match err {
+            XlsError::Encrypted(msg) => assert!(msg.contains("RC4"), "msg={msg}"),
+            other => panic!("expected Encrypted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_not_encrypted_rejects_xor_obfuscation() {
+        // Encryption type 0 = XOR obfuscation.
+        let recs = vec![
+            record(records::BOF, vec![0x00, 0x06, 0x05, 0x00, 0, 0, 0, 0]),
+            record(records::FILEPASS, vec![0x00, 0x00]),
+        ];
+        let err = check_not_encrypted(&recs).unwrap_err();
+        match err {
+            XlsError::Encrypted(msg) => assert!(msg.contains("XOR"), "msg={msg}"),
+            other => panic!("expected Encrypted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_not_encrypted_ignores_filepass_after_globals_eof() {
+        // FILEPASS must appear in the globals block (before first EOF).
+        // A stray FILEPASS-like record later in the stream is not a valid
+        // encryption marker and must not trigger a false positive.
+        let recs = vec![
+            record(records::BOF, vec![0x00, 0x06, 0x05, 0x00, 0, 0, 0, 0]),
+            record(records::EOF, vec![]),
+            record(records::FILEPASS, vec![0x01, 0x00]),
+        ];
+        check_not_encrypted(&recs).expect("FILEPASS after globals EOF must not trigger");
+    }
+}

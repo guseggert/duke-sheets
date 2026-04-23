@@ -17,7 +17,6 @@ use duke_sheets_core::{
     CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, Style, Workbook,
 };
 
-
 use crate::biff::formula::token_parser::ParsedToken;
 use crate::biff::formula::{ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES};
 use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32, read_u8};
@@ -106,6 +105,10 @@ impl XlsReader {
         // Parse all BIFF records from the stream
         let mut cursor = Cursor::new(&stream_data);
         let all_records = biff::read_all_records(&mut cursor)?;
+
+        // Bail out immediately on encrypted workbooks rather than feeding
+        // ciphertext through the BIFF record parsers.
+        biff::check_not_encrypted(&all_records)?;
 
         // Phase 1: Parse workbook globals
         let mut sst: Vec<SstEntry> = Vec::new();
@@ -632,8 +635,7 @@ impl XlsReader {
                     // Header only - DV records follow with actual rules
                 }
                 records::DV => Self::parse_dv(&rec.data, ws, formula_ctx)?,
-                records::AUTOFILTERINFO => {
-                }
+                records::AUTOFILTERINFO => {}
                 records::AUTOFILTER => {
                     if let Some(fc) = Self::parse_autofilter(&rec.data) {
                         auto_filter_columns.push(fc);
@@ -746,8 +748,7 @@ impl XlsReader {
                         }
                     }
                 }
-                records::HCENTER | records::VCENTER => {
-                }
+                records::HCENTER | records::VCENTER => {}
                 records::SCL => {
                     // Zoom: numerator(u16) + denominator(u16)
                     if rec.data.len() >= 4 {

@@ -6,6 +6,7 @@
 pub const BOF: u16 = 0x0809;
 pub const EOF: u16 = 0x000A;
 pub const CONTINUE: u16 = 0x003C;
+pub const FILEPASS: u16 = 0x002F; // Password/encryption header (XOR or RC4)
 
 // ── Workbook globals ────────────────────────────────────────────────────
 pub const BOUNDSHEET: u16 = 0x0085; // Sheet name, type, visibility, stream offset
