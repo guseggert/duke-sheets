@@ -77,6 +77,30 @@ enum DoperValue {
     NonBlanks,
 }
 
+/// Pick the BIFF workbook stream path inside a CFB container, or return a
+/// clean error describing why no readable workbook is present.
+///
+/// Encrypted OOXML files (password-protected `.xlsx`/`.xlsm`) are stored as CFB
+/// containers with the streams `EncryptionInfo` and `EncryptedPackage`, so
+/// they're misclassified as XLS by the top-level format sniffer. Detecting
+/// those streams here lets us return a specific `Encrypted` error rather than
+/// a misleading "no Workbook or Book stream found in CFB".
+pub(crate) fn resolve_workbook_stream<F: Fn(&str) -> bool>(exists: F) -> XlsResult<&'static str> {
+    if exists("/Workbook") {
+        Ok("/Workbook")
+    } else if exists("/Book") {
+        Ok("/Book")
+    } else if exists("/EncryptedPackage") || exists("/EncryptionInfo") {
+        Err(XlsError::Encrypted(
+            "file is an encrypted OOXML document; decryption is not supported".into(),
+        ))
+    } else {
+        Err(XlsError::InvalidFormat(
+            "no Workbook or Book stream found in CFB".into(),
+        ))
+    }
+}
+
 impl XlsReader {
     /// Read an XLS file from a filesystem path.
     pub fn read_file<P: AsRef<Path>>(path: P) -> XlsResult<Workbook> {
@@ -89,16 +113,9 @@ impl XlsReader {
         // Open CFB container
         let cfb = crate::cfb::CompoundFile::open(reader).map_err(std::io::Error::from)?;
 
-        // Read the "Workbook" stream (some files use "Book" for BIFF5)
-        let stream_path = if cfb.exists("/Workbook") {
-            "/Workbook"
-        } else if cfb.exists("/Book") {
-            "/Book"
-        } else {
-            return Err(XlsError::InvalidFormat(
-                "no Workbook or Book stream found in CFB".into(),
-            ));
-        };
+        // Pick the BIFF workbook stream, or surface a clean error if the CFB is
+        // actually an encrypted OOXML envelope rather than a BIFF workbook.
+        let stream_path = resolve_workbook_stream(|p| cfb.exists(p))?;
 
         let stream_data = cfb.read_stream(stream_path).map_err(std::io::Error::from)?;
 
@@ -2870,6 +2887,47 @@ impl XlsReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_workbook_stream_prefers_workbook() {
+        let s = resolve_workbook_stream(|p| p == "/Workbook").unwrap();
+        assert_eq!(s, "/Workbook");
+    }
+
+    #[test]
+    fn resolve_workbook_stream_falls_back_to_book() {
+        let s = resolve_workbook_stream(|p| p == "/Book").unwrap();
+        assert_eq!(s, "/Book");
+    }
+
+    #[test]
+    fn resolve_workbook_stream_rejects_encrypted_ooxml_package() {
+        // Password-protected .xlsx files are CFB containers that hold the
+        // encrypted ZIP in an EncryptedPackage stream alongside an
+        // EncryptionInfo stream. They masquerade as XLS to the byte sniffer.
+        let err = resolve_workbook_stream(|p| p == "/EncryptedPackage").unwrap_err();
+        match err {
+            XlsError::Encrypted(msg) => assert!(msg.contains("encrypted OOXML"), "msg={msg}"),
+            other => panic!("expected Encrypted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_workbook_stream_rejects_encrypted_ooxml_by_info_alone() {
+        let err = resolve_workbook_stream(|p| p == "/EncryptionInfo").unwrap_err();
+        assert!(matches!(err, XlsError::Encrypted(_)));
+    }
+
+    #[test]
+    fn resolve_workbook_stream_invalid_format_when_nothing_matches() {
+        let err = resolve_workbook_stream(|_| false).unwrap_err();
+        match err {
+            XlsError::InvalidFormat(msg) => {
+                assert!(msg.contains("no Workbook or Book"), "msg={msg}")
+            }
+            other => panic!("expected InvalidFormat, got {other:?}"),
+        }
+    }
 
     fn rec(record_type: u16, data: Vec<u8>) -> BiffRecord {
         BiffRecord {
