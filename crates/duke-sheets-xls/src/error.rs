@@ -20,6 +20,10 @@ pub enum XlsError {
     #[error("Unsupported XLS version: {0}")]
     UnsupportedVersion(String),
 
+    /// File is encrypted and cannot be read without decryption.
+    #[error("Encrypted XLS file: {0}")]
+    Encrypted(String),
+
     /// Parse error
     #[error("Parse error: {0}")]
     Parse(String),
