@@ -309,7 +309,13 @@ impl CompoundFile {
             visited[entry_id] = true;
 
             let entry = &self.directory[entry_id];
-            if entry.name == name {
+            // CFB stream names are technically case-sensitive in storage, but
+            // in practice Windows and Office apps treat them case-insensitively
+            // because Windows filesystem semantics do. Some tools write the
+            // workbook stream as `WORKBOOK` (all caps) rather than Excel's
+            // canonical `Workbook`; matching case-insensitively lets us read
+            // those files.
+            if entry.name.eq_ignore_ascii_case(name) {
                 return Some(entry_id);
             }
 
@@ -700,5 +706,49 @@ mod tests {
 
         let entries = parse_directory(&data, 4096).expect("parse ok");
         assert_eq!(entries[1].stream_size, raw);
+    }
+
+    /// Build a minimal two-entry directory and verify we can locate a stream
+    /// regardless of the case of its name. Some third-party Excel-emitting
+    /// tools write the workbook stream as `WORKBOOK` instead of `Workbook`.
+    #[test]
+    fn find_child_by_name_is_case_insensitive() {
+        let cfb = CompoundFile {
+            file_data: Vec::new(),
+            sector_size: 512,
+            mini_sector_size: 64,
+            mini_stream_cutoff: 4096,
+            fat: Vec::new(),
+            mini_fat: Vec::new(),
+            directory: vec![
+                DirectoryEntry {
+                    name: "Root Entry".into(),
+                    object_type: 5,
+                    left_sibling: NOSTREAM,
+                    right_sibling: NOSTREAM,
+                    child: 1,
+                    start_sector: 0,
+                    stream_size: 0,
+                },
+                DirectoryEntry {
+                    name: "WORKBOOK".into(),
+                    object_type: 2,
+                    left_sibling: NOSTREAM,
+                    right_sibling: NOSTREAM,
+                    child: NOSTREAM,
+                    start_sector: 0,
+                    stream_size: 0,
+                },
+            ],
+            mini_stream_data: Vec::new(),
+        };
+
+        assert!(
+            cfb.exists("/Workbook"),
+            "canonical case must match WORKBOOK"
+        );
+        assert!(cfb.exists("/workbook"), "lowercase must match WORKBOOK");
+        assert!(cfb.exists("/WORKBOOK"), "exact case must still match");
+        assert!(!cfb.exists("/Book"), "unrelated name must not match");
     }
 }
