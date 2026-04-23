@@ -225,7 +225,18 @@ pub(crate) fn read_comment_visibility_map<R: Read + Seek>(
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(XlsxError::Xml(e)),
+            Err(e) => {
+                // The VML visibility map is auxiliary metadata. Excel embeds
+                // legacy HTML (e.g. unclosed `<br>`) inside `<v:textbox>`
+                // content which is well-formed HTML but malformed XML.
+                // Rather than failing the whole XLSX read over markup we
+                // don't care about, log a warning and return whatever entries
+                // we already extracted from the well-formed prefix.
+                log::warn!(
+                    "VML visibility map parse error at {vml_path}: {e} (returning partial map)"
+                );
+                break;
+            }
             Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
                 b"Visible" if in_client_data_note => {
                     // <x:Visible/> (self-closing) explicitly marks the note as visible
@@ -422,5 +433,55 @@ mod tests {
 
         // Space between visibility: and visible should still be recognized
         assert_eq!(map.get(&(0, 0)).copied(), Some(true));
+    }
+
+    /// Excel sometimes embeds HTML-style markup with void `<br>` tags inside
+    /// VML `<v:textbox>` content. That's well-formed HTML but malformed XML:
+    /// quick-xml in strict mode rejects it with "expected `</br>`".
+    /// Since VML visibility is auxiliary metadata for comments, a parse
+    /// failure in unrelated markup must not propagate up and fail the whole
+    /// XLSX read. Any visibility entries collected before the malformed
+    /// content should still be returned.
+    #[test]
+    fn malformed_br_in_vml_textbox_yields_partial_visibility() {
+        let mut bytes = Vec::new();
+        {
+            let cursor = Cursor::new(&mut bytes);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+
+            zip.start_file("xl/drawings/vmlDrawing1.vml", options)
+                .unwrap();
+            zip.write_all(
+                br##"<?xml version="1.0"?>
+<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:schemas-microsoft-com:office:excel">
+  <v:shape id="_x0000_s1025" type="#_x0000_t202" style="position:absolute;visibility:visible">
+    <x:ClientData ObjectType="Note">
+      <x:Row>5</x:Row>
+      <x:Column>7</x:Column>
+    </x:ClientData>
+  </v:shape>
+  <v:shape id="_x0000_s1026" type="#_x0000_t201" style="position:absolute">
+    <v:textbox>
+      <div><font>line one<br>
+         </font><font>line two</font></div>
+    </v:textbox>
+    <x:ClientData ObjectType="Button"/>
+  </v:shape>
+</xml>"##,
+            )
+            .unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let cursor = Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let map = read_comment_visibility_map(&mut archive, Some("xl/drawings/vmlDrawing1.vml"))
+            .expect("malformed VML must not fail the read");
+
+        // The first shape's visibility was captured before the parser hit the
+        // malformed <br>; it should still be in the map.
+        assert_eq!(map.get(&(5, 7)).copied(), Some(true));
     }
 }
