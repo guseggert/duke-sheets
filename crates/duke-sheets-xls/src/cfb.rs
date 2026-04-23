@@ -128,7 +128,7 @@ impl CompoundFile {
 
         let directory_stream =
             read_regular_chain(&file_data, sector_size, &fat, first_directory_sector, None)?;
-        let directory = parse_directory(&directory_stream)?;
+        let directory = parse_directory(&directory_stream, sector_size)?;
         if directory.is_empty() {
             return Err(CfbError::InvalidFormat("empty directory stream".into()));
         }
@@ -582,10 +582,16 @@ fn read_mini_fat(
     Ok(mini_fat)
 }
 
-fn parse_directory(data: &[u8]) -> Result<Vec<DirectoryEntry>, CfbError> {
+fn parse_directory(data: &[u8], sector_size: usize) -> Result<Vec<DirectoryEntry>, CfbError> {
     if data.len() < DIR_ENTRY_LEN {
         return Err(CfbError::InvalidFormat("directory stream too short".into()));
     }
+
+    // MS-CFB §2.6.1: On CFB v3 (512-byte sectors) the StreamSize high DWORD is reserved
+    // and "should be ignored" by consumers. Some older implementations (notably Excel 97)
+    // leave garbage in those bytes, which would otherwise be read as a multi-petabyte
+    // stream size and abort the allocator.
+    let stream_size_is_u32 = sector_size == 512;
 
     let mut entries = Vec::with_capacity(data.len() / DIR_ENTRY_LEN);
     let mut offset = 0usize;
@@ -613,6 +619,13 @@ fn parse_directory(data: &[u8]) -> Result<Vec<DirectoryEntry>, CfbError> {
         }
         let name = String::from_utf16_lossy(&utf16);
 
+        let raw_stream_size = read_u64(chunk, 120)?;
+        let stream_size = if stream_size_is_u32 {
+            raw_stream_size & 0xFFFF_FFFF
+        } else {
+            raw_stream_size
+        };
+
         entries.push(DirectoryEntry {
             name,
             object_type: chunk[66],
@@ -620,11 +633,72 @@ fn parse_directory(data: &[u8]) -> Result<Vec<DirectoryEntry>, CfbError> {
             right_sibling: read_u32(chunk, 72)?,
             child: read_u32(chunk, 76)?,
             start_sector: read_u32(chunk, 116)?,
-            stream_size: read_u64(chunk, 120)?,
+            stream_size,
         });
 
         offset += DIR_ENTRY_LEN;
     }
 
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_dir_entry(name: &str, object_type: u8, stream_size_raw: u64) -> [u8; DIR_ENTRY_LEN] {
+        let mut e = [0u8; DIR_ENTRY_LEN];
+        let mut utf16: Vec<u16> = name.encode_utf16().collect();
+        utf16.push(0);
+        for (i, w) in utf16.iter().enumerate() {
+            let [lo, hi] = w.to_le_bytes();
+            e[i * 2] = lo;
+            e[i * 2 + 1] = hi;
+        }
+        let name_len_bytes = (utf16.len() * 2) as u16;
+        e[64..66].copy_from_slice(&name_len_bytes.to_le_bytes());
+        e[66] = object_type;
+        e[68..72].copy_from_slice(&NOSTREAM.to_le_bytes());
+        e[72..76].copy_from_slice(&NOSTREAM.to_le_bytes());
+        e[76..80].copy_from_slice(&NOSTREAM.to_le_bytes());
+        e[116..120].copy_from_slice(&0u32.to_le_bytes());
+        e[120..128].copy_from_slice(&stream_size_raw.to_le_bytes());
+        e
+    }
+
+    /// MS-CFB §2.6.1: "For a version 3 compound file 512-byte sector size, the value of
+    /// this field MUST be less than or equal to 0x80000000. (Note: Some older
+    /// implementations may have set the high DWORD of this field to something other than
+    /// zero, in which case it should be ignored.)"
+    ///
+    /// Old Excel 97 files in the wild have garbage in the high DWORD. If we read the raw
+    /// u64 and feed it to Vec::with_capacity, the allocator aborts the process.
+    #[test]
+    fn parse_directory_masks_v3_stream_size_high_dword() {
+        let raw = 0x7000_4000_0000_B74Du64; // high garbage, low = 46925
+        let mut data = Vec::new();
+        data.extend_from_slice(&make_dir_entry("Root Entry", 5, 0));
+        data.extend_from_slice(&make_dir_entry("Workbook", 2, raw));
+
+        let entries = parse_directory(&data, 512).expect("parse ok");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[1].stream_size, 46925,
+            "v3 stream_size must be masked to low 32 bits (got {:#x})",
+            entries[1].stream_size
+        );
+    }
+
+    /// CFB v4 (4096-byte sector) uses the full u64 StreamSize field, so it must not be
+    /// masked.
+    #[test]
+    fn parse_directory_keeps_v4_stream_size_full_u64() {
+        let raw = 0x0000_0001_0000_0100u64; // > 4 GB, legitimate in v4
+        let mut data = Vec::new();
+        data.extend_from_slice(&make_dir_entry("Root Entry", 5, 0));
+        data.extend_from_slice(&make_dir_entry("Big", 2, raw));
+
+        let entries = parse_directory(&data, 4096).expect("parse ok");
+        assert_eq!(entries[1].stream_size, raw);
+    }
 }
