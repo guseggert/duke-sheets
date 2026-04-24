@@ -1,0 +1,15 @@
+[package]
+name = "duke-sheets-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Office document encryption/decryption for duke-sheets (XLS + OOXML)"
+
+[dependencies]
+thiserror.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

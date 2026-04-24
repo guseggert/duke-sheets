@@ -16,6 +16,7 @@ members = [
     "crates/duke-sheets-libreoffice",
     "crates/duke-sheets-html",
     "crates/duke-sheets-xlsb",
+    "crates/duke-sheets-crypto",
     "crates/ssfmt",
 ]
 # Bindings are excluded from the default workspace build
@@ -42,6 +43,7 @@ duke-sheets-csv = { path = "crates/duke-sheets-csv" }
 duke-sheets-chart = { path = "crates/duke-sheets-chart" }
 duke-sheets-html = { path = "crates/duke-sheets-html" }
 duke-sheets-xlsb = { path = "crates/duke-sheets-xlsb" }
+duke-sheets-crypto = { path = "crates/duke-sheets-crypto" }
 
 # Error handling
 thiserror = "1.0"
