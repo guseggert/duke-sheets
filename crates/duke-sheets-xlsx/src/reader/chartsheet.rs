@@ -3,6 +3,7 @@ use std::io::{BufReader, Read, Seek};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 
 /// Parse a chartsheet XML part and return the drawing relationship id.
@@ -18,7 +19,7 @@ pub(super) fn read_chartsheet_drawing_rid<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     path: &str,
 ) -> XlsxResult<Option<String>> {
-    let file = match archive.by_name(path) {
+    let file = match archive_by_name(archive, path) {
         Ok(f) => f,
         Err(_) => return Ok(None),
     };

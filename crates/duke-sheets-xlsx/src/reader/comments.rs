@@ -4,6 +4,7 @@ use std::io::{BufReader, Read, Seek};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::comment::CellComment;
 use duke_sheets_core::CellAddress;
@@ -16,7 +17,7 @@ pub(crate) fn read_worksheet_comments<R: Read + Seek>(
 ) -> XlsxResult<()> {
     let visible_map = read_comment_visibility_map(archive, vml_path)?;
 
-    let file = match archive.by_name(comments_path) {
+    let file = match archive_by_name(archive, comments_path) {
         Ok(f) => f,
         Err(_) => return Ok(()),
     };
@@ -129,7 +130,7 @@ pub(crate) fn read_comment_visibility_map<R: Read + Seek>(
         return Ok(HashMap::new());
     };
 
-    let file = match archive.by_name(vml_path) {
+    let file = match archive_by_name(archive, vml_path) {
         Ok(f) => f,
         Err(_) => return Ok(HashMap::new()),
     };

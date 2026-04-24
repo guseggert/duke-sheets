@@ -3,6 +3,7 @@ use std::io::{BufReader, Read, Seek};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::style::{Color, FillStyle, Style};
 
@@ -83,7 +84,7 @@ pub(super) fn read_theme_palette<R: Read + Seek>(
     }
 
     for path in try_paths {
-        let mut file = match archive.by_name(&path) {
+        let mut file = match archive_by_name(archive, &path) {
             Ok(f) => f,
             Err(_) => continue,
         };
