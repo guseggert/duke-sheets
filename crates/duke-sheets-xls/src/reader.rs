@@ -77,6 +77,38 @@ enum DoperValue {
     NonBlanks,
 }
 
+/// Peek at a raw Workbook stream to tell whether it has a FilePass
+/// record immediately after the globals BOF. Cheaper than running the
+/// full BIFF parser; used to short-circuit the decryption path.
+fn is_encrypted_workbook_stream(stream: &[u8]) -> bool {
+    let mut cursor = 0usize;
+    let mut seen_bof = false;
+    while cursor + 4 <= stream.len() {
+        let record_type = u16::from_le_bytes([stream[cursor], stream[cursor + 1]]);
+        let size = u16::from_le_bytes([stream[cursor + 2], stream[cursor + 3]]) as usize;
+        let body_end = cursor + 4 + size;
+        if body_end > stream.len() {
+            return false;
+        }
+        if record_type == 0x0809 {
+            // BOF
+            if seen_bof {
+                // Second BOF means we've moved past globals; no FilePass.
+                return false;
+            }
+            seen_bof = true;
+        } else if record_type == 0x002F {
+            return true;
+        } else if seen_bof {
+            // Any non-BOF non-FilePass record means the globals block
+            // started without FilePass; it's plaintext.
+            return false;
+        }
+        cursor = body_end;
+    }
+    false
+}
+
 /// Pick the BIFF workbook stream path inside a CFB container, or return a
 /// clean error describing why no readable workbook is present.
 ///
@@ -108,8 +140,32 @@ impl XlsReader {
         Self::read(file)
     }
 
+    /// Read an XLS file from a filesystem path, supplying a password for
+    /// encrypted workbooks.
+    pub fn read_file_with_password<P: AsRef<Path>>(
+        path: P,
+        password: Option<&str>,
+    ) -> XlsResult<Workbook> {
+        let file = std::fs::File::open(path.as_ref())?;
+        Self::read_with_password(file, password)
+    }
+
     /// Read an XLS file from any `Read + Seek` source.
     pub fn read<R: Read + Seek>(reader: R) -> XlsResult<Workbook> {
+        Self::read_with_password(reader, None)
+    }
+
+    /// Read an XLS file from any `Read + Seek` source, supplying a
+    /// password for encrypted workbooks.
+    ///
+    /// If `password` is `Some`, an encrypted workbook is decrypted
+    /// in-memory before record parsing. Passing `None` preserves the
+    /// historical behavior (encrypted files return `XlsError::Encrypted`).
+    /// Wrong passwords return [`XlsError::BadPassword`].
+    pub fn read_with_password<R: Read + Seek>(
+        reader: R,
+        password: Option<&str>,
+    ) -> XlsResult<Workbook> {
         // Open CFB container
         let cfb = crate::cfb::CompoundFile::open(reader).map_err(std::io::Error::from)?;
 
@@ -117,7 +173,16 @@ impl XlsReader {
         // actually an encrypted OOXML envelope rather than a BIFF workbook.
         let stream_path = resolve_workbook_stream(|p| cfb.exists(p))?;
 
-        let stream_data = cfb.read_stream(stream_path).map_err(std::io::Error::from)?;
+        let mut stream_data = cfb.read_stream(stream_path).map_err(std::io::Error::from)?;
+
+        // If the workbook is encrypted AND a password was supplied,
+        // decrypt in place before parsing. Detection peeks at the raw
+        // record header sequence for a FilePass record right after BOF.
+        if let Some(pw) = password {
+            if is_encrypted_workbook_stream(&stream_data) {
+                stream_data = duke_sheets_crypto::xls::decrypt_workbook_stream(&stream_data, pw)?;
+            }
+        }
 
         // Parse all BIFF records from the stream
         let mut cursor = Cursor::new(&stream_data);
