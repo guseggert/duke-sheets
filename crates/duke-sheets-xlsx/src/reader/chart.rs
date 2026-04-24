@@ -1,5 +1,6 @@
 use std::io::{Read, Seek};
 
+use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_chart::{Chart, DrawingAnchor};
 
@@ -8,7 +9,7 @@ pub(crate) fn read_chart<R: Read + Seek>(
     chart_path: &str,
     anchor: DrawingAnchor,
 ) -> XlsxResult<Option<Chart>> {
-    let file = match archive.by_name(chart_path) {
+    let file = match archive_by_name(archive, chart_path) {
         Ok(f) => f,
         Err(_) => return Ok(None),
     };

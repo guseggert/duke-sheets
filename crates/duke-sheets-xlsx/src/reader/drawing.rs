@@ -4,6 +4,7 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use quick_xml::Writer;
 
+use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
 
@@ -38,7 +39,7 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     drawing_path: &str,
 ) -> XlsxResult<DrawingContents> {
-    let file = match archive.by_name(drawing_path) {
+    let file = match archive_by_name(archive, drawing_path) {
         Ok(f) => f,
         Err(_) => {
             return Ok(DrawingContents {

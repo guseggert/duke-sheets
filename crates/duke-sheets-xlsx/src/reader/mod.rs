@@ -31,6 +31,7 @@ use formulas::{
 };
 use theme::{read_theme_palette, resolve_style_theme_colors};
 
+mod archive;
 pub(crate) mod chart;
 pub(crate) mod chart_ex;
 mod chartsheet;
@@ -44,6 +45,7 @@ mod table;
 mod theme;
 mod workbook;
 
+pub(crate) use archive::archive_by_name;
 pub(crate) use formulas::CellFormulaState;
 use shared_strings::SharedStringEntry;
 pub(crate) use theme::ThemePalette;
@@ -122,14 +124,14 @@ fn read_chart_style_color<R: Read + Seek>(
     };
     for rel in chart_rels.values() {
         if rel.rel_type.ends_with("/chartStyle") {
-            if let Ok(mut f) = archive.by_name(&rel.target) {
+            if let Ok(mut f) = archive_by_name(archive, &rel.target) {
                 let mut bytes = Vec::new();
                 if f.read_to_end(&mut bytes).is_ok() {
                     chart.raw_chart_style = Some(bytes);
                 }
             }
         } else if rel.rel_type.ends_with("/chartColorStyle") {
-            if let Ok(mut f) = archive.by_name(&rel.target) {
+            if let Ok(mut f) = archive_by_name(archive, &rel.target) {
                 let mut bytes = Vec::new();
                 if f.read_to_end(&mut bytes).is_ok() {
                     chart.raw_chart_color_style = Some(bytes);
@@ -150,14 +152,14 @@ fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
     };
     for rel in chart_rels.values() {
         if rel.rel_type.ends_with("/chartStyle") {
-            if let Ok(mut f) = archive.by_name(&rel.target) {
+            if let Ok(mut f) = archive_by_name(archive, &rel.target) {
                 let mut bytes = Vec::new();
                 if f.read_to_end(&mut bytes).is_ok() {
                     chart.raw_chart_style = Some(bytes);
                 }
             }
         } else if rel.rel_type.ends_with("/chartColorStyle") {
-            if let Ok(mut f) = archive.by_name(&rel.target) {
+            if let Ok(mut f) = archive_by_name(archive, &rel.target) {
                 let mut bytes = Vec::new();
                 if f.read_to_end(&mut bytes).is_ok() {
                     chart.raw_chart_color_style = Some(bytes);
@@ -182,7 +184,7 @@ impl XlsxReader {
         let mut archive = zip::ZipArchive::new(reader)?;
 
         // Verify this is an XLSX file
-        if archive.by_name("[Content_Types].xml").is_err() {
+        if archive_by_name(&mut archive, "[Content_Types].xml").is_err() {
             return Err(XlsxError::InvalidFormat(
                 "Missing [Content_Types].xml".into(),
             ));
@@ -327,7 +329,7 @@ impl XlsxReader {
                                     image.format = fmt;
                                 }
                                 image.media_path = rel.target.clone();
-                                if let Ok(mut f) = archive.by_name(&rel.target) {
+                                if let Ok(mut f) = archive_by_name(&mut archive, &rel.target) {
                                     let mut buf = Vec::new();
                                     if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
                                         image.data = buf;
@@ -337,7 +339,7 @@ impl XlsxReader {
                             if let Some(svg_rel_id) = &image.svg_media_path {
                                 if let Some(rel) = drawing_rels.get(svg_rel_id.as_str()) {
                                     image.svg_media_path = Some(rel.target.clone());
-                                    if let Ok(mut f) = archive.by_name(&rel.target) {
+                                    if let Ok(mut f) = archive_by_name(&mut archive, &rel.target) {
                                         let mut buf = Vec::new();
                                         if std::io::Read::read_to_end(&mut f, &mut buf).is_ok() {
                                             image.svg_data = Some(buf);
@@ -449,7 +451,7 @@ impl XlsxReader {
     }
 
     fn read_styles<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> XlsxResult<ParsedStyles> {
-        let file = match archive.by_name("xl/styles.xml") {
+        let file = match archive_by_name(archive, "xl/styles.xml") {
             Ok(f) => f,
             Err(_) => {
                 return Ok(ParsedStyles {
@@ -638,49 +640,31 @@ impl XlsxReader {
                                             worksheet.set_zoom_scale(Some(z));
                                         }
                                     }
-                                    b"showFormulas" => {
-                                    }
-                                    b"showGridLines" => {
-                                    }
-                                    b"showZeros" => {
-                                    }
-                                    b"showRuler" => {
-                                    }
-                                    b"showOutlineSymbols" => {
-                                    }
-                                    b"showRowColHeaders" => {
-                                    }
-                                    b"showWhiteSpace" => {
-                                    }
-                                    b"topLeftCell" => {
-                                    }
+                                    b"showFormulas" => {}
+                                    b"showGridLines" => {}
+                                    b"showZeros" => {}
+                                    b"showRuler" => {}
+                                    b"showOutlineSymbols" => {}
+                                    b"showRowColHeaders" => {}
+                                    b"showWhiteSpace" => {}
+                                    b"topLeftCell" => {}
                                     b"view" => {
                                         if let Ok(v) = attr.unescape_value() {
                                             match v.as_ref() {
-                                                "normal" => {
-                                                }
-                                                "pageBreakPreview" => {
-                                                }
-                                                "pageLayout" => {
-                                                }
+                                                "normal" => {}
+                                                "pageBreakPreview" => {}
+                                                "pageLayout" => {}
                                                 _ => {}
                                             }
                                         }
                                     }
-                                    b"windowProtection" => {
-                                    }
-                                    b"workbookViewId" => {
-                                    }
-                                    b"rightToLeft" => {
-                                    }
-                                    b"zoomScaleNormal" => {
-                                    }
-                                    b"zoomScalePageLayoutView" => {
-                                    }
-                                    b"zoomScaleSheetLayoutView" => {
-                                    }
-                                    b"colorId" => {
-                                    }
+                                    b"windowProtection" => {}
+                                    b"workbookViewId" => {}
+                                    b"rightToLeft" => {}
+                                    b"zoomScaleNormal" => {}
+                                    b"zoomScalePageLayoutView" => {}
+                                    b"zoomScaleSheetLayoutView" => {}
+                                    b"colorId" => {}
                                     _ => {}
                                 }
                             }
@@ -1726,49 +1710,31 @@ impl XlsxReader {
                                             worksheet.set_zoom_scale(Some(z));
                                         }
                                     }
-                                    b"showFormulas" => {
-                                    }
-                                    b"showGridLines" => {
-                                    }
-                                    b"showZeros" => {
-                                    }
-                                    b"showRuler" => {
-                                    }
-                                    b"showOutlineSymbols" => {
-                                    }
-                                    b"showRowColHeaders" => {
-                                    }
-                                    b"showWhiteSpace" => {
-                                    }
-                                    b"topLeftCell" => {
-                                    }
+                                    b"showFormulas" => {}
+                                    b"showGridLines" => {}
+                                    b"showZeros" => {}
+                                    b"showRuler" => {}
+                                    b"showOutlineSymbols" => {}
+                                    b"showRowColHeaders" => {}
+                                    b"showWhiteSpace" => {}
+                                    b"topLeftCell" => {}
                                     b"view" => {
                                         if let Ok(v) = attr.unescape_value() {
                                             match v.as_ref() {
-                                                "normal" => {
-                                                }
-                                                "pageBreakPreview" => {
-                                                }
-                                                "pageLayout" => {
-                                                }
+                                                "normal" => {}
+                                                "pageBreakPreview" => {}
+                                                "pageLayout" => {}
                                                 _ => {}
                                             }
                                         }
                                     }
-                                    b"windowProtection" => {
-                                    }
-                                    b"workbookViewId" => {
-                                    }
-                                    b"rightToLeft" => {
-                                    }
-                                    b"zoomScaleNormal" => {
-                                    }
-                                    b"zoomScalePageLayoutView" => {
-                                    }
-                                    b"zoomScaleSheetLayoutView" => {
-                                    }
-                                    b"colorId" => {
-                                    }
+                                    b"windowProtection" => {}
+                                    b"workbookViewId" => {}
+                                    b"rightToLeft" => {}
+                                    b"zoomScaleNormal" => {}
+                                    b"zoomScalePageLayoutView" => {}
+                                    b"zoomScaleSheetLayoutView" => {}
+                                    b"colorId" => {}
                                     _ => {}
                                 }
                             }
@@ -2704,58 +2670,42 @@ impl XlsxReader {
             }
         } else if let Some(value) = value {
             let cell_value = match cell_type {
-                Some("s") => {
-                    match value.parse::<usize>() {
-                        Ok(idx) => match shared_strings.get(idx) {
-                            Some(SharedStringEntry::Plain(s)) => {
-                                CellValue::String(s.clone().into())
-                            }
-                            Some(SharedStringEntry::Rich(runs)) => {
-                                CellValue::rich_text(runs.clone())
-                            }
-                            None => {
-                                log::warn!(
+                Some("s") => match value.parse::<usize>() {
+                    Ok(idx) => match shared_strings.get(idx) {
+                        Some(SharedStringEntry::Plain(s)) => CellValue::String(s.clone().into()),
+                        Some(SharedStringEntry::Rich(runs)) => CellValue::rich_text(runs.clone()),
+                        None => {
+                            log::warn!(
                                     "Cell {}: shared string index {} out of bounds (max {}), using #REF!",
                                     cell_ref, idx, shared_strings.len()
                                 );
-                                CellValue::Error(CellError::Ref)
-                            }
-                        },
-                        Err(_) => {
-                            log::warn!(
-                                "Cell {}: invalid shared string index '{}', using #REF!",
-                                cell_ref,
-                                value
-                            );
                             CellValue::Error(CellError::Ref)
                         }
+                    },
+                    Err(_) => {
+                        log::warn!(
+                            "Cell {}: invalid shared string index '{}', using #REF!",
+                            cell_ref,
+                            value
+                        );
+                        CellValue::Error(CellError::Ref)
                     }
-                }
+                },
 
-                Some("b") => {
-                    CellValue::Boolean(value == "1" || value.eq_ignore_ascii_case("true"))
-                }
+                Some("b") => CellValue::Boolean(value == "1" || value.eq_ignore_ascii_case("true")),
 
-                Some("e") => {
-                    CellError::parse(value)
-                        .map(CellValue::Error)
-                        .unwrap_or_else(|| CellValue::String(value.to_string().into()))
-                }
+                Some("e") => CellError::parse(value)
+                    .map(CellValue::Error)
+                    .unwrap_or_else(|| CellValue::String(value.to_string().into())),
 
-                Some("inlineStr") => {
-                    CellValue::String(decode_excel_escapes(value).into())
-                }
+                Some("inlineStr") => CellValue::String(decode_excel_escapes(value).into()),
 
-                Some("str") => {
-                    CellValue::String(decode_excel_escapes(value).into())
-                }
+                Some("str") => CellValue::String(decode_excel_escapes(value).into()),
 
-                None | Some("n") => {
-                    match value.parse::<f64>() {
-                        Ok(n) => CellValue::Number(n),
-                        Err(_) => CellValue::String(value.to_string().into()),
-                    }
-                }
+                None | Some("n") => match value.parse::<f64>() {
+                    Ok(n) => CellValue::Number(n),
+                    Err(_) => CellValue::String(value.to_string().into()),
+                },
 
                 Some(_) => CellValue::String(value.to_string().into()),
             };

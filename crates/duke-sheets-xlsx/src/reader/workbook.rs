@@ -6,6 +6,7 @@ use std::io::{BufReader, Read, Seek};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::SheetVisibility;
 
@@ -41,8 +42,7 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
 ) -> XlsxResult<WorkbookProps> {
     use duke_sheets_core::named_range::{NameScope, NamedRange};
 
-    let file = archive
-        .by_name("xl/workbook.xml")
+    let file = archive_by_name(archive, "xl/workbook.xml")
         .map_err(|_| XlsxError::MissingPart("xl/workbook.xml".into()))?;
 
     let reader = BufReader::new(file);
@@ -173,8 +173,7 @@ fn parse_workbook_pr(e: &quick_xml::events::BytesStart<'_>, date_1904: &mut bool
 pub(super) fn read_workbook_rels<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
 ) -> XlsxResult<WorkbookRels> {
-    let file = archive
-        .by_name("xl/_rels/workbook.xml.rels")
+    let file = archive_by_name(archive, "xl/_rels/workbook.xml.rels")
         .map_err(|_| XlsxError::MissingPart("xl/_rels/workbook.xml.rels".into()))?;
 
     let reader = BufReader::new(file);
@@ -259,7 +258,7 @@ pub(super) fn read_sheet_rels<R: Read + Seek>(
     };
     let rels_path = format!("{}/_rels/{}.rels", base_dir, file_name);
 
-    let file = match archive.by_name(&rels_path) {
+    let file = match archive_by_name(archive, &rels_path) {
         Ok(f) => f,
         Err(_) => return Ok(HashMap::new()),
     };

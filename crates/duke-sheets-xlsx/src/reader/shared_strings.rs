@@ -7,6 +7,7 @@ use duke_sheets_core::style::{Color, FontVerticalAlign, Underline};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 
+use super::archive_by_name;
 use super::conditional_format::parse_color_element;
 use super::decode_excel_escapes;
 use crate::error::{XlsxError, XlsxResult};
@@ -28,7 +29,7 @@ pub(crate) fn read_shared_strings<R: Read + Seek>(
 ) -> XlsxResult<Vec<SharedStringEntry>> {
     let mut entries = Vec::new();
 
-    let file = match archive.by_name("xl/sharedStrings.xml") {
+    let file = match archive_by_name(archive, "xl/sharedStrings.xml") {
         Ok(f) => f,
         Err(_) => return Ok(entries), // No shared strings is valid
     };

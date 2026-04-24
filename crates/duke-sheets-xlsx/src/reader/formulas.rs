@@ -35,18 +35,10 @@ pub(super) fn parse_cell_formula_state(e: &quick_xml::events::BytesStart<'_>) ->
             b"t" => {
                 if let Ok(v) = attr.unescape_value() {
                     state.kind = match v.as_ref() {
-                        "shared" => {
-                            CellFormulaKind::Shared
-                        }
-                        "array" => {
-                            CellFormulaKind::Array
-                        }
-                        "dataTable" => {
-                            CellFormulaKind::DataTable
-                        }
-                        _ => {
-                            CellFormulaKind::Normal
-                        }
+                        "shared" => CellFormulaKind::Shared,
+                        "array" => CellFormulaKind::Array,
+                        "dataTable" => CellFormulaKind::DataTable,
+                        _ => CellFormulaKind::Normal,
                     };
                 }
             }

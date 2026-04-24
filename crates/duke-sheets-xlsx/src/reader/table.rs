@@ -3,6 +3,7 @@ use std::io::{BufReader, Read, Seek};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 use duke_sheets_core::CellRange;
@@ -12,7 +13,7 @@ pub(crate) fn read_table<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     table_path: &str,
 ) -> XlsxResult<Option<Table>> {
-    let file = match archive.by_name(table_path) {
+    let file = match archive_by_name(archive, table_path) {
         Ok(f) => f,
         Err(_) => return Ok(None),
     };
