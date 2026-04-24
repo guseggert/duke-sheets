@@ -159,7 +159,7 @@ impl CompoundFile {
         let root_size = usize::try_from(root.stream_size).map_err(|_| {
             CfbError::InvalidFormat("root entry stream size does not fit in memory".into())
         })?;
-        let mini_stream_data = if root_size == 0 || root.start_sector == ENDOFCHAIN {
+        let mut mini_stream_data = if root_size == 0 || root.start_sector == ENDOFCHAIN {
             Vec::new()
         } else {
             read_regular_chain(
@@ -170,6 +170,13 @@ impl CompoundFile {
                 Some(root_size),
             )?
         };
+        // Mirror the file-level padding: the mini stream is a byte-for-byte
+        // concatenation of mini sectors, and some producers leave the root
+        // stream size (root_size) shy of the actual mini-sector boundary.
+        // Padding with zeros lets the mini FAT chain's final sector fall
+        // within the buffer. Any real data in that tail would be zeros anyway
+        // per spec.
+        pad_to_sector_boundary(&mut mini_stream_data, mini_sector_size);
 
         Ok(Self {
             file_data,
