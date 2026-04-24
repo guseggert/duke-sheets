@@ -61,6 +61,39 @@ fn make_property_value(name: &str, value: UnoValue, type_desc: Type) -> UnoValue
     ])
 }
 
+/// Build a `com.sun.star.beans.NamedValue` as a `UnoValue::Struct`.
+///
+/// NamedValue members: Name(string), Value(any). Distinct from
+/// `PropertyValue` even though the intent is similar — some LO filter
+/// APIs (notably `EncryptionData` for OOXML password protection) insist
+/// on `NamedValue` and silently emit unencrypted output when given
+/// `PropertyValue`.
+fn make_named_value(name: &str, value: UnoValue, type_desc: Type) -> UnoValue {
+    UnoValue::Struct(vec![
+        UnoValue::String(name.to_string()),
+        UnoValue::Any(Box::new(Any { type_desc, value })),
+    ])
+}
+
+/// Convert a filesystem path to a `file://` URL as expected by
+/// `XStorable::storeToURL`.
+fn path_to_file_url(path: &str) -> String {
+    if path.starts_with("file://") {
+        path.to_string()
+    } else {
+        let abs = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(path)
+                .display()
+                .to_string()
+        };
+        format!("file://{abs}")
+    }
+}
+
 impl<'a> Workbook<'a> {
     pub(crate) fn new(conn: &'a mut UrpConnection, doc: UnoProxy) -> Self {
         Self { conn, doc }
@@ -1442,21 +1475,7 @@ impl<'a> Workbook<'a> {
 
     /// Save the workbook as XLSX to the given file path.
     pub async fn save(&mut self, path: &str) -> Result<()> {
-        // Convert to file:// URL
-        let url = if path.starts_with("file://") {
-            path.to_string()
-        } else {
-            let abs = if path.starts_with('/') {
-                path.to_string()
-            } else {
-                std::env::current_dir()
-                    .unwrap_or_default()
-                    .join(path)
-                    .display()
-                    .to_string()
-            };
-            format!("file://{abs}")
-        };
+        let url = path_to_file_url(path);
 
         // queryInterface for XStorable
         let storable_proxy = self.doc_qi(type_names::X_STORABLE).await?;
@@ -1478,22 +1497,98 @@ impl<'a> Workbook<'a> {
         Ok(())
     }
 
+    /// Save the workbook as XLSX with password encryption.
+    ///
+    /// LibreOffice encrypts `.xlsx` output using the ECMA-376 Agile scheme
+    /// (AES-256-CBC + HMAC-SHA512) by default, which is the same format
+    /// modern Excel produces.
+    ///
+    /// The incantation is finicky: you need `EncryptionData` as a
+    /// sequence of `NamedValue` (**not** `PropertyValue`) containing both
+    /// `CryptoType = "StrongEncryptionDataSpace"` and `OOXPassword`. Any
+    /// other combination silently produces an unencrypted ZIP, or throws
+    /// "SfxBaseModel::impl_store failed". See test script
+    /// `crates/duke-sheets-crypto/tests/fixture_gen.rs` for the
+    /// combinatorial survey that found this.
+    pub async fn save_with_password_xlsx(
+        &mut self,
+        path: &str,
+        password: &str,
+    ) -> Result<()> {
+        let url = path_to_file_url(path);
+        let storable_proxy = self.doc_qi(type_names::X_STORABLE).await?;
+
+        let filter_pv = make_property_value(
+            "FilterName",
+            UnoValue::String("Calc MS Excel 2007 XML".to_string()),
+            Type::string(),
+        );
+        let overwrite_pv = make_property_value("Overwrite", UnoValue::Bool(true), Type::boolean());
+
+        let crypto_type_nv = make_named_value(
+            "CryptoType",
+            UnoValue::String("StrongEncryptionDataSpace".to_string()),
+            Type::string(),
+        );
+        let ooxpw_nv = make_named_value(
+            "OOXPassword",
+            UnoValue::String(password.to_string()),
+            Type::string(),
+        );
+        let encryption_data_pv = make_property_value(
+            "EncryptionData",
+            UnoValue::Sequence(vec![crypto_type_nv, ooxpw_nv]),
+            Type::sequence("com.sun.star.beans.NamedValue"),
+        );
+
+        let props = UnoValue::Sequence(vec![filter_pv, overwrite_pv, encryption_data_pv]);
+
+        let method = interface::store_to_url();
+        self.conn
+            .call(&storable_proxy, &method, &[UnoValue::String(url), props])
+            .await?;
+
+        tracing::info!("Saved encrypted workbook to {path}");
+        Ok(())
+    }
+
+    /// Save the workbook as XLS (Excel 97) with password encryption.
+    ///
+    /// LibreOffice encrypts `.xls` output using RC4 CryptoAPI (typically
+    /// 128-bit key, SHA-1 KDF).
+    pub async fn save_with_password_xls(
+        &mut self,
+        path: &str,
+        password: &str,
+    ) -> Result<()> {
+        let url = path_to_file_url(path);
+        let storable_proxy = self.doc_qi(type_names::X_STORABLE).await?;
+
+        let filter_pv = make_property_value(
+            "FilterName",
+            UnoValue::String("MS Excel 97".to_string()),
+            Type::string(),
+        );
+        let overwrite_pv = make_property_value("Overwrite", UnoValue::Bool(true), Type::boolean());
+        let password_pv = make_property_value(
+            "Password",
+            UnoValue::String(password.to_string()),
+            Type::string(),
+        );
+        let props = UnoValue::Sequence(vec![filter_pv, overwrite_pv, password_pv]);
+
+        let method = interface::store_to_url();
+        self.conn
+            .call(&storable_proxy, &method, &[UnoValue::String(url), props])
+            .await?;
+
+        tracing::info!("Saved encrypted XLS workbook to {path}");
+        Ok(())
+    }
+
     /// Save the workbook as XLS (Excel 97) to the given file path.
     pub async fn save_as_xls(&mut self, path: &str) -> Result<()> {
-        let url = if path.starts_with("file://") {
-            path.to_string()
-        } else {
-            let abs = if path.starts_with('/') {
-                path.to_string()
-            } else {
-                std::env::current_dir()
-                    .unwrap_or_default()
-                    .join(path)
-                    .display()
-                    .to_string()
-            };
-            format!("file://{abs}")
-        };
+        let url = path_to_file_url(path);
 
         let storable_proxy = self.doc_qi(type_names::X_STORABLE).await?;
 
