@@ -28,6 +28,24 @@ pub enum XlsxError {
     #[error("Missing required part: {0}")]
     MissingPart(String),
 
+    /// Workbook is encrypted and no password was supplied, or decryption
+    /// is not supported for the detected variant.
+    ///
+    /// Distinct from [`XlsxError::BadPassword`]: this means "decryption
+    /// was not attempted", while `BadPassword` means "decryption was
+    /// attempted and the verifier rejected the password".
+    #[error("Encrypted XLSX file: {0}")]
+    Encrypted(String),
+
+    /// A password was supplied but the file's password verifier rejected it.
+    #[error("Incorrect password for encrypted XLSX file")]
+    BadPassword,
+
+    /// The file is encrypted with a variant this crate does not yet
+    /// implement (e.g. certificate-based key encryptor).
+    #[error("Unsupported XLSX encryption: {0}")]
+    UnsupportedEncryption(String),
+
     /// Parse error
     #[error("Parse error: {0}")]
     Parse(String),
@@ -35,4 +53,19 @@ pub enum XlsxError {
     /// Core error
     #[error("Core error: {0}")]
     Core(#[from] duke_sheets_core::Error),
+}
+
+impl From<duke_sheets_crypto::CryptoError> for XlsxError {
+    fn from(err: duke_sheets_crypto::CryptoError) -> Self {
+        use duke_sheets_crypto::CryptoError;
+        match err {
+            CryptoError::BadPassword => XlsxError::BadPassword,
+            CryptoError::MissingPassword => {
+                XlsxError::Encrypted("workbook is encrypted but no password was supplied".into())
+            }
+            CryptoError::UnsupportedVariant(s) => XlsxError::UnsupportedEncryption(s),
+            CryptoError::InvalidFormat(s) => XlsxError::InvalidFormat(format!("crypto: {s}")),
+            CryptoError::Io(e) => XlsxError::Io(e),
+        }
+    }
 }

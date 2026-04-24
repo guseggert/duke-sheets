@@ -11,6 +11,7 @@ description = "XLSX (Office Open XML) reader/writer for duke-sheets"
 duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
 duke-sheets-chart = { workspace = true, features = ["parse"] }
+duke-sheets-crypto.workspace = true
 thiserror.workspace = true
 quick-xml.workspace = true
 zip.workspace = true
