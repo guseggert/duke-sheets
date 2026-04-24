@@ -100,6 +100,11 @@ impl CompoundFile {
             )));
         }
 
+        // Some third-party XLS writers leave the final sector truncated on disk
+        // rather than zero-padding it to the sector boundary the spec requires.
+        // Pad in memory so `sector_offset` sees a complete file.
+        pad_to_sector_boundary(&mut file_data, sector_size);
+
         let total_fat_sectors = read_u32(&file_data, 44)? as usize;
 
         // Sanity check: FAT sectors can't exceed the number of sectors in the file
@@ -648,9 +653,48 @@ fn parse_directory(data: &[u8], sector_size: usize) -> Result<Vec<DirectoryEntry
     Ok(entries)
 }
 
+/// Pad a CFB file buffer to the next sector boundary with zeros.
+///
+/// MS-CFB specifies that a compound file's byte length be a multiple of its
+/// sector size, with any unused tail bytes zeroed. Some real-world XLS writers
+/// skip that padding, so the last sector is truncated on disk and our
+/// strict `sector_offset` check rejects the file. Padding with zeros at load
+/// time matches what the producer should have written and lets us read valid
+/// streams whose on-disk tails happened to be all zeros anyway.
+fn pad_to_sector_boundary(file_data: &mut Vec<u8>, sector_size: usize) {
+    let rem = file_data.len() % sector_size;
+    if rem != 0 {
+        let pad = sector_size - rem;
+        file_data.resize(file_data.len() + pad, 0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pad_to_sector_boundary_adds_zeros_when_truncated() {
+        let mut data = vec![0xAB; 1500]; // 1500 bytes, sector_size 512 -> pad to 1536
+        pad_to_sector_boundary(&mut data, 512);
+        assert_eq!(data.len(), 1536);
+        assert_eq!(&data[..1500], &vec![0xAB; 1500][..]);
+        assert_eq!(&data[1500..], &[0; 36]);
+    }
+
+    #[test]
+    fn pad_to_sector_boundary_is_noop_when_aligned() {
+        let mut data = vec![0xAB; 1024];
+        pad_to_sector_boundary(&mut data, 512);
+        assert_eq!(data.len(), 1024);
+    }
+
+    #[test]
+    fn pad_to_sector_boundary_handles_4k_sectors() {
+        let mut data = vec![0xAB; 5000];
+        pad_to_sector_boundary(&mut data, 4096);
+        assert_eq!(data.len(), 8192);
+    }
 
     fn make_dir_entry(name: &str, object_type: u8, stream_size_raw: u64) -> [u8; DIR_ENTRY_LEN] {
         let mut e = [0u8; DIR_ENTRY_LEN];
