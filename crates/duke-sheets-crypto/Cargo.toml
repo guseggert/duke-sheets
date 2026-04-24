@@ -13,3 +13,10 @@ log.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+# Used by the fixture generator test to produce encrypted Office files via
+# LibreOffice's storeToURL. The fixture-gen test is #[ignore]-gated so CI
+# doesn't need a running LibreOffice unless someone is explicitly
+# regenerating fixtures.
+duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
+libreoffice-urp = { path = "../libreoffice-urp" }
+tokio = { version = "1", features = ["rt", "sync", "net", "macros"] }

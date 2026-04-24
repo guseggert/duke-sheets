@@ -740,6 +740,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "duke-sheets-crypto"
+version = "0.1.0"
+dependencies = [
+ "duke-sheets-libreoffice",
+ "libreoffice-urp",
+ "log",
+ "pretty_assertions",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "duke-sheets-csv"
 version = "0.1.0"
 dependencies = [
@@ -823,6 +835,7 @@ dependencies = [
  "chrono",
  "duke-sheets-chart",
  "duke-sheets-core",
+ "duke-sheets-crypto",
  "duke-sheets-formula",
  "duke-sheets-libreoffice",
  "log",
@@ -856,6 +869,7 @@ dependencies = [
  "chrono",
  "duke-sheets-chart",
  "duke-sheets-core",
+ "duke-sheets-crypto",
  "duke-sheets-formula",
  "duke-sheets-libreoffice",
  "libreoffice-urp",
