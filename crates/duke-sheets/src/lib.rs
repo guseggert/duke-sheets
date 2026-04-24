@@ -186,19 +186,149 @@ pub fn detect_format(bytes: &[u8]) -> FileFormat {
     }
 }
 
+/// Options controlling how a workbook is opened.
+///
+/// See `docs/PASSWORD_SUPPORT.md` for the full encryption story. The
+/// struct is intentionally non-exhaustive so fields can be added in
+/// future phases (lazy loading, calculation preferences, etc.) without
+/// a major-version bump.
+#[derive(Default, Clone)]
+#[non_exhaustive]
+pub struct WorkbookOpenOptions {
+    /// Password for encrypted workbooks. `None` causes the reader to
+    /// treat an encrypted file as an error after trying the Excel
+    /// `VelvetSweatshop` sentinel (once decryption is implemented).
+    pub password: Option<String>,
+}
+
+impl WorkbookOpenOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn password(mut self, pw: impl Into<String>) -> Self {
+        self.password = Some(pw.into());
+        self
+    }
+}
+
+// Redact the password in Debug output to avoid accidentally logging it.
+impl std::fmt::Debug for WorkbookOpenOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkbookOpenOptions")
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+/// Options controlling how a workbook is saved.
+///
+/// Like [`WorkbookOpenOptions`], this struct is non-exhaustive; new
+/// fields will appear as features land. The `encryption` selector is
+/// currently ignored because the writer doesn't yet produce encrypted
+/// output.
+#[derive(Default, Clone)]
+#[non_exhaustive]
+pub struct WorkbookSaveOptions {
+    /// Password to encrypt the output with. `None` writes plaintext.
+    pub password: Option<String>,
+
+    /// Which encryption profile to use when `password` is supplied.
+    pub encryption: EncryptionProfile,
+}
+
+impl WorkbookSaveOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn password(mut self, pw: impl Into<String>) -> Self {
+        self.password = Some(pw.into());
+        self
+    }
+
+    pub fn encryption(mut self, profile: EncryptionProfile) -> Self {
+        self.encryption = profile;
+        self
+    }
+}
+
+impl std::fmt::Debug for WorkbookSaveOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkbookSaveOptions")
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("encryption", &self.encryption)
+            .finish()
+    }
+}
+
+/// Encryption variant selector for [`WorkbookSaveOptions`].
+///
+/// `Default` picks Agile AES-256 for `.xlsx` and RC4 CryptoAPI 128-bit
+/// for `.xls`, matching Excel's current defaults. Callers who need
+/// deterministic output (reproducible builds, golden files) can pin
+/// an explicit variant.
+#[derive(Debug, Default, Clone)]
+#[non_exhaustive]
+pub enum EncryptionProfile {
+    /// Format-appropriate default: Agile-256 for `.xlsx`, RC4
+    /// CryptoAPI 128-bit for `.xls`.
+    #[default]
+    Default,
+
+    /// OOXML ECMA-376 Agile (AES-CBC + HMAC-SHA*). Modern default.
+    OoxmlAgile { key_bits: u32, spin_count: u32 },
+    /// OOXML ECMA-376 Standard (AES-ECB). Office 2007 compatibility.
+    OoxmlStandard { key_bits: u32 },
+    /// OOXML Binary Document RC4 CryptoAPI. Rare; for legacy readers.
+    OoxmlBinaryRc4 { key_bits: u32 },
+
+    /// XLS RC4 CryptoAPI (SHA-1 KDF, Excel XP+).
+    XlsRc4CryptoApi { key_bits: u32 },
+    /// XLS Legacy RC4 (MD5 KDF, Excel 97/2000).
+    XlsRc4Legacy,
+    /// XLS XOR Obfuscation (Excel 95-era, 15-char password cap).
+    XlsXor,
+}
+
 /// Extension trait for Workbook to add file I/O
 pub trait WorkbookExt {
     /// Open a workbook from a file
     fn open<P: AsRef<Path>>(path: P) -> Result<Workbook>;
 
+    /// Open a workbook from a file with explicit options
+    /// (for password-protected files, etc.).
+    fn open_with<P: AsRef<Path>>(path: P, opts: &WorkbookOpenOptions) -> Result<Workbook>;
+
     /// Open a workbook from bytes, auto-detecting the format (XLSX or XLS)
     fn from_bytes(bytes: &[u8]) -> Result<Workbook>;
 
+    /// Open a workbook from bytes with explicit options.
+    fn from_bytes_with(bytes: &[u8], opts: &WorkbookOpenOptions) -> Result<Workbook>;
+
     /// Save the workbook to a file
     fn save<P: AsRef<Path>>(&self, path: P) -> Result<()>;
+
+    /// Save the workbook to a file with explicit options
+    /// (to write an encrypted file, etc.).
+    fn save_with<P: AsRef<Path>>(&self, path: P, opts: &WorkbookSaveOptions) -> Result<()>;
 }
 
 impl WorkbookExt for Workbook {
+    fn open_with<P: AsRef<Path>>(path: P, _opts: &WorkbookOpenOptions) -> Result<Workbook> {
+        // Phase 0: options accepted but ignored. Decryption will be wired
+        // in from Phase 1 onward (see docs/PASSWORD_SUPPORT.md).
+        Self::open(path)
+    }
+
+    fn from_bytes_with(bytes: &[u8], _opts: &WorkbookOpenOptions) -> Result<Workbook> {
+        Self::from_bytes(bytes)
+    }
+
+    fn save_with<P: AsRef<Path>>(&self, path: P, _opts: &WorkbookSaveOptions) -> Result<()> {
+        self.save(path)
+    }
+
     fn open<P: AsRef<Path>>(path: P) -> Result<Workbook> {
         let path = path.as_ref();
         let extension = path
@@ -406,5 +536,50 @@ mod tests {
         assert_eq!(ws2.get_value_at(0, 0), CellValue::string("hello"));
         assert_eq!(ws2.get_value_at(0, 1), CellValue::Number(42.0));
         assert_eq!(ws2.get_value_at(0, 2), CellValue::Boolean(true));
+    }
+
+    #[test]
+    fn workbook_open_options_debug_redacts_password() {
+        let opts = WorkbookOpenOptions::new().password("hunter2");
+        let dbg = format!("{opts:?}");
+        assert!(
+            !dbg.contains("hunter2"),
+            "debug output must not leak password: {dbg}"
+        );
+        assert!(
+            dbg.contains("redacted"),
+            "should mark password as redacted: {dbg}"
+        );
+    }
+
+    #[test]
+    fn workbook_save_options_debug_redacts_password() {
+        let opts = WorkbookSaveOptions::new().password("hunter2");
+        let dbg = format!("{opts:?}");
+        assert!(
+            !dbg.contains("hunter2"),
+            "debug output must not leak password: {dbg}"
+        );
+    }
+
+    #[test]
+    fn workbook_open_options_default_has_no_password() {
+        let opts = WorkbookOpenOptions::default();
+        assert!(opts.password.is_none());
+    }
+
+    /// Phase 0 contract: `_with` methods accept an options struct and
+    /// delegate to the plain method. Behavior doesn't change until the
+    /// crypto phases wire the password through.
+    #[test]
+    #[cfg(feature = "xlsb")]
+    fn from_bytes_with_delegates_to_from_bytes() {
+        let buf = make_xlsb_bytes();
+        let via_plain = Workbook::from_bytes(&buf);
+        let via_with = Workbook::from_bytes_with(&buf, &WorkbookOpenOptions::default());
+        // Both should produce the same error (bad xlsb content) or the
+        // same success; we compare the error-ness since the test fixture
+        // isn't a real xlsb.
+        assert_eq!(via_plain.is_err(), via_with.is_err());
     }
 }
