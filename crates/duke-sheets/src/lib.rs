@@ -315,17 +315,39 @@ pub trait WorkbookExt {
 }
 
 impl WorkbookExt for Workbook {
-    fn open_with<P: AsRef<Path>>(path: P, _opts: &WorkbookOpenOptions) -> Result<Workbook> {
-        // Phase 0: options accepted but ignored. Decryption will be wired
-        // in from Phase 1 onward (see docs/PASSWORD_SUPPORT.md).
-        Self::open(path)
+    fn open_with<P: AsRef<Path>>(path: P, opts: &WorkbookOpenOptions) -> Result<Workbook> {
+        let path = path.as_ref();
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase());
+
+        // Only the XLS path currently consumes the password (legacy RC4
+        // read). Other formats delegate to their plain readers; they
+        // return the standard Encrypted error if they encounter crypto.
+        match extension.as_deref() {
+            #[cfg(feature = "xls")]
+            Some("xls") => XlsReader::read_file_with_password(path, opts.password.as_deref())
+                .map_err(|e| Error::other(e.to_string())),
+            _ => Self::open(path),
+        }
     }
 
-    fn from_bytes_with(bytes: &[u8], _opts: &WorkbookOpenOptions) -> Result<Workbook> {
-        Self::from_bytes(bytes)
+    fn from_bytes_with(bytes: &[u8], opts: &WorkbookOpenOptions) -> Result<Workbook> {
+        match detect_format(bytes) {
+            #[cfg(feature = "xls")]
+            FileFormat::Xls => {
+                let cursor = Cursor::new(bytes);
+                XlsReader::read_with_password(cursor, opts.password.as_deref())
+                    .map_err(|e| Error::other(e.to_string()))
+            }
+            _ => Self::from_bytes(bytes),
+        }
     }
 
     fn save_with<P: AsRef<Path>>(&self, path: P, _opts: &WorkbookSaveOptions) -> Result<()> {
+        // Encrypted write not yet implemented - Phase 4+ of the password
+        // support plan. For now, save as plaintext regardless.
         self.save(path)
     }
 
