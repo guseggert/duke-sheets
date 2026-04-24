@@ -19,10 +19,12 @@
 //! | OOXML Agile (AES-CBC + HMAC) | planned | planned |
 //! | OOXML Standard (AES-ECB) | planned | planned |
 //! | OOXML Binary RC4 CryptoAPI | planned | planned |
-//! | XLS RC4 CryptoAPI (SHA-1 KDF) | planned | planned |
+//! | XLS RC4 CryptoAPI (SHA-1 KDF) | **implemented** | planned |
 //! | XLS Legacy RC4 (MD5 KDF) | planned | planned |
 //! | XLS XOR Obfuscation | planned | planned |
 
 pub mod error;
+pub(crate) mod password;
+pub mod xls;
 
 pub use error::{CryptoError, CryptoResult};

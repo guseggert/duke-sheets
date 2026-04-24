@@ -11,6 +11,12 @@ description = "Office document encryption/decryption for duke-sheets (XLS + OOXM
 thiserror.workspace = true
 log.workspace = true
 
+# Crypto primitives (all pure Rust, from RustCrypto).
+sha1 = "0.10"
+md-5 = "0.10"
+rc4 = "0.2"
+subtle = "2"
+
 [dev-dependencies]
 pretty_assertions.workspace = true
 # Used by the fixture generator test to produce encrypted Office files via
