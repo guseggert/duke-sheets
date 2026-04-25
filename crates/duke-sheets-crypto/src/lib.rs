@@ -20,6 +20,7 @@
 //! | XLS XOR Obfuscation | planned | planned |
 
 pub mod error;
+pub mod ooxml;
 pub(crate) mod password;
 pub mod xls;
 
