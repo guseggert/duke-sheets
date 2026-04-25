@@ -1,8 +1,7 @@
 //! XLS (BIFF8) FilePass-based encryption: RC4 CryptoAPI, legacy RC4 (MD5),
 //! and XOR obfuscation.
 //!
-//! See `docs/PASSWORD_SUPPORT.md` and MS-XLS §2.2.10 for how FilePass
-//! interacts with the Workbook stream.
+//! See MS-XLS §2.2.10 for how FilePass interacts with the Workbook stream.
 
 pub mod rc4_cryptoapi;
 pub mod rc4_legacy;

@@ -8,10 +8,6 @@
 //! semantics. The XLS and XLSX crates call into this crate when they
 //! encounter an encrypted workbook.
 //!
-//! See `docs/PASSWORD_SUPPORT.md` for the end-to-end design, wire format
-//! details, and implementation phasing. The present crate is the Phase 0
-//! skeleton: error type only, no decryption implementations yet.
-//!
 //! Supported variants (as they land):
 //!
 //! | Variant | Read | Write |

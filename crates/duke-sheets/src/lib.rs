@@ -188,10 +188,8 @@ pub fn detect_format(bytes: &[u8]) -> FileFormat {
 
 /// Options controlling how a workbook is opened.
 ///
-/// See `docs/PASSWORD_SUPPORT.md` for the full encryption story. The
-/// struct is intentionally non-exhaustive so fields can be added in
-/// future phases (lazy loading, calculation preferences, etc.) without
-/// a major-version bump.
+/// The struct is non-exhaustive so fields can be added without a major
+/// version bump.
 #[derive(Default, Clone)]
 #[non_exhaustive]
 pub struct WorkbookOpenOptions {
