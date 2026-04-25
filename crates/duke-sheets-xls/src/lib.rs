@@ -16,7 +16,7 @@
 //! ```
 
 pub mod biff;
-pub(crate) mod cfb;
+pub mod cfb;
 pub mod error;
 pub mod reader;
 pub mod styles;

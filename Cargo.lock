@@ -911,6 +911,7 @@ dependencies = [
  "duke-sheets-crypto",
  "duke-sheets-formula",
  "duke-sheets-libreoffice",
+ "duke-sheets-xls",
  "libreoffice-urp",
  "log",
  "pretty_assertions",

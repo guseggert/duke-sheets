@@ -172,11 +172,61 @@ fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
 /// XLSX file reader
 pub struct XlsxReader;
 
+/// CFB magic: encrypted XLSX files are CFB envelopes rather than ZIPs,
+/// so a leading match here means we should run the bytes through the
+/// crypto decrypt path before treating them as a ZIP archive.
+fn is_cfb_envelope(bytes: &[u8]) -> bool {
+    bytes.len() >= 8 && bytes[0..8] == [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
+}
+
+/// Open an encrypted-OOXML CFB envelope, extract the EncryptionInfo and
+/// EncryptedPackage streams, and decrypt to the inner ZIP bytes.
+fn decrypt_ooxml_envelope(bytes: &[u8], password: &str) -> XlsxResult<Vec<u8>> {
+    let cfb = duke_sheets_xls::cfb::CompoundFile::open(std::io::Cursor::new(bytes))
+        .map_err(|e| XlsxError::InvalidFormat(format!("CFB envelope open failed: {e}")))?;
+    let info = cfb
+        .read_stream("/EncryptionInfo")
+        .map_err(|e| XlsxError::InvalidFormat(format!("read /EncryptionInfo: {e}")))?;
+    let package = cfb
+        .read_stream("/EncryptedPackage")
+        .map_err(|e| XlsxError::InvalidFormat(format!("read /EncryptedPackage: {e}")))?;
+    Ok(duke_sheets_crypto::ooxml::decrypt(
+        &info, &package, password,
+    )?)
+}
+
 impl XlsxReader {
     /// Read a workbook from a file path
     pub fn read_file<P: AsRef<Path>>(path: P) -> XlsxResult<Workbook> {
         let file = File::open(path)?;
         Self::read(file)
+    }
+
+    /// Read a workbook from a file path, supplying a password for
+    /// encrypted files.
+    pub fn read_file_with_password<P: AsRef<Path>>(
+        path: P,
+        password: Option<&str>,
+    ) -> XlsxResult<Workbook> {
+        let bytes = std::fs::read(path)?;
+        Self::read_bytes_with_password(&bytes, password)
+    }
+
+    /// Read a workbook from raw bytes with an optional password.
+    ///
+    /// Encrypted XLSX files are CFB envelopes (not plain ZIPs); when
+    /// the leading magic bytes match CFB and a password is supplied,
+    /// we delegate to `duke_sheets_crypto::ooxml::decrypt` and then
+    /// proceed with the resulting plaintext ZIP.
+    pub fn read_bytes_with_password(bytes: &[u8], password: Option<&str>) -> XlsxResult<Workbook> {
+        if is_cfb_envelope(bytes) {
+            let pw = password.ok_or_else(|| {
+                XlsxError::Encrypted("workbook is encrypted but no password was supplied".into())
+            })?;
+            let decrypted = decrypt_ooxml_envelope(bytes, pw)?;
+            return Self::read(std::io::Cursor::new(decrypted));
+        }
+        Self::read(std::io::Cursor::new(bytes))
     }
 
     /// Read a workbook from a reader

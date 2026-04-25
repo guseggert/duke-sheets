@@ -12,6 +12,9 @@ duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
 duke-sheets-chart = { workspace = true, features = ["parse"] }
 duke-sheets-crypto.workspace = true
+# Encrypted .xlsx files are CFB-wrapped, not ZIP. We reuse the
+# corpus-hardened CFB parser from the XLS crate.
+duke-sheets-xls.workspace = true
 thiserror.workspace = true
 quick-xml.workspace = true
 zip.workspace = true
