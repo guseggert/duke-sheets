@@ -141,46 +141,57 @@ impl XlsReader {
     }
 
     /// Read an XLS file from a filesystem path, supplying a password for
-    /// encrypted workbooks.
+    /// encrypted workbooks. When `password` is `None` and
+    /// `try_velvet_sweatshop` is true, encrypted workbooks are
+    /// transparently retried with the `VelvetSweatshop` sentinel before
+    /// reporting them as encrypted.
     pub fn read_file_with_password<P: AsRef<Path>>(
         path: P,
         password: Option<&str>,
+        try_velvet_sweatshop: bool,
     ) -> XlsResult<Workbook> {
         let file = std::fs::File::open(path.as_ref())?;
-        Self::read_with_password(file, password)
+        Self::read_with_password(file, password, try_velvet_sweatshop)
     }
 
     /// Read an XLS file from any `Read + Seek` source.
     pub fn read<R: Read + Seek>(reader: R) -> XlsResult<Workbook> {
-        Self::read_with_password(reader, None)
+        Self::read_with_password(reader, None, false)
     }
 
     /// Read an XLS file from any `Read + Seek` source, supplying a
     /// password for encrypted workbooks.
     ///
-    /// If `password` is `Some`, an encrypted workbook is decrypted
-    /// in-memory before record parsing. Passing `None` preserves the
-    /// historical behavior (encrypted files return `XlsError::Encrypted`).
-    /// Wrong passwords return [`XlsError::BadPassword`].
+    /// `try_velvet_sweatshop` enables the Excel-compatible auto-retry
+    /// with the well-known sentinel password when no explicit password
+    /// is supplied. Wrong passwords return [`XlsError::BadPassword`].
     pub fn read_with_password<R: Read + Seek>(
         reader: R,
         password: Option<&str>,
+        try_velvet_sweatshop: bool,
     ) -> XlsResult<Workbook> {
-        // Open CFB container
         let cfb = crate::cfb::CompoundFile::open(reader).map_err(std::io::Error::from)?;
-
-        // Pick the BIFF workbook stream, or surface a clean error if the CFB is
-        // actually an encrypted OOXML envelope rather than a BIFF workbook.
         let stream_path = resolve_workbook_stream(|p| cfb.exists(p))?;
-
         let mut stream_data = cfb.read_stream(stream_path).map_err(std::io::Error::from)?;
 
-        // If the workbook is encrypted AND a password was supplied,
-        // decrypt in place before parsing. Detection peeks at the raw
-        // record header sequence for a FilePass record right after BOF.
-        if let Some(pw) = password {
-            if is_encrypted_workbook_stream(&stream_data) {
-                stream_data = duke_sheets_crypto::xls::decrypt_workbook_stream(&stream_data, pw)?;
+        if is_encrypted_workbook_stream(&stream_data) {
+            let try_pw = match password {
+                Some(p) => Some(p),
+                None if try_velvet_sweatshop => Some("VelvetSweatshop"),
+                None => None,
+            };
+            if let Some(pw) = try_pw {
+                match duke_sheets_crypto::xls::decrypt_workbook_stream(&stream_data, pw) {
+                    Ok(decrypted) => {
+                        stream_data = decrypted;
+                    }
+                    Err(duke_sheets_crypto::CryptoError::BadPassword) if password.is_none() => {
+                        return Err(XlsError::Encrypted(
+                            "workbook is encrypted but no password was supplied".into(),
+                        ));
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             }
         }
 

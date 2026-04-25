@@ -196,13 +196,31 @@ pub fn detect_format(bytes: &[u8]) -> FileFormat {
 ///
 /// The struct is non-exhaustive so fields can be added without a major
 /// version bump.
-#[derive(Default, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct WorkbookOpenOptions {
-    /// Password for encrypted workbooks. `None` causes the reader to
-    /// treat an encrypted file as an error after trying the Excel
-    /// `VelvetSweatshop` sentinel (once decryption is implemented).
+    /// Password for encrypted workbooks. `None` falls through to the
+    /// `VelvetSweatshop` sentinel retry (when enabled), then to an
+    /// `Encrypted` error.
     pub password: Option<String>,
+
+    /// When `true` (the default, matching Excel's behavior), encrypted
+    /// files with no supplied password are auto-decrypted with the
+    /// well-known password `"VelvetSweatshop"` before reporting them
+    /// as encrypted. Files protected this way (mostly Excel-2007-era
+    /// templates with tamper-evidence rather than real protection)
+    /// open transparently. Set to `false` for strict semantics where
+    /// no password supplied always errors.
+    pub try_velvet_sweatshop: bool,
+}
+
+impl Default for WorkbookOpenOptions {
+    fn default() -> Self {
+        Self {
+            password: None,
+            try_velvet_sweatshop: true,
+        }
+    }
 }
 
 impl WorkbookOpenOptions {
@@ -212,6 +230,14 @@ impl WorkbookOpenOptions {
 
     pub fn password(mut self, pw: impl Into<String>) -> Self {
         self.password = Some(pw.into());
+        self
+    }
+
+    /// Disable the `VelvetSweatshop` sentinel retry. When this is set,
+    /// an encrypted file with no explicit password always returns an
+    /// `Encrypted` error.
+    pub fn strict_password(mut self) -> Self {
+        self.try_velvet_sweatshop = false;
         self
     }
 }
@@ -326,26 +352,33 @@ impl WorkbookExt for Workbook {
             .and_then(|e| e.to_str())
             .map(|e| e.to_lowercase());
 
+        let pw = opts.password.as_deref();
+        let vs = opts.try_velvet_sweatshop;
+
         match extension.as_deref() {
             Some("xlsx") | Some("xlsm") | Some("xltx") | Some("xltm") => {
-                XlsxReader::read_file_with_password(path, opts.password.as_deref())
+                XlsxReader::read_file_with_password(path, pw, vs)
                     .map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
-            Some("xls") => XlsReader::read_file_with_password(path, opts.password.as_deref())
+            Some("xls") => XlsReader::read_file_with_password(path, pw, vs)
                 .map_err(|e| Error::other(e.to_string())),
             _ => Self::open(path),
         }
     }
 
     fn from_bytes_with(bytes: &[u8], opts: &WorkbookOpenOptions) -> Result<Workbook> {
+        let pw = opts.password.as_deref();
+        let vs = opts.try_velvet_sweatshop;
+
         // Encrypted XLSX files masquerade as XLS to detect_format because
-        // both share the CFB magic header. When a password is supplied,
-        // try the XLSX path first (it handles both plain ZIPs and CFB-wrapped
-        // encrypted envelopes), then fall back to XLS only if the bytes
-        // turn out not to be an OOXML envelope.
-        if opts.password.is_some() && is_cfb_magic(bytes) {
-            match XlsxReader::read_bytes_with_password(bytes, opts.password.as_deref()) {
+        // both share the CFB magic header. When a password is supplied
+        // OR the sentinel retry is allowed, try the XLSX path first (it
+        // handles both plain ZIPs and CFB-wrapped encrypted envelopes),
+        // then fall back to XLS only if the bytes turn out not to be an
+        // OOXML envelope.
+        if (pw.is_some() || vs) && is_cfb_magic(bytes) {
+            match XlsxReader::read_bytes_with_password(bytes, pw, vs) {
                 Ok(wb) => return Ok(wb),
                 Err(XlsxError::InvalidFormat(msg))
                     if msg.contains("Missing [Content_Types].xml")
@@ -357,14 +390,12 @@ impl WorkbookExt for Workbook {
             }
         }
         match detect_format(bytes) {
-            FileFormat::Xlsx => {
-                XlsxReader::read_bytes_with_password(bytes, opts.password.as_deref())
-                    .map_err(|e| Error::other(e.to_string()))
-            }
+            FileFormat::Xlsx => XlsxReader::read_bytes_with_password(bytes, pw, vs)
+                .map_err(|e| Error::other(e.to_string())),
             #[cfg(feature = "xls")]
             FileFormat::Xls => {
                 let cursor = Cursor::new(bytes);
-                XlsReader::read_with_password(cursor, opts.password.as_deref())
+                XlsReader::read_with_password(cursor, pw, vs)
                     .map_err(|e| Error::other(e.to_string()))
             }
             _ => Self::from_bytes(bytes),

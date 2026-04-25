@@ -203,28 +203,47 @@ impl XlsxReader {
     }
 
     /// Read a workbook from a file path, supplying a password for
-    /// encrypted files.
+    /// encrypted files. When `password` is `None` and
+    /// `try_velvet_sweatshop` is true, encrypted files are
+    /// transparently retried with the well-known `VelvetSweatshop`
+    /// password before reporting them as encrypted.
     pub fn read_file_with_password<P: AsRef<Path>>(
         path: P,
         password: Option<&str>,
+        try_velvet_sweatshop: bool,
     ) -> XlsxResult<Workbook> {
         let bytes = std::fs::read(path)?;
-        Self::read_bytes_with_password(&bytes, password)
+        Self::read_bytes_with_password(&bytes, password, try_velvet_sweatshop)
     }
 
     /// Read a workbook from raw bytes with an optional password.
     ///
     /// Encrypted XLSX files are CFB envelopes (not plain ZIPs); when
-    /// the leading magic bytes match CFB and a password is supplied,
-    /// we delegate to `duke_sheets_crypto::ooxml::decrypt` and then
-    /// proceed with the resulting plaintext ZIP.
-    pub fn read_bytes_with_password(bytes: &[u8], password: Option<&str>) -> XlsxResult<Workbook> {
+    /// the leading magic bytes match CFB we delegate to
+    /// `duke_sheets_crypto::ooxml::decrypt` and then proceed with the
+    /// resulting plaintext ZIP.
+    pub fn read_bytes_with_password(
+        bytes: &[u8],
+        password: Option<&str>,
+        try_velvet_sweatshop: bool,
+    ) -> XlsxResult<Workbook> {
         if is_cfb_envelope(bytes) {
-            let pw = password.ok_or_else(|| {
-                XlsxError::Encrypted("workbook is encrypted but no password was supplied".into())
-            })?;
-            let decrypted = decrypt_ooxml_envelope(bytes, pw)?;
-            return Self::read(std::io::Cursor::new(decrypted));
+            let try_pw = match password {
+                Some(p) => p,
+                None if try_velvet_sweatshop => "VelvetSweatshop",
+                None => {
+                    return Err(XlsxError::Encrypted(
+                        "workbook is encrypted but no password was supplied".into(),
+                    ));
+                }
+            };
+            return match decrypt_ooxml_envelope(bytes, try_pw) {
+                Ok(decrypted) => Self::read(std::io::Cursor::new(decrypted)),
+                Err(XlsxError::BadPassword) if password.is_none() => Err(XlsxError::Encrypted(
+                    "workbook is encrypted but no password was supplied".into(),
+                )),
+                Err(e) => Err(e),
+            };
         }
         Self::read(std::io::Cursor::new(bytes))
     }

@@ -53,8 +53,8 @@ fn agile_xlsx_fails_without_password() {
         return;
     };
     let bytes = std::fs::read(&path).expect("read fixture");
-    let err =
-        XlsxReader::read_bytes_with_password(&bytes, None).expect_err("must require password");
+    let err = XlsxReader::read_bytes_with_password(&bytes, None, false)
+        .expect_err("must require password");
     assert!(
         matches!(err, XlsxError::Encrypted(_)),
         "expected Encrypted, got {err:?}"
@@ -66,7 +66,7 @@ fn agile_xlsx_decrypts_with_correct_password() {
     let Some(path) = skip_if_missing("agile_aes256.xlsx") else {
         return;
     };
-    let workbook = XlsxReader::read_file_with_password(&path, Some(FIXTURE_PASSWORD))
+    let workbook = XlsxReader::read_file_with_password(&path, Some(FIXTURE_PASSWORD), false)
         .expect("decryption with correct password must succeed");
     assert_decrypted_workbook(&workbook);
 }
@@ -76,7 +76,7 @@ fn agile_xlsx_wrong_password_yields_bad_password() {
     let Some(path) = skip_if_missing("agile_aes256.xlsx") else {
         return;
     };
-    let err = XlsxReader::read_file_with_password(&path, Some("wrong-password"))
+    let err = XlsxReader::read_file_with_password(&path, Some("wrong-password"), false)
         .expect_err("must reject wrong password");
     assert!(
         matches!(err, XlsxError::BadPassword),
@@ -90,8 +90,8 @@ fn excel_agile_xlsx_fails_without_password() {
         return;
     };
     let bytes = std::fs::read(&path).expect("read");
-    let err =
-        XlsxReader::read_bytes_with_password(&bytes, None).expect_err("must require password");
+    let err = XlsxReader::read_bytes_with_password(&bytes, None, false)
+        .expect_err("must require password");
     assert!(
         matches!(err, XlsxError::Encrypted(_)),
         "expected Encrypted, got {err:?}"
@@ -103,7 +103,7 @@ fn excel_agile_xlsx_decrypts_with_correct_password() {
     let Some(path) = skip_if_missing("xlsx_agile_excel.xlsx") else {
         return;
     };
-    let workbook = XlsxReader::read_file_with_password(&path, Some(FIXTURE_PASSWORD))
+    let workbook = XlsxReader::read_file_with_password(&path, Some(FIXTURE_PASSWORD), false)
         .expect("Agile decryption with correct password must succeed");
     assert_decrypted_workbook(&workbook);
 }
@@ -113,7 +113,7 @@ fn excel_agile_xlsx_wrong_password_yields_bad_password() {
     let Some(path) = skip_if_missing("xlsx_agile_excel.xlsx") else {
         return;
     };
-    let err = XlsxReader::read_file_with_password(&path, Some("wrong-password"))
+    let err = XlsxReader::read_file_with_password(&path, Some("wrong-password"), false)
         .expect_err("must reject wrong password");
     assert!(
         matches!(err, XlsxError::BadPassword),
@@ -122,11 +122,50 @@ fn excel_agile_xlsx_wrong_password_yields_bad_password() {
 }
 
 #[test]
+fn velvet_sweatshop_auto_decrypts_when_enabled() {
+    let Some(path) = skip_if_missing("xlsx_velvet_sweatshop.xlsx") else {
+        return;
+    };
+    let bytes = std::fs::read(&path).expect("read");
+    let workbook = XlsxReader::read_bytes_with_password(&bytes, None, true)
+        .expect("VelvetSweatshop sentinel must auto-decrypt");
+    assert_decrypted_workbook(&workbook);
+}
+
+#[test]
+fn velvet_sweatshop_disabled_yields_encrypted() {
+    let Some(path) = skip_if_missing("xlsx_velvet_sweatshop.xlsx") else {
+        return;
+    };
+    let bytes = std::fs::read(&path).expect("read");
+    let err = XlsxReader::read_bytes_with_password(&bytes, None, false)
+        .expect_err("strict mode must error without a password");
+    assert!(
+        matches!(err, XlsxError::Encrypted(_)),
+        "expected Encrypted, got {err:?}"
+    );
+}
+
+#[test]
+fn velvet_sweatshop_doesnt_swallow_real_password_files() {
+    let Some(path) = skip_if_missing("xlsx_agile_excel.xlsx") else {
+        return;
+    };
+    let bytes = std::fs::read(&path).expect("read");
+    let err = XlsxReader::read_bytes_with_password(&bytes, None, true)
+        .expect_err("real password file must still error when sentinel doesn't match");
+    assert!(
+        matches!(err, XlsxError::Encrypted(_)),
+        "expected Encrypted (not BadPassword), got {err:?}"
+    );
+}
+
+#[test]
 fn plain_xlsx_password_ignored() {
     let Some(path) = skip_if_missing("agile_aes256.plain.xlsx") else {
         return;
     };
-    let workbook = XlsxReader::read_file_with_password(&path, Some("anything"))
+    let workbook = XlsxReader::read_file_with_password(&path, Some("anything"), false)
         .expect("plain XLSX should open regardless of password arg");
     assert!(workbook.sheet_count() >= 1);
 }

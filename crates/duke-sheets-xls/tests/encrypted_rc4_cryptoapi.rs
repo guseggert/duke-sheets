@@ -67,7 +67,7 @@ fn legacy_rc4_md5_decrypts_with_correct_password() {
     let Some(path) = skip_if_missing("xls_rc4_cryptoapi.xls") else {
         return;
     };
-    let workbook = XlsReader::read_file_with_password(&path, Some(FIXTURE_PASSWORD))
+    let workbook = XlsReader::read_file_with_password(&path, Some(FIXTURE_PASSWORD), false)
         .expect("decryption with correct password must succeed");
     assert_decrypted_workbook(&workbook);
 }
@@ -77,7 +77,7 @@ fn legacy_rc4_md5_wrong_password_yields_bad_password() {
     let Some(path) = skip_if_missing("xls_rc4_cryptoapi.xls") else {
         return;
     };
-    let err = XlsReader::read_file_with_password(&path, Some("wrong-password"))
+    let err = XlsReader::read_file_with_password(&path, Some("wrong-password"), false)
         .expect_err("must reject wrong password");
     assert!(
         matches!(err, XlsError::BadPassword),
@@ -102,7 +102,7 @@ fn cryptoapi_sha1_decrypts_with_correct_password() {
     let Some(path) = skip_if_missing("xls_rc4_cryptoapi_excel.xls") else {
         return;
     };
-    let workbook = XlsReader::read_file_with_password(&path, Some(FIXTURE_PASSWORD))
+    let workbook = XlsReader::read_file_with_password(&path, Some(FIXTURE_PASSWORD), false)
         .expect("decryption with correct password must succeed");
     assert_decrypted_workbook(&workbook);
 }
@@ -112,7 +112,7 @@ fn cryptoapi_sha1_wrong_password_yields_bad_password() {
     let Some(path) = skip_if_missing("xls_rc4_cryptoapi_excel.xls") else {
         return;
     };
-    let err = XlsReader::read_file_with_password(&path, Some("wrong-password"))
+    let err = XlsReader::read_file_with_password(&path, Some("wrong-password"), false)
         .expect_err("must reject wrong password");
     assert!(
         matches!(err, XlsError::BadPassword),
@@ -125,7 +125,7 @@ fn plain_xls_password_ignored() {
     let Some(path) = skip_if_missing("xls_rc4_cryptoapi.plain.xls") else {
         return;
     };
-    let workbook = XlsReader::read_file_with_password(&path, Some("anything"))
+    let workbook = XlsReader::read_file_with_password(&path, Some("anything"), false)
         .expect("plain file should open regardless of password arg");
     assert!(workbook.sheet_count() >= 1);
 }
