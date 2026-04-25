@@ -11,11 +11,20 @@ description = "Office document encryption/decryption for duke-sheets (XLS + OOXM
 thiserror.workspace = true
 log.workspace = true
 
-# Crypto primitives (all pure Rust, from RustCrypto).
+# Crypto primitives (all pure Rust, from RustCrypto). All WASM-friendly.
 sha1 = "0.10"
+sha2 = "0.10"
 md-5 = "0.10"
 rc4 = "0.2"
+aes = "0.8"
+cbc = "0.1"
+hmac = "0.12"
+cipher = "0.4"
 subtle = "2"
+
+# OOXML Agile EncryptionInfo is an XML descriptor; quick-xml is already
+# in the workspace.
+quick-xml.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

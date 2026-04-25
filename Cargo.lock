@@ -772,13 +772,19 @@ dependencies = [
 name = "duke-sheets-crypto"
 version = "0.1.0"
 dependencies = [
+ "aes",
+ "cbc",
+ "cipher 0.4.4",
  "duke-sheets-libreoffice",
+ "hmac",
  "libreoffice-urp",
  "log",
  "md-5",
  "pretty_assertions",
+ "quick-xml 0.37.5",
  "rc4",
  "sha1",
+ "sha2",
  "subtle",
  "thiserror 1.0.69",
  "tokio",
