@@ -170,6 +170,12 @@ pub enum FileFormat {
     Unknown,
 }
 
+/// True if the buffer starts with the CFB magic. Encrypted XLSX files
+/// are CFB envelopes; plain XLSX files are ZIPs.
+fn is_cfb_magic(bytes: &[u8]) -> bool {
+    bytes.len() >= 8 && bytes[0..8] == [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
+}
+
 /// Sniff the first few bytes of a buffer to determine its file format.
 pub fn detect_format(bytes: &[u8]) -> FileFormat {
     if bytes.len() >= 4 && bytes[0..4] == [0x50, 0x4B, 0x03, 0x04] {
@@ -320,10 +326,11 @@ impl WorkbookExt for Workbook {
             .and_then(|e| e.to_str())
             .map(|e| e.to_lowercase());
 
-        // Only the XLS path currently consumes the password (legacy RC4
-        // read). Other formats delegate to their plain readers; they
-        // return the standard Encrypted error if they encounter crypto.
         match extension.as_deref() {
+            Some("xlsx") | Some("xlsm") | Some("xltx") | Some("xltm") => {
+                XlsxReader::read_file_with_password(path, opts.password.as_deref())
+                    .map_err(|e| Error::other(e.to_string()))
+            }
             #[cfg(feature = "xls")]
             Some("xls") => XlsReader::read_file_with_password(path, opts.password.as_deref())
                 .map_err(|e| Error::other(e.to_string())),
@@ -332,7 +339,28 @@ impl WorkbookExt for Workbook {
     }
 
     fn from_bytes_with(bytes: &[u8], opts: &WorkbookOpenOptions) -> Result<Workbook> {
+        // Encrypted XLSX files masquerade as XLS to detect_format because
+        // both share the CFB magic header. When a password is supplied,
+        // try the XLSX path first (it handles both plain ZIPs and CFB-wrapped
+        // encrypted envelopes), then fall back to XLS only if the bytes
+        // turn out not to be an OOXML envelope.
+        if opts.password.is_some() && is_cfb_magic(bytes) {
+            match XlsxReader::read_bytes_with_password(bytes, opts.password.as_deref()) {
+                Ok(wb) => return Ok(wb),
+                Err(XlsxError::InvalidFormat(msg))
+                    if msg.contains("Missing [Content_Types].xml")
+                        || msg.contains("EncryptionInfo") =>
+                {
+                    // Not an OOXML envelope - fall through to XLS.
+                }
+                Err(e) => return Err(Error::other(e.to_string())),
+            }
+        }
         match detect_format(bytes) {
+            FileFormat::Xlsx => {
+                XlsxReader::read_bytes_with_password(bytes, opts.password.as_deref())
+                    .map_err(|e| Error::other(e.to_string()))
+            }
             #[cfg(feature = "xls")]
             FileFormat::Xls => {
                 let cursor = Cursor::new(bytes);
@@ -344,8 +372,6 @@ impl WorkbookExt for Workbook {
     }
 
     fn save_with<P: AsRef<Path>>(&self, path: P, _opts: &WorkbookSaveOptions) -> Result<()> {
-        // Encrypted write not yet implemented - Phase 4+ of the password
-        // support plan. For now, save as plaintext regardless.
         self.save(path)
     }
 
