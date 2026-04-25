@@ -131,43 +131,47 @@ fn parse_filepass(body: &[u8]) -> CryptoResult<FilePassVariant> {
 /// follow the `wEncryptionType / vMajor / vMinor` triple of a FilePass
 /// RC4 CryptoAPI record.
 ///
-/// Layout (MS-OFFCRYPTO §2.3.2 + §2.3.3):
-///   EncryptionHeader:
+/// XLS FilePass body layout for RC4 CryptoAPI (vMinor=2), per
+/// MS-OFFCRYPTO §2.3.4 + msoffcrypto-tool's `_parse_header_RC4CryptoAPI`:
+///
+/// ```text
+///   u32 EncryptionHeaderFlags     // duplicates the per-header Flags below; skip
+///   u32 EncryptionHeaderSize      // length of the EncryptionHeader that follows
+///   EncryptionHeader (size bytes):
 ///     u32 Flags
-///     u32 SizeExtra       // must be 0
-///     u32 AlgID           // 0x6801 = RC4
-///     u32 AlgIDHash       // 0x8004 = SHA-1
-///     u32 KeySize         // in bits
-///     u32 ProviderType    // 0x0001 = RC4
+///     u32 SizeExtra                // must be 0
+///     u32 AlgID                    // 0x6801 = RC4 (or 0 = default)
+///     u32 AlgIDHash                // 0x8004 = SHA-1
+///     u32 KeySize                  // in bits (40 / 128 / etc.; 0 = default 40)
+///     u32 ProviderType             // 0x0001 = RC4 (or 0 = default)
 ///     u32 Reserved1
 ///     u32 Reserved2
-///     WCHAR[] CSPName     // UTF-16LE null-terminated
+///     UTF-16LE CSPName             // null-terminated, variable length
 ///   EncryptionVerifier:
-///     u32 SaltSize        // must be 16
+///     u32 SaltSize                 // = 16
 ///     u8[16] Salt
 ///     u8[16] EncryptedVerifier
-///     u32 VerifierHashSize // must be 20
-///     u8[32] EncryptedVerifierHash
+///     u32 VerifierHashSize         // = 20 (SHA-1 digest size)
+///     u8[20] EncryptedVerifierHash // 20 for RC4; AES variants pad to 32
+/// ```
 fn parse_rc4_cryptoapi_header(data: &[u8]) -> CryptoResult<rc4_cryptoapi::Rc4CryptoApiParams> {
-    // EncryptionHeader starts with Flags (u32). MS-OFFCRYPTO actually
-    // prefixes it with a `u32 Size` telling how many bytes the
-    // EncryptionHeader spans (including its Size field). Parse that
-    // first.
-    if data.len() < 4 {
+    if data.len() < 8 {
         return Err(CryptoError::InvalidFormat(
-            "RC4 CryptoAPI header missing size prefix".into(),
+            "RC4 CryptoAPI header missing flags+size prefix".into(),
         ));
     }
-    let header_size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    if 4 + header_size > data.len() {
+    let header_size = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+    let header_start = 8usize;
+    let header_end = header_start
+        .checked_add(header_size)
+        .ok_or_else(|| CryptoError::InvalidFormat("RC4 CryptoAPI header size overflow".into()))?;
+    if header_end > data.len() {
         return Err(CryptoError::InvalidFormat(format!(
             "RC4 CryptoAPI EncryptionHeader claims {header_size} bytes but only {} remain",
-            data.len() - 4
+            data.len() - header_start
         )));
     }
-    // Parse fixed-size fields of the EncryptionHeader (32 bytes before
-    // the variable-length CSPName).
-    let hdr = &data[4..4 + header_size];
+    let hdr = &data[header_start..header_end];
     if hdr.len() < 32 {
         return Err(CryptoError::InvalidFormat(format!(
             "RC4 CryptoAPI EncryptionHeader too short: {}",
@@ -175,12 +179,10 @@ fn parse_rc4_cryptoapi_header(data: &[u8]) -> CryptoResult<rc4_cryptoapi::Rc4Cry
         )));
     }
     let alg_id = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]);
-    let key_size_bits = u32::from_le_bytes([hdr[16], hdr[17], hdr[18], hdr[19]]);
+    let raw_key_size = u32::from_le_bytes([hdr[16], hdr[17], hdr[18], hdr[19]]);
     let provider_type = u32::from_le_bytes([hdr[20], hdr[21], hdr[22], hdr[23]]);
 
     if alg_id != 0x0000_6801 && alg_id != 0 {
-        // algId=0 means "default" per spec (RC4 CryptoAPI); 0x6801
-        // means RC4 explicitly. Anything else is a different cipher.
         return Err(CryptoError::UnsupportedVariant(format!(
             "RC4 CryptoAPI header algId={alg_id:#010x} (expected 0x6801 or 0)"
         )));
@@ -191,10 +193,12 @@ fn parse_rc4_cryptoapi_header(data: &[u8]) -> CryptoResult<rc4_cryptoapi::Rc4Cry
         )));
     }
 
-    // EncryptionVerifier follows the EncryptionHeader.
-    let verifier_start = 4 + header_size;
-    let verifier = &data[verifier_start..];
-    if verifier.len() < 4 + 16 + 16 + 4 + 32 {
+    // MS-OFFCRYPTO §2.3.4.5: KeySize=0 means "format default". For
+    // RC4 CryptoAPI the default is 40 bits.
+    let key_size_bits = if raw_key_size == 0 { 40 } else { raw_key_size };
+
+    let verifier = &data[header_end..];
+    if verifier.len() < 4 + 16 + 16 + 4 + 20 {
         return Err(CryptoError::InvalidFormat(format!(
             "RC4 CryptoAPI EncryptionVerifier too short: {}",
             verifier.len()
@@ -221,8 +225,11 @@ fn parse_rc4_cryptoapi_header(data: &[u8]) -> CryptoResult<rc4_cryptoapi::Rc4Cry
         )));
     }
 
+    // RC4 CryptoAPI's encrypted_verifier_hash is 20 bytes on the wire
+    // (one SHA-1 digest). Our params struct holds 32 bytes for AES
+    // alignment compatibility; the unused tail stays zero.
     let mut encrypted_verifier_hash = [0u8; 32];
-    encrypted_verifier_hash.copy_from_slice(&verifier[40..72]);
+    encrypted_verifier_hash[..20].copy_from_slice(&verifier[40..60]);
 
     Ok(rc4_cryptoapi::Rc4CryptoApiParams {
         salt,
