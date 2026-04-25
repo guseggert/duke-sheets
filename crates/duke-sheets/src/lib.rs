@@ -376,16 +376,17 @@ impl WorkbookExt for Workbook {
         // OR the sentinel retry is allowed, try the XLSX path first (it
         // handles both plain ZIPs and CFB-wrapped encrypted envelopes),
         // then fall back to XLS only if the bytes turn out not to be an
-        // OOXML envelope.
+        // OOXML envelope. The fall-through is intentionally narrow:
+        // matching only the "this CFB has no /EncryptionInfo" failure
+        // mode so that genuine OOXML errors (BadPassword, Encrypted,
+        // UnsupportedEncryption, crypto-layer InvalidFormat) propagate
+        // back to the caller instead of being silently retried as XLS.
         if (pw.is_some() || vs) && is_cfb_magic(bytes) {
             match XlsxReader::read_bytes_with_password(bytes, pw, vs) {
                 Ok(wb) => return Ok(wb),
                 Err(XlsxError::InvalidFormat(msg))
-                    if msg.contains("Missing [Content_Types].xml")
-                        || msg.contains("EncryptionInfo") =>
-                {
-                    // Not an OOXML envelope - fall through to XLS.
-                }
+                    if msg.starts_with("CFB envelope open failed:")
+                        || msg.starts_with("not an OOXML envelope") => {}
                 Err(e) => return Err(Error::other(e.to_string())),
             }
         }

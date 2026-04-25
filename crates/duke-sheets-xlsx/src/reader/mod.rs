@@ -181,15 +181,34 @@ fn is_cfb_envelope(bytes: &[u8]) -> bool {
 
 /// Open an encrypted-OOXML CFB envelope, extract the EncryptionInfo and
 /// EncryptedPackage streams, and decrypt to the inner ZIP bytes.
+///
+/// Distinguishes three failure modes via the error message prefix so the
+/// top-level dispatcher can decide whether to fall back to the XLS path:
+///
+///   - `"CFB envelope open failed:"` and `"not an OOXML envelope"` mean
+///     "this isn't an encrypted-OOXML container" — fall through to XLS.
+///   - Other errors (Encrypted, BadPassword, malformed envelope) indicate
+///     the file IS encrypted OOXML and should propagate as-is.
 fn decrypt_ooxml_envelope(bytes: &[u8], password: &str) -> XlsxResult<Vec<u8>> {
     let cfb = duke_sheets_xls::cfb::CompoundFile::open(std::io::Cursor::new(bytes))
         .map_err(|e| XlsxError::InvalidFormat(format!("CFB envelope open failed: {e}")))?;
-    let info = cfb
-        .read_stream("/EncryptionInfo")
-        .map_err(|e| XlsxError::InvalidFormat(format!("read /EncryptionInfo: {e}")))?;
-    let package = cfb
-        .read_stream("/EncryptedPackage")
-        .map_err(|e| XlsxError::InvalidFormat(format!("read /EncryptedPackage: {e}")))?;
+    let has_info = cfb.exists("/EncryptionInfo");
+    let has_package = cfb.exists("/EncryptedPackage");
+    if !has_info && !has_package {
+        return Err(XlsxError::InvalidFormat(
+            "not an OOXML envelope: CFB has neither /EncryptionInfo nor /EncryptedPackage".into(),
+        ));
+    }
+    let info = cfb.read_stream("/EncryptionInfo").map_err(|e| {
+        XlsxError::InvalidFormat(format!(
+            "malformed OOXML envelope: read /EncryptionInfo: {e}"
+        ))
+    })?;
+    let package = cfb.read_stream("/EncryptedPackage").map_err(|e| {
+        XlsxError::InvalidFormat(format!(
+            "malformed OOXML envelope: read /EncryptedPackage: {e}"
+        ))
+    })?;
     Ok(duke_sheets_crypto::ooxml::decrypt(
         &info, &package, password,
     )?)
