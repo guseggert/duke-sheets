@@ -21,8 +21,9 @@ const FIXTURE_PASSWORD: &str = "duke-test-pw";
 const FIXTURE_A1: &str = "hello crypto";
 const FIXTURE_B1: f64 = 42.0;
 
-/// Excel `XlFileFormat` constant for `.xls` (Excel 97-2003 binary).
+/// Excel `XlFileFormat` constants.
 const XL_EXCEL8: i32 = 56;
+const XL_OPEN_XML_WORKBOOK: i32 = 51;
 
 /// Crypto fixtures land alongside the LO-generated ones.
 fn fixtures_dir() -> PathBuf {
@@ -78,6 +79,52 @@ fn generate_xls_rc4_cryptoapi_fixture_via_excel() {
         &bytes[0..8],
         &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1],
         "Excel-encrypted .xls must be a CFB envelope"
+    );
+    eprintln!(
+        "wrote {} ({} bytes); password={FIXTURE_PASSWORD:?}",
+        dest_path.display(),
+        bytes.len()
+    );
+}
+
+#[test]
+#[ignore = "requires running Excel COM bridge on localhost:9876 (mise run vm:start)"]
+fn generate_xlsx_agile_fixture_via_excel() {
+    let bridge = excel_bridge();
+    ensure_vm_temp_dir();
+
+    let fixture = TempFixture {
+        host_path: PathBuf::from("/tmp/duke-sheets-excel/xlsx_agile_excel.xlsx"),
+        vm_path: r"C:\temp\xlsx_agile_excel.xlsx".to_string(),
+        name: "xlsx_agile_excel.xlsx".to_string(),
+    };
+
+    {
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", FIXTURE_A1).expect("set A1");
+        wb.set_cell_value("B1", FIXTURE_B1).expect("set B1");
+
+        // Excel's default password encryption for .xlsx is Agile (since
+        // Office 2010). Skipping SetPasswordEncryptionOptions selects
+        // the default, producing an Agile-encrypted CFB envelope.
+        wb.save_with_password(&fixture.vm_path, XL_OPEN_XML_WORKBOOK, FIXTURE_PASSWORD)
+            .expect("save with password");
+        wb.close().expect("close");
+    }
+
+    pull_file_from_vm(&fixture);
+
+    let dest = fixtures_dir();
+    std::fs::create_dir_all(&dest).expect("create fixtures dir");
+    let dest_path = dest.join("xlsx_agile_excel.xlsx");
+    std::fs::copy(&fixture.host_path, &dest_path).expect("copy into fixtures");
+
+    let bytes = std::fs::read(&dest_path).expect("read");
+    assert_eq!(
+        &bytes[0..8],
+        &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1],
+        "Excel-encrypted .xlsx must be a CFB envelope"
     );
     eprintln!(
         "wrote {} ({} bytes); password={FIXTURE_PASSWORD:?}",
