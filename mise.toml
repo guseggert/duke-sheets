@@ -287,6 +287,23 @@ cargo test -p duke-sheets --test xlsb_parity -- --nocapture --ignored
 description = "Run chart corpus smoke test against real Excel files"
 run = 'cargo test -p duke-sheets --test chart_corpus -- --ignored --nocapture'
 
+[tasks."crypto:fixtures:excel"]
+description = "Generate XLS RC4 CryptoAPI fixture via real Excel (requires running VM)"
+run = """
+#!/bin/bash
+set -e
+
+bridge_ready() {
+    echo '{"id":1,"cmd":"Init","params":{}}' | nc -w2 localhost 9876 2>/dev/null | grep -q '"ok"'
+}
+if ! bridge_ready; then
+    echo "Bridge not responsive on localhost:9876; start the VM with: mise run vm:start"
+    exit 1
+fi
+
+cargo test -p duke-sheets-excel-com --test e2e crypto_fixtures -- --ignored --nocapture --test-threads=1
+"""
+
 [tasks."crypto:fixtures"]
 description = "Generate password-protected fixture files for duke-sheets-crypto (starts LibreOffice in Docker automatically)"
 depends = ["docker:build"]

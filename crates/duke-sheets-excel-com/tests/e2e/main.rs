@@ -21,6 +21,7 @@ mod comments;
 mod common;
 mod conditional_format;
 mod data_types;
+mod crypto_fixtures;
 mod data_validation;
 mod dimensions;
 mod fill_styles;
