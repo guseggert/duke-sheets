@@ -302,7 +302,12 @@ impl ExcelBridge {
         formula: &str,
     ) -> Result<(), BridgeError> {
         let chain = vec![sheet.to_chain_step(), cs_idx("Range", cell)];
-        self.set(workbook, chain, "Formula2", serde_json::Value::from(formula))
+        self.set(
+            workbook,
+            chain,
+            "Formula2",
+            serde_json::Value::from(formula),
+        )
     }
 
     pub(crate) fn get_cell_value(
@@ -349,6 +354,55 @@ impl ExcelBridge {
             vec![
                 serde_json::Value::from(path),
                 serde_json::Value::from(format),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Save with the workbook open password set. Excel's `SaveAs` takes
+    /// the password as its 3rd positional argument.
+    pub(crate) fn save_workbook_with_password(
+        &self,
+        workbook: u64,
+        path: &str,
+        format: i32,
+        password: &str,
+    ) -> Result<(), BridgeError> {
+        self.invoke(
+            workbook,
+            vec![],
+            "SaveAs",
+            vec![
+                serde_json::Value::from(path),
+                serde_json::Value::from(format),
+                serde_json::Value::from(password),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Configure the encryption algorithm Excel uses for password-
+    /// protected saves of this workbook. Defaults vary by file format;
+    /// for `.xls` Excel ships with Office 97/2000-compatible RC4 (legacy
+    /// MD5 KDF) but can be switched to RC4 CryptoAPI by passing
+    /// `("Microsoft Enhanced Cryptographic Provider v1.0", "RC4", 128, false)`.
+    pub(crate) fn set_password_encryption_options(
+        &self,
+        workbook: u64,
+        provider: &str,
+        algorithm: &str,
+        key_length: i32,
+        encrypt_file_properties: bool,
+    ) -> Result<(), BridgeError> {
+        self.invoke(
+            workbook,
+            vec![],
+            "SetPasswordEncryptionOptions",
+            vec![
+                serde_json::Value::from(provider),
+                serde_json::Value::from(algorithm),
+                serde_json::Value::from(key_length),
+                serde_json::Value::from(encrypt_file_properties),
             ],
         )?;
         Ok(())

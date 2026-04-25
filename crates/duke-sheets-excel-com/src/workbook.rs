@@ -614,6 +614,38 @@ impl<'a> Workbook<'a> {
         self.bridge.save_workbook(self.handle, windows_path, format)
     }
 
+    /// Save the workbook with a workbook-open password.
+    pub fn save_with_password(
+        &self,
+        windows_path: &str,
+        format: i32,
+        password: &str,
+    ) -> Result<(), BridgeError> {
+        self.bridge
+            .save_workbook_with_password(self.handle, windows_path, format, password)
+    }
+
+    /// Configure the encryption profile for password-protected saves.
+    /// Must be called before `save_with_password` to override Excel's
+    /// per-format default (`.xls` defaults to legacy MD5 RC4; passing
+    /// `("Microsoft Enhanced Cryptographic Provider v1.0", "RC4", 128, false)`
+    /// switches to RC4 CryptoAPI).
+    pub fn set_password_encryption_options(
+        &self,
+        provider: &str,
+        algorithm: &str,
+        key_length: i32,
+        encrypt_file_properties: bool,
+    ) -> Result<(), BridgeError> {
+        self.bridge.set_password_encryption_options(
+            self.handle,
+            provider,
+            algorithm,
+            key_length,
+            encrypt_file_properties,
+        )
+    }
+
     // Workbook properties (read)
 
     /// Get the workbook's name (e.g., "Book1.xlsx").
