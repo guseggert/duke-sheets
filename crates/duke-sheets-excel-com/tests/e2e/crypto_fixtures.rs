@@ -89,6 +89,42 @@ fn generate_xls_rc4_cryptoapi_fixture_via_excel() {
 
 #[test]
 #[ignore = "requires running Excel COM bridge on localhost:9876 (mise run vm:start)"]
+fn generate_xlsx_velvet_sweatshop_fixture() {
+    let bridge = excel_bridge();
+    ensure_vm_temp_dir();
+
+    let fixture = TempFixture {
+        host_path: PathBuf::from("/tmp/duke-sheets-excel/xlsx_velvet_sweatshop.xlsx"),
+        vm_path: r"C:\temp\xlsx_velvet_sweatshop.xlsx".to_string(),
+        name: "xlsx_velvet_sweatshop.xlsx".to_string(),
+    };
+
+    {
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create workbook");
+        wb.set_cell_value("A1", FIXTURE_A1).expect("set A1");
+        wb.set_cell_value("B1", FIXTURE_B1).expect("set B1");
+        wb.save_with_password(&fixture.vm_path, XL_OPEN_XML_WORKBOOK, "VelvetSweatshop")
+            .expect("save with password");
+        wb.close().expect("close");
+    }
+
+    pull_file_from_vm(&fixture);
+    let dest = fixtures_dir();
+    std::fs::create_dir_all(&dest).expect("create fixtures dir");
+    let dest_path = dest.join("xlsx_velvet_sweatshop.xlsx");
+    std::fs::copy(&fixture.host_path, &dest_path).expect("copy into fixtures");
+
+    let bytes = std::fs::read(&dest_path).expect("read");
+    assert_eq!(
+        &bytes[0..8],
+        &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
+    );
+    eprintln!("wrote {} ({} bytes)", dest_path.display(), bytes.len());
+}
+
+#[test]
+#[ignore = "requires running Excel COM bridge on localhost:9876 (mise run vm:start)"]
 fn generate_xlsx_agile_fixture_via_excel() {
     let bridge = excel_bridge();
     ensure_vm_temp_dir();
