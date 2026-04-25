@@ -15,6 +15,7 @@
 //! | 2.2 / 3.2 / 4.2 | Binary RC4 CryptoAPI (when fAES flag is unset) |
 
 pub mod agile;
+pub mod binary_rc4;
 pub mod standard;
 
 use crate::error::{CryptoError, CryptoResult};
@@ -83,9 +84,9 @@ pub fn decrypt(
     match detect_variant(encryption_info)? {
         OoxmlVariant::Agile => agile::decrypt(encryption_info, encrypted_package, password),
         OoxmlVariant::Standard => standard::decrypt(encryption_info, encrypted_package, password),
-        OoxmlVariant::BinaryRc4 => Err(CryptoError::UnsupportedVariant(
-            "OOXML Binary RC4 CryptoAPI (planned for a later phase)".into(),
-        )),
+        OoxmlVariant::BinaryRc4 => {
+            binary_rc4::decrypt(encryption_info, encrypted_package, password)
+        }
     }
 }
 
