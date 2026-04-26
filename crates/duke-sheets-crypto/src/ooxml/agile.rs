@@ -936,43 +936,183 @@ fn build_encryption_info_stream(xml: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Wrap two streams in a CFB envelope. Used by the OOXML write path.
+/// Wrap two streams in a CFB envelope plus the `\x06DataSpaces` tree
+/// that Office requires for type detection of Agile-encrypted files.
+///
+/// Without DataSpaces, LibreOffice and Excel fail with "type detection
+/// failed" before even looking at the encryption header. The tree is a
+/// fixed Office-document marker (MS-OFFCRYPTO §2.4) that says
+/// "this CFB contains a `StrongEncryptionDataSpace`-protected
+/// `EncryptedPackage` stream".
 fn write_cfb_envelope(encryption_info: &[u8], encrypted_package: &[u8]) -> CryptoResult<Vec<u8>> {
     use std::io::{Cursor, Write as _};
     let mut cursor = Cursor::new(Vec::<u8>::new());
-    let mut comp = cfb::CompoundFile::create(&mut cursor)
+    // Office encrypted files are CFB v3 (512-byte sectors). The cfb
+    // crate's `create` defaults to v4 (4 KB sectors), which Excel and
+    // LibreOffice reject during type detection.
+    let mut comp = cfb::CompoundFile::create_with_version(cfb::Version::V3, &mut cursor)
         .map_err(|e| CryptoError::Io(std::io::Error::new(e.kind(), format!("CFB create: {e}"))))?;
+
+    let io_err = |ctx: &str, e: std::io::Error| {
+        CryptoError::Io(std::io::Error::new(e.kind(), format!("{ctx}: {e}")))
+    };
+
+    let dataspaces_root = "/\u{0006}DataSpaces";
+    comp.create_storage(dataspaces_root)
+        .map_err(|e| io_err("create DataSpaces storage", e))?;
+    comp.create_storage(format!("{dataspaces_root}/DataSpaceInfo"))
+        .map_err(|e| io_err("create DataSpaceInfo storage", e))?;
+    comp.create_storage(format!("{dataspaces_root}/TransformInfo"))
+        .map_err(|e| io_err("create TransformInfo storage", e))?;
+    comp.create_storage(format!(
+        "{dataspaces_root}/TransformInfo/StrongEncryptionTransform"
+    ))
+    .map_err(|e| io_err("create StrongEncryptionTransform storage", e))?;
+
     {
-        let mut s = comp.create_stream("/EncryptionInfo").map_err(|e| {
-            CryptoError::Io(std::io::Error::new(
-                e.kind(),
-                format!("create EncryptionInfo: {e}"),
-            ))
-        })?;
-        s.write_all(encryption_info).map_err(|e| {
-            CryptoError::Io(std::io::Error::new(
-                e.kind(),
-                format!("write EncryptionInfo: {e}"),
-            ))
-        })?;
+        let mut s = comp
+            .create_stream(format!("{dataspaces_root}/Version"))
+            .map_err(|e| io_err("create Version stream", e))?;
+        s.write_all(&build_dataspaces_version())
+            .map_err(|e| io_err("write Version", e))?;
     }
     {
-        let mut s = comp.create_stream("/EncryptedPackage").map_err(|e| {
-            CryptoError::Io(std::io::Error::new(
-                e.kind(),
-                format!("create EncryptedPackage: {e}"),
+        let mut s = comp
+            .create_stream(format!("{dataspaces_root}/DataSpaceMap"))
+            .map_err(|e| io_err("create DataSpaceMap stream", e))?;
+        s.write_all(&build_dataspace_map())
+            .map_err(|e| io_err("write DataSpaceMap", e))?;
+    }
+    {
+        let mut s = comp
+            .create_stream(format!(
+                "{dataspaces_root}/DataSpaceInfo/StrongEncryptionDataSpace"
             ))
-        })?;
-        s.write_all(encrypted_package).map_err(|e| {
-            CryptoError::Io(std::io::Error::new(
-                e.kind(),
-                format!("write EncryptedPackage: {e}"),
+            .map_err(|e| io_err("create StrongEncryptionDataSpace stream", e))?;
+        s.write_all(&build_strong_encryption_dataspace())
+            .map_err(|e| io_err("write StrongEncryptionDataSpace", e))?;
+    }
+    {
+        let mut s = comp
+            .create_stream(format!(
+                "{dataspaces_root}/TransformInfo/StrongEncryptionTransform/\u{0006}Primary"
             ))
-        })?;
+            .map_err(|e| io_err("create Primary stream", e))?;
+        s.write_all(&build_primary_transform())
+            .map_err(|e| io_err("write Primary", e))?;
+    }
+    {
+        let mut s = comp
+            .create_stream("/EncryptionInfo")
+            .map_err(|e| io_err("create EncryptionInfo", e))?;
+        s.write_all(encryption_info)
+            .map_err(|e| io_err("write EncryptionInfo", e))?;
+    }
+    {
+        let mut s = comp
+            .create_stream("/EncryptedPackage")
+            .map_err(|e| io_err("create EncryptedPackage", e))?;
+        s.write_all(encrypted_package)
+            .map_err(|e| io_err("write EncryptedPackage", e))?;
     }
     comp.flush()
         .map_err(|e| CryptoError::Io(std::io::Error::new(e.kind(), format!("CFB flush: {e}"))))?;
     Ok(cursor.into_inner())
+}
+
+/// Encode `s` as length-prefixed UTF-16LE: `u32 byte_length || UTF-16LE
+/// bytes || zero pad to next 4-byte boundary`. Used throughout the
+/// DataSpaces structures (MS-OFFCRYPTO §2.5.1.1).
+fn encode_prefixed_utf16le(s: &str) -> Vec<u8> {
+    let utf16: Vec<u16> = s.encode_utf16().collect();
+    let byte_len = utf16.len() * 2;
+    let padded = byte_len.div_ceil(4) * 4;
+    let mut out = Vec::with_capacity(4 + padded);
+    out.extend_from_slice(&(byte_len as u32).to_le_bytes());
+    for u in &utf16 {
+        out.extend_from_slice(&u.to_le_bytes());
+    }
+    while out.len() < 4 + padded {
+        out.push(0);
+    }
+    out
+}
+
+/// Build the `/\x06DataSpaces/Version` stream (MS-OFFCRYPTO §2.5.4).
+/// Identifies the FeatureIdentifier and the reader/updater/writer
+/// version triplet (all 1.0 for current Office).
+fn build_dataspaces_version() -> Vec<u8> {
+    let mut out = encode_prefixed_utf16le("Microsoft.Container.DataSpaces");
+    for v in [1u16, 0u16, 1, 0, 1, 0] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// Build the `/\x06DataSpaces/DataSpaceMap` stream (MS-OFFCRYPTO §2.5.5).
+///
+/// Maps `EncryptedPackage` (a stream) to the `StrongEncryptionDataSpace`
+/// — the link Office follows when opening the file.
+fn build_dataspace_map() -> Vec<u8> {
+    let component_name = encode_prefixed_utf16le("EncryptedPackage");
+    let dataspace_name = encode_prefixed_utf16le("StrongEncryptionDataSpace");
+    let entry_inner = {
+        let mut v = Vec::new();
+        v.extend_from_slice(&1u32.to_le_bytes()); // ReferenceComponentCount
+        v.extend_from_slice(&0u32.to_le_bytes()); // ReferenceComponentType (stream)
+        v.extend_from_slice(&component_name);
+        v.extend_from_slice(&dataspace_name);
+        v
+    };
+    let entry_total = 4 + entry_inner.len();
+    let mut out = Vec::with_capacity(8 + entry_total);
+    out.extend_from_slice(&8u32.to_le_bytes()); // HeaderLength
+    out.extend_from_slice(&1u32.to_le_bytes()); // EntryCount
+    out.extend_from_slice(&(entry_total as u32).to_le_bytes());
+    out.extend_from_slice(&entry_inner);
+    out
+}
+
+/// Build the `/\x06DataSpaces/DataSpaceInfo/StrongEncryptionDataSpace`
+/// stream (MS-OFFCRYPTO §2.5.6). Lists the transforms applied to the
+/// EncryptedPackage; for password-encrypted files, just one
+/// `StrongEncryptionTransform`.
+fn build_strong_encryption_dataspace() -> Vec<u8> {
+    let transform_name = encode_prefixed_utf16le("StrongEncryptionTransform");
+    let mut out = Vec::with_capacity(8 + transform_name.len());
+    out.extend_from_slice(&8u32.to_le_bytes()); // HeaderLength
+    out.extend_from_slice(&1u32.to_le_bytes()); // EntryCount
+    out.extend_from_slice(&transform_name);
+    out
+}
+
+/// Build the
+/// `/\x06DataSpaces/TransformInfo/StrongEncryptionTransform/\x06Primary`
+/// stream (MS-OFFCRYPTO §2.5.7). Carries the well-known Office
+/// encryption-transform GUID and an empty EncryptionTransformInfo (the
+/// real key data lives in `/EncryptionInfo`).
+fn build_primary_transform() -> Vec<u8> {
+    const TRANSFORM_ID: &str = "{FF9A3F03-56EF-4613-BDD5-5A41C1D07246}";
+    const TRANSFORM_NAME: &str = "Microsoft.Container.EncryptionTransform";
+
+    let id = encode_prefixed_utf16le(TRANSFORM_ID);
+    let name = encode_prefixed_utf16le(TRANSFORM_NAME);
+
+    let transform_length = 4 + 4 + id.len();
+
+    let mut out = Vec::with_capacity(transform_length + name.len() + 12 + 16);
+    out.extend_from_slice(&(transform_length as u32).to_le_bytes());
+    out.extend_from_slice(&1u32.to_le_bytes()); // TransformType: Protection
+    out.extend_from_slice(&id);
+    out.extend_from_slice(&name);
+    for v in [1u16, 0u16, 1, 0, 1, 0] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&0u32.to_le_bytes()); // EncryptionName length = 0
+    out.extend_from_slice(&0u32.to_le_bytes()); // EncryptionBlockSize = 0
+    out.extend_from_slice(&0u32.to_le_bytes()); // CipherMode = 0
+    out.extend_from_slice(&4u32.to_le_bytes()); // Reserved (MUST be 4)
+    out
 }
 
 /// Standard base64 encode (RFC 4648, `+/` alphabet, `=` padding). Mirror

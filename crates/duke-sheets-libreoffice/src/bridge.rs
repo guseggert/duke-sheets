@@ -7,7 +7,7 @@ use std::time::Duration;
 use libreoffice_urp::connection::UrpConnection;
 use libreoffice_urp::interface;
 use libreoffice_urp::proxy::{self, UnoProxy};
-use libreoffice_urp::types::{type_names, Type, UnoValue};
+use libreoffice_urp::types::{type_names, Any, Type, UnoValue};
 use tokio::process::{Child, Command};
 use tokio::time::sleep;
 
@@ -162,7 +162,27 @@ impl LibreOfficeBridge {
 
     /// Open an existing workbook from a file path.
     pub async fn open_workbook(&mut self, path: &str) -> Result<Workbook<'_>> {
-        // Convert to file:// URL
+        self.open_workbook_inner(path, None).await
+    }
+
+    /// Open an existing password-protected workbook from a file path.
+    ///
+    /// LibreOffice picks the right encryption variant from the file
+    /// itself; the caller only supplies the password. Used by tests
+    /// to verify cross-tool compatibility of files we encrypt.
+    pub async fn open_workbook_with_password(
+        &mut self,
+        path: &str,
+        password: &str,
+    ) -> Result<Workbook<'_>> {
+        self.open_workbook_inner(path, Some(password)).await
+    }
+
+    async fn open_workbook_inner(
+        &mut self,
+        path: &str,
+        password: Option<&str>,
+    ) -> Result<Workbook<'_>> {
         let url = if path.starts_with("file://") {
             path.to_string()
         } else {
@@ -178,6 +198,18 @@ impl LibreOfficeBridge {
             format!("file://{abs}")
         };
 
+        let load_args: Vec<UnoValue> = match password {
+            None => Vec::new(),
+            Some(pw) => {
+                let pw_pv = make_property_value_local(
+                    "Password",
+                    UnoValue::String(pw.to_string()),
+                    Type::string(),
+                );
+                vec![pw_pv]
+            }
+        };
+
         let method = interface::load_component_from_url();
         let result = self
             .conn
@@ -188,7 +220,7 @@ impl LibreOfficeBridge {
                     UnoValue::String(url),
                     UnoValue::String("_blank".to_string()),
                     UnoValue::Long(0),
-                    UnoValue::Sequence(vec![]),
+                    UnoValue::Sequence(load_args),
                 ],
             )
             .await?;
@@ -255,4 +287,17 @@ impl LibreOfficeBridge {
 
         Ok(())
     }
+}
+
+/// Build a `com.sun.star.beans.PropertyValue` UNO struct.
+///
+/// Mirrors the helper in [`crate::workbook`] but lives here so the
+/// bridge module doesn't need to depend on `Workbook` internals.
+fn make_property_value_local(name: &str, value: UnoValue, type_desc: Type) -> UnoValue {
+    UnoValue::Struct(vec![
+        UnoValue::String(name.to_string()),
+        UnoValue::Long(0),
+        UnoValue::Any(Box::new(Any { type_desc, value })),
+        UnoValue::Enum(0),
+    ])
 }
