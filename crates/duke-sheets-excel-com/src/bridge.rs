@@ -256,6 +256,34 @@ impl ExcelBridge {
         Ok(Workbook::new(self, handle))
     }
 
+    /// Open a password-protected workbook in Excel.
+    ///
+    /// The `Workbooks.Open` method's 5th positional argument is `Password`
+    /// (1=Filename, 2=UpdateLinks, 3=ReadOnly, 4=Format, 5=Password). To
+    /// avoid Excel prompting interactively when no password is supplied,
+    /// we set the rest to defaults (`Null`) and put the password in the
+    /// 5th slot.
+    pub fn open_workbook_with_password(
+        &self,
+        windows_path: &str,
+        password: &str,
+    ) -> Result<Workbook<'_>, BridgeError> {
+        let data = self.invoke(
+            0,
+            vec![cs_prop("Workbooks")],
+            "Open",
+            vec![
+                serde_json::Value::from(windows_path),
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::from(password),
+            ],
+        )?;
+        let handle = extract_handle(data)?;
+        Ok(Workbook::new(self, handle))
+    }
+
     /// Force a full recalculation of all open workbooks.
     ///
     /// Equivalent to `Excel.Application.Calculate()`.
