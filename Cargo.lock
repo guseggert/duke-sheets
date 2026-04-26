@@ -367,6 +367,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfb"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a347dcabdae9c31b0825fd6a8bed285ec9c2acb89c47827126d52fa4f59cece3"
+dependencies = [
+ "fnv",
+ "uuid",
+ "web-time",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -774,8 +785,11 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "cbc",
+ "cfb 0.14.0",
  "cipher 0.4.4",
  "duke-sheets-libreoffice",
+ "duke-sheets-xls",
+ "getrandom 0.2.17",
  "hmac",
  "libreoffice-urp",
  "log",
@@ -788,6 +802,7 @@ dependencies = [
  "subtle",
  "thiserror 1.0.69",
  "tokio",
+ "zip",
 ]
 
 [[package]]
@@ -2217,7 +2232,7 @@ dependencies = [
  "base64",
  "byteorder",
  "cbc",
- "cfb",
+ "cfb 0.10.0",
  "chrono",
  "encoding_rs",
  "fancy-regex",
@@ -2338,6 +2353,16 @@ name = "web-sys"
 version = "0.3.85"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "312e32e551d92129218ea9a2452120f4aabc03529ef03e4d0d82fb2780608598"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

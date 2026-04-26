@@ -22,6 +22,7 @@
 pub mod error;
 pub mod ooxml;
 pub(crate) mod password;
+pub(crate) mod random;
 pub mod xls;
 
 pub use error::{CryptoError, CryptoResult};

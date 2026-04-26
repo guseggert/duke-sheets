@@ -35,13 +35,15 @@
 //! Treating them as one is the most common implementation bug.
 
 use aes::{Aes128, Aes192, Aes256};
-use cbc::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
+use cbc::cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use sha2::{Digest as _, Sha256, Sha384, Sha512};
 use subtle::ConstantTimeEq;
 
 use crate::error::{CryptoError, CryptoResult};
 use crate::password::utf16le_bytes;
+use crate::random::random_bytes;
 
 const BLK_VERIFIER_HASH_INPUT: [u8; 8] = [0xFE, 0xA7, 0xD2, 0x76, 0x3B, 0x4B, 0x9E, 0x79];
 const BLK_VERIFIER_HASH_VALUE: [u8; 8] = [0xD7, 0xAA, 0x0F, 0x6D, 0x30, 0x61, 0x34, 0x4E];
@@ -77,12 +79,46 @@ impl HashAlgo {
         }
     }
 
-    fn digest_size(self) -> usize {
+    pub fn digest_size(self) -> usize {
         match self {
             HashAlgo::Sha1 => 20,
             HashAlgo::Sha256 => 32,
             HashAlgo::Sha384 => 48,
             HashAlgo::Sha512 => 64,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            HashAlgo::Sha1 => "SHA1",
+            HashAlgo::Sha256 => "SHA256",
+            HashAlgo::Sha384 => "SHA384",
+            HashAlgo::Sha512 => "SHA512",
+        }
+    }
+
+    fn hmac(self, key: &[u8], data: &[u8]) -> Vec<u8> {
+        match self {
+            HashAlgo::Sha1 => {
+                let mut m = <Hmac<Sha1> as Mac>::new_from_slice(key).expect("HMAC key any size");
+                m.update(data);
+                m.finalize().into_bytes().to_vec()
+            }
+            HashAlgo::Sha256 => {
+                let mut m = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC key any size");
+                m.update(data);
+                m.finalize().into_bytes().to_vec()
+            }
+            HashAlgo::Sha384 => {
+                let mut m = <Hmac<Sha384> as Mac>::new_from_slice(key).expect("HMAC key any size");
+                m.update(data);
+                m.finalize().into_bytes().to_vec()
+            }
+            HashAlgo::Sha512 => {
+                let mut m = <Hmac<Sha512> as Mac>::new_from_slice(key).expect("HMAC key any size");
+                m.update(data);
+                m.finalize().into_bytes().to_vec()
+            }
         }
     }
 
@@ -567,8 +603,409 @@ fn decrypt_package(
     }
 
     out.truncate(total_size);
-    let _ = key_data.hash_size; // silence unused-field lint until HMAC is wired
+    let _ = key_data.hash_size; // silence unused-field lint until HMAC verify is wired
     Ok(out)
+}
+
+/// Caller-tunable parameters for [`encrypt`].
+///
+/// `Default` produces Office 2010+ defaults: AES-256, SHA-512, 100 000
+/// spinCount. Pin explicit values for reproducible output.
+#[derive(Debug, Clone)]
+pub struct AgileWriteOptions {
+    /// AES key size in bits. Must be 128, 192, or 256.
+    pub key_bits: u32,
+    /// Spin count for the password KDF. Office's default is 100 000;
+    /// MS-OFFCRYPTO §2.3.4.10 caps at 10 000 000.
+    pub spin_count: u32,
+    /// Hash algorithm used everywhere in the descriptor. SHA-512 is the
+    /// modern default; SHA-256/384 also work; SHA-1 only for legacy
+    /// reader compatibility (and is rejected by some readers).
+    pub hash: HashAlgo,
+}
+
+impl Default for AgileWriteOptions {
+    fn default() -> Self {
+        Self {
+            key_bits: 256,
+            spin_count: 100_000,
+            hash: HashAlgo::Sha512,
+        }
+    }
+}
+
+/// Encrypt an OOXML inner-ZIP byte buffer with Agile encryption,
+/// producing a complete CFB envelope ready to write to disk.
+///
+/// The output:
+/// 1. Is a valid CFB compound file with `/EncryptionInfo` (Agile XML
+///    descriptor + 8-byte version header) and `/EncryptedPackage`
+///    (8-byte total-size prefix + AES-CBC ciphertext) streams.
+/// 2. Round-trips through [`super::decrypt`] / [`super::super::decrypt`]
+///    with the same password.
+/// 3. Carries an HMAC over the full encrypted package for integrity
+///    verification by external readers.
+///
+/// Random salts, IVs, and keys are drawn from the OS RNG via
+/// `getrandom`; no caller-provided seed.
+pub fn encrypt(
+    plaintext: &[u8],
+    password: &str,
+    opts: &AgileWriteOptions,
+) -> CryptoResult<Vec<u8>> {
+    if !matches!(opts.key_bits, 128 | 192 | 256) {
+        return Err(CryptoError::UnsupportedVariant(format!(
+            "Agile keyBits={} (only 128/192/256 supported)",
+            opts.key_bits
+        )));
+    }
+    if opts.spin_count > MAX_SPIN_COUNT {
+        return Err(CryptoError::UnsupportedVariant(format!(
+            "Agile spinCount={} exceeds MS-OFFCRYPTO limit of {MAX_SPIN_COUNT}",
+            opts.spin_count
+        )));
+    }
+
+    let key_bytes = (opts.key_bits / 8) as usize;
+    let block_size = 16usize;
+    let hash_size = opts.hash.digest_size();
+
+    let key_data_salt = random_bytes(block_size)?;
+    let key_encryptor_salt = random_bytes(block_size)?;
+    let secret_key = random_bytes(key_bytes)?;
+    let hmac_key = random_bytes(hash_size)?;
+
+    let encrypted_package = encrypt_package(plaintext, &secret_key, &key_data_salt, opts.hash)?;
+
+    let hmac_value = opts.hash.hmac(&hmac_key, &encrypted_package);
+
+    let iv_hmac_key = derive_iv_from_salt(
+        &key_data_salt,
+        &BLK_DATA_INTEGRITY_KEY,
+        opts.hash,
+        block_size,
+    );
+    let iv_hmac_value = derive_iv_from_salt(
+        &key_data_salt,
+        &BLK_DATA_INTEGRITY_VALUE,
+        opts.hash,
+        block_size,
+    );
+    let encrypted_hmac_key = aes_cbc_encrypt(
+        &secret_key,
+        &iv_hmac_key,
+        &pad_to_block(&hmac_key, block_size),
+    )?;
+    let encrypted_hmac_value = aes_cbc_encrypt(
+        &secret_key,
+        &iv_hmac_value,
+        &pad_to_block(&hmac_value, block_size),
+    )?;
+
+    let key_vhi = derive_intermediate_key(
+        password,
+        &key_encryptor_salt,
+        opts.spin_count,
+        &BLK_VERIFIER_HASH_INPUT,
+        opts.hash,
+        key_bytes,
+    );
+    let key_vhv = derive_intermediate_key(
+        password,
+        &key_encryptor_salt,
+        opts.spin_count,
+        &BLK_VERIFIER_HASH_VALUE,
+        opts.hash,
+        key_bytes,
+    );
+    let key_ekv = derive_intermediate_key(
+        password,
+        &key_encryptor_salt,
+        opts.spin_count,
+        &BLK_ENCRYPTED_KEY_VALUE,
+        opts.hash,
+        key_bytes,
+    );
+
+    let verifier_input = random_bytes(block_size)?;
+    let verifier_hash = opts.hash.hash(&verifier_input);
+
+    let encrypted_verifier_hash_input =
+        aes_cbc_encrypt(&key_vhi, &key_encryptor_salt, &verifier_input)?;
+    let encrypted_verifier_hash_value = aes_cbc_encrypt(
+        &key_vhv,
+        &key_encryptor_salt,
+        &pad_to_block(&verifier_hash, block_size),
+    )?;
+    let encrypted_key_value = aes_cbc_encrypt(
+        &key_ekv,
+        &key_encryptor_salt,
+        &pad_to_block(&secret_key, block_size),
+    )?;
+
+    let xml = build_descriptor_xml(&DescriptorParams {
+        key_bits: opts.key_bits,
+        block_size: block_size as u32,
+        hash_size: hash_size as u32,
+        hash: opts.hash,
+        spin_count: opts.spin_count,
+        key_data_salt: &key_data_salt,
+        key_encryptor_salt: &key_encryptor_salt,
+        encrypted_hmac_key: &encrypted_hmac_key,
+        encrypted_hmac_value: &encrypted_hmac_value,
+        encrypted_verifier_hash_input: &encrypted_verifier_hash_input,
+        encrypted_verifier_hash_value: &encrypted_verifier_hash_value,
+        encrypted_key_value: &encrypted_key_value,
+    });
+
+    let encryption_info = build_encryption_info_stream(&xml);
+    write_cfb_envelope(&encryption_info, &encrypted_package)
+}
+
+fn pad_to_block(data: &[u8], block: usize) -> Vec<u8> {
+    let rem = data.len() % block;
+    if rem == 0 {
+        data.to_vec()
+    } else {
+        let mut v = Vec::with_capacity(data.len() + block - rem);
+        v.extend_from_slice(data);
+        v.resize(data.len() + (block - rem), 0);
+        v
+    }
+}
+
+fn derive_iv_from_salt(
+    salt: &[u8],
+    block_key: &[u8; 8],
+    hash: HashAlgo,
+    block_size: usize,
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(salt.len() + block_key.len());
+    buf.extend_from_slice(salt);
+    buf.extend_from_slice(block_key);
+    let mut iv = hash.hash(&buf);
+    if iv.len() < block_size {
+        iv.resize(block_size, 0);
+    } else {
+        iv.truncate(block_size);
+    }
+    iv
+}
+
+fn aes_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> CryptoResult<Vec<u8>> {
+    if plaintext.len() % 16 != 0 {
+        return Err(CryptoError::InvalidFormat(format!(
+            "AES-CBC plaintext length {} not a multiple of 16",
+            plaintext.len()
+        )));
+    }
+    let mut iv_buf = [0u8; 16];
+    iv_buf.copy_from_slice(&iv[..iv.len().min(16)]);
+    let mut buf = vec![0u8; plaintext.len()];
+    buf[..plaintext.len()].copy_from_slice(plaintext);
+
+    match key.len() {
+        16 => {
+            type Aes128CbcEnc = cbc::Encryptor<Aes128>;
+            let cipher = Aes128CbcEnc::new_from_slices(key, &iv_buf)
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-128-CBC init: {e}")))?;
+            cipher
+                .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext.len())
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-128-CBC encrypt: {e}")))?;
+        }
+        24 => {
+            type Aes192CbcEnc = cbc::Encryptor<Aes192>;
+            let cipher = Aes192CbcEnc::new_from_slices(key, &iv_buf)
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-192-CBC init: {e}")))?;
+            cipher
+                .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext.len())
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-192-CBC encrypt: {e}")))?;
+        }
+        32 => {
+            type Aes256CbcEnc = cbc::Encryptor<Aes256>;
+            let cipher = Aes256CbcEnc::new_from_slices(key, &iv_buf)
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-256-CBC init: {e}")))?;
+            cipher
+                .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext.len())
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-256-CBC encrypt: {e}")))?;
+        }
+        n => {
+            return Err(CryptoError::UnsupportedVariant(format!(
+                "Agile AES key length {n} not in {{16, 24, 32}}"
+            )));
+        }
+    }
+    Ok(buf)
+}
+
+fn encrypt_package(
+    plaintext: &[u8],
+    secret_key: &[u8],
+    key_data_salt: &[u8],
+    hash: HashAlgo,
+) -> CryptoResult<Vec<u8>> {
+    const SEGMENT: usize = 4096;
+    let block_size = 16usize;
+
+    let total_size = plaintext.len();
+    let padded = pad_to_block(plaintext, block_size);
+
+    let mut out = Vec::with_capacity(8 + padded.len());
+    out.extend_from_slice(&(total_size as u64).to_le_bytes());
+
+    for (i, segment) in padded.chunks(SEGMENT).enumerate() {
+        let mut salt_with_block_key = Vec::with_capacity(key_data_salt.len() + 4);
+        salt_with_block_key.extend_from_slice(key_data_salt);
+        salt_with_block_key.extend_from_slice(&(i as u32).to_le_bytes());
+        let mut iv = hash.hash(&salt_with_block_key);
+        if iv.len() < block_size {
+            iv.resize(block_size, 0);
+        } else {
+            iv.truncate(block_size);
+        }
+        let enc = aes_cbc_encrypt(secret_key, &iv, segment)?;
+        out.extend_from_slice(&enc);
+    }
+    Ok(out)
+}
+
+struct DescriptorParams<'a> {
+    key_bits: u32,
+    block_size: u32,
+    hash_size: u32,
+    hash: HashAlgo,
+    spin_count: u32,
+    key_data_salt: &'a [u8],
+    key_encryptor_salt: &'a [u8],
+    encrypted_hmac_key: &'a [u8],
+    encrypted_hmac_value: &'a [u8],
+    encrypted_verifier_hash_input: &'a [u8],
+    encrypted_verifier_hash_value: &'a [u8],
+    encrypted_key_value: &'a [u8],
+}
+
+fn build_descriptor_xml(p: &DescriptorParams<'_>) -> Vec<u8> {
+    let salt_size = 16u32;
+    let hash_name = p.hash.name();
+    let kds_b64 = encode_base64(p.key_data_salt);
+    let kes_b64 = encode_base64(p.key_encryptor_salt);
+    let ehk_b64 = encode_base64(p.encrypted_hmac_key);
+    let ehv_b64 = encode_base64(p.encrypted_hmac_value);
+    let evhi_b64 = encode_base64(p.encrypted_verifier_hash_input);
+    let evhv_b64 = encode_base64(p.encrypted_verifier_hash_value);
+    let ekv_b64 = encode_base64(p.encrypted_key_value);
+
+    let mut s = String::new();
+    s.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n");
+    s.push_str("<encryption xmlns=\"http://schemas.microsoft.com/office/2006/encryption\" xmlns:p=\"http://schemas.microsoft.com/office/2006/keyEncryptor/password\" xmlns:c=\"http://schemas.microsoft.com/office/2006/keyEncryptor/certificate\">");
+    s.push_str(&format!(
+        "<keyData saltSize=\"{salt_size}\" blockSize=\"{block_size}\" keyBits=\"{key_bits}\" hashSize=\"{hash_size}\" cipherAlgorithm=\"AES\" cipherChaining=\"ChainingModeCBC\" hashAlgorithm=\"{hash_name}\" saltValue=\"{kds_b64}\"/>",
+        block_size = p.block_size,
+        key_bits = p.key_bits,
+        hash_size = p.hash_size,
+    ));
+    s.push_str(&format!(
+        "<dataIntegrity encryptedHmacKey=\"{ehk_b64}\" encryptedHmacValue=\"{ehv_b64}\"/>"
+    ));
+    s.push_str("<keyEncryptors>");
+    s.push_str(
+        "<keyEncryptor uri=\"http://schemas.microsoft.com/office/2006/keyEncryptor/password\">",
+    );
+    s.push_str(&format!(
+        "<p:encryptedKey spinCount=\"{spin_count}\" saltSize=\"{salt_size}\" blockSize=\"{block_size}\" keyBits=\"{key_bits}\" hashSize=\"{hash_size}\" cipherAlgorithm=\"AES\" cipherChaining=\"ChainingModeCBC\" hashAlgorithm=\"{hash_name}\" saltValue=\"{kes_b64}\" encryptedVerifierHashInput=\"{evhi_b64}\" encryptedVerifierHashValue=\"{evhv_b64}\" encryptedKeyValue=\"{ekv_b64}\"/>",
+        spin_count = p.spin_count,
+        block_size = p.block_size,
+        key_bits = p.key_bits,
+        hash_size = p.hash_size,
+    ));
+    s.push_str("</keyEncryptor>");
+    s.push_str("</keyEncryptors>");
+    s.push_str("</encryption>");
+    s.into_bytes()
+}
+
+/// Build the full `/EncryptionInfo` stream: 8-byte version/flags header
+/// (vMajor=4 vMinor=4 flags=0x40 = fAgile) followed by the XML
+/// descriptor body.
+fn build_encryption_info_stream(xml: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + xml.len());
+    out.extend_from_slice(&4u16.to_le_bytes());
+    out.extend_from_slice(&4u16.to_le_bytes());
+    out.extend_from_slice(&0x0000_0040u32.to_le_bytes());
+    out.extend_from_slice(xml);
+    out
+}
+
+/// Wrap two streams in a CFB envelope. Used by the OOXML write path.
+fn write_cfb_envelope(encryption_info: &[u8], encrypted_package: &[u8]) -> CryptoResult<Vec<u8>> {
+    use std::io::{Cursor, Write as _};
+    let mut cursor = Cursor::new(Vec::<u8>::new());
+    let mut comp = cfb::CompoundFile::create(&mut cursor)
+        .map_err(|e| CryptoError::Io(std::io::Error::new(e.kind(), format!("CFB create: {e}"))))?;
+    {
+        let mut s = comp.create_stream("/EncryptionInfo").map_err(|e| {
+            CryptoError::Io(std::io::Error::new(
+                e.kind(),
+                format!("create EncryptionInfo: {e}"),
+            ))
+        })?;
+        s.write_all(encryption_info).map_err(|e| {
+            CryptoError::Io(std::io::Error::new(
+                e.kind(),
+                format!("write EncryptionInfo: {e}"),
+            ))
+        })?;
+    }
+    {
+        let mut s = comp.create_stream("/EncryptedPackage").map_err(|e| {
+            CryptoError::Io(std::io::Error::new(
+                e.kind(),
+                format!("create EncryptedPackage: {e}"),
+            ))
+        })?;
+        s.write_all(encrypted_package).map_err(|e| {
+            CryptoError::Io(std::io::Error::new(
+                e.kind(),
+                format!("write EncryptedPackage: {e}"),
+            ))
+        })?;
+    }
+    comp.flush()
+        .map_err(|e| CryptoError::Io(std::io::Error::new(e.kind(), format!("CFB flush: {e}"))))?;
+    Ok(cursor.into_inner())
+}
+
+/// Standard base64 encode (RFC 4648, `+/` alphabet, `=` padding). Mirror
+/// of [`decode_base64`] above; rolled by hand to avoid a dependency on
+/// the `base64` crate for a few thousand bytes per file.
+fn encode_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(((bytes.len() + 2) / 3) * 4);
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        let n =
+            (u32::from(bytes[i]) << 16) | (u32::from(bytes[i + 1]) << 8) | u32::from(bytes[i + 2]);
+        out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
+        out.push(ALPHABET[((n >> 6) & 0x3F) as usize] as char);
+        out.push(ALPHABET[(n & 0x3F) as usize] as char);
+        i += 3;
+    }
+    let rem = bytes.len() - i;
+    if rem == 1 {
+        let n = u32::from(bytes[i]) << 16;
+        out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem == 2 {
+        let n = (u32::from(bytes[i]) << 16) | (u32::from(bytes[i + 1]) << 8);
+        out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
+        out.push(ALPHABET[((n >> 6) & 0x3F) as usize] as char);
+        out.push('=');
+    }
+    out
 }
 
 #[cfg(test)]

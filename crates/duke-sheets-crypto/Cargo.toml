@@ -26,8 +26,21 @@ subtle = "2"
 # in the workspace.
 quick-xml.workspace = true
 
+# CFB envelope writer for OOXML encryption (write path). Deps (fnv, uuid,
+# web-time) are all pure-Rust and WASM-friendly.
+cfb = "0.14"
+
+# Random byte generation for salts / IVs / keys. WASM consumers must
+# enable getrandom's `js` feature in their own Cargo.toml; bindings/wasm
+# already does so via its top-level dependency.
+getrandom = "0.2"
+
 [dev-dependencies]
 pretty_assertions.workspace = true
+# Round-trip tests build sample inner ZIPs and parse the CFB envelope
+# emitted by the write path.
+zip.workspace = true
+duke-sheets-xls = { path = "../duke-sheets-xls" }
 # Used by the fixture generator test to produce encrypted Office files via
 # LibreOffice's storeToURL. The fixture-gen test is #[ignore]-gated so CI
 # doesn't need a running LibreOffice unless someone is explicitly
