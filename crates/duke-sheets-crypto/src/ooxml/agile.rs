@@ -34,7 +34,7 @@
 //!
 //! Treating them as one is the most common implementation bug.
 
-use aes::Aes256;
+use aes::{Aes128, Aes192, Aes256};
 use cbc::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
 use sha1::Sha1;
 use sha2::{Digest as _, Sha256, Sha384, Sha512};
@@ -478,22 +478,41 @@ fn aes_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> CryptoResult<Vec
             ciphertext.len()
         )));
     }
-    if key.len() != 32 {
-        return Err(CryptoError::UnsupportedVariant(format!(
-            "Agile AES key length {} not yet supported (only AES-256)",
-            key.len()
-        )));
-    }
     let mut iv_buf = [0u8; 16];
     iv_buf.copy_from_slice(&iv[..iv.len().min(16)]);
-
-    type Aes256CbcDec = cbc::Decryptor<Aes256>;
-    let cipher = Aes256CbcDec::new_from_slices(key, &iv_buf)
-        .map_err(|e| CryptoError::InvalidFormat(format!("AES-256-CBC init: {e}")))?;
     let mut buf = ciphertext.to_vec();
-    cipher
-        .decrypt_padded_mut::<NoPadding>(&mut buf)
-        .map_err(|e| CryptoError::InvalidFormat(format!("AES-256-CBC decrypt: {e}")))?;
+
+    match key.len() {
+        16 => {
+            type Aes128CbcDec = cbc::Decryptor<Aes128>;
+            let cipher = Aes128CbcDec::new_from_slices(key, &iv_buf)
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-128-CBC init: {e}")))?;
+            cipher
+                .decrypt_padded_mut::<NoPadding>(&mut buf)
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-128-CBC decrypt: {e}")))?;
+        }
+        24 => {
+            type Aes192CbcDec = cbc::Decryptor<Aes192>;
+            let cipher = Aes192CbcDec::new_from_slices(key, &iv_buf)
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-192-CBC init: {e}")))?;
+            cipher
+                .decrypt_padded_mut::<NoPadding>(&mut buf)
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-192-CBC decrypt: {e}")))?;
+        }
+        32 => {
+            type Aes256CbcDec = cbc::Decryptor<Aes256>;
+            let cipher = Aes256CbcDec::new_from_slices(key, &iv_buf)
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-256-CBC init: {e}")))?;
+            cipher
+                .decrypt_padded_mut::<NoPadding>(&mut buf)
+                .map_err(|e| CryptoError::InvalidFormat(format!("AES-256-CBC decrypt: {e}")))?;
+        }
+        n => {
+            return Err(CryptoError::UnsupportedVariant(format!(
+                "Agile AES key length {n} not in {{16, 24, 32}}"
+            )));
+        }
+    }
     Ok(buf)
 }
 
@@ -630,6 +649,61 @@ mod tests {
         assert_eq!(d.key_encryptor.salt_value, b"salt_key_encryptor");
         assert!(!d.encrypted_hmac_key.is_empty());
         assert!(!d.encrypted_hmac_value.is_empty());
+    }
+
+    /// AES-CBC round-trip for each key size we claim to support.
+    /// Validates that the dispatch in `aes_cbc_decrypt` plumbs through
+    /// the right cipher type for 128- and 192-bit keys (the path that
+    /// the corpus surfaced an unsupported error on).
+    #[test]
+    fn aes_cbc_decrypt_supports_128_192_256() {
+        use cbc::cipher::{block_padding::NoPadding, BlockEncryptMut, KeyIvInit};
+        let plaintext = [0x77u8; 64];
+        let iv = [0x13u8; 16];
+
+        for key_len in [16usize, 24, 32] {
+            let key = vec![0x42u8; key_len];
+            let mut buf = plaintext.to_vec();
+            match key_len {
+                16 => {
+                    type Aes128CbcEnc = cbc::Encryptor<Aes128>;
+                    let cipher = Aes128CbcEnc::new_from_slices(&key, &iv).unwrap();
+                    cipher
+                        .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext.len())
+                        .unwrap();
+                }
+                24 => {
+                    type Aes192CbcEnc = cbc::Encryptor<Aes192>;
+                    let cipher = Aes192CbcEnc::new_from_slices(&key, &iv).unwrap();
+                    cipher
+                        .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext.len())
+                        .unwrap();
+                }
+                32 => {
+                    type Aes256CbcEnc = cbc::Encryptor<Aes256>;
+                    let cipher = Aes256CbcEnc::new_from_slices(&key, &iv).unwrap();
+                    cipher
+                        .encrypt_padded_mut::<NoPadding>(&mut buf, plaintext.len())
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let decrypted = aes_cbc_decrypt(&key, &iv, &buf).expect("decrypt ok");
+            assert_eq!(
+                decrypted,
+                plaintext,
+                "round-trip for {}-bit key",
+                key_len * 8
+            );
+        }
+    }
+
+    #[test]
+    fn aes_cbc_decrypt_rejects_unsupported_key_lengths() {
+        let iv = [0u8; 16];
+        let ct = [0u8; 16];
+        let err = aes_cbc_decrypt(&[0u8; 17], &iv, &ct).unwrap_err();
+        assert!(matches!(err, CryptoError::UnsupportedVariant(_)));
     }
 
     #[test]
