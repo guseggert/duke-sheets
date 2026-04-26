@@ -6,6 +6,7 @@
 pub mod rc4_cryptoapi;
 pub mod rc4_legacy;
 pub(crate) mod record_walk;
+pub mod xor_obfuscation;
 
 use crate::error::{CryptoError, CryptoResult};
 
@@ -24,7 +25,7 @@ pub const FILEPASS_RECORD_TYPE: u16 = 0x002F;
 /// Returns [`CryptoError::InvalidFormat`] if the stream is not an
 /// encrypted Workbook (no `FilePass` at the expected position). Returns
 /// [`CryptoError::UnsupportedVariant`] for variants we don't yet
-/// implement (legacy RC4 MD5, XOR).
+/// implement.
 pub fn decrypt_workbook_stream(stream: &[u8], password: &str) -> CryptoResult<Vec<u8>> {
     let filepass = find_filepass(stream)?;
     match parse_filepass(filepass.body)? {
@@ -34,9 +35,9 @@ pub fn decrypt_workbook_stream(stream: &[u8], password: &str) -> CryptoResult<Ve
         FilePassVariant::Rc4Legacy(params) => {
             rc4_legacy::decrypt_workbook_stream(stream, password, &params)
         }
-        FilePassVariant::Xor => Err(CryptoError::UnsupportedVariant(
-            "XLS XOR Obfuscation".into(),
-        )),
+        FilePassVariant::Xor(params) => {
+            xor_obfuscation::decrypt_workbook_stream(stream, password, &params)
+        }
     }
 }
 
@@ -85,7 +86,7 @@ fn find_filepass(stream: &[u8]) -> CryptoResult<FilePass<'_>> {
 enum FilePassVariant {
     Rc4CryptoApi(rc4_cryptoapi::Rc4CryptoApiParams),
     Rc4Legacy(rc4_legacy::Rc4LegacyParams),
-    Xor,
+    Xor(xor_obfuscation::XorParams),
 }
 
 fn parse_filepass(body: &[u8]) -> CryptoResult<FilePassVariant> {
@@ -97,7 +98,10 @@ fn parse_filepass(body: &[u8]) -> CryptoResult<FilePassVariant> {
     let w_encryption_type = u16::from_le_bytes([body[0], body[1]]);
 
     match w_encryption_type {
-        0 => Ok(FilePassVariant::Xor),
+        0 => {
+            let params = xor_obfuscation::parse_filepass_body(&body[2..])?;
+            Ok(FilePassVariant::Xor(params))
+        }
         1 => {
             if body.len() < 6 {
                 return Err(CryptoError::InvalidFormat(
@@ -275,8 +279,9 @@ mod tests {
 
     #[test]
     fn parse_filepass_xor() {
-        let body = [0, 0];
-        assert!(matches!(parse_filepass(&body), Ok(FilePassVariant::Xor)));
+        // wEncryptionType=0 + 4 bytes XOR params (key + verification_bytes)
+        let body = [0u8, 0, 0xAB, 0xCD, 0x0A, 0x9A];
+        assert!(matches!(parse_filepass(&body), Ok(FilePassVariant::Xor(_))));
     }
 
     #[test]
