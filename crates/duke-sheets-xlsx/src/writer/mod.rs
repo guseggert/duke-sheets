@@ -458,6 +458,36 @@ impl SharedStringTable {
     }
 }
 
+/// Encryption profile selector for [`XlsxWriter::write_to_bytes_encrypted`]
+/// and friends.
+///
+/// Currently only Agile is wired through; Standard / Binary RC4 are
+/// planned in later phases.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum EncryptionProfile {
+    /// ECMA-376 Agile encryption (AES-CBC + HMAC). Office 2010+ default.
+    /// `key_bits` selects AES key size; `spin_count` selects KDF cost.
+    /// Use [`EncryptionProfile::agile_default`] for Office 2010+ defaults.
+    Agile { key_bits: u32, spin_count: u32 },
+}
+
+impl EncryptionProfile {
+    /// Match Office 2010+ defaults: Agile + AES-256 + 100 000 spinCount.
+    pub fn agile_default() -> Self {
+        Self::Agile {
+            key_bits: 256,
+            spin_count: 100_000,
+        }
+    }
+}
+
+impl Default for EncryptionProfile {
+    fn default() -> Self {
+        Self::agile_default()
+    }
+}
+
 /// XLSX file writer
 pub struct XlsxWriter;
 
@@ -466,6 +496,43 @@ impl XlsxWriter {
     pub fn write_file<P: AsRef<Path>>(workbook: &Workbook, path: P) -> XlsxResult<()> {
         let file = File::create(path)?;
         Self::write(workbook, file)
+    }
+
+    /// Write a workbook to a file path, encrypted with `password` using
+    /// the supplied OOXML encryption profile.
+    pub fn write_file_encrypted<P: AsRef<Path>>(
+        workbook: &Workbook,
+        path: P,
+        password: &str,
+        profile: &EncryptionProfile,
+    ) -> XlsxResult<()> {
+        let bytes = Self::write_to_bytes_encrypted(workbook, password, profile)?;
+        std::fs::write(path, bytes).map_err(XlsxError::Io)
+    }
+
+    /// Encrypt the workbook's serialized form with `password` and the
+    /// chosen profile, returning the resulting CFB envelope as bytes.
+    pub fn write_to_bytes_encrypted(
+        workbook: &Workbook,
+        password: &str,
+        profile: &EncryptionProfile,
+    ) -> XlsxResult<Vec<u8>> {
+        let mut plain = Vec::new();
+        Self::write(workbook, std::io::Cursor::new(&mut plain))?;
+        match profile {
+            EncryptionProfile::Agile {
+                key_bits,
+                spin_count,
+            } => {
+                let opts = duke_sheets_crypto::ooxml::agile::AgileWriteOptions {
+                    key_bits: *key_bits,
+                    spin_count: *spin_count,
+                    hash: duke_sheets_crypto::ooxml::agile::HashAlgo::Sha512,
+                };
+                let envelope = duke_sheets_crypto::ooxml::agile::encrypt(&plain, password, &opts)?;
+                Ok(envelope)
+            }
+        }
     }
 
     /// Write a workbook to a writer

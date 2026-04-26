@@ -403,8 +403,44 @@ impl WorkbookExt for Workbook {
         }
     }
 
-    fn save_with<P: AsRef<Path>>(&self, path: P, _opts: &WorkbookSaveOptions) -> Result<()> {
-        self.save(path)
+    fn save_with<P: AsRef<Path>>(&self, path: P, opts: &WorkbookSaveOptions) -> Result<()> {
+        let Some(password) = opts.password.as_deref() else {
+            return self.save(path);
+        };
+
+        let path = path.as_ref();
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase());
+
+        match extension.as_deref() {
+            Some("xlsx") | Some("xlsm") | Some("xltx") | Some("xltm") => {
+                let xlsx_profile = match &opts.encryption {
+                    EncryptionProfile::Default => {
+                        duke_sheets_xlsx::EncryptionProfile::agile_default()
+                    }
+                    EncryptionProfile::OoxmlAgile {
+                        key_bits,
+                        spin_count,
+                    } => duke_sheets_xlsx::EncryptionProfile::Agile {
+                        key_bits: *key_bits,
+                        spin_count: *spin_count,
+                    },
+                    other => {
+                        return Err(Error::other(format!(
+                            "OOXML write does not yet support encryption profile {other:?}"
+                        )));
+                    }
+                };
+                XlsxWriter::write_file_encrypted(self, path, password, &xlsx_profile)
+                    .map_err(|e| Error::other(e.to_string()))
+            }
+            _ => Err(Error::other(format!(
+                "encrypted save is only implemented for .xlsx-family extensions; got {}",
+                path.display()
+            ))),
+        }
     }
 
     fn open<P: AsRef<Path>>(path: P) -> Result<Workbook> {

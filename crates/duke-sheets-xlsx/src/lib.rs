@@ -10,4 +10,4 @@ mod styles;
 
 pub use error::{XlsxError, XlsxResult};
 pub use reader::XlsxReader;
-pub use writer::XlsxWriter;
+pub use writer::{EncryptionProfile, XlsxWriter};
