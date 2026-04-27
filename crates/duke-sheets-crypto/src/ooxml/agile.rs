@@ -634,25 +634,58 @@ impl Default for AgileWriteOptions {
     }
 }
 
-/// Encrypt an OOXML inner-ZIP byte buffer with Agile encryption,
-/// producing a complete CFB envelope ready to write to disk.
+/// Encrypted OOXML envelope parts ready for CFB packaging.
 ///
-/// The output:
-/// 1. Is a valid CFB compound file with `/EncryptionInfo` (Agile XML
-///    descriptor + 8-byte version header) and `/EncryptedPackage`
-///    (8-byte total-size prefix + AES-CBC ciphertext) streams.
-/// 2. Round-trips through [`super::decrypt`] / [`super::super::decrypt`]
-///    with the same password.
-/// 3. Carries an HMAC over the full encrypted package for integrity
+/// `encryption_info` and `encrypted_package` are the two top-level
+/// streams (`/EncryptionInfo` and `/EncryptedPackage`).
+/// `dataspaces` carries the four `\x06DataSpaces`-tree streams Office
+/// requires for type detection (MS-OFFCRYPTO §2.4); each entry is a
+/// `(path, bytes)` pair where the path uses leading-slash form and
+/// includes the `\x06` prefix bytes on the storages and `Primary`
+/// stream. The matching storages (containers) the caller must also
+/// create are listed in [`AGILE_REQUIRED_STORAGES`].
+///
+/// The caller is responsible for assembling these parts into a CFB v3
+/// compound file. `duke-sheets-xls`'s `CompoundFileBuilder` is a
+/// suitable backend.
+#[derive(Debug)]
+pub struct AgileEnvelopeParts {
+    pub encryption_info: Vec<u8>,
+    pub encrypted_package: Vec<u8>,
+    pub dataspaces: Vec<(String, Vec<u8>)>,
+}
+
+/// Storage paths the caller must create (in this order) before adding
+/// the streams from [`AgileEnvelopeParts::dataspaces`]. Without these
+/// storages, Office rejects the file with "type detection failed".
+pub const AGILE_REQUIRED_STORAGES: &[&str] = &[
+    "/\u{0006}DataSpaces",
+    "/\u{0006}DataSpaces/DataSpaceInfo",
+    "/\u{0006}DataSpaces/TransformInfo",
+    "/\u{0006}DataSpaces/TransformInfo/StrongEncryptionTransform",
+];
+
+/// Encrypt an OOXML inner-ZIP byte buffer with Agile encryption,
+/// producing the parts that make up a complete CFB envelope.
+///
+/// The returned [`AgileEnvelopeParts`]:
+/// 1. Round-trips through [`decrypt`] (or [`super::decrypt`]) with the
+///    same password once the parts are reassembled.
+/// 2. Carries an HMAC over the full encrypted package for integrity
 ///    verification by external readers.
 ///
 /// Random salts, IVs, and keys are drawn from the OS RNG via
 /// `getrandom`; no caller-provided seed.
+///
+/// CFB packaging is the caller's responsibility; the crypto crate stays
+/// out of file-format territory so it can run on no-std-ish targets
+/// like WASM without pulling in CFB-write code that isn't otherwise
+/// reachable from a decrypt-only build.
 pub fn encrypt(
     plaintext: &[u8],
     password: &str,
     opts: &AgileWriteOptions,
-) -> CryptoResult<Vec<u8>> {
+) -> CryptoResult<AgileEnvelopeParts> {
     if !matches!(opts.key_bits, 128 | 192 | 256) {
         return Err(CryptoError::UnsupportedVariant(format!(
             "Agile keyBits={} (only 128/192/256 supported)",
@@ -759,7 +792,31 @@ pub fn encrypt(
     });
 
     let encryption_info = build_encryption_info_stream(&xml);
-    write_cfb_envelope(&encryption_info, &encrypted_package)
+    let dataspaces_root = "/\u{0006}DataSpaces";
+    let dataspaces = vec![
+        (
+            format!("{dataspaces_root}/Version"),
+            build_dataspaces_version(),
+        ),
+        (
+            format!("{dataspaces_root}/DataSpaceMap"),
+            build_dataspace_map(),
+        ),
+        (
+            format!("{dataspaces_root}/DataSpaceInfo/StrongEncryptionDataSpace"),
+            build_strong_encryption_dataspace(),
+        ),
+        (
+            format!("{dataspaces_root}/TransformInfo/StrongEncryptionTransform/\u{0006}Primary"),
+            build_primary_transform(),
+        ),
+    ];
+
+    Ok(AgileEnvelopeParts {
+        encryption_info,
+        encrypted_package,
+        dataspaces,
+    })
 }
 
 fn pad_to_block(data: &[u8], block: usize) -> Vec<u8> {
@@ -934,90 +991,6 @@ fn build_encryption_info_stream(xml: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&0x0000_0040u32.to_le_bytes());
     out.extend_from_slice(xml);
     out
-}
-
-/// Wrap two streams in a CFB envelope plus the `\x06DataSpaces` tree
-/// that Office requires for type detection of Agile-encrypted files.
-///
-/// Without DataSpaces, LibreOffice and Excel fail with "type detection
-/// failed" before even looking at the encryption header. The tree is a
-/// fixed Office-document marker (MS-OFFCRYPTO §2.4) that says
-/// "this CFB contains a `StrongEncryptionDataSpace`-protected
-/// `EncryptedPackage` stream".
-fn write_cfb_envelope(encryption_info: &[u8], encrypted_package: &[u8]) -> CryptoResult<Vec<u8>> {
-    use std::io::{Cursor, Write as _};
-    let mut cursor = Cursor::new(Vec::<u8>::new());
-    // Office encrypted files are CFB v3 (512-byte sectors). The cfb
-    // crate's `create` defaults to v4 (4 KB sectors), which Excel and
-    // LibreOffice reject during type detection.
-    let mut comp = cfb::CompoundFile::create_with_version(cfb::Version::V3, &mut cursor)
-        .map_err(|e| CryptoError::Io(std::io::Error::new(e.kind(), format!("CFB create: {e}"))))?;
-
-    let io_err = |ctx: &str, e: std::io::Error| {
-        CryptoError::Io(std::io::Error::new(e.kind(), format!("{ctx}: {e}")))
-    };
-
-    let dataspaces_root = "/\u{0006}DataSpaces";
-    comp.create_storage(dataspaces_root)
-        .map_err(|e| io_err("create DataSpaces storage", e))?;
-    comp.create_storage(format!("{dataspaces_root}/DataSpaceInfo"))
-        .map_err(|e| io_err("create DataSpaceInfo storage", e))?;
-    comp.create_storage(format!("{dataspaces_root}/TransformInfo"))
-        .map_err(|e| io_err("create TransformInfo storage", e))?;
-    comp.create_storage(format!(
-        "{dataspaces_root}/TransformInfo/StrongEncryptionTransform"
-    ))
-    .map_err(|e| io_err("create StrongEncryptionTransform storage", e))?;
-
-    {
-        let mut s = comp
-            .create_stream(format!("{dataspaces_root}/Version"))
-            .map_err(|e| io_err("create Version stream", e))?;
-        s.write_all(&build_dataspaces_version())
-            .map_err(|e| io_err("write Version", e))?;
-    }
-    {
-        let mut s = comp
-            .create_stream(format!("{dataspaces_root}/DataSpaceMap"))
-            .map_err(|e| io_err("create DataSpaceMap stream", e))?;
-        s.write_all(&build_dataspace_map())
-            .map_err(|e| io_err("write DataSpaceMap", e))?;
-    }
-    {
-        let mut s = comp
-            .create_stream(format!(
-                "{dataspaces_root}/DataSpaceInfo/StrongEncryptionDataSpace"
-            ))
-            .map_err(|e| io_err("create StrongEncryptionDataSpace stream", e))?;
-        s.write_all(&build_strong_encryption_dataspace())
-            .map_err(|e| io_err("write StrongEncryptionDataSpace", e))?;
-    }
-    {
-        let mut s = comp
-            .create_stream(format!(
-                "{dataspaces_root}/TransformInfo/StrongEncryptionTransform/\u{0006}Primary"
-            ))
-            .map_err(|e| io_err("create Primary stream", e))?;
-        s.write_all(&build_primary_transform())
-            .map_err(|e| io_err("write Primary", e))?;
-    }
-    {
-        let mut s = comp
-            .create_stream("/EncryptionInfo")
-            .map_err(|e| io_err("create EncryptionInfo", e))?;
-        s.write_all(encryption_info)
-            .map_err(|e| io_err("write EncryptionInfo", e))?;
-    }
-    {
-        let mut s = comp
-            .create_stream("/EncryptedPackage")
-            .map_err(|e| io_err("create EncryptedPackage", e))?;
-        s.write_all(encrypted_package)
-            .map_err(|e| io_err("write EncryptedPackage", e))?;
-    }
-    comp.flush()
-        .map_err(|e| CryptoError::Io(std::io::Error::new(e.kind(), format!("CFB flush: {e}"))))?;
-    Ok(cursor.into_inner())
 }
 
 /// Encode `s` as length-prefixed UTF-16LE: `u32 byte_length || UTF-16LE

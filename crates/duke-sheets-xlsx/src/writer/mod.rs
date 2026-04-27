@@ -458,6 +458,38 @@ impl SharedStringTable {
     }
 }
 
+/// Compose Agile envelope parts into a CFB v3 compound file.
+///
+/// Wraps `EncryptionInfo`, `EncryptedPackage`, and the four
+/// `\x06DataSpaces`-tree streams (plus the matching storages) into the
+/// shape Office expects. CFB writing happens through the in-house
+/// `duke-sheets-xls` writer to keep the workspace dep tree free of any
+/// third-party CFB crate.
+fn assemble_agile_envelope(
+    parts: &duke_sheets_crypto::ooxml::agile::AgileEnvelopeParts,
+) -> XlsxResult<Vec<u8>> {
+    let mut b = duke_sheets_xls::cfb::CompoundFileBuilder::new();
+    let map_io = |ctx: &str, e: duke_sheets_xls::cfb::CfbError| {
+        XlsxError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{ctx}: {e}"),
+        ))
+    };
+    for storage in duke_sheets_crypto::ooxml::agile::AGILE_REQUIRED_STORAGES {
+        b.add_storage(storage)
+            .map_err(|e| map_io(&format!("create storage {storage}"), e))?;
+    }
+    for (path, bytes) in &parts.dataspaces {
+        b.add_stream(path, bytes.clone())
+            .map_err(|e| map_io(&format!("add dataspace stream {path}"), e))?;
+    }
+    b.add_stream("/EncryptionInfo", parts.encryption_info.clone())
+        .map_err(|e| map_io("add EncryptionInfo", e))?;
+    b.add_stream("/EncryptedPackage", parts.encrypted_package.clone())
+        .map_err(|e| map_io("add EncryptedPackage", e))?;
+    b.build().map_err(|e| map_io("CFB build", e))
+}
+
 /// Encryption profile selector for [`XlsxWriter::write_to_bytes_encrypted`]
 /// and friends.
 ///
@@ -529,8 +561,8 @@ impl XlsxWriter {
                     spin_count: *spin_count,
                     hash: duke_sheets_crypto::ooxml::agile::HashAlgo::Sha512,
                 };
-                let envelope = duke_sheets_crypto::ooxml::agile::encrypt(&plain, password, &opts)?;
-                Ok(envelope)
+                let parts = duke_sheets_crypto::ooxml::agile::encrypt(&plain, password, &opts)?;
+                assemble_agile_envelope(&parts)
             }
         }
     }

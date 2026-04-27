@@ -43,14 +43,14 @@ impl From<CfbError> for io::Error {
 }
 
 #[derive(Clone, Debug)]
-struct DirectoryEntry {
-    name: String,
-    object_type: u8,
-    left_sibling: u32,
-    right_sibling: u32,
-    child: u32,
-    start_sector: u32,
-    stream_size: u64,
+pub struct DirectoryEntry {
+    pub name: String,
+    pub object_type: u8,
+    pub left_sibling: u32,
+    pub right_sibling: u32,
+    pub child: u32,
+    pub start_sector: u32,
+    pub stream_size: u64,
 }
 
 pub struct CompoundFile {
@@ -193,6 +193,13 @@ impl CompoundFile {
     pub fn exists(&self, path: &str) -> bool {
         self.find_entry(path)
             .is_some_and(|entry| entry.object_type == 2)
+    }
+
+    /// Iterate over all directory entries (in storage order). Useful
+    /// for tooling that needs to inspect the CFB structure beyond the
+    /// `exists`/`read_stream` API.
+    pub fn directory_entries(&self) -> impl Iterator<Item = &DirectoryEntry> {
+        self.directory.iter()
     }
 
     pub fn read_stream(&self, path: &str) -> Result<Vec<u8>, CfbError> {
@@ -801,5 +808,722 @@ mod tests {
         assert!(cfb.exists("/workbook"), "lowercase must match WORKBOOK");
         assert!(cfb.exists("/WORKBOOK"), "exact case must still match");
         assert!(!cfb.exists("/Book"), "unrelated name must not match");
+    }
+}
+
+const FATSECT: u32 = 0xFFFFFFFD;
+const NUM_DIFAT_ENTRIES_IN_HEADER: usize = 109;
+const ROOT_DIR_NAME: &str = "Root Entry";
+const MAX_NAME_LEN_UTF16: usize = 31;
+
+const OBJ_TYPE_STORAGE: u8 = 1;
+const OBJ_TYPE_STREAM: u8 = 2;
+const OBJ_TYPE_ROOT: u8 = 5;
+const COLOR_BLACK: u8 = 1;
+
+#[derive(Debug)]
+enum EntryKind {
+    Storage,
+    Stream(Vec<u8>),
+}
+
+#[derive(Debug)]
+struct EntryDef {
+    path: String,
+    kind: EntryKind,
+}
+
+/// One-shot builder for a CFB v3 compound file (512-byte sectors).
+///
+/// Designed for small, write-once outputs like the OOXML encryption
+/// envelope: pile up storages and streams, call [`build`], get bytes.
+/// No incremental update / random access — use the existing
+/// [`CompoundFile`] reader to read what we wrote.
+///
+/// Output is byte-compatible with Excel: CFB v3, mini stream cutoff
+/// 4096, mini sector size 64. Streams smaller than 4096 bytes go into
+/// the mini-FAT; the rest into the regular FAT. Directory entries are
+/// emitted as a flat right-sibling chain — readers (Excel, LO, our own
+/// reader) walk via DFS so a strict red-black tree is not required.
+pub struct CompoundFileBuilder {
+    entries: Vec<EntryDef>,
+}
+
+impl Default for CompoundFileBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CompoundFileBuilder {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Add an empty storage (directory). Path must start with `/`.
+    pub fn add_storage(&mut self, path: &str) -> Result<(), CfbError> {
+        validate_path(path)?;
+        let segs = split_path(path);
+        let name = segs
+            .last()
+            .ok_or_else(|| CfbError::InvalidFormat(format!("empty path: {path}")))?;
+        validate_name(name)?;
+        self.entries.push(EntryDef {
+            path: path.to_string(),
+            kind: EntryKind::Storage,
+        });
+        Ok(())
+    }
+
+    /// Add a stream (file) with the given byte contents. Path must
+    /// start with `/`. Stream names follow CFB constraints (≤ 31 UTF-16
+    /// code units, no `/`, `\`, `:`, `!`); the `\x06` and `\x05` prefix
+    /// bytes used by Office system streams are allowed.
+    pub fn add_stream(&mut self, path: &str, data: Vec<u8>) -> Result<(), CfbError> {
+        validate_path(path)?;
+        let segs = split_path(path);
+        let name = segs
+            .last()
+            .ok_or_else(|| CfbError::InvalidFormat(format!("empty path: {path}")))?;
+        validate_name(name)?;
+        self.entries.push(EntryDef {
+            path: path.to_string(),
+            kind: EntryKind::Stream(data),
+        });
+        Ok(())
+    }
+
+    /// Serialize to bytes. Returns the full CFB envelope.
+    pub fn build(self) -> Result<Vec<u8>, CfbError> {
+        const SECTOR: usize = 512;
+        const MINI_SECTOR: usize = 64;
+        const MINI_CUTOFF: usize = 4096;
+        const ENTRIES_PER_DIR_SECTOR: usize = SECTOR / DIR_ENTRY_LEN;
+        const FAT_ENTRIES_PER_SECTOR: usize = SECTOR / 4;
+
+        let mut entries = self.entries;
+
+        // Sort by path depth so parents are always processed before
+        // children. Stable sort within a depth keeps insertion order.
+        entries.sort_by_key(|e| e.path.matches('/').count());
+
+        // Build directory list with the root entry at index 0. The root
+        // is always the first directory entry in CFB.
+        let mut dirs: Vec<DirWriteEntry> = vec![DirWriteEntry::root()];
+
+        let mut path_to_id: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        path_to_id.insert(String::new(), 0);
+
+        let mut children_of: std::collections::HashMap<u32, Vec<u32>> =
+            std::collections::HashMap::new();
+
+        for entry in entries {
+            let segments = split_path(&entry.path);
+            let parent_path = if segments.len() <= 1 {
+                String::new()
+            } else {
+                format!("/{}", segments[..segments.len() - 1].join("/"))
+            };
+            let parent_path_key = parent_path.trim_start_matches('/').to_string();
+            let name = segments
+                .last()
+                .ok_or_else(|| CfbError::InvalidFormat(format!("empty path: {}", entry.path)))?
+                .to_string();
+
+            let parent_id = *path_to_id.get(&parent_path_key).ok_or_else(|| {
+                CfbError::InvalidFormat(format!(
+                    "parent path '/{parent_path_key}' not found for '{}'",
+                    entry.path
+                ))
+            })?;
+
+            if !matches!(
+                dirs[parent_id as usize].object_type,
+                OBJ_TYPE_ROOT | OBJ_TYPE_STORAGE
+            ) {
+                return Err(CfbError::InvalidFormat(format!(
+                    "cannot add '{}' under a stream",
+                    entry.path
+                )));
+            }
+
+            validate_name(&name)?;
+
+            let id = u32::try_from(dirs.len())
+                .map_err(|_| CfbError::InvalidFormat("more than 2^32 directory entries".into()))?;
+
+            let (object_type, stream_data) = match entry.kind {
+                EntryKind::Storage => (OBJ_TYPE_STORAGE, Vec::new()),
+                EntryKind::Stream(data) => (OBJ_TYPE_STREAM, data),
+            };
+
+            let key = entry.path.trim_start_matches('/').to_string();
+            if path_to_id.contains_key(&key) {
+                return Err(CfbError::InvalidFormat(format!(
+                    "duplicate entry: {}",
+                    entry.path
+                )));
+            }
+
+            dirs.push(DirWriteEntry {
+                name,
+                object_type,
+                color: COLOR_BLACK,
+                left_sibling: NOSTREAM,
+                right_sibling: NOSTREAM,
+                child: NOSTREAM,
+                start_sector: 0,
+                stream_size: 0,
+                stream_data,
+            });
+            path_to_id.insert(key, id);
+            children_of.entry(parent_id).or_default().push(id);
+        }
+
+        // Sort each storage's children by CFB name order and link as
+        // a balanced binary search tree.
+        //
+        // [MS-CFB] §2.6.4 specifies a red-black tree, but in practice
+        // readers (Office, LibreOffice) traverse the tree without
+        // validating black-height invariants. A flat right-sibling
+        // chain is BST-valid but causes LibreOffice's Office-document
+        // type detector to reject the file before opening; a balanced
+        // BST is what real Office writers emit and is what works.
+        for (parent_id, child_ids) in children_of.iter_mut() {
+            child_ids.sort_by(|&a, &b| {
+                compare_cfb_names(&dirs[a as usize].name, &dirs[b as usize].name)
+            });
+            let root = build_balanced_subtree(&mut dirs, child_ids);
+            dirs[*parent_id as usize].child = root;
+        }
+
+        // Partition streams: mini if (kind=stream AND size > 0 AND size < cutoff),
+        // regular otherwise. Empty streams keep start_sector=0 stream_size=0.
+        let mut mini_stream_data: Vec<u8> = Vec::new();
+        let mut mini_chain: Vec<u32> = Vec::new();
+
+        let mut large_streams: Vec<u32> = Vec::new();
+
+        for (idx, dir) in dirs.iter_mut().enumerate() {
+            if dir.object_type != OBJ_TYPE_STREAM {
+                continue;
+            }
+            let size = dir.stream_data.len();
+            dir.stream_size = size as u64;
+            if size == 0 {
+                dir.start_sector = 0;
+            } else if size < MINI_CUTOFF {
+                let first_mini = (mini_stream_data.len() / MINI_SECTOR) as u32;
+                dir.start_sector = first_mini;
+                let mut written = 0;
+                while written < size {
+                    let take = (size - written).min(MINI_SECTOR);
+                    mini_stream_data.extend_from_slice(&dir.stream_data[written..written + take]);
+                    written += take;
+                    if written < size {
+                        while mini_stream_data.len() % MINI_SECTOR != 0 {
+                            mini_stream_data.push(0);
+                        }
+                        let next = (mini_stream_data.len() / MINI_SECTOR) as u32;
+                        mini_chain.push(next);
+                    } else {
+                        mini_chain.push(ENDOFCHAIN);
+                    }
+                }
+                while mini_stream_data.len() % MINI_SECTOR != 0 {
+                    mini_stream_data.push(0);
+                }
+            } else {
+                large_streams.push(idx as u32);
+            }
+        }
+
+        // Compute sector counts.
+        let dir_sector_count = dirs.len().div_ceil(ENTRIES_PER_DIR_SECTOR);
+        let mini_fat_sector_count = if mini_chain.is_empty() {
+            0
+        } else {
+            mini_chain.len().div_ceil(FAT_ENTRIES_PER_SECTOR)
+        };
+        let mini_stream_sector_count = mini_stream_data.len().div_ceil(SECTOR);
+
+        let mut large_sector_counts: Vec<usize> = Vec::with_capacity(large_streams.len());
+        for &id in &large_streams {
+            let n = (dirs[id as usize].stream_data.len()).div_ceil(SECTOR);
+            large_sector_counts.push(n);
+        }
+
+        // Total non-FAT sectors = dir + mini-FAT + mini-stream + sum(large).
+        let non_fat_sectors = dir_sector_count
+            + mini_fat_sector_count
+            + mini_stream_sector_count
+            + large_sector_counts.iter().sum::<usize>();
+
+        // Solve for fat_sector_count: we need fat_count s.t.
+        // fat_count * FAT_ENTRIES_PER_SECTOR >= non_fat_sectors + fat_count
+        // => fat_count >= non_fat_sectors / (FAT_ENTRIES_PER_SECTOR - 1)
+        let fat_sector_count = non_fat_sectors.div_ceil(FAT_ENTRIES_PER_SECTOR - 1).max(1);
+
+        if fat_sector_count > NUM_DIFAT_ENTRIES_IN_HEADER {
+            return Err(CfbError::InvalidFormat(format!(
+                "this writer does not yet support files with more than {NUM_DIFAT_ENTRIES_IN_HEADER} FAT sectors (would need DIFAT chain); got {fat_sector_count}"
+            )));
+        }
+
+        let total_sectors = non_fat_sectors + fat_sector_count;
+
+        // Sector allocation order: FAT sectors first, then dir, mini-FAT,
+        // mini-stream, large streams.
+        let mut next_sector: u32 = 0;
+        let alloc = |count: usize, next_sector: &mut u32| -> std::ops::Range<u32> {
+            let start = *next_sector;
+            *next_sector += count as u32;
+            start..*next_sector
+        };
+
+        let fat_range = alloc(fat_sector_count, &mut next_sector);
+        let dir_range = alloc(dir_sector_count, &mut next_sector);
+        let mini_fat_range = alloc(mini_fat_sector_count, &mut next_sector);
+        let mini_stream_range = alloc(mini_stream_sector_count, &mut next_sector);
+        let mut large_ranges: Vec<std::ops::Range<u32>> = Vec::new();
+        for &count in &large_sector_counts {
+            large_ranges.push(alloc(count, &mut next_sector));
+        }
+
+        // Build the FAT (one u32 per regular sector). Pad with FREESECT
+        // to cover full FAT sectors.
+        let total_fat_entries = fat_sector_count * FAT_ENTRIES_PER_SECTOR;
+        let mut fat = vec![FREESECT; total_fat_entries];
+
+        for s in fat_range.clone() {
+            fat[s as usize] = FATSECT;
+        }
+        link_chain(&mut fat, dir_range.clone());
+        if mini_fat_sector_count > 0 {
+            link_chain(&mut fat, mini_fat_range.clone());
+        }
+        if mini_stream_sector_count > 0 {
+            link_chain(&mut fat, mini_stream_range.clone());
+        }
+        for r in &large_ranges {
+            link_chain(&mut fat, r.clone());
+        }
+
+        // Wire start_sector for each large stream now that we know its
+        // location. Mini streams already had start_sector set (mini
+        // sector index, not regular).
+        for (i, &id) in large_streams.iter().enumerate() {
+            dirs[id as usize].start_sector = large_ranges[i].start;
+        }
+
+        // Root entry's start_sector points to the mini stream; its
+        // stream_size is the byte length of the mini stream.
+        if mini_stream_sector_count > 0 {
+            dirs[0].start_sector = mini_stream_range.start;
+            dirs[0].stream_size = mini_stream_data.len() as u64;
+        }
+
+        // Header.
+        let mut buf: Vec<u8> = vec![0u8; (1 + total_sectors as usize) * SECTOR];
+        write_header(
+            &mut buf,
+            fat_range.clone(),
+            dir_range.clone(),
+            mini_fat_range.clone(),
+            mini_fat_sector_count as u32,
+            dir_sector_count as u32,
+        );
+
+        // FAT sectors.
+        let mut cursor = SECTOR;
+        for entry in &fat {
+            buf[cursor..cursor + 4].copy_from_slice(&entry.to_le_bytes());
+            cursor += 4;
+        }
+
+        // Directory sectors. Each dir entry = 128 bytes.
+        let dir_byte_offset = (1 + dir_range.start as usize) * SECTOR;
+        for (i, dir) in dirs.iter().enumerate() {
+            let off = dir_byte_offset + i * DIR_ENTRY_LEN;
+            write_dir_entry(&mut buf[off..off + DIR_ENTRY_LEN], dir);
+        }
+        // Pad remaining directory slots with unallocated entries (zeroed
+        // names, object_type=0). The Vec is zero-initialised so they
+        // are already correct, but we set color/left/right/child to
+        // NOSTREAM per spec for unused entries.
+        let used_entries = dirs.len();
+        let total_dir_entries = dir_sector_count * ENTRIES_PER_DIR_SECTOR;
+        for i in used_entries..total_dir_entries {
+            let off = dir_byte_offset + i * DIR_ENTRY_LEN;
+            buf[off + 0x44..off + 0x48].copy_from_slice(&NOSTREAM.to_le_bytes());
+            buf[off + 0x48..off + 0x4C].copy_from_slice(&NOSTREAM.to_le_bytes());
+            buf[off + 0x4C..off + 0x50].copy_from_slice(&NOSTREAM.to_le_bytes());
+        }
+
+        // Mini-FAT sectors.
+        if mini_fat_sector_count > 0 {
+            let off = (1 + mini_fat_range.start as usize) * SECTOR;
+            let mut cur = off;
+            for entry in &mini_chain {
+                buf[cur..cur + 4].copy_from_slice(&entry.to_le_bytes());
+                cur += 4;
+            }
+            // Pad rest of mini-FAT sector(s) with FREESECT.
+            let end = (1 + mini_fat_range.end as usize) * SECTOR;
+            while cur < end {
+                buf[cur..cur + 4].copy_from_slice(&FREESECT.to_le_bytes());
+                cur += 4;
+            }
+        }
+
+        // Mini-stream payload.
+        if mini_stream_sector_count > 0 {
+            let off = (1 + mini_stream_range.start as usize) * SECTOR;
+            buf[off..off + mini_stream_data.len()].copy_from_slice(&mini_stream_data);
+        }
+
+        // Large streams.
+        for (i, &id) in large_streams.iter().enumerate() {
+            let r = &large_ranges[i];
+            let off = (1 + r.start as usize) * SECTOR;
+            let data = &dirs[id as usize].stream_data;
+            buf[off..off + data.len()].copy_from_slice(data);
+        }
+
+        Ok(buf)
+    }
+}
+
+#[derive(Debug)]
+struct DirWriteEntry {
+    name: String,
+    object_type: u8,
+    color: u8,
+    left_sibling: u32,
+    right_sibling: u32,
+    child: u32,
+    start_sector: u32,
+    stream_size: u64,
+    stream_data: Vec<u8>,
+}
+
+impl DirWriteEntry {
+    fn root() -> Self {
+        Self {
+            name: ROOT_DIR_NAME.to_string(),
+            object_type: OBJ_TYPE_ROOT,
+            color: COLOR_BLACK,
+            left_sibling: NOSTREAM,
+            right_sibling: NOSTREAM,
+            child: NOSTREAM,
+            start_sector: ENDOFCHAIN,
+            stream_size: 0,
+            stream_data: Vec::new(),
+        }
+    }
+}
+
+fn validate_path(path: &str) -> Result<(), CfbError> {
+    if !path.starts_with('/') {
+        return Err(CfbError::InvalidFormat(format!(
+            "path must start with '/': {path}"
+        )));
+    }
+    if path == "/" {
+        return Err(CfbError::InvalidFormat(
+            "cannot add the root entry; it is implicit".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_name(name: &str) -> Result<(), CfbError> {
+    let utf16_units = name.encode_utf16().count();
+    if utf16_units == 0 {
+        return Err(CfbError::InvalidFormat("empty name".into()));
+    }
+    if utf16_units > MAX_NAME_LEN_UTF16 {
+        return Err(CfbError::InvalidFormat(format!(
+            "name too long ({utf16_units} UTF-16 units, max {MAX_NAME_LEN_UTF16}): {name}"
+        )));
+    }
+    for ch in &['/', '\\', ':', '!'] {
+        if name.contains(*ch) {
+            return Err(CfbError::InvalidFormat(format!(
+                "name cannot contain '{ch}': {name}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn split_path(path: &str) -> Vec<&str> {
+    path.trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// CFB name comparison: shorter names first; equal length compared
+/// case-insensitively in UTF-16 order. Mirrors MS-CFB §2.6.4. ASCII
+/// fast path mirrors the upstream `cfb` crate's optimisation.
+fn compare_cfb_names(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    if a.is_ascii() && b.is_ascii() {
+        match a.len().cmp(&b.len()) {
+            Ordering::Equal => a
+                .bytes()
+                .map(|b| b.to_ascii_uppercase())
+                .cmp(b.bytes().map(|b| b.to_ascii_uppercase())),
+            other => other,
+        }
+    } else {
+        match a.encode_utf16().count().cmp(&b.encode_utf16().count()) {
+            Ordering::Equal => a
+                .chars()
+                .map(|c| c.to_uppercase().next().unwrap_or(c))
+                .cmp(b.chars().map(|c| c.to_uppercase().next().unwrap_or(c))),
+            other => other,
+        }
+    }
+}
+
+fn build_balanced_subtree(dirs: &mut [DirWriteEntry], sorted_ids: &[u32]) -> u32 {
+    if sorted_ids.is_empty() {
+        return NOSTREAM;
+    }
+    let mid = sorted_ids.len() / 2;
+    let root = sorted_ids[mid];
+    let left = build_balanced_subtree(dirs, &sorted_ids[..mid]);
+    let right = build_balanced_subtree(dirs, &sorted_ids[mid + 1..]);
+    dirs[root as usize].left_sibling = left;
+    dirs[root as usize].right_sibling = right;
+    root
+}
+
+fn link_chain(fat: &mut [u32], range: std::ops::Range<u32>) {
+    let count = (range.end - range.start) as usize;
+    for i in 0..count {
+        let idx = (range.start + i as u32) as usize;
+        fat[idx] = if i + 1 == count {
+            ENDOFCHAIN
+        } else {
+            range.start + i as u32 + 1
+        };
+    }
+}
+
+fn write_header(
+    buf: &mut [u8],
+    fat_range: std::ops::Range<u32>,
+    dir_range: std::ops::Range<u32>,
+    mini_fat_range: std::ops::Range<u32>,
+    mini_fat_sector_count: u32,
+    _dir_sector_count: u32,
+) {
+    // Field offsets per [MS-CFB] §2.2.
+    buf[0..8].copy_from_slice(&CFB_MAGIC);
+    // 8..24: CLSID (zero — already initialised)
+    buf[24..26].copy_from_slice(&0x003Eu16.to_le_bytes()); // minor version
+    buf[26..28].copy_from_slice(&0x0003u16.to_le_bytes()); // major version (V3)
+    buf[28..30].copy_from_slice(&0xFFFEu16.to_le_bytes()); // byte order mark
+    buf[30..32].copy_from_slice(&9u16.to_le_bytes()); // sector shift (2^9 = 512)
+    buf[32..34].copy_from_slice(&6u16.to_le_bytes()); // mini sector shift (2^6 = 64)
+                                                      // 34..40: reserved (zero)
+                                                      // [MS-CFB] §2.2: in v3, num directory sectors MUST be zero (the
+                                                      // dir-sector count field is meaningful only for v4). Stricter
+                                                      // readers (LibreOffice's loadenv type detector) reject v3 files
+                                                      // that put a non-zero count here even when the directory chain is
+                                                      // otherwise valid.
+    buf[40..44].copy_from_slice(&0u32.to_le_bytes());
+    buf[44..48].copy_from_slice(&(fat_range.end - fat_range.start).to_le_bytes()); // num FAT sectors
+    buf[48..52].copy_from_slice(&dir_range.start.to_le_bytes()); // first directory sector
+    buf[52..56].copy_from_slice(&0u32.to_le_bytes()); // transaction signature
+    buf[56..60].copy_from_slice(&0x0000_1000u32.to_le_bytes()); // mini stream cutoff (4096)
+    let first_mini_fat = if mini_fat_sector_count > 0 {
+        mini_fat_range.start
+    } else {
+        ENDOFCHAIN
+    };
+    buf[60..64].copy_from_slice(&first_mini_fat.to_le_bytes()); // first mini-FAT sector
+    buf[64..68].copy_from_slice(&mini_fat_sector_count.to_le_bytes()); // num mini-FAT sectors
+    buf[68..72].copy_from_slice(&ENDOFCHAIN.to_le_bytes()); // first DIFAT sector
+    buf[72..76].copy_from_slice(&0u32.to_le_bytes()); // num DIFAT sectors
+
+    // 76..512: DIFAT — first 109 entries, each pointing to a FAT sector.
+    for i in 0..NUM_DIFAT_ENTRIES_IN_HEADER {
+        let off = 76 + i * 4;
+        let val = if i < (fat_range.end - fat_range.start) as usize {
+            fat_range.start + i as u32
+        } else {
+            FREESECT
+        };
+        buf[off..off + 4].copy_from_slice(&val.to_le_bytes());
+    }
+}
+
+fn write_dir_entry(buf: &mut [u8], dir: &DirWriteEntry) {
+    let utf16: Vec<u16> = dir.name.encode_utf16().collect();
+    let name_bytes = utf16.len() * 2;
+    for (i, u) in utf16.iter().enumerate() {
+        buf[i * 2..i * 2 + 2].copy_from_slice(&u.to_le_bytes());
+    }
+    buf[name_bytes..name_bytes + 2].copy_from_slice(&0u16.to_le_bytes());
+    buf[64..66].copy_from_slice(&((name_bytes + 2) as u16).to_le_bytes());
+    buf[66] = dir.object_type;
+    buf[67] = dir.color;
+    buf[68..72].copy_from_slice(&dir.left_sibling.to_le_bytes());
+    buf[72..76].copy_from_slice(&dir.right_sibling.to_le_bytes());
+    buf[76..80].copy_from_slice(&dir.child.to_le_bytes());
+    buf[80..96].fill(0);
+    buf[96..100].copy_from_slice(&0u32.to_le_bytes());
+    buf[100..108].copy_from_slice(&0u64.to_le_bytes());
+    buf[108..116].copy_from_slice(&0u64.to_le_bytes());
+    buf[116..120].copy_from_slice(&dir.start_sector.to_le_bytes());
+    buf[120..128].copy_from_slice(&dir.stream_size.to_le_bytes());
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn build_minimal() -> Vec<u8> {
+        let mut b = CompoundFileBuilder::new();
+        b.add_stream("/Hello", b"world".to_vec()).unwrap();
+        b.build().unwrap()
+    }
+
+    #[test]
+    fn writer_emits_cfb_v3_magic_and_header() {
+        let bytes = build_minimal();
+        assert_eq!(&bytes[0..8], &CFB_MAGIC);
+        assert_eq!(
+            u16::from_le_bytes([bytes[26], bytes[27]]),
+            3,
+            "major version must be 3"
+        );
+        assert_eq!(
+            u16::from_le_bytes([bytes[30], bytes[31]]),
+            9,
+            "sector shift must be 9 (512-byte sectors)"
+        );
+    }
+
+    #[test]
+    fn writer_round_trips_through_reader() {
+        let bytes = build_minimal();
+        let cfb = CompoundFile::open(Cursor::new(&bytes))
+            .expect("our reader must accept our writer's output");
+        assert!(cfb.exists("/Hello"));
+        assert_eq!(cfb.read_stream("/Hello").unwrap(), b"world");
+    }
+
+    #[test]
+    fn writer_handles_storages_and_nested_streams() {
+        let mut b = CompoundFileBuilder::new();
+        b.add_storage("/Outer").unwrap();
+        b.add_storage("/Outer/Inner").unwrap();
+        b.add_stream("/Outer/Inner/leaf.txt", b"deeply nested".to_vec())
+            .unwrap();
+        b.add_stream("/top.bin", vec![0xAA; 100]).unwrap();
+        let bytes = b.build().unwrap();
+        let cfb = CompoundFile::open(Cursor::new(&bytes)).unwrap();
+        // `exists` only matches streams; storages aren't user-visible
+        // through that API. Verify them through directory inspection.
+        let names: Vec<_> = cfb
+            .directory
+            .iter()
+            .map(|e| (e.name.clone(), e.object_type))
+            .collect();
+        assert!(names.contains(&("Outer".to_string(), OBJ_TYPE_STORAGE)));
+        assert!(names.contains(&("Inner".to_string(), OBJ_TYPE_STORAGE)));
+        assert!(cfb.exists("/Outer/Inner/leaf.txt"));
+        assert!(cfb.exists("/top.bin"));
+        assert_eq!(
+            cfb.read_stream("/Outer/Inner/leaf.txt").unwrap(),
+            b"deeply nested"
+        );
+        assert_eq!(cfb.read_stream("/top.bin").unwrap(), vec![0xAA; 100]);
+    }
+
+    #[test]
+    fn writer_routes_small_streams_to_mini_fat_and_large_to_regular() {
+        let mut b = CompoundFileBuilder::new();
+        let small = vec![0x42; 1000];
+        let large = vec![0x99; 5000];
+        b.add_stream("/small", small.clone()).unwrap();
+        b.add_stream("/large", large.clone()).unwrap();
+        let bytes = b.build().unwrap();
+        let cfb = CompoundFile::open(Cursor::new(&bytes)).unwrap();
+        assert_eq!(cfb.read_stream("/small").unwrap(), small);
+        assert_eq!(cfb.read_stream("/large").unwrap(), large);
+    }
+
+    #[test]
+    fn writer_handles_streams_at_mini_cutoff_boundary() {
+        // A 4096-byte stream goes to regular FAT (not mini), per the
+        // MS-CFB rule "stream size >= cutoff goes to regular FAT".
+        let mut b = CompoundFileBuilder::new();
+        b.add_stream("/at_cutoff", vec![1u8; 4096]).unwrap();
+        b.add_stream("/just_under", vec![2u8; 4095]).unwrap();
+        let bytes = b.build().unwrap();
+        let cfb = CompoundFile::open(Cursor::new(&bytes)).unwrap();
+        assert_eq!(cfb.read_stream("/at_cutoff").unwrap(), vec![1u8; 4096]);
+        assert_eq!(cfb.read_stream("/just_under").unwrap(), vec![2u8; 4095]);
+    }
+
+    #[test]
+    fn writer_supports_control_character_prefix_in_name() {
+        let mut b = CompoundFileBuilder::new();
+        b.add_storage("/\u{0006}DataSpaces").unwrap();
+        b.add_stream("/\u{0006}DataSpaces/Version", b"v1.0".to_vec())
+            .unwrap();
+        let bytes = b.build().unwrap();
+        let cfb = CompoundFile::open(Cursor::new(&bytes)).unwrap();
+        // The reader's `exists` API only matches streams, not
+        // storages — so verify the storage exists by inspecting the
+        // directory directly, and verify the nested stream via
+        // `exists` + `read_stream`.
+        assert!(
+            cfb.directory
+                .iter()
+                .any(|e| e.name == "\u{0006}DataSpaces" && e.object_type == OBJ_TYPE_STORAGE),
+            "storage with control-char prefix must be present in directory"
+        );
+        assert!(cfb.exists("/\u{0006}DataSpaces/Version"));
+        assert_eq!(
+            cfb.read_stream("/\u{0006}DataSpaces/Version").unwrap(),
+            b"v1.0"
+        );
+    }
+
+    #[test]
+    fn writer_rejects_duplicates() {
+        let mut b = CompoundFileBuilder::new();
+        b.add_stream("/dup", b"a".to_vec()).unwrap();
+        b.add_stream("/dup", b"b".to_vec()).unwrap();
+        let err = b.build().expect_err("duplicates must error");
+        assert!(matches!(err, CfbError::InvalidFormat(msg) if msg.contains("duplicate")));
+    }
+
+    #[test]
+    fn writer_rejects_long_names() {
+        let mut b = CompoundFileBuilder::new();
+        let long = "a".repeat(32);
+        let err = b.add_stream(&format!("/{long}"), vec![]).unwrap_err();
+        assert!(matches!(err, CfbError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn writer_rejects_streams_under_streams() {
+        let mut b = CompoundFileBuilder::new();
+        b.add_stream("/leaf", b"x".to_vec()).unwrap();
+        b.add_stream("/leaf/below", b"y".to_vec()).unwrap();
+        let err = b.build().expect_err("can't nest under a stream");
+        assert!(matches!(err, CfbError::InvalidFormat(_)));
     }
 }

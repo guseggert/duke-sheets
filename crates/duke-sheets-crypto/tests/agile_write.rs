@@ -1,12 +1,33 @@
 //! Round-trip tests for OOXML Agile encryption write path.
 //!
-//! These tests cover the bytes-in-bytes-out write API in
-//! `duke_sheets_crypto::ooxml::agile::encrypt`. Cross-tool compatibility
-//! tests (LibreOffice, Excel COM) live in dedicated `#[ignore]`-gated
-//! modules so the default `cargo test` run doesn't need either backend.
+//! These tests cover the bytes-in/parts-out write API in
+//! `duke_sheets_crypto::ooxml::agile::encrypt`. The CFB envelope is
+//! assembled here using the in-house `duke-sheets-xls::cfb` writer so
+//! tests can drive the same CFB-pack pipeline xlsx will use in
+//! production. Cross-tool compatibility tests (LibreOffice, Excel COM)
+//! live in dedicated `#[ignore]`-gated modules.
 
-use duke_sheets_crypto::ooxml::agile::{encrypt, AgileWriteOptions};
+use duke_sheets_crypto::ooxml::agile::{
+    encrypt, AgileEnvelopeParts, AgileWriteOptions, AGILE_REQUIRED_STORAGES,
+};
 use duke_sheets_crypto::ooxml::{decrypt as decrypt_ooxml, detect_variant, OoxmlVariant};
+use duke_sheets_xls::cfb::CompoundFileBuilder;
+
+fn assemble_envelope(parts: &AgileEnvelopeParts) -> Vec<u8> {
+    let mut b = CompoundFileBuilder::new();
+    for storage in AGILE_REQUIRED_STORAGES {
+        b.add_storage(storage).expect("add storage");
+    }
+    for (path, bytes) in &parts.dataspaces {
+        b.add_stream(path, bytes.clone())
+            .expect("add dataspace stream");
+    }
+    b.add_stream("/EncryptionInfo", parts.encryption_info.clone())
+        .expect("add EncryptionInfo");
+    b.add_stream("/EncryptedPackage", parts.encrypted_package.clone())
+        .expect("add EncryptedPackage");
+    b.build().expect("CFB build")
+}
 
 /// A tiny but well-formed inner ZIP. The crypto layer is bytes-in
 /// bytes-out — the ZIP only needs to be non-trivial enough to surface
@@ -38,7 +59,8 @@ fn extract_streams(envelope: &[u8]) -> (Vec<u8>, Vec<u8>) {
 #[test]
 fn agile_encrypt_emits_cfb_envelope() {
     let plain = sample_zip();
-    let envelope = encrypt(&plain, "test-pw", &AgileWriteOptions::default()).expect("encrypt ok");
+    let parts = encrypt(&plain, "test-pw", &AgileWriteOptions::default()).expect("encrypt ok");
+    let envelope = assemble_envelope(&parts);
     assert!(envelope.len() >= 8, "envelope too short");
     assert_eq!(
         &envelope[0..8],
@@ -50,10 +72,9 @@ fn agile_encrypt_emits_cfb_envelope() {
 #[test]
 fn agile_encrypt_envelope_has_agile_header() {
     let plain = sample_zip();
-    let envelope = encrypt(&plain, "test-pw", &AgileWriteOptions::default()).expect("encrypt ok");
-    let (info, _pkg) = extract_streams(&envelope);
+    let parts = encrypt(&plain, "test-pw", &AgileWriteOptions::default()).expect("encrypt ok");
     assert_eq!(
-        detect_variant(&info).expect("detect variant"),
+        detect_variant(&parts.encryption_info).expect("detect variant"),
         OoxmlVariant::Agile,
         "EncryptionInfo header should identify as Agile"
     );
@@ -62,9 +83,9 @@ fn agile_encrypt_envelope_has_agile_header() {
 #[test]
 fn agile_encrypt_decrypt_round_trip_yields_original_bytes() {
     let plain = sample_zip();
-    let envelope = encrypt(&plain, "test-pw", &AgileWriteOptions::default()).expect("encrypt ok");
-    let (info, pkg) = extract_streams(&envelope);
-    let decrypted = decrypt_ooxml(&info, &pkg, "test-pw").expect("decrypt ok");
+    let parts = encrypt(&plain, "test-pw", &AgileWriteOptions::default()).expect("encrypt ok");
+    let decrypted = decrypt_ooxml(&parts.encryption_info, &parts.encrypted_package, "test-pw")
+        .expect("decrypt ok");
     assert_eq!(
         decrypted, plain,
         "round-trip must reproduce the original plaintext bytes exactly"
@@ -74,9 +95,9 @@ fn agile_encrypt_decrypt_round_trip_yields_original_bytes() {
 #[test]
 fn agile_encrypt_decrypt_with_wrong_password_yields_bad_password() {
     let plain = sample_zip();
-    let envelope = encrypt(&plain, "real-pw", &AgileWriteOptions::default()).expect("encrypt ok");
-    let (info, pkg) = extract_streams(&envelope);
-    let err = decrypt_ooxml(&info, &pkg, "wrong-pw").expect_err("must reject wrong password");
+    let parts = encrypt(&plain, "real-pw", &AgileWriteOptions::default()).expect("encrypt ok");
+    let err = decrypt_ooxml(&parts.encryption_info, &parts.encrypted_package, "wrong-pw")
+        .expect_err("must reject wrong password");
     assert!(
         matches!(err, duke_sheets_crypto::CryptoError::BadPassword),
         "expected BadPassword, got {err:?}"
@@ -89,18 +110,18 @@ fn agile_encrypt_handles_misaligned_plaintext() {
     // cleanly (internally padded) and decrypt back to the original
     // (padding stripped via the totalSize prefix).
     let plain = b"abc".to_vec();
-    let envelope = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt ok");
-    let (info, pkg) = extract_streams(&envelope);
-    let decrypted = decrypt_ooxml(&info, &pkg, "pw").expect("decrypt ok");
+    let parts = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt ok");
+    let decrypted =
+        decrypt_ooxml(&parts.encryption_info, &parts.encrypted_package, "pw").expect("decrypt ok");
     assert_eq!(decrypted, plain);
 }
 
 #[test]
 fn agile_encrypt_handles_empty_plaintext() {
     let plain: Vec<u8> = Vec::new();
-    let envelope = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt ok");
-    let (info, pkg) = extract_streams(&envelope);
-    let decrypted = decrypt_ooxml(&info, &pkg, "pw").expect("decrypt ok");
+    let parts = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt ok");
+    let decrypted =
+        decrypt_ooxml(&parts.encryption_info, &parts.encrypted_package, "pw").expect("decrypt ok");
     assert!(decrypted.is_empty());
 }
 
@@ -110,9 +131,9 @@ fn agile_encrypt_handles_multi_segment_plaintext() {
     let plain: Vec<u8> = (0..20_000u32)
         .map(|i| (i.wrapping_mul(0x9E3779B1) >> 24) as u8)
         .collect();
-    let envelope = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt ok");
-    let (info, pkg) = extract_streams(&envelope);
-    let decrypted = decrypt_ooxml(&info, &pkg, "pw").expect("decrypt ok");
+    let parts = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt ok");
+    let decrypted =
+        decrypt_ooxml(&parts.encryption_info, &parts.encrypted_package, "pw").expect("decrypt ok");
     assert_eq!(decrypted, plain);
 }
 
@@ -121,9 +142,15 @@ fn agile_encrypt_uses_random_salts() {
     // Two encryptions of identical plaintext + password must produce
     // different ciphertext (random salts/IVs/keys).
     let plain = sample_zip();
-    let env1 = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt 1");
-    let env2 = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt 2");
-    assert_ne!(env1, env2, "envelopes must differ across encryption runs");
+    let p1 = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt 1");
+    let p2 = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt 2");
+    assert_ne!(
+        p1.encrypted_package, p2.encrypted_package,
+        "encrypted package must differ across encryption runs"
+    );
+    let env1 = assemble_envelope(&p1);
+    let env2 = assemble_envelope(&p2);
+    assert_ne!(env1, env2, "full envelopes must differ across runs");
 }
 
 #[test]
@@ -133,9 +160,9 @@ fn agile_encrypt_aes128_round_trip() {
         key_bits: 128,
         ..AgileWriteOptions::default()
     };
-    let envelope = encrypt(&plain, "pw", &opts).expect("encrypt ok");
-    let (info, pkg) = extract_streams(&envelope);
-    let decrypted = decrypt_ooxml(&info, &pkg, "pw").expect("decrypt ok");
+    let parts = encrypt(&plain, "pw", &opts).expect("encrypt ok");
+    let decrypted =
+        decrypt_ooxml(&parts.encryption_info, &parts.encrypted_package, "pw").expect("decrypt ok");
     assert_eq!(decrypted, plain);
 }
 
@@ -146,9 +173,9 @@ fn agile_encrypt_aes192_round_trip() {
         key_bits: 192,
         ..AgileWriteOptions::default()
     };
-    let envelope = encrypt(&plain, "pw", &opts).expect("encrypt ok");
-    let (info, pkg) = extract_streams(&envelope);
-    let decrypted = decrypt_ooxml(&info, &pkg, "pw").expect("decrypt ok");
+    let parts = encrypt(&plain, "pw", &opts).expect("encrypt ok");
+    let decrypted =
+        decrypt_ooxml(&parts.encryption_info, &parts.encrypted_package, "pw").expect("decrypt ok");
     assert_eq!(decrypted, plain);
 }
 
@@ -161,8 +188,22 @@ fn agile_encrypt_low_spincount_round_trip() {
         spin_count: 100,
         ..AgileWriteOptions::default()
     };
-    let envelope = encrypt(&plain, "pw", &opts).expect("encrypt ok");
+    let parts = encrypt(&plain, "pw", &opts).expect("encrypt ok");
+    let decrypted =
+        decrypt_ooxml(&parts.encryption_info, &parts.encrypted_package, "pw").expect("decrypt ok");
+    assert_eq!(decrypted, plain);
+}
+
+#[test]
+fn agile_assembled_envelope_round_trips_via_cfb_reader() {
+    // Sanity: the assembled envelope is parseable by our CFB reader,
+    // its EncryptionInfo decodes to Agile, and decrypt of the recovered
+    // streams yields the original plaintext.
+    let plain = sample_zip();
+    let parts = encrypt(&plain, "pw", &AgileWriteOptions::default()).expect("encrypt ok");
+    let envelope = assemble_envelope(&parts);
     let (info, pkg) = extract_streams(&envelope);
+    assert_eq!(detect_variant(&info).unwrap(), OoxmlVariant::Agile);
     let decrypted = decrypt_ooxml(&info, &pkg, "pw").expect("decrypt ok");
     assert_eq!(decrypted, plain);
 }
