@@ -443,6 +443,11 @@ impl WorkbookExt for Workbook {
                         key_bits: *key_bits,
                         spin_count: *spin_count,
                     },
+                    EncryptionProfile::OoxmlStandard { key_bits } => {
+                        duke_sheets_xlsx::EncryptionProfile::Standard {
+                            key_bits: *key_bits,
+                        }
+                    }
                     other => {
                         return Err(Error::other(format!(
                             "OOXML write does not yet support encryption profile {other:?}"

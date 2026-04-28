@@ -490,6 +490,28 @@ fn assemble_agile_envelope(
     b.build().map_err(|e| map_io("CFB build", e))
 }
 
+/// Compose Standard envelope parts into a CFB v3 compound file.
+///
+/// Standard encryption skips the `\x06DataSpaces` tree — both Office
+/// (2007-era spec) and LibreOffice produce / accept Standard files
+/// with just `/EncryptionInfo` and `/EncryptedPackage`.
+fn assemble_standard_envelope(
+    parts: &duke_sheets_crypto::ooxml::standard::StandardEnvelopeParts,
+) -> XlsxResult<Vec<u8>> {
+    let mut b = duke_sheets_xls::cfb::CompoundFileBuilder::new();
+    let map_io = |ctx: &str, e: duke_sheets_xls::cfb::CfbError| {
+        XlsxError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{ctx}: {e}"),
+        ))
+    };
+    b.add_stream("/EncryptionInfo", parts.encryption_info.clone())
+        .map_err(|e| map_io("add EncryptionInfo", e))?;
+    b.add_stream("/EncryptedPackage", parts.encrypted_package.clone())
+        .map_err(|e| map_io("add EncryptedPackage", e))?;
+    b.build().map_err(|e| map_io("CFB build", e))
+}
+
 /// Encryption profile selector for [`XlsxWriter::write_to_bytes_encrypted`]
 /// and friends.
 ///
@@ -502,6 +524,12 @@ pub enum EncryptionProfile {
     /// `key_bits` selects AES key size; `spin_count` selects KDF cost.
     /// Use [`EncryptionProfile::agile_default`] for Office 2010+ defaults.
     Agile { key_bits: u32, spin_count: u32 },
+
+    /// ECMA-376 Standard encryption (AES-ECB + SHA-1 KDF). Office
+    /// 2007-era; what LibreOffice still emits by default for
+    /// password-protected `.xlsx`. `key_bits` selects AES key size
+    /// (128/192/256); spin count is fixed at 50 000 per spec.
+    Standard { key_bits: u32 },
 }
 
 impl EncryptionProfile {
@@ -511,6 +539,11 @@ impl EncryptionProfile {
             key_bits: 256,
             spin_count: 100_000,
         }
+    }
+
+    /// Match Office 2007 / LibreOffice default: Standard + AES-128.
+    pub fn standard_default() -> Self {
+        Self::Standard { key_bits: 128 }
     }
 }
 
@@ -563,6 +596,13 @@ impl XlsxWriter {
                 };
                 let parts = duke_sheets_crypto::ooxml::agile::encrypt(&plain, password, &opts)?;
                 assemble_agile_envelope(&parts)
+            }
+            EncryptionProfile::Standard { key_bits } => {
+                let opts = duke_sheets_crypto::ooxml::standard::StandardWriteOptions {
+                    key_bits: *key_bits,
+                };
+                let parts = duke_sheets_crypto::ooxml::standard::encrypt(&plain, password, &opts)?;
+                assemble_standard_envelope(&parts)
             }
         }
     }
