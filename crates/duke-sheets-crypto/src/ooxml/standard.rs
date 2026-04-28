@@ -30,13 +30,14 @@
 //! difference.
 
 use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecrypt, KeyInit};
+use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use aes::{Aes128, Aes192, Aes256};
 use sha1::{Digest as _, Sha1};
 use subtle::ConstantTimeEq;
 
 use crate::error::{CryptoError, CryptoResult};
 use crate::password::utf16le_bytes;
+use crate::random::random_bytes;
 
 const ITER_COUNT: u32 = 50_000;
 
@@ -249,6 +250,195 @@ fn aes_ecb_decrypt(key: &[u8], ciphertext: &[u8]) -> CryptoResult<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+fn aes_ecb_encrypt(key: &[u8], plaintext: &[u8]) -> CryptoResult<Vec<u8>> {
+    if plaintext.len() % 16 != 0 || plaintext.is_empty() {
+        return Err(CryptoError::InvalidFormat(format!(
+            "AES-ECB plaintext length {} not a positive multiple of 16",
+            plaintext.len()
+        )));
+    }
+    let mut out = plaintext.to_vec();
+    match key.len() {
+        16 => {
+            let cipher = Aes128::new(GenericArray::from_slice(key));
+            for chunk in out.chunks_exact_mut(16) {
+                cipher.encrypt_block(GenericArray::from_mut_slice(chunk));
+            }
+        }
+        24 => {
+            let cipher = Aes192::new(GenericArray::from_slice(key));
+            for chunk in out.chunks_exact_mut(16) {
+                cipher.encrypt_block(GenericArray::from_mut_slice(chunk));
+            }
+        }
+        32 => {
+            let cipher = Aes256::new(GenericArray::from_slice(key));
+            for chunk in out.chunks_exact_mut(16) {
+                cipher.encrypt_block(GenericArray::from_mut_slice(chunk));
+            }
+        }
+        n => {
+            return Err(CryptoError::UnsupportedVariant(format!(
+                "AES key length {n} not in {{16, 24, 32}}"
+            )));
+        }
+    }
+    Ok(out)
+}
+
+/// Caller-tunable parameters for [`encrypt`].
+#[derive(Debug, Clone)]
+pub struct StandardWriteOptions {
+    /// AES key size in bits. Standard supports 128, 192, 256.
+    pub key_bits: u32,
+}
+
+impl Default for StandardWriteOptions {
+    fn default() -> Self {
+        Self { key_bits: 256 }
+    }
+}
+
+/// The two top-level streams the caller must wrap in a CFB envelope.
+/// Standard encryption does NOT require the `\x06DataSpaces` tree —
+/// LibreOffice produces Standard files with just these two streams,
+/// and our reader (and Office's) accepts them.
+#[derive(Debug)]
+pub struct StandardEnvelopeParts {
+    pub encryption_info: Vec<u8>,
+    pub encrypted_package: Vec<u8>,
+}
+
+/// Encrypt with ECMA-376 Standard encryption (AES-ECB + SHA-1 KDF).
+///
+/// Returns the parts of a CFB envelope; the caller is responsible for
+/// CFB packaging. See the module docstring for KDF details and
+/// [`StandardWriteOptions`] for parameters.
+pub fn encrypt(
+    plaintext: &[u8],
+    password: &str,
+    opts: &StandardWriteOptions,
+) -> CryptoResult<StandardEnvelopeParts> {
+    if !matches!(opts.key_bits, 128 | 192 | 256) {
+        return Err(CryptoError::UnsupportedVariant(format!(
+            "Standard keyBits={} (only 128/192/256 supported)",
+            opts.key_bits
+        )));
+    }
+
+    let salt_vec = random_bytes(16)?;
+    let mut salt = [0u8; 16];
+    salt.copy_from_slice(&salt_vec);
+
+    let key = derive_key(password, &salt, opts.key_bits);
+
+    let verifier_input_vec = random_bytes(16)?;
+    let mut verifier_input = [0u8; 16];
+    verifier_input.copy_from_slice(&verifier_input_vec);
+
+    let verifier_hash = Sha1::digest(verifier_input);
+    let mut verifier_hash_padded = [0u8; 32];
+    verifier_hash_padded[..20].copy_from_slice(&verifier_hash);
+
+    let encrypted_verifier = aes_ecb_encrypt(&key, &verifier_input)?;
+    let encrypted_verifier_hash = aes_ecb_encrypt(&key, &verifier_hash_padded)?;
+
+    let total_size = plaintext.len();
+    // ECB is block-only; an empty plaintext still needs one all-zero
+    // block so the reader has bytes to decrypt before truncating to
+    // total_size = 0.
+    let padded = if plaintext.is_empty() {
+        vec![0u8; 16]
+    } else {
+        pad_to_block(plaintext, 16)
+    };
+    let encrypted_payload = aes_ecb_encrypt(&key, &padded)?;
+    let mut encrypted_package = Vec::with_capacity(8 + encrypted_payload.len());
+    encrypted_package.extend_from_slice(&(total_size as u64).to_le_bytes());
+    encrypted_package.extend_from_slice(&encrypted_payload);
+
+    let encryption_info = build_encryption_info_stream(
+        opts.key_bits,
+        &salt,
+        &encrypted_verifier,
+        &encrypted_verifier_hash,
+    );
+
+    Ok(StandardEnvelopeParts {
+        encryption_info,
+        encrypted_package,
+    })
+}
+
+fn pad_to_block(data: &[u8], block: usize) -> Vec<u8> {
+    let rem = data.len() % block;
+    if rem == 0 {
+        data.to_vec()
+    } else {
+        let mut v = Vec::with_capacity(data.len() + block - rem);
+        v.extend_from_slice(data);
+        v.resize(data.len() + (block - rem), 0);
+        v
+    }
+}
+
+/// Build the full `/EncryptionInfo` stream for Standard encryption:
+/// 4-byte version header (vMajor=4, vMinor=2) + EncryptionHeaderFlags +
+/// EncryptionHeaderSize + EncryptionHeader + EncryptionVerifier.
+fn build_encryption_info_stream(
+    key_bits: u32,
+    salt: &[u8; 16],
+    encrypted_verifier: &[u8],
+    encrypted_verifier_hash: &[u8],
+) -> Vec<u8> {
+    // [MS-OFFCRYPTO] §2.3.4.4 EncryptionHeader.Flags:
+    //   bit 2 (0x04) fCryptoAPI
+    //   bit 5 (0x20) fAES
+    const FLAGS: u32 = 0x24;
+
+    let alg_id = match key_bits {
+        128 => 0x0000_660Eu32,
+        192 => 0x0000_660Fu32,
+        256 => 0x0000_6610u32,
+        _ => unreachable!("guarded in encrypt()"),
+    };
+
+    let csp_name_utf16: Vec<u16> = "Microsoft Enhanced RSA and AES Cryptographic Provider"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let csp_name_bytes: Vec<u8> = csp_name_utf16
+        .iter()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+
+    let mut header = Vec::new();
+    header.extend_from_slice(&FLAGS.to_le_bytes());
+    header.extend_from_slice(&0u32.to_le_bytes()); // SizeExtra
+    header.extend_from_slice(&alg_id.to_le_bytes());
+    header.extend_from_slice(&0x0000_8004u32.to_le_bytes()); // AlgIDHash = SHA-1
+    header.extend_from_slice(&key_bits.to_le_bytes());
+    header.extend_from_slice(&0x0000_0018u32.to_le_bytes()); // ProviderType = AES
+    header.extend_from_slice(&0u32.to_le_bytes()); // Reserved1
+    header.extend_from_slice(&0u32.to_le_bytes()); // Reserved2
+    header.extend_from_slice(&csp_name_bytes);
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&4u16.to_le_bytes()); // vMajor
+    out.extend_from_slice(&2u16.to_le_bytes()); // vMinor
+    out.extend_from_slice(&FLAGS.to_le_bytes()); // EncryptionHeaderFlags
+    out.extend_from_slice(&(header.len() as u32).to_le_bytes()); // EncryptionHeaderSize
+    out.extend_from_slice(&header);
+
+    out.extend_from_slice(&16u32.to_le_bytes()); // SaltSize
+    out.extend_from_slice(salt);
+    out.extend_from_slice(encrypted_verifier);
+    out.extend_from_slice(&20u32.to_le_bytes()); // VerifierHashSize (SHA-1)
+    out.extend_from_slice(encrypted_verifier_hash);
+
+    out
 }
 
 fn decrypt_package(key: &[u8], encrypted_package: &[u8]) -> CryptoResult<Vec<u8>> {
