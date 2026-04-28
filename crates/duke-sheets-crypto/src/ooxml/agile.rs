@@ -162,10 +162,40 @@ pub struct AgileDescriptor {
 /// `encryption_info` is the full `/EncryptionInfo` stream including the
 /// 8-byte version/flags header. `encrypted_package` is the full
 /// `/EncryptedPackage` stream including the 8-byte total-size prefix.
+///
+/// Verifies the data-integrity HMAC over the encrypted package after
+/// successful password unwrap; returns
+/// [`CryptoError::IntegrityCheckFailed`] on mismatch. Use
+/// [`decrypt_with_options`] to opt out of the check.
 pub fn decrypt(
     encryption_info: &[u8],
     encrypted_package: &[u8],
     password: &str,
+) -> CryptoResult<Vec<u8>> {
+    decrypt_with_options(
+        encryption_info,
+        encrypted_package,
+        password,
+        &AgileReadOptions::default(),
+    )
+}
+
+/// Caller-tunable parameters for Agile decryption.
+#[derive(Debug, Clone, Default)]
+pub struct AgileReadOptions {
+    /// Skip the HMAC integrity check after decryption. Off by default
+    /// (matching Office behaviour). Turn on for forensic / recovery
+    /// scenarios where you want to read damaged or tampered files.
+    pub skip_integrity_check: bool,
+}
+
+/// Agile decrypt with explicit options. See [`decrypt`] and
+/// [`AgileReadOptions`].
+pub fn decrypt_with_options(
+    encryption_info: &[u8],
+    encrypted_package: &[u8],
+    password: &str,
+    opts: &AgileReadOptions,
 ) -> CryptoResult<Vec<u8>> {
     if encryption_info.len() < 8 {
         return Err(CryptoError::InvalidFormat(
@@ -174,7 +204,49 @@ pub fn decrypt(
     }
     let descriptor = parse_descriptor(&encryption_info[8..])?;
     let secret_key = recover_secret_key(&descriptor, password)?;
+    if !opts.skip_integrity_check {
+        verify_hmac(&descriptor, &secret_key, encrypted_package)?;
+    }
     decrypt_package(&descriptor.key_data, &secret_key, encrypted_package)
+}
+
+fn verify_hmac(
+    d: &AgileDescriptor,
+    secret_key: &[u8],
+    encrypted_package: &[u8],
+) -> CryptoResult<()> {
+    let block_size = d.key_data.block_size as usize;
+    let iv_hmac_key = derive_iv_from_salt(
+        &d.key_data.salt_value,
+        &BLK_DATA_INTEGRITY_KEY,
+        d.key_data.hash_algorithm,
+        block_size,
+    );
+    let iv_hmac_value = derive_iv_from_salt(
+        &d.key_data.salt_value,
+        &BLK_DATA_INTEGRITY_VALUE,
+        d.key_data.hash_algorithm,
+        block_size,
+    );
+    let unwrapped_key = aes_cbc_decrypt(secret_key, &iv_hmac_key, &d.encrypted_hmac_key)?;
+    let unwrapped_value = aes_cbc_decrypt(secret_key, &iv_hmac_value, &d.encrypted_hmac_value)?;
+    let hash_size = d.key_data.hash_algorithm.digest_size();
+    if unwrapped_key.len() < hash_size || unwrapped_value.len() < hash_size {
+        return Err(CryptoError::InvalidFormat(format!(
+            "HMAC key/value too short after unwrap: key={} value={} hash_size={}",
+            unwrapped_key.len(),
+            unwrapped_value.len(),
+            hash_size
+        )));
+    }
+    let hmac_key = &unwrapped_key[..hash_size];
+    let stored_value = &unwrapped_value[..hash_size];
+    let computed = d.key_data.hash_algorithm.hmac(hmac_key, encrypted_package);
+    let ok: bool = computed.ct_eq(stored_value).into();
+    if !ok {
+        return Err(CryptoError::IntegrityCheckFailed);
+    }
+    Ok(())
 }
 
 /// Parse the XML descriptor that follows the 8-byte EncryptionInfo

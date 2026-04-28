@@ -81,8 +81,39 @@ pub fn decrypt(
     encrypted_package: &[u8],
     password: &str,
 ) -> CryptoResult<Vec<u8>> {
+    decrypt_with_options(
+        encryption_info,
+        encrypted_package,
+        password,
+        &DecryptOptions::default(),
+    )
+}
+
+/// Caller-tunable parameters for [`decrypt_with_options`].
+#[derive(Debug, Clone, Default)]
+pub struct DecryptOptions {
+    /// Skip the data-integrity HMAC check on Agile-encrypted files. No
+    /// effect on Standard or Binary RC4 variants (they don't carry an
+    /// integrity HMAC). Default `false`, matching Office.
+    pub skip_integrity_check: bool,
+}
+
+/// Decrypt with explicit options.
+pub fn decrypt_with_options(
+    encryption_info: &[u8],
+    encrypted_package: &[u8],
+    password: &str,
+    opts: &DecryptOptions,
+) -> CryptoResult<Vec<u8>> {
     match detect_variant(encryption_info)? {
-        OoxmlVariant::Agile => agile::decrypt(encryption_info, encrypted_package, password),
+        OoxmlVariant::Agile => agile::decrypt_with_options(
+            encryption_info,
+            encrypted_package,
+            password,
+            &agile::AgileReadOptions {
+                skip_integrity_check: opts.skip_integrity_check,
+            },
+        ),
         OoxmlVariant::Standard => standard::decrypt(encryption_info, encrypted_package, password),
         OoxmlVariant::BinaryRc4 => {
             binary_rc4::decrypt(encryption_info, encrypted_package, password)

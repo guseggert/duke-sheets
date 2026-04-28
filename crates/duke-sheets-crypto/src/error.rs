@@ -30,11 +30,18 @@ pub enum CryptoError {
     #[error("unsupported encryption variant: {0}")]
     UnsupportedVariant(String),
 
-    /// The encryption header is malformed or the ciphertext failed an
-    /// integrity check (HMAC mismatch, truncated stream, invalid field
-    /// size, etc).
+    /// The encryption header is malformed (truncated stream, invalid
+    /// field sizes, etc). HMAC failures are reported as
+    /// [`Self::IntegrityCheckFailed`] instead.
     #[error("invalid encrypted format: {0}")]
     InvalidFormat(String),
+
+    /// The password decrypted successfully but the data integrity HMAC
+    /// did not match — the encrypted package was modified after
+    /// encryption. Returned by Agile decrypt unless the caller opts
+    /// out via `WorkbookOpenOptions::skip_integrity_check`.
+    #[error("data integrity check failed: encrypted package was modified after encryption")]
+    IntegrityCheckFailed,
 
     /// An I/O error occurred while reading or writing encrypted data.
     #[error("I/O error: {0}")]

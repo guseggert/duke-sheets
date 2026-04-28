@@ -46,6 +46,11 @@ pub enum XlsxError {
     #[error("Unsupported XLSX encryption: {0}")]
     UnsupportedEncryption(String),
 
+    /// The password decrypted successfully but the data integrity HMAC
+    /// did not match. Encrypted package was modified after encryption.
+    #[error("Encrypted XLSX file failed integrity check (HMAC mismatch)")]
+    IntegrityCheckFailed,
+
     /// Parse error
     #[error("Parse error: {0}")]
     Parse(String),
@@ -65,6 +70,7 @@ impl From<duke_sheets_crypto::CryptoError> for XlsxError {
             }
             CryptoError::UnsupportedVariant(s) => XlsxError::UnsupportedEncryption(s),
             CryptoError::InvalidFormat(s) => XlsxError::InvalidFormat(format!("crypto: {s}")),
+            CryptoError::IntegrityCheckFailed => XlsxError::IntegrityCheckFailed,
             CryptoError::Io(e) => XlsxError::Io(e),
         }
     }
