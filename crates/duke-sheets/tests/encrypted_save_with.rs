@@ -117,3 +117,65 @@ fn save_with_wrong_password_on_open_yields_bad_password() {
         duke_sheets::XlsxReader::read_bytes_with_password(&bytes, Some("nope"), false).unwrap_err();
     assert!(matches!(err, XlsxError::BadPassword));
 }
+
+/// Read the file's CFB envelope, find the byte offset where
+/// `/EncryptedPackage` content lives, and flip a byte there so the
+/// CFB structure + EncryptionInfo XML stay parseable but the HMAC
+/// fails.
+fn tamper_encrypted_package_byte(path: &std::path::Path) {
+    let bytes = std::fs::read(path).unwrap();
+    let cfb = duke_sheets_xls::cfb::CompoundFile::open(std::io::Cursor::new(&bytes)).unwrap();
+    let pkg = cfb.read_stream("/EncryptedPackage").unwrap();
+    let needle: [u8; 16] = pkg[16..32].try_into().unwrap();
+    let pos = bytes
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .expect("encrypted package bytes must appear in file");
+    let mut new_bytes = bytes;
+    new_bytes[pos + 4] ^= 0xFF;
+    std::fs::write(path, new_bytes).unwrap();
+}
+
+#[test]
+fn open_with_tampered_envelope_default_rejects_via_integrity_check() {
+    let wb = build_wb();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tampered.xlsx");
+    wb.save_with(&path, &WorkbookSaveOptions::new().password(PASSWORD))
+        .unwrap();
+    tamper_encrypted_package_byte(&path);
+
+    let bytes = std::fs::read(&path).unwrap();
+    let xlsx_err = duke_sheets::XlsxReader::read_bytes_with_password(&bytes, Some(PASSWORD), false)
+        .expect_err("tampered envelope must fail integrity check");
+    assert!(
+        matches!(xlsx_err, XlsxError::IntegrityCheckFailed),
+        "expected IntegrityCheckFailed, got {xlsx_err:?}"
+    );
+}
+
+#[test]
+fn open_with_tampered_envelope_and_skip_integrity_check_bypasses_check() {
+    let wb = build_wb();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tampered.xlsx");
+    wb.save_with(&path, &WorkbookSaveOptions::new().password(PASSWORD))
+        .unwrap();
+    tamper_encrypted_package_byte(&path);
+
+    let opts = WorkbookOpenOptions::new()
+        .password(PASSWORD)
+        .skip_integrity_check();
+    // Skip-flag suppresses IntegrityCheckFailed. The 16-byte AES block
+    // containing the flipped byte is garbled, so ZIP parsing of the
+    // decrypted package may fail — we only assert that whatever error
+    // surfaces, it is NOT the integrity check.
+    let result = Workbook::open_with(&path, &opts);
+    if let Err(e) = &result {
+        let msg = e.to_string().to_lowercase();
+        assert!(
+            !msg.contains("integrity check"),
+            "skip_integrity_check must suppress IntegrityCheckFailed but got: {msg}"
+        );
+    }
+}

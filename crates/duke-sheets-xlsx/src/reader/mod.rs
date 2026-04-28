@@ -189,7 +189,11 @@ fn is_cfb_envelope(bytes: &[u8]) -> bool {
 ///     "this isn't an encrypted-OOXML container" — fall through to XLS.
 ///   - Other errors (Encrypted, BadPassword, malformed envelope) indicate
 ///     the file IS encrypted OOXML and should propagate as-is.
-fn decrypt_ooxml_envelope(bytes: &[u8], password: &str) -> XlsxResult<Vec<u8>> {
+fn decrypt_ooxml_envelope(
+    bytes: &[u8],
+    password: &str,
+    skip_integrity_check: bool,
+) -> XlsxResult<Vec<u8>> {
     let cfb = duke_sheets_xls::cfb::CompoundFile::open(std::io::Cursor::new(bytes))
         .map_err(|e| XlsxError::InvalidFormat(format!("CFB envelope open failed: {e}")))?;
     let has_info = cfb.exists("/EncryptionInfo");
@@ -209,8 +213,13 @@ fn decrypt_ooxml_envelope(bytes: &[u8], password: &str) -> XlsxResult<Vec<u8>> {
             "malformed OOXML envelope: read /EncryptedPackage: {e}"
         ))
     })?;
-    Ok(duke_sheets_crypto::ooxml::decrypt(
-        &info, &package, password,
+    Ok(duke_sheets_crypto::ooxml::decrypt_with_options(
+        &info,
+        &package,
+        password,
+        &duke_sheets_crypto::ooxml::DecryptOptions {
+            skip_integrity_check,
+        },
     )?)
 }
 
@@ -231,8 +240,20 @@ impl XlsxReader {
         password: Option<&str>,
         try_velvet_sweatshop: bool,
     ) -> XlsxResult<Workbook> {
+        Self::read_file_with_options(path, password, try_velvet_sweatshop, false)
+    }
+
+    /// Read a workbook from a file path with full open-options control.
+    /// `skip_integrity_check` opts out of the post-decrypt HMAC check;
+    /// default-off (false) matches Office.
+    pub fn read_file_with_options<P: AsRef<Path>>(
+        path: P,
+        password: Option<&str>,
+        try_velvet_sweatshop: bool,
+        skip_integrity_check: bool,
+    ) -> XlsxResult<Workbook> {
         let bytes = std::fs::read(path)?;
-        Self::read_bytes_with_password(&bytes, password, try_velvet_sweatshop)
+        Self::read_bytes_with_options(&bytes, password, try_velvet_sweatshop, skip_integrity_check)
     }
 
     /// Read a workbook from raw bytes with an optional password.
@@ -246,6 +267,17 @@ impl XlsxReader {
         password: Option<&str>,
         try_velvet_sweatshop: bool,
     ) -> XlsxResult<Workbook> {
+        Self::read_bytes_with_options(bytes, password, try_velvet_sweatshop, false)
+    }
+
+    /// Read a workbook from raw bytes with full open-options control.
+    /// `skip_integrity_check` opts out of the post-decrypt HMAC check.
+    pub fn read_bytes_with_options(
+        bytes: &[u8],
+        password: Option<&str>,
+        try_velvet_sweatshop: bool,
+        skip_integrity_check: bool,
+    ) -> XlsxResult<Workbook> {
         if is_cfb_envelope(bytes) {
             let try_pw = match password {
                 Some(p) => p,
@@ -256,7 +288,7 @@ impl XlsxReader {
                     ));
                 }
             };
-            return match decrypt_ooxml_envelope(bytes, try_pw) {
+            return match decrypt_ooxml_envelope(bytes, try_pw, skip_integrity_check) {
                 Ok(decrypted) => Self::read(std::io::Cursor::new(decrypted)),
                 Err(XlsxError::BadPassword) if password.is_none() => Err(XlsxError::Encrypted(
                     "workbook is encrypted but no password was supplied".into(),

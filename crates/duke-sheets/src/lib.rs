@@ -212,6 +212,12 @@ pub struct WorkbookOpenOptions {
     /// open transparently. Set to `false` for strict semantics where
     /// no password supplied always errors.
     pub try_velvet_sweatshop: bool,
+
+    /// Skip the data-integrity HMAC check on Agile-encrypted files.
+    /// Default `false` (matches Office). Turn on for forensic /
+    /// recovery scenarios where you want to read damaged or tampered
+    /// files even though their integrity check fails.
+    pub skip_integrity_check: bool,
 }
 
 impl Default for WorkbookOpenOptions {
@@ -219,6 +225,7 @@ impl Default for WorkbookOpenOptions {
         Self {
             password: None,
             try_velvet_sweatshop: true,
+            skip_integrity_check: false,
         }
     }
 }
@@ -238,6 +245,13 @@ impl WorkbookOpenOptions {
     /// `Encrypted` error.
     pub fn strict_password(mut self) -> Self {
         self.try_velvet_sweatshop = false;
+        self
+    }
+
+    /// Skip the integrity-check HMAC after decryption. Use only for
+    /// forensic / recovery work; default-off matches Office.
+    pub fn skip_integrity_check(mut self) -> Self {
+        self.skip_integrity_check = true;
         self
     }
 }
@@ -354,10 +368,11 @@ impl WorkbookExt for Workbook {
 
         let pw = opts.password.as_deref();
         let vs = opts.try_velvet_sweatshop;
+        let skip_ic = opts.skip_integrity_check;
 
         match extension.as_deref() {
             Some("xlsx") | Some("xlsm") | Some("xltx") | Some("xltm") => {
-                XlsxReader::read_file_with_password(path, pw, vs)
+                XlsxReader::read_file_with_options(path, pw, vs, skip_ic)
                     .map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
@@ -370,6 +385,7 @@ impl WorkbookExt for Workbook {
     fn from_bytes_with(bytes: &[u8], opts: &WorkbookOpenOptions) -> Result<Workbook> {
         let pw = opts.password.as_deref();
         let vs = opts.try_velvet_sweatshop;
+        let skip_ic = opts.skip_integrity_check;
 
         // Encrypted XLSX files masquerade as XLS to detect_format because
         // both share the CFB magic header. When a password is supplied
@@ -382,7 +398,7 @@ impl WorkbookExt for Workbook {
         // UnsupportedEncryption, crypto-layer InvalidFormat) propagate
         // back to the caller instead of being silently retried as XLS.
         if (pw.is_some() || vs) && is_cfb_magic(bytes) {
-            match XlsxReader::read_bytes_with_password(bytes, pw, vs) {
+            match XlsxReader::read_bytes_with_options(bytes, pw, vs, skip_ic) {
                 Ok(wb) => return Ok(wb),
                 Err(XlsxError::InvalidFormat(msg))
                     if msg.starts_with("CFB envelope open failed:")

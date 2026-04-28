@@ -32,6 +32,8 @@ serde_json.workspace = true
 calamine = "0.26"
 umya-spreadsheet = "2.3"
 rust_xlsxwriter = "0.82"
+# Reach into the CFB layer in tests for tamper-detection coverage.
+duke-sheets-xls.workspace = true
 duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
 libreoffice-urp = { path = "../libreoffice-urp" }
 tokio = { version = "1", features = ["full", "test-util"] }
