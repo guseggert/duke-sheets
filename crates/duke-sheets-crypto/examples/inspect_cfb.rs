@@ -17,16 +17,18 @@ fn main() {
     println!("file: {path} ({} bytes)", bytes.len());
     println!();
     for entry in cfb.directory_entries() {
-        let kind = match entry.object_type {
+        let kind = match entry.object_type() {
             5 => "root",
             1 => "stor",
             2 => "strm",
             _ => "????",
         };
-        let raw_name: Vec<u8> = entry.name.bytes().collect();
+        let raw_name = entry.name().as_bytes();
         println!(
             "{kind:>4}  size={:>10}  name={:?}  raw_bytes={:02x?}",
-            entry.stream_size, entry.name, raw_name
+            entry.stream_size(),
+            entry.name(),
+            raw_name
         );
     }
 }

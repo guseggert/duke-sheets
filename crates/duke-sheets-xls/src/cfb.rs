@@ -44,13 +44,32 @@ impl From<CfbError> for io::Error {
 
 #[derive(Clone, Debug)]
 pub struct DirectoryEntry {
-    pub name: String,
-    pub object_type: u8,
-    pub left_sibling: u32,
-    pub right_sibling: u32,
-    pub child: u32,
-    pub start_sector: u32,
-    pub stream_size: u64,
+    name: String,
+    object_type: u8,
+    // Color is parsed for RB-invariant assertions in tests but not
+    // consulted by production read paths (we walk the tree as a plain
+    // BST). Suppress dead-code warning in non-test builds.
+    #[cfg_attr(not(test), allow(dead_code))]
+    color: u8,
+    left_sibling: u32,
+    right_sibling: u32,
+    child: u32,
+    start_sector: u32,
+    stream_size: u64,
+}
+
+impl DirectoryEntry {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn object_type(&self) -> u8 {
+        self.object_type
+    }
+
+    pub fn stream_size(&self) -> u64 {
+        self.stream_size
+    }
 }
 
 pub struct CompoundFile {
@@ -654,6 +673,7 @@ fn parse_directory(data: &[u8], sector_size: usize) -> Result<Vec<DirectoryEntry
         entries.push(DirectoryEntry {
             name,
             object_type: chunk[66],
+            color: chunk[67],
             left_sibling: read_u32(chunk, 68)?,
             right_sibling: read_u32(chunk, 72)?,
             child: read_u32(chunk, 76)?,
@@ -782,6 +802,7 @@ mod tests {
                 DirectoryEntry {
                     name: "Root Entry".into(),
                     object_type: 5,
+                    color: COLOR_BLACK,
                     left_sibling: NOSTREAM,
                     right_sibling: NOSTREAM,
                     child: 1,
@@ -791,6 +812,7 @@ mod tests {
                 DirectoryEntry {
                     name: "WORKBOOK".into(),
                     object_type: 2,
+                    color: COLOR_BLACK,
                     left_sibling: NOSTREAM,
                     right_sibling: NOSTREAM,
                     child: NOSTREAM,
@@ -812,6 +834,7 @@ mod tests {
 }
 
 const FATSECT: u32 = 0xFFFFFFFD;
+const DIFSECT: u32 = 0xFFFFFFFC;
 const NUM_DIFAT_ENTRIES_IN_HEADER: usize = 109;
 const ROOT_DIR_NAME: &str = "Root Entry";
 const MAX_NAME_LEN_UTF16: usize = 31;
@@ -819,6 +842,7 @@ const MAX_NAME_LEN_UTF16: usize = 31;
 const OBJ_TYPE_STORAGE: u8 = 1;
 const OBJ_TYPE_STREAM: u8 = 2;
 const OBJ_TYPE_ROOT: u8 = 5;
+const COLOR_RED: u8 = 0;
 const COLOR_BLACK: u8 = 1;
 
 #[derive(Debug)]
@@ -983,20 +1007,14 @@ impl CompoundFileBuilder {
             children_of.entry(parent_id).or_default().push(id);
         }
 
-        // Sort each storage's children by CFB name order and link as
-        // a balanced binary search tree.
-        //
-        // [MS-CFB] §2.6.4 specifies a red-black tree, but in practice
-        // readers (Office, LibreOffice) traverse the tree without
-        // validating black-height invariants. A flat right-sibling
-        // chain is BST-valid but causes LibreOffice's Office-document
-        // type detector to reject the file before opening; a balanced
-        // BST is what real Office writers emit and is what works.
+        // Children form a red-black tree per [MS-CFB] §2.6.4. LibreOffice
+        // type detection rejects flat right-sibling chains; we insert in
+        // CFB-name order and fix up colors after each insert.
         for (parent_id, child_ids) in children_of.iter_mut() {
             child_ids.sort_by(|&a, &b| {
                 compare_cfb_names(&dirs[a as usize].name, &dirs[b as usize].name)
             });
-            let root = build_balanced_subtree(&mut dirs, child_ids);
+            let root = build_rb_tree(&mut dirs, child_ids);
             dirs[*parent_id as usize].child = root;
         }
 
@@ -1056,27 +1074,33 @@ impl CompoundFileBuilder {
             large_sector_counts.push(n);
         }
 
-        // Total non-FAT sectors = dir + mini-FAT + mini-stream + sum(large).
         let non_fat_sectors = dir_sector_count
             + mini_fat_sector_count
             + mini_stream_sector_count
             + large_sector_counts.iter().sum::<usize>();
 
-        // Solve for fat_sector_count: we need fat_count s.t.
-        // fat_count * FAT_ENTRIES_PER_SECTOR >= non_fat_sectors + fat_count
-        // => fat_count >= non_fat_sectors / (FAT_ENTRIES_PER_SECTOR - 1)
-        let fat_sector_count = non_fat_sectors.div_ceil(FAT_ENTRIES_PER_SECTOR - 1).max(1);
-
-        if fat_sector_count > NUM_DIFAT_ENTRIES_IN_HEADER {
-            return Err(CfbError::InvalidFormat(format!(
-                "this writer does not yet support files with more than {NUM_DIFAT_ENTRIES_IN_HEADER} FAT sectors (would need DIFAT chain); got {fat_sector_count}"
-            )));
+        // FAT and DIFAT counts depend on each other (DIFAT sectors are
+        // themselves regular sectors covered by the FAT, but FAT
+        // sectors > 109 require DIFAT entries to address). Iterate to a
+        // fixpoint — converges in ≤ 2 iterations for any practical file.
+        let difat_entries_per_sector = FAT_ENTRIES_PER_SECTOR - 1;
+        let mut fat_sector_count = non_fat_sectors.div_ceil(FAT_ENTRIES_PER_SECTOR - 1).max(1);
+        let mut difat_sector_count;
+        loop {
+            difat_sector_count = fat_sector_count
+                .saturating_sub(NUM_DIFAT_ENTRIES_IN_HEADER)
+                .div_ceil(difat_entries_per_sector);
+            let new_fat = (non_fat_sectors + difat_sector_count)
+                .div_ceil(FAT_ENTRIES_PER_SECTOR - 1)
+                .max(1);
+            if new_fat == fat_sector_count {
+                break;
+            }
+            fat_sector_count = new_fat;
         }
 
-        let total_sectors = non_fat_sectors + fat_sector_count;
+        let total_sectors = non_fat_sectors + fat_sector_count + difat_sector_count;
 
-        // Sector allocation order: FAT sectors first, then dir, mini-FAT,
-        // mini-stream, large streams.
         let mut next_sector: u32 = 0;
         let alloc = |count: usize, next_sector: &mut u32| -> std::ops::Range<u32> {
             let start = *next_sector;
@@ -1085,6 +1109,7 @@ impl CompoundFileBuilder {
         };
 
         let fat_range = alloc(fat_sector_count, &mut next_sector);
+        let difat_range = alloc(difat_sector_count, &mut next_sector);
         let dir_range = alloc(dir_sector_count, &mut next_sector);
         let mini_fat_range = alloc(mini_fat_sector_count, &mut next_sector);
         let mini_stream_range = alloc(mini_stream_sector_count, &mut next_sector);
@@ -1093,13 +1118,14 @@ impl CompoundFileBuilder {
             large_ranges.push(alloc(count, &mut next_sector));
         }
 
-        // Build the FAT (one u32 per regular sector). Pad with FREESECT
-        // to cover full FAT sectors.
         let total_fat_entries = fat_sector_count * FAT_ENTRIES_PER_SECTOR;
         let mut fat = vec![FREESECT; total_fat_entries];
 
         for s in fat_range.clone() {
             fat[s as usize] = FATSECT;
+        }
+        for s in difat_range.clone() {
+            fat[s as usize] = DIFSECT;
         }
         link_chain(&mut fat, dir_range.clone());
         if mini_fat_sector_count > 0 {
@@ -1133,15 +1159,48 @@ impl CompoundFileBuilder {
             fat_range.clone(),
             dir_range.clone(),
             mini_fat_range.clone(),
+            difat_range.clone(),
             mini_fat_sector_count as u32,
             dir_sector_count as u32,
+            difat_sector_count as u32,
         );
 
         // FAT sectors.
-        let mut cursor = SECTOR;
-        for entry in &fat {
-            buf[cursor..cursor + 4].copy_from_slice(&entry.to_le_bytes());
-            cursor += 4;
+        {
+            let off = (1 + fat_range.start as usize) * SECTOR;
+            let mut cursor = off;
+            for entry in &fat {
+                buf[cursor..cursor + 4].copy_from_slice(&entry.to_le_bytes());
+                cursor += 4;
+            }
+        }
+
+        // DIFAT sectors. Each holds (entries_per_sector - 1) FAT
+        // pointers and a "next DIFAT sector" pointer at the tail.
+        if difat_sector_count > 0 {
+            let header_difat_count = NUM_DIFAT_ENTRIES_IN_HEADER.min(fat_sector_count);
+            let mut fat_idx = header_difat_count;
+            let difat_sectors: Vec<u32> = difat_range.clone().collect();
+            for (i, &sector) in difat_sectors.iter().enumerate() {
+                let off = (1 + sector as usize) * SECTOR;
+                for slot in 0..difat_entries_per_sector {
+                    let val = if fat_idx < fat_sector_count {
+                        let v = fat_range.start + fat_idx as u32;
+                        fat_idx += 1;
+                        v
+                    } else {
+                        FREESECT
+                    };
+                    buf[off + slot * 4..off + slot * 4 + 4].copy_from_slice(&val.to_le_bytes());
+                }
+                let next = if i + 1 < difat_sectors.len() {
+                    difat_sectors[i + 1]
+                } else {
+                    ENDOFCHAIN
+                };
+                let tail = off + difat_entries_per_sector * 4;
+                buf[tail..tail + 4].copy_from_slice(&next.to_le_bytes());
+            }
         }
 
         // Directory sectors. Each dir entry = 128 bytes.
@@ -1291,17 +1350,148 @@ fn compare_cfb_names(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-fn build_balanced_subtree(dirs: &mut [DirWriteEntry], sorted_ids: &[u32]) -> u32 {
-    if sorted_ids.is_empty() {
-        return NOSTREAM;
+// Standard CLRS §13.3 red-black insert: color new node red, walk parent
+// stack performing recolors and rotations until invariants restored.
+fn build_rb_tree(dirs: &mut [DirWriteEntry], sorted_ids: &[u32]) -> u32 {
+    let mut root = NOSTREAM;
+    for &id in sorted_ids {
+        dirs[id as usize].color = COLOR_RED;
+        dirs[id as usize].left_sibling = NOSTREAM;
+        dirs[id as usize].right_sibling = NOSTREAM;
+        root = rb_insert(dirs, root, id);
     }
-    let mid = sorted_ids.len() / 2;
-    let root = sorted_ids[mid];
-    let left = build_balanced_subtree(dirs, &sorted_ids[..mid]);
-    let right = build_balanced_subtree(dirs, &sorted_ids[mid + 1..]);
-    dirs[root as usize].left_sibling = left;
-    dirs[root as usize].right_sibling = right;
+    if root != NOSTREAM {
+        dirs[root as usize].color = COLOR_BLACK;
+    }
     root
+}
+
+fn rb_insert(dirs: &mut [DirWriteEntry], root: u32, new_id: u32) -> u32 {
+    let mut parents: Vec<u32> = Vec::with_capacity(16);
+    let mut cur = root;
+    if cur == NOSTREAM {
+        return new_id;
+    }
+    loop {
+        parents.push(cur);
+        let cmp = compare_cfb_names(
+            &dirs[new_id as usize].name.clone(),
+            &dirs[cur as usize].name.clone(),
+        );
+        let next = match cmp {
+            std::cmp::Ordering::Less | std::cmp::Ordering::Equal => dirs[cur as usize].left_sibling,
+            std::cmp::Ordering::Greater => dirs[cur as usize].right_sibling,
+        };
+        if next == NOSTREAM {
+            match cmp {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
+                    dirs[cur as usize].left_sibling = new_id;
+                }
+                std::cmp::Ordering::Greater => {
+                    dirs[cur as usize].right_sibling = new_id;
+                }
+            }
+            break;
+        }
+        cur = next;
+    }
+
+    rb_fixup(dirs, root, new_id, &parents)
+}
+
+fn rb_fixup(dirs: &mut [DirWriteEntry], mut root: u32, node: u32, parents: &[u32]) -> u32 {
+    let mut cur = node;
+    let mut stack: Vec<u32> = parents.to_vec();
+    while let Some(&parent) = stack.last() {
+        if dirs[parent as usize].color == COLOR_BLACK {
+            break;
+        }
+        let grandparent = match stack.iter().rev().nth(1) {
+            Some(&g) => g,
+            None => break,
+        };
+        let parent_is_left = dirs[grandparent as usize].left_sibling == parent;
+        let uncle = if parent_is_left {
+            dirs[grandparent as usize].right_sibling
+        } else {
+            dirs[grandparent as usize].left_sibling
+        };
+
+        if uncle != NOSTREAM && dirs[uncle as usize].color == COLOR_RED {
+            dirs[parent as usize].color = COLOR_BLACK;
+            dirs[uncle as usize].color = COLOR_BLACK;
+            dirs[grandparent as usize].color = COLOR_RED;
+            cur = grandparent;
+            stack.pop();
+            stack.pop();
+            continue;
+        }
+
+        if parent_is_left {
+            if dirs[parent as usize].right_sibling == cur {
+                let new_subroot = rotate_left(dirs, parent);
+                update_parent_link(dirs, &stack, parent, new_subroot, &mut root, 1);
+                stack.pop();
+                stack.push(new_subroot);
+                cur = parent;
+            }
+            let parent2 = *stack.last().unwrap();
+            dirs[parent2 as usize].color = COLOR_BLACK;
+            dirs[grandparent as usize].color = COLOR_RED;
+            let new_subroot = rotate_right(dirs, grandparent);
+            update_parent_link(dirs, &stack, grandparent, new_subroot, &mut root, 2);
+        } else {
+            if dirs[parent as usize].left_sibling == cur {
+                let new_subroot = rotate_right(dirs, parent);
+                update_parent_link(dirs, &stack, parent, new_subroot, &mut root, 1);
+                stack.pop();
+                stack.push(new_subroot);
+                cur = parent;
+            }
+            let parent2 = *stack.last().unwrap();
+            dirs[parent2 as usize].color = COLOR_BLACK;
+            dirs[grandparent as usize].color = COLOR_RED;
+            let new_subroot = rotate_left(dirs, grandparent);
+            update_parent_link(dirs, &stack, grandparent, new_subroot, &mut root, 2);
+        }
+        break;
+    }
+    root
+}
+
+fn rotate_left(dirs: &mut [DirWriteEntry], x: u32) -> u32 {
+    let y = dirs[x as usize].right_sibling;
+    dirs[x as usize].right_sibling = dirs[y as usize].left_sibling;
+    dirs[y as usize].left_sibling = x;
+    y
+}
+
+fn rotate_right(dirs: &mut [DirWriteEntry], x: u32) -> u32 {
+    let y = dirs[x as usize].left_sibling;
+    dirs[x as usize].left_sibling = dirs[y as usize].right_sibling;
+    dirs[y as usize].right_sibling = x;
+    y
+}
+
+// `depth_above`: 1 = parent, 2 = grandparent.
+fn update_parent_link(
+    dirs: &mut [DirWriteEntry],
+    stack: &[u32],
+    old_subroot: u32,
+    new_subroot: u32,
+    root: &mut u32,
+    depth_above: usize,
+) {
+    if stack.len() <= depth_above {
+        *root = new_subroot;
+        return;
+    }
+    let p = stack[stack.len() - 1 - depth_above];
+    if dirs[p as usize].left_sibling == old_subroot {
+        dirs[p as usize].left_sibling = new_subroot;
+    } else {
+        dirs[p as usize].right_sibling = new_subroot;
+    }
 }
 
 fn link_chain(fat: &mut [u32], range: std::ops::Range<u32>) {
@@ -1321,42 +1511,45 @@ fn write_header(
     fat_range: std::ops::Range<u32>,
     dir_range: std::ops::Range<u32>,
     mini_fat_range: std::ops::Range<u32>,
+    difat_range: std::ops::Range<u32>,
     mini_fat_sector_count: u32,
     _dir_sector_count: u32,
+    difat_sector_count: u32,
 ) {
+    let fat_sector_count = fat_range.end - fat_range.start;
     // Field offsets per [MS-CFB] §2.2.
     buf[0..8].copy_from_slice(&CFB_MAGIC);
-    // 8..24: CLSID (zero — already initialised)
-    buf[24..26].copy_from_slice(&0x003Eu16.to_le_bytes()); // minor version
-    buf[26..28].copy_from_slice(&0x0003u16.to_le_bytes()); // major version (V3)
-    buf[28..30].copy_from_slice(&0xFFFEu16.to_le_bytes()); // byte order mark
-    buf[30..32].copy_from_slice(&9u16.to_le_bytes()); // sector shift (2^9 = 512)
-    buf[32..34].copy_from_slice(&6u16.to_le_bytes()); // mini sector shift (2^6 = 64)
-                                                      // 34..40: reserved (zero)
-                                                      // [MS-CFB] §2.2: in v3, num directory sectors MUST be zero (the
-                                                      // dir-sector count field is meaningful only for v4). Stricter
-                                                      // readers (LibreOffice's loadenv type detector) reject v3 files
-                                                      // that put a non-zero count here even when the directory chain is
-                                                      // otherwise valid.
+    buf[24..26].copy_from_slice(&0x003Eu16.to_le_bytes());
+    buf[26..28].copy_from_slice(&0x0003u16.to_le_bytes());
+    buf[28..30].copy_from_slice(&0xFFFEu16.to_le_bytes());
+    buf[30..32].copy_from_slice(&9u16.to_le_bytes());
+    buf[32..34].copy_from_slice(&6u16.to_le_bytes());
+    // [MS-CFB] §2.2: num-directory-sectors MUST be zero in v3.
+    // LibreOffice loadenv type detection rejects non-zero values here.
     buf[40..44].copy_from_slice(&0u32.to_le_bytes());
-    buf[44..48].copy_from_slice(&(fat_range.end - fat_range.start).to_le_bytes()); // num FAT sectors
-    buf[48..52].copy_from_slice(&dir_range.start.to_le_bytes()); // first directory sector
-    buf[52..56].copy_from_slice(&0u32.to_le_bytes()); // transaction signature
-    buf[56..60].copy_from_slice(&0x0000_1000u32.to_le_bytes()); // mini stream cutoff (4096)
+    buf[44..48].copy_from_slice(&fat_sector_count.to_le_bytes());
+    buf[48..52].copy_from_slice(&dir_range.start.to_le_bytes());
+    buf[52..56].copy_from_slice(&0u32.to_le_bytes());
+    buf[56..60].copy_from_slice(&0x0000_1000u32.to_le_bytes());
     let first_mini_fat = if mini_fat_sector_count > 0 {
         mini_fat_range.start
     } else {
         ENDOFCHAIN
     };
-    buf[60..64].copy_from_slice(&first_mini_fat.to_le_bytes()); // first mini-FAT sector
-    buf[64..68].copy_from_slice(&mini_fat_sector_count.to_le_bytes()); // num mini-FAT sectors
-    buf[68..72].copy_from_slice(&ENDOFCHAIN.to_le_bytes()); // first DIFAT sector
-    buf[72..76].copy_from_slice(&0u32.to_le_bytes()); // num DIFAT sectors
+    buf[60..64].copy_from_slice(&first_mini_fat.to_le_bytes());
+    buf[64..68].copy_from_slice(&mini_fat_sector_count.to_le_bytes());
+    let first_difat = if difat_sector_count > 0 {
+        difat_range.start
+    } else {
+        ENDOFCHAIN
+    };
+    buf[68..72].copy_from_slice(&first_difat.to_le_bytes());
+    buf[72..76].copy_from_slice(&difat_sector_count.to_le_bytes());
 
-    // 76..512: DIFAT — first 109 entries, each pointing to a FAT sector.
+    let header_difat_count = NUM_DIFAT_ENTRIES_IN_HEADER.min(fat_sector_count as usize);
     for i in 0..NUM_DIFAT_ENTRIES_IN_HEADER {
         let off = 76 + i * 4;
-        let val = if i < (fat_range.end - fat_range.start) as usize {
+        let val = if i < header_difat_count {
             fat_range.start + i as u32
         } else {
             FREESECT
@@ -1525,5 +1718,106 @@ mod writer_tests {
         b.add_stream("/leaf/below", b"y".to_vec()).unwrap();
         let err = b.build().expect_err("can't nest under a stream");
         assert!(matches!(err, CfbError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn writer_handles_difat_chain_for_large_streams() {
+        // 8 MB stream forces > 109 FAT sectors. Each FAT sector covers
+        // 128 sectors × 512 B = 64 KiB; 8 MiB / 64 KiB = 128 sectors,
+        // so we need at least 1 DIFAT sector.
+        const SIZE: usize = 8 * 1024 * 1024;
+        let mut b = CompoundFileBuilder::new();
+        let payload: Vec<u8> = (0..SIZE).map(|i| (i & 0xFF) as u8).collect();
+        b.add_stream("/big", payload.clone()).unwrap();
+        let bytes = b.build().unwrap();
+
+        let num_fat = u32::from_le_bytes([bytes[44], bytes[45], bytes[46], bytes[47]]);
+        let num_difat = u32::from_le_bytes([bytes[72], bytes[73], bytes[74], bytes[75]]);
+        let first_difat = u32::from_le_bytes([bytes[68], bytes[69], bytes[70], bytes[71]]);
+        assert!(num_fat > NUM_DIFAT_ENTRIES_IN_HEADER as u32);
+        assert!(num_difat >= 1);
+        assert_ne!(first_difat, ENDOFCHAIN);
+
+        let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("reader must accept DIFAT chain");
+        assert_eq!(cfb.read_stream("/big").unwrap(), payload);
+    }
+
+    #[test]
+    fn writer_rb_tree_round_trips_50_children_with_invariants_intact() {
+        let mut b = CompoundFileBuilder::new();
+        for i in 0..50u32 {
+            b.add_stream(&format!("/s{i:03}"), vec![i as u8; 8])
+                .unwrap();
+        }
+        let bytes = b.build().unwrap();
+        let cfb = CompoundFile::open(Cursor::new(&bytes)).unwrap();
+        for i in 0..50u32 {
+            let path = format!("/s{i:03}");
+            assert!(cfb.exists(&path), "missing {path}");
+            assert_eq!(cfb.read_stream(&path).unwrap(), vec![i as u8; 8]);
+        }
+        assert_rb_invariants(&cfb);
+    }
+
+    #[test]
+    fn writer_rb_tree_holds_invariants_for_fan_outs_three_through_seven() {
+        for n in 3..=7u32 {
+            let mut b = CompoundFileBuilder::new();
+            b.add_storage("/grp").unwrap();
+            for i in 0..n {
+                b.add_stream(&format!("/grp/s{i}"), vec![]).unwrap();
+            }
+            let bytes = b.build().unwrap();
+            let cfb =
+                CompoundFile::open(Cursor::new(&bytes)).unwrap_or_else(|e| panic!("n={n}: {e}"));
+            assert_rb_invariants(&cfb);
+        }
+    }
+
+    fn assert_rb_invariants(cfb: &CompoundFile) {
+        let entries: Vec<&DirectoryEntry> = cfb.directory_entries().collect();
+        for entry in &entries {
+            if !matches!(entry.object_type, OBJ_TYPE_ROOT | OBJ_TYPE_STORAGE) {
+                continue;
+            }
+            let root = entry.child;
+            if root == NOSTREAM {
+                continue;
+            }
+            assert_eq!(
+                entries[root as usize].color, COLOR_BLACK,
+                "subtree root under {:?} must be black",
+                entry.name
+            );
+            assert_rb_subtree(&entries, root);
+        }
+    }
+
+    // CLRS §13.1: red parent → black children; equal black-height on
+    // every root-to-NIL path. Returns black-height for caller's check.
+    fn assert_rb_subtree(entries: &[&DirectoryEntry], node: u32) -> u32 {
+        if node == NOSTREAM {
+            return 1;
+        }
+        let e = entries[node as usize];
+        if e.color == COLOR_RED {
+            for child in [e.left_sibling, e.right_sibling] {
+                if child != NOSTREAM {
+                    assert_eq!(
+                        entries[child as usize].color, COLOR_BLACK,
+                        "red node {} has red child {}",
+                        e.name, entries[child as usize].name
+                    );
+                }
+            }
+        }
+        let lh = assert_rb_subtree(entries, e.left_sibling);
+        let rh = assert_rb_subtree(entries, e.right_sibling);
+        assert_eq!(
+            lh, rh,
+            "black-height mismatch at {}: left={lh} right={rh}",
+            e.name
+        );
+        lh + u32::from(e.color == COLOR_BLACK)
     }
 }
