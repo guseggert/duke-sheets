@@ -102,23 +102,25 @@ pub fn verify_password(params: &Rc4CryptoApiParams, password: &str) -> bool {
     computed.ct_eq(&verifier_hash[..20]).into()
 }
 
-/// Apply RC4 CryptoAPI decryption to a byte buffer, re-keying every
+/// Apply the RC4 CryptoAPI keystream to a byte buffer, re-keying every
 /// `block_size` bytes (1024 for XLS, 512 for OOXML Binary RC4).
 ///
-/// Every block gets a fresh RC4 instance (no state carries across
-/// blocks); only the derived key differs per block. This function does
-/// not know about XLS record structure — callers must zero-pad
-/// plaintext positions in the input and overlay them in the output.
-pub fn decrypt_raw(
+/// RC4 is its own inverse, so this function is symmetric: feeding it
+/// plaintext yields ciphertext and vice versa. Every block gets a fresh
+/// RC4 instance (no state carries across blocks); only the derived key
+/// differs per block. This function does not know about XLS record
+/// structure — callers must zero-pad plaintext positions in the input
+/// and overlay them in the output.
+pub fn apply_keystream(
     password: &str,
     salt: &[u8; 16],
     key_size_bits: u32,
     block_size: usize,
-    ciphertext: &[u8],
+    input: &[u8],
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(ciphertext.len());
+    let mut out = Vec::with_capacity(input.len());
 
-    for (block_idx, chunk) in ciphertext.chunks(block_size).enumerate() {
+    for (block_idx, chunk) in input.chunks(block_size).enumerate() {
         let key = make_key(password, salt, key_size_bits, block_idx as u32);
         let mut rc4 = Rc4::new_from_slice(&key[..16]).expect("16-byte key is valid for RC4");
         let mut buf = chunk.to_vec();
@@ -146,7 +148,7 @@ pub fn decrypt_workbook_stream(
 
     let classified = record_walk::classify(workbook_stream)?;
     const BLOCK_SIZE: usize = 1024;
-    let decrypted = decrypt_raw(
+    let decrypted = apply_keystream(
         password,
         &params.salt,
         params.key_size_bits,
@@ -242,25 +244,20 @@ mod tests {
     }
 
     #[test]
-    fn decrypt_raw_rekeys_every_block() {
+    fn apply_keystream_rekeys_every_block() {
         let salt = [0u8; 16];
-        // Two blocks' worth of identical plaintext → two different
-        // ciphertexts because the key changes per block.
         let plaintext = vec![0x41u8; 2048];
-        let mut encrypted = Vec::with_capacity(2048);
-        for (block_idx, chunk) in plaintext.chunks(1024).enumerate() {
-            let key = make_key("pw", &salt, 128, block_idx as u32);
-            let mut rc4 = Rc4::new_from_slice(&key[..16]).unwrap();
-            let mut c = chunk.to_vec();
-            rc4.apply_keystream(&mut c);
-            encrypted.extend_from_slice(&c);
-        }
-        // First 1024 bytes ciphertext MUST differ from second 1024
-        // because of per-block re-keying.
-        assert_ne!(&encrypted[..1024], &encrypted[1024..]);
+        let encrypted = apply_keystream("pw", &salt, 128, 1024, &plaintext);
+        assert_ne!(
+            &encrypted[..1024],
+            &encrypted[1024..],
+            "per-block re-keying should yield different ciphertext for identical plaintext"
+        );
 
-        // Round-trip: same function decrypts.
-        let decrypted = decrypt_raw("pw", &salt, 128, 1024, &encrypted);
-        assert_eq!(decrypted, plaintext);
+        let decrypted = apply_keystream("pw", &salt, 128, 1024, &encrypted);
+        assert_eq!(
+            decrypted, plaintext,
+            "RC4 is symmetric: round-trip recovers input"
+        );
     }
 }

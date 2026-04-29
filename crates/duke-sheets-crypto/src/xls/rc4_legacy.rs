@@ -120,6 +120,25 @@ pub fn verify_password(params: &Rc4LegacyParams, password: &str) -> bool {
     computed.ct_eq(&verifier_hash).into()
 }
 
+/// Apply the legacy RC4 keystream to a byte buffer, re-keying every
+/// 1024 bytes per MS-OFFCRYPTO §2.3.6.
+///
+/// RC4 is its own inverse, so this function is symmetric: feeding it
+/// plaintext yields ciphertext and vice versa. Every block gets a fresh
+/// RC4 instance keyed off `make_key(password, salt, block_idx)`.
+pub fn apply_keystream(password: &str, params: &Rc4LegacyParams, input: &[u8]) -> Vec<u8> {
+    const BLOCK_SIZE: usize = 1024;
+    let mut out = Vec::with_capacity(input.len());
+    for (block_idx, chunk) in input.chunks(BLOCK_SIZE).enumerate() {
+        let key = make_key(password, &params.salt, block_idx as u32);
+        let mut rc4 = Rc4::new_from_slice(&key).expect("16-byte key is valid for RC4");
+        let mut buf = chunk.to_vec();
+        rc4.apply_keystream(&mut buf);
+        out.extend_from_slice(&buf);
+    }
+    out
+}
+
 /// Decrypt an XLS Workbook stream encrypted with legacy RC4 (MD5 KDF).
 ///
 /// Output length equals input length; the FilePass record body is
@@ -135,17 +154,7 @@ pub fn decrypt_workbook_stream(
     }
 
     let classified = record_walk::classify(stream)?;
-    const BLOCK_SIZE: usize = 1024;
-
-    let mut decrypted = Vec::with_capacity(classified.ciphertext.len());
-    for (block_idx, chunk) in classified.ciphertext.chunks(BLOCK_SIZE).enumerate() {
-        let key = make_key(password, &params.salt, block_idx as u32);
-        let mut rc4 = Rc4::new_from_slice(&key).expect("16-byte key is valid for RC4");
-        let mut buf = chunk.to_vec();
-        rc4.apply_keystream(&mut buf);
-        decrypted.extend_from_slice(&buf);
-    }
-
+    let decrypted = apply_keystream(password, params, &classified.ciphertext);
     Ok(record_walk::apply_overlay(decrypted, &classified.overlay))
 }
 
@@ -220,5 +229,26 @@ mod tests {
         let body = [0u8; 48];
         let params = parse_filepass_body(&body).expect("parse ok");
         assert_eq!(params.salt, [0u8; 16]);
+    }
+
+    #[test]
+    fn apply_keystream_rekeys_every_block() {
+        let params = Rc4LegacyParams {
+            salt: [0u8; 16],
+            encrypted_verifier: [0u8; 16],
+            encrypted_verifier_hash: [0u8; 16],
+        };
+        let plaintext = vec![0x41u8; 2048];
+        let encrypted = apply_keystream("pw", &params, &plaintext);
+        assert_ne!(
+            &encrypted[..1024],
+            &encrypted[1024..],
+            "per-block re-keying should yield different ciphertext for identical plaintext"
+        );
+        let decrypted = apply_keystream("pw", &params, &encrypted);
+        assert_eq!(
+            decrypted, plaintext,
+            "RC4 is symmetric: round-trip recovers input"
+        );
     }
 }

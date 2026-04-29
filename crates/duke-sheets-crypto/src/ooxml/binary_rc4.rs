@@ -3,9 +3,9 @@
 //! Same binary `EncryptionHeader`/`EncryptionVerifier` layout as Standard
 //! Encryption (§2.3.4.5) but with `AlgID=0x6801` (RC4) and
 //! `ProviderType=0x0001`. Same SHA-1 KDF as our XLS RC4 CryptoAPI
-//! variant — we reuse `xls::rc4_cryptoapi::make_key` and `decrypt_raw`
-//! since the cipher math is identical; only the re-key block size and
-//! verifier hash size differ:
+//! variant — we reuse `xls::rc4_cryptoapi::make_key` and
+//! `apply_keystream` since the cipher math is identical; only the
+//! re-key block size and verifier hash size differ:
 //!
 //! | Variant | Re-key boundary | Verifier hash size |
 //! |---|---|---|
@@ -20,7 +20,7 @@ use sha1::{Digest as _, Sha1};
 use subtle::ConstantTimeEq;
 
 use crate::error::{CryptoError, CryptoResult};
-use crate::xls::rc4_cryptoapi::{decrypt_raw, make_key};
+use crate::xls::rc4_cryptoapi::{apply_keystream, make_key};
 
 /// Parsed Binary RC4 EncryptionHeader + EncryptionVerifier.
 #[derive(Debug, Clone)]
@@ -148,7 +148,7 @@ fn decrypt_package(
 
     // OOXML Binary RC4 re-keys every 512 bytes (vs XLS's 1024).
     const BLOCK_SIZE: usize = 512;
-    let mut decrypted = decrypt_raw(password, &d.salt, d.key_size_bits, BLOCK_SIZE, ciphertext);
+    let mut decrypted = apply_keystream(password, &d.salt, d.key_size_bits, BLOCK_SIZE, ciphertext);
     decrypted.truncate(total_size);
     Ok(decrypted)
 }

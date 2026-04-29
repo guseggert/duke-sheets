@@ -126,9 +126,25 @@ fn xor_ror1(b1: u8, b2: u8) -> u8 {
     (v >> 1) | ((v & 1) << 7)
 }
 
-/// Rotate-right by 5 bits (8-bit width), used during data byte unmasking.
+/// Rotate-right by 5 bits (8-bit width), used when decrypting data
+/// bytes (after the XOR with the rolling mask).
 fn ror5(v: u8) -> u8 {
     (v >> 5) | ((v & 0x1F) << 3)
+}
+
+/// Rotate-left by 5 bits (8-bit width), used when encrypting data
+/// bytes (before the XOR with the rolling mask). Inverse of [`ror5`].
+fn rol5(v: u8) -> u8 {
+    (v << 5) | (v >> 3)
+}
+
+/// Direction for the XOR Obfuscation cipher. RC4 variants are
+/// symmetric, but XOR Obfuscation pairs `(rol5, xor)` for encrypt with
+/// `(xor, ror5)` for decrypt, so direction must be specified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XorDirection {
+    Encrypt,
+    Decrypt,
 }
 
 /// Build the 16-byte `XorArray` rolling mask
@@ -181,6 +197,62 @@ fn create_xor_array(password: &[u8]) -> [u8; 16] {
     obf
 }
 
+/// Apply the XOR Obfuscation cipher to a classified Workbook stream.
+///
+/// Plaintext positions (overlay = `Some`) are copied through; encrypted
+/// runs (overlay = `None`) are transformed per `direction`. The mask
+/// index for each run is `(run_start + run_len + adjustment) % 16`,
+/// where `adjustment = 4` for the tail of a `BoundSheet8` record (whose
+/// 4-byte `lbPlyPos` prefix was excluded from encryption).
+pub(crate) fn apply_xor_to_classified(
+    classified: &record_walk::ClassifiedStream,
+    xor_array: &[u8; 16],
+    direction: XorDirection,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(classified.overlay.len());
+    let mut i = 0usize;
+    while i < classified.overlay.len() {
+        match classified.overlay[i] {
+            Some(b) => {
+                out.push(b);
+                i += 1;
+            }
+            None => {
+                let run_start = i;
+                let mut run_end = i;
+                while run_end < classified.overlay.len() && classified.overlay[run_end].is_none() {
+                    run_end += 1;
+                }
+                let count = run_end - run_start;
+                let is_bound_sheet_tail = run_start >= 4
+                    && classified.overlay[run_start - 4..run_start]
+                        .iter()
+                        .all(Option::is_some)
+                    && classified.overlay[run_start - 8..run_start - 4]
+                        .iter()
+                        .all(Option::is_some)
+                    && (run_start >= 8
+                        && classified.ciphertext[run_start - 8] == 0x85
+                        && classified.ciphertext[run_start - 7] == 0x00);
+
+                let adjustment = if is_bound_sheet_tail { 4 } else { 0 };
+                let mut idx = (run_start + count + adjustment) % 16;
+                for k in 0..count {
+                    let src = classified.ciphertext[run_start + k];
+                    let transformed = match direction {
+                        XorDirection::Decrypt => ror5(src ^ xor_array[idx]),
+                        XorDirection::Encrypt => rol5(src) ^ xor_array[idx],
+                    };
+                    out.push(transformed);
+                    idx = (idx + 1) % 16;
+                }
+                i = run_end;
+            }
+        }
+    }
+    out
+}
+
 /// Decrypt an XLS Workbook stream encrypted with XOR Obfuscation.
 pub fn decrypt_workbook_stream(
     stream: &[u8],
@@ -206,54 +278,11 @@ pub fn decrypt_workbook_stream(
 
     let xor_array = create_xor_array(pw_bytes);
     let classified = record_walk::classify(stream)?;
-
-    // Walk the classified stream byte by byte. For each byte where the
-    // overlay is None (encrypted), apply XOR + ROR-5 with the rolling
-    // mask. The mask index for each run is set to (stream_offset_of_run_end + adjustment) % 16.
-    let mut out = Vec::with_capacity(stream.len());
-    let mut i = 0usize;
-    while i < classified.overlay.len() {
-        match classified.overlay[i] {
-            Some(b) => {
-                out.push(b);
-                i += 1;
-            }
-            None => {
-                // Determine the length of this encrypted run and whether
-                // it follows a BoundSheet8 lbPlyPos prefix (4 plaintext
-                // bytes immediately before this run, within the same
-                // record).
-                let run_start = i;
-                let mut run_end = i;
-                while run_end < classified.overlay.len() && classified.overlay[run_end].is_none() {
-                    run_end += 1;
-                }
-                let count = run_end - run_start;
-                let is_bound_sheet_tail = run_start >= 4
-                    && classified.overlay[run_start - 4..run_start]
-                        .iter()
-                        .all(Option::is_some)
-                    && classified.overlay[run_start - 8..run_start - 4]
-                        .iter()
-                        .all(Option::is_some)
-                    && (run_start >= 8
-                        && classified.ciphertext[run_start - 8] == 0x85
-                        && classified.ciphertext[run_start - 7] == 0x00);
-
-                let adjustment = if is_bound_sheet_tail { 4 } else { 0 };
-                let mut idx = (run_start + count + adjustment) % 16;
-                for k in 0..count {
-                    let cb = classified.ciphertext[run_start + k];
-                    let unmasked = ror5(cb ^ xor_array[idx]);
-                    out.push(unmasked);
-                    idx = (idx + 1) % 16;
-                }
-                i = run_end;
-            }
-        }
-    }
-
-    Ok(out)
+    Ok(apply_xor_to_classified(
+        &classified,
+        &xor_array,
+        XorDirection::Decrypt,
+    ))
 }
 
 #[cfg(test)]
@@ -305,42 +334,38 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    /// Round-trip XOR (since the algorithm is its own inverse if you
-    /// reverse the rotate direction): encrypt a record body using the
-    /// inverse operations, then decrypt and confirm we recover the
-    /// plaintext.
+    /// Encrypt a NUMBER record's body via [`apply_xor_to_classified`]
+    /// in [`XorDirection::Encrypt`], then run [`decrypt_workbook_stream`]
+    /// to recover the plaintext. Locks in symmetry of the factored
+    /// cipher walk against the legacy in-place decrypt path.
     #[test]
     fn round_trip_one_record() {
-        // Construct a stream: BOF (excluded, plaintext body) + a 0x0203
-        // (NUMBER) record we'll fully encrypt.
-        let mut stream = Vec::new();
-        stream.extend_from_slice(&0x0809u16.to_le_bytes()); // BOF type
-        stream.extend_from_slice(&8u16.to_le_bytes()); // size
-        stream.extend_from_slice(&[0u8; 8]); // BOF body
+        let pw = b"hunter2";
+        let xor_array = create_xor_array(pw);
+
+        let mut plain = Vec::new();
+        plain.extend_from_slice(&0x0809u16.to_le_bytes());
+        plain.extend_from_slice(&8u16.to_le_bytes());
+        plain.extend_from_slice(&[0u8; 8]);
         let plain_body = [
             0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE,
         ];
-        stream.extend_from_slice(&0x0203u16.to_le_bytes()); // NUMBER type
-        stream.extend_from_slice(&(plain_body.len() as u16).to_le_bytes()); // size
-        let body_offset = stream.len();
-        // Encrypt body with the XOR algorithm in reverse: ROL-5 then XOR
-        // (so decrypt = XOR then ROR-5 inverts it).
-        let pw = b"hunter2";
-        let xor_array = create_xor_array(pw);
-        let count = plain_body.len();
-        let mut idx = (body_offset + count) % 16;
-        for &b in &plain_body {
-            let rolled = (b << 5) | (b >> 3);
-            let masked = rolled ^ xor_array[idx];
-            stream.push(masked);
-            idx = (idx + 1) % 16;
-        }
+        plain.extend_from_slice(&0x0203u16.to_le_bytes());
+        plain.extend_from_slice(&(plain_body.len() as u16).to_le_bytes());
+        let body_offset = plain.len();
+        plain.extend_from_slice(&plain_body);
 
-        // Decrypt and verify.
+        let plain_classified = record_walk::classify(&plain).expect("classify plaintext");
+        let stream = apply_xor_to_classified(&plain_classified, &xor_array, XorDirection::Encrypt);
+        assert_ne!(
+            &stream[body_offset..body_offset + plain_body.len()],
+            &plain_body,
+            "encryption must alter the encrypted run"
+        );
+
         let params = XorParams {
             stored_key: 0,
             verification_bytes: {
-                // Compute matching VerifyPassword output for "hunter2".
                 let mut seq = vec![pw.len() as u8];
                 seq.extend_from_slice(pw);
                 seq.reverse();
@@ -356,10 +381,44 @@ mod tests {
         let decrypted = decrypt_workbook_stream(&stream, "hunter2", &params)
             .expect("decrypt round-trip should succeed");
 
-        // Decrypted body should match plaintext.
-        assert_eq!(&decrypted[body_offset..body_offset + count], &plain_body);
-        // Header preserved.
+        assert_eq!(
+            &decrypted[body_offset..body_offset + plain_body.len()],
+            &plain_body
+        );
         assert_eq!(decrypted[12], 0x03);
         assert_eq!(decrypted[13], 0x02);
+    }
+
+    #[test]
+    fn apply_xor_to_classified_is_symmetric_via_directions() {
+        let pw = b"correct horse";
+        let xor_array = create_xor_array(pw);
+
+        let mut plain = Vec::new();
+        plain.extend_from_slice(&0x0809u16.to_le_bytes());
+        plain.extend_from_slice(&8u16.to_le_bytes());
+        plain.extend_from_slice(&[0u8; 8]);
+        plain.extend_from_slice(&0x0203u16.to_le_bytes());
+        plain.extend_from_slice(&14u16.to_le_bytes());
+        plain.extend_from_slice(&[0x42u8; 14]);
+
+        let plain_classified = record_walk::classify(&plain).unwrap();
+        let encrypted =
+            apply_xor_to_classified(&plain_classified, &xor_array, XorDirection::Encrypt);
+        let enc_classified = record_walk::classify(&encrypted).unwrap();
+        let decrypted = apply_xor_to_classified(&enc_classified, &xor_array, XorDirection::Decrypt);
+
+        assert_eq!(
+            decrypted, plain,
+            "encrypt then decrypt recovers the original stream"
+        );
+    }
+
+    #[test]
+    fn rol5_and_ror5_are_inverses() {
+        for b in 0u8..=255 {
+            assert_eq!(ror5(rol5(b)), b);
+            assert_eq!(rol5(ror5(b)), b);
+        }
     }
 }
