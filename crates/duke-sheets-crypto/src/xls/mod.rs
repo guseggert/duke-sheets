@@ -26,10 +26,16 @@ const BOUND_SHEET_8: u16 = 0x0085;
 /// `duke-sheets` crate. Stronger to weaker:
 ///
 /// - `Rc4CryptoApi { key_bits }`: SHA-1 KDF, 1024-byte block re-keying.
-///   Excel XP+ default. `key_bits` is commonly 40 or 128.
+///   Excel XP+ default. `key_bits` is commonly 40 or 128. Verified
+///   round-trip-readable by both LibreOffice and real Excel.
 /// - `Rc4Legacy`: MD5 KDF, 1024-byte block re-keying. Excel 97/2000.
+///   Verified round-trip-readable by both LibreOffice and real Excel.
 /// - `Xor`: 16-byte rolling XOR mask, password capped at 15 chars.
-///   Excel 95-era. Trivially breakable.
+///   Excel 95-era. Trivially breakable. **Round-trips via our own
+///   reader; cross-tool interop is not verified.** Modern Excel doesn't
+///   expose XOR on the write side and LibreOffice's `.xls` filter emits
+///   legacy RC4 by default, leaving no readily-available reference
+///   fixture for byte-level comparison.
 #[derive(Debug, Clone, Copy)]
 pub enum XlsEncryptionVariant {
     Rc4CryptoApi { key_bits: u32 },

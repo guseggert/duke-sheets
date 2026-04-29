@@ -25,6 +25,7 @@ mod data_types;
 mod data_validation;
 mod dimensions;
 mod encrypted_agile_compat;
+mod encrypted_rc4_compat;
 mod encrypted_standard_compat;
 mod fill_styles;
 mod font_styles;

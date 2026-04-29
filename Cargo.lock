@@ -812,6 +812,7 @@ dependencies = [
  "base64",
  "duke-sheets-chart",
  "duke-sheets-core",
+ "duke-sheets-crypto",
  "duke-sheets-xls",
  "duke-sheets-xlsb",
  "duke-sheets-xlsx",
