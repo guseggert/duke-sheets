@@ -11,6 +11,7 @@ categories = ["parser-implementations", "encoding"]
 
 [dependencies]
 duke-sheets-core.workspace = true
+duke-sheets-crypto.workspace = true
 duke-sheets-formula.workspace = true
 duke-sheets-xlsx.workspace = true
 duke-sheets-xls = { workspace = true, optional = true }

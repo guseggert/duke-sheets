@@ -149,7 +149,7 @@ pub use duke_sheets_chart::{
 // Re-export I/O types
 pub use duke_sheets_csv::{CsvError, CsvReadOptions, CsvReader, CsvWriteOptions, CsvWriter};
 #[cfg(feature = "xls")]
-pub use duke_sheets_xls::{XlsError, XlsReader};
+pub use duke_sheets_xls::{XlsError, XlsReader, XlsWriter};
 #[cfg(feature = "xlsb")]
 pub use duke_sheets_xlsb::{XlsbError, XlsbReader, XlsbWriter};
 pub use duke_sheets_xlsx::{XlsxError, XlsxReader, XlsxWriter};
@@ -457,8 +457,34 @@ impl WorkbookExt for Workbook {
                 XlsxWriter::write_file_encrypted(self, path, password, &xlsx_profile)
                     .map_err(|e| Error::other(e.to_string()))
             }
+            #[cfg(feature = "xls")]
+            Some("xls") => {
+                let variant = match &opts.encryption {
+                    EncryptionProfile::Default => {
+                        duke_sheets_crypto::xls::XlsEncryptionVariant::Rc4CryptoApi {
+                            key_bits: 128,
+                        }
+                    }
+                    EncryptionProfile::XlsRc4CryptoApi { key_bits } => {
+                        duke_sheets_crypto::xls::XlsEncryptionVariant::Rc4CryptoApi {
+                            key_bits: *key_bits,
+                        }
+                    }
+                    EncryptionProfile::XlsRc4Legacy => {
+                        duke_sheets_crypto::xls::XlsEncryptionVariant::Rc4Legacy
+                    }
+                    EncryptionProfile::XlsXor => duke_sheets_crypto::xls::XlsEncryptionVariant::Xor,
+                    other => {
+                        return Err(Error::other(format!(
+                            "XLS write does not support encryption profile {other:?}"
+                        )));
+                    }
+                };
+                XlsWriter::write_file_encrypted(self, path, password, variant)
+                    .map_err(|e| Error::other(e.to_string()))
+            }
             _ => Err(Error::other(format!(
-                "encrypted save is only implemented for .xlsx-family extensions; got {}",
+                "encrypted save is only implemented for .xlsx-family and .xls extensions; got {}",
                 path.display()
             ))),
         }
@@ -539,6 +565,12 @@ impl WorkbookExt for Workbook {
             Some("xlsx") => {
                 XlsxWriter::write_file(self, path).map_err(|e| Error::other(e.to_string()))
             }
+            #[cfg(feature = "xls")]
+            Some("xls") => {
+                XlsWriter::write_file(self, path).map_err(|e| Error::other(e.to_string()))
+            }
+            #[cfg(not(feature = "xls"))]
+            Some("xls") => Err(Error::other("XLS writing requires the 'xls' feature")),
             #[cfg(feature = "xlsb")]
             Some("xlsb") => {
                 XlsbWriter::write_file(self, path).map_err(|e| Error::other(e.to_string()))

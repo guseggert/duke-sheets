@@ -83,11 +83,7 @@ impl XlsWriter {
     /// `/Workbook` stream).
     pub fn write_to_bytes(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         let stream = build_workbook_stream(workbook)?;
-        let mut builder = CompoundFileBuilder::new();
-        builder
-            .add_stream("/Workbook", stream)
-            .map_err(cfb_to_xls)?;
-        builder.build().map_err(cfb_to_xls)
+        wrap_workbook_stream_in_cfb(stream)
     }
 
     /// Write a workbook to a filesystem path.
@@ -97,6 +93,43 @@ impl XlsWriter {
         f.write_all(&bytes)?;
         Ok(())
     }
+
+    /// Serialize a workbook to encrypted BIFF8 bytes. Builds the
+    /// plaintext `/Workbook` stream, runs it through
+    /// [`duke_sheets_crypto::xls::encrypt_workbook_stream`] for the
+    /// requested variant, then re-wraps the encrypted stream in a
+    /// fresh CFB envelope.
+    pub fn write_to_bytes_encrypted(
+        workbook: &Workbook,
+        password: &str,
+        variant: duke_sheets_crypto::xls::XlsEncryptionVariant,
+    ) -> XlsResult<Vec<u8>> {
+        let plain = build_workbook_stream(workbook)?;
+        let encrypted = duke_sheets_crypto::xls::encrypt_workbook_stream(&plain, password, variant)
+            .map_err(XlsError::from)?;
+        wrap_workbook_stream_in_cfb(encrypted)
+    }
+
+    /// Write a workbook to a filesystem path with FilePass encryption.
+    pub fn write_file_encrypted<P: AsRef<Path>>(
+        workbook: &Workbook,
+        path: P,
+        password: &str,
+        variant: duke_sheets_crypto::xls::XlsEncryptionVariant,
+    ) -> XlsResult<()> {
+        let bytes = Self::write_to_bytes_encrypted(workbook, password, variant)?;
+        let mut f = std::fs::File::create(path.as_ref())?;
+        f.write_all(&bytes)?;
+        Ok(())
+    }
+}
+
+fn wrap_workbook_stream_in_cfb(stream: Vec<u8>) -> XlsResult<Vec<u8>> {
+    let mut builder = CompoundFileBuilder::new();
+    builder
+        .add_stream("/Workbook", stream)
+        .map_err(cfb_to_xls)?;
+    builder.build().map_err(cfb_to_xls)
 }
 
 fn cfb_to_xls(err: crate::cfb::CfbError) -> XlsError {
