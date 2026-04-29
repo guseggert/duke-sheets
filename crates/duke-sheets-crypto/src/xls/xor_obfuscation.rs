@@ -197,6 +197,82 @@ fn create_xor_array(password: &[u8]) -> [u8; 16] {
     obf
 }
 
+/// Validate `password` and produce the 16-byte rolling XOR array used
+/// to encrypt non-excluded record bodies. Wraps the private
+/// [`create_xor_array`] with the same length checks
+/// [`decrypt_workbook_stream`] applies on the read side.
+pub(crate) fn create_xor_array_for_encrypt(password: &[u8]) -> CryptoResult<[u8; 16]> {
+    if password.is_empty() {
+        return Err(CryptoError::InvalidFormat(
+            "XOR Obfuscation does not accept empty passwords".into(),
+        ));
+    }
+    if password.len() > MAX_PASSWORD_LEN {
+        return Err(CryptoError::InvalidFormat(format!(
+            "XOR Obfuscation password must be \u{2264} {} characters (got {})",
+            MAX_PASSWORD_LEN,
+            password.len()
+        )));
+    }
+    Ok(create_xor_array(password))
+}
+
+/// Compute the 16-bit verification value Excel writes into the
+/// FilePass body for a given password (MS-OFFCRYPTO §2.3.7.4). Inverse
+/// of [`verify_password`]'s reduction.
+pub(crate) fn compute_verification_bytes(password: &[u8]) -> u16 {
+    let mut seq = Vec::with_capacity(password.len() + 1);
+    seq.push(password.len() as u8);
+    seq.extend_from_slice(password);
+    seq.reverse();
+
+    let mut v: u16 = 0;
+    for b in seq {
+        let i1 = if v & 0x4000 != 0 { 1 } else { 0 };
+        let i2 = (v << 1) & 0x7FFF;
+        v = (i1 ^ i2) ^ b as u16;
+    }
+    v ^ VERIFIER_MAGIC
+}
+
+/// Build the full XOR Obfuscation FilePass record (header + body).
+///
+/// Layout (10 bytes total):
+/// ```text
+/// [0..2]   record type   = 0x002F
+/// [2..4]   body size     = 6
+/// [4..6]   wEncryptionType = 0x0000
+/// [6..8]   Key (informational; readers regenerate from password)
+/// [8..10]  VerificationBytes (computed from password)
+/// ```
+pub fn build_filepass_record(password: &[u8]) -> CryptoResult<Vec<u8>> {
+    if password.is_empty() {
+        return Err(CryptoError::InvalidFormat(
+            "XOR Obfuscation does not accept empty passwords".into(),
+        ));
+    }
+    if password.len() > MAX_PASSWORD_LEN {
+        return Err(CryptoError::InvalidFormat(format!(
+            "XOR Obfuscation password must be \u{2264} {} characters (got {})",
+            MAX_PASSWORD_LEN,
+            password.len()
+        )));
+    }
+
+    let mut stored_key_bytes = [0u8; 2];
+    crate::random::fill_random(&mut stored_key_bytes)?;
+    let stored_key = u16::from_le_bytes(stored_key_bytes);
+    let verification_bytes = compute_verification_bytes(password);
+
+    let mut record = Vec::with_capacity(10);
+    record.extend_from_slice(&crate::xls::FILEPASS_RECORD_TYPE.to_le_bytes());
+    record.extend_from_slice(&6u16.to_le_bytes());
+    record.extend_from_slice(&0u16.to_le_bytes()); // wEncryptionType = 0
+    record.extend_from_slice(&stored_key.to_le_bytes());
+    record.extend_from_slice(&verification_bytes.to_le_bytes());
+    Ok(record)
+}
+
 /// Apply the XOR Obfuscation cipher to a classified Workbook stream.
 ///
 /// Plaintext positions (overlay = `Some`) are copied through; encrypted
@@ -277,7 +353,7 @@ pub fn decrypt_workbook_stream(
     }
 
     let xor_array = create_xor_array(pw_bytes);
-    let classified = record_walk::classify(stream)?;
+    let classified = record_walk::classify(stream, record_walk::Direction::Decrypt)?;
     Ok(apply_xor_to_classified(
         &classified,
         &xor_array,
@@ -355,7 +431,8 @@ mod tests {
         let body_offset = plain.len();
         plain.extend_from_slice(&plain_body);
 
-        let plain_classified = record_walk::classify(&plain).expect("classify plaintext");
+        let plain_classified = record_walk::classify(&plain, record_walk::Direction::Encrypt)
+            .expect("classify plaintext");
         let stream = apply_xor_to_classified(&plain_classified, &xor_array, XorDirection::Encrypt);
         assert_ne!(
             &stream[body_offset..body_offset + plain_body.len()],
@@ -402,10 +479,12 @@ mod tests {
         plain.extend_from_slice(&14u16.to_le_bytes());
         plain.extend_from_slice(&[0x42u8; 14]);
 
-        let plain_classified = record_walk::classify(&plain).unwrap();
+        let plain_classified =
+            record_walk::classify(&plain, record_walk::Direction::Encrypt).unwrap();
         let encrypted =
             apply_xor_to_classified(&plain_classified, &xor_array, XorDirection::Encrypt);
-        let enc_classified = record_walk::classify(&encrypted).unwrap();
+        let enc_classified =
+            record_walk::classify(&encrypted, record_walk::Direction::Decrypt).unwrap();
         let decrypted = apply_xor_to_classified(&enc_classified, &xor_array, XorDirection::Decrypt);
 
         assert_eq!(

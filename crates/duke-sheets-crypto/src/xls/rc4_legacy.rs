@@ -139,6 +139,69 @@ pub fn apply_keystream(password: &str, params: &Rc4LegacyParams, input: &[u8]) -
     out
 }
 
+/// Re-parse [`Rc4LegacyParams`] from a FilePass record produced by
+/// [`build_filepass_record`]. The encrypt path uses this to recover
+/// the salt for keying the workbook-body cipher without holding extra
+/// state.
+pub(crate) fn params_from_filepass(record: &[u8]) -> CryptoResult<Rc4LegacyParams> {
+    if record.len() < 58 {
+        return Err(CryptoError::InvalidFormat(format!(
+            "legacy RC4 FilePass record too short: {} (need 58)",
+            record.len()
+        )));
+    }
+    parse_filepass_body(&record[10..58])
+}
+
+/// Build the full legacy RC4 FilePass record (header + body) for a
+/// freshly-generated salt and verifier.
+///
+/// Layout (58 bytes total):
+/// ```text
+/// [0..2]    record type  = 0x002F
+/// [2..4]    body size    = 54
+/// [4..6]    wEncryptionType = 1
+/// [6..8]    vMajor       = 1
+/// [8..10]   vMinor       = 1
+/// [10..26]  Salt
+/// [26..42]  EncryptedVerifier       (RC4-encrypted from random verifier)
+/// [42..58]  EncryptedVerifierHash   (RC4-encrypted from MD5(verifier))
+/// ```
+///
+/// `encrypted_verifier` and `encrypted_verifier_hash` are produced by a
+/// single RC4 instance keyed at block 0; the keystream continues across
+/// the two reads, matching what [`verify_password`] expects on decrypt.
+pub fn build_filepass_record(password: &str) -> CryptoResult<Vec<u8>> {
+    let mut salt = [0u8; 16];
+    crate::random::fill_random(&mut salt)?;
+
+    let mut verifier = [0u8; 16];
+    crate::random::fill_random(&mut verifier)?;
+
+    let mut md = Md5::new();
+    md.update(verifier);
+    let verifier_hash: [u8; 16] = md.finalize().into();
+
+    let key = make_key(password, &salt, 0);
+    let mut rc4 = Rc4::new_from_slice(&key).expect("16-byte key is valid for RC4");
+
+    let mut encrypted_verifier = verifier;
+    rc4.apply_keystream(&mut encrypted_verifier);
+    let mut encrypted_verifier_hash = verifier_hash;
+    rc4.apply_keystream(&mut encrypted_verifier_hash);
+
+    let mut record = Vec::with_capacity(58);
+    record.extend_from_slice(&crate::xls::FILEPASS_RECORD_TYPE.to_le_bytes());
+    record.extend_from_slice(&54u16.to_le_bytes());
+    record.extend_from_slice(&1u16.to_le_bytes()); // wEncryptionType
+    record.extend_from_slice(&1u16.to_le_bytes()); // vMajor
+    record.extend_from_slice(&1u16.to_le_bytes()); // vMinor
+    record.extend_from_slice(&salt);
+    record.extend_from_slice(&encrypted_verifier);
+    record.extend_from_slice(&encrypted_verifier_hash);
+    Ok(record)
+}
+
 /// Decrypt an XLS Workbook stream encrypted with legacy RC4 (MD5 KDF).
 ///
 /// Output length equals input length; the FilePass record body is
@@ -153,7 +216,7 @@ pub fn decrypt_workbook_stream(
         return Err(CryptoError::BadPassword);
     }
 
-    let classified = record_walk::classify(stream)?;
+    let classified = record_walk::classify(stream, record_walk::Direction::Decrypt)?;
     let decrypted = apply_keystream(password, params, &classified.ciphertext);
     Ok(record_walk::apply_overlay(decrypted, &classified.overlay))
 }

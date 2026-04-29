@@ -30,6 +30,19 @@ const EXCLUDED_RECORD_TYPES: &[u16] = &[
 /// BoundSheet8: first 4 bytes of body (`lbPlyPos`) plaintext, rest encrypted.
 const BOUND_SHEET_8: u16 = 0x0085;
 
+/// Direction in which a Workbook stream is being classified.
+///
+/// The two directions agree on every record except `FilePass`. On
+/// decrypt, the FilePass record is neutered: type bytes overwritten
+/// with zeros and body zeroed, so downstream BIFF parsers ignore it.
+/// On encrypt, the FilePass record's real bytes pass through verbatim
+/// — the caller has already built and inserted it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Direction {
+    Decrypt,
+    Encrypt,
+}
+
 /// Classified workbook stream: ciphertext with zero-filled plaintext
 /// holes, plus a co-indexed overlay of known plaintext bytes.
 pub(crate) struct ClassifiedStream {
@@ -40,7 +53,7 @@ pub(crate) struct ClassifiedStream {
 /// Walk the records in a workbook stream and classify each byte as
 /// either "plaintext" (provide overlay byte) or "encrypted" (overlay
 /// is `None`, ciphertext buffer holds the real bytes).
-pub(crate) fn classify(stream: &[u8]) -> CryptoResult<ClassifiedStream> {
+pub(crate) fn classify(stream: &[u8], direction: Direction) -> CryptoResult<ClassifiedStream> {
     let mut ciphertext = Vec::with_capacity(stream.len());
     let mut overlay: Vec<Option<u8>> = Vec::with_capacity(stream.len());
 
@@ -57,12 +70,15 @@ pub(crate) fn classify(stream: &[u8]) -> CryptoResult<ClassifiedStream> {
             )));
         }
 
-        if record_type == 0x002F {
-            // FilePass: neuter the record so downstream parsers treat
-            // the stream as plaintext. Zero the 2-byte type (`0x002F`
-            // becomes `0x0000` - an unknown record that BIFF readers
-            // skip) but keep the 2-byte size so every absolute offset
-            // (notably `BoundSheet8.lbPlyPos`) remains valid.
+        if record_type == 0x002F && direction == Direction::Decrypt {
+            // FilePass on decrypt: neuter the record so downstream
+            // parsers treat the stream as plaintext. Zero the 2-byte
+            // type (`0x002F` becomes `0x0000` - an unknown record that
+            // BIFF readers skip) but keep the 2-byte size so every
+            // absolute offset (notably `BoundSheet8.lbPlyPos`) remains
+            // valid. On encrypt, the FilePass record falls through to
+            // the EXCLUDED_RECORD_TYPES branch below: its real bytes
+            // are preserved verbatim because the caller built them.
             ciphertext.extend_from_slice(&[0, 0, 0, 0]);
             overlay.extend_from_slice(&[
                 Some(0),

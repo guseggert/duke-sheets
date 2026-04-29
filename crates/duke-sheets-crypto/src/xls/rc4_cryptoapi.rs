@@ -131,6 +131,122 @@ pub fn apply_keystream(
     out
 }
 
+/// CSP name Office writes for RC4 CryptoAPI FilePass records (UTF-16LE
+/// in the EncryptionHeader). Matches what Excel emits when saving with
+/// `SetPasswordEncryptionOptions("Microsoft Enhanced Cryptographic
+/// Provider v1.0", "RC4", ...)`.
+const CSP_NAME: &str = "Microsoft Enhanced Cryptographic Provider v1.0";
+
+/// Re-parse the salt from a FilePass record produced by
+/// [`build_filepass_record`]. The encrypt path uses this to recover the
+/// salt for keying the workbook-body cipher without holding extra state.
+pub(crate) fn salt_from_filepass(record: &[u8]) -> CryptoResult<[u8; 16]> {
+    if record.len() < 22 {
+        return Err(CryptoError::InvalidFormat(
+            "RC4 CryptoAPI FilePass record too short for header prefix".into(),
+        ));
+    }
+    let header_size = u32::from_le_bytes([record[14], record[15], record[16], record[17]]) as usize;
+    let salt_size_offset = 18usize
+        .checked_add(header_size)
+        .ok_or_else(|| CryptoError::InvalidFormat("RC4 CryptoAPI header size overflow".into()))?;
+    let salt_offset = salt_size_offset + 4;
+    if salt_offset + 16 > record.len() {
+        return Err(CryptoError::InvalidFormat(
+            "RC4 CryptoAPI FilePass record truncated before salt".into(),
+        ));
+    }
+    let mut salt = [0u8; 16];
+    salt.copy_from_slice(&record[salt_offset..salt_offset + 16]);
+    Ok(salt)
+}
+
+/// MS-OFFCRYPTO §2.3.1 EncryptionHeader Flags. Bit 2 = fCryptoAPI;
+/// other bits cleared (no fDocProps / fExternal / fAES for RC4).
+const FLAGS_RC4_CRYPTOAPI: u32 = 0x04;
+/// MS-OFFCRYPTO §2.3.4.5 AlgID for RC4.
+const ALG_ID_RC4: u32 = 0x6801;
+/// MS-OFFCRYPTO §2.3.4.5 AlgIDHash for SHA-1.
+const ALG_ID_HASH_SHA1: u32 = 0x8004;
+/// MS-OFFCRYPTO §2.3.4.5 ProviderType for RC4.
+const PROVIDER_TYPE_RC4: u32 = 0x0001;
+
+/// Build the full RC4 CryptoAPI FilePass record (header + body) for a
+/// freshly-generated salt and verifier.
+///
+/// Layout follows MS-OFFCRYPTO §2.3.4.5 with the XLS-specific
+/// `wEncryptionType=1, vMajor=4, vMinor=2` triple in front. Writes
+/// `EncryptionHeaderFlags == EncryptionHeader.Flags` (Excel duplicates
+/// Flags into both fields), AlgID=RC4, AlgIDHash=SHA-1, ProviderType=RC4,
+/// CSPName="Microsoft Enhanced Cryptographic Provider v1.0\0".
+///
+/// `key_bits` selects the RC4 key size (commonly 40 or 128). The
+/// verifier and its 20-byte SHA-1 hash are encrypted with a single RC4
+/// instance keyed at block 0 (continuous keystream).
+pub fn build_filepass_record(password: &str, key_bits: u32) -> CryptoResult<Vec<u8>> {
+    let mut salt = [0u8; 16];
+    crate::random::fill_random(&mut salt)?;
+    let mut verifier = [0u8; 16];
+    crate::random::fill_random(&mut verifier)?;
+
+    let mut h = Sha1::new();
+    h.update(verifier);
+    let verifier_hash = h.finalize();
+    let mut verifier_hash_padded = [0u8; 32];
+    verifier_hash_padded[..20].copy_from_slice(&verifier_hash);
+
+    let key = make_key(password, &salt, key_bits, 0);
+    let mut rc4 = Rc4::new_from_slice(&key[..16]).expect("16-byte key is valid for RC4");
+
+    let mut encrypted_verifier = verifier;
+    rc4.apply_keystream(&mut encrypted_verifier);
+    let mut encrypted_verifier_hash = verifier_hash_padded;
+    rc4.apply_keystream(&mut encrypted_verifier_hash);
+
+    let mut csp_utf16: Vec<u8> = Vec::with_capacity((CSP_NAME.len() + 1) * 2);
+    for unit in CSP_NAME.encode_utf16() {
+        csp_utf16.extend_from_slice(&unit.to_le_bytes());
+    }
+    csp_utf16.extend_from_slice(&[0, 0]);
+
+    let header_fixed_len = 32usize;
+    let header_size = header_fixed_len + csp_utf16.len();
+
+    let mut header = Vec::with_capacity(header_size);
+    header.extend_from_slice(&FLAGS_RC4_CRYPTOAPI.to_le_bytes());
+    header.extend_from_slice(&0u32.to_le_bytes()); // SizeExtra
+    header.extend_from_slice(&ALG_ID_RC4.to_le_bytes());
+    header.extend_from_slice(&ALG_ID_HASH_SHA1.to_le_bytes());
+    header.extend_from_slice(&key_bits.to_le_bytes());
+    header.extend_from_slice(&PROVIDER_TYPE_RC4.to_le_bytes());
+    header.extend_from_slice(&0u32.to_le_bytes()); // Reserved1
+    header.extend_from_slice(&0u32.to_le_bytes()); // Reserved2
+    header.extend_from_slice(&csp_utf16);
+    debug_assert_eq!(header.len(), header_size);
+
+    let verifier_block_len = 4 + 16 + 16 + 4 + 20;
+    let body_after_dispatch_len = 4 + 4 + header_size + verifier_block_len;
+    let body_len = 6 + body_after_dispatch_len;
+    let record_len = 4 + body_len;
+
+    let mut record = Vec::with_capacity(record_len);
+    record.extend_from_slice(&crate::xls::FILEPASS_RECORD_TYPE.to_le_bytes());
+    record.extend_from_slice(&(body_len as u16).to_le_bytes());
+    record.extend_from_slice(&1u16.to_le_bytes()); // wEncryptionType
+    record.extend_from_slice(&4u16.to_le_bytes()); // vMajor
+    record.extend_from_slice(&2u16.to_le_bytes()); // vMinor
+    record.extend_from_slice(&FLAGS_RC4_CRYPTOAPI.to_le_bytes()); // EncryptionHeaderFlags
+    record.extend_from_slice(&(header_size as u32).to_le_bytes());
+    record.extend_from_slice(&header);
+    record.extend_from_slice(&16u32.to_le_bytes()); // SaltSize
+    record.extend_from_slice(&salt);
+    record.extend_from_slice(&encrypted_verifier);
+    record.extend_from_slice(&20u32.to_le_bytes()); // VerifierHashSize
+    record.extend_from_slice(&encrypted_verifier_hash[..20]);
+    debug_assert_eq!(record.len(), record_len);
+    Ok(record)
+}
+
 /// Decrypt an XLS Workbook stream that was encrypted with RC4 CryptoAPI.
 ///
 /// `workbook_stream` is the full stream including the FilePass record.
@@ -146,7 +262,7 @@ pub fn decrypt_workbook_stream(
         return Err(CryptoError::BadPassword);
     }
 
-    let classified = record_walk::classify(workbook_stream)?;
+    let classified = record_walk::classify(workbook_stream, record_walk::Direction::Decrypt)?;
     const BLOCK_SIZE: usize = 1024;
     let decrypted = apply_keystream(
         password,

@@ -13,6 +13,153 @@ use crate::error::{CryptoError, CryptoResult};
 /// The BIFF8 `FilePass` record type.
 pub const FILEPASS_RECORD_TYPE: u16 = 0x002F;
 
+/// Globals/Worksheet BOF record type.
+const BOF_RECORD_TYPE: u16 = 0x0809;
+
+/// BoundSheet8 record type — the writer must update `lbPlyPos` (its
+/// first 4 body bytes) when a FilePass record is spliced into the stream.
+const BOUND_SHEET_8: u16 = 0x0085;
+
+/// Selector for which XLS encryption variant a writer should produce.
+///
+/// Mirrors the public `EncryptionProfile` variants in the top-level
+/// `duke-sheets` crate. Stronger to weaker:
+///
+/// - `Rc4CryptoApi { key_bits }`: SHA-1 KDF, 1024-byte block re-keying.
+///   Excel XP+ default. `key_bits` is commonly 40 or 128.
+/// - `Rc4Legacy`: MD5 KDF, 1024-byte block re-keying. Excel 97/2000.
+/// - `Xor`: 16-byte rolling XOR mask, password capped at 15 chars.
+///   Excel 95-era. Trivially breakable.
+#[derive(Debug, Clone, Copy)]
+pub enum XlsEncryptionVariant {
+    Rc4CryptoApi { key_bits: u32 },
+    Rc4Legacy,
+    Xor,
+}
+
+/// Encrypt an XLS Workbook stream by splicing in a FilePass record and
+/// applying the variant's cipher to non-excluded record bodies.
+///
+/// `plaintext_stream` must be a complete, well-formed BIFF8 Workbook
+/// stream that **does not** contain a FilePass record. The first
+/// record must be the globals BOF (`0x0809`).
+///
+/// On success returns a new ciphertext stream of length
+/// `plaintext_stream.len() + filepass_record_size_for_variant(variant)`.
+/// Every `BoundSheet8.lbPlyPos` value is bumped by the FilePass record
+/// size so worksheet-stream offsets remain valid.
+pub fn encrypt_workbook_stream(
+    plaintext_stream: &[u8],
+    password: &str,
+    variant: XlsEncryptionVariant,
+) -> CryptoResult<Vec<u8>> {
+    let bof_end = locate_globals_bof_end(plaintext_stream)?;
+    if find_filepass(plaintext_stream).is_ok() {
+        return Err(CryptoError::InvalidFormat(
+            "plaintext stream already contains a FilePass record".into(),
+        ));
+    }
+
+    let filepass = match variant {
+        XlsEncryptionVariant::Xor => xor_obfuscation::build_filepass_record(password.as_bytes())?,
+        XlsEncryptionVariant::Rc4Legacy => rc4_legacy::build_filepass_record(password)?,
+        XlsEncryptionVariant::Rc4CryptoApi { key_bits } => {
+            rc4_cryptoapi::build_filepass_record(password, key_bits)?
+        }
+    };
+
+    let mut spliced = Vec::with_capacity(plaintext_stream.len() + filepass.len());
+    spliced.extend_from_slice(&plaintext_stream[..bof_end]);
+    spliced.extend_from_slice(&filepass);
+    spliced.extend_from_slice(&plaintext_stream[bof_end..]);
+
+    bump_boundsheet_offsets(&mut spliced, filepass.len() as u32)?;
+
+    let classified = record_walk::classify(&spliced, record_walk::Direction::Encrypt)?;
+
+    let ciphertext = match variant {
+        XlsEncryptionVariant::Xor => {
+            let xor_array = xor_obfuscation::create_xor_array_for_encrypt(password.as_bytes())?;
+            xor_obfuscation::apply_xor_to_classified(
+                &classified,
+                &xor_array,
+                xor_obfuscation::XorDirection::Encrypt,
+            )
+        }
+        XlsEncryptionVariant::Rc4Legacy => {
+            let params = rc4_legacy::params_from_filepass(&filepass)?;
+            let encrypted = rc4_legacy::apply_keystream(password, &params, &classified.ciphertext);
+            encrypted
+        }
+        XlsEncryptionVariant::Rc4CryptoApi { key_bits } => {
+            let salt = rc4_cryptoapi::salt_from_filepass(&filepass)?;
+            const BLOCK_SIZE: usize = 1024;
+            rc4_cryptoapi::apply_keystream(
+                password,
+                &salt,
+                key_bits,
+                BLOCK_SIZE,
+                &classified.ciphertext,
+            )
+        }
+    };
+
+    Ok(record_walk::apply_overlay(ciphertext, &classified.overlay))
+}
+
+fn locate_globals_bof_end(stream: &[u8]) -> CryptoResult<usize> {
+    if stream.len() < 4 {
+        return Err(CryptoError::InvalidFormat(
+            "Workbook stream too short for a record header".into(),
+        ));
+    }
+    let record_type = u16::from_le_bytes([stream[0], stream[1]]);
+    let size = u16::from_le_bytes([stream[2], stream[3]]) as usize;
+    if record_type != BOF_RECORD_TYPE {
+        return Err(CryptoError::InvalidFormat(format!(
+            "Workbook stream must start with BOF (0x0809); found {record_type:#06x}"
+        )));
+    }
+    let end = 4 + size;
+    if end > stream.len() {
+        return Err(CryptoError::InvalidFormat(
+            "globals BOF size extends past stream end".into(),
+        ));
+    }
+    Ok(end)
+}
+
+fn bump_boundsheet_offsets(stream: &mut [u8], delta: u32) -> CryptoResult<()> {
+    let mut cursor = 0usize;
+    while cursor + 4 <= stream.len() {
+        let record_type = u16::from_le_bytes([stream[cursor], stream[cursor + 1]]);
+        let size = u16::from_le_bytes([stream[cursor + 2], stream[cursor + 3]]) as usize;
+        let body_start = cursor + 4;
+        let body_end = body_start + size;
+        if body_end > stream.len() {
+            return Err(CryptoError::InvalidFormat(format!(
+                "record at offset {cursor:#x} extends past stream end"
+            )));
+        }
+        if record_type == BOUND_SHEET_8 && size >= 4 {
+            let prev = u32::from_le_bytes([
+                stream[body_start],
+                stream[body_start + 1],
+                stream[body_start + 2],
+                stream[body_start + 3],
+            ]);
+            let next = prev.checked_add(delta).ok_or_else(|| {
+                CryptoError::InvalidFormat(
+                    "BoundSheet8.lbPlyPos overflow on FilePass splice".into(),
+                )
+            })?;
+            stream[body_start..body_start + 4].copy_from_slice(&next.to_le_bytes());
+        }
+        cursor = body_end;
+    }
+    Ok(())
+}
+
 /// Decrypt an XLS Workbook stream in place.
 ///
 /// Finds the `FilePass` record (which must appear directly after the
