@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
+use duke_sheets_core::style::{Color, FontStyle, Underline};
 use duke_sheets_core::workbook::Workbook;
 use duke_sheets_core::worksheet::Worksheet;
 use duke_sheets_core::CellValue;
@@ -23,12 +24,27 @@ const EOF_RECORD: u16 = 0x000A;
 const CONTINUE_RECORD: u16 = 0x003C;
 const BOUND_SHEET_8: u16 = 0x0085;
 const SST_RECORD: u16 = 0x00FC;
+const FONT_RECORD: u16 = 0x0031;
+const XF_RECORD: u16 = 0x00E0;
 const DIMENSION_RECORD: u16 = 0x0200;
 const WINDOW2_RECORD: u16 = 0x023E;
 const BLANK_RECORD: u16 = 0x0201;
 const NUMBER_RECORD: u16 = 0x0203;
 const BOOLERR_RECORD: u16 = 0x0205;
 const LABELSST_RECORD: u16 = 0x00FD;
+
+/// BIFF8 reserves the first 16 XF records for built-in cell-format
+/// slots; user-defined cell XFs start at 16. Also see MS-XLS §2.4.353.
+const XF_USER_BASE: u16 = 16;
+
+/// BIFF8 emits at least 5 FONT records before any can be referenced
+/// from XFs, with a "skip 4" quirk in cell-XF font_index decoding
+/// (MS-XLS §2.4.122). The writer always emits exactly 5 default fonts
+/// up front; user-defined fonts append after.
+const FONT_BUILTIN_COUNT: u16 = 5;
+
+/// MS-XLS §2.4.122 Auto color sentinel.
+const COLOR_AUTO: u16 = 0x7FFF;
 
 /// Maximum BIFF record body size. Records larger than this must be
 /// split with `CONTINUE` records.
@@ -98,9 +114,12 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     }
 
     let sst = SstTable::collect(workbook);
+    let styles = StyleTables::collect(workbook);
 
     let mut stream = Vec::new();
     write_bof(&mut stream, DT_WORKBOOK_GLOBALS);
+    styles.write_font_records(&mut stream)?;
+    styles.write_xf_records(&mut stream);
 
     let mut lbplypos_field_offsets = Vec::with_capacity(workbook.sheet_count());
     for sheet in workbook.worksheets() {
@@ -113,11 +132,11 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     write_eof(&mut stream);
 
     let mut sheet_bof_offsets = Vec::with_capacity(workbook.sheet_count());
-    for sheet in workbook.worksheets() {
+    for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
         let bof_pos = stream.len() as u32;
         write_bof(&mut stream, DT_WORKSHEET);
         write_dimension(&mut stream, sheet);
-        write_cell_records(&mut stream, sheet, &sst);
+        write_cell_records(&mut stream, sheet, sheet_idx, &sst, &styles);
         write_window2(&mut stream);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
@@ -128,6 +147,211 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     }
 
     Ok(stream)
+}
+
+/// Workbook-global font + XF tables. Slice 4a customizes only the
+/// `font_index` axis of an XF record; format, alignment, fill, and
+/// border are still left at defaults.
+struct StyleTables {
+    /// FONT records to emit, in disk order. The first
+    /// `FONT_BUILTIN_COUNT` entries are the BIFF8-required built-ins
+    /// (all defaulted Calibri 11). User-defined fonts append after.
+    fonts_in_order: Vec<FontStyle>,
+    /// User-defined XF records to emit after the 16 built-ins. Each
+    /// entry stores the resolved `font_index` field; everything else
+    /// is taken from XF defaults at emission time.
+    user_xfs: Vec<UserXf>,
+    /// `(sheet_idx, style_index_in_pool) -> ixfe`. Cells consult this
+    /// to pick their `XF` reference; absent entries fall back to 0.
+    cell_ixfe: HashMap<(usize, u32), u16>,
+}
+
+#[derive(Debug, Clone)]
+struct UserXf {
+    font_index: u16,
+}
+
+impl StyleTables {
+    fn collect(workbook: &Workbook) -> Self {
+        let default_font = FontStyle::default();
+        let mut fonts_in_order = vec![default_font.clone(); FONT_BUILTIN_COUNT as usize];
+        let mut font_xf_index = HashMap::new();
+        font_xf_index.insert(default_font, 0u16);
+
+        let mut user_xfs: Vec<UserXf> = Vec::new();
+        let mut xf_for_font: HashMap<u16, u16> = HashMap::new();
+        let mut cell_ixfe = HashMap::new();
+
+        for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
+            for (_row, _col, cell) in sheet.iter_cells() {
+                if cell.style_index == 0 {
+                    continue;
+                }
+                let Some(style) = sheet.style_by_index(cell.style_index) else {
+                    continue;
+                };
+                let font = style.font.clone();
+
+                let font_idx = match font_xf_index.get(&font) {
+                    Some(&idx) => idx,
+                    None => {
+                        let on_disk = fonts_in_order.len() as u16;
+                        let xf_idx = if on_disk < 4 { on_disk } else { on_disk + 1 };
+                        fonts_in_order.push(font.clone());
+                        font_xf_index.insert(font.clone(), xf_idx);
+                        xf_idx
+                    }
+                };
+
+                let ixfe = match xf_for_font.get(&font_idx) {
+                    Some(&i) => i,
+                    None => {
+                        let new_ixfe = XF_USER_BASE + user_xfs.len() as u16;
+                        user_xfs.push(UserXf {
+                            font_index: font_idx,
+                        });
+                        xf_for_font.insert(font_idx, new_ixfe);
+                        new_ixfe
+                    }
+                };
+
+                cell_ixfe.insert((sheet_idx, cell.style_index), ixfe);
+            }
+        }
+
+        StyleTables {
+            fonts_in_order,
+            user_xfs,
+            cell_ixfe,
+        }
+    }
+
+    fn ixfe_for_cell(&self, sheet_idx: usize, style_index: u32) -> u16 {
+        if style_index == 0 {
+            return 0;
+        }
+        self.cell_ixfe
+            .get(&(sheet_idx, style_index))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn write_font_records(&self, stream: &mut Vec<u8>) -> XlsResult<()> {
+        for font in &self.fonts_in_order {
+            write_font_record(stream, font)?;
+        }
+        Ok(())
+    }
+
+    fn write_xf_records(&self, stream: &mut Vec<u8>) {
+        for _ in 0..XF_USER_BASE {
+            write_default_xf(stream, /* is_style_xf */ false, 0);
+        }
+        for xf in &self.user_xfs {
+            write_default_xf(stream, false, xf.font_index);
+        }
+    }
+}
+
+/// Emit a FONT record (MS-XLS §2.4.122). Only the fields needed by the
+/// reader's `parse_font` are populated; family/charset are left at 0
+/// (font-style-default). Color resolution: `Auto` → 0x7FFF, `Indexed`
+/// passes through; RGB/Theme fall back to `Auto` because BIFF8 needs
+/// a PALETTE record to express arbitrary RGB and that's deferred.
+fn write_font_record(stream: &mut Vec<u8>, font: &FontStyle) -> XlsResult<()> {
+    let mut body = Vec::with_capacity(16 + font.name.len() * 2);
+    let height_twips = (font.size * 20.0).round() as u16;
+    body.extend_from_slice(&height_twips.to_le_bytes());
+
+    let mut grbit: u16 = 0;
+    if font.italic {
+        grbit |= 0x0002;
+    }
+    if font.strikethrough {
+        grbit |= 0x0008;
+    }
+    body.extend_from_slice(&grbit.to_le_bytes());
+
+    let icv = match font.color {
+        Color::Auto => COLOR_AUTO,
+        Color::Indexed(i) => i as u16,
+        // BIFF8 has no first-class RGB / theme support without a
+        // PALETTE record. Fall back to auto rather than emit an
+        // out-of-range icv that the reader would reject.
+        _ => COLOR_AUTO,
+    };
+    body.extend_from_slice(&icv.to_le_bytes());
+
+    let bls: u16 = if font.bold { 700 } else { 400 };
+    body.extend_from_slice(&bls.to_le_bytes());
+
+    let sss: u16 = match font.vertical_align {
+        duke_sheets_core::style::FontVerticalAlign::Superscript => 1,
+        duke_sheets_core::style::FontVerticalAlign::Subscript => 2,
+        _ => 0,
+    };
+    body.extend_from_slice(&sss.to_le_bytes());
+
+    let uls: u8 = match font.underline {
+        Underline::Single => 0x01,
+        Underline::Double => 0x02,
+        Underline::SingleAccounting => 0x21,
+        Underline::DoubleAccounting => 0x22,
+        Underline::None => 0x00,
+    };
+    body.push(uls);
+    body.push(0); // bFamily
+    body.push(0); // bCharSet
+    body.push(0); // reserved
+
+    push_short_xlunicode_string(&mut body, &font.name)?;
+
+    stream.extend_from_slice(&FONT_RECORD.to_le_bytes());
+    stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    stream.extend_from_slice(&body);
+    Ok(())
+}
+
+/// Emit a 20-byte XF record with everything at defaults except font
+/// index (and the cell-vs-style-XF flag).
+fn write_default_xf(stream: &mut Vec<u8>, is_style_xf: bool, font_index: u16) {
+    stream.extend_from_slice(&XF_RECORD.to_le_bytes());
+    stream.extend_from_slice(&20u16.to_le_bytes());
+    stream.extend_from_slice(&font_index.to_le_bytes());
+    stream.extend_from_slice(&0u16.to_le_bytes()); // ifmt = General
+    let type_prot: u16 = if is_style_xf { 0xFFF5 } else { 0x0001 };
+    stream.extend_from_slice(&type_prot.to_le_bytes());
+    stream.push(0); // alignment 1
+    stream.push(0); // rotation
+    stream.push(0); // alignment 2
+    stream.push(0); // used_attribs
+    stream.extend_from_slice(&0u32.to_le_bytes()); // border + colors block 1
+    stream.extend_from_slice(&0u32.to_le_bytes()); // border + colors block 2 + fill pattern
+    stream.extend_from_slice(&0u16.to_le_bytes()); // fill colors
+}
+
+/// Emit a `ShortXLUnicodeString` (1-byte cch, 1-byte fHighByte, chars).
+fn push_short_xlunicode_string(buf: &mut Vec<u8>, s: &str) -> XlsResult<()> {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    if units.len() > u8::MAX as usize {
+        return Err(XlsError::InvalidFormat(format!(
+            "short string '{s}' exceeds 255-char ShortXLUnicodeString limit"
+        )));
+    }
+    let high_byte = units.iter().any(|&u| u > 0xFF);
+    buf.push(units.len() as u8);
+    if high_byte {
+        buf.push(0x01);
+        for u in &units {
+            buf.extend_from_slice(&u.to_le_bytes());
+        }
+    } else {
+        buf.push(0x00);
+        for u in &units {
+            buf.push(*u as u8);
+        }
+    }
+    Ok(())
 }
 
 /// Builder + emitter for the workbook-level Shared String Table (SST).
@@ -335,9 +559,15 @@ fn write_window2(stream: &mut Vec<u8>) {
 /// non-empty cell in `sheet`, sorted in row-major order. Spill-target
 /// cells are silently skipped (dynamic-array machinery; deferred).
 ///
-/// All cells are emitted with `ixfe = 0` (default style); per-cell XF
-/// indices land with the formatting slice.
-fn write_cell_records(stream: &mut Vec<u8>, sheet: &Worksheet, sst: &SstTable) {
+/// `ixfe` is resolved via `styles.ixfe_for_cell` so cells with a
+/// non-default style point at the appropriate user-defined XF.
+fn write_cell_records(
+    stream: &mut Vec<u8>,
+    sheet: &Worksheet,
+    sheet_idx: usize,
+    sst: &SstTable,
+    styles: &StyleTables,
+) {
     let mut cells: Vec<_> = sheet.iter_cells().collect();
     cells.sort_by_key(|(row, col, _)| (*row, *col));
 
@@ -346,7 +576,7 @@ fn write_cell_records(stream: &mut Vec<u8>, sheet: &Worksheet, sst: &SstTable) {
             continue;
         }
         let row16 = row as u16;
-        let ixfe = clamp_ixfe(data.style_index);
+        let ixfe = styles.ixfe_for_cell(sheet_idx, data.style_index);
         match &data.value {
             CellValue::Empty => {
                 if ixfe != 0 {
@@ -386,14 +616,6 @@ fn write_labelsst(stream: &mut Vec<u8>, row: u16, col: u16, ixfe: u16, isst: u32
     stream.extend_from_slice(&col.to_le_bytes());
     stream.extend_from_slice(&ixfe.to_le_bytes());
     stream.extend_from_slice(&isst.to_le_bytes());
-}
-
-fn clamp_ixfe(style_index: u32) -> u16 {
-    if style_index <= u16::MAX as u32 {
-        style_index as u16
-    } else {
-        0
-    }
 }
 
 fn write_blank(stream: &mut Vec<u8>, row: u16, col: u16, ixfe: u16) {
@@ -499,29 +721,47 @@ mod tests {
         let _ = &mut wb;
     }
 
+    /// Walk the stream's record headers and return the byte offset of
+    /// every record matching `record_type`, in document order.
+    fn find_records(stream: &[u8], record_type: u16) -> Vec<usize> {
+        let mut found = Vec::new();
+        let mut cursor = 0usize;
+        while cursor + 4 <= stream.len() {
+            let rt = u16::from_le_bytes([stream[cursor], stream[cursor + 1]]);
+            let size = u16::from_le_bytes([stream[cursor + 2], stream[cursor + 3]]) as usize;
+            if rt == record_type {
+                found.push(cursor);
+            }
+            cursor += 4 + size;
+        }
+        found
+    }
+
     #[test]
     fn lbplypos_points_to_first_worksheet_bof() {
         let wb = Workbook::new();
         let stream = build_workbook_stream(&wb).expect("serialize");
 
-        let globals_bof_size = u16::from_le_bytes([stream[2], stream[3]]) as usize;
-        let boundsheet_record_pos = 4 + globals_bof_size;
-        let boundsheet_size = u16::from_le_bytes([
-            stream[boundsheet_record_pos + 2],
-            stream[boundsheet_record_pos + 3],
-        ]) as usize;
+        // Find the BoundSheet8 record by walking the stream so the
+        // assertion stays valid as the writer adds new records (FONT,
+        // XF, SST, etc.) before BoundSheet8.
+        let bs_pos = *find_records(&stream, BOUND_SHEET_8)
+            .first()
+            .expect("at least one BoundSheet8");
         let lbplypos = u32::from_le_bytes([
-            stream[boundsheet_record_pos + 4],
-            stream[boundsheet_record_pos + 5],
-            stream[boundsheet_record_pos + 6],
-            stream[boundsheet_record_pos + 7],
+            stream[bs_pos + 4],
+            stream[bs_pos + 5],
+            stream[bs_pos + 6],
+            stream[bs_pos + 7],
         ]) as usize;
 
-        let globals_eof_pos = boundsheet_record_pos + 4 + boundsheet_size;
-        let expected_sheet_bof = globals_eof_pos + 4;
-        assert_eq!(lbplypos, expected_sheet_bof);
-
-        let bof_record_type = u16::from_le_bytes([stream[lbplypos], stream[lbplypos + 1]]);
-        assert_eq!(bof_record_type, BOF_RECORD);
+        // The first worksheet's BOF is the second BOF in document
+        // order (the first being globals).
+        let bof_positions = find_records(&stream, BOF_RECORD);
+        assert!(
+            bof_positions.len() >= 2,
+            "expected globals BOF + at least one worksheet BOF"
+        );
+        assert_eq!(lbplypos, bof_positions[1]);
     }
 }
