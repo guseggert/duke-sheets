@@ -37,6 +37,8 @@ const BLANK_RECORD: u16 = 0x0201;
 const NUMBER_RECORD: u16 = 0x0203;
 const BOOLERR_RECORD: u16 = 0x0205;
 const LABELSST_RECORD: u16 = 0x00FD;
+const FORMULA_RECORD: u16 = 0x0006;
+const STRING_RECORD: u16 = 0x0207;
 
 /// MS-XLS §2.4.126 user-defined number-format index base. Built-in
 /// formats use ifmt 0..=49; user-defined custom format strings start
@@ -830,9 +832,12 @@ fn write_window2(stream: &mut Vec<u8>) {
     stream.extend_from_slice(&reserved.to_le_bytes());
 }
 
-/// Emit cell records (BLANK, NUMBER, BOOLERR, LABELSST) for every
-/// non-empty cell in `sheet`, sorted in row-major order. Spill-target
-/// cells are silently skipped (dynamic-array machinery; deferred).
+/// Emit cell records (BLANK, NUMBER, BOOLERR, LABELSST, FORMULA) for
+/// every non-empty cell in `sheet`, sorted in row-major order.
+/// Spill-target cells are silently skipped (dynamic-array machinery;
+/// deferred). Formula cells with an unsupported AST shape (named
+/// ranges, structured refs, function calls, etc.) fall back to
+/// emitting their cached value as a static cell.
 ///
 /// `ixfe` is resolved via `styles.ixfe_for_cell` so cells with a
 /// non-default style point at the appropriate user-defined XF.
@@ -852,6 +857,13 @@ fn write_cell_records(
         }
         let row16 = row as u16;
         let ixfe = styles.ixfe_for_cell(sheet_idx, data.style_index);
+
+        if let Some(formula_text) = sheet.get_formula_at(row, col) {
+            if try_write_formula_record(stream, row16, col, ixfe, formula_text, &data.value, sst) {
+                continue;
+            }
+        }
+
         match &data.value {
             CellValue::Empty => {
                 if ixfe != 0 {
@@ -882,6 +894,271 @@ fn write_cell_records(
             }
         }
     }
+}
+
+/// Try to compile and emit a FORMULA record for a cell. Returns true
+/// on success, false if the formula AST contains constructs we don't
+/// yet emit (named ranges, function calls, structured refs, external
+/// refs, arrays); on false the caller falls back to emitting the
+/// cell's cached value as a static record.
+///
+/// Slice 5a supports: numeric/string/bool/error literals, single cell
+/// refs (relative + absolute), range refs, binary operators (+, -, *,
+/// /, ^, &, comparisons), unary minus / unary plus / percent.
+fn try_write_formula_record(
+    stream: &mut Vec<u8>,
+    row: u16,
+    col: u16,
+    ixfe: u16,
+    formula_text: &str,
+    cached: &CellValue,
+    sst: &SstTable,
+) -> bool {
+    // duke-sheets-formula's parse_formula requires the leading '=';
+    // ensure it's present without double-prefixing.
+    let with_eq_owned: String;
+    let parse_input: &str = if formula_text.starts_with('=') {
+        formula_text
+    } else {
+        with_eq_owned = format!("={formula_text}");
+        &with_eq_owned
+    };
+    let Ok(expr) = duke_sheets_formula::parse_formula(parse_input) else {
+        return false;
+    };
+    let mut tokens = Vec::with_capacity(32);
+    if compile_ptgs(&expr, &mut tokens).is_err() {
+        return false;
+    }
+    if tokens.len() > u16::MAX as usize {
+        return false;
+    }
+
+    let cached_bytes = encode_cached_result(cached);
+    stream.extend_from_slice(&FORMULA_RECORD.to_le_bytes());
+    let body_len: u16 = 22 + tokens.len() as u16;
+    stream.extend_from_slice(&body_len.to_le_bytes());
+    stream.extend_from_slice(&row.to_le_bytes());
+    stream.extend_from_slice(&col.to_le_bytes());
+    stream.extend_from_slice(&ixfe.to_le_bytes());
+    stream.extend_from_slice(&cached_bytes);
+    let grbit: u16 = 0x0002; // fAlwaysCalc cleared, fCalcOnLoad set: cause Excel to recompute on open
+    stream.extend_from_slice(&grbit.to_le_bytes());
+    stream.extend_from_slice(&0u32.to_le_bytes()); // chn (cache key)
+    stream.extend_from_slice(&(tokens.len() as u16).to_le_bytes());
+    stream.extend_from_slice(&tokens);
+
+    if let CellValue::String(s) = cached {
+        write_string_followup(stream, s.as_ref());
+    } else if let CellValue::RichText(runs) = cached {
+        let plain: String = runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>()
+            .join("");
+        write_string_followup(stream, &plain);
+    }
+
+    let _ = sst;
+    true
+}
+
+fn write_string_followup(stream: &mut Vec<u8>, s: &str) {
+    let mut body = Vec::with_capacity(3 + s.len() * 2);
+    let units: Vec<u16> = s.encode_utf16().collect();
+    let high_byte = units.iter().any(|&u| u > 0xFF);
+    body.extend_from_slice(&(units.len() as u16).to_le_bytes());
+    if high_byte {
+        body.push(0x01);
+        for u in &units {
+            body.extend_from_slice(&u.to_le_bytes());
+        }
+    } else {
+        body.push(0x00);
+        for u in &units {
+            body.push(*u as u8);
+        }
+    }
+    stream.extend_from_slice(&STRING_RECORD.to_le_bytes());
+    stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    stream.extend_from_slice(&body);
+}
+
+/// Encode an 8-byte FORMULA cached_result field (MS-XLS §2.5.133
+/// FormulaValue). Numeric results: 8-byte f64 little-endian. Other
+/// types use a sentinel encoding where bytes[6..8] = 0xFFFF and
+/// bytes[0] selects the variant: 0=string (real value in STRING
+/// follow-up), 1=bool, 2=error, 3=empty.
+fn encode_cached_result(value: &CellValue) -> [u8; 8] {
+    let mut out = [0u8; 8];
+    match value {
+        CellValue::Number(n) => {
+            out.copy_from_slice(&n.to_le_bytes());
+        }
+        CellValue::String(_) | CellValue::RichText(_) => {
+            out[0] = 0x00;
+            out[6] = 0xFF;
+            out[7] = 0xFF;
+        }
+        CellValue::Boolean(b) => {
+            out[0] = 0x01;
+            out[2] = if *b { 1 } else { 0 };
+            out[6] = 0xFF;
+            out[7] = 0xFF;
+        }
+        CellValue::Error(e) => {
+            out[0] = 0x02;
+            out[2] = e.code();
+            out[6] = 0xFF;
+            out[7] = 0xFF;
+        }
+        CellValue::Empty | CellValue::SpillTarget { .. } => {
+            out[0] = 0x03;
+            out[6] = 0xFF;
+            out[7] = 0xFF;
+        }
+    }
+    out
+}
+
+#[derive(Debug)]
+struct UnsupportedToken;
+
+/// Recursively walk a `FormulaExpr` in postfix order, appending BIFF8
+/// ptg bytes to `out`. Returns `Err(UnsupportedToken)` for AST shapes
+/// that slice 5a doesn't yet emit (named ranges, function calls,
+/// structured refs, external refs, arrays, intersection/union ops);
+/// the caller falls back to emitting the cached value as a static
+/// cell record so the spreadsheet still renders correctly.
+fn compile_ptgs(
+    expr: &duke_sheets_formula::FormulaExpr,
+    out: &mut Vec<u8>,
+) -> Result<(), UnsupportedToken> {
+    use duke_sheets_formula::ast::{BinaryOperator, UnaryOperator};
+    use duke_sheets_formula::FormulaExpr;
+
+    match expr {
+        FormulaExpr::Number(n) => {
+            out.push(0x1F); // PTG_NUM
+            out.extend_from_slice(&n.to_le_bytes());
+        }
+        FormulaExpr::String(s) => {
+            out.push(0x17); // PTG_STR
+            push_short_xlunicode_string(out, s).map_err(|_| UnsupportedToken)?;
+        }
+        FormulaExpr::Boolean(b) => {
+            out.push(0x1D); // PTG_BOOL
+            out.push(if *b { 1 } else { 0 });
+        }
+        FormulaExpr::Error(e) => {
+            out.push(0x1C); // PTG_ERR
+            out.push(e.code());
+        }
+        FormulaExpr::CellRef(cref) => {
+            if cref.sheet.is_some() {
+                return Err(UnsupportedToken);
+            }
+            out.push(0x44); // PTG_REF (V class)
+            push_ref_payload(out, &cref.address)?;
+        }
+        FormulaExpr::RangeRef(rref) => {
+            if rref.sheet.is_some() {
+                return Err(UnsupportedToken);
+            }
+            out.push(0x45); // PTG_AREA (V class)
+            push_area_payload(out, &rref.range)?;
+        }
+        FormulaExpr::BinaryOp { op, left, right } => {
+            compile_ptgs(left, out)?;
+            compile_ptgs(right, out)?;
+            out.push(match op {
+                BinaryOperator::Add => 0x03,
+                BinaryOperator::Subtract => 0x04,
+                BinaryOperator::Multiply => 0x05,
+                BinaryOperator::Divide => 0x06,
+                BinaryOperator::Power => 0x07,
+                BinaryOperator::Concat => 0x08,
+                BinaryOperator::LessThan => 0x09,
+                BinaryOperator::LessEqual => 0x0A,
+                BinaryOperator::Equal => 0x0B,
+                BinaryOperator::GreaterEqual => 0x0C,
+                BinaryOperator::GreaterThan => 0x0D,
+                BinaryOperator::NotEqual => 0x0E,
+                BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
+                    return Err(UnsupportedToken)
+                }
+            });
+        }
+        FormulaExpr::UnaryOp { op, operand } => {
+            compile_ptgs(operand, out)?;
+            out.push(match op {
+                UnaryOperator::Negate => 0x13,
+                UnaryOperator::Percent => 0x14,
+                UnaryOperator::ImplicitIntersection | UnaryOperator::SpillRange => {
+                    return Err(UnsupportedToken)
+                }
+            });
+        }
+        FormulaExpr::Function { .. }
+        | FormulaExpr::Array(_)
+        | FormulaExpr::NameRef(_)
+        | FormulaExpr::StructuredRef(_)
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::Empty => {
+            return Err(UnsupportedToken);
+        }
+    }
+    Ok(())
+}
+
+fn push_ref_payload(
+    out: &mut Vec<u8>,
+    addr: &duke_sheets_core::CellAddress,
+) -> Result<(), UnsupportedToken> {
+    if addr.row > u16::MAX as u32 {
+        return Err(UnsupportedToken);
+    }
+    out.extend_from_slice(&(addr.row as u16).to_le_bytes());
+    out.extend_from_slice(
+        &encode_col_with_relative_flags(addr.col, addr.row_absolute, addr.col_absolute)
+            .to_le_bytes(),
+    );
+    Ok(())
+}
+
+fn push_area_payload(
+    out: &mut Vec<u8>,
+    range: &duke_sheets_core::CellRange,
+) -> Result<(), UnsupportedToken> {
+    let start = &range.start;
+    let end = &range.end;
+    if start.row > u16::MAX as u32 || end.row > u16::MAX as u32 {
+        return Err(UnsupportedToken);
+    }
+    out.extend_from_slice(&(start.row as u16).to_le_bytes());
+    out.extend_from_slice(&(end.row as u16).to_le_bytes());
+    out.extend_from_slice(
+        &encode_col_with_relative_flags(start.col, start.row_absolute, start.col_absolute)
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(
+        &encode_col_with_relative_flags(end.col, end.row_absolute, end.col_absolute).to_le_bytes(),
+    );
+    Ok(())
+}
+
+/// Pack column index + row/col absolute flags into the 16-bit
+/// `colIxv` field used by tRef/tArea (MS-XLS §2.5.198.103). Bits 0-13
+/// hold the column; bit 14 is fColRel; bit 15 is fRowRel.
+fn encode_col_with_relative_flags(col: u16, row_absolute: bool, col_absolute: bool) -> u16 {
+    let mut v = col & 0x3FFF;
+    if !col_absolute {
+        v |= 0x4000;
+    }
+    if !row_absolute {
+        v |= 0x8000;
+    }
+    v
 }
 
 fn write_labelsst(stream: &mut Vec<u8>, row: u16, col: u16, ixfe: u16, isst: u32) {
