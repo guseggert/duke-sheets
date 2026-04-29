@@ -202,6 +202,11 @@ fn create_xor_array(password: &[u8]) -> [u8; 16] {
 /// [`create_xor_array`] with the same length checks
 /// [`decrypt_workbook_stream`] applies on the read side.
 pub(crate) fn create_xor_array_for_encrypt(password: &[u8]) -> CryptoResult<[u8; 16]> {
+    validate_password_for_xor(password)?;
+    Ok(create_xor_array(password))
+}
+
+fn validate_password_for_xor(password: &[u8]) -> CryptoResult<()> {
     if password.is_empty() {
         return Err(CryptoError::InvalidFormat(
             "XOR Obfuscation does not accept empty passwords".into(),
@@ -214,7 +219,7 @@ pub(crate) fn create_xor_array_for_encrypt(password: &[u8]) -> CryptoResult<[u8;
             password.len()
         )));
     }
-    Ok(create_xor_array(password))
+    Ok(())
 }
 
 /// Compute the 16-bit verification value Excel writes into the
@@ -237,31 +242,24 @@ pub(crate) fn compute_verification_bytes(password: &[u8]) -> u16 {
 
 /// Build the full XOR Obfuscation FilePass record (header + body).
 ///
-/// Layout (10 bytes total):
+/// Layout (10 bytes total) per MS-XLS §2.4.117 + MS-OFFCRYPTO §2.3.7:
 /// ```text
-/// [0..2]   record type   = 0x002F
-/// [2..4]   body size     = 6
+/// [0..2]   record type     = 0x002F
+/// [2..4]   body size       = 6
 /// [4..6]   wEncryptionType = 0x0000
-/// [6..8]   Key (informational; readers regenerate from password)
+/// [6..8]   Key             = CreateXorKey_Method1(password)
 /// [8..10]  VerificationBytes (computed from password)
 /// ```
+///
+/// The `Key` field MUST be `CreateXorKey_Method1(password)`, not
+/// random — Excel cross-checks the stored key against the value it
+/// derives from the user-supplied password before decrypting, and
+/// rejects the workbook with "password is not correct" when the two
+/// differ.
 pub fn build_filepass_record(password: &[u8]) -> CryptoResult<Vec<u8>> {
-    if password.is_empty() {
-        return Err(CryptoError::InvalidFormat(
-            "XOR Obfuscation does not accept empty passwords".into(),
-        ));
-    }
-    if password.len() > MAX_PASSWORD_LEN {
-        return Err(CryptoError::InvalidFormat(format!(
-            "XOR Obfuscation password must be \u{2264} {} characters (got {})",
-            MAX_PASSWORD_LEN,
-            password.len()
-        )));
-    }
+    validate_password_for_xor(password)?;
 
-    let mut stored_key_bytes = [0u8; 2];
-    crate::random::fill_random(&mut stored_key_bytes)?;
-    let stored_key = u16::from_le_bytes(stored_key_bytes);
+    let stored_key = create_xor_key(password);
     let verification_bytes = compute_verification_bytes(password);
 
     let mut record = Vec::with_capacity(10);
@@ -300,16 +298,20 @@ pub(crate) fn apply_xor_to_classified(
                     run_end += 1;
                 }
                 let count = run_end - run_start;
-                let is_bound_sheet_tail = run_start >= 4
+                // Per MS-OFFCRYPTO §2.3.7, the encrypted tail of a
+                // BoundSheet8 record needs a `+4` byte-index adjustment
+                // because the unencrypted lbPlyPos prefix consumes 4
+                // bytes of plaintext that the cipher's index counter
+                // doesn't see. Detect the BoundSheet8 case by reading
+                // the record header from the overlay (the classifier
+                // zeros header bytes in `ciphertext`; the real header
+                // bytes live in `overlay`).
+                let is_bound_sheet_tail = run_start >= 8
+                    && matches!(classified.overlay.get(run_start - 8), Some(Some(0x85)))
+                    && matches!(classified.overlay.get(run_start - 7), Some(Some(0x00)))
                     && classified.overlay[run_start - 4..run_start]
                         .iter()
-                        .all(Option::is_some)
-                    && classified.overlay[run_start - 8..run_start - 4]
-                        .iter()
-                        .all(Option::is_some)
-                    && (run_start >= 8
-                        && classified.ciphertext[run_start - 8] == 0x85
-                        && classified.ciphertext[run_start - 7] == 0x00);
+                        .all(Option::is_some);
 
                 let adjustment = if is_bound_sheet_tail { 4 } else { 0 };
                 let mut idx = (run_start + count + adjustment) % 16;
