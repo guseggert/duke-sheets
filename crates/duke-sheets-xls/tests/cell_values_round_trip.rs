@@ -99,7 +99,7 @@ fn cells_round_trip_when_set_in_scrambled_order() {
 }
 
 #[test]
-fn string_cells_are_silently_dropped_until_sst_slice() {
+fn mixed_numbers_and_strings_round_trip() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 1.0).expect("set A1");
@@ -109,10 +109,10 @@ fn string_cells_are_silently_dropped_until_sst_slice() {
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
     assert_eq!(number_at(sheet, "A1"), Some(1.0));
-    let a2 = sheet.get_value("A2").expect("A2 still parses");
+    let a2 = sheet.get_value("A2").expect("A2");
     assert!(
-        matches!(a2, CellValue::Empty),
-        "string cells must come back empty until SST slice lands; got {a2:?}"
+        matches!(&a2, CellValue::String(s) if s.as_ref() == "hello"),
+        "got {a2:?}"
     );
     assert_eq!(number_at(sheet, "A3"), Some(3.0));
 }

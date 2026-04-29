@@ -7,6 +7,7 @@
 //! `BoundSheet8`. Cell values, formatting, formulas, and comments are
 //! deliberately not emitted yet — they land in subsequent slices.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
@@ -19,12 +20,19 @@ use crate::error::{XlsError, XlsResult};
 
 const BOF_RECORD: u16 = 0x0809;
 const EOF_RECORD: u16 = 0x000A;
+const CONTINUE_RECORD: u16 = 0x003C;
 const BOUND_SHEET_8: u16 = 0x0085;
+const SST_RECORD: u16 = 0x00FC;
 const DIMENSION_RECORD: u16 = 0x0200;
 const WINDOW2_RECORD: u16 = 0x023E;
 const BLANK_RECORD: u16 = 0x0201;
 const NUMBER_RECORD: u16 = 0x0203;
 const BOOLERR_RECORD: u16 = 0x0205;
+const LABELSST_RECORD: u16 = 0x00FD;
+
+/// Maximum BIFF record body size. Records larger than this must be
+/// split with `CONTINUE` records.
+const BIFF_MAX_RECORD_BODY: usize = 8224;
 
 const BIFF8_VERSION: u16 = 0x0600;
 const DT_WORKBOOK_GLOBALS: u16 = 0x0005;
@@ -89,6 +97,8 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         ));
     }
 
+    let sst = SstTable::collect(workbook);
+
     let mut stream = Vec::new();
     write_bof(&mut stream, DT_WORKBOOK_GLOBALS);
 
@@ -99,6 +109,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         lbplypos_field_offsets.push(body_start);
     }
 
+    sst.write_records(&mut stream)?;
     write_eof(&mut stream);
 
     let mut sheet_bof_offsets = Vec::with_capacity(workbook.sheet_count());
@@ -106,7 +117,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         let bof_pos = stream.len() as u32;
         write_bof(&mut stream, DT_WORKSHEET);
         write_dimension(&mut stream, sheet);
-        write_cell_records(&mut stream, sheet);
+        write_cell_records(&mut stream, sheet, &sst);
         write_window2(&mut stream);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
@@ -117,6 +128,146 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     }
 
     Ok(stream)
+}
+
+/// Builder + emitter for the workbook-level Shared String Table (SST).
+///
+/// String cells in BIFF8 don't store their text inline; instead they
+/// reference an entry in this workbook-global table via `LABELSST.isst`.
+/// We dedupe identical strings on insert (matching what Excel writes)
+/// and emit a single SST record + CONTINUE chain in the globals stream.
+struct SstTable {
+    strings: Vec<String>,
+    index: HashMap<String, u32>,
+    total_refs: u32,
+}
+
+impl SstTable {
+    fn collect(workbook: &Workbook) -> Self {
+        let mut t = SstTable {
+            strings: Vec::new(),
+            index: HashMap::new(),
+            total_refs: 0,
+        };
+        for sheet in workbook.worksheets() {
+            for (_row, _col, cell) in sheet.iter_cells() {
+                match &cell.value {
+                    CellValue::String(s) => {
+                        t.add(s.as_ref());
+                    }
+                    CellValue::RichText(runs) => {
+                        let plain: String = runs
+                            .iter()
+                            .map(|r| r.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("");
+                        t.add(&plain);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        t
+    }
+
+    fn add(&mut self, s: &str) {
+        self.total_refs += 1;
+        if !self.index.contains_key(s) {
+            let idx = self.strings.len() as u32;
+            self.index.insert(s.to_string(), idx);
+            self.strings.push(s.to_string());
+        }
+    }
+
+    fn lookup(&self, s: &str) -> Option<u32> {
+        self.index.get(s).copied()
+    }
+
+    /// Serialize the SST (and any required CONTINUE records) into the
+    /// workbook stream. No-op if no strings were collected.
+    fn write_records(&self, stream: &mut Vec<u8>) -> XlsResult<()> {
+        if self.strings.is_empty() {
+            return Ok(());
+        }
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&self.total_refs.to_le_bytes());
+        payload.extend_from_slice(&(self.strings.len() as u32).to_le_bytes());
+        for s in &self.strings {
+            push_xlunicode_string(&mut payload, s)?;
+        }
+
+        // Split between strings (never mid-string). String boundaries
+        // are tracked while building `payload`; rebuild a parallel
+        // splittable representation: a list of (chunk_start_in_payload,
+        // chunk_len). For simplicity, walk strings forward and emit
+        // records up to BIFF_MAX_RECORD_BODY bytes each.
+        let mut chunks: Vec<(usize, usize)> = Vec::new();
+        let mut cursor = 8usize; // skip cstTotal + cstUnique header
+        let mut chunk_start = 0usize;
+        let mut chunk_len = 8usize;
+        for s in &self.strings {
+            let str_len = xlunicode_string_len(s);
+            if chunk_len + str_len > BIFF_MAX_RECORD_BODY {
+                chunks.push((chunk_start, chunk_len));
+                chunk_start = cursor;
+                chunk_len = 0;
+            }
+            chunk_len += str_len;
+            cursor += str_len;
+        }
+        if chunk_len > 0 {
+            chunks.push((chunk_start, chunk_len));
+        }
+
+        for (i, (start, len)) in chunks.iter().enumerate() {
+            let record_type = if i == 0 { SST_RECORD } else { CONTINUE_RECORD };
+            stream.extend_from_slice(&record_type.to_le_bytes());
+            stream.extend_from_slice(&(*len as u16).to_le_bytes());
+            stream.extend_from_slice(&payload[*start..*start + *len]);
+        }
+        Ok(())
+    }
+}
+
+/// Length of an `XLUnicodeRichExtendedString`-formatted plaintext entry
+/// (cch + flags + chars) without rich/ext fields.
+fn xlunicode_string_len(s: &str) -> usize {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    let high_byte = units.iter().any(|&u| u > 0xFF);
+    let chars_len = if high_byte {
+        units.len() * 2
+    } else {
+        units.len()
+    };
+    2 + 1 + chars_len
+}
+
+/// Emit an `XLUnicodeRichExtendedString` (no rich runs, no ExtRst).
+/// Picks the compact Latin-1 encoding when every code unit fits in a
+/// byte; otherwise emits UTF-16LE.
+fn push_xlunicode_string(buf: &mut Vec<u8>, s: &str) -> XlsResult<()> {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    if units.len() > u16::MAX as usize {
+        return Err(XlsError::InvalidFormat(format!(
+            "string of {} UTF-16 units exceeds BIFF8 cch limit (u16)",
+            units.len()
+        )));
+    }
+    let high_byte = units.iter().any(|&u| u > 0xFF);
+    buf.extend_from_slice(&(units.len() as u16).to_le_bytes());
+    if high_byte {
+        buf.push(0x01); // fHighByte = 1
+        for u in &units {
+            buf.extend_from_slice(&u.to_le_bytes());
+        }
+    } else {
+        buf.push(0x00); // fHighByte = 0 (Latin-1)
+        for u in &units {
+            buf.push(*u as u8);
+        }
+    }
+    Ok(())
 }
 
 /// Emit a DIMENSION record (MS-XLS §2.4.62) bounding the populated
@@ -180,14 +331,13 @@ fn write_window2(stream: &mut Vec<u8>) {
     stream.extend_from_slice(&reserved.to_le_bytes());
 }
 
-/// Emit cell records (BLANK, NUMBER, BOOLERR) for every non-empty cell
-/// in `sheet`, sorted in row-major order. String, rich-text, and
-/// spill-target cells are silently skipped — those land in the SST
-/// slice; emitting them as BLANK would lose information.
+/// Emit cell records (BLANK, NUMBER, BOOLERR, LABELSST) for every
+/// non-empty cell in `sheet`, sorted in row-major order. Spill-target
+/// cells are silently skipped (dynamic-array machinery; deferred).
 ///
 /// All cells are emitted with `ixfe = 0` (default style); per-cell XF
 /// indices land with the formatting slice.
-fn write_cell_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+fn write_cell_records(stream: &mut Vec<u8>, sheet: &Worksheet, sst: &SstTable) {
     let mut cells: Vec<_> = sheet.iter_cells().collect();
     cells.sort_by_key(|(row, col, _)| (*row, *col));
 
@@ -206,11 +356,36 @@ fn write_cell_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
             CellValue::Number(v) => write_number(stream, row16, col, ixfe, *v),
             CellValue::Boolean(b) => write_boolerr(stream, row16, col, ixfe, u8::from(*b), false),
             CellValue::Error(err) => write_boolerr(stream, row16, col, ixfe, err.code(), true),
-            CellValue::String(_) | CellValue::RichText(_) | CellValue::SpillTarget { .. } => {
-                // Deferred to the SST / formula slices.
+            CellValue::String(s) => {
+                if let Some(idx) = sst.lookup(s.as_ref()) {
+                    write_labelsst(stream, row16, col, ixfe, idx);
+                }
+            }
+            CellValue::RichText(runs) => {
+                let plain: String = runs
+                    .iter()
+                    .map(|r| r.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("");
+                if let Some(idx) = sst.lookup(&plain) {
+                    write_labelsst(stream, row16, col, ixfe, idx);
+                }
+            }
+            CellValue::SpillTarget { .. } => {
+                // Dynamic-array formula spill targets need formula
+                // emission infrastructure; deferred.
             }
         }
     }
+}
+
+fn write_labelsst(stream: &mut Vec<u8>, row: u16, col: u16, ixfe: u16, isst: u32) {
+    stream.extend_from_slice(&LABELSST_RECORD.to_le_bytes());
+    stream.extend_from_slice(&10u16.to_le_bytes());
+    stream.extend_from_slice(&row.to_le_bytes());
+    stream.extend_from_slice(&col.to_le_bytes());
+    stream.extend_from_slice(&ixfe.to_le_bytes());
+    stream.extend_from_slice(&isst.to_le_bytes());
 }
 
 fn clamp_ixfe(style_index: u32) -> u16 {
