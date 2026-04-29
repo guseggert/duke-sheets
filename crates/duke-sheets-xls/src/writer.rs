@@ -11,7 +11,11 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
-use duke_sheets_core::style::{Color, FontStyle, NumberFormat, Underline};
+use duke_sheets_core::style::{
+    Alignment, BorderEdge, BorderLineStyle, BorderStyle, Color, DiagonalDirection, FillStyle,
+    FontStyle, HorizontalAlignment, NumberFormat, PatternType, ReadingOrder, Underline,
+    VerticalAlignment,
+};
 use duke_sheets_core::workbook::Workbook;
 use duke_sheets_core::worksheet::Worksheet;
 use duke_sheets_core::CellValue;
@@ -179,6 +183,9 @@ struct StyleTables {
 struct UserXf {
     font_index: u16,
     format_index: u16,
+    alignment: Alignment,
+    border: BorderStyle,
+    fill: FillStyle,
 }
 
 impl StyleTables {
@@ -192,7 +199,8 @@ impl StyleTables {
         let mut format_index_for_custom: HashMap<String, u16> = HashMap::new();
 
         let mut user_xfs: Vec<UserXf> = Vec::new();
-        let mut xf_key_to_ixfe: HashMap<(u16, u16), u16> = HashMap::new();
+        type XfKey = (u16, u16, Alignment, BorderStyle, FillStyle);
+        let mut xf_key_to_ixfe: HashMap<XfKey, u16> = HashMap::new();
         let mut cell_ixfe = HashMap::new();
 
         for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
@@ -230,7 +238,13 @@ impl StyleTables {
                     },
                 };
 
-                let xf_key = (font_idx, format_idx);
+                let xf_key: XfKey = (
+                    font_idx,
+                    format_idx,
+                    style.alignment.clone(),
+                    style.border.clone(),
+                    style.fill.clone(),
+                );
                 let ixfe = match xf_key_to_ixfe.get(&xf_key) {
                     Some(&i) => i,
                     None => {
@@ -238,6 +252,9 @@ impl StyleTables {
                         user_xfs.push(UserXf {
                             font_index: font_idx,
                             format_index: format_idx,
+                            alignment: style.alignment.clone(),
+                            border: style.border.clone(),
+                            fill: style.fill.clone(),
                         });
                         xf_key_to_ixfe.insert(xf_key, new_ixfe);
                         new_ixfe
@@ -283,13 +300,36 @@ impl StyleTables {
 
     fn write_xf_records(&self, stream: &mut Vec<u8>) {
         for _ in 0..XF_USER_BASE {
-            write_default_xf(stream, /* is_style_xf */ false, 0, 0);
+            write_xf_record(stream, /* is_style_xf */ false, &XF_DEFAULTS);
         }
         for xf in &self.user_xfs {
-            write_default_xf(stream, false, xf.font_index, xf.format_index);
+            write_xf_record(stream, false, xf);
         }
     }
 }
+
+const XF_DEFAULTS: UserXf = UserXf {
+    font_index: 0,
+    format_index: 0,
+    alignment: Alignment {
+        horizontal: HorizontalAlignment::General,
+        vertical: VerticalAlignment::Bottom,
+        wrap_text: false,
+        shrink_to_fit: false,
+        indent: 0,
+        rotation: 0,
+        reading_order: ReadingOrder::ContextDependent,
+    },
+    border: BorderStyle {
+        left: None,
+        right: None,
+        top: None,
+        bottom: None,
+        diagonal: None,
+        diagonal_direction: DiagonalDirection::None,
+    },
+    fill: FillStyle::None,
+};
 
 /// Emit a FORMAT record (MS-XLS §2.4.126) for a user-defined custom
 /// number-format string. Built-in format indices (0..=49) are implicit
@@ -363,22 +403,206 @@ fn write_font_record(stream: &mut Vec<u8>, font: &FontStyle) -> XlsResult<()> {
     Ok(())
 }
 
-/// Emit a 20-byte XF record with everything at defaults except font
-/// index, number-format index, and the cell-vs-style-XF flag.
-fn write_default_xf(stream: &mut Vec<u8>, is_style_xf: bool, font_index: u16, format_index: u16) {
+/// Emit a 20-byte XF record (MS-XLS §2.4.353) with the supplied
+/// font/format/alignment/border/fill axes encoded into the bit-packed
+/// fields. `is_style_xf` flips the type/protect bit that tells the
+/// reader whether this XF is a cell XF or a named-style XF.
+fn write_xf_record(stream: &mut Vec<u8>, is_style_xf: bool, xf: &UserXf) {
     stream.extend_from_slice(&XF_RECORD.to_le_bytes());
     stream.extend_from_slice(&20u16.to_le_bytes());
-    stream.extend_from_slice(&font_index.to_le_bytes());
-    stream.extend_from_slice(&format_index.to_le_bytes());
+    stream.extend_from_slice(&xf.font_index.to_le_bytes());
+    stream.extend_from_slice(&xf.format_index.to_le_bytes());
     let type_prot: u16 = if is_style_xf { 0xFFF5 } else { 0x0001 };
     stream.extend_from_slice(&type_prot.to_le_bytes());
-    stream.push(0); // alignment 1
-    stream.push(0); // rotation
-    stream.push(0); // alignment 2
+
+    let halign = encode_horizontal_alignment(xf.alignment.horizontal);
+    let valign = encode_vertical_alignment(xf.alignment.vertical);
+    let align1: u8 =
+        (halign & 0x07) | (if xf.alignment.wrap_text { 0x08 } else { 0 }) | ((valign & 0x07) << 4);
+    stream.push(align1);
+    stream.push(encode_rotation(xf.alignment.rotation));
+    let reading_order = encode_reading_order(xf.alignment.reading_order);
+    let align2: u8 = (xf.alignment.indent.min(15))
+        | (if xf.alignment.shrink_to_fit { 0x10 } else { 0 })
+        | ((reading_order & 0x03) << 6);
+    stream.push(align2);
     stream.push(0); // used_attribs
-    stream.extend_from_slice(&0u32.to_le_bytes()); // border + colors block 1
-    stream.extend_from_slice(&0u32.to_le_bytes()); // border + colors block 2 + fill pattern
-    stream.extend_from_slice(&0u16.to_le_bytes()); // fill colors
+
+    let (border_left, border_right, border_top, border_bottom) = (
+        encode_border_line(xf.border.left.as_ref()),
+        encode_border_line(xf.border.right.as_ref()),
+        encode_border_line(xf.border.top.as_ref()),
+        encode_border_line(xf.border.bottom.as_ref()),
+    );
+    let (icv_left, icv_right) = (
+        encode_border_color(xf.border.left.as_ref()),
+        encode_border_color(xf.border.right.as_ref()),
+    );
+    let diagonal_dir = encode_diagonal_direction(xf.border.diagonal_direction);
+    let border1: u32 = (border_left as u32 & 0x0F)
+        | ((border_right as u32 & 0x0F) << 4)
+        | ((border_top as u32 & 0x0F) << 8)
+        | ((border_bottom as u32 & 0x0F) << 12)
+        | ((icv_left as u32 & 0x7F) << 16)
+        | ((icv_right as u32 & 0x7F) << 23)
+        | ((diagonal_dir as u32 & 0x03) << 30);
+    stream.extend_from_slice(&border1.to_le_bytes());
+
+    let icv_top = encode_border_color(xf.border.top.as_ref());
+    let icv_bottom = encode_border_color(xf.border.bottom.as_ref());
+    let icv_diag = encode_border_color(xf.border.diagonal.as_ref());
+    let border_diag = encode_border_line(xf.border.diagonal.as_ref());
+    let fill_pattern = encode_fill_pattern(&xf.fill);
+    let border2: u32 = (icv_top as u32 & 0x7F)
+        | ((icv_bottom as u32 & 0x7F) << 7)
+        | ((icv_diag as u32 & 0x7F) << 14)
+        | ((border_diag as u32 & 0x0F) << 21)
+        | ((fill_pattern as u32 & 0x3F) << 26);
+    stream.extend_from_slice(&border2.to_le_bytes());
+
+    let (fill_fg, fill_bg) = encode_fill_colors(&xf.fill);
+    let fill_colors: u16 = (fill_fg as u16 & 0x7F) | ((fill_bg as u16 & 0x7F) << 7);
+    stream.extend_from_slice(&fill_colors.to_le_bytes());
+}
+
+fn encode_horizontal_alignment(h: HorizontalAlignment) -> u8 {
+    match h {
+        HorizontalAlignment::General => 0,
+        HorizontalAlignment::Left => 1,
+        HorizontalAlignment::Center => 2,
+        HorizontalAlignment::Right => 3,
+        HorizontalAlignment::Fill => 4,
+        HorizontalAlignment::Justify => 5,
+        HorizontalAlignment::CenterContinuous => 6,
+        HorizontalAlignment::Distributed => 7,
+    }
+}
+
+fn encode_vertical_alignment(v: VerticalAlignment) -> u8 {
+    match v {
+        VerticalAlignment::Top => 0,
+        VerticalAlignment::Center => 1,
+        VerticalAlignment::Bottom => 2,
+        VerticalAlignment::Justify => 3,
+        VerticalAlignment::Distributed => 4,
+    }
+}
+
+fn encode_reading_order(r: ReadingOrder) -> u8 {
+    match r {
+        ReadingOrder::ContextDependent => 0,
+        ReadingOrder::LeftToRight => 1,
+        ReadingOrder::RightToLeft => 2,
+    }
+}
+
+fn encode_rotation(rotation: i16) -> u8 {
+    if rotation == 255 {
+        return 255;
+    }
+    match rotation {
+        0 => 0,
+        1..=90 => rotation as u8,
+        // The reader maps BIFF values 91..=180 back to negative
+        // (anti-clockwise) angles. Inverse the relation here.
+        -90..=-1 => (90i16 - rotation) as u8,
+        _ => 0,
+    }
+}
+
+fn encode_border_line(edge: Option<&BorderEdge>) -> u8 {
+    let style = edge.map(|e| e.style).unwrap_or(BorderLineStyle::None);
+    match style {
+        BorderLineStyle::None => 0,
+        BorderLineStyle::Thin => 1,
+        BorderLineStyle::Medium => 2,
+        BorderLineStyle::Dashed => 3,
+        BorderLineStyle::Dotted => 4,
+        BorderLineStyle::Thick => 5,
+        BorderLineStyle::Double => 6,
+        BorderLineStyle::Hair => 7,
+        BorderLineStyle::MediumDashed => 8,
+        BorderLineStyle::DashDot => 9,
+        BorderLineStyle::MediumDashDot => 10,
+        BorderLineStyle::DashDotDot => 11,
+        BorderLineStyle::MediumDashDotDot => 12,
+        BorderLineStyle::SlantDashDot => 13,
+    }
+}
+
+fn encode_border_color(edge: Option<&BorderEdge>) -> u8 {
+    edge.map(|e| color_to_icv7(&e.color)).unwrap_or(0x40)
+}
+
+fn encode_diagonal_direction(d: DiagonalDirection) -> u8 {
+    match d {
+        DiagonalDirection::None => 0,
+        DiagonalDirection::Down => 1,
+        DiagonalDirection::Up => 2,
+        DiagonalDirection::Both => 3,
+    }
+}
+
+fn encode_fill_pattern(fill: &FillStyle) -> u8 {
+    match fill {
+        FillStyle::None => 0,
+        FillStyle::Solid { .. } => 1,
+        FillStyle::Pattern { pattern, .. } => match pattern {
+            PatternType::None => 0,
+            PatternType::Solid => 1,
+            PatternType::MediumGray => 2,
+            PatternType::DarkGray => 3,
+            PatternType::LightGray => 4,
+            PatternType::DarkHorizontal => 5,
+            PatternType::DarkVertical => 6,
+            PatternType::DarkDown => 7,
+            PatternType::DarkUp => 8,
+            PatternType::DarkGrid => 9,
+            PatternType::DarkTrellis => 10,
+            PatternType::LightHorizontal => 11,
+            PatternType::LightVertical => 12,
+            PatternType::LightDown => 13,
+            PatternType::LightUp => 14,
+            PatternType::LightGrid => 15,
+            PatternType::LightTrellis => 16,
+            PatternType::Gray125 => 17,
+            PatternType::Gray0625 => 18,
+        },
+        FillStyle::Gradient { .. } => 1, // fall back to solid for now
+    }
+}
+
+fn encode_fill_colors(fill: &FillStyle) -> (u8, u8) {
+    match fill {
+        FillStyle::None => (0x40, 0x41),
+        FillStyle::Solid { color } => (color_to_icv7(color), 0x41),
+        FillStyle::Pattern {
+            foreground,
+            background,
+            ..
+        } => (color_to_icv7(foreground), color_to_icv7(background)),
+        FillStyle::Gradient { stops, .. } => {
+            let fg = stops
+                .first()
+                .map(|s| color_to_icv7(&s.color))
+                .unwrap_or(0x40);
+            (fg, 0x41)
+        }
+    }
+}
+
+/// Encode a [`Color`] as a 7-bit `icv` value (the on-disk encoding
+/// used in border/fill XF fields). The font-side encoding uses 16
+/// bits and a different sentinel — see `write_font_record`.
+fn color_to_icv7(color: &Color) -> u8 {
+    match color {
+        Color::Auto => 0x40,
+        Color::Indexed(i) => 0x08u8.saturating_add(i.min(&55).clone()),
+        // BIFF8 has no first-class RGB without a PALETTE record. Pick
+        // 0x40 (system foreground) as the closest no-op default; a
+        // future PALETTE-emission slice can express arbitrary RGB.
+        _ => 0x40,
+    }
 }
 
 /// Emit a `ShortXLUnicodeString` (1-byte cch, 1-byte fHighByte, chars).
