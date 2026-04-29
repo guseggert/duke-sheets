@@ -131,3 +131,61 @@ fn lo_can_open_skeleton_workbook() {
     let count = outcome.expect("LO must open the skeleton workbook");
     assert_eq!(count, 1);
 }
+
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_read_cell_values_we_emit() {
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    if TcpStream::connect_timeout(
+        &"127.0.0.1:2002".parse().unwrap(),
+        Duration::from_secs(2),
+    )
+    .is_err()
+    {
+        panic!("LO URP not reachable; start with `mise run urp:start`");
+    }
+
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "Probe").expect("rename");
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).expect("set A1");
+    ws.set_cell_value("B2", -3.14).expect("set B2");
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    std::fs::create_dir_all("/tmp/duke-sheets-urp").expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("/tmp/duke-sheets-urp/duke_cells_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write to shared dir");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<(f64, f64), String> = rt.block_on(async {
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let a1 = wb
+            .get_cell_value("A1")
+            .await
+            .map_err(|e| format!("read A1: {e}"))?;
+        let b2 = wb
+            .get_cell_value("B2")
+            .await
+            .map_err(|e| format!("read B2: {e}"))?;
+        Ok((a1, b2))
+    });
+    let _ = std::fs::remove_file(&path);
+    let (a1, b2) = outcome.expect("LO must read cells we wrote");
+    assert!((a1 - 42.0).abs() < 1e-9, "A1 = {a1}");
+    assert!((b2 - -3.14).abs() < 1e-9, "B2 = {b2}");
+}

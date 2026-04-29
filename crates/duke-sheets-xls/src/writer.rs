@@ -11,6 +11,8 @@ use std::io::Write;
 use std::path::Path;
 
 use duke_sheets_core::workbook::Workbook;
+use duke_sheets_core::worksheet::Worksheet;
+use duke_sheets_core::CellValue;
 
 use crate::cfb::CompoundFileBuilder;
 use crate::error::{XlsError, XlsResult};
@@ -18,6 +20,11 @@ use crate::error::{XlsError, XlsResult};
 const BOF_RECORD: u16 = 0x0809;
 const EOF_RECORD: u16 = 0x000A;
 const BOUND_SHEET_8: u16 = 0x0085;
+const DIMENSION_RECORD: u16 = 0x0200;
+const WINDOW2_RECORD: u16 = 0x023E;
+const BLANK_RECORD: u16 = 0x0201;
+const NUMBER_RECORD: u16 = 0x0203;
+const BOOLERR_RECORD: u16 = 0x0205;
 
 const BIFF8_VERSION: u16 = 0x0600;
 const DT_WORKBOOK_GLOBALS: u16 = 0x0005;
@@ -95,9 +102,12 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     write_eof(&mut stream);
 
     let mut sheet_bof_offsets = Vec::with_capacity(workbook.sheet_count());
-    for _ in workbook.worksheets() {
+    for sheet in workbook.worksheets() {
         let bof_pos = stream.len() as u32;
         write_bof(&mut stream, DT_WORKSHEET);
+        write_dimension(&mut stream, sheet);
+        write_cell_records(&mut stream, sheet);
+        write_window2(&mut stream);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
     }
@@ -107,6 +117,142 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     }
 
     Ok(stream)
+}
+
+/// Emit a DIMENSION record (MS-XLS §2.4.62) bounding the populated
+/// cell rectangle. LibreOffice and real Excel scan the cell records in
+/// the half-open `[firstRow..lastRow), [firstCol..lastCol)` range
+/// declared here; without DIMENSION they treat the worksheet as empty
+/// even when cell records are physically present.
+fn write_dimension(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let mut first_row = u32::MAX;
+    let mut last_row_excl = 0u32;
+    let mut first_col = u16::MAX;
+    let mut last_col_excl = 0u16;
+    for (row, col, _) in sheet.iter_cells() {
+        if row < first_row {
+            first_row = row;
+        }
+        if row + 1 > last_row_excl {
+            last_row_excl = row + 1;
+        }
+        if col < first_col {
+            first_col = col;
+        }
+        if col + 1 > last_col_excl {
+            last_col_excl = col + 1;
+        }
+    }
+    if last_row_excl == 0 {
+        first_row = 0;
+        first_col = 0;
+    }
+
+    stream.extend_from_slice(&DIMENSION_RECORD.to_le_bytes());
+    stream.extend_from_slice(&14u16.to_le_bytes());
+    stream.extend_from_slice(&first_row.to_le_bytes());
+    stream.extend_from_slice(&last_row_excl.to_le_bytes());
+    stream.extend_from_slice(&(first_col as u16).to_le_bytes());
+    stream.extend_from_slice(&(last_col_excl as u16).to_le_bytes());
+    stream.extend_from_slice(&0u16.to_le_bytes());
+}
+
+/// Emit a minimal WINDOW2 record (MS-XLS §2.4.349). The reader extracts
+/// only the frozen-pane bit, but real Excel and LibreOffice expect this
+/// record as a structural cue that the worksheet stream is well-formed.
+fn write_window2(stream: &mut Vec<u8>) {
+    let options: u16 = 0x06B6; // grbit defaults: show grid, headings, formulas, default to row=col=0
+    let row_pos: u16 = 0;
+    let col_pos: u16 = 0;
+    let grid_color: u32 = 0;
+    let preview_zoom: u16 = 0;
+    let normal_zoom: u16 = 0;
+    let reserved: u32 = 0;
+
+    stream.extend_from_slice(&WINDOW2_RECORD.to_le_bytes());
+    stream.extend_from_slice(&18u16.to_le_bytes());
+    stream.extend_from_slice(&options.to_le_bytes());
+    stream.extend_from_slice(&row_pos.to_le_bytes());
+    stream.extend_from_slice(&col_pos.to_le_bytes());
+    stream.extend_from_slice(&grid_color.to_le_bytes());
+    stream.extend_from_slice(&preview_zoom.to_le_bytes());
+    stream.extend_from_slice(&normal_zoom.to_le_bytes());
+    stream.extend_from_slice(&reserved.to_le_bytes());
+}
+
+/// Emit cell records (BLANK, NUMBER, BOOLERR) for every non-empty cell
+/// in `sheet`, sorted in row-major order. String, rich-text, and
+/// spill-target cells are silently skipped — those land in the SST
+/// slice; emitting them as BLANK would lose information.
+///
+/// All cells are emitted with `ixfe = 0` (default style); per-cell XF
+/// indices land with the formatting slice.
+fn write_cell_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let mut cells: Vec<_> = sheet.iter_cells().collect();
+    cells.sort_by_key(|(row, col, _)| (*row, *col));
+
+    for (row, col, data) in cells {
+        if row > u16::MAX as u32 {
+            continue;
+        }
+        let row16 = row as u16;
+        let ixfe = clamp_ixfe(data.style_index);
+        match &data.value {
+            CellValue::Empty => {
+                if ixfe != 0 {
+                    write_blank(stream, row16, col, ixfe);
+                }
+            }
+            CellValue::Number(v) => write_number(stream, row16, col, ixfe, *v),
+            CellValue::Boolean(b) => write_boolerr(stream, row16, col, ixfe, u8::from(*b), false),
+            CellValue::Error(err) => write_boolerr(stream, row16, col, ixfe, err.code(), true),
+            CellValue::String(_) | CellValue::RichText(_) | CellValue::SpillTarget { .. } => {
+                // Deferred to the SST / formula slices.
+            }
+        }
+    }
+}
+
+fn clamp_ixfe(style_index: u32) -> u16 {
+    if style_index <= u16::MAX as u32 {
+        style_index as u16
+    } else {
+        0
+    }
+}
+
+fn write_blank(stream: &mut Vec<u8>, row: u16, col: u16, ixfe: u16) {
+    stream.extend_from_slice(&BLANK_RECORD.to_le_bytes());
+    stream.extend_from_slice(&6u16.to_le_bytes());
+    stream.extend_from_slice(&row.to_le_bytes());
+    stream.extend_from_slice(&col.to_le_bytes());
+    stream.extend_from_slice(&ixfe.to_le_bytes());
+}
+
+fn write_number(stream: &mut Vec<u8>, row: u16, col: u16, ixfe: u16, value: f64) {
+    stream.extend_from_slice(&NUMBER_RECORD.to_le_bytes());
+    stream.extend_from_slice(&14u16.to_le_bytes());
+    stream.extend_from_slice(&row.to_le_bytes());
+    stream.extend_from_slice(&col.to_le_bytes());
+    stream.extend_from_slice(&ixfe.to_le_bytes());
+    stream.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_boolerr(
+    stream: &mut Vec<u8>,
+    row: u16,
+    col: u16,
+    ixfe: u16,
+    bool_or_err: u8,
+    is_error: bool,
+) {
+    stream.extend_from_slice(&BOOLERR_RECORD.to_le_bytes());
+    stream.extend_from_slice(&8u16.to_le_bytes());
+    stream.extend_from_slice(&row.to_le_bytes());
+    stream.extend_from_slice(&col.to_le_bytes());
+    stream.extend_from_slice(&ixfe.to_le_bytes());
+    stream.push(bool_or_err);
+    stream.push(if is_error { 1 } else { 0 });
 }
 
 fn write_bof(stream: &mut Vec<u8>, dt: u16) {
