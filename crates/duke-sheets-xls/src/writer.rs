@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
-use duke_sheets_core::style::{Color, FontStyle, Underline};
+use duke_sheets_core::style::{Color, FontStyle, NumberFormat, Underline};
 use duke_sheets_core::workbook::Workbook;
 use duke_sheets_core::worksheet::Worksheet;
 use duke_sheets_core::CellValue;
@@ -25,6 +25,7 @@ const CONTINUE_RECORD: u16 = 0x003C;
 const BOUND_SHEET_8: u16 = 0x0085;
 const SST_RECORD: u16 = 0x00FC;
 const FONT_RECORD: u16 = 0x0031;
+const FORMAT_RECORD: u16 = 0x041E;
 const XF_RECORD: u16 = 0x00E0;
 const DIMENSION_RECORD: u16 = 0x0200;
 const WINDOW2_RECORD: u16 = 0x023E;
@@ -32,6 +33,11 @@ const BLANK_RECORD: u16 = 0x0201;
 const NUMBER_RECORD: u16 = 0x0203;
 const BOOLERR_RECORD: u16 = 0x0205;
 const LABELSST_RECORD: u16 = 0x00FD;
+
+/// MS-XLS §2.4.126 user-defined number-format index base. Built-in
+/// formats use ifmt 0..=49; user-defined custom format strings start
+/// at index 164.
+const FORMAT_USER_INDEX_BASE: u16 = 164;
 
 /// BIFF8 reserves the first 16 XF records for built-in cell-format
 /// slots; user-defined cell XFs start at 16. Also see MS-XLS §2.4.353.
@@ -119,6 +125,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     let mut stream = Vec::new();
     write_bof(&mut stream, DT_WORKBOOK_GLOBALS);
     styles.write_font_records(&mut stream)?;
+    styles.write_format_records(&mut stream)?;
     styles.write_xf_records(&mut stream);
 
     let mut lbplypos_field_offsets = Vec::with_capacity(workbook.sheet_count());
@@ -149,17 +156,19 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     Ok(stream)
 }
 
-/// Workbook-global font + XF tables. Slice 4a customizes only the
-/// `font_index` axis of an XF record; format, alignment, fill, and
-/// border are still left at defaults.
+/// Workbook-global font + format + XF tables. Slice 4a/4b customize
+/// the font_index and format_index axes of an XF record; alignment,
+/// fill, and border stay at defaults.
 struct StyleTables {
     /// FONT records to emit, in disk order. The first
     /// `FONT_BUILTIN_COUNT` entries are the BIFF8-required built-ins
     /// (all defaulted Calibri 11). User-defined fonts append after.
     fonts_in_order: Vec<FontStyle>,
-    /// User-defined XF records to emit after the 16 built-ins. Each
-    /// entry stores the resolved `font_index` field; everything else
-    /// is taken from XF defaults at emission time.
+    /// User-defined number-format strings to emit as FORMAT records.
+    /// Their on-disk ifmt values start at `FORMAT_USER_INDEX_BASE` and
+    /// increment by one per entry.
+    user_formats: Vec<String>,
+    /// User-defined XF records to emit after the 16 built-ins.
     user_xfs: Vec<UserXf>,
     /// `(sheet_idx, style_index_in_pool) -> ixfe`. Cells consult this
     /// to pick their `XF` reference; absent entries fall back to 0.
@@ -169,17 +178,21 @@ struct StyleTables {
 #[derive(Debug, Clone)]
 struct UserXf {
     font_index: u16,
+    format_index: u16,
 }
 
 impl StyleTables {
     fn collect(workbook: &Workbook) -> Self {
         let default_font = FontStyle::default();
         let mut fonts_in_order = vec![default_font.clone(); FONT_BUILTIN_COUNT as usize];
-        let mut font_xf_index = HashMap::new();
+        let mut font_xf_index: HashMap<FontStyle, u16> = HashMap::new();
         font_xf_index.insert(default_font, 0u16);
 
+        let mut user_formats: Vec<String> = Vec::new();
+        let mut format_index_for_custom: HashMap<String, u16> = HashMap::new();
+
         let mut user_xfs: Vec<UserXf> = Vec::new();
-        let mut xf_for_font: HashMap<u16, u16> = HashMap::new();
+        let mut xf_key_to_ixfe: HashMap<(u16, u16), u16> = HashMap::new();
         let mut cell_ixfe = HashMap::new();
 
         for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
@@ -190,8 +203,8 @@ impl StyleTables {
                 let Some(style) = sheet.style_by_index(cell.style_index) else {
                     continue;
                 };
-                let font = style.font.clone();
 
+                let font = style.font.clone();
                 let font_idx = match font_xf_index.get(&font) {
                     Some(&idx) => idx,
                     None => {
@@ -203,14 +216,30 @@ impl StyleTables {
                     }
                 };
 
-                let ixfe = match xf_for_font.get(&font_idx) {
+                let format_idx = match &style.number_format {
+                    NumberFormat::General => 0u16,
+                    NumberFormat::BuiltIn(id) => *id as u16,
+                    NumberFormat::Custom(s) => match format_index_for_custom.get(s) {
+                        Some(&idx) => idx,
+                        None => {
+                            let idx = FORMAT_USER_INDEX_BASE + user_formats.len() as u16;
+                            user_formats.push(s.clone());
+                            format_index_for_custom.insert(s.clone(), idx);
+                            idx
+                        }
+                    },
+                };
+
+                let xf_key = (font_idx, format_idx);
+                let ixfe = match xf_key_to_ixfe.get(&xf_key) {
                     Some(&i) => i,
                     None => {
                         let new_ixfe = XF_USER_BASE + user_xfs.len() as u16;
                         user_xfs.push(UserXf {
                             font_index: font_idx,
+                            format_index: format_idx,
                         });
-                        xf_for_font.insert(font_idx, new_ixfe);
+                        xf_key_to_ixfe.insert(xf_key, new_ixfe);
                         new_ixfe
                     }
                 };
@@ -221,6 +250,7 @@ impl StyleTables {
 
         StyleTables {
             fonts_in_order,
+            user_formats,
             user_xfs,
             cell_ixfe,
         }
@@ -243,14 +273,35 @@ impl StyleTables {
         Ok(())
     }
 
+    fn write_format_records(&self, stream: &mut Vec<u8>) -> XlsResult<()> {
+        for (i, fmt) in self.user_formats.iter().enumerate() {
+            let ifmt = FORMAT_USER_INDEX_BASE + i as u16;
+            write_format_record(stream, ifmt, fmt)?;
+        }
+        Ok(())
+    }
+
     fn write_xf_records(&self, stream: &mut Vec<u8>) {
         for _ in 0..XF_USER_BASE {
-            write_default_xf(stream, /* is_style_xf */ false, 0);
+            write_default_xf(stream, /* is_style_xf */ false, 0, 0);
         }
         for xf in &self.user_xfs {
-            write_default_xf(stream, false, xf.font_index);
+            write_default_xf(stream, false, xf.font_index, xf.format_index);
         }
     }
+}
+
+/// Emit a FORMAT record (MS-XLS §2.4.126) for a user-defined custom
+/// number-format string. Built-in format indices (0..=49) are implicit
+/// and don't need a FORMAT record.
+fn write_format_record(stream: &mut Vec<u8>, ifmt: u16, format_string: &str) -> XlsResult<()> {
+    let mut body = Vec::with_capacity(2 + 3 + format_string.len() * 2);
+    body.extend_from_slice(&ifmt.to_le_bytes());
+    push_xlunicode_string(&mut body, format_string)?;
+    stream.extend_from_slice(&FORMAT_RECORD.to_le_bytes());
+    stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    stream.extend_from_slice(&body);
+    Ok(())
 }
 
 /// Emit a FONT record (MS-XLS §2.4.122). Only the fields needed by the
@@ -313,12 +364,12 @@ fn write_font_record(stream: &mut Vec<u8>, font: &FontStyle) -> XlsResult<()> {
 }
 
 /// Emit a 20-byte XF record with everything at defaults except font
-/// index (and the cell-vs-style-XF flag).
-fn write_default_xf(stream: &mut Vec<u8>, is_style_xf: bool, font_index: u16) {
+/// index, number-format index, and the cell-vs-style-XF flag.
+fn write_default_xf(stream: &mut Vec<u8>, is_style_xf: bool, font_index: u16, format_index: u16) {
     stream.extend_from_slice(&XF_RECORD.to_le_bytes());
     stream.extend_from_slice(&20u16.to_le_bytes());
     stream.extend_from_slice(&font_index.to_le_bytes());
-    stream.extend_from_slice(&0u16.to_le_bytes()); // ifmt = General
+    stream.extend_from_slice(&format_index.to_le_bytes());
     let type_prot: u16 = if is_style_xf { 0xFFF5 } else { 0x0001 };
     stream.extend_from_slice(&type_prot.to_le_bytes());
     stream.push(0); // alignment 1
