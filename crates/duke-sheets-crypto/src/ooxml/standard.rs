@@ -346,15 +346,12 @@ pub fn encrypt(
     let encrypted_verifier_hash = aes_ecb_encrypt(&key, &verifier_hash_padded)?;
 
     let total_size = plaintext.len();
-    // ECB is block-only; an empty plaintext still needs one all-zero
-    // block so the reader has bytes to decrypt before truncating to
-    // total_size = 0.
-    let padded = if plaintext.is_empty() {
-        vec![0u8; 16]
+    let padded = pad_to_block(plaintext, 16);
+    let encrypted_payload = if padded.is_empty() {
+        Vec::new()
     } else {
-        pad_to_block(plaintext, 16)
+        aes_ecb_encrypt(&key, &padded)?
     };
-    let encrypted_payload = aes_ecb_encrypt(&key, &padded)?;
     let mut encrypted_package = Vec::with_capacity(8 + encrypted_payload.len());
     encrypted_package.extend_from_slice(&(total_size as u64).to_le_bytes());
     encrypted_package.extend_from_slice(&encrypted_payload);
@@ -458,6 +455,9 @@ fn decrypt_package(key: &[u8], encrypted_package: &[u8]) -> CryptoResult<Vec<u8>
         encrypted_package[7],
     ]) as usize;
     let ciphertext = &encrypted_package[8..];
+    if ciphertext.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut decrypted = aes_ecb_decrypt(key, ciphertext)?;
     decrypted.truncate(total_size);
     Ok(decrypted)

@@ -1433,7 +1433,6 @@ fn rb_fixup(dirs: &mut [DirWriteEntry], mut root: u32, node: u32, parents: &[u32
                 update_parent_link(dirs, &stack, parent, new_subroot, &mut root, 1);
                 stack.pop();
                 stack.push(new_subroot);
-                cur = parent;
             }
             let parent2 = *stack.last().unwrap();
             dirs[parent2 as usize].color = COLOR_BLACK;
@@ -1446,7 +1445,6 @@ fn rb_fixup(dirs: &mut [DirWriteEntry], mut root: u32, node: u32, parents: &[u32
                 update_parent_link(dirs, &stack, parent, new_subroot, &mut root, 1);
                 stack.pop();
                 stack.push(new_subroot);
-                cur = parent;
             }
             let parent2 = *stack.last().unwrap();
             dirs[parent2 as usize].color = COLOR_BLACK;
