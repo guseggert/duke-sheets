@@ -5,15 +5,20 @@
 //! can also open the files — proof that we're emitting spec-compliant
 //! Office output, not just a private serialization round-trip.
 //!
-//! All tests are `#[ignore]`-gated because they need:
-//!   - LibreOffice URP daemon on `127.0.0.1:2002` (for `lo_*` tests).
-//!
-//! Run with:
+//! All tests are `#[ignore]`-gated because they need a running
+//! LibreOffice URP daemon on `127.0.0.1:2002`. The recommended way
+//! to run them is via `mise run test:crypto-compat` which auto-starts
+//! the LO container (and the Excel COM bridge) and tears them down.
+//! Direct invocation is also supported once LO is up:
 //!
 //! ```sh
 //! cargo test -p duke-sheets-xlsx --test encrypted_agile_compat -- \
 //!   --ignored --nocapture
 //! ```
+//!
+//! If LibreOffice isn't reachable when these tests are explicitly
+//! invoked with `--ignored`, they panic (rather than silently passing)
+//! so a missing backend can't be mistaken for a clean run.
 
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -26,9 +31,19 @@ use duke_sheets_xlsx::{EncryptionProfile, XlsxWriter};
 const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
 const PASSWORD: &str = "compat-test-pw";
 
-fn lo_available() -> bool {
-    TcpStream::connect_timeout(&"127.0.0.1:2002".parse().unwrap(), Duration::from_secs(2))
-        .is_ok()
+fn require_lo() {
+    if TcpStream::connect_timeout(
+        &"127.0.0.1:2002".parse().unwrap(),
+        Duration::from_secs(2),
+    )
+    .is_err()
+    {
+        panic!(
+            "LibreOffice URP not reachable on 127.0.0.1:2002. \
+             Start it with `mise run urp:start` or run the suite via \
+             `mise run test:crypto-compat`."
+        );
+    }
 }
 
 fn build_wb() -> Workbook {
@@ -55,10 +70,7 @@ fn write_encrypted_to_shared(profile: &EncryptionProfile) -> PathBuf {
 #[test]
 #[ignore = "requires running LibreOffice on 127.0.0.1:2002"]
 fn lo_can_read_aes256_default_profile() {
-    if !lo_available() {
-        eprintln!("SKIP: LibreOffice URP not reachable on 127.0.0.1:2002");
-        return;
-    }
+    require_lo();
     let path = write_encrypted_to_shared(&EncryptionProfile::agile_default());
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -95,10 +107,7 @@ fn lo_can_read_aes256_default_profile() {
 #[test]
 #[ignore = "requires running LibreOffice on 127.0.0.1:2002"]
 fn lo_can_read_aes128_profile() {
-    if !lo_available() {
-        eprintln!("SKIP: LibreOffice URP not reachable on 127.0.0.1:2002");
-        return;
-    }
+    require_lo();
     let path = write_encrypted_to_shared(&EncryptionProfile::Agile {
         key_bits: 128,
         spin_count: 100_000,

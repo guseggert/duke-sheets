@@ -287,6 +287,106 @@ cargo test -p duke-sheets --test xlsb_parity -- --nocapture --ignored
 description = "Run chart corpus smoke test against real Excel files"
 run = 'cargo test -p duke-sheets --test chart_corpus -- --ignored --nocapture'
 
+[tasks."test:crypto-compat"]
+description = "Run encrypted-OOXML cross-tool compat tests (write with duke-sheets, read with LibreOffice + Excel COM). Auto-starts LO container and Windows VM."
+depends = ["docker:build"]
+run = """
+#!/bin/bash
+set -e
+
+mkdir -p /tmp/duke-sheets-urp /tmp/duke-sheets-excel
+
+bridge_ready() {
+    # `-w2` matches the pattern used by other crypto/parity tasks; the
+    # system nc on this host is ncat (nmap), which doesn't recognise
+    # GNU netcat's `-q1`. `-w` is portable across both.
+    echo '{"id":1,"cmd":"Init","params":{}}' | nc -w2 localhost 9876 2>/dev/null | grep -q '"ok"'
+}
+
+# LibreOffice container. Always replace with a fresh managed
+# instance: stale containers wedge after a few opens and produce
+# "loadComponentFromURL returned null" with no clean recovery path.
+# A 3-second restart is cheaper than the hours of debugging that
+# stale state has cost in this repo's history.
+LO_NAME="duke-lo-compat"
+echo "Restarting LibreOffice container ($LO_NAME)..."
+docker rm -f "$LO_NAME" 2>/dev/null || true
+# Kill any other container holding port 2002 (e.g. an interactive
+# `mise run urp:start` or a leftover diag container). Mise renders
+# task scripts through Tera, which interprets Go-template double
+# braces, so prefer `--filter publish=...` over docker's templated
+# format strings.
+for c in $(docker ps --filter "publish=2002" --quiet); do
+    echo "  removing existing container on port 2002: $c"
+    docker rm -f "$c" 2>/dev/null || true
+done
+docker run -d --rm --name "$LO_NAME" -p 2002:2002 \
+    -v /tmp/duke-sheets-urp:/tmp/duke-sheets-urp duke-sheets-pyuno \
+    bash -c 'soffice --headless --accept="socket,host=0.0.0.0,port=2002;urp;StarOffice.ComponentContext" & sleep 999999' \
+    > /dev/null
+for i in $(seq 1 30); do
+    if nc -z localhost 2002 2>/dev/null; then
+        echo "LibreOffice ready (took ${i}s)"
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo "ERROR: Timeout waiting for LibreOffice"
+        docker rm -f "$LO_NAME" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 1
+done
+
+# Excel COM bridge in QEMU/KVM Windows VM.
+STARTED_VM=false
+if ! bridge_ready; then
+    echo "Excel COM bridge not responsive on localhost:9876, starting VM..."
+    if ! pgrep -f qemu-system-x86_64 >/dev/null; then
+        mise run vm:start &
+        STARTED_VM=true
+    fi
+    for i in $(seq 1 180); do
+        if bridge_ready; then
+            echo "Bridge ready (took ${i}*2 = $((i*2))s)"
+            break
+        fi
+        if [ "$i" -eq 180 ]; then
+            echo "ERROR: Timeout waiting for Excel COM bridge"
+            docker rm -f "$LO_NAME" 2>/dev/null || true
+            exit 1
+        fi
+        sleep 2
+    done
+else
+    echo "Excel COM bridge already responsive on localhost:9876"
+fi
+
+set +e
+cargo test -p duke-sheets-xlsx --test encrypted_agile_compat -- --ignored --nocapture
+LO_AGILE_EXIT=$?
+cargo test -p duke-sheets-xlsx --test encrypted_standard_compat -- --ignored --nocapture
+LO_STD_EXIT=$?
+cargo test -p duke-sheets-excel-com --test e2e encrypted_agile_compat -- --ignored --nocapture --test-threads=1
+EXCEL_AGILE_EXIT=$?
+cargo test -p duke-sheets-excel-com --test e2e encrypted_standard_compat -- --ignored --nocapture --test-threads=1
+EXCEL_STD_EXIT=$?
+set -e
+
+echo "Stopping LibreOffice container..."
+docker rm -f "$LO_NAME" 2>/dev/null || true
+
+# We don't auto-stop the VM since it's expensive to boot; leave it
+# running so subsequent invocations are fast. Stop manually with
+# `mise run vm:stop` when done.
+
+FAILED=0
+[ "$LO_AGILE_EXIT" -ne 0 ] && { echo "FAIL: LO Agile compat exit=$LO_AGILE_EXIT"; FAILED=1; }
+[ "$LO_STD_EXIT" -ne 0 ] && { echo "FAIL: LO Standard compat exit=$LO_STD_EXIT"; FAILED=1; }
+[ "$EXCEL_AGILE_EXIT" -ne 0 ] && { echo "FAIL: Excel Agile compat exit=$EXCEL_AGILE_EXIT"; FAILED=1; }
+[ "$EXCEL_STD_EXIT" -ne 0 ] && { echo "FAIL: Excel Standard compat exit=$EXCEL_STD_EXIT"; FAILED=1; }
+exit $FAILED
+"""
+
 [tasks."crypto:fixtures:excel"]
 description = "Generate XLS RC4 CryptoAPI fixture via real Excel (requires running VM)"
 run = """
