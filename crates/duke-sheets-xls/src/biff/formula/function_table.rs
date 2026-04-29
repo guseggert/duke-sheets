@@ -598,6 +598,19 @@ pub fn function_argc(idx: u16) -> u16 {
     }
 }
 
+/// Inverse of [`function_name`]: look up the BIFF8 function index for
+/// a function name. Comparison is case-insensitive (Excel treats
+/// `SUM`/`sum`/`Sum` as the same function). Returns `None` for
+/// reserved/unused indices and unknown names.
+pub fn function_index(name: &str) -> Option<u16> {
+    for (idx, entry) in FTAB.iter().enumerate() {
+        if !entry.is_empty() && entry.eq_ignore_ascii_case(name) {
+            return Some(idx as u16);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

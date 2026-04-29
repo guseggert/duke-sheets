@@ -1099,8 +1099,29 @@ fn compile_ptgs(
                 }
             });
         }
-        FormulaExpr::Function { .. }
-        | FormulaExpr::Array(_)
+        FormulaExpr::Function { name, args } => {
+            let Some(idx) = crate::biff::formula::function_table::function_index(name) else {
+                return Err(UnsupportedToken);
+            };
+            if args.len() > u8::MAX as usize {
+                return Err(UnsupportedToken);
+            }
+            for arg in args {
+                if matches!(arg, FormulaExpr::Empty) {
+                    out.push(0x16); // PTG_MISS_ARG
+                } else {
+                    compile_ptgs(arg, out)?;
+                }
+            }
+            // Always emit tFuncVar (V class, 0x42) so the variable-
+            // argument count is encoded inline with the token; the
+            // reader handles fixed-arity functions decoded this way
+            // identically to the more compact tFunc form.
+            out.push(0x42);
+            out.push(args.len() as u8);
+            out.extend_from_slice(&idx.to_le_bytes());
+        }
+        FormulaExpr::Array(_)
         | FormulaExpr::NameRef(_)
         | FormulaExpr::StructuredRef(_)
         | FormulaExpr::ExternalRef(_)

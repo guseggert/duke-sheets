@@ -135,7 +135,7 @@ fn range_reference_in_formula_round_trips() {
 }
 
 #[test]
-fn unsupported_function_falls_back_to_static_value() {
+fn sum_function_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 10.0).expect("A1");
@@ -147,13 +147,83 @@ fn unsupported_function_falls_back_to_static_value() {
 
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
-    // Slice 5a doesn't yet emit function calls; we fall back to a
-    // static NUMBER record so the spreadsheet still displays the
-    // cached result. The formula text won't survive in this case.
-    assert!(sheet.get_formula_at(0, 1).is_none(), "function-call formula falls back to static value");
+    let formula = sheet.get_formula_at(0, 1).expect("SUM round-trips");
+    assert!(formula.to_uppercase().contains("SUM"), "got {formula:?}");
+    assert!(formula.contains("A1") && formula.contains("A3"));
     assert_eq!(
         sheet.get_value("B1").expect("cached").as_number(),
         Some(60.0)
+    );
+}
+
+#[test]
+fn if_function_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 5.0).expect("A1");
+    ws.set_cell_formula("B1", "=IF(A1>0,1,0)").expect("formula");
+    ws.set_formula_result(0, 1, CellValue::Number(1.0))
+        .expect("cached");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let formula = sheet.get_formula_at(0, 1).expect("IF round-trips");
+    assert!(formula.to_uppercase().contains("IF"), "got {formula:?}");
+}
+
+#[test]
+fn nested_function_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 9.0).expect("A1");
+    ws.set_cell_value("A2", 16.0).expect("A2");
+    ws.set_cell_formula("B1", "=SUM(SQRT(A1),SQRT(A2))")
+        .expect("formula");
+    ws.set_formula_result(0, 1, CellValue::Number(7.0))
+        .expect("cached");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let formula = sheet.get_formula_at(0, 1).expect("nested round-trips");
+    assert!(formula.to_uppercase().contains("SUM"));
+    assert!(formula.to_uppercase().contains("SQRT"));
+}
+
+#[test]
+fn case_insensitive_function_lookup() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 4.0).expect("A1");
+    ws.set_cell_formula("B1", "=sum(A1)").expect("formula");
+    ws.set_formula_result(0, 1, CellValue::Number(4.0))
+        .expect("cached");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let formula = sheet
+        .get_formula_at(0, 1)
+        .expect("case-insensitive sum round-trips");
+    assert!(formula.to_uppercase().contains("SUM"), "got {formula:?}");
+}
+
+#[test]
+fn unknown_function_falls_back_to_static_value() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=ABSOLUTELY_NOT_A_REAL_FUNCTION(1)")
+        .expect("formula");
+    ws.set_formula_result(0, 0, CellValue::Number(99.0))
+        .expect("cached");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    assert!(
+        sheet.get_formula_at(0, 0).is_none(),
+        "unknown function falls back to static value"
+    );
+    assert_eq!(
+        sheet.get_value("A1").expect("cached").as_number(),
+        Some(99.0)
     );
 }
 
@@ -196,6 +266,60 @@ fn many_formulas_round_trip() {
         let cached = sheet.get_value(&addr).expect("cached");
         assert_eq!(cached.as_number(), Some(row as f64 * 2.0));
     }
+}
+
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_evaluate_sum_function_we_emit() {
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    if TcpStream::connect_timeout(
+        &"127.0.0.1:2002".parse().unwrap(),
+        Duration::from_secs(2),
+    )
+    .is_err()
+    {
+        panic!("LO URP not reachable; start with `mise run urp:start`");
+    }
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 1.0).expect("A1");
+    ws.set_cell_value("A2", 2.0).expect("A2");
+    ws.set_cell_value("A3", 3.0).expect("A3");
+    ws.set_cell_value("A4", 4.0).expect("A4");
+    ws.set_cell_value("A5", 5.0).expect("A5");
+    ws.set_cell_formula("B1", "=SUM(A1:A5)").expect("formula");
+    ws.set_formula_result(0, 1, CellValue::Number(15.0))
+        .expect("cached");
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    std::fs::create_dir_all("/tmp/duke-sheets-urp").expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("/tmp/duke-sheets-urp/duke_sumfn_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<f64, String> = rt.block_on(async {
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        wb.get_cell_value("B1").await.map_err(|e| format!("B1: {e}"))
+    });
+    let _ = std::fs::remove_file(&path);
+    let b1 = outcome.expect("LO must compute SUM");
+    assert!((b1 - 15.0).abs() < 1e-9, "LO computed B1 = {b1}");
 }
 
 #[test]
