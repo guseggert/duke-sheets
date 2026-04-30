@@ -14,6 +14,43 @@ use duke_sheets_core::{
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
 
+fn parse_xlsx_profile(
+    profile: Option<&str>,
+    key_bits: Option<u32>,
+    spin_count: Option<u32>,
+) -> std::result::Result<duke_sheets_xlsx::EncryptionProfile, String> {
+    use duke_sheets_xlsx::EncryptionProfile;
+    let normalized = profile.map(|p| p.to_lowercase());
+    Ok(match normalized.as_deref() {
+        None | Some("default") | Some("agile") | Some("ooxml-agile") => EncryptionProfile::Agile {
+            key_bits: key_bits.unwrap_or(256),
+            spin_count: spin_count.unwrap_or(100_000),
+        },
+        Some("standard") | Some("ooxml-standard") => EncryptionProfile::Standard {
+            key_bits: key_bits.unwrap_or(128),
+        },
+        Some(other) => return Err(format!("unknown XLSX encryption profile: {other:?}")),
+    })
+}
+
+fn parse_xls_variant(
+    profile: Option<&str>,
+    key_bits: Option<u32>,
+) -> std::result::Result<duke_sheets_crypto::xls::XlsEncryptionVariant, String> {
+    use duke_sheets_crypto::xls::XlsEncryptionVariant;
+    let normalized = profile.map(|p| p.to_lowercase());
+    Ok(match normalized.as_deref() {
+        None | Some("default") | Some("rc4-cryptoapi") | Some("xls-rc4-cryptoapi") => {
+            XlsEncryptionVariant::Rc4CryptoApi {
+                key_bits: key_bits.unwrap_or(128),
+            }
+        }
+        Some("rc4-legacy") | Some("xls-rc4-legacy") => XlsEncryptionVariant::Rc4Legacy,
+        Some("xor") | Some("xls-xor") => XlsEncryptionVariant::Xor,
+        Some(other) => return Err(format!("unknown XLS encryption profile: {other:?}")),
+    })
+}
+
 mod types;
 mod workbook_read;
 mod worksheet_read;
@@ -477,12 +514,72 @@ impl Workbook {
         })
     }
 
+    /// Load a password-protected workbook from bytes, auto-detecting
+    /// the format (XLSX or XLS). `skipIntegrityCheck` skips the HMAC
+    /// integrity check on Agile-encrypted files (matches Office
+    /// behaviour); defaults to false.
+    #[wasm_bindgen(js_name = fromBytesWithPassword)]
+    pub fn from_bytes_with_password(
+        data: &[u8],
+        password: &str,
+        skip_integrity_check: Option<bool>,
+    ) -> Result<Workbook, JsError> {
+        use duke_sheets::{WorkbookExt, WorkbookOpenOptions};
+        let mut opts = WorkbookOpenOptions::default().password(password);
+        if skip_integrity_check.unwrap_or(false) {
+            opts = opts.skip_integrity_check();
+        }
+        let wb = duke_sheets_core::Workbook::from_bytes_with(data, &opts)
+            .map_err(|e| JsError::new(&format!("Failed to read file: {}", e)))?;
+        Ok(Self {
+            inner: Rc::new(RefCell::new(wb)),
+        })
+    }
+
     #[wasm_bindgen(js_name = saveXlsxBytes)]
     pub fn save_xlsx_bytes(&self) -> Result<Vec<u8>, JsError> {
         let wb = self.inner.borrow();
         let mut buf = Vec::new();
         XlsxWriter::write(&wb, Cursor::new(&mut buf)).map_err(to_js_error)?;
         Ok(buf)
+    }
+
+    /// Save the workbook as encrypted XLSX bytes. `profile` selects
+    /// the encryption variant; passing `null`/`undefined` uses the
+    /// Agile-256 default. Valid values: `"agile"`, `"standard"`.
+    /// `keyBits` and `spinCount` override the defaults where the
+    /// profile supports them.
+    #[wasm_bindgen(js_name = saveXlsxBytesEncrypted)]
+    pub fn save_xlsx_bytes_encrypted(
+        &self,
+        password: &str,
+        profile: Option<String>,
+        key_bits: Option<u32>,
+        spin_count: Option<u32>,
+    ) -> Result<Vec<u8>, JsError> {
+        let wb = self.inner.borrow();
+        let xlsx_profile = parse_xlsx_profile(profile.as_deref(), key_bits, spin_count)
+            .map_err(|e| JsError::new(&e))?;
+        XlsxWriter::write_to_bytes_encrypted(&wb, password, &xlsx_profile).map_err(to_js_error)
+    }
+
+    /// Save the workbook as encrypted XLS bytes. `profile` selects
+    /// the FilePass variant; `null` defaults to RC4 CryptoAPI 128.
+    /// Valid values: `"rc4-cryptoapi"`, `"rc4-legacy"`, `"xor"`.
+    /// `keyBits` controls RC4 CryptoAPI key size (40 or 128). XOR is
+    /// not certified to interoperate with modern Excel.
+    #[wasm_bindgen(js_name = saveXlsBytesEncrypted)]
+    pub fn save_xls_bytes_encrypted(
+        &self,
+        password: &str,
+        profile: Option<String>,
+        key_bits: Option<u32>,
+    ) -> Result<Vec<u8>, JsError> {
+        let wb = self.inner.borrow();
+        let variant =
+            parse_xls_variant(profile.as_deref(), key_bits).map_err(|e| JsError::new(&e))?;
+        duke_sheets_xls::XlsWriter::write_to_bytes_encrypted(&wb, password, variant)
+            .map_err(to_js_error)
     }
 
     #[wasm_bindgen(js_name = saveXlsbBytes)]

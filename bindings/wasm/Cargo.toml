@@ -12,7 +12,9 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 duke-sheets = { path = "../../crates/duke-sheets", features = ["full"] }
 duke-sheets-core = { path = "../../crates/duke-sheets-core" }
+duke-sheets-crypto = { path = "../../crates/duke-sheets-crypto" }
 duke-sheets-csv = { path = "../../crates/duke-sheets-csv" }
+duke-sheets-xls = { path = "../../crates/duke-sheets-xls" }
 duke-sheets-xlsx = { path = "../../crates/duke-sheets-xlsx" }
 duke-sheets-xlsb = { path = "../../crates/duke-sheets-xlsb" }
 duke-sheets-chart = { path = "../../crates/duke-sheets-chart" }

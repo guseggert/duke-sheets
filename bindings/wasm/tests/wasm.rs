@@ -815,3 +815,95 @@ fn test_get_rows_batch_skip_blank() {
     assert_eq!(get_f64_field(&merged_row_cells[0], "col") as u32, 0);
     assert_eq!(get_string_field(&merged_row_cells[0], "value"), "merged");
 }
+
+// Password-protected save/open round-trips
+
+const PASSWORD: &str = "duke-test-pw";
+
+fn encrypted_round_trip_xlsx(profile: Option<&str>, key_bits: Option<u32>) {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from_str("hello")).unwrap();
+    sheet.set_cell("B1", JsValue::from_f64(42.0)).unwrap();
+
+    let bytes = wb
+        .save_xlsx_bytes_encrypted(PASSWORD, profile.map(String::from), key_bits, None)
+        .expect("save_xlsx_bytes_encrypted");
+
+    let opened = Workbook::from_bytes_with_password(&bytes, PASSWORD, None)
+        .expect("from_bytes_with_password");
+    let sheet = opened.get_sheet(0).unwrap();
+    assert_eq!(sheet.get_cell("A1").unwrap().as_text().as_deref(), Some("hello"));
+    assert_eq!(sheet.get_cell("B1").unwrap().as_number(), Some(42.0));
+}
+
+fn encrypted_round_trip_xls(profile: Option<&str>, key_bits: Option<u32>) {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from_str("hello")).unwrap();
+    sheet.set_cell("B1", JsValue::from_f64(42.0)).unwrap();
+
+    let bytes = wb
+        .save_xls_bytes_encrypted(PASSWORD, profile.map(String::from), key_bits)
+        .expect("save_xls_bytes_encrypted");
+
+    let opened = Workbook::from_bytes_with_password(&bytes, PASSWORD, None)
+        .expect("from_bytes_with_password");
+    let sheet = opened.get_sheet(0).unwrap();
+    assert_eq!(sheet.get_cell("A1").unwrap().as_text().as_deref(), Some("hello"));
+    assert_eq!(sheet.get_cell("B1").unwrap().as_number(), Some(42.0));
+}
+
+#[wasm_bindgen_test]
+fn test_save_xlsx_encrypted_default_round_trips() {
+    encrypted_round_trip_xlsx(None, None);
+}
+
+#[wasm_bindgen_test]
+fn test_save_xlsx_encrypted_agile_256_round_trips() {
+    encrypted_round_trip_xlsx(Some("agile"), Some(256));
+}
+
+#[wasm_bindgen_test]
+fn test_save_xlsx_encrypted_standard_round_trips() {
+    encrypted_round_trip_xlsx(Some("standard"), None);
+}
+
+#[wasm_bindgen_test]
+fn test_save_xls_encrypted_default_round_trips() {
+    encrypted_round_trip_xls(None, None);
+}
+
+#[wasm_bindgen_test]
+fn test_save_xls_encrypted_rc4_cryptoapi_40_round_trips() {
+    encrypted_round_trip_xls(Some("rc4-cryptoapi"), Some(40));
+}
+
+#[wasm_bindgen_test]
+fn test_save_xls_encrypted_rc4_legacy_round_trips() {
+    encrypted_round_trip_xls(Some("rc4-legacy"), None);
+}
+
+#[wasm_bindgen_test]
+fn test_save_xls_encrypted_xor_round_trips() {
+    encrypted_round_trip_xls(Some("xor"), None);
+}
+
+#[wasm_bindgen_test]
+fn test_wrong_password_rejects() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from_f64(1.0)).unwrap();
+    let bytes = wb
+        .save_xlsx_bytes_encrypted(PASSWORD, None, None, None)
+        .expect("save");
+    let err = Workbook::from_bytes_with_password(&bytes, "wrong", None);
+    assert!(err.is_err(), "wrong password must reject");
+}
+
+#[wasm_bindgen_test]
+fn test_unknown_xlsx_profile_rejects() {
+    let wb = Workbook::new();
+    let res = wb.save_xlsx_bytes_encrypted(PASSWORD, Some("not-a-thing".into()), None, None);
+    assert!(res.is_err(), "unknown profile must reject");
+}
