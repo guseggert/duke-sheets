@@ -345,9 +345,9 @@ One row per category, backed by the formula engine test suite. Individual functi
 | File-level encryption: OOXML Agile (AES + HMAC) | R✔ W✔ | R✖ W✖ | - | - | `encrypted_agile::excel_agile_xlsx_decrypts_with_correct_password`, `encrypted_agile_write::write_then_read_agile_round_trips_workbook_contents` | [MS-OFFCRYPTO] §2.3.4.10 |
 | File-level encryption: OOXML Standard (AES-ECB) | R✔ W✔ | R✖ W✖ | - | - | `encrypted_agile::agile_xlsx_decrypts_with_correct_password`, `encrypted_standard_write::write_then_read_standard_round_trips_workbook_contents` | [MS-OFFCRYPTO] §2.3.4.5 |
 | File-level encryption: OOXML Binary RC4 | R✔ W✖ | R✖ W✖ | - | - | `duke_sheets_crypto::ooxml::binary_rc4::tests::verify_password_round_trips` | [MS-OFFCRYPTO] §2.3.5 |
-| File-level encryption: XLS RC4 CryptoAPI (SHA-1) | - | - | R✔ W✖ | - | `encrypted_rc4_cryptoapi::xls_rc4_cryptoapi_excel_decrypts_with_correct_password` | [MS-OFFCRYPTO] §2.3.6.4 |
-| File-level encryption: XLS RC4 legacy (MD5) | - | - | R✔ W✖ | - | `encrypted_rc4_cryptoapi::xls_rc4_legacy_decrypts_with_correct_password` | [MS-OFFCRYPTO] §2.3.6.2 |
-| File-level encryption: XLS XOR Obfuscation | - | - | R✔ W✖ | - | `duke_sheets_crypto::xls::xor_obfuscation::tests::round_trip_one_record` | [MS-OFFCRYPTO] §2.3.7 |
+| File-level encryption: XLS RC4 CryptoAPI (SHA-1) | - | - | R✔ W✔ | - | `encrypted_rc4_cryptoapi::xls_rc4_cryptoapi_excel_decrypts_with_correct_password`, `encrypted_rc4_write::round_trip_via_xls_reader_rc4_cryptoapi_128` | [MS-OFFCRYPTO] §2.3.6.4 |
+| File-level encryption: XLS RC4 legacy (MD5) | - | - | R✔ W✔ | - | `encrypted_rc4_cryptoapi::xls_rc4_legacy_decrypts_with_correct_password`, `encrypted_rc4_write::round_trip_via_xls_reader_rc4_legacy` | [MS-OFFCRYPTO] §2.3.6.2 |
+| File-level encryption: XLS XOR Obfuscation | - | - | R✔ W● | - | `duke_sheets_crypto::xls::xor_obfuscation::tests::round_trip_one_record`, `encrypted_rc4_write::round_trip_via_xls_reader_xor_obfuscation` | [MS-OFFCRYPTO] §2.3.7 | Round-trips via own reader; not certified to interop with modern Excel (no reference XOR fixture) |
 | VelvetSweatshop sentinel auto-decrypt | R✔ - | R✖ - | R✔ - | - | `encrypted_agile::velvet_sweatshop_auto_decrypts_when_enabled` | (well-known Excel password) |
 | Write-reservation password | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.5.3 |
 
