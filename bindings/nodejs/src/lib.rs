@@ -23,6 +23,33 @@ fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
     napi::Error::from_reason(e.to_string())
 }
 
+fn parse_encryption_profile(
+    profile: Option<&str>,
+    key_bits: Option<u32>,
+    spin_count: Option<u32>,
+) -> std::result::Result<duke_sheets::EncryptionProfile, String> {
+    use duke_sheets::EncryptionProfile;
+    let normalized = profile.map(|p| p.to_lowercase());
+    Ok(match normalized.as_deref() {
+        None | Some("default") => EncryptionProfile::Default,
+        Some("agile") | Some("ooxml-agile") => EncryptionProfile::OoxmlAgile {
+            key_bits: key_bits.unwrap_or(256),
+            spin_count: spin_count.unwrap_or(100_000),
+        },
+        Some("standard") | Some("ooxml-standard") => EncryptionProfile::OoxmlStandard {
+            key_bits: key_bits.unwrap_or(128),
+        },
+        Some("rc4-cryptoapi") | Some("xls-rc4-cryptoapi") => {
+            EncryptionProfile::XlsRc4CryptoApi {
+                key_bits: key_bits.unwrap_or(128),
+            }
+        }
+        Some("rc4-legacy") | Some("xls-rc4-legacy") => EncryptionProfile::XlsRc4Legacy,
+        Some("xor") | Some("xls-xor") => EncryptionProfile::XlsXor,
+        Some(other) => return Err(format!("unknown encryption profile: {other:?}")),
+    })
+}
+
 /// Catch Rust panics at the FFI boundary and convert them to napi::Error.
 ///
 /// Without this, a panic (e.g. integer overflow, index out of bounds) would
@@ -674,6 +701,7 @@ impl Workbook {
     ///
     /// The format is determined by the file extension:
     /// - `.xlsx` for Excel format
+    /// - `.xls` for legacy Excel binary format
     /// - `.csv` for CSV format (first sheet only)
     ///
     /// @param path - Path to save to
@@ -684,6 +712,69 @@ impl Workbook {
             let path = PathBuf::from(path);
             wb.save(&path)
                 .map_err(|e| napi::Error::from_reason(format!("Failed to save: {}", e)))
+        })
+    }
+
+    /// Save the workbook to a password-protected file. The encryption
+    /// variant is selected via `profile`:
+    ///
+    /// - `"default"` (or null) - Agile-256 for .xlsx, RC4 CryptoAPI 128 for .xls
+    /// - `"agile"` - OOXML Agile (AES-CBC + HMAC-SHA*); pass keyBits to override
+    /// - `"standard"` - OOXML Standard Encryption (AES-ECB)
+    /// - `"rc4-cryptoapi"` - XLS RC4 CryptoAPI; keyBits 40 or 128
+    /// - `"rc4-legacy"` - XLS legacy RC4 (MD5 KDF)
+    /// - `"xor"` - XLS XOR Obfuscation; round-trips via duke-sheets but
+    ///   does not interoperate with modern Excel
+    ///
+    /// @param path - Path to save to
+    /// @param password - Password to encrypt with
+    /// @param profile - Optional encryption variant (see above)
+    /// @param keyBits - Optional key size override (Agile / RC4 CryptoAPI)
+    /// @param spinCount - Optional iteration count (Agile only; default 100,000)
+    #[napi]
+    pub fn save_with_password(
+        &self,
+        path: String,
+        password: String,
+        profile: Option<String>,
+        key_bits: Option<u32>,
+        spin_count: Option<u32>,
+    ) -> Result<()> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            let encryption = parse_encryption_profile(profile.as_deref(), key_bits, spin_count)
+                .map_err(napi::Error::from_reason)?;
+            let opts = duke_sheets::WorkbookSaveOptions::default()
+                .password(&password)
+                .encryption(encryption);
+            wb.save_with(&PathBuf::from(path), &opts)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to save: {}", e)))
+        })
+    }
+
+    /// Open a password-protected workbook.
+    ///
+    /// @param path - File path
+    /// @param password - Password to attempt
+    /// @param skipIntegrityCheck - If true, skip the HMAC integrity
+    ///   check on Agile-encrypted files (matches Office behaviour).
+    ///   Default false.
+    #[napi(factory)]
+    pub fn open_with_password(
+        path: String,
+        password: String,
+        skip_integrity_check: Option<bool>,
+    ) -> Result<Self> {
+        catch_panic(|| {
+            let mut opts = duke_sheets::WorkbookOpenOptions::default().password(&password);
+            if skip_integrity_check.unwrap_or(false) {
+                opts = opts.skip_integrity_check();
+            }
+            let wb = CoreWorkbook::open_with(&PathBuf::from(path), &opts)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to open file: {}", e)))?;
+            Ok(Self {
+                inner: Arc::new(RwLock::new(wb)),
+            })
         })
     }
 

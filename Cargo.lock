@@ -717,6 +717,7 @@ dependencies = [
  "dashmap",
  "duke-sheets-chart",
  "duke-sheets-core",
+ "duke-sheets-crypto",
  "duke-sheets-csv",
  "duke-sheets-formula",
  "duke-sheets-libreoffice",

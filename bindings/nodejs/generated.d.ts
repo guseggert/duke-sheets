@@ -121,11 +121,41 @@ export declare class Workbook {
    *
    * The format is determined by the file extension:
    * - `.xlsx` for Excel format
+   * - `.xls` for legacy Excel binary format
    * - `.csv` for CSV format (first sheet only)
    *
    * @param path - Path to save to
    */
   save(path: string): void
+  /**
+   * Save the workbook to a password-protected file. The encryption
+   * variant is selected via `profile`:
+   *
+   * - `"default"` (or null) - Agile-256 for .xlsx, RC4 CryptoAPI 128 for .xls
+   * - `"agile"` - OOXML Agile (AES-CBC + HMAC-SHA*); pass keyBits to override
+   * - `"standard"` - OOXML Standard Encryption (AES-ECB)
+   * - `"rc4-cryptoapi"` - XLS RC4 CryptoAPI; keyBits 40 or 128
+   * - `"rc4-legacy"` - XLS legacy RC4 (MD5 KDF)
+   * - `"xor"` - XLS XOR Obfuscation; round-trips via duke-sheets but
+   *   does not interoperate with modern Excel
+   *
+   * @param path - Path to save to
+   * @param password - Password to encrypt with
+   * @param profile - Optional encryption variant (see above)
+   * @param keyBits - Optional key size override (Agile / RC4 CryptoAPI)
+   * @param spinCount - Optional iteration count (Agile only; default 100,000)
+   */
+  saveWithPassword(path: string, password: string, profile?: string | undefined | null, keyBits?: number | undefined | null, spinCount?: number | undefined | null): void
+  /**
+   * Open a password-protected workbook.
+   *
+   * @param path - File path
+   * @param password - Password to attempt
+   * @param skipIntegrityCheck - If true, skip the HMAC integrity
+   *   check on Agile-encrypted files (matches Office behaviour).
+   *   Default false.
+   */
+  static openWithPassword(path: string, password: string, skipIntegrityCheck?: boolean | undefined | null): Workbook
   /** Save the workbook as a CSV string (first sheet only) */
   saveCsvString(): string
   /** Get the number of worksheets */
