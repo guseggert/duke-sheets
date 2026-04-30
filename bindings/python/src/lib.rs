@@ -26,6 +26,35 @@ pub(crate) fn to_py_err(e: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
 
+fn parse_encryption_profile(
+    profile: Option<&str>,
+    key_bits: Option<u32>,
+    spin_count: Option<u32>,
+) -> PyResult<duke_sheets::EncryptionProfile> {
+    use duke_sheets::EncryptionProfile;
+    let normalized = profile.map(|p| p.to_lowercase());
+    Ok(match normalized.as_deref() {
+        None | Some("default") => EncryptionProfile::Default,
+        Some("agile") | Some("ooxml-agile") => EncryptionProfile::OoxmlAgile {
+            key_bits: key_bits.unwrap_or(256),
+            spin_count: spin_count.unwrap_or(100_000),
+        },
+        Some("standard") | Some("ooxml-standard") => EncryptionProfile::OoxmlStandard {
+            key_bits: key_bits.unwrap_or(128),
+        },
+        Some("rc4-cryptoapi") | Some("xls-rc4-cryptoapi") => EncryptionProfile::XlsRc4CryptoApi {
+            key_bits: key_bits.unwrap_or(128),
+        },
+        Some("rc4-legacy") | Some("xls-rc4-legacy") => EncryptionProfile::XlsRc4Legacy,
+        Some("xor") | Some("xls-xor") => EncryptionProfile::XlsXor,
+        Some(other) => {
+            return Err(PyValueError::new_err(format!(
+                "unknown encryption profile: {other:?}"
+            )));
+        }
+    })
+}
+
 fn cell_error_to_string(e: &CellError) -> &'static str {
     match e {
         CellError::Div0 => "#DIV/0!",
@@ -572,6 +601,7 @@ impl PyWorkbook {
     ///
     /// The format is determined by the file extension:
     /// - .xlsx for Excel format
+    /// - .xls for legacy Excel binary format
     /// - .csv for CSV format (first sheet only)
     ///
     /// Args:
@@ -584,6 +614,72 @@ impl PyWorkbook {
 
         wb.save(&path)
             .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Save the workbook to a password-protected file.
+    ///
+    /// The encryption variant is chosen by `profile`:
+    /// - "default" (or None): Agile AES-256 for .xlsx, RC4 CryptoAPI 128
+    ///   for .xls.
+    /// - "agile": OOXML Agile (AES-CBC + HMAC-SHA*); pass key_bits to
+    ///   override the default 256.
+    /// - "standard": OOXML Standard Encryption (AES-ECB).
+    /// - "rc4-cryptoapi": XLS RC4 CryptoAPI; key_bits 40 or 128.
+    /// - "rc4-legacy": XLS legacy RC4 (MD5 KDF).
+    /// - "xor": XLS XOR Obfuscation. Round-trips via duke-sheets but
+    ///   does not interoperate with modern Excel; use only for legacy
+    ///   reader compatibility.
+    ///
+    /// Args:
+    ///     path: Path to save to
+    ///     password: Password to encrypt with
+    ///     profile: Optional encryption variant string (see above)
+    ///     key_bits: Optional key size override (Agile / RC4 CryptoAPI)
+    ///     spin_count: Optional iteration count (Agile only; default 100,000)
+    #[pyo3(signature = (path, password, profile=None, key_bits=None, spin_count=None))]
+    fn save_with_password(
+        &self,
+        path: &str,
+        password: &str,
+        profile: Option<&str>,
+        key_bits: Option<u32>,
+        spin_count: Option<u32>,
+    ) -> PyResult<()> {
+        use duke_sheets::{WorkbookExt, WorkbookSaveOptions};
+        let wb = self.inner.read().map_err(to_py_err)?;
+        let encryption = parse_encryption_profile(profile, key_bits, spin_count)?;
+        let opts = WorkbookSaveOptions::default()
+            .password(password)
+            .encryption(encryption);
+        wb.save_with(&PathBuf::from(path), &opts)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Open a password-protected workbook.
+    ///
+    /// Args:
+    ///     path: File path
+    ///     password: Password to attempt
+    ///     skip_integrity_check: If True, skip the HMAC integrity check
+    ///         on Agile-encrypted files (matches Office behaviour).
+    ///         Default False.
+    #[staticmethod]
+    #[pyo3(signature = (path, password, skip_integrity_check=false))]
+    fn open_with_password(
+        path: &str,
+        password: &str,
+        skip_integrity_check: bool,
+    ) -> PyResult<Self> {
+        use duke_sheets::{WorkbookExt, WorkbookOpenOptions};
+        let mut opts = WorkbookOpenOptions::default().password(password);
+        if skip_integrity_check {
+            opts = opts.skip_integrity_check();
+        }
+        let wb = Workbook::open_with(&PathBuf::from(path), &opts)
+            .map_err(|e| PyIOError::new_err(e.to_string()))?;
+        Ok(Self {
+            inner: Arc::new(RwLock::new(wb)),
+        })
     }
 
     /// Get the number of worksheets
