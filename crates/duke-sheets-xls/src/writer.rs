@@ -42,6 +42,7 @@ const STRING_RECORD: u16 = 0x0207;
 const MERGECELLS_RECORD: u16 = 0x00E5;
 const ROW_RECORD: u16 = 0x0208;
 const COLINFO_RECORD: u16 = 0x007D;
+const PANE_RECORD: u16 = 0x0041;
 
 /// MS-XLS §2.4.169: a single MERGECELLS record can hold at most 1027
 /// merged ranges (8 bytes each, plus the 2-byte cmcs count, fits in
@@ -193,7 +194,8 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_dimension(&mut stream, sheet);
         write_row_records(&mut stream, sheet);
         write_cell_records(&mut stream, sheet, sheet_idx, &sst, &styles);
-        write_window2(&mut stream);
+        write_window2(&mut stream, sheet);
+        write_pane(&mut stream, sheet);
         write_mergecells(&mut stream, sheet);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
@@ -856,8 +858,14 @@ fn write_dimension(stream: &mut Vec<u8>, sheet: &Worksheet) {
 /// Emit a minimal WINDOW2 record (MS-XLS §2.4.349). The reader extracts
 /// only the frozen-pane bit, but real Excel and LibreOffice expect this
 /// record as a structural cue that the worksheet stream is well-formed.
-fn write_window2(stream: &mut Vec<u8>) {
-    let options: u16 = 0x06B6; // grbit defaults: show grid, headings, formulas, default to row=col=0
+/// Sets fFrozen (bit 3) and fFrozenNoSplit (bit 8) when the sheet has
+/// freeze panes set; the matching PANE record carries the split
+/// position.
+fn write_window2(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let mut options: u16 = 0x06B6;
+    if sheet.freeze_panes().is_some() {
+        options |= 0x0008 | 0x0100;
+    }
     let row_pos: u16 = 0;
     let col_pos: u16 = 0;
     let grid_color: u32 = 0;
@@ -874,6 +882,41 @@ fn write_window2(stream: &mut Vec<u8>) {
     stream.extend_from_slice(&preview_zoom.to_le_bytes());
     stream.extend_from_slice(&normal_zoom.to_le_bytes());
     stream.extend_from_slice(&reserved.to_le_bytes());
+}
+
+/// Emit a PANE record (MS-XLS §2.4.187) when the worksheet has freeze
+/// panes set. Body: x (col split, u16), y (row split, u16), top_row
+/// (u16), left_col (u16), active_pane (u16, 0=bottomRight). The
+/// matching WINDOW2 sets fFrozen + fFrozenNoSplit so the reader knows
+/// the split values are row/col indices rather than twip offsets.
+fn write_pane(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let Some(freeze) = sheet.freeze_panes() else {
+        return;
+    };
+    if freeze.row == 0 && freeze.col == 0 {
+        return;
+    }
+    let x = freeze.col;
+    let y = freeze.row.min(u16::MAX as u32) as u16;
+    let top_row: u16 = y;
+    let left_col: u16 = x;
+    // Active pane is the bottom-right when both axes are frozen,
+    // else the corresponding half. Excel uses 0=bottomRight,
+    // 1=topRight, 2=bottomLeft, 3=topLeft.
+    let active_pane: u16 = match (x > 0, y > 0) {
+        (true, true) => 0,
+        (true, false) => 0,
+        (false, true) => 2,
+        (false, false) => 3,
+    };
+
+    stream.extend_from_slice(&PANE_RECORD.to_le_bytes());
+    stream.extend_from_slice(&10u16.to_le_bytes());
+    stream.extend_from_slice(&x.to_le_bytes());
+    stream.extend_from_slice(&y.to_le_bytes());
+    stream.extend_from_slice(&top_row.to_le_bytes());
+    stream.extend_from_slice(&left_col.to_le_bytes());
+    stream.extend_from_slice(&active_pane.to_le_bytes());
 }
 
 /// Emit a ROW record (MS-XLS §2.4.220) per row that has any non-

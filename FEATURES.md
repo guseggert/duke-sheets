@@ -289,8 +289,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Freeze panes (rows) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes` | §18.3.1.66 |
-| Freeze panes (columns) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes` | §18.3.1.66 |
+| Freeze panes (rows) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes`, `freeze_panes_round_trip::freeze_first_two_rows_round_trips` | §18.3.1.66 |
+| Freeze panes (columns) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes`, `freeze_panes_round_trip::freeze_first_column_round_trips` | §18.3.1.66 |
 | Freeze + split combination | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_split_panes_and_selection` | §18.3.1.66 |
 | Split panes | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_split_panes_and_selection` | §18.3.1.66 |
 | Active cell / active range | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_range_sqref` | §18.3.1.78 |
