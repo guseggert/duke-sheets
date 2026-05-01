@@ -167,9 +167,9 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Basic merged cell ranges | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::merged_cells::merged_cells_horizontal` | §18.3.1.55 |
-| Merge spanning many rows/cols | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::merged_cells::merged_cells_block` | §18.3.1.55 |
-| Multiple merged regions per sheet | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::merged_cells::multiple_merged_regions` | §18.3.1.55 |
+| Basic merged cell ranges | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::merged_cells::merged_cells_horizontal`, `merged_cells_round_trip::horizontal_merge_round_trips` | §18.3.1.55 |
+| Merge spanning many rows/cols | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::merged_cells::merged_cells_block`, `merged_cells_round_trip::block_merge_round_trips` | §18.3.1.55 |
+| Multiple merged regions per sheet | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::merged_cells::multiple_merged_regions`, `merged_cells_round_trip::multiple_disjoint_merges_round_trip` | §18.3.1.55 |
 
 ## Hyperlinks
 

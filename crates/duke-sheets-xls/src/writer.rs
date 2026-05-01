@@ -39,6 +39,12 @@ const BOOLERR_RECORD: u16 = 0x0205;
 const LABELSST_RECORD: u16 = 0x00FD;
 const FORMULA_RECORD: u16 = 0x0006;
 const STRING_RECORD: u16 = 0x0207;
+const MERGECELLS_RECORD: u16 = 0x00E5;
+
+/// MS-XLS §2.4.169: a single MERGECELLS record can hold at most 1027
+/// merged ranges (8 bytes each, plus the 2-byte cmcs count, fits in
+/// the 8224-byte BIFF8 record body cap with margin).
+const MERGECELLS_MAX_PER_RECORD: usize = 1027;
 
 /// MS-XLS §2.4.126 user-defined number-format index base. Built-in
 /// formats use ifmt 0..=49; user-defined custom format strings start
@@ -184,6 +190,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_dimension(&mut stream, sheet);
         write_cell_records(&mut stream, sheet, sheet_idx, &sst, &styles);
         write_window2(&mut stream);
+        write_mergecells(&mut stream, sheet);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
     }
@@ -863,6 +870,43 @@ fn write_window2(stream: &mut Vec<u8>) {
     stream.extend_from_slice(&preview_zoom.to_le_bytes());
     stream.extend_from_slice(&normal_zoom.to_le_bytes());
     stream.extend_from_slice(&reserved.to_le_bytes());
+}
+
+/// Emit one or more MERGECELLS records for the worksheet
+/// (MS-XLS §2.4.169). Body: cmcs (u16, count) followed by
+/// `cmcs` × Ref8U (rwFirst, rwLast, colFirst, colLast - all u16).
+/// Multiple records are emitted when the merge count exceeds
+/// `MERGECELLS_MAX_PER_RECORD`. Ranges with rows beyond u16::MAX or
+/// cols beyond u16::MAX are silently skipped because BIFF8 can't
+/// address them.
+fn write_mergecells(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let regions = sheet.merged_regions();
+    if regions.is_empty() {
+        return;
+    }
+    for chunk in regions.chunks(MERGECELLS_MAX_PER_RECORD) {
+        let mut body = Vec::with_capacity(2 + chunk.len() * 8);
+        let mut emitted: u16 = 0;
+        let count_offset = body.len();
+        body.extend_from_slice(&0u16.to_le_bytes()); // placeholder for cmcs
+        for region in chunk {
+            if region.start.row > u16::MAX as u32 || region.end.row > u16::MAX as u32 {
+                continue;
+            }
+            body.extend_from_slice(&(region.start.row as u16).to_le_bytes());
+            body.extend_from_slice(&(region.end.row as u16).to_le_bytes());
+            body.extend_from_slice(&region.start.col.to_le_bytes());
+            body.extend_from_slice(&region.end.col.to_le_bytes());
+            emitted += 1;
+        }
+        if emitted == 0 {
+            continue;
+        }
+        body[count_offset..count_offset + 2].copy_from_slice(&emitted.to_le_bytes());
+        stream.extend_from_slice(&MERGECELLS_RECORD.to_le_bytes());
+        stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        stream.extend_from_slice(&body);
+    }
 }
 
 /// Emit cell records (BLANK, NUMBER, BOOLERR, LABELSST, FORMULA) for
