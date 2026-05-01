@@ -63,6 +63,22 @@ fn empty_string_round_trips() {
 }
 
 #[test]
+fn line_break_within_string_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "first line\nsecond line\nthird line")
+        .expect("set A1");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    assert_eq!(
+        string_at(sheet, "A1").as_deref(),
+        Some("first line\nsecond line\nthird line"),
+        "embedded \\n must round-trip verbatim through SST"
+    );
+}
+
+#[test]
 fn duplicate_strings_are_deduplicated_in_sst() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

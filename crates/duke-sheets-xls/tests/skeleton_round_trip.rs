@@ -68,6 +68,32 @@ fn writes_cfb_v3_envelope() {
 }
 
 #[test]
+fn special_and_unicode_sheet_names_round_trip() {
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "First & Last").expect("rename Sheet1");
+    wb.add_worksheet_with_name("with 'apostrophe'")
+        .expect("apostrophe sheet");
+    wb.add_worksheet_with_name("日本語データ")
+        .expect("unicode sheet");
+    wb.add_worksheet_with_name("dash-dot.dot")
+        .expect("dash-dot sheet");
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    let parsed = XlsReader::read(Cursor::new(&bytes)).expect("read back");
+
+    let names: Vec<_> = parsed.worksheets().map(|s| s.name().to_string()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "First & Last",
+            "with 'apostrophe'",
+            "日本語データ",
+            "dash-dot.dot",
+        ]
+    );
+}
+
+#[test]
 fn write_to_bytes_then_read_file_round_trips() {
     let wb = Workbook::new();
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");

@@ -94,6 +94,42 @@ fn unary_minus_formula_round_trips() {
 }
 
 #[test]
+fn percent_operator_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 50.0).expect("A1");
+    ws.set_cell_formula("B1", "=A1%").expect("formula");
+    ws.set_formula_result(0, 1, CellValue::Number(0.5))
+        .expect("cached");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let formula = sheet
+        .get_formula_at(0, 1)
+        .expect("percent operator must round-trip via formula path");
+    assert!(formula.contains('%'), "got {formula:?}");
+    assert!(formula.contains("A1"), "got {formula:?}");
+}
+
+#[test]
+fn concat_operator_round_trips_via_formula_path() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "hello").expect("A1");
+    ws.set_cell_formula("B1", "=A1&\" world\"").expect("formula");
+    ws.set_formula_result(0, 1, CellValue::String("hello world".into()))
+        .expect("cached");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let formula = sheet
+        .get_formula_at(0, 1)
+        .expect("concat operator must round-trip via formula path");
+    assert!(formula.contains('&'), "got {formula:?}");
+    assert!(formula.contains("A1"), "got {formula:?}");
+}
+
+#[test]
 fn absolute_cell_reference_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

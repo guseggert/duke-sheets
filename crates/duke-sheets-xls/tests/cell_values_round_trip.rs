@@ -3,6 +3,7 @@
 
 use std::io::Cursor;
 
+use duke_sheets_core::style::Style;
 use duke_sheets_core::{CellError, CellValue, Workbook, Worksheet};
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
@@ -115,6 +116,27 @@ fn mixed_numbers_and_strings_round_trip() {
         "got {a2:?}"
     );
     assert_eq!(number_at(sheet, "A3"), Some(3.0));
+}
+
+#[test]
+fn empty_cell_with_format_only_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let bold = Style::new().bold(true);
+    ws.set_cell_style("A1", &bold)
+        .expect("set style on empty cell");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let style = sheet
+        .cell_style("A1")
+        .expect("cell_style ok")
+        .cloned()
+        .expect("style present on formatted-but-empty cell");
+    assert!(
+        style.font.bold,
+        "format-only cell must preserve its style on round-trip"
+    );
 }
 
 #[test]

@@ -5,7 +5,7 @@ use std::io::Cursor;
 
 use duke_sheets_core::style::{
     BorderEdge, BorderLineStyle, Color, DiagonalDirection, FillStyle, HorizontalAlignment,
-    PatternType, Style, VerticalAlignment,
+    PatternType, ReadingOrder, Style, VerticalAlignment,
 };
 use duke_sheets_core::{Workbook, Worksheet};
 use duke_sheets_xls::{XlsReader, XlsWriter};
@@ -96,6 +96,59 @@ fn indent_round_trips() {
 }
 
 #[test]
+fn shrink_to_fit_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "shrink me to fit").expect("set A1");
+    let mut style = Style::new();
+    style.alignment.shrink_to_fit = true;
+    ws.set_cell_style("A1", &style).expect("set style");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    assert!(style_at(sheet, "A1").alignment.shrink_to_fit);
+}
+
+#[test]
+fn rotation_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "rotated").expect("set A1");
+    let mut style = Style::new();
+    style.alignment.rotation = 45;
+    ws.set_cell_style("A1", &style).expect("set style");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    assert_eq!(style_at(sheet, "A1").alignment.rotation, 45);
+}
+
+#[test]
+fn reading_order_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "rtl").expect("set A1");
+    ws.set_cell_value("A2", "ltr").expect("set A2");
+    let mut rtl = Style::new();
+    rtl.alignment.reading_order = ReadingOrder::RightToLeft;
+    let mut ltr = Style::new();
+    ltr.alignment.reading_order = ReadingOrder::LeftToRight;
+    ws.set_cell_style("A1", &rtl).expect("A1 style");
+    ws.set_cell_style("A2", &ltr).expect("A2 style");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    assert_eq!(
+        style_at(sheet, "A1").alignment.reading_order,
+        ReadingOrder::RightToLeft
+    );
+    assert_eq!(
+        style_at(sheet, "A2").alignment.reading_order,
+        ReadingOrder::LeftToRight
+    );
+}
+
+#[test]
 fn border_thin_all_sides_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -145,6 +198,31 @@ fn border_individual_sides_round_trip() {
     assert_eq!(
         border.bottom.as_ref().map(|e| e.style),
         Some(BorderLineStyle::Double)
+    );
+}
+
+#[test]
+fn border_color_indexed_non_black_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 1.0).expect("set A1");
+    let mut style = Style::new();
+    style.border.left = Some(BorderEdge::new(BorderLineStyle::Thin, Color::Indexed(2)));
+    ws.set_cell_style("A1", &style).expect("set style");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let edge = style_at(sheet, "A1")
+        .border
+        .left
+        .clone()
+        .expect("left edge present");
+    let (r, g, b) = edge.color.to_rgb();
+    assert_eq!(
+        (r, g, b),
+        (255, 0, 0),
+        "indexed-2 (red) border color should round-trip; got {:?}",
+        edge.color
     );
 }
 

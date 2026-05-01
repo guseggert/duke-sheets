@@ -90,6 +90,39 @@ fn underline_round_trips() {
 }
 
 #[test]
+fn double_underline_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "double-underlined").expect("set A1");
+    let mut style = Style::new();
+    style.font.underline = Underline::Double;
+    ws.set_cell_style("A1", &style).expect("set A1 style");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    assert_eq!(font_at(sheet, "A1").underline, Underline::Double);
+}
+
+#[test]
+fn accounting_underline_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "single-acct").expect("set A1");
+    ws.set_cell_value("A2", "double-acct").expect("set A2");
+    let mut single_acct = Style::new();
+    single_acct.font.underline = Underline::SingleAccounting;
+    let mut double_acct = Style::new();
+    double_acct.font.underline = Underline::DoubleAccounting;
+    ws.set_cell_style("A1", &single_acct).expect("A1 style");
+    ws.set_cell_style("A2", &double_acct).expect("A2 style");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    assert_eq!(font_at(sheet, "A1").underline, Underline::SingleAccounting);
+    assert_eq!(font_at(sheet, "A2").underline, Underline::DoubleAccounting);
+}
+
+#[test]
 fn strikethrough_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -117,6 +150,23 @@ fn superscript_round_trips() {
     assert_eq!(
         font_at(sheet, "A1").vertical_align,
         FontVerticalAlign::Superscript
+    );
+}
+
+#[test]
+fn subscript_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "sub").expect("set A1");
+    let mut style = Style::new();
+    style.font.vertical_align = FontVerticalAlign::Subscript;
+    ws.set_cell_style("A1", &style).expect("set A1 style");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    assert_eq!(
+        font_at(sheet, "A1").vertical_align,
+        FontVerticalAlign::Subscript
     );
 }
 
