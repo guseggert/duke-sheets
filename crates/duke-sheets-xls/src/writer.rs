@@ -1102,6 +1102,19 @@ fn compile_ptgs(
             push_area_payload(out, &rref.range)?;
         }
         FormulaExpr::BinaryOp { op, left, right } => {
+            // The `:` operator with NameRef/Number leaves on both sides
+            // is how Excel-style full-column (`A:A`) and full-row
+            // (`1:1`) refs reach us from the parser - it lacks a
+            // first-class FullColumn / FullRow AST node. Detect those
+            // shapes and emit a single tArea ptg covering the BIFF8
+            // sheet extent.
+            if matches!(op, BinaryOperator::Range) {
+                if let Some(area) = full_column_or_row_range(left, right) {
+                    out.push(0x45); // PTG_AREA (V class)
+                    push_area_payload(out, &area)?;
+                    return Ok(());
+                }
+            }
             compile_ptgs(left, out)?;
             compile_ptgs(right, out)?;
             out.push(match op {
@@ -1180,17 +1193,60 @@ fn push_ref_payload(
     Ok(())
 }
 
+/// Recognise full-column (`A:A`, `B:D`) and full-row (`1:1`, `2:5`)
+/// reference shapes that the formula parser leaves as
+/// `Range(NameRef, NameRef)` or `Range(Number, Number)` respectively.
+/// Returns the equivalent `CellRange` covering the BIFF8 sheet
+/// extent, or `None` when the operands aren't a recognised shape.
+fn full_column_or_row_range(
+    left: &duke_sheets_formula::FormulaExpr,
+    right: &duke_sheets_formula::FormulaExpr,
+) -> Option<duke_sheets_core::CellRange> {
+    use duke_sheets_core::CellAddress;
+    use duke_sheets_formula::FormulaExpr;
+
+    if let (FormulaExpr::NameRef(l), FormulaExpr::NameRef(r)) = (left, right) {
+        let start_col = CellAddress::letters_to_column(l).ok()?;
+        let end_col = CellAddress::letters_to_column(r).ok()?;
+        return Some(duke_sheets_core::CellRange {
+            start: CellAddress::new(0, start_col.min(end_col)),
+            end: CellAddress::new(u16::MAX as u32, start_col.max(end_col)),
+        });
+    }
+    if let (FormulaExpr::Number(l), FormulaExpr::Number(r)) = (left, right) {
+        if l.fract() != 0.0 || r.fract() != 0.0 || *l < 1.0 || *r < 1.0 {
+            return None;
+        }
+        let l_idx = (*l as u32).saturating_sub(1);
+        let r_idx = (*r as u32).saturating_sub(1);
+        if l_idx > u16::MAX as u32 || r_idx > u16::MAX as u32 {
+            return None;
+        }
+        return Some(duke_sheets_core::CellRange {
+            start: CellAddress::new(l_idx.min(r_idx), 0),
+            end: CellAddress::new(l_idx.max(r_idx), 0xFF),
+        });
+    }
+    None
+}
+
 fn push_area_payload(
     out: &mut Vec<u8>,
     range: &duke_sheets_core::CellRange,
 ) -> Result<(), UnsupportedToken> {
     let start = &range.start;
     let end = &range.end;
-    if start.row > u16::MAX as u32 || end.row > u16::MAX as u32 {
+    if start.row > u16::MAX as u32 {
         return Err(UnsupportedToken);
     }
+    // Clamp end.row to BIFF8's row limit. The XLSX-style parser
+    // produces end.row = 1048575 for full-column refs like A:A;
+    // BIFF8 can't represent rows beyond 65535, so the closest valid
+    // expression is "from start.row through row 65535" - i.e. the
+    // entire BIFF8 column (or the entire BIFF8 row, for 1:1 refs).
+    let end_row = end.row.min(u16::MAX as u32) as u16;
     out.extend_from_slice(&(start.row as u16).to_le_bytes());
-    out.extend_from_slice(&(end.row as u16).to_le_bytes());
+    out.extend_from_slice(&end_row.to_le_bytes());
     out.extend_from_slice(
         &encode_col_with_relative_flags(start.col, start.row_absolute, start.col_absolute)
             .to_le_bytes(),

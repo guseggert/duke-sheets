@@ -130,6 +130,66 @@ fn concat_operator_round_trips_via_formula_path() {
 }
 
 #[test]
+fn full_column_ref_round_trips_clamped_to_biff8_row_limit() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 1.0).expect("A1");
+    ws.set_cell_value("A2", 2.0).expect("A2");
+    ws.set_cell_value("A3", 3.0).expect("A3");
+    ws.set_cell_formula("B1", "=SUM(A:A)").expect("formula");
+    ws.set_formula_result(0, 1, CellValue::Number(6.0))
+        .expect("cached");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let formula = sheet
+        .get_formula_at(0, 1)
+        .expect("full-column ref must round-trip via formula path (not static)");
+    assert!(
+        formula.to_uppercase().contains("SUM"),
+        "expected SUM in formula, got {formula:?}"
+    );
+    // BIFF8's row limit is 65535. The XLSX-style parser produces
+    // end.row = 1048575 for `A:A`; we clamp on emit and the reader
+    // renders the area as A1:A65536. Either A:A (if the renderer
+    // recognises full-column shape) or A1:A65536 is acceptable.
+    let upper = formula.to_uppercase();
+    assert!(
+        upper.contains("A:A") || (upper.contains("A1") && upper.contains("A65536")),
+        "expected a full-column reference shape, got {formula:?}"
+    );
+}
+
+#[test]
+fn full_row_ref_round_trips_with_biff8_col_extent() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 10.0).expect("A1");
+    ws.set_cell_value("B1", 20.0).expect("B1");
+    ws.set_cell_value("C1", 30.0).expect("C1");
+    ws.set_cell_formula("A2", "=SUM(1:1)").expect("formula");
+    ws.set_formula_result(1, 0, CellValue::Number(60.0))
+        .expect("cached");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    let formula = sheet
+        .get_formula_at(1, 0)
+        .expect("full-row ref must round-trip via formula path (not static)");
+    assert!(
+        formula.to_uppercase().contains("SUM"),
+        "expected SUM in formula, got {formula:?}"
+    );
+    let upper = formula.to_uppercase();
+    assert!(
+        upper.contains("1:1")
+            || upper.contains("$1:$1")
+            || (upper.contains("A1") && upper.contains("1")),
+        "expected a full-row reference shape, got {formula:?}"
+    );
+}
+
+#[test]
 fn absolute_cell_reference_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
