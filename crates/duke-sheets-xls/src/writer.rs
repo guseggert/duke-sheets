@@ -179,7 +179,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     let mut lbplypos_field_offsets = Vec::with_capacity(workbook.sheet_count());
     for sheet in workbook.worksheets() {
         let body_start = stream.len() + 4;
-        write_boundsheet8_with_placeholder_offset(&mut stream, sheet.name())?;
+        write_boundsheet8_with_placeholder_offset(&mut stream, sheet)?;
         lbplypos_field_offsets.push(body_start);
     }
 
@@ -1540,11 +1540,15 @@ fn write_eof(stream: &mut Vec<u8>) {
 /// Body layout per MS-XLS §2.4.28:
 /// ```text
 ///  u32 lbPlyPos     ← zeroed; caller fixes up
-///  u8  hsState      = 0 (visible)
+///  u8  hsState      = visibility (0=visible, 1=hidden, 2=very hidden)
 ///  u8  dt           = 0 (worksheet)
 ///  ShortXLUnicodeString stName
 /// ```
-fn write_boundsheet8_with_placeholder_offset(stream: &mut Vec<u8>, name: &str) -> XlsResult<()> {
+fn write_boundsheet8_with_placeholder_offset(
+    stream: &mut Vec<u8>,
+    sheet: &Worksheet,
+) -> XlsResult<()> {
+    let name = sheet.name();
     let utf16_units: Vec<u16> = name.encode_utf16().collect();
     if utf16_units.len() > 31 {
         return Err(XlsError::InvalidFormat(format!(
@@ -1553,9 +1557,15 @@ fn write_boundsheet8_with_placeholder_offset(stream: &mut Vec<u8>, name: &str) -
         )));
     }
 
+    let hs_state: u8 = match sheet.visibility() {
+        duke_sheets_core::worksheet::SheetVisibility::Visible => 0,
+        duke_sheets_core::worksheet::SheetVisibility::Hidden => 1,
+        duke_sheets_core::worksheet::SheetVisibility::VeryHidden => 2,
+    };
+
     let mut body = Vec::with_capacity(8 + utf16_units.len() * 2);
     body.extend_from_slice(&[0u8; 4]); // lbPlyPos placeholder
-    body.push(0); // hsState = visible
+    body.push(hs_state);
     body.push(0); // dt = worksheet
     body.push(utf16_units.len() as u8); // cch
     body.push(1); // fHighByte = 1 (UTF-16LE)

@@ -301,7 +301,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Row/column header visibility | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |
 | Right-to-left view | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |
 | Tab color | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.82 |
-| Sheet visibility (visible/hidden/veryHidden) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::sheet_properties::hidden_sheet` | §18.2.19 |
+| Sheet visibility (visible/hidden/veryHidden) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::sheet_properties::hidden_sheet`, `sheet_visibility_round_trip::very_hidden_sheet_round_trips` | §18.2.19 |
 | Named sheet views (x16 ext) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-XLSX] §2.3.17 |
 
 ## Page setup and print
