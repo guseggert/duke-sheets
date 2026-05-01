@@ -6,32 +6,32 @@
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Number values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_numbers` | §18.3.1.4 |
-| String values (SST) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_strings` | §18.4.8 |
+| Number values | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_numbers`, `cell_values_round_trip::number_value_round_trips` | §18.3.1.4 |
+| String values (SST) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_strings`, `sst_round_trip::ascii_string_round_trips` | §18.4.8 |
 | Inline strings | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_e2e::data_types::string_values` | §18.3.1.53 |
-| Boolean values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_booleans` | §18.18.11 |
-| Error values (#REF!, #VALUE!, etc.) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_types::error_values` | §18.18.11 |
-| Formula cells with cached values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_formula_cached_number` | §18.3.1.40 |
+| Boolean values | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_booleans`, `cell_values_round_trip::boolean_value_round_trips` | §18.18.11 |
+| Error values (#REF!, #VALUE!, etc.) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::data_types::error_values`, `cell_values_round_trip::error_value_round_trips_for_standard_codes` | §18.18.11 |
+| Formula cells with cached values | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_formula_cached_number`, `formula_round_trip::arithmetic_formula_round_trips_with_text_intact` | §18.3.1.40 |
 | Formula cells without cached values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_formula_no_cached_value` | §18.3.1.40 |
 | Empty cells (formatting only) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_style_only_cells` | §18.3.1.4 |
-| Date values (stored as numbers) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::number_formats::date_format` | §18.17.4 |
+| Date values (stored as numbers) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::number_formats::date_format`, `number_format_round_trip::builtin_date_format_round_trips` | §18.17.4 |
 | Rich text values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.1 |
 | Cell metadata index (`cm`) | R✔ W✔ | R✖ W✖ | R- W- | R- W- | `xlsx_e2e::formula_metadata::reader_parses_cm_attribute` | §18.3.1.4 |
 | Value metadata index (`vm`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
 | Phonetic hint (`ph`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
 | Large row/column indices | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_large_indices` | - |
-| Sparse data (non-contiguous cells) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_sparse_data` | - |
+| Sparse data (non-contiguous cells) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_sparse_data`, `cell_values_round_trip::cells_round_trip_when_set_in_scrambled_order` | - |
 
 ## Formulas
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Arithmetic operators (+ - * / ^) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_evaluate_simple_formulas` | §18.17.2 |
-| Comparison operators (= <> > < >= <=) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_boolean_functions` | §18.17.2 |
+| Arithmetic operators (+ - * / ^) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `formula_evaluation::test_evaluate_simple_formulas`, `formula_round_trip::arithmetic_formula_round_trips_with_text_intact` | §18.17.2 |
+| Comparison operators (= <> > < >= <=) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `formula_evaluation::test_boolean_functions`, `formula_round_trip::comparison_formula_round_trips` | §18.17.2 |
 | String concatenation (&) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_string_operations` | §18.17.2 |
 | Percent operator (%) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_evaluate_simple_formulas` | §18.17.2 |
-| Cell references (A1) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_evaluate_with_cell_references` | §18.17.2.3 |
-| Range references (A1:B2) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_evaluate_with_range_references` | §18.17.2.3 |
+| Cell references (A1) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `formula_evaluation::test_evaluate_with_cell_references`, `formula_round_trip::range_reference_in_formula_round_trips` | §18.17.2.3 |
+| Range references (A1:B2) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `formula_evaluation::test_evaluate_with_range_references`, `formula_round_trip::sum_function_round_trips` | §18.17.2.3 |
 | Full row/column refs (A:A, 1:1) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `formula_evaluation::test_evaluate_sum` | §18.17.2.3 |
 | Cross-sheet references | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_ref` | §18.17.2.3 |
 | Quoted sheet names | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_quoted_name` | §18.17.2.3 |
@@ -103,36 +103,36 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Font: bold | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles` | §18.8.22 |
-| Font: italic | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles` | §18.8.22 |
-| Font: size | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::font_size` | §18.8.29 |
-| Font: name/family | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::font_name` | §18.8.22 |
+| Font: bold | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles`, `font_round_trip::bold_round_trips` | §18.8.22 |
+| Font: italic | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles`, `font_round_trip::italic_round_trips` | §18.8.22 |
+| Font: size | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::font_styles::font_size`, `font_round_trip::font_size_round_trips` | §18.8.29 |
+| Font: name/family | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::font_styles::font_name`, `font_round_trip::font_name_round_trips` | §18.8.22 |
 | Font: color (RGB) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::font_color` | §18.8.19 |
 | Font: color (theme) | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_chart_style_color_passthrough` | §18.8.19 |
-| Font: color (indexed) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::font_color` | §18.8.19 |
-| Font: underline (single) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::underline_single` | §18.4.13 |
+| Font: color (indexed) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::font_styles::font_color`, `font_round_trip::indexed_color_round_trips` | §18.8.19 |
+| Font: underline (single) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::font_styles::underline_single`, `font_round_trip::underline_round_trips` | §18.4.13 |
 | Font: underline (double) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::font_underline_double` | §18.4.13 |
 | Font: underline (accounting single/double) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles` | §18.4.13 |
-| Font: strikethrough | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::strikethrough` | §18.8.37 |
-| Font: superscript | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::superscript` | §18.18.85 |
+| Font: strikethrough | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::font_styles::strikethrough`, `font_round_trip::strikethrough_round_trips` | §18.8.37 |
+| Font: superscript | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::font_styles::superscript`, `font_round_trip::superscript_round_trips` | §18.18.85 |
 | Font: subscript | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::font_styles::subscript` | §18.18.85 |
-| Fill: solid color | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::fill_styles::solid_fill_red` | §18.8.20 |
-| Fill: pattern fill | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::fill_pattern_fills` | §18.8.22 |
+| Fill: solid color | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::fill_styles::solid_fill_red`, `cell_format_round_trip::solid_fill_with_indexed_color_round_trips` | §18.8.20 |
+| Fill: pattern fill | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::styles::fill_pattern_fills`, `cell_format_round_trip::pattern_fill_round_trips` | §18.8.22 |
 | Fill: gradient fill | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_gradient_fill` | §18.8.24 |
-| Border: all sides (top/bottom/left/right) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::border_styles::thin_border_all_sides` | §18.8.4 |
-| Border: diagonal | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::diagonal_border_down` | §18.8.4 |
-| Border: styles (thin/medium/thick/dashed/dotted/double) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_border_styles` | §18.18.3 |
+| Border: all sides (top/bottom/left/right) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::border_styles::thin_border_all_sides`, `cell_format_round_trip::border_thin_all_sides_round_trips` | §18.8.4 |
+| Border: diagonal | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::styles::diagonal_border_down`, `cell_format_round_trip::diagonal_border_round_trips` | §18.8.4 |
+| Border: styles (thin/medium/thick/dashed/dotted/double) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_border_styles`, `cell_format_round_trip::border_individual_sides_round_trip` | §18.18.3 |
 | Border: color | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::border_styles::border_color` | §18.8.4 |
-| Alignment: horizontal (left/center/right/justify/fill) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::horizontal_center` | §18.18.40 |
-| Alignment: vertical (top/center/bottom) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::vertical_bottom` | §18.18.88 |
-| Alignment: wrap text | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::wrap_text` | §18.8.1 |
+| Alignment: horizontal (left/center/right/justify/fill) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::alignment::horizontal_center`, `cell_format_round_trip::horizontal_alignment_round_trips` | §18.18.40 |
+| Alignment: vertical (top/center/bottom) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::alignment::vertical_bottom`, `cell_format_round_trip::vertical_alignment_round_trips` | §18.18.88 |
+| Alignment: wrap text | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::alignment::wrap_text`, `cell_format_round_trip::wrap_text_round_trips` | §18.8.1 |
 | Alignment: shrink to fit | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::shrink_to_fit` | §18.8.1 |
 | Alignment: rotation | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::rotation` | §18.8.1 |
-| Alignment: indent | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::alignment::indent` | §18.8.1 |
+| Alignment: indent | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::alignment::indent`, `cell_format_round_trip::indent_round_trips` | §18.8.1 |
 | Alignment: reading order (LTR/RTL) | R● W✔ | R● W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::reading_order_rtl` | §18.8.1 |
 | Alignment: justifyLastLine | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.8.1 |
-| Number format: builtin IDs (0-49, 164+) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_number_format_styles` | §18.8.31 |
-| Number format: custom format strings | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::number_formats::custom_decimal_format` | §18.8.31 |
+| Number format: builtin IDs (0-49, 164+) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_number_format_styles`, `number_format_round_trip::builtin_percent_format_round_trips` | §18.8.31 |
+| Number format: custom format strings | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::number_formats::custom_decimal_format`, `number_format_round_trip::custom_currency_format_round_trips` | §18.8.31 |
 | Cell protection: locked | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::cell_protection_locked` | §18.8.33 |
 | Cell protection: formula hidden | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::cell_protection_formula_hidden` | §18.8.33 |
 | Named cell styles (cellStyleXf) | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `xlsx_e2e::named_cell_styles_roundtrip::roundtrip_preserves_cell_style_xfs_and_named_styles` | §18.8.8 |
@@ -489,8 +489,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Multiple worksheets | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multiple_sheets` | §18.2.20 |
-| Sheet order preservation | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_interleaved_tab_order` | §18.2.20 |
+| Multiple worksheets | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multiple_sheets`, `skeleton_round_trip::multi_sheet_round_trips_with_all_names` | §18.2.20 |
+| Sheet order preservation | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_interleaved_tab_order`, `skeleton_round_trip::multi_sheet_round_trips_with_all_names` | §18.2.20 |
 | Special / XML-unsafe sheet names | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_xml_special_chars_in_sheet_names` | §18.2.19 |
 | Active sheet | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::sheet_properties::active_sheet` | §18.2.27 |
 | Book view: window position / size | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.27 |
