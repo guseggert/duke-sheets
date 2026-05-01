@@ -43,6 +43,7 @@ const MERGECELLS_RECORD: u16 = 0x00E5;
 const ROW_RECORD: u16 = 0x0208;
 const COLINFO_RECORD: u16 = 0x007D;
 const PANE_RECORD: u16 = 0x0041;
+const WINDOW1_RECORD: u16 = 0x003D;
 
 /// MS-XLS §2.4.169: a single MERGECELLS record can hold at most 1027
 /// merged ranges (8 bytes each, plus the 2-byte cmcs count, fits in
@@ -172,6 +173,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
 
     let mut stream = Vec::new();
     write_bof(&mut stream, DT_WORKBOOK_GLOBALS);
+    write_window1(&mut stream, workbook);
     styles.write_font_records(&mut stream)?;
     styles.write_format_records(&mut stream)?;
     styles.write_xf_records(&mut stream);
@@ -853,6 +855,36 @@ fn write_dimension(stream: &mut Vec<u8>, sheet: &Worksheet) {
     stream.extend_from_slice(&(first_col as u16).to_le_bytes());
     stream.extend_from_slice(&(last_col_excl as u16).to_le_bytes());
     stream.extend_from_slice(&0u16.to_le_bytes());
+}
+
+/// Emit a WINDOW1 record (MS-XLS §2.4.346). Bytes 10-11 carry
+/// `itabCur` (active sheet index); the reader uses that to set the
+/// workbook's active sheet. The other fields use sensible defaults.
+fn write_window1(stream: &mut Vec<u8>, workbook: &Workbook) {
+    let active = workbook.active_sheet().min(u16::MAX as usize) as u16;
+    let visible_count = workbook
+        .worksheets()
+        .filter(|s| {
+            !matches!(
+                s.visibility(),
+                duke_sheets_core::worksheet::SheetVisibility::Hidden
+                    | duke_sheets_core::worksheet::SheetVisibility::VeryHidden
+            )
+        })
+        .count()
+        .min(u16::MAX as usize) as u16;
+
+    stream.extend_from_slice(&WINDOW1_RECORD.to_le_bytes());
+    stream.extend_from_slice(&18u16.to_le_bytes());
+    stream.extend_from_slice(&0i16.to_le_bytes()); // xWn
+    stream.extend_from_slice(&0i16.to_le_bytes()); // yWn
+    stream.extend_from_slice(&15000u16.to_le_bytes()); // dxWn
+    stream.extend_from_slice(&9000u16.to_le_bytes()); // dyWn
+    stream.extend_from_slice(&0x0038u16.to_le_bytes()); // grbit: tab visible, scroll bars visible
+    stream.extend_from_slice(&active.to_le_bytes()); // itabCur
+    stream.extend_from_slice(&0u16.to_le_bytes()); // itabFirst
+    stream.extend_from_slice(&visible_count.max(1).to_le_bytes()); // ctabSel
+    stream.extend_from_slice(&600u16.to_le_bytes()); // wTabRatio (600 = 60%)
 }
 
 /// Emit a minimal WINDOW2 record (MS-XLS §2.4.349). The reader extracts

@@ -492,7 +492,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Multiple worksheets | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multiple_sheets`, `skeleton_round_trip::multi_sheet_round_trips_with_all_names` | §18.2.20 |
 | Sheet order preservation | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_interleaved_tab_order`, `skeleton_round_trip::multi_sheet_round_trips_with_all_names` | §18.2.20 |
 | Special / XML-unsafe sheet names | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_xml_special_chars_in_sheet_names`, `skeleton_round_trip::special_and_unicode_sheet_names_round_trip` | §18.2.19 |
-| Active sheet | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::sheet_properties::active_sheet` | §18.2.27 |
+| Active sheet | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::sheet_properties::active_sheet`, `active_sheet_round_trip::middle_sheet_active_round_trips` | §18.2.27 |
 | Book view: window position / size | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.27 |
 | Book view: tabRatio | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.27 |
 | Book view: minimized / maximized | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.27 |
