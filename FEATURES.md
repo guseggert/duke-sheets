@@ -153,12 +153,12 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Custom row heights | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_row_heights_column_widths` | §18.3.1.73 |
-| Custom column widths | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_row_heights_column_widths` | §18.3.1.13 |
-| Hidden rows | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_hidden_rows_columns` | §18.3.1.73 |
-| Hidden columns | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_hidden_rows_columns` | §18.3.1.13 |
-| Outline levels / grouping | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_outline_metadata` | §18.3.1.73 |
-| Collapsed outline state | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::formula_metadata::outline_and_sheet_view_metadata` | §18.3.1.73 |
+| Custom row heights | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_row_heights_column_widths`, `row_column_dimensions_round_trip::custom_row_height_round_trips` | §18.3.1.73 |
+| Custom column widths | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_row_heights_column_widths`, `row_column_dimensions_round_trip::custom_column_width_round_trips` | §18.3.1.13 |
+| Hidden rows | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_hidden_rows_columns`, `row_column_dimensions_round_trip::hidden_rows_round_trip` | §18.3.1.73 |
+| Hidden columns | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_hidden_rows_columns`, `row_column_dimensions_round_trip::hidden_columns_round_trip` | §18.3.1.13 |
+| Outline levels / grouping | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_outline_metadata`, `row_column_dimensions_round_trip::row_outline_level_round_trips`, `row_column_dimensions_round_trip::column_outline_level_round_trips` | §18.3.1.73 |
+| Collapsed outline state | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::formula_metadata::outline_and_sheet_view_metadata`, `row_column_dimensions_round_trip::row_collapsed_state_round_trips`, `row_column_dimensions_round_trip::column_collapsed_state_round_trips` | §18.3.1.73 |
 | Default row height | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.30 |
 | Default column width | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.30 |
 | Outline summary position | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.3.1.35 |

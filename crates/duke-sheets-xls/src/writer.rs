@@ -40,6 +40,8 @@ const LABELSST_RECORD: u16 = 0x00FD;
 const FORMULA_RECORD: u16 = 0x0006;
 const STRING_RECORD: u16 = 0x0207;
 const MERGECELLS_RECORD: u16 = 0x00E5;
+const ROW_RECORD: u16 = 0x0208;
+const COLINFO_RECORD: u16 = 0x007D;
 
 /// MS-XLS §2.4.169: a single MERGECELLS record can hold at most 1027
 /// merged ranges (8 bytes each, plus the 2-byte cmcs count, fits in
@@ -187,7 +189,9 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
         let bof_pos = stream.len() as u32;
         write_bof(&mut stream, DT_WORKSHEET);
+        write_colinfo_records(&mut stream, sheet);
         write_dimension(&mut stream, sheet);
+        write_row_records(&mut stream, sheet);
         write_cell_records(&mut stream, sheet, sheet_idx, &sst, &styles);
         write_window2(&mut stream);
         write_mergecells(&mut stream, sheet);
@@ -870,6 +874,118 @@ fn write_window2(stream: &mut Vec<u8>) {
     stream.extend_from_slice(&preview_zoom.to_le_bytes());
     stream.extend_from_slice(&normal_zoom.to_le_bytes());
     stream.extend_from_slice(&reserved.to_le_bytes());
+}
+
+/// Emit a ROW record (MS-XLS §2.4.220) per row that has any non-
+/// default property: explicit height, hidden flag, outline level, or
+/// collapsed state. Bit layout in the 32-bit options field at body
+/// offset 12 matches the reader's parse_row: 0x10 collapsed, 0x20
+/// hidden, 0x40 fUnsynced (custom height), bits 8-10 outline level.
+/// Rows beyond u16::MAX are silently skipped because BIFF8 can't
+/// address them.
+fn write_row_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let heights = sheet.custom_row_heights();
+    let hidden = sheet.hidden_rows();
+    let outlines = sheet.row_outline_levels();
+    let collapsed = sheet.collapsed_rows();
+
+    let mut rows: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    rows.extend(heights.keys());
+    rows.extend(hidden.keys());
+    rows.extend(outlines.keys());
+    rows.extend(collapsed.keys());
+
+    for row in rows {
+        if row > u16::MAX as u32 {
+            continue;
+        }
+        let height_pt = heights.get(&row).copied();
+        let is_hidden = hidden.get(&row).copied().unwrap_or(false);
+        let outline_level = outlines.get(&row).copied().unwrap_or(0);
+        let is_collapsed = collapsed.get(&row).copied().unwrap_or(false);
+
+        let mut body = Vec::with_capacity(16);
+        body.extend_from_slice(&(row as u16).to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes()); // colMic
+        body.extend_from_slice(&0u16.to_le_bytes()); // colMac
+        let height_twips = match height_pt {
+            Some(h) if h > 0.0 => ((h * 20.0).round() as u32).min(0x7FFF) as u16,
+            _ => 0,
+        };
+        body.extend_from_slice(&height_twips.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes()); // reserved1
+        body.extend_from_slice(&0u16.to_le_bytes()); // unused1
+        let mut options: u32 = 0;
+        if is_collapsed {
+            options |= 0x10;
+        }
+        if is_hidden {
+            options |= 0x20;
+        }
+        if height_pt.is_some() {
+            options |= 0x40; // fUnsynced (custom height)
+        }
+        if outline_level > 0 {
+            options |= ((outline_level as u32) & 0x07) << 8;
+        }
+        body.extend_from_slice(&options.to_le_bytes());
+
+        stream.extend_from_slice(&ROW_RECORD.to_le_bytes());
+        stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        stream.extend_from_slice(&body);
+    }
+}
+
+/// Emit a COLINFO record (MS-XLS §2.4.49) per column with any non-
+/// default property: explicit width, hidden flag, outline level, or
+/// collapsed state. Each emitted record covers a single column for
+/// simplicity; the reader merges adjacent COLINFO ranges fine.
+/// Width is converted from the model's "characters" unit to BIFF8's
+/// 1/256-of-default-char-width unit.
+fn write_colinfo_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let widths = sheet.custom_column_widths();
+    let hidden = sheet.hidden_columns();
+    let outlines = sheet.column_outline_levels();
+    let collapsed = sheet.collapsed_columns();
+
+    let mut cols: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
+    cols.extend(widths.keys());
+    cols.extend(hidden.keys());
+    cols.extend(outlines.keys());
+    cols.extend(collapsed.keys());
+
+    for col in cols {
+        let width_chars = widths.get(&col).copied();
+        let is_hidden = hidden.get(&col).copied().unwrap_or(false);
+        let outline_level = outlines.get(&col).copied().unwrap_or(0);
+        let is_collapsed = collapsed.get(&col).copied().unwrap_or(false);
+
+        let mut body = Vec::with_capacity(12);
+        body.extend_from_slice(&col.to_le_bytes());
+        body.extend_from_slice(&col.to_le_bytes()); // last == first for one-col record
+        let coldx = match width_chars {
+            Some(w) if w > 0.0 => ((w * 256.0).round() as u32).min(u16::MAX as u32) as u16,
+            _ => 0,
+        };
+        body.extend_from_slice(&coldx.to_le_bytes());
+        body.extend_from_slice(&15u16.to_le_bytes()); // ixfe (default cell XF)
+        let mut options: u16 = 0;
+        if is_hidden {
+            options |= 0x0001;
+        }
+        if outline_level > 0 {
+            options |= ((outline_level as u16) & 0x0007) << 8;
+        }
+        if is_collapsed {
+            options |= 0x1000;
+        }
+        body.extend_from_slice(&options.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes()); // reserved
+
+        stream.extend_from_slice(&COLINFO_RECORD.to_le_bytes());
+        stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        stream.extend_from_slice(&body);
+    }
 }
 
 /// Emit one or more MERGECELLS records for the worksheet
