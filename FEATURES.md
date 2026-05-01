@@ -336,7 +336,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Sheet protection flag | R✔ W● | R✖ W✖ | R✔ W✖ | R✖ W✖ | `xls_e2e::sheet_properties::sheet_protection` | §18.3.1.79 |
+| Sheet protection flag | R✔ W● | R✖ W✖ | R✔ W✔ | R✖ W✖ | `xls_e2e::sheet_properties::sheet_protection`, `sheet_protection_round_trip::protected_sheet_round_trips_flag` | §18.3.1.79 |
 | Sheet protection: password hash | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.79 |
 | Sheet protection: specific permissions (objects/scenarios/formatCells/...) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.79 |
 | Protected ranges (protectedRange) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.64 |

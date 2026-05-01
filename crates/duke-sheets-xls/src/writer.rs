@@ -44,6 +44,8 @@ const ROW_RECORD: u16 = 0x0208;
 const COLINFO_RECORD: u16 = 0x007D;
 const PANE_RECORD: u16 = 0x0041;
 const WINDOW1_RECORD: u16 = 0x003D;
+const PROTECT_RECORD: u16 = 0x0012;
+const PASSWORD_RECORD: u16 = 0x0013;
 
 /// MS-XLS §2.4.169: a single MERGECELLS record can hold at most 1027
 /// merged ranges (8 bytes each, plus the 2-byte cmcs count, fits in
@@ -192,6 +194,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
         let bof_pos = stream.len() as u32;
         write_bof(&mut stream, DT_WORKSHEET);
+        write_protect_records(&mut stream, sheet);
         write_colinfo_records(&mut stream, sheet);
         write_dimension(&mut stream, sheet);
         write_row_records(&mut stream, sheet);
@@ -949,6 +952,27 @@ fn write_pane(stream: &mut Vec<u8>, sheet: &Worksheet) {
     stream.extend_from_slice(&top_row.to_le_bytes());
     stream.extend_from_slice(&left_col.to_le_bytes());
     stream.extend_from_slice(&active_pane.to_le_bytes());
+}
+
+/// Emit PROTECT (MS-XLS §2.4.196) and optional PASSWORD (MS-XLS
+/// §2.4.190) records when the worksheet has protection set. PROTECT
+/// is a single u16 = 1; PASSWORD is the precomputed 16-bit verifier
+/// (zero means "no password required, but sheet is protected").
+fn write_protect_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let Some(protection) = sheet.protection() else {
+        return;
+    };
+    if !protection.protected {
+        return;
+    }
+    stream.extend_from_slice(&PROTECT_RECORD.to_le_bytes());
+    stream.extend_from_slice(&2u16.to_le_bytes());
+    stream.extend_from_slice(&1u16.to_le_bytes());
+
+    let password_hash = protection.password_hash.unwrap_or(0);
+    stream.extend_from_slice(&PASSWORD_RECORD.to_le_bytes());
+    stream.extend_from_slice(&2u16.to_le_bytes());
+    stream.extend_from_slice(&password_hash.to_le_bytes());
 }
 
 /// Emit a ROW record (MS-XLS §2.4.220) per row that has any non-
