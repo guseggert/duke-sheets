@@ -46,6 +46,17 @@ const PANE_RECORD: u16 = 0x0041;
 const WINDOW1_RECORD: u16 = 0x003D;
 const PROTECT_RECORD: u16 = 0x0012;
 const PASSWORD_RECORD: u16 = 0x0013;
+const SETUP_RECORD: u16 = 0x00A1;
+const HEADER_RECORD: u16 = 0x0014;
+const FOOTER_RECORD: u16 = 0x0015;
+const LEFT_MARGIN_RECORD: u16 = 0x0026;
+const RIGHT_MARGIN_RECORD: u16 = 0x0027;
+const TOP_MARGIN_RECORD: u16 = 0x0028;
+const BOTTOM_MARGIN_RECORD: u16 = 0x0029;
+const PRINTHEADERS_RECORD: u16 = 0x002A;
+const PRINTGRIDLINES_RECORD: u16 = 0x002B;
+const HPAGEBREAKS_RECORD: u16 = 0x001B;
+const VPAGEBREAKS_RECORD: u16 = 0x001A;
 
 /// MS-XLS §2.4.169: a single MERGECELLS record can hold at most 1027
 /// merged ranges (8 bytes each, plus the 2-byte cmcs count, fits in
@@ -199,6 +210,11 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_dimension(&mut stream, sheet);
         write_row_records(&mut stream, sheet);
         write_cell_records(&mut stream, sheet, sheet_idx, &sst, &styles);
+        write_page_break_records(&mut stream, sheet);
+        write_header_footer_records(&mut stream, sheet);
+        write_margin_records(&mut stream, sheet);
+        write_print_flags(&mut stream, sheet);
+        write_setup_record(&mut stream, sheet);
         write_window2(&mut stream, sheet);
         write_pane(&mut stream, sheet);
         write_mergecells(&mut stream, sheet);
@@ -1085,6 +1101,142 @@ fn write_colinfo_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
         stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
         stream.extend_from_slice(&body);
     }
+}
+
+/// Emit a SETUP record (MS-XLS §2.4.252) carrying paper size, scale,
+/// fit-to-width/height, orientation, and header/footer margins.
+/// Body layout: iPaperSize, iScale, iPageStart, iFitWidth, iFitHeight,
+/// grbit, iRes, iVRes, numHdr (f64), numFtr (f64), iCopies. The
+/// orientation lives in grbit bit 1 (set = landscape); bit 6 (fNoOrient)
+/// is cleared so the orientation is honoured.
+fn write_setup_record(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let ps = sheet.page_setup();
+    let mut body = Vec::with_capacity(34);
+    body.extend_from_slice(&(ps.paper_size as u16).to_le_bytes());
+    body.extend_from_slice(&ps.scale.clamp(10, 400).to_le_bytes());
+    body.extend_from_slice(&1u16.to_le_bytes()); // iPageStart
+    body.extend_from_slice(&ps.fit_to_width.unwrap_or(0).to_le_bytes());
+    body.extend_from_slice(&ps.fit_to_height.unwrap_or(0).to_le_bytes());
+
+    let mut grbit: u16 = 0;
+    if matches!(ps.orientation, duke_sheets_core::PageOrientation::Landscape) {
+        grbit |= 0x0002;
+    }
+    body.extend_from_slice(&grbit.to_le_bytes());
+    body.extend_from_slice(&600u16.to_le_bytes()); // iRes (DPI)
+    body.extend_from_slice(&600u16.to_le_bytes()); // iVRes (DPI)
+    body.extend_from_slice(&ps.header_margin.to_le_bytes());
+    body.extend_from_slice(&ps.footer_margin.to_le_bytes());
+    body.extend_from_slice(&1u16.to_le_bytes()); // iCopies
+
+    stream.extend_from_slice(&SETUP_RECORD.to_le_bytes());
+    stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    stream.extend_from_slice(&body);
+}
+
+/// Emit HEADER (MS-XLS §2.4.137) and FOOTER (MS-XLS §2.4.111) records
+/// when the page setup has odd-page header/footer text. Both wrap the
+/// text in a XLUnicodeString (cch + flags + chars). Even/first page
+/// headers and footers are not yet emitted; BIFF8's HEADERFOOTER ext
+/// record carries those.
+fn write_header_footer_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let ps = sheet.page_setup();
+    if let Some(text) = ps.odd_header.as_deref() {
+        emit_unicode_string_record(stream, HEADER_RECORD, text);
+    }
+    if let Some(text) = ps.odd_footer.as_deref() {
+        emit_unicode_string_record(stream, FOOTER_RECORD, text);
+    }
+}
+
+fn emit_unicode_string_record(stream: &mut Vec<u8>, record_type: u16, text: &str) {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let high_byte = units.iter().any(|&u| u > 0xFF);
+    let mut body = Vec::with_capacity(3 + units.len() * 2);
+    body.extend_from_slice(&(units.len() as u16).to_le_bytes());
+    if high_byte {
+        body.push(0x01);
+        for u in &units {
+            body.extend_from_slice(&u.to_le_bytes());
+        }
+    } else {
+        body.push(0x00);
+        for u in &units {
+            body.push(*u as u8);
+        }
+    }
+    stream.extend_from_slice(&record_type.to_le_bytes());
+    stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    stream.extend_from_slice(&body);
+}
+
+/// Emit LEFT_MARGIN, RIGHT_MARGIN, TOP_MARGIN, BOTTOM_MARGIN records.
+/// Each is an 8-byte f64 carrying the margin in inches. The SETUP
+/// record covers header/footer margins separately.
+fn write_margin_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let ps = sheet.page_setup();
+    for (record_type, value) in [
+        (LEFT_MARGIN_RECORD, ps.left_margin),
+        (RIGHT_MARGIN_RECORD, ps.right_margin),
+        (TOP_MARGIN_RECORD, ps.top_margin),
+        (BOTTOM_MARGIN_RECORD, ps.bottom_margin),
+    ] {
+        stream.extend_from_slice(&record_type.to_le_bytes());
+        stream.extend_from_slice(&8u16.to_le_bytes());
+        stream.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// Emit PRINTHEADERS and PRINTGRIDLINES boolean records when their
+/// flags are set on the page setup. Each body is a single u16 = 1
+/// (omitted when the corresponding flag is false to keep the stream
+/// minimal).
+fn write_print_flags(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let ps = sheet.page_setup();
+    if ps.print_headings {
+        stream.extend_from_slice(&PRINTHEADERS_RECORD.to_le_bytes());
+        stream.extend_from_slice(&2u16.to_le_bytes());
+        stream.extend_from_slice(&1u16.to_le_bytes());
+    }
+    if ps.print_gridlines {
+        stream.extend_from_slice(&PRINTGRIDLINES_RECORD.to_le_bytes());
+        stream.extend_from_slice(&2u16.to_le_bytes());
+        stream.extend_from_slice(&1u16.to_le_bytes());
+    }
+}
+
+/// Emit HPAGEBREAKS (row breaks, MS-XLS §2.4.139) and VPAGEBREAKS
+/// (column breaks, MS-XLS §2.4.342). Body for each is count(u16)
+/// followed by N × (id u16, min u16, max u16). Breaks beyond u16::MAX
+/// are skipped because BIFF8 can't address them.
+fn write_page_break_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    fn emit(
+        stream: &mut Vec<u8>,
+        record_type: u16,
+        breaks: &[duke_sheets_core::worksheet::PageBreak],
+    ) {
+        let usable: Vec<_> = breaks
+            .iter()
+            .filter(|b| {
+                b.id <= u16::MAX as u32 && b.min <= u16::MAX as u32 && b.max <= u16::MAX as u32
+            })
+            .collect();
+        if usable.is_empty() {
+            return;
+        }
+        let mut body = Vec::with_capacity(2 + usable.len() * 6);
+        body.extend_from_slice(&(usable.len() as u16).to_le_bytes());
+        for b in usable {
+            body.extend_from_slice(&(b.id as u16).to_le_bytes());
+            body.extend_from_slice(&(b.min as u16).to_le_bytes());
+            body.extend_from_slice(&(b.max as u16).to_le_bytes());
+        }
+        stream.extend_from_slice(&record_type.to_le_bytes());
+        stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        stream.extend_from_slice(&body);
+    }
+    emit(stream, HPAGEBREAKS_RECORD, sheet.row_breaks());
+    emit(stream, VPAGEBREAKS_RECORD, sheet.col_breaks());
 }
 
 /// Emit one or more MERGECELLS records for the worksheet

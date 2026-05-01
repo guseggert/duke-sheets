@@ -308,29 +308,29 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Page orientation (portrait/landscape) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.62 |
-| Paper size | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.62 |
-| Scale percentage | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.62 |
+| Page orientation (portrait/landscape) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer`, `page_setup_round_trip::landscape_orientation_round_trips` | §18.3.1.62 |
+| Paper size | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer`, `page_setup_round_trip::paper_size_a4_round_trips` | §18.3.1.62 |
+| Scale percentage | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer`, `page_setup_round_trip::scale_percentage_round_trips` | §18.3.1.62 |
 | Fit to width/height | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
-| Margins | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.59 |
+| Margins | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer`, `page_setup_round_trip::page_margins_round_trip` | §18.3.1.59 |
 | Center horizontally / vertically on page | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.61 |
 | Print area | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area` | §18.2.5 |
 | Print titles: repeat rows | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_repeat_rows` | §18.2.5 |
 | Print titles: repeat columns | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_repeat_cols` | §18.2.5 |
-| Print gridlines | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `com_e2e::xls_reader::xls_print_gridlines` | §18.3.1.70 |
-| Print row/column headings | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `com_e2e::xls_reader::xls_print_headings` | §18.3.1.70 |
+| Print gridlines | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `com_e2e::xls_reader::xls_print_gridlines`, `page_setup_round_trip::print_gridlines_round_trips` | §18.3.1.70 |
+| Print row/column headings | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `com_e2e::xls_reader::xls_print_headings`, `page_setup_round_trip::print_headings_round_trips` | §18.3.1.70 |
 | Black and white printing | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
 | Draft quality | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
 | Comments printing option | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
 | Cell errors display (blank/dash/#N/A) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
 | Page order (downThenOver/overThenDown) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
-| Header/footer: odd pages | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_header_footer_odd_only_defaults` | §18.3.1.46 |
+| Header/footer: odd pages | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_header_footer_odd_only_defaults`, `page_setup_round_trip::odd_header_text_round_trips` | §18.3.1.46 |
 | Header/footer: even pages | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_header_footer_even_first_and_flags` | §18.3.1.46 |
 | Header/footer: first page different | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_header_footer_even_first_and_flags` | §18.3.1.46 |
 | Header/footer: scaleWithDoc / alignWithMargins | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.3.1.46 |
 | Header/footer: formatting codes (bold, color, font) | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.46 |
-| Row page breaks | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::roundtrip_row_breaks` | §18.3.1.74 |
-| Column page breaks | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::roundtrip_col_breaks` | §18.3.1.16 |
+| Row page breaks | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::roundtrip_row_breaks`, `page_setup_round_trip::row_page_breaks_round_trip` | §18.3.1.74 |
+| Column page breaks | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::roundtrip_col_breaks`, `page_setup_round_trip::col_page_breaks_round_trip` | §18.3.1.16 |
 
 ## Workbook and sheet protection
 
