@@ -123,6 +123,32 @@ fn odd_header_text_round_trips() {
 }
 
 #[test]
+fn header_formatting_codes_round_trip() {
+    // BIFF8 stores header/footer text verbatim, so Excel-style
+    // formatting codes (&B bold, &I italic, &"Arial,Bold" font face,
+    // &14 size, &K00FF00 hex color) round-trip as raw substring.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut ps = ws.page_setup().clone();
+    ps.odd_header = Some("&L&BBold&I Italic&K00FF00 Green&\"Arial,Regular\"&14Bigger".to_string());
+    ws.set_page_setup(ps);
+
+    let parsed = write_then_read(&wb);
+    let header = parsed
+        .worksheet(0)
+        .unwrap()
+        .page_setup()
+        .odd_header
+        .clone()
+        .expect("header present");
+    assert!(header.contains("&B"), "got {header:?}");
+    assert!(header.contains("&I"), "got {header:?}");
+    assert!(header.contains("&K00FF00"), "got {header:?}");
+    assert!(header.contains("&\"Arial,Regular\""), "got {header:?}");
+    assert!(header.contains("&14"), "got {header:?}");
+}
+
+#[test]
 fn odd_footer_text_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

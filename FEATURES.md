@@ -328,7 +328,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Header/footer: even pages | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_header_footer_even_first_and_flags` | §18.3.1.46 |
 | Header/footer: first page different | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_header_footer_even_first_and_flags` | §18.3.1.46 |
 | Header/footer: scaleWithDoc / alignWithMargins | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.3.1.46 |
-| Header/footer: formatting codes (bold, color, font) | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer` | §18.3.1.46 |
+| Header/footer: formatting codes (bold, color, font) | R✔ W✔ | R✔ W✔ | R● W● | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer`, `page_setup_round_trip::header_formatting_codes_round_trip` | §18.3.1.46 | XLS round-trips formatting codes verbatim through HEADER / FOOTER strings; semantic interpretation is reader-side only |
 | Row page breaks | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::roundtrip_row_breaks`, `page_setup_round_trip::row_page_breaks_round_trip` | §18.3.1.74 |
 | Column page breaks | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::roundtrip_col_breaks`, `page_setup_round_trip::col_page_breaks_round_trip` | §18.3.1.16 |
 
