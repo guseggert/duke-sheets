@@ -17,6 +17,7 @@ members = [
     "crates/duke-sheets-html",
     "crates/duke-sheets-xlsb",
     "crates/duke-sheets-crypto",
+    "crates/duke-sheets-test-harness",
     "crates/ssfmt",
 ]
 # Bindings are excluded from the default workspace build
@@ -44,6 +45,7 @@ duke-sheets-chart = { path = "crates/duke-sheets-chart" }
 duke-sheets-html = { path = "crates/duke-sheets-html" }
 duke-sheets-xlsb = { path = "crates/duke-sheets-xlsb" }
 duke-sheets-crypto = { path = "crates/duke-sheets-crypto" }
+duke-sheets-test-harness = { path = "crates/duke-sheets-test-harness" }
 
 # Error handling
 thiserror = "1.0"

@@ -873,6 +873,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "duke-sheets-test-harness"
+version = "0.1.0"
+
+[[package]]
 name = "duke-sheets-xls"
 version = "0.1.0"
 dependencies = [
