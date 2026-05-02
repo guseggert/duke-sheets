@@ -108,6 +108,41 @@ fn whole_number_greater_than_round_trips() {
 }
 
 #[test]
+fn decimal_validation_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut v = DataValidation::default();
+    v.validation_type = ValidationType::Decimal {
+        operator: ValidationOperator::Between,
+        value1: "0.0".into(),
+        value2: Some("100.5".into()),
+    };
+    v.ranges = vec![range("E1", "E5")];
+    ws.add_data_validation(v);
+
+    let parsed = write_then_read(&wb);
+    let validations = parsed.worksheet(0).unwrap().data_validations();
+    match &validations[0].validation_type {
+        ValidationType::Decimal {
+            operator,
+            value1,
+            value2,
+        } => {
+            assert_eq!(*operator, ValidationOperator::Between);
+            assert!(
+                value1.starts_with("0") && (value1.contains("0.0") || *value1 == "0"),
+                "got {value1:?}"
+            );
+            assert!(
+                value2.as_ref().is_some_and(|s| s.starts_with("100")),
+                "got {value2:?}"
+            );
+        }
+        other => panic!("expected Decimal, got {other:?}"),
+    }
+}
+
+#[test]
 fn text_length_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

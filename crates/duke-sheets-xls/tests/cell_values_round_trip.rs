@@ -140,6 +140,27 @@ fn empty_cell_with_format_only_round_trips() {
 }
 
 #[test]
+fn large_row_and_column_indices_round_trip() {
+    // BIFF8 caps at row 65535 (XLS-Excel display 65536) and col 255
+    // (column IV). The writer should accept cells right up against
+    // those limits.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value_at(0, 0, 1.0).expect("origin");
+    ws.set_cell_value_at(65535, 0, 2.0)
+        .expect("last row, col A");
+    ws.set_cell_value_at(0, 255, 3.0).expect("row 0, last col");
+    ws.set_cell_value_at(65535, 255, 4.0).expect("far corner");
+
+    let parsed = write_then_read(&wb);
+    let sheet = parsed.worksheet(0).unwrap();
+    assert_eq!(sheet.get_value_at(0, 0).as_number(), Some(1.0));
+    assert_eq!(sheet.get_value_at(65535, 0).as_number(), Some(2.0));
+    assert_eq!(sheet.get_value_at(0, 255).as_number(), Some(3.0));
+    assert_eq!(sheet.get_value_at(65535, 255).as_number(), Some(4.0));
+}
+
+#[test]
 fn many_rows_round_trip() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

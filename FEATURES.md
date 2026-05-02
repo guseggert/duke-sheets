@@ -19,7 +19,7 @@
 | Cell metadata index (`cm`) | R✔ W✔ | R✖ W✖ | R- W- | R- W- | `xlsx_e2e::formula_metadata::reader_parses_cm_attribute` | §18.3.1.4 |
 | Value metadata index (`vm`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
 | Phonetic hint (`ph`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
-| Large row/column indices | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_large_indices` | - |
+| Large row/column indices | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_large_indices`, `cell_values_round_trip::large_row_and_column_indices_round_trip` | - |
 | Sparse data (non-contiguous cells) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_sparse_data`, `cell_values_round_trip::cells_round_trip_when_set_in_scrambled_order` | - |
 
 ## Formulas
@@ -260,7 +260,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | List validation (cell-range source) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_validation::list_validation` | §18.3.1.32 |
 | List validation (named range source) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
 | Whole number validation | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_number`, `data_validation_round_trip::whole_number_between_round_trips` | §18.3.1.32 |
-| Decimal validation | R● W● | R● W● | R● W✖ | R✖ W✖ | `xlsx_e2e::data_validation::whole_number_validation` | §18.3.1.32 |
+| Decimal validation | R● W● | R● W● | R● W● | R✖ W✖ | `xlsx_e2e::data_validation::whole_number_validation`, `data_validation_round_trip::decimal_validation_round_trips` | §18.3.1.32 | XLS round-trips numeric value through a parse-and-recompile cycle; lossy for non-trivial precision |
 | Date validation | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
 | Time validation | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
 | Text length validation | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::data_validation::text_length_validation`, `data_validation_round_trip::text_length_round_trips` | §18.3.1.32 |
