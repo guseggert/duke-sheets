@@ -10,6 +10,8 @@
 //! the container can't be brought up that's a real failure, not a
 //! reason to pretend a test ran.
 
+use std::io::Read;
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -57,10 +59,41 @@ pub fn ensure_lo() {
     });
 }
 
-/// Quick TCP connect probe with a short timeout.
+/// Probe that the URP server is genuinely ready, not just that the
+/// docker port forward is up. Docker publishes :2002 instantly on
+/// `docker run`, but the soffice process inside the container takes a
+/// few seconds to bind that port for real. A pure connect-only check
+/// passes too early; subsequent URP I/O then fails with
+/// `Broken pipe`.
+///
+/// Strategy: open a connection, set a 200ms read timeout, attempt a
+/// `read`. The URP server doesn't speak first, so a healthy connection
+/// hits the read timeout (`WouldBlock`/`TimedOut`). An unhealthy
+/// connection (port forward to nothing) returns `Ok(0)` (EOF) or an
+/// error immediately.
 fn port_listening(port: u16) -> bool {
-    let addr = format!("127.0.0.1:{port}").parse().unwrap();
-    std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok()
+    let addr = match format!("127.0.0.1:{port}").parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) else {
+        return false;
+    };
+    if stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .is_err()
+    {
+        return false;
+    }
+    let mut buf = [0u8; 1];
+    match stream.read(&mut buf) {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(e) => matches!(
+            e.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ),
+    }
 }
 
 /// Build the LO docker image if `docker images -q` returns nothing for it.
