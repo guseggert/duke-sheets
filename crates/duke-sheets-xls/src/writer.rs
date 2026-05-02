@@ -63,6 +63,8 @@ const HLINK_RECORD: u16 = 0x01B8;
 const NAME_RECORD: u16 = 0x0018;
 const AUTOFILTER_RECORD: u16 = 0x009E;
 const FILTERMODE_RECORD: u16 = 0x009B;
+const DVAL_RECORD: u16 = 0x01B2;
+const DV_RECORD: u16 = 0x01BE;
 
 /// Built-in NAME index for `Print_Area` (MS-XLS §2.5.4).
 const BUILTIN_NAME_PRINT_AREA: u8 = 0x06;
@@ -251,6 +253,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_mergecells(&mut stream, sheet);
         write_hlink_records(&mut stream, sheet);
         write_autofilter_records(&mut stream, sheet);
+        write_data_validations(&mut stream, sheet);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
     }
@@ -1782,6 +1785,211 @@ fn push_autofilter_string(buf: &mut Vec<u8>, s: &str) {
             buf.push(*u as u8);
         }
     }
+}
+
+/// Emit a DVAL header (MS-XLS §2.4.81) plus one DV record (§2.4.79)
+/// per `DataValidation` on the worksheet.
+///
+/// DVAL body (18 bytes):
+///   options (u16)        - input-box state flags
+///   xLeft, yTop (i32x2)  - input-box position
+///   iDvIdInputBox (u32)  - the DV record currently in the input box
+///   idv (u32)            - count of DV records that follow
+///
+/// DV body:
+///   flags (u32)          - val_type (bits 0-3), err_style (4-6),
+///                          fExplicit list (7), fAllowBlank (8),
+///                          fSuppressDropdown (9), fShowInput (18),
+///                          fShowError (19), operator (20-23)
+///   input_title          - XLUnicodeString
+///   error_title          - XLUnicodeString
+///   input_msg            - XLUnicodeString
+///   error_msg            - XLUnicodeString
+///   cce1 (u16) + unused (u16) + formula1 ptgs
+///   cce2 (u16) + unused (u16) + formula2 ptgs
+///   range_count (u16) + N × Ref8U (8 bytes: r1/r2/c1/c2 u16)
+fn write_data_validations(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    use duke_sheets_core::validation::{ValidationErrorStyle, ValidationOperator, ValidationType};
+
+    let validations = sheet.data_validations();
+    if validations.is_empty() {
+        return;
+    }
+
+    let mut dval_body = Vec::with_capacity(18);
+    dval_body.extend_from_slice(&0u16.to_le_bytes()); // options
+    dval_body.extend_from_slice(&0i32.to_le_bytes()); // xLeft
+    dval_body.extend_from_slice(&0i32.to_le_bytes()); // yTop
+    dval_body.extend_from_slice(&0u32.to_le_bytes()); // iDvIdInputBox
+    dval_body.extend_from_slice(&(validations.len() as u32).to_le_bytes());
+    stream.extend_from_slice(&DVAL_RECORD.to_le_bytes());
+    stream.extend_from_slice(&(dval_body.len() as u16).to_le_bytes());
+    stream.extend_from_slice(&dval_body);
+
+    for v in validations {
+        let val_type_bits: u32 = match &v.validation_type {
+            ValidationType::None => 0,
+            ValidationType::Whole { .. } => 1,
+            ValidationType::Decimal { .. } => 2,
+            ValidationType::List { .. } => 3,
+            ValidationType::Date { .. } => 4,
+            ValidationType::Time { .. } => 5,
+            ValidationType::TextLength { .. } => 6,
+            ValidationType::Custom { .. } => 7,
+        };
+        let err_style_bits: u32 = match v.error_style {
+            ValidationErrorStyle::Stop => 0,
+            ValidationErrorStyle::Warning => 1,
+            ValidationErrorStyle::Information => 2,
+        };
+        let op_bits: u32 = match &v.validation_type {
+            ValidationType::Whole { operator, .. }
+            | ValidationType::Decimal { operator, .. }
+            | ValidationType::Date { operator, .. }
+            | ValidationType::Time { operator, .. }
+            | ValidationType::TextLength { operator, .. } => match operator {
+                ValidationOperator::Between => 0,
+                ValidationOperator::NotBetween => 1,
+                ValidationOperator::Equal => 2,
+                ValidationOperator::NotEqual => 3,
+                ValidationOperator::GreaterThan => 4,
+                ValidationOperator::LessThan => 5,
+                ValidationOperator::GreaterThanOrEqual => 6,
+                ValidationOperator::LessThanOrEqual => 7,
+            },
+            _ => 0,
+        };
+        let is_explicit_list = matches!(
+            &v.validation_type,
+            ValidationType::List { source } if !source.starts_with('=')
+        );
+
+        let mut flags: u32 = val_type_bits | (err_style_bits << 4) | (op_bits << 20);
+        if is_explicit_list {
+            flags |= 0x0080;
+        }
+        if v.allow_blank {
+            flags |= 0x0100;
+        }
+        if !v.show_dropdown {
+            flags |= 0x0200;
+        }
+        if v.show_input_message {
+            flags |= 0x0004_0000;
+        }
+        if v.show_error_alert {
+            flags |= 0x0008_0000;
+        }
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&flags.to_le_bytes());
+
+        // String headers (always emit, empty when None).
+        for s in [
+            v.input_title.as_deref(),
+            v.error_title.as_deref(),
+            v.input_message.as_deref(),
+            v.error_message.as_deref(),
+        ] {
+            push_dv_unicode_string(&mut body, s.unwrap_or(""));
+        }
+
+        let (value1, value2) = match &v.validation_type {
+            ValidationType::Whole { value1, value2, .. }
+            | ValidationType::Decimal { value1, value2, .. }
+            | ValidationType::Date { value1, value2, .. }
+            | ValidationType::Time { value1, value2, .. }
+            | ValidationType::TextLength { value1, value2, .. } => {
+                (Some(value1.as_str()), value2.as_deref())
+            }
+            ValidationType::List { source } => (Some(source.as_str()), None),
+            ValidationType::Custom { formula } => (Some(formula.as_str()), None),
+            ValidationType::None => (None, None),
+        };
+
+        let formula1 = value1.map(encode_dv_formula).unwrap_or_default();
+        body.extend_from_slice(&(formula1.len() as u16).to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes()); // unused
+        body.extend_from_slice(&formula1);
+
+        let formula2 = value2.map(encode_dv_formula).unwrap_or_default();
+        body.extend_from_slice(&(formula2.len() as u16).to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes()); // unused
+        body.extend_from_slice(&formula2);
+
+        let usable: Vec<&duke_sheets_core::CellRange> = v
+            .ranges
+            .iter()
+            .filter(|r| r.start.row <= u16::MAX as u32 && r.end.row <= u16::MAX as u32)
+            .collect();
+        body.extend_from_slice(&(usable.len() as u16).to_le_bytes());
+        for r in usable {
+            body.extend_from_slice(&(r.start.row as u16).to_le_bytes());
+            body.extend_from_slice(&(r.end.row as u16).to_le_bytes());
+            body.extend_from_slice(&r.start.col.to_le_bytes());
+            body.extend_from_slice(&r.end.col.to_le_bytes());
+        }
+
+        stream.extend_from_slice(&DV_RECORD.to_le_bytes());
+        stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        stream.extend_from_slice(&body);
+    }
+}
+
+/// Emit an XLUnicodeString (cch u16 + flags u8 + chars) for DV input
+/// titles, error titles, and message text. Empty strings emit cch=0
+/// and a flags byte of 0; the reader treats them as None.
+fn push_dv_unicode_string(buf: &mut Vec<u8>, s: &str) {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    let cch = units.len().min(u16::MAX as usize) as u16;
+    buf.extend_from_slice(&cch.to_le_bytes());
+    let high_byte = units.iter().any(|&u| u > 0xFF);
+    if high_byte {
+        buf.push(0x01);
+        for u in &units {
+            buf.extend_from_slice(&u.to_le_bytes());
+        }
+    } else {
+        buf.push(0x00);
+        for u in &units {
+            buf.push(*u as u8);
+        }
+    }
+}
+
+/// Encode a DataValidation value-string into a ptg formula body.
+///
+/// The model carries values as decompiled formula strings (e.g.
+/// "100", "10.5", "Red,Green,Blue", "=A1+1"). Round-tripping requires
+/// re-parsing as a formula and recompiling to ptgs:
+///
+///   - Numeric/string/cell-ref values reach the parser via a synthetic
+///     `=` prefix. parse_formula handles `=100`, `=10.5`, `=A1`, etc.
+///   - Custom validation formulas already start with `=`.
+///   - Inline list sources like "Red,Green,Blue" don't parse as a
+///     formula expression. Fall back to a single tStr ptg that
+///     decompiles back to a quoted string; the reader strips the
+///     surrounding quotes when the fExplicit-list flag is set.
+fn encode_dv_formula(value: &str) -> Vec<u8> {
+    if value.is_empty() {
+        return Vec::new();
+    }
+    let to_parse = if value.starts_with('=') {
+        value.to_string()
+    } else {
+        format!("={value}")
+    };
+    if let Ok(expr) = duke_sheets_formula::parse_formula(&to_parse) {
+        let mut bytes = Vec::new();
+        if compile_ptgs(&expr, &mut bytes).is_ok() {
+            return bytes;
+        }
+    }
+    // Fallback: emit the raw value as a tStr ptg literal.
+    let mut bytes = Vec::new();
+    bytes.push(0x17); // PTG_STR
+    let _ = push_short_xlunicode_string(&mut bytes, value);
+    bytes
 }
 
 /// Encode a length-prefixed UTF-16LE string for HLINK record fields

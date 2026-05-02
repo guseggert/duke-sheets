@@ -256,17 +256,17 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| List validation (inline values) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_list` | §18.3.1.32 |
+| List validation (inline values) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_list`, `data_validation_round_trip::list_inline_values_round_trip` | §18.3.1.32 |
 | List validation (cell-range source) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_validation::list_validation` | §18.3.1.32 |
 | List validation (named range source) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
-| Whole number validation | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_number` | §18.3.1.32 |
+| Whole number validation | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_number`, `data_validation_round_trip::whole_number_between_round_trips` | §18.3.1.32 |
 | Decimal validation | R● W● | R● W● | R● W✖ | R✖ W✖ | `xlsx_e2e::data_validation::whole_number_validation` | §18.3.1.32 |
 | Date validation | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
 | Time validation | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
-| Text length validation | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_validation::text_length_validation` | §18.3.1.32 |
+| Text length validation | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::data_validation::text_length_validation`, `data_validation_round_trip::text_length_round_trips` | §18.3.1.32 |
 | Custom formula validation | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
-| Input messages (prompt) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_validation::validation_with_messages` | §18.3.1.32 |
-| Error alerts (stop/warning/info styles) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_validation::validation_with_messages` | §18.3.1.32 |
+| Input messages (prompt) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::data_validation::validation_with_messages`, `data_validation_round_trip::input_message_round_trips` | §18.3.1.32 |
+| Error alerts (stop/warning/info styles) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::data_validation::validation_with_messages`, `data_validation_round_trip::error_alert_round_trips` | §18.3.1.32 |
 | Drop-down arrow visibility | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
 | Extension-list validation (x14 custom) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-XLSX] §2.6.5 |
 
