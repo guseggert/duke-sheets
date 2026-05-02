@@ -133,8 +133,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Alignment: justifyLastLine | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.8.1 |
 | Number format: builtin IDs (0-49, 164+) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_number_format_styles`, `number_format_round_trip::builtin_percent_format_round_trips` | §18.8.31 |
 | Number format: custom format strings | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::number_formats::custom_decimal_format`, `number_format_round_trip::custom_currency_format_round_trips` | §18.8.31 |
-| Cell protection: locked | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::cell_protection_locked` | §18.8.33 |
-| Cell protection: formula hidden | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::styles::cell_protection_formula_hidden` | §18.8.33 |
+| Cell protection: locked | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::styles::cell_protection_locked`, `cell_protection_round_trip::explicitly_locked_state_round_trips` | §18.8.33 |
+| Cell protection: formula hidden | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::styles::cell_protection_formula_hidden`, `cell_protection_round_trip::formula_hidden_cell_round_trips` | §18.8.33 |
 | Named cell styles (cellStyleXf) | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `xlsx_e2e::named_cell_styles_roundtrip::roundtrip_preserves_cell_style_xfs_and_named_styles` | §18.8.8 |
 | Differential formats (DXF) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_formatting_roundtrip::test_roundtrip_dxf_styles` | §18.8.14 |
 | Table cell style (tableStyleInfo) | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_basic` | §18.8.42 |

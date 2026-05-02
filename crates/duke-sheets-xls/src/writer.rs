@@ -255,6 +255,7 @@ struct UserXf {
     alignment: Alignment,
     border: BorderStyle,
     fill: FillStyle,
+    protection: duke_sheets_core::style::Protection,
 }
 
 impl StyleTables {
@@ -268,7 +269,14 @@ impl StyleTables {
         let mut format_index_for_custom: HashMap<String, u16> = HashMap::new();
 
         let mut user_xfs: Vec<UserXf> = Vec::new();
-        type XfKey = (u16, u16, Alignment, BorderStyle, FillStyle);
+        type XfKey = (
+            u16,
+            u16,
+            Alignment,
+            BorderStyle,
+            FillStyle,
+            duke_sheets_core::style::Protection,
+        );
         let mut xf_key_to_ixfe: HashMap<XfKey, u16> = HashMap::new();
         let mut cell_ixfe = HashMap::new();
 
@@ -313,6 +321,7 @@ impl StyleTables {
                     style.alignment.clone(),
                     style.border.clone(),
                     style.fill.clone(),
+                    style.protection,
                 );
                 let ixfe = match xf_key_to_ixfe.get(&xf_key) {
                     Some(&i) => i,
@@ -324,6 +333,7 @@ impl StyleTables {
                             alignment: style.alignment.clone(),
                             border: style.border.clone(),
                             fill: style.fill.clone(),
+                            protection: style.protection,
                         });
                         xf_key_to_ixfe.insert(xf_key, new_ixfe);
                         new_ixfe
@@ -398,6 +408,10 @@ const XF_DEFAULTS: UserXf = UserXf {
         diagonal_direction: DiagonalDirection::None,
     },
     fill: FillStyle::None,
+    protection: duke_sheets_core::style::Protection {
+        locked: true,
+        hidden: false,
+    },
 };
 
 /// Emit a FORMAT record (MS-XLS §2.4.126) for a user-defined custom
@@ -481,7 +495,24 @@ fn write_xf_record(stream: &mut Vec<u8>, is_style_xf: bool, xf: &UserXf) {
     stream.extend_from_slice(&20u16.to_le_bytes());
     stream.extend_from_slice(&xf.font_index.to_le_bytes());
     stream.extend_from_slice(&xf.format_index.to_le_bytes());
-    let type_prot: u16 = if is_style_xf { 0xFFF5 } else { 0x0001 };
+    // type_prot bit layout (MS-XLS §2.4.353):
+    //   bit 0 (0x0001): fLocked
+    //   bit 1 (0x0002): fHidden (formula hidden when sheet is protected)
+    //   bit 2 (0x0004): fStyle (1 = style XF, 0 = cell XF)
+    //   bits 4-15: ifmt-XF parent (cell XF parent index, 0xFFF for style XFs)
+    let type_prot: u16 = if is_style_xf {
+        // 0xFFF5 = parent=0xFFF, fStyle=1, fHidden=0, fLocked=1 (default).
+        0xFFF5
+    } else {
+        let mut bits: u16 = 0;
+        if xf.protection.locked {
+            bits |= 0x0001;
+        }
+        if xf.protection.hidden {
+            bits |= 0x0002;
+        }
+        bits
+    };
     stream.extend_from_slice(&type_prot.to_le_bytes());
 
     let halign = encode_horizontal_alignment(xf.alignment.horizontal);
