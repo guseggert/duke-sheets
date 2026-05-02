@@ -131,7 +131,7 @@ impl Style {
 }
 
 /// Cell protection settings
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Protection {
     /// Cell is locked (protected when sheet is protected)
     pub locked: bool,
