@@ -15,7 +15,7 @@
 | Formula cells without cached values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_formula_no_cached_value` | §18.3.1.40 |
 | Empty cells (formatting only) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_style_only_cells`, `cell_values_round_trip::empty_cell_with_format_only_round_trips` | §18.3.1.4 |
 | Date values (stored as numbers) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::number_formats::date_format`, `number_format_round_trip::builtin_date_format_round_trips` | §18.17.4 |
-| Rich text values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.1 |
+| Rich text values | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text`, `rich_text_round_trip::three_run_rich_text_round_trips_text_and_run_count` | §18.4.1 |
 | Cell metadata index (`cm`) | R✔ W✔ | R✖ W✖ | R- W- | R- W- | `xlsx_e2e::formula_metadata::reader_parses_cm_attribute` | §18.3.1.4 |
 | Value metadata index (`vm`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
 | Phonetic hint (`ph`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
@@ -87,14 +87,14 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Rich text in shared strings | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.2 |
+| Rich text in shared strings | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text`, `rich_text_round_trip::three_run_rich_text_round_trips_text_and_run_count` | §18.4.2 |
 | Rich text in inline strings | R✔ W✔ | R✔ W✔ | R- W- | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.4 |
 | Rich text in comments | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `com_e2e::rich_text::read_rich_text_from_excel` | §18.7.5 |
-| Run properties: bold/italic | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.7 |
-| Run properties: font size/name/color | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text` | §18.4.7 |
-| Run properties: underline styles | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles` | §18.4.7 |
-| Run properties: strikethrough | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles` | §18.4.7 |
-| Run properties: sub/superscript | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_vertical_align` | §18.4.7 |
+| Run properties: bold/italic | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text`, `rich_text_round_trip::rich_text_with_bold_run_round_trips` | §18.4.7 |
+| Run properties: font size/name/color | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text`, `rich_text_round_trip::rich_text_with_size_and_color_round_trips` | §18.4.7 |
+| Run properties: underline styles | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles`, `rich_text_round_trip::rich_text_with_underline_run_round_trips` | §18.4.7 |
+| Run properties: strikethrough | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_styles`, `rich_text_round_trip::rich_text_with_strikethrough_run_round_trips` | §18.4.7 |
+| Run properties: sub/superscript | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_font_vertical_align`, `rich_text_round_trip::rich_text_with_superscript_run_round_trips` | §18.4.7 |
 | Run properties: shadow/outline/emboss/engrave | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.4.7 |
 | Line breaks within a cell | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_strings`, `sst_round_trip::line_break_within_string_round_trips` | - |
 | Phonetic guide (Japanese furigana) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.4.3 |

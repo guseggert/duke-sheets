@@ -215,8 +215,8 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         ));
     }
 
-    let sst = SstTable::collect(workbook);
     let styles = StyleTables::collect(workbook);
+    let sst = SstTable::collect(workbook, &styles);
 
     let mut stream = Vec::new();
     write_bof(&mut stream, DT_WORKBOOK_GLOBALS);
@@ -290,6 +290,12 @@ struct StyleTables {
     /// `FONT_BUILTIN_COUNT` entries are the BIFF8-required built-ins
     /// (all defaulted Calibri 11). User-defined fonts append after.
     fonts_in_order: Vec<FontStyle>,
+    /// `FontStyle -> on-disk-font-index` (with the BIFF8 "skip 4"
+    /// quirk applied: positions 0..3 are the index, position 4 is
+    /// reserved, position 5+ become index +1). Exposed so the SST
+    /// rich-text emitter can look up font indices for run fonts that
+    /// were also interned in this table.
+    font_xf_index: HashMap<FontStyle, u16>,
     /// User-defined number-format strings to emit as FORMAT records.
     /// Their on-disk ifmt values start at `FORMAT_USER_INDEX_BASE` and
     /// increment by one per entry.
@@ -397,8 +403,31 @@ impl StyleTables {
             }
         }
 
+        // Second pass: intern fonts for any rich-text run that has a
+        // RunFont attached. Each run gets a complete FontStyle (with
+        // unspecified RunFont fields filled from FontStyle::default)
+        // so the SST emitter can look up its on-disk font index.
+        for sheet in workbook.worksheets() {
+            for (_row, _col, cell) in sheet.iter_cells() {
+                if let CellValue::RichText(runs) = &cell.value {
+                    for run in runs.iter() {
+                        if let Some(rf) = &run.font {
+                            let font = run_font_to_font_style(rf);
+                            if !font_xf_index.contains_key(&font) {
+                                let on_disk = fonts_in_order.len() as u16;
+                                let xf_idx = if on_disk < 4 { on_disk } else { on_disk + 1 };
+                                fonts_in_order.push(font.clone());
+                                font_xf_index.insert(font, xf_idx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         StyleTables {
             fonts_in_order,
+            font_xf_index,
             user_formats,
             user_xfs,
             cell_ixfe,
@@ -438,6 +467,48 @@ impl StyleTables {
             write_xf_record(stream, false, xf);
         }
     }
+}
+
+/// Materialise a [`RunFont`] (where each property is optional) into a
+/// complete [`FontStyle`]. Unspecified `RunFont` properties fall back
+/// to [`FontStyle::default()`] so the resulting struct can be emitted
+/// as a complete BIFF8 FONT record.
+fn run_font_to_font_style(rf: &duke_sheets_core::rich_text::RunFont) -> FontStyle {
+    let mut font = FontStyle::default();
+    if let Some(b) = rf.bold {
+        font.bold = b;
+    }
+    if let Some(i) = rf.italic {
+        font.italic = i;
+    }
+    if let Some(s) = rf.size {
+        font.size = s;
+    }
+    if let Some(c) = rf.color.as_ref() {
+        font.color = c.clone();
+    }
+    if let Some(name) = rf.name.as_ref() {
+        font.name = name.clone();
+    }
+    if let Some(u) = rf.underline {
+        font.underline = u;
+    }
+    if let Some(s) = rf.strikethrough {
+        font.strikethrough = s;
+    }
+    if let Some(va) = rf.vertical_align {
+        font.vertical_align = va;
+    }
+    if let Some(family) = rf.family {
+        font.family = Some(family);
+    }
+    if let Some(charset) = rf.charset {
+        font.charset = Some(charset);
+    }
+    if let Some(scheme) = rf.scheme.as_ref() {
+        font.scheme = Some(scheme.clone());
+    }
+    font
 }
 
 const XF_DEFAULTS: UserXf = UserXf {
@@ -788,16 +859,37 @@ fn push_short_xlunicode_string(buf: &mut Vec<u8>, s: &str) -> XlsResult<()> {
 /// reference an entry in this workbook-global table via `LABELSST.isst`.
 /// We dedupe identical strings on insert (matching what Excel writes)
 /// and emit a single SST record + CONTINUE chain in the globals stream.
+/// A single entry in the BIFF8 Shared String Table.
+///
+/// `Plain` is a flat string with no per-character formatting. `Rich`
+/// stores the same text plus a list of formatting runs (each a
+/// `(char_pos, font_idx)` pair) that the writer encodes as a BIFF8
+/// rich-text SST entry with `fRichSt` set.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum SstEntryKind {
+    Plain,
+    Rich(Vec<(u16, u16)>),
+}
+
+#[derive(Debug, Clone)]
+struct SstEntry {
+    text: String,
+    kind: SstEntryKind,
+}
+
 struct SstTable {
-    strings: Vec<String>,
-    index: HashMap<String, u32>,
+    entries: Vec<SstEntry>,
+    /// Index keyed by `(text, kind)` so plain and rich variants of the
+    /// same text are distinct entries (a plain "hello" and a bolded
+    /// "hello" share neither LABELSST index nor SST slot).
+    index: HashMap<(String, SstEntryKind), u32>,
     total_refs: u32,
 }
 
 impl SstTable {
-    fn collect(workbook: &Workbook) -> Self {
+    fn collect(workbook: &Workbook, styles: &StyleTables) -> Self {
         let mut t = SstTable {
-            strings: Vec::new(),
+            entries: Vec::new(),
             index: HashMap::new(),
             total_refs: 0,
         };
@@ -805,15 +897,10 @@ impl SstTable {
             for (_row, _col, cell) in sheet.iter_cells() {
                 match &cell.value {
                     CellValue::String(s) => {
-                        t.add(s.as_ref());
+                        t.add_plain(s.as_ref());
                     }
                     CellValue::RichText(runs) => {
-                        let plain: String = runs
-                            .iter()
-                            .map(|r| r.text.as_str())
-                            .collect::<Vec<_>>()
-                            .join("");
-                        t.add(&plain);
+                        t.add_rich(runs, styles);
                     }
                     _ => {}
                 }
@@ -822,51 +909,103 @@ impl SstTable {
         t
     }
 
-    fn add(&mut self, s: &str) {
+    fn add_plain(&mut self, s: &str) {
         self.total_refs += 1;
-        if !self.index.contains_key(s) {
-            let idx = self.strings.len() as u32;
-            self.index.insert(s.to_string(), idx);
-            self.strings.push(s.to_string());
+        let key = (s.to_string(), SstEntryKind::Plain);
+        if !self.index.contains_key(&key) {
+            let idx = self.entries.len() as u32;
+            self.index.insert(key, idx);
+            self.entries.push(SstEntry {
+                text: s.to_string(),
+                kind: SstEntryKind::Plain,
+            });
         }
     }
 
-    fn lookup(&self, s: &str) -> Option<u32> {
-        self.index.get(s).copied()
+    fn add_rich(
+        &mut self,
+        runs: &[duke_sheets_core::rich_text::RichTextRun],
+        styles: &StyleTables,
+    ) {
+        self.total_refs += 1;
+        let mut text = String::new();
+        let mut formatting: Vec<(u16, u16)> = Vec::new();
+        for run in runs {
+            // char_pos is the UTF-16 code unit offset where this run
+            // begins, which is what BIFF8 expects.
+            let char_pos = text.encode_utf16().count().min(u16::MAX as usize) as u16;
+            if let Some(rf) = &run.font {
+                let font = run_font_to_font_style(rf);
+                if let Some(&font_idx) = styles.font_xf_index.get(&font) {
+                    formatting.push((char_pos, font_idx));
+                }
+            }
+            text.push_str(&run.text);
+        }
+
+        let kind = if formatting.is_empty() {
+            SstEntryKind::Plain
+        } else {
+            SstEntryKind::Rich(formatting)
+        };
+
+        let key = (text.clone(), kind.clone());
+        if !self.index.contains_key(&key) {
+            let idx = self.entries.len() as u32;
+            self.index.insert(key, idx);
+            self.entries.push(SstEntry { text, kind });
+        }
+    }
+
+    /// Look up a plain-string SST index. Used by the LABELSST path
+    /// for `CellValue::String` cells.
+    fn lookup_plain(&self, s: &str) -> Option<u32> {
+        self.index
+            .get(&(s.to_string(), SstEntryKind::Plain))
+            .copied()
+    }
+
+    /// Look up the SST index for a rich-text cell, given the text +
+    /// formatting runs that were resolved for it.
+    fn lookup_rich(&self, text: &str, formatting: &[(u16, u16)]) -> Option<u32> {
+        let kind = if formatting.is_empty() {
+            SstEntryKind::Plain
+        } else {
+            SstEntryKind::Rich(formatting.to_vec())
+        };
+        self.index.get(&(text.to_string(), kind)).copied()
     }
 
     /// Serialize the SST (and any required CONTINUE records) into the
-    /// workbook stream. No-op if no strings were collected.
+    /// workbook stream. No-op if no entries were collected.
     fn write_records(&self, stream: &mut Vec<u8>) -> XlsResult<()> {
-        if self.strings.is_empty() {
+        if self.entries.is_empty() {
             return Ok(());
         }
 
         let mut payload = Vec::new();
         payload.extend_from_slice(&self.total_refs.to_le_bytes());
-        payload.extend_from_slice(&(self.strings.len() as u32).to_le_bytes());
-        for s in &self.strings {
-            push_xlunicode_string(&mut payload, s)?;
+        payload.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
+        for entry in &self.entries {
+            push_sst_entry(&mut payload, entry)?;
         }
 
-        // Split between strings (never mid-string). String boundaries
-        // are tracked while building `payload`; rebuild a parallel
-        // splittable representation: a list of (chunk_start_in_payload,
-        // chunk_len). For simplicity, walk strings forward and emit
-        // records up to BIFF_MAX_RECORD_BODY bytes each.
+        // Split between entries (never mid-entry). For each entry,
+        // compute its on-disk length and chunk into BIFF_MAX_RECORD_BODY
+        // groups.
         let mut chunks: Vec<(usize, usize)> = Vec::new();
         let mut cursor = 8usize; // skip cstTotal + cstUnique header
         let mut chunk_start = 0usize;
         let mut chunk_len = 8usize;
-        for s in &self.strings {
-            let str_len = xlunicode_string_len(s);
-            if chunk_len + str_len > BIFF_MAX_RECORD_BODY {
+        for entry in &self.entries {
+            let entry_len = sst_entry_len(entry);
+            if chunk_len + entry_len > BIFF_MAX_RECORD_BODY {
                 chunks.push((chunk_start, chunk_len));
                 chunk_start = cursor;
                 chunk_len = 0;
             }
-            chunk_len += str_len;
-            cursor += str_len;
+            chunk_len += entry_len;
+            cursor += entry_len;
         }
         if chunk_len > 0 {
             chunks.push((chunk_start, chunk_len));
@@ -893,6 +1032,63 @@ fn xlunicode_string_len(s: &str) -> usize {
         units.len()
     };
     2 + 1 + chars_len
+}
+
+/// Length of an SST entry on disk: plain entries are
+/// cch + flags + chars; rich entries add a 2-byte cRun count plus
+/// 4 bytes per formatting run inserted between the flags byte and
+/// the character data.
+fn sst_entry_len(entry: &SstEntry) -> usize {
+    let plain = xlunicode_string_len(&entry.text);
+    match &entry.kind {
+        SstEntryKind::Plain => plain,
+        SstEntryKind::Rich(runs) => plain + 2 + runs.len() * 4,
+    }
+}
+
+fn push_sst_entry(buf: &mut Vec<u8>, entry: &SstEntry) -> XlsResult<()> {
+    match &entry.kind {
+        SstEntryKind::Plain => push_xlunicode_string(buf, &entry.text),
+        SstEntryKind::Rich(runs) => push_rich_xlunicode_string(buf, &entry.text, runs),
+    }
+}
+
+/// Emit a rich `XLUnicodeRichExtendedString`: cch + flags (with
+/// fRichSt bit set) + cRun + chars + run array. Each run is
+/// (char_pos u16, font_idx u16) = 4 bytes.
+fn push_rich_xlunicode_string(buf: &mut Vec<u8>, s: &str, runs: &[(u16, u16)]) -> XlsResult<()> {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    if units.len() > u16::MAX as usize {
+        return Err(XlsError::InvalidFormat(format!(
+            "string of {} UTF-16 units exceeds BIFF8 cch limit (u16)",
+            units.len()
+        )));
+    }
+    if runs.len() > u16::MAX as usize {
+        return Err(XlsError::InvalidFormat(format!(
+            "rich-text run count {} exceeds BIFF8 limit (u16)",
+            runs.len()
+        )));
+    }
+    let high_byte = units.iter().any(|&u| u > 0xFF);
+    buf.extend_from_slice(&(units.len() as u16).to_le_bytes());
+    let flags: u8 = 0x08 | if high_byte { 0x01 } else { 0x00 };
+    buf.push(flags);
+    buf.extend_from_slice(&(runs.len() as u16).to_le_bytes());
+    if high_byte {
+        for u in &units {
+            buf.extend_from_slice(&u.to_le_bytes());
+        }
+    } else {
+        for u in &units {
+            buf.push(*u as u8);
+        }
+    }
+    for (char_pos, font_idx) in runs {
+        buf.extend_from_slice(&char_pos.to_le_bytes());
+        buf.extend_from_slice(&font_idx.to_le_bytes());
+    }
+    Ok(())
 }
 
 /// Emit an `XLUnicodeRichExtendedString` (no rich runs, no ExtRst).
@@ -2393,17 +2589,24 @@ fn write_cell_records(
             CellValue::Boolean(b) => write_boolerr(stream, row16, col, ixfe, u8::from(*b), false),
             CellValue::Error(err) => write_boolerr(stream, row16, col, ixfe, err.code(), true),
             CellValue::String(s) => {
-                if let Some(idx) = sst.lookup(s.as_ref()) {
+                if let Some(idx) = sst.lookup_plain(s.as_ref()) {
                     write_labelsst(stream, row16, col, ixfe, idx);
                 }
             }
             CellValue::RichText(runs) => {
-                let plain: String = runs
-                    .iter()
-                    .map(|r| r.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("");
-                if let Some(idx) = sst.lookup(&plain) {
+                let mut text = String::new();
+                let mut formatting: Vec<(u16, u16)> = Vec::new();
+                for run in runs.iter() {
+                    let char_pos = text.encode_utf16().count().min(u16::MAX as usize) as u16;
+                    if let Some(rf) = &run.font {
+                        let font = run_font_to_font_style(rf);
+                        if let Some(&font_idx) = styles.font_xf_index.get(&font) {
+                            formatting.push((char_pos, font_idx));
+                        }
+                    }
+                    text.push_str(&run.text);
+                }
+                if let Some(idx) = sst.lookup_rich(&text, &formatting) {
                     write_labelsst(stream, row16, col, ixfe, idx);
                 }
             }
