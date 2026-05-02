@@ -60,6 +60,12 @@ const VPAGEBREAKS_RECORD: u16 = 0x001A;
 const SELECTION_RECORD: u16 = 0x001D;
 const SCL_RECORD: u16 = 0x00A0;
 const HLINK_RECORD: u16 = 0x01B8;
+const NAME_RECORD: u16 = 0x0018;
+
+/// Built-in NAME index for `Print_Area` (MS-XLS §2.5.4).
+const BUILTIN_NAME_PRINT_AREA: u8 = 0x06;
+/// Built-in NAME index for `Print_Titles`.
+const BUILTIN_NAME_PRINT_TITLES: u8 = 0x07;
 
 /// Hyperlink CLSID (MS-XLS §2.4.144) - StdLink class id
 /// 79EAC9D0-BAF9-11CE-8C82-00AA004BA90B, on-disk LE-mixed format
@@ -216,6 +222,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         lbplypos_field_offsets.push(body_start);
     }
 
+    write_print_name_records(&mut stream, workbook);
     sst.write_records(&mut stream)?;
     write_eof(&mut stream);
 
@@ -1414,6 +1421,117 @@ fn write_mergecells(stream: &mut Vec<u8>, sheet: &Worksheet) {
         stream.extend_from_slice(&MERGECELLS_RECORD.to_le_bytes());
         stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
         stream.extend_from_slice(&body);
+    }
+}
+
+/// Emit a NAME record (MS-XLS §2.4.176, "Lbl") for each worksheet
+/// that has a Print_Area or Print_Titles set on its page setup. The
+/// record is sheet-scoped (itab = sheet_idx + 1) and uses the
+/// built-in name index byte: 0x06 for Print_Area, 0x07 for
+/// Print_Titles.
+///
+/// Print_Area body: a single tArea3D ptg covering the print area
+/// range. Print_Titles body holds row titles, column titles, or
+/// both:
+///
+///   - rows only: tArea3D(first_row..last_row, col 0..0xFF)
+///   - cols only: tArea3D(row 0..0xFFFF, first_col..last_col)
+///   - both:      tMemFunc + cce + tArea3D(rows) + tArea3D(cols)
+///                + tList
+///
+/// ixti is hardcoded to 0; our XlsReader's extract_filter_db_range
+/// and extract_print_titles ignore the EXTERNSHEET index when
+/// extracting the row/col fields, so the round-trip works without
+/// emitting EXTERNSHEET / SUPBOOK records too.
+fn write_print_name_records(stream: &mut Vec<u8>, workbook: &Workbook) {
+    for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
+        if sheet_idx > u16::MAX as usize - 1 {
+            continue;
+        }
+        let itab = (sheet_idx as u16) + 1;
+        let ps = sheet.page_setup();
+
+        if let Some(range) = ps.print_area.as_ref() {
+            let body = build_print_area_body(range);
+            emit_builtin_name(stream, itab, BUILTIN_NAME_PRINT_AREA, &body);
+        }
+
+        let print_titles_body = build_print_titles_body(ps.repeat_rows, ps.repeat_cols);
+        if !print_titles_body.is_empty() {
+            emit_builtin_name(stream, itab, BUILTIN_NAME_PRINT_TITLES, &print_titles_body);
+        }
+    }
+}
+
+fn emit_builtin_name(stream: &mut Vec<u8>, itab: u16, builtin_index: u8, formula_body: &[u8]) {
+    let cce = formula_body.len() as u16;
+    let mut body = Vec::with_capacity(15 + 2 + formula_body.len());
+    body.extend_from_slice(&0x0020u16.to_le_bytes()); // flags: fBuiltin
+    body.push(0); // chKey
+    body.push(1); // cch (one "character" - the built-in index byte)
+    body.extend_from_slice(&cce.to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes()); // reserved (ixals - external book index)
+    body.extend_from_slice(&itab.to_le_bytes());
+    body.extend_from_slice(&[0u8; 4]); // 4 reserved bytes
+    body.push(0); // name flags: 0 = compressed/Latin-1
+    body.push(builtin_index); // the "character" is actually the built-in index
+    body.extend_from_slice(formula_body);
+
+    stream.extend_from_slice(&NAME_RECORD.to_le_bytes());
+    stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    stream.extend_from_slice(&body);
+}
+
+/// Build a tArea3D ptg body (11 bytes): token + ixti(u16) + first_row
+/// + last_row + first_col + last_col. ixti is 0 (no EXTERNSHEET).
+fn build_t_area_3d(first_row: u16, last_row: u16, first_col: u16, last_col: u16) -> [u8; 11] {
+    let mut buf = [0u8; 11];
+    buf[0] = 0x3B; // tArea3D (R class)
+                   // bytes 1..3: ixti (u16) = 0
+    buf[3..5].copy_from_slice(&first_row.to_le_bytes());
+    buf[5..7].copy_from_slice(&last_row.to_le_bytes());
+    buf[7..9].copy_from_slice(&(first_col & 0x3FFF).to_le_bytes());
+    buf[9..11].copy_from_slice(&(last_col & 0x3FFF).to_le_bytes());
+    buf
+}
+
+fn build_print_area_body(range: &duke_sheets_core::CellRange) -> Vec<u8> {
+    let first_row = range.start.row.min(u16::MAX as u32) as u16;
+    let last_row = range.end.row.min(u16::MAX as u32) as u16;
+    let first_col = range.start.col;
+    let last_col = range.end.col;
+    build_t_area_3d(first_row, last_row, first_col, last_col).to_vec()
+}
+
+fn build_print_titles_body(
+    repeat_rows: Option<(u32, u32)>,
+    repeat_cols: Option<(u16, u16)>,
+) -> Vec<u8> {
+    let row_area = repeat_rows.map(|(r1, r2)| {
+        build_t_area_3d(
+            r1.min(u16::MAX as u32) as u16,
+            r2.min(u16::MAX as u32) as u16,
+            0,
+            0xFF,
+        )
+    });
+    let col_area = repeat_cols.map(|(c1, c2)| build_t_area_3d(0, 0xFFFF, c1, c2));
+
+    match (row_area, col_area) {
+        (None, None) => Vec::new(),
+        (Some(rows), None) => rows.to_vec(),
+        (None, Some(cols)) => cols.to_vec(),
+        (Some(rows), Some(cols)) => {
+            // tMemFunc(0x29) + cce(u16) + rows(11) + cols(11) + tList(0x10)
+            let inner_len: u16 = 11 + 11 + 1;
+            let mut body = Vec::with_capacity(3 + inner_len as usize);
+            body.push(0x29);
+            body.extend_from_slice(&inner_len.to_le_bytes());
+            body.extend_from_slice(&rows);
+            body.extend_from_slice(&cols);
+            body.push(0x10); // tList (range union)
+            body
+        }
     }
 }
 

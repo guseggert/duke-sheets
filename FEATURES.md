@@ -314,9 +314,9 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Fit to width/height | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
 | Margins | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer`, `page_setup_round_trip::page_margins_round_trip` | §18.3.1.59 |
 | Center horizontally / vertically on page | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.61 |
-| Print area | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area` | §18.2.5 |
-| Print titles: repeat rows | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_repeat_rows` | §18.2.5 |
-| Print titles: repeat columns | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_repeat_cols` | §18.2.5 |
+| Print area | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area`, `print_names_round_trip::print_area_round_trips` | §18.2.5 |
+| Print titles: repeat rows | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_repeat_rows`, `print_names_round_trip::repeat_rows_only_round_trips` | §18.2.5 |
+| Print titles: repeat columns | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_repeat_cols`, `print_names_round_trip::repeat_cols_only_round_trips` | §18.2.5 |
 | Print gridlines | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `com_e2e::xls_reader::xls_print_gridlines`, `page_setup_round_trip::print_gridlines_round_trips` | §18.3.1.70 |
 | Print row/column headings | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `com_e2e::xls_reader::xls_print_headings`, `page_setup_round_trip::print_headings_round_trips` | §18.3.1.70 |
 | Black and white printing | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
