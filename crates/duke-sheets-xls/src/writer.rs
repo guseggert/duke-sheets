@@ -59,6 +59,22 @@ const HPAGEBREAKS_RECORD: u16 = 0x001B;
 const VPAGEBREAKS_RECORD: u16 = 0x001A;
 const SELECTION_RECORD: u16 = 0x001D;
 const SCL_RECORD: u16 = 0x00A0;
+const HLINK_RECORD: u16 = 0x01B8;
+
+/// Hyperlink CLSID (MS-XLS §2.4.144) - StdLink class id
+/// 79EAC9D0-BAF9-11CE-8C82-00AA004BA90B, on-disk LE-mixed format
+/// (Data1/2/3 little-endian, Data4 byte-ordered).
+const HLINK_CLSID: [u8; 16] = [
+    0xD0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B,
+];
+
+/// URL moniker CLSID E0C9EA79-F9BA-CE11-8C82-00AA004BA90B in on-disk
+/// LE-mixed format. Identifies the moniker block as a URL rather than
+/// a file path. Must match the reader's URL_MONIKER constant byte-
+/// for-byte; the reader bails to "unknown moniker, skip" otherwise.
+const URL_MONIKER_CLSID: [u8; 16] = [
+    0x79, 0xEA, 0xC9, 0xE0, 0xBA, 0xF9, 0x11, 0xCE, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B,
+];
 
 /// MS-XLS §2.4.169: a single MERGECELLS record can hold at most 1027
 /// merged ranges (8 bytes each, plus the 2-byte cmcs count, fits in
@@ -222,6 +238,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_pane(&mut stream, sheet);
         write_selection_records(&mut stream, sheet);
         write_mergecells(&mut stream, sheet);
+        write_hlink_records(&mut stream, sheet);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
     }
@@ -1398,6 +1415,119 @@ fn write_mergecells(stream: &mut Vec<u8>, sheet: &Worksheet) {
         stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
         stream.extend_from_slice(&body);
     }
+}
+
+/// Emit one HLINK record per cell-attached hyperlink (MS-XLS §2.4.144).
+///
+/// Body layout:
+///   - Ref8U (8 bytes): row_first/row_last/col_first/col_last (u16
+///     each); single-cell hyperlinks use row_first==row_last and
+///     col_first==col_last.
+///   - HLINK CLSID (16 bytes).
+///   - streamVersion (4 bytes) = 0x00000002.
+///   - flags (4 bytes): bit 0 has_moniker, bit 1 is_absolute,
+///     bit 3 has_location, bit 4 has_display, bit 7 has_frame.
+///   - displayName (only when bit 4 set): char_count(u32) + UTF-16LE
+///     chars + 0x0000 terminator.
+///   - frameName (when bit 7 set): same encoding.
+///   - moniker (when bit 0 set): URL_MONIKER_CLSID + url_byte_len(u32)
+///     + UTF-16LE chars + 0x0000 terminator.
+///   - location (when bit 3 set): char_count(u32) + UTF-16LE chars +
+///     0x0000 terminator.
+///
+/// Internal `#Sheet!A1` targets are emitted with no moniker but a
+/// location string. URL-style targets use the URL moniker. File
+/// monikers and other types are not yet emitted; the reader can read
+/// them but the writer round-trips file paths via the URL path.
+fn write_hlink_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    use duke_sheets_core::CellAddress;
+
+    let mut entries: Vec<(CellAddress, &duke_sheets_core::Hyperlink)> =
+        sheet.hyperlinks().iter().map(|(a, h)| (*a, h)).collect();
+    entries.sort_by_key(|(addr, _)| (addr.row, addr.col));
+
+    for (addr, hyperlink) in entries {
+        if addr.row > u16::MAX as u32 {
+            continue;
+        }
+        let mut body = Vec::with_capacity(64);
+        body.extend_from_slice(&(addr.row as u16).to_le_bytes());
+        body.extend_from_slice(&(addr.row as u16).to_le_bytes()); // row_last
+        body.extend_from_slice(&addr.col.to_le_bytes());
+        body.extend_from_slice(&addr.col.to_le_bytes()); // col_last
+        body.extend_from_slice(&HLINK_CLSID);
+        body.extend_from_slice(&2u32.to_le_bytes()); // streamVersion
+
+        let target = hyperlink.target.as_str();
+        let is_internal = target.starts_with('#') || target.is_empty();
+        let location_text: Option<String> = if is_internal {
+            if target.starts_with('#') {
+                Some(target[1..].to_string())
+            } else {
+                hyperlink.location.clone()
+            }
+        } else {
+            hyperlink.location.clone()
+        };
+
+        let display = hyperlink.display.as_deref();
+
+        let mut flags: u32 = 0;
+        if !is_internal {
+            flags |= 0x0001 | 0x0002; // has_moniker + is_absolute
+        }
+        if location_text.is_some() {
+            flags |= 0x0008;
+        }
+        if display.is_some() {
+            flags |= 0x0014; // has_display + has_text-mark
+        }
+        body.extend_from_slice(&flags.to_le_bytes());
+
+        if let Some(text) = display {
+            push_hlink_string(&mut body, text);
+        }
+
+        if !is_internal {
+            body.extend_from_slice(&URL_MONIKER_CLSID);
+            push_url_moniker_payload(&mut body, target);
+        }
+
+        if let Some(loc) = location_text.as_deref() {
+            push_hlink_string(&mut body, loc);
+        }
+
+        stream.extend_from_slice(&HLINK_RECORD.to_le_bytes());
+        stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        stream.extend_from_slice(&body);
+    }
+}
+
+/// Encode a length-prefixed UTF-16LE string for HLINK record fields
+/// (displayName, frameName, location). Format: char_count(u32,
+/// includes null terminator) + UTF-16LE chars + 0x0000.
+fn push_hlink_string(buf: &mut Vec<u8>, s: &str) {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    let total_chars = (units.len() + 1) as u32; // include null
+    buf.extend_from_slice(&total_chars.to_le_bytes());
+    for u in &units {
+        buf.extend_from_slice(&u.to_le_bytes());
+    }
+    buf.extend_from_slice(&0u16.to_le_bytes()); // null terminator
+}
+
+/// Encode the URL moniker payload following the URL_MONIKER_CLSID:
+/// byte_len(u32, includes the null terminator's 2 bytes) + UTF-16LE
+/// chars + 0x0000. Note: the URL moniker uses BYTE length, not char
+/// count, unlike the regular HLINK strings.
+fn push_url_moniker_payload(buf: &mut Vec<u8>, url: &str) {
+    let units: Vec<u16> = url.encode_utf16().collect();
+    let byte_len = ((units.len() + 1) * 2) as u32; // include null
+    buf.extend_from_slice(&byte_len.to_le_bytes());
+    for u in &units {
+        buf.extend_from_slice(&u.to_le_bytes());
+    }
+    buf.extend_from_slice(&0u16.to_le_bytes()); // null terminator
 }
 
 /// Emit cell records (BLANK, NUMBER, BOOLERR, LABELSST, FORMULA) for

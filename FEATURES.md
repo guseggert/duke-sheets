@@ -175,8 +175,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| External URL hyperlinks | R✔ W● | R✔ W✖ | R✔ W✖ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*` | §18.3.1.36 | Reader preserves; writer round-trip incomplete |
-| Internal hyperlinks (Sheet!A1) | R✔ W● | R✔ W✖ | R✔ W✖ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*` | §18.3.1.36 | |
+| External URL hyperlinks | R✔ W● | R✔ W✖ | R✔ W✔ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*`, `hyperlinks_round_trip::external_url_hyperlink_round_trips` | §18.3.1.36 | Reader preserves; XLSX writer round-trip incomplete |
+| Internal hyperlinks (Sheet!A1) | R✔ W● | R✔ W✖ | R✔ W✔ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*`, `hyperlinks_round_trip::internal_hash_target_round_trips` | §18.3.1.36 | |
 | Mailto hyperlinks | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
 | Hyperlink tooltips | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
 | Hyperlink display text | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
