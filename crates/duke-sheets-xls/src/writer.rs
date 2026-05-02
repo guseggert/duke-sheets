@@ -61,11 +61,15 @@ const SELECTION_RECORD: u16 = 0x001D;
 const SCL_RECORD: u16 = 0x00A0;
 const HLINK_RECORD: u16 = 0x01B8;
 const NAME_RECORD: u16 = 0x0018;
+const AUTOFILTER_RECORD: u16 = 0x009E;
+const FILTERMODE_RECORD: u16 = 0x009B;
 
 /// Built-in NAME index for `Print_Area` (MS-XLS §2.5.4).
 const BUILTIN_NAME_PRINT_AREA: u8 = 0x06;
 /// Built-in NAME index for `Print_Titles`.
 const BUILTIN_NAME_PRINT_TITLES: u8 = 0x07;
+/// Built-in NAME index for `_FilterDatabase` (the AutoFilter range).
+const BUILTIN_NAME_FILTER_DATABASE: u8 = 0x0D;
 
 /// Hyperlink CLSID (MS-XLS §2.4.144) - StdLink class id
 /// 79EAC9D0-BAF9-11CE-8C82-00AA004BA90B, on-disk LE-mixed format
@@ -246,6 +250,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_selection_records(&mut stream, sheet);
         write_mergecells(&mut stream, sheet);
         write_hlink_records(&mut stream, sheet);
+        write_autofilter_records(&mut stream, sheet);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
     }
@@ -1460,6 +1465,11 @@ fn write_print_name_records(stream: &mut Vec<u8>, workbook: &Workbook) {
         if !print_titles_body.is_empty() {
             emit_builtin_name(stream, itab, BUILTIN_NAME_PRINT_TITLES, &print_titles_body);
         }
+
+        if let Some(af) = sheet.auto_filter() {
+            let body = build_print_area_body(&af.range);
+            emit_builtin_name(stream, itab, BUILTIN_NAME_FILTER_DATABASE, &body);
+        }
     }
 }
 
@@ -1618,6 +1628,159 @@ fn write_hlink_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
         stream.extend_from_slice(&HLINK_RECORD.to_le_bytes());
         stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
         stream.extend_from_slice(&body);
+    }
+}
+
+/// Emit a FILTERMODE record (1 byte body of zero) plus one AUTOFILTER
+/// record per FilterColumn when the worksheet has an auto-filter set.
+/// FILTERMODE indicates the worksheet has filtering active; the
+/// AUTOFILTER body carries per-column criteria.
+///
+/// AUTOFILTER body (24 bytes minimum + variable strings):
+///   bytes 0..2  - i_entry (column offset within the filter range)
+///   bytes 2..4  - flags:
+///       bits 0-1 - 0x01 = OR-join the two dopers (else AND)
+///       bit 4    - fTopN
+///       bit 5    - fTop (top vs bottom for top-N)
+///       bit 6    - fPercent
+///       bits 7-15 - wTopN value
+///   bytes 4..14 - doper1 (vt + op + 8-byte payload)
+///   bytes 14..24 - doper2
+///   bytes 24..  - inline strings for any string-typed dopers
+fn write_autofilter_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    use duke_sheets_core::auto_filter::{ColumnFilter, FilterOperator};
+
+    let Some(af) = sheet.auto_filter() else {
+        return;
+    };
+
+    stream.extend_from_slice(&FILTERMODE_RECORD.to_le_bytes());
+    stream.extend_from_slice(&0u16.to_le_bytes());
+
+    for column in &af.filter_columns {
+        if column.col_id > u16::MAX as u32 {
+            continue;
+        }
+        let mut body = Vec::with_capacity(32);
+        body.extend_from_slice(&(column.col_id as u16).to_le_bytes());
+
+        let mut flags: u16 = 0;
+        let mut doper1 = [0u8; 10];
+        let mut doper2 = [0u8; 10];
+        let mut trailing_strings: Vec<String> = Vec::new();
+
+        match &column.filter {
+            ColumnFilter::Top10(t) => {
+                flags |= 0x0010; // fTopN
+                if t.top {
+                    flags |= 0x0020;
+                }
+                if t.percent {
+                    flags |= 0x0040;
+                }
+                let n = (t.val as u16) & 0x01FF;
+                flags |= n << 7;
+            }
+            ColumnFilter::Custom(c) => {
+                if !c.and {
+                    flags |= 0x0001; // OR-join
+                }
+                if let Some(cond) = c.conditions.first() {
+                    encode_custom_condition(cond, &mut doper1, &mut trailing_strings);
+                }
+                if let Some(cond) = c.conditions.get(1) {
+                    encode_custom_condition(cond, &mut doper2, &mut trailing_strings);
+                }
+            }
+            ColumnFilter::Values(v) => {
+                flags |= 0x0001; // OR-join (Values are matched as Equal+OR)
+                if let Some(value) = v.values.first() {
+                    encode_custom_condition(
+                        &duke_sheets_core::auto_filter::CustomFilterCondition {
+                            operator: FilterOperator::Equal,
+                            value: value.clone(),
+                        },
+                        &mut doper1,
+                        &mut trailing_strings,
+                    );
+                }
+                if let Some(value) = v.values.get(1) {
+                    encode_custom_condition(
+                        &duke_sheets_core::auto_filter::CustomFilterCondition {
+                            operator: FilterOperator::Equal,
+                            value: value.clone(),
+                        },
+                        &mut doper2,
+                        &mut trailing_strings,
+                    );
+                }
+            }
+            ColumnFilter::Dynamic(_) | ColumnFilter::Color(_) => {
+                // Reader doesn't decode these from BIFF8 today; skip
+                // emit so we don't create records that won't round-
+                // trip via XlsReader.
+                continue;
+            }
+        }
+
+        body.extend_from_slice(&flags.to_le_bytes());
+        body.extend_from_slice(&doper1);
+        body.extend_from_slice(&doper2);
+        for s in &trailing_strings {
+            push_autofilter_string(&mut body, s);
+        }
+
+        stream.extend_from_slice(&AUTOFILTER_RECORD.to_le_bytes());
+        stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        stream.extend_from_slice(&body);
+    }
+}
+
+/// Encode a `CustomFilterCondition` into a 10-byte doper. Numeric
+/// conditions store the value inline (vt=0x04, IEEE 754 f64). String
+/// conditions emit vt=0x06 with cch in payload[4]; the actual UTF-8
+/// string is collected into `trailing_strings` and appended to the
+/// AUTOFILTER record body in order.
+fn encode_custom_condition(
+    cond: &duke_sheets_core::auto_filter::CustomFilterCondition,
+    doper: &mut [u8; 10],
+    trailing_strings: &mut Vec<String>,
+) {
+    use duke_sheets_core::auto_filter::FilterOperator;
+
+    doper[1] = match cond.operator {
+        FilterOperator::LessThan => 0x01,
+        FilterOperator::Equal => 0x02,
+        FilterOperator::LessThanOrEqual => 0x03,
+        FilterOperator::GreaterThan => 0x04,
+        FilterOperator::NotEqual => 0x05,
+        FilterOperator::GreaterThanOrEqual => 0x06,
+    };
+
+    if let Ok(n) = cond.value.parse::<f64>() {
+        doper[0] = 0x04; // f64
+        doper[2..10].copy_from_slice(&n.to_le_bytes());
+    } else {
+        doper[0] = 0x06; // string
+        let units = cond.value.encode_utf16().count() as u8;
+        doper[6] = units; // cch lives at offset 4 of payload, i.e. doper[6]
+        trailing_strings.push(cond.value.clone());
+    }
+}
+
+fn push_autofilter_string(buf: &mut Vec<u8>, s: &str) {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    let high_byte = units.iter().any(|&u| u > 0xFF);
+    if high_byte {
+        buf.push(0x01);
+        for u in &units {
+            buf.extend_from_slice(&u.to_le_bytes());
+        }
+    } else {
+        buf.push(0x00);
+        for u in &units {
+            buf.push(*u as u8);
+        }
     }
 }
 
