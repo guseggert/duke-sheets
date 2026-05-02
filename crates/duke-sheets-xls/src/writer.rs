@@ -269,8 +269,8 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_mergecells(&mut stream, sheet);
         write_hlink_records(&mut stream, sheet);
         write_autofilter_records(&mut stream, sheet);
-        write_data_validations(&mut stream, sheet);
-        write_conditional_formats(&mut stream, sheet);
+        write_data_validations(&mut stream, sheet, &externsheet_table, &name_table);
+        write_conditional_formats(&mut stream, sheet, &externsheet_table, &name_table);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
     }
@@ -1999,7 +1999,12 @@ fn push_autofilter_string(buf: &mut Vec<u8>, s: &str) {
 /// The reader keeps the most recent CONDFMT range list and applies it
 /// to subsequent CF records, so we emit them as alternating
 /// CONDFMT → CF pairs to keep the mapping unambiguous.
-fn write_conditional_formats(stream: &mut Vec<u8>, sheet: &Worksheet) {
+fn write_conditional_formats(
+    stream: &mut Vec<u8>,
+    sheet: &Worksheet,
+    externsheet: &ExternSheetTable,
+    names: &NameTable,
+) {
     use duke_sheets_core::conditional_format::{CfOperator, CfRuleType};
 
     for rule in sheet.conditional_formats() {
@@ -2069,8 +2074,12 @@ fn write_conditional_formats(stream: &mut Vec<u8>, sheet: &Worksheet) {
             _ => continue, // skip rule types we don't know how to emit
         };
 
-        let f1 = formula1_text.map(encode_dv_formula).unwrap_or_default();
-        let f2 = formula2_text.map(encode_dv_formula).unwrap_or_default();
+        let f1 = formula1_text
+            .map(|t| encode_dv_formula(t, externsheet, names))
+            .unwrap_or_default();
+        let f2 = formula2_text
+            .map(|t| encode_dv_formula(t, externsheet, names))
+            .unwrap_or_default();
 
         let mut cf_body = Vec::with_capacity(6 + f1.len() + f2.len());
         cf_body.push(ct);
@@ -2110,7 +2119,12 @@ fn write_conditional_formats(stream: &mut Vec<u8>, sheet: &Worksheet) {
 ///   cce1 (u16) + unused (u16) + formula1 ptgs
 ///   cce2 (u16) + unused (u16) + formula2 ptgs
 ///   range_count (u16) + N × Ref8U (8 bytes: r1/r2/c1/c2 u16)
-fn write_data_validations(stream: &mut Vec<u8>, sheet: &Worksheet) {
+fn write_data_validations(
+    stream: &mut Vec<u8>,
+    sheet: &Worksheet,
+    externsheet: &ExternSheetTable,
+    names: &NameTable,
+) {
     use duke_sheets_core::validation::{ValidationErrorStyle, ValidationOperator, ValidationType};
 
     let validations = sheet.data_validations();
@@ -2209,12 +2223,16 @@ fn write_data_validations(stream: &mut Vec<u8>, sheet: &Worksheet) {
             ValidationType::None => (None, None),
         };
 
-        let formula1 = value1.map(encode_dv_formula).unwrap_or_default();
+        let formula1 = value1
+            .map(|t| encode_dv_formula(t, externsheet, names))
+            .unwrap_or_default();
         body.extend_from_slice(&(formula1.len() as u16).to_le_bytes());
         body.extend_from_slice(&0u16.to_le_bytes()); // unused
         body.extend_from_slice(&formula1);
 
-        let formula2 = value2.map(encode_dv_formula).unwrap_or_default();
+        let formula2 = value2
+            .map(|t| encode_dv_formula(t, externsheet, names))
+            .unwrap_or_default();
         body.extend_from_slice(&(formula2.len() as u16).to_le_bytes());
         body.extend_from_slice(&0u16.to_le_bytes()); // unused
         body.extend_from_slice(&formula2);
@@ -2272,7 +2290,7 @@ fn push_dv_unicode_string(buf: &mut Vec<u8>, s: &str) {
 ///     formula expression. Fall back to a single tStr ptg that
 ///     decompiles back to a quoted string; the reader strips the
 ///     surrounding quotes when the fExplicit-list flag is set.
-fn encode_dv_formula(value: &str) -> Vec<u8> {
+fn encode_dv_formula(value: &str, externsheet: &ExternSheetTable, names: &NameTable) -> Vec<u8> {
     if value.is_empty() {
         return Vec::new();
     }
@@ -2283,7 +2301,7 @@ fn encode_dv_formula(value: &str) -> Vec<u8> {
     };
     if let Ok(expr) = duke_sheets_formula::parse_formula(&to_parse) {
         let mut bytes = Vec::new();
-        if compile_ptgs(&expr, &mut bytes).is_ok() {
+        if compile_ptgs_with_context(&expr, &mut bytes, externsheet, names).is_ok() {
             return bytes;
         }
     }

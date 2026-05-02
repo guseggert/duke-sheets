@@ -257,7 +257,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
 | List validation (inline values) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_list`, `data_validation_round_trip::list_inline_values_round_trip` | §18.3.1.32 |
-| List validation (cell-range source) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_e2e::data_validation::list_validation` | §18.3.1.32 |
+| List validation (cell-range source) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::data_validation::list_validation`, `data_validation_round_trip::list_cell_range_source_round_trips` | §18.3.1.32 |
 | List validation (named range source) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
 | Whole number validation | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_number`, `data_validation_round_trip::whole_number_between_round_trips` | §18.3.1.32 |
 | Decimal validation | R● W● | R● W● | R● W● | R✖ W✖ | `xlsx_e2e::data_validation::whole_number_validation`, `data_validation_round_trip::decimal_validation_round_trips` | §18.3.1.32 | XLS round-trips numeric value through a parse-and-recompile cycle; lossy for non-trivial precision |

@@ -52,6 +52,44 @@ fn list_inline_values_round_trip() {
 }
 
 #[test]
+fn list_cell_range_source_round_trips() {
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "Lookup").expect("rename");
+    wb.add_worksheet_with_name("Form").expect("add");
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_cell_value("A1", "Yes")
+        .expect("A1");
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_cell_value("A2", "No")
+        .expect("A2");
+
+    let mut v = DataValidation::list("=Lookup!$A$1:$A$2");
+    v.ranges = vec![range("B1", "B5")];
+    wb.worksheet_mut(1).unwrap().add_data_validation(v);
+
+    let parsed = write_then_read(&wb);
+    let validations = parsed.worksheet_by_name("Form").unwrap().data_validations();
+    assert_eq!(validations.len(), 1);
+    match &validations[0].validation_type {
+        ValidationType::List { source } => {
+            assert!(source.contains("Lookup"), "got {source:?}");
+            // Reader emits absolute refs as $A$1; tolerate both styles.
+            assert!(
+                source.contains("A1") || source.contains("$A$1"),
+                "got {source:?}"
+            );
+            assert!(
+                source.contains("A2") || source.contains("$A$2"),
+                "got {source:?}"
+            );
+        }
+        other => panic!("expected List with cell-range source, got {other:?}"),
+    }
+}
+
+#[test]
 fn whole_number_between_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
