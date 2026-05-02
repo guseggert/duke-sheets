@@ -17,3 +17,4 @@ tracing.workspace = true
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile.workspace = true
 duke-sheets = { path = "../duke-sheets", features = ["xlsx"] }
+duke-sheets-test-harness.workspace = true

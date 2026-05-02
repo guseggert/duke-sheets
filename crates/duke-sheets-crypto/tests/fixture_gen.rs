@@ -40,11 +40,10 @@
 //! via the COM bridge, or bespoke header construction). Those fixtures
 //! land when those phases are ready to consume them.
 
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use duke_sheets_libreoffice::bridge::LibreOfficeBridge;
+use duke_sheets_test_harness::lo::{ensure_lo, SHARED_DIR};
 
 /// Canonical password used for every encrypted fixture this test emits.
 /// Kept short and ASCII to keep KDF cost down on the LO side; the crypto
@@ -63,17 +62,6 @@ fn fixtures_dir() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("tests/fixtures");
     p
-}
-
-/// Path shared with the LibreOffice Docker container. When LO runs in a
-/// container we must write to a bind-mounted directory so the host can
-/// read the output back. Matches the pattern in
-/// `crates/duke-sheets-xlsx/tests/e2e/common.rs`.
-const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
-
-fn lo_available() -> bool {
-    TcpStream::connect_timeout(&"127.0.0.1:2002".parse().unwrap(), Duration::from_secs(2))
-        .is_ok()
 }
 
 /// Copy a file produced by LibreOffice (inside the shared Docker volume)
@@ -139,11 +127,7 @@ async fn build_and_save(path: &str, variant: SaveVariant<'_>) -> Result<(), Stri
 #[test]
 #[ignore = "requires running LibreOffice on 127.0.0.1:2002"]
 fn generate_ooxml_agile_aes256_fixture() {
-    if !lo_available() {
-        eprintln!("SKIP: LibreOffice URP not reachable on 127.0.0.1:2002");
-        return;
-    }
-    std::fs::create_dir_all(SHARED_DIR).expect("create shared dir");
+    ensure_lo();
 
     let shared_enc = PathBuf::from(format!("{SHARED_DIR}/agile_aes256.xlsx"));
     let shared_plain = PathBuf::from(format!("{SHARED_DIR}/agile_aes256.plain.xlsx"));
@@ -194,11 +178,7 @@ fn generate_ooxml_agile_aes256_fixture() {
 #[test]
 #[ignore = "requires running LibreOffice on 127.0.0.1:2002"]
 fn generate_xls_rc4_cryptoapi_fixture() {
-    if !lo_available() {
-        eprintln!("SKIP: LibreOffice URP not reachable on 127.0.0.1:2002");
-        return;
-    }
-    std::fs::create_dir_all(SHARED_DIR).expect("create shared dir");
+    ensure_lo();
 
     let shared_enc = PathBuf::from(format!("{SHARED_DIR}/xls_rc4_cryptoapi.xls"));
     let shared_plain = PathBuf::from(format!("{SHARED_DIR}/xls_rc4_cryptoapi.plain.xls"));

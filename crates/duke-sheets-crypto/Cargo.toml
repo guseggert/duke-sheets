@@ -42,5 +42,6 @@ duke-sheets-xls = { path = "../duke-sheets-xls" }
 # doesn't need a running LibreOffice unless someone is explicitly
 # regenerating fixtures.
 duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
+duke-sheets-test-harness.workspace = true
 libreoffice-urp = { path = "../libreoffice-urp" }
 tokio = { version = "1", features = ["rt", "sync", "net", "macros"] }

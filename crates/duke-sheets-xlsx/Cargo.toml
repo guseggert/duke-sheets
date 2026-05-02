@@ -25,5 +25,6 @@ log.workspace = true
 tempfile.workspace = true
 pretty_assertions.workspace = true
 duke-sheets-libreoffice = { path = "../duke-sheets-libreoffice" }
+duke-sheets-test-harness.workspace = true
 libreoffice-urp = { path = "../libreoffice-urp" }
 tokio = { version = "1", features = ["full", "test-util"] }

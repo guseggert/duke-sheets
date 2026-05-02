@@ -15,9 +15,7 @@ use std::sync::{Mutex, OnceLock};
 
 use base64::prelude::*;
 use duke_sheets_excel_com::{ExcelBridge, ExcelBridgeConfig};
-
-/// Host-side directory for downloaded test fixtures.
-const HOST_DIR: &str = "/tmp/duke-sheets-excel";
+use duke_sheets_test_harness::excel::{ensure_excel_bridge, SHARED_DIR as HOST_DIR};
 
 /// VM-side directory where Excel saves files.
 const VM_DIR: &str = r"C:\temp";
@@ -28,16 +26,13 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Global bridge connection, initialized once and shared across tests.
 static BRIDGE: OnceLock<Mutex<ExcelBridge>> = OnceLock::new();
 
-/// Get the global Excel bridge, connecting on first call.
-///
-/// Panics if the bridge server is not available - tests require a running
-/// Windows VM with the bridge server on localhost:9876.
+/// Get the global Excel bridge, auto-starting the Windows VM on first
+/// call if the bridge isn't already responsive. Panics on timeout.
 pub fn excel_bridge() -> &'static Mutex<ExcelBridge> {
     BRIDGE.get_or_init(|| {
-        let bridge = ExcelBridge::connect(ExcelBridgeConfig::default()).expect(
-            "Failed to connect to Excel COM bridge on localhost:9876. \
-             Start the VM with: bash tools/vm/qemu-start.sh",
-        );
+        ensure_excel_bridge();
+        let bridge = ExcelBridge::connect(ExcelBridgeConfig::default())
+            .expect("Failed to connect to Excel COM bridge on localhost:9876");
         Mutex::new(bridge)
     })
 }

@@ -1,49 +1,17 @@
 //! Integration tests for the LibreOffice URP bridge.
 //!
-//! These tests require a running LibreOffice instance with a URP socket listener.
-//! They are gated behind either:
-//!
-//! 1. A manually-started LibreOffice:
-//!    soffice --headless --accept="socket,host=localhost,port=2002;urp;StarOffice.ComponentContext"
-//!
-//! 2. The Docker-based setup (reuses the duke-sheets-pyuno image):
-//!    docker run --rm -p 2002:2002 duke-sheets-pyuno /app/run.sh --idle
-//!
-//! 3. The mise task:
-//!    mise run test:urp
-//!
-//! If LibreOffice is not reachable on localhost:2002, all tests are skipped.
+//! These tests need a LibreOffice URP listener on localhost:2002.
+//! `duke_sheets_test_harness::lo::ensure_lo()` is called at the top of
+//! every test and auto-starts the docker container if it isn't already
+//! running. There is no silent-skip path: if the container can't be
+//! brought up the test panics.
 
 use duke_sheets::prelude::*;
-
-/// Check if a LibreOffice URP listener is available on localhost:2002.
-fn urp_available() -> bool {
-    std::net::TcpStream::connect_timeout(
-        &"127.0.0.1:2002".parse().unwrap(),
-        std::time::Duration::from_secs(2),
-    )
-    .is_ok()
-}
-
-/// Skip this test if URP is not available.
-macro_rules! skip_if_no_urp {
-    () => {
-        if !urp_available() {
-            eprintln!(
-                "SKIP: LibreOffice URP not available on localhost:2002.\n\
-                 Start LibreOffice with:\n  \
-                 soffice --headless --accept=\"socket,host=localhost,port=2002;urp;StarOffice.ComponentContext\"\n\
-                 Or use Docker:\n  \
-                 mise run urp:start"
-            );
-            return;
-        }
-    };
-}
+use duke_sheets_test_harness::lo::ensure_lo;
 
 #[tokio::test]
 async fn test_connect_and_bootstrap() {
-    skip_if_no_urp!();
+    ensure_lo();
 
     let bridge = duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002).await;
     match bridge {
@@ -59,7 +27,7 @@ async fn test_connect_and_bootstrap() {
 
 #[tokio::test]
 async fn test_create_workbook_and_set_cells() {
-    skip_if_no_urp!();
+    ensure_lo();
 
     let mut bridge = duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002)
         .await
@@ -101,7 +69,7 @@ async fn test_create_workbook_and_set_cells() {
 
 #[tokio::test]
 async fn test_save_and_read_back_with_duke_sheets() {
-    skip_if_no_urp!();
+    ensure_lo();
 
     let mut bridge = duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002)
         .await
@@ -203,7 +171,7 @@ async fn test_save_and_read_back_with_duke_sheets() {
 
 #[tokio::test]
 async fn test_set_array_formula() {
-    skip_if_no_urp!();
+    ensure_lo();
 
     let mut bridge = duke_sheets_libreoffice::LibreOfficeBridge::connect("localhost", 2002)
         .await
