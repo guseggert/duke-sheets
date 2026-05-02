@@ -33,8 +33,8 @@
 | Cell references (A1) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `formula_evaluation::test_evaluate_with_cell_references`, `formula_round_trip::range_reference_in_formula_round_trips` | §18.17.2.3 |
 | Range references (A1:B2) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `formula_evaluation::test_evaluate_with_range_references`, `formula_round_trip::sum_function_round_trips` | §18.17.2.3 |
 | Full row/column refs (A:A, 1:1) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `formula_evaluation::test_evaluate_sum`, `formula_round_trip::full_column_ref_round_trips_clamped_to_biff8_row_limit`, `formula_round_trip::full_row_ref_round_trips_with_biff8_col_extent` | §18.17.2.3 |
-| Cross-sheet references | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_ref` | §18.17.2.3 |
-| Quoted sheet names | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_quoted_name` | §18.17.2.3 |
+| Cross-sheet references | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_ref`, `cross_sheet_formula_round_trip::cross_sheet_cell_ref_round_trips` | §18.17.2.3 |
+| Quoted sheet names | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_quoted_name`, `cross_sheet_formula_round_trip::quoted_sheet_name_round_trips` | §18.17.2.3 |
 | 3D references (Sheet1:Sheet3!A1) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.3 | Parses but evaluation limited |
 | Named range refs in formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression` | §18.2.5 |
 | Structured references (tables) | R✔ W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_with_calculated_column` | §18.17.2.3 | XLSB compiler drops structured refs |
@@ -203,7 +203,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Sheet-scoped names | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges` | §18.2.5 |
 | Names with formula bodies | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression` | §18.2.5 |
 | Names referencing ranges | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges` | §18.2.5 |
-| Hidden / built-in names (_xlnm.*) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area` | §18.2.5 |
+| Hidden / built-in names (_xlnm.*) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area`, `print_names_round_trip::print_area_round_trips` | §18.2.5 |
 | Names with comments | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.2.5 |
 
 ## Tables
