@@ -233,7 +233,9 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     }
 
     let externsheet_table = build_externsheet_table(workbook);
+    let name_table = build_name_table(workbook);
     write_supbook_and_externsheet(&mut stream, workbook, &externsheet_table);
+    write_user_name_records(&mut stream, workbook, &externsheet_table, &name_table);
     write_print_name_records(&mut stream, workbook);
     sst.write_records(&mut stream)?;
     write_eof(&mut stream);
@@ -253,6 +255,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
             &sst,
             &styles,
             &externsheet_table,
+            &name_table,
         );
         write_page_break_records(&mut stream, sheet);
         write_header_footer_records(&mut stream, sheet);
@@ -1465,6 +1468,124 @@ fn write_mergecells(stream: &mut Vec<u8>, sheet: &Worksheet) {
 /// and extract_print_titles ignore the EXTERNSHEET index when
 /// extracting the row/col fields, so the round-trip works without
 /// emitting EXTERNSHEET / SUPBOOK records too.
+/// Maps user-defined name strings to their 1-based NAME table index
+/// (the value embedded in tName ptgs). Names are matched case-
+/// insensitively to mirror Excel's name resolution.
+#[derive(Debug, Default)]
+struct NameTable {
+    by_name: HashMap<String, u16>,
+}
+
+impl NameTable {
+    fn idx_for_name(&self, name: &str) -> Option<u16> {
+        self.by_name.get(&name.to_ascii_lowercase()).copied()
+    }
+}
+
+fn build_name_table(workbook: &Workbook) -> NameTable {
+    let mut by_name = HashMap::new();
+    for (i, nr) in workbook.named_ranges().iter().enumerate() {
+        if i >= u16::MAX as usize {
+            break;
+        }
+        // Names are 1-based in tName ptg encoding.
+        by_name.insert(nr.name.to_ascii_lowercase(), (i as u16) + 1);
+    }
+    NameTable { by_name }
+}
+
+/// Emit one NAME record (MS-XLS §2.4.176, Lbl) per user-defined named
+/// range in the workbook. Layout:
+///
+///   flags (u16)    - 0 for visible, 0x0001 fHidden if NamedRange.hidden
+///   chKey (u8)     - 0
+///   cch (u8)       - name string length (UTF-16 code units)
+///   cce (u16)      - formula body length
+///   reserved (u16) - 0
+///   itab (u16)     - 0 for workbook scope, sheet_idx + 1 for sheet
+///                    scope; the reader maps itab=0 -> 0xFFFFFFFF
+///                    sheet_idx (workbook), else sheet_idx = itab - 1
+///   reserved (u32) - 0
+///   name string    - flags byte (0=Latin1, 1=UTF-16) + chars
+///   formula body   - parsed via duke-sheets-formula and recompiled
+///                    via compile_ptgs_with_context. parse failures
+///                    emit no formula body (cce = 0) so the reader
+///                    sees the name without a body.
+fn write_user_name_records(
+    stream: &mut Vec<u8>,
+    workbook: &Workbook,
+    externsheet: &ExternSheetTable,
+    name_table: &NameTable,
+) {
+    use duke_sheets_core::named_range::NameScope;
+
+    for nr in workbook.named_ranges().iter() {
+        let name_units: Vec<u16> = nr.name.encode_utf16().collect();
+        if name_units.is_empty() || name_units.len() > u8::MAX as usize {
+            continue;
+        }
+
+        let formula_body: Vec<u8> = {
+            let to_parse = if nr.refers_to.starts_with('=') {
+                nr.refers_to.clone()
+            } else {
+                format!("={}", nr.refers_to)
+            };
+            if let Ok(expr) = duke_sheets_formula::parse_formula(&to_parse) {
+                let mut bytes = Vec::new();
+                if compile_ptgs_with_context(&expr, &mut bytes, externsheet, name_table).is_ok() {
+                    bytes
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        };
+
+        let mut flags: u16 = 0;
+        if nr.hidden {
+            flags |= 0x0001;
+        }
+        let itab: u16 = match nr.scope {
+            NameScope::Workbook => 0,
+            NameScope::Sheet(idx) => (idx.min(u16::MAX as usize) as u16) + 1,
+        };
+
+        let high_byte = name_units.iter().any(|&u| u > 0xFF);
+        let name_bytes_len = if high_byte {
+            1 + name_units.len() * 2
+        } else {
+            1 + name_units.len()
+        };
+
+        let mut body = Vec::with_capacity(15 + name_bytes_len + formula_body.len());
+        body.extend_from_slice(&flags.to_le_bytes());
+        body.push(0); // chKey
+        body.push(name_units.len() as u8);
+        body.extend_from_slice(&(formula_body.len() as u16).to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes()); // reserved
+        body.extend_from_slice(&itab.to_le_bytes());
+        body.extend_from_slice(&[0u8; 4]); // reserved
+        if high_byte {
+            body.push(0x01);
+            for u in &name_units {
+                body.extend_from_slice(&u.to_le_bytes());
+            }
+        } else {
+            body.push(0x00);
+            for u in &name_units {
+                body.push(*u as u8);
+            }
+        }
+        body.extend_from_slice(&formula_body);
+
+        stream.extend_from_slice(&NAME_RECORD.to_le_bytes());
+        stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        stream.extend_from_slice(&body);
+    }
+}
+
 /// Maps sheet names to their EXTERNSHEET ixti index, with case-
 /// insensitive lookup to match Excel's name resolution. Built once per
 /// workbook write; passed to `compile_ptgs_with_externsheet` so 3D
@@ -2216,6 +2337,7 @@ fn write_cell_records(
     sst: &SstTable,
     styles: &StyleTables,
     externsheet: &ExternSheetTable,
+    names: &NameTable,
 ) {
     let mut cells: Vec<_> = sheet.iter_cells().collect();
     cells.sort_by_key(|(row, col, _)| (*row, *col));
@@ -2237,6 +2359,7 @@ fn write_cell_records(
                 &data.value,
                 sst,
                 externsheet,
+                names,
             ) {
                 continue;
             }
@@ -2292,6 +2415,7 @@ fn try_write_formula_record(
     cached: &CellValue,
     sst: &SstTable,
     externsheet: &ExternSheetTable,
+    names: &NameTable,
 ) -> bool {
     // duke-sheets-formula's parse_formula requires the leading '=';
     // ensure it's present without double-prefixing.
@@ -2306,7 +2430,7 @@ fn try_write_formula_record(
         return false;
     };
     let mut tokens = Vec::with_capacity(32);
-    if compile_ptgs_with_externsheet(&expr, &mut tokens, externsheet).is_err() {
+    if compile_ptgs_with_context(&expr, &mut tokens, externsheet, names).is_err() {
         return false;
     }
     if tokens.len() > u16::MAX as usize {
@@ -2413,13 +2537,19 @@ fn compile_ptgs(
     expr: &duke_sheets_formula::FormulaExpr,
     out: &mut Vec<u8>,
 ) -> Result<(), UnsupportedToken> {
-    compile_ptgs_with_externsheet(expr, out, &ExternSheetTable::default())
+    compile_ptgs_with_context(
+        expr,
+        out,
+        &ExternSheetTable::default(),
+        &NameTable::default(),
+    )
 }
 
-fn compile_ptgs_with_externsheet(
+fn compile_ptgs_with_context(
     expr: &duke_sheets_formula::FormulaExpr,
     out: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
+    names: &NameTable,
 ) -> Result<(), UnsupportedToken> {
     use duke_sheets_formula::ast::{BinaryOperator, UnaryOperator};
     use duke_sheets_formula::FormulaExpr;
@@ -2483,8 +2613,8 @@ fn compile_ptgs_with_externsheet(
                     return Ok(());
                 }
             }
-            compile_ptgs_with_externsheet(left, out, externsheet)?;
-            compile_ptgs_with_externsheet(right, out, externsheet)?;
+            compile_ptgs_with_context(left, out, externsheet, names)?;
+            compile_ptgs_with_context(right, out, externsheet, names)?;
             out.push(match op {
                 BinaryOperator::Add => 0x03,
                 BinaryOperator::Subtract => 0x04,
@@ -2504,7 +2634,7 @@ fn compile_ptgs_with_externsheet(
             });
         }
         FormulaExpr::UnaryOp { op, operand } => {
-            compile_ptgs_with_externsheet(operand, out, externsheet)?;
+            compile_ptgs_with_context(operand, out, externsheet, names)?;
             out.push(match op {
                 UnaryOperator::Negate => 0x13,
                 UnaryOperator::Percent => 0x14,
@@ -2524,7 +2654,7 @@ fn compile_ptgs_with_externsheet(
                 if matches!(arg, FormulaExpr::Empty) {
                     out.push(0x16); // PTG_MISS_ARG
                 } else {
-                    compile_ptgs_with_externsheet(arg, out, externsheet)?;
+                    compile_ptgs_with_context(arg, out, externsheet, names)?;
                 }
             }
             // Always emit tFuncVar (V class, 0x42) so the variable-
@@ -2535,8 +2665,13 @@ fn compile_ptgs_with_externsheet(
             out.push(args.len() as u8);
             out.extend_from_slice(&idx.to_le_bytes());
         }
+        FormulaExpr::NameRef(name) => {
+            let idx = names.idx_for_name(name).ok_or(UnsupportedToken)?;
+            out.push(0x23); // PTG_NAME (R class)
+            out.extend_from_slice(&idx.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // 2 reserved bytes
+        }
         FormulaExpr::Array(_)
-        | FormulaExpr::NameRef(_)
         | FormulaExpr::StructuredRef(_)
         | FormulaExpr::ExternalRef(_)
         | FormulaExpr::Empty => {

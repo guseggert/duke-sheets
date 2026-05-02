@@ -36,14 +36,14 @@
 | Cross-sheet references | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_ref`, `cross_sheet_formula_round_trip::cross_sheet_cell_ref_round_trips` | §18.17.2.3 |
 | Quoted sheet names | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_quoted_name`, `cross_sheet_formula_round_trip::quoted_sheet_name_round_trips` | §18.17.2.3 |
 | 3D references (Sheet1:Sheet3!A1) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.3 | Parses but evaluation limited |
-| Named range refs in formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression` | §18.2.5 |
+| Named range refs in formulas | R✔ W✔ | R✔ W✔ | R✔ W● | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression`, `named_range_round_trip::user_named_range_in_cell_formula_round_trips` | §18.2.5 | XLS round-trips formula text via tName ptg + NAME record; `Workbook::named_ranges` is not yet repopulated by the reader |
 | Structured references (tables) | R✔ W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_with_calculated_column` | §18.17.2.3 | XLSB compiler drops structured refs |
 | Shared formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::shared_formula` | §18.3.1.40 |
 | Array formulas (CSE) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::cse_array_formula` | §18.3.1.40 |
 | Dynamic array formulas (spill) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::roundtrip_dynamic_array_sequence` | [MS-XLSX] §2.6.3 |
 | Data table formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::data_table_formula` | §18.3.1.72 |
 | External workbook refs `[book]!A1` | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.3 | XLSB reader captures, XLSX parser doesn't |
-| Defined name refs in formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::named_range` | §18.2.5 |
+| Defined name refs in formulas | R✔ W✔ | R✔ W✔ | R✔ W● | R✖ W✖ | `xls_e2e::formulas::named_range`, `named_range_round_trip::workbook_scoped_constant_name_round_trips_in_formula` | §18.2.5 | XLS round-trips formula text via tName ptg + NAME record; `Workbook::named_ranges` is not yet repopulated by the reader |
 | R1C1 reference mode (storage) | R✖ W✖ | R- W- | R- W- | R- W- | - | §18.2.29 |
 | Array constants in formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::array_constant` | §18.17.2.5 |
 | Intersection operator (space) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.2 |
@@ -199,10 +199,10 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Workbook-scoped names | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges` | §18.2.5 |
-| Sheet-scoped names | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges` | §18.2.5 |
-| Names with formula bodies | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression` | §18.2.5 |
-| Names referencing ranges | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges` | §18.2.5 |
+| Workbook-scoped names | R✔ W✔ | R✔ W✔ | R● W● | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges`, `named_range_round_trip::workbook_scoped_constant_name_round_trips_in_formula` | §18.2.5 | XLS reader doesn't yet repopulate `workbook.named_ranges`; only formula-text references survive round-trip |
+| Sheet-scoped names | R✔ W✔ | R✔ W✔ | R● W● | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges`, `named_range_round_trip::sheet_scoped_name_round_trips_in_formula` | §18.2.5 | XLS reader doesn't yet repopulate `workbook.named_ranges`; only formula-text references survive round-trip |
+| Names with formula bodies | R✔ W✔ | R✔ W✔ | R● W● | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression`, `named_range_round_trip::workbook_scoped_constant_name_round_trips_in_formula` | §18.2.5 | XLS reader doesn't yet repopulate `workbook.named_ranges` |
+| Names referencing ranges | R✔ W✔ | R✔ W✔ | R● W● | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges`, `named_range_round_trip::user_named_range_in_cell_formula_round_trips` | §18.2.5 | XLS reader doesn't yet repopulate `workbook.named_ranges` |
 | Hidden / built-in names (_xlnm.*) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area`, `print_names_round_trip::print_area_round_trips` | §18.2.5 |
 | Names with comments | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.2.5 |
 
