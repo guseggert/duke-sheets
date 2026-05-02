@@ -293,9 +293,9 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Freeze panes (columns) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes`, `freeze_panes_round_trip::freeze_first_column_round_trips` | §18.3.1.66 |
 | Freeze + split combination | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_split_panes_and_selection` | §18.3.1.66 |
 | Split panes | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_split_panes_and_selection` | §18.3.1.66 |
-| Active cell / active range | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_range_sqref` | §18.3.1.78 |
-| Multi-range selection (sqref) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_range_sqref` | §18.3.1.78 |
-| Zoom level (normal/page-layout/page-break) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `com_e2e::xls_reader::xls_zoom` | §18.3.1.87 |
+| Active cell / active range | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_range_sqref`, `sheet_view_round_trip::active_cell_round_trips` | §18.3.1.78 |
+| Multi-range selection (sqref) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_range_sqref`, `sheet_view_round_trip::multi_range_selection_round_trips` | §18.3.1.78 |
+| Zoom level (normal/page-layout/page-break) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `com_e2e::xls_reader::xls_zoom`, `sheet_view_round_trip::zoom_at_75_percent_round_trips` | §18.3.1.87 |
 | View mode (normal/pageBreakPreview/pageLayout) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |
 | Gridlines visibility | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |
 | Row/column header visibility | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |

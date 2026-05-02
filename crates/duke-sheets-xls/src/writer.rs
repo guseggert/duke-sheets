@@ -57,6 +57,8 @@ const PRINTHEADERS_RECORD: u16 = 0x002A;
 const PRINTGRIDLINES_RECORD: u16 = 0x002B;
 const HPAGEBREAKS_RECORD: u16 = 0x001B;
 const VPAGEBREAKS_RECORD: u16 = 0x001A;
+const SELECTION_RECORD: u16 = 0x001D;
+const SCL_RECORD: u16 = 0x00A0;
 
 /// MS-XLS §2.4.169: a single MERGECELLS record can hold at most 1027
 /// merged ranges (8 bytes each, plus the 2-byte cmcs count, fits in
@@ -216,7 +218,9 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_print_flags(&mut stream, sheet);
         write_setup_record(&mut stream, sheet);
         write_window2(&mut stream, sheet);
+        write_scl(&mut stream, sheet);
         write_pane(&mut stream, sheet);
+        write_selection_records(&mut stream, sheet);
         write_mergecells(&mut stream, sheet);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
@@ -999,6 +1003,95 @@ fn write_pane(stream: &mut Vec<u8>, sheet: &Worksheet) {
     stream.extend_from_slice(&top_row.to_le_bytes());
     stream.extend_from_slice(&left_col.to_le_bytes());
     stream.extend_from_slice(&active_pane.to_le_bytes());
+}
+
+/// Emit an SCL record (MS-XLS §2.4.249) carrying the worksheet zoom
+/// level as a numerator/denominator ratio. The model stores zoom as a
+/// percentage (10..=400); reduce against 100 for compactness.
+fn write_scl(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    let Some(zoom) = sheet.zoom_scale() else {
+        return;
+    };
+    let zoom = zoom.clamp(10, 400);
+    let (num, den) = if zoom % 25 == 0 && zoom <= 200 {
+        (zoom / 25, 4u16)
+    } else {
+        (zoom, 100u16)
+    };
+    stream.extend_from_slice(&SCL_RECORD.to_le_bytes());
+    stream.extend_from_slice(&4u16.to_le_bytes());
+    stream.extend_from_slice(&num.to_le_bytes());
+    stream.extend_from_slice(&den.to_le_bytes());
+}
+
+/// Emit one SELECTION record (MS-XLS §2.4.247) per Selection in the
+/// worksheet's selection list. Body: pane (u8), active_row (u16),
+/// active_col (u16), active_ref (u16), ref_count (u16), then
+/// `ref_count` × Ref8U (r1 u16, r2 u16, c1 u8, c2 u8 = 6 bytes).
+/// Selections targeting cells beyond the BIFF8 sheet extent (col >
+/// 255 or row > 65535) are skipped because the on-disk Ref8U format
+/// can't represent them.
+fn write_selection_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    use duke_sheets_core::{CellAddress, CellRange};
+
+    for selection in sheet.selections() {
+        let pane_byte: u8 = match selection.pane.as_deref() {
+            Some("topRight") => 1,
+            Some("bottomLeft") => 2,
+            Some("topLeft") => 3,
+            _ => 0, // bottomRight or unspecified
+        };
+
+        let (active_row, active_col) = selection
+            .active_cell
+            .as_deref()
+            .and_then(|s| CellAddress::parse(s).ok())
+            .map(|a| (a.row, a.col))
+            .unwrap_or((0u32, 0u16));
+        if active_row > u16::MAX as u32 || active_col > u8::MAX as u16 {
+            continue;
+        }
+
+        let ranges: Vec<CellRange> = selection
+            .sqref
+            .as_deref()
+            .map(|s| {
+                s.split_whitespace()
+                    .filter_map(|piece| {
+                        CellRange::parse(piece).ok().or_else(|| {
+                            CellAddress::parse(piece).ok().map(|a| CellRange::new(a, a))
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let usable: Vec<&CellRange> = ranges
+            .iter()
+            .filter(|r| {
+                r.start.row <= u16::MAX as u32
+                    && r.end.row <= u16::MAX as u32
+                    && r.start.col <= u8::MAX as u16
+                    && r.end.col <= u8::MAX as u16
+            })
+            .collect();
+
+        let ref_count = usable.len() as u16;
+        let body_len = 9u16 + ref_count * 6;
+        stream.extend_from_slice(&SELECTION_RECORD.to_le_bytes());
+        stream.extend_from_slice(&body_len.to_le_bytes());
+        stream.push(pane_byte);
+        stream.extend_from_slice(&(active_row as u16).to_le_bytes());
+        stream.extend_from_slice(&active_col.to_le_bytes());
+        stream.extend_from_slice(&0u16.to_le_bytes()); // active_ref index
+        stream.extend_from_slice(&ref_count.to_le_bytes());
+        for r in usable {
+            stream.extend_from_slice(&(r.start.row as u16).to_le_bytes());
+            stream.extend_from_slice(&(r.end.row as u16).to_le_bytes());
+            stream.push(r.start.col as u8);
+            stream.push(r.end.col as u8);
+        }
+    }
 }
 
 /// Emit PROTECT (MS-XLS §2.4.196) and optional PASSWORD (MS-XLS
