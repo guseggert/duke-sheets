@@ -226,8 +226,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| cellIs rules (comparison operators) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_conditional_format_cell_is` | §18.3.1.10 |
-| Formula-based (expression) rules | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_conditional_format_expression` | §18.3.1.43 |
+| cellIs rules (comparison operators) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_conditional_format_cell_is`, `conditional_format_round_trip::cellis_greater_than_round_trips` | §18.3.1.10 |
+| Formula-based (expression) rules | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_conditional_format_expression`, `conditional_format_round_trip::expression_rule_round_trips` | §18.3.1.43 |
 | beginsWith / endsWith | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
 | containsText / notContainsText | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
 | containsBlanks / notContainsBlanks | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
@@ -248,7 +248,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Icon set: 4 variants | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.49 |
 | Icon set: 5 variants | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.49 |
 | Icon set: custom icons (MS-XLSX ext) | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.6.8 |
-| Multiple CF rules per range | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_multiple_rules` | §18.3.1.18 |
+| Multiple CF rules per range | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_multiple_rules`, `conditional_format_round_trip::multiple_rules_per_sheet_round_trip` | §18.3.1.18 |
 | Rule priority / stopIfTrue | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_multiple_rules` | §18.3.1.10 |
 | Extension-list CF rules (x14) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-XLSX] §2.6.4 |
 

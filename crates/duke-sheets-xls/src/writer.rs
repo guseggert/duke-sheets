@@ -65,6 +65,8 @@ const AUTOFILTER_RECORD: u16 = 0x009E;
 const FILTERMODE_RECORD: u16 = 0x009B;
 const DVAL_RECORD: u16 = 0x01B2;
 const DV_RECORD: u16 = 0x01BE;
+const CONDFMT_RECORD: u16 = 0x01B0;
+const CF_RECORD: u16 = 0x01B1;
 
 /// Built-in NAME index for `Print_Area` (MS-XLS §2.5.4).
 const BUILTIN_NAME_PRINT_AREA: u8 = 0x06;
@@ -254,6 +256,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_hlink_records(&mut stream, sheet);
         write_autofilter_records(&mut stream, sheet);
         write_data_validations(&mut stream, sheet);
+        write_conditional_formats(&mut stream, sheet);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
     }
@@ -1784,6 +1787,105 @@ fn push_autofilter_string(buf: &mut Vec<u8>, s: &str) {
         for u in &units {
             buf.push(*u as u8);
         }
+    }
+}
+
+/// Emit one CONDFMT (MS-XLS §2.4.45) + CF (§2.4.43) pair per
+/// `ConditionalFormatRule`. Each CONDFMT carries the bounding
+/// rectangle and the per-range Ref8U list; each CF carries the rule
+/// header + cce1 + cce2 + an empty dxf block (no formatting overrides
+/// emitted yet) + formula1 + formula2.
+///
+/// The reader keeps the most recent CONDFMT range list and applies it
+/// to subsequent CF records, so we emit them as alternating
+/// CONDFMT → CF pairs to keep the mapping unambiguous.
+fn write_conditional_formats(stream: &mut Vec<u8>, sheet: &Worksheet) {
+    use duke_sheets_core::conditional_format::{CfOperator, CfRuleType};
+
+    for rule in sheet.conditional_formats() {
+        if rule.ranges.is_empty() {
+            continue;
+        }
+
+        let usable: Vec<&duke_sheets_core::CellRange> = rule
+            .ranges
+            .iter()
+            .filter(|r| r.start.row <= u16::MAX as u32 && r.end.row <= u16::MAX as u32)
+            .collect();
+        if usable.is_empty() {
+            continue;
+        }
+
+        // Compute enclosing range = bounding box of all individual
+        // ranges. The reader skips this field but Excel/LO use it.
+        let mut enc_first_row = u16::MAX;
+        let mut enc_last_row = 0u16;
+        let mut enc_first_col = u16::MAX;
+        let mut enc_last_col = 0u16;
+        for r in &usable {
+            enc_first_row = enc_first_row.min(r.start.row as u16);
+            enc_last_row = enc_last_row.max(r.end.row as u16);
+            enc_first_col = enc_first_col.min(r.start.col);
+            enc_last_col = enc_last_col.max(r.end.col);
+        }
+
+        let mut cfmt_body = Vec::with_capacity(14 + usable.len() * 8);
+        cfmt_body.extend_from_slice(&1u16.to_le_bytes()); // cCF: 1 rule follows
+        cfmt_body.extend_from_slice(&1u16.to_le_bytes()); // flags (fAlwaysCalc-ish, set to 1)
+        cfmt_body.extend_from_slice(&enc_first_row.to_le_bytes());
+        cfmt_body.extend_from_slice(&enc_last_row.to_le_bytes());
+        cfmt_body.extend_from_slice(&enc_first_col.to_le_bytes());
+        cfmt_body.extend_from_slice(&enc_last_col.to_le_bytes());
+        cfmt_body.extend_from_slice(&(usable.len() as u16).to_le_bytes());
+        for r in &usable {
+            cfmt_body.extend_from_slice(&(r.start.row as u16).to_le_bytes());
+            cfmt_body.extend_from_slice(&(r.end.row as u16).to_le_bytes());
+            cfmt_body.extend_from_slice(&r.start.col.to_le_bytes());
+            cfmt_body.extend_from_slice(&r.end.col.to_le_bytes());
+        }
+        stream.extend_from_slice(&CONDFMT_RECORD.to_le_bytes());
+        stream.extend_from_slice(&(cfmt_body.len() as u16).to_le_bytes());
+        stream.extend_from_slice(&cfmt_body);
+
+        let (ct, cp, formula1_text, formula2_text) = match &rule.rule_type {
+            CfRuleType::CellIs {
+                operator,
+                formula1,
+                formula2,
+            } => {
+                let cp = match operator {
+                    CfOperator::Between => 1u8,
+                    CfOperator::NotBetween => 2,
+                    CfOperator::Equal => 3,
+                    CfOperator::NotEqual => 4,
+                    CfOperator::GreaterThan => 5,
+                    CfOperator::LessThan => 6,
+                    CfOperator::GreaterThanOrEqual => 7,
+                    CfOperator::LessThanOrEqual => 8,
+                };
+                (1u8, cp, Some(formula1.as_str()), formula2.as_deref())
+            }
+            CfRuleType::Expression { formula } => (2u8, 0u8, Some(formula.as_str()), None),
+            _ => continue, // skip rule types we don't know how to emit
+        };
+
+        let f1 = formula1_text.map(encode_dv_formula).unwrap_or_default();
+        let f2 = formula2_text.map(encode_dv_formula).unwrap_or_default();
+
+        let mut cf_body = Vec::with_capacity(6 + f1.len() + f2.len());
+        cf_body.push(ct);
+        cf_body.push(cp);
+        cf_body.extend_from_slice(&(f1.len() as u16).to_le_bytes());
+        cf_body.extend_from_slice(&(f2.len() as u16).to_le_bytes());
+        // No dxf formatting override - the reader's CF parser locates
+        // the formulas by `total - cce1 - cce2`, so an empty dxf block
+        // simply means formula1 starts immediately after the header.
+        cf_body.extend_from_slice(&f1);
+        cf_body.extend_from_slice(&f2);
+
+        stream.extend_from_slice(&CF_RECORD.to_le_bytes());
+        stream.extend_from_slice(&(cf_body.len() as u16).to_le_bytes());
+        stream.extend_from_slice(&cf_body);
     }
 }
 
