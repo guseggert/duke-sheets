@@ -205,57 +205,16 @@ mkdir -p /tmp/duke-sheets-excel
 RUST_TEST_THREADS=1 cargo test "$@"
 """
 
-[tasks."generate:formula-parity"]
-description = "Generate data/formula-parity.xlsx via Excel COM"
-run = "RUST_TEST_THREADS=1 cargo test -p duke-sheets-excel-com --test e2e generate_formula_parity_spreadsheet -- --ignored --nocapture"
-
-[tasks."test:formula-parity"]
-description = "Run formula parity test (auto-generates data/formula-parity.xlsx if missing)"
-run = """
-#!/bin/bash
-set -e
-if [ ! -f data/formula-parity.xlsx ]; then
-    echo "data/formula-parity.xlsx not found, generating via Excel COM..."
-    mise run generate:formula-parity
-fi
-cargo test -p duke-sheets --test formula_parity -- --nocapture --ignored
-"""
-
-[tasks."generate:xlsb-parity"]
-description = "Convert formula-parity.xlsx to data/formula-parity.xlsb via Excel COM"
-run = """
-#!/bin/bash
-set -e
-if [ ! -f data/formula-parity.xlsx ]; then
-    echo "data/formula-parity.xlsx not found, generating first..."
-    mise run generate:formula-parity
-fi
-RUST_TEST_THREADS=1 cargo test -p duke-sheets-excel-com --test e2e generate_xlsb_parity_from_xlsx -- --ignored --nocapture
-"""
-
-[tasks."test:xlsb-parity"]
-description = "Run XLSB parity test (auto-generates data/formula-parity.xlsb if missing)"
-run = """
-#!/bin/bash
-set -e
-if [ ! -f data/formula-parity.xlsb ]; then
-    echo "data/formula-parity.xlsb not found, generating..."
-    mise run generate:xlsb-parity
-fi
-cargo test -p duke-sheets --test xlsb_parity -- --nocapture --ignored
-"""
-
-[tasks."test:corpus-charts"]
-description = "Run chart corpus smoke test against real Excel files"
-run = 'cargo test -p duke-sheets --test chart_corpus -- --ignored --nocapture'
-
-[tasks."generate:chart-parity"]
-description = "Generate chart parity fixture via Excel COM"
-run = "RUST_TEST_THREADS=1 cargo test -p duke-sheets-excel-com --test e2e generate_chart_parity -- --ignored --nocapture"
-
-[tasks."test:chart-parity"]
-description = "Verify chart parity fixture (requires data/chart-parity.xlsx)"
-run = "cargo test -p duke-sheets --test chart_parity -- --ignored --nocapture"
+# Parity/corpus tests run via test:lo (which delegates to cargo test).
+# The parity tests in `crates/duke-sheets/tests/{formula,xlsb,chart}_parity.rs`
+# auto-generate their `data/*-parity.xlsx`/`.xlsb` fixtures via the
+# `duke_sheets_test_harness::fixture::ensure_via_cargo_test()` helper on
+# first run; subsequent runs reuse the cached file. Examples:
+#
+#   mise run test:lo -- --test formula_parity -- --ignored
+#   mise run test:lo -- --test xlsb_parity -- --ignored
+#   mise run test:lo -- --test chart_parity -- --ignored
+#   mise run test:lo -- --test chart_corpus -- --ignored   # needs DUKE_CORPUS_DIR
 
 [tasks."test:all"]
 alias = "ta"

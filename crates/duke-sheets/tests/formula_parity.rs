@@ -1,6 +1,5 @@
-use std::path::PathBuf;
-
 use duke_sheets::prelude::*;
+use duke_sheets_test_harness::fixture::ensure_via_cargo_test;
 
 #[derive(Debug, Clone)]
 struct ParityCase {
@@ -12,16 +11,21 @@ struct ParityCase {
 }
 
 #[test]
-#[ignore = "requires data/formula-parity.xlsx - run `mise run test:excel` to generate"]
+#[ignore = "auto-generates data/formula-parity.xlsx via Excel COM on first run"]
 fn formula_parity_matches_excel_cached_values() {
-    let fixture_path = formula_parity_path();
-    if !fixture_path.exists() {
-        println!(
-            "skipping formula parity test: {} does not exist",
-            fixture_path.display()
-        );
-        return;
-    }
+    let fixture_path = ensure_via_cargo_test(
+        "data/formula-parity.xlsx",
+        &[
+            "-p",
+            "duke-sheets-excel-com",
+            "--test",
+            "e2e",
+            "generate_formula_parity_spreadsheet",
+            "--",
+            "--ignored",
+            "--nocapture",
+        ],
+    );
 
     let mut workbook = XlsxReader::read_file(&fixture_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", fixture_path.display()));
@@ -51,12 +55,6 @@ fn formula_parity_matches_excel_cached_values() {
         failures.len(),
         failures.join("\n")
     );
-}
-
-fn formula_parity_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("data/formula-parity.xlsx")
 }
 
 fn collect_parity_cases(workbook: &Workbook) -> Vec<ParityCase> {
@@ -250,17 +248,20 @@ fn complex_strings_close(a: &str, b: &str) -> bool {
     // Try to parse both as f64 pairs and compare with tolerance
     fn parse_complex(s: &str) -> Option<(f64, f64)> {
         let s = s.trim();
-        if s == "0" { return Some((0.0, 0.0)); }
+        if s == "0" {
+            return Some((0.0, 0.0));
+        }
         // Handle pure imaginary: "5i", "-3i"
         if s.ends_with('i') && !s.contains('+') && !s[1..].contains('-') {
-            let im = s[..s.len()-1].parse::<f64>().ok()?;
+            let im = s[..s.len() - 1].parse::<f64>().ok()?;
             return Some((0.0, im));
         }
         // Split on + or - before 'i'
         let i_pos = s.find('i')?;
         let before_i = &s[..i_pos];
         // Find the last + or - that separates real and imaginary
-        let split = before_i.rfind(|c: char| (c == '+' || c == '-') && before_i[..before_i.len()].len() > 0)?;
+        let split = before_i
+            .rfind(|c: char| (c == '+' || c == '-') && before_i[..before_i.len()].len() > 0)?;
         if split == 0 {
             // Entire thing is imaginary with sign
             let im = before_i.parse::<f64>().ok()?;
@@ -271,9 +272,7 @@ fn complex_strings_close(a: &str, b: &str) -> bool {
         Some((real, im))
     }
     match (parse_complex(a), parse_complex(b)) {
-        (Some((ar, ai)), Some((br, bi))) => {
-            (ar - br).abs() < 1e-6 && (ai - bi).abs() < 1e-6
-        }
+        (Some((ar, ai)), Some((br, bi))) => (ar - br).abs() < 1e-6 && (ai - bi).abs() < 1e-6,
         _ => false,
     }
 }

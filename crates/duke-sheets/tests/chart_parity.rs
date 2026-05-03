@@ -8,24 +8,27 @@
 //! Run this test with:
 //!   cargo test -p duke-sheets --test chart_parity -- --ignored --nocapture
 
-use std::path::PathBuf;
-
 use duke_sheets::prelude::*;
 use duke_sheets::{AxisPosition, DataReference};
 use duke_sheets_chart::{AxisType, LegendPosition};
+use duke_sheets_test_harness::fixture::ensure_via_cargo_test;
 
 #[test]
-#[ignore = "requires data/chart-parity.xlsx - generate with Excel COM first"]
+#[ignore = "auto-generates data/chart-parity.xlsx via Excel COM on first run"]
 fn chart_parity_matches_excel() {
-    let fixture_path = chart_parity_path();
-    if !fixture_path.exists() {
-        println!(
-            "skipping chart parity test: {} does not exist\n\
-             generate with: cargo test -p duke-sheets-excel-com --test e2e generate_chart_parity -- --test-threads=1",
-            fixture_path.display()
-        );
-        return;
-    }
+    let fixture_path = ensure_via_cargo_test(
+        "data/chart-parity.xlsx",
+        &[
+            "-p",
+            "duke-sheets-excel-com",
+            "--test",
+            "e2e",
+            "generate_chart_parity_spreadsheet",
+            "--",
+            "--ignored",
+            "--nocapture",
+        ],
+    );
 
     let wb = XlsxReader::read_file(&fixture_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", fixture_path.display()));
@@ -63,47 +66,103 @@ fn chart_parity_matches_excel() {
     // Chart 0: ColumnClustered (barChart with barDir=col, grouping=clustered)
     {
         let c = &charts[0];
-        check!(c.title.as_deref() == Some("ColumnClustered"), "chart 0 title: {:?}", c.title);
-        check!(c.chart_type == ChartType::ColumnClustered, "chart 0 type: {:?}", c.chart_type);
-        check!(c.series.len() == 2, "chart 0 series count: {}", c.series.len());
+        check!(
+            c.title.as_deref() == Some("ColumnClustered"),
+            "chart 0 title: {:?}",
+            c.title
+        );
+        check!(
+            c.chart_type == ChartType::ColumnClustered,
+            "chart 0 type: {:?}",
+            c.chart_type
+        );
+        check!(
+            c.series.len() == 2,
+            "chart 0 series count: {}",
+            c.series.len()
+        );
 
         // Category axis
         check!(c.category_axis.is_some(), "chart 0 missing catAx");
         if let Some(ax) = &c.category_axis {
-            check!(ax.axis_type == AxisType::Category, "chart 0 catAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Bottom, "chart 0 catAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Category,
+                "chart 0 catAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Bottom,
+                "chart 0 catAx pos: {:?}",
+                ax.position
+            );
         }
 
         // Value axis
         check!(c.value_axis.is_some(), "chart 0 missing valAx");
         if let Some(ax) = &c.value_axis {
-            check!(ax.axis_type == AxisType::Value, "chart 0 valAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Left, "chart 0 valAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Value,
+                "chart 0 valAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Left,
+                "chart 0 valAx pos: {:?}",
+                ax.position
+            );
         }
 
         // Legend: Excel may or may not add one for column charts
         // (in our fixture it does not)
-        check!(c.legend.is_none(), "chart 0 unexpected legend: {:?}", c.legend.as_ref().map(|l| &l.position));
+        check!(
+            c.legend.is_none(),
+            "chart 0 unexpected legend: {:?}",
+            c.legend.as_ref().map(|l| &l.position)
+        );
 
         // Series 0: Revenue
         if c.series.len() > 0 {
             let s = &c.series[0];
-            check!(s.name.as_deref() == Some("Sheet1!$B$1"), "chart 0 s0 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$B$2:$B$7"), "chart 0 s0 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$B$1"),
+                "chart 0 s0 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$B$2:$B$7"),
+                "chart 0 s0 values: {:?}",
+                s.values
+            );
             check!(s.categories.is_some(), "chart 0 s0 missing categories");
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 0 s0 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 0 s0 categories: {:?}",
+                    cat
+                );
             }
         }
 
         // Series 1: Profit
         if c.series.len() > 1 {
             let s = &c.series[1];
-            check!(s.name.as_deref() == Some("Sheet1!$C$1"), "chart 0 s1 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$C$2:$C$7"), "chart 0 s1 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$C$1"),
+                "chart 0 s1 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$C$2:$C$7"),
+                "chart 0 s1 values: {:?}",
+                s.values
+            );
             check!(s.categories.is_some(), "chart 0 s1 missing categories");
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 0 s1 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 0 s1 categories: {:?}",
+                    cat
+                );
             }
         }
     }
@@ -111,20 +170,48 @@ fn chart_parity_matches_excel() {
     // Chart 1: BarClustered (barChart with barDir=bar)
     {
         let c = &charts[1];
-        check!(c.title.as_deref() == Some("BarClustered"), "chart 1 title: {:?}", c.title);
-        check!(c.chart_type == ChartType::BarClustered, "chart 1 type: {:?}", c.chart_type);
-        check!(c.series.len() == 2, "chart 1 series count: {}", c.series.len());
+        check!(
+            c.title.as_deref() == Some("BarClustered"),
+            "chart 1 title: {:?}",
+            c.title
+        );
+        check!(
+            c.chart_type == ChartType::BarClustered,
+            "chart 1 type: {:?}",
+            c.chart_type
+        );
+        check!(
+            c.series.len() == 2,
+            "chart 1 series count: {}",
+            c.series.len()
+        );
 
         // Bar charts swap axes: category on left, value on bottom
         check!(c.category_axis.is_some(), "chart 1 missing catAx");
         if let Some(ax) = &c.category_axis {
-            check!(ax.axis_type == AxisType::Category, "chart 1 catAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Left, "chart 1 catAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Category,
+                "chart 1 catAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Left,
+                "chart 1 catAx pos: {:?}",
+                ax.position
+            );
         }
         check!(c.value_axis.is_some(), "chart 1 missing valAx");
         if let Some(ax) = &c.value_axis {
-            check!(ax.axis_type == AxisType::Value, "chart 1 valAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Bottom, "chart 1 valAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Value,
+                "chart 1 valAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Bottom,
+                "chart 1 valAx pos: {:?}",
+                ax.position
+            );
         }
 
         check!(c.legend.is_none(), "chart 1 unexpected legend");
@@ -132,20 +219,44 @@ fn chart_parity_matches_excel() {
         // Series 0: Revenue
         if c.series.len() > 0 {
             let s = &c.series[0];
-            check!(s.name.as_deref() == Some("Sheet1!$B$1"), "chart 1 s0 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$B$2:$B$7"), "chart 1 s0 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$B$1"),
+                "chart 1 s0 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$B$2:$B$7"),
+                "chart 1 s0 values: {:?}",
+                s.values
+            );
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 1 s0 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 1 s0 categories: {:?}",
+                    cat
+                );
             }
         }
 
         // Series 1: Profit
         if c.series.len() > 1 {
             let s = &c.series[1];
-            check!(s.name.as_deref() == Some("Sheet1!$C$1"), "chart 1 s1 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$C$2:$C$7"), "chart 1 s1 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$C$1"),
+                "chart 1 s1 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$C$2:$C$7"),
+                "chart 1 s1 values: {:?}",
+                s.values
+            );
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 1 s1 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 1 s1 categories: {:?}",
+                    cat
+                );
             }
         }
     }
@@ -153,19 +264,47 @@ fn chart_parity_matches_excel() {
     // Chart 2: Line (lineChart)
     {
         let c = &charts[2];
-        check!(c.title.as_deref() == Some("Line"), "chart 2 title: {:?}", c.title);
-        check!(c.chart_type == ChartType::Line, "chart 2 type: {:?}", c.chart_type);
-        check!(c.series.len() == 2, "chart 2 series count: {}", c.series.len());
+        check!(
+            c.title.as_deref() == Some("Line"),
+            "chart 2 title: {:?}",
+            c.title
+        );
+        check!(
+            c.chart_type == ChartType::Line,
+            "chart 2 type: {:?}",
+            c.chart_type
+        );
+        check!(
+            c.series.len() == 2,
+            "chart 2 series count: {}",
+            c.series.len()
+        );
 
         check!(c.category_axis.is_some(), "chart 2 missing catAx");
         if let Some(ax) = &c.category_axis {
-            check!(ax.axis_type == AxisType::Category, "chart 2 catAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Bottom, "chart 2 catAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Category,
+                "chart 2 catAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Bottom,
+                "chart 2 catAx pos: {:?}",
+                ax.position
+            );
         }
         check!(c.value_axis.is_some(), "chart 2 missing valAx");
         if let Some(ax) = &c.value_axis {
-            check!(ax.axis_type == AxisType::Value, "chart 2 valAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Left, "chart 2 valAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Value,
+                "chart 2 valAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Left,
+                "chart 2 valAx pos: {:?}",
+                ax.position
+            );
         }
 
         check!(c.legend.is_none(), "chart 2 unexpected legend");
@@ -173,22 +312,46 @@ fn chart_parity_matches_excel() {
         // Series 0: Revenue
         if c.series.len() > 0 {
             let s = &c.series[0];
-            check!(s.name.as_deref() == Some("Sheet1!$B$1"), "chart 2 s0 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$B$2:$B$7"), "chart 2 s0 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$B$1"),
+                "chart 2 s0 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$B$2:$B$7"),
+                "chart 2 s0 values: {:?}",
+                s.values
+            );
             check!(s.categories.is_some(), "chart 2 s0 missing categories");
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 2 s0 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 2 s0 categories: {:?}",
+                    cat
+                );
             }
         }
 
         // Series 1: Profit
         if c.series.len() > 1 {
             let s = &c.series[1];
-            check!(s.name.as_deref() == Some("Sheet1!$C$1"), "chart 2 s1 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$C$2:$C$7"), "chart 2 s1 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$C$1"),
+                "chart 2 s1 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$C$2:$C$7"),
+                "chart 2 s1 values: {:?}",
+                s.values
+            );
             check!(s.categories.is_some(), "chart 2 s1 missing categories");
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 2 s1 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 2 s1 categories: {:?}",
+                    cat
+                );
             }
         }
     }
@@ -196,9 +359,21 @@ fn chart_parity_matches_excel() {
     // Chart 3: Pie (pieChart) - no axes, has legend
     {
         let c = &charts[3];
-        check!(c.title.as_deref() == Some("Pie"), "chart 3 title: {:?}", c.title);
-        check!(c.chart_type == ChartType::Pie, "chart 3 type: {:?}", c.chart_type);
-        check!(c.series.len() == 1, "chart 3 series count: {}", c.series.len());
+        check!(
+            c.title.as_deref() == Some("Pie"),
+            "chart 3 title: {:?}",
+            c.title
+        );
+        check!(
+            c.chart_type == ChartType::Pie,
+            "chart 3 type: {:?}",
+            c.chart_type
+        );
+        check!(
+            c.series.len() == 1,
+            "chart 3 series count: {}",
+            c.series.len()
+        );
 
         // Pie charts have no axes
         check!(c.category_axis.is_none(), "chart 3 should not have catAx");
@@ -207,16 +382,32 @@ fn chart_parity_matches_excel() {
         // Pie should have a legend
         check!(c.legend.is_some(), "chart 3 missing legend");
         if let Some(legend) = &c.legend {
-            check!(legend.position == LegendPosition::Bottom, "chart 3 legend pos: {:?}", legend.position);
+            check!(
+                legend.position == LegendPosition::Bottom,
+                "chart 3 legend pos: {:?}",
+                legend.position
+            );
         }
 
         // Single series with categories for slice labels
         if let Some(s) = c.series.first() {
-            check!(s.name.as_deref() == Some("Sheet1!$B$1"), "chart 3 s0 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$B$2:$B$7"), "chart 3 s0 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$B$1"),
+                "chart 3 s0 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$B$2:$B$7"),
+                "chart 3 s0 values: {:?}",
+                s.values
+            );
             check!(s.categories.is_some(), "chart 3 s0 missing categories");
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 3 s0 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 3 s0 categories: {:?}",
+                    cat
+                );
             }
         }
     }
@@ -224,9 +415,21 @@ fn chart_parity_matches_excel() {
     // Chart 4: Doughnut (doughnutChart) - has legend, hole size
     {
         let c = &charts[4];
-        check!(c.title.as_deref() == Some("Doughnut"), "chart 4 title: {:?}", c.title);
-        check!(c.chart_type == ChartType::Doughnut, "chart 4 type: {:?}", c.chart_type);
-        check!(c.series.len() == 1, "chart 4 series count: {}", c.series.len());
+        check!(
+            c.title.as_deref() == Some("Doughnut"),
+            "chart 4 title: {:?}",
+            c.title
+        );
+        check!(
+            c.chart_type == ChartType::Doughnut,
+            "chart 4 type: {:?}",
+            c.chart_type
+        );
+        check!(
+            c.series.len() == 1,
+            "chart 4 series count: {}",
+            c.series.len()
+        );
 
         // Doughnut has no axes
         check!(c.category_axis.is_none(), "chart 4 should not have catAx");
@@ -235,19 +438,39 @@ fn chart_parity_matches_excel() {
         // Doughnut should have a legend
         check!(c.legend.is_some(), "chart 4 missing legend");
         if let Some(legend) = &c.legend {
-            check!(legend.position == LegendPosition::Bottom, "chart 4 legend pos: {:?}", legend.position);
+            check!(
+                legend.position == LegendPosition::Bottom,
+                "chart 4 legend pos: {:?}",
+                legend.position
+            );
         }
 
         // Excel default hole_size is 75
-        check!(c.hole_size == Some(75), "chart 4 hole_size: {:?} (expected 75)", c.hole_size);
+        check!(
+            c.hole_size == Some(75),
+            "chart 4 hole_size: {:?} (expected 75)",
+            c.hole_size
+        );
 
         // Single series
         if let Some(s) = c.series.first() {
-            check!(s.name.as_deref() == Some("Sheet1!$B$1"), "chart 4 s0 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$B$2:$B$7"), "chart 4 s0 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$B$1"),
+                "chart 4 s0 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$B$2:$B$7"),
+                "chart 4 s0 values: {:?}",
+                s.values
+            );
             check!(s.categories.is_some(), "chart 4 s0 missing categories");
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 4 s0 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 4 s0 categories: {:?}",
+                    cat
+                );
             }
         }
     }
@@ -255,49 +478,108 @@ fn chart_parity_matches_excel() {
     // Chart 5: Scatter (scatterChart) - value axis only, no category axis
     {
         let c = &charts[5];
-        check!(c.title.as_deref() == Some("XYScatter"), "chart 5 title: {:?}", c.title);
+        check!(
+            c.title.as_deref() == Some("XYScatter"),
+            "chart 5 title: {:?}",
+            c.title
+        );
 
         // Excel creates scatter with lineMarker scatterStyle → ScatterLines
         check!(
-            matches!(c.chart_type, ChartType::ScatterLines | ChartType::ScatterSmooth | ChartType::ScatterMarkers),
-            "chart 5 type should be scatter variant: {:?}", c.chart_type
+            matches!(
+                c.chart_type,
+                ChartType::ScatterLines | ChartType::ScatterSmooth | ChartType::ScatterMarkers
+            ),
+            "chart 5 type should be scatter variant: {:?}",
+            c.chart_type
         );
 
-        check!(c.series.len() == 1, "chart 5 series count: {}", c.series.len());
+        check!(
+            c.series.len() == 1,
+            "chart 5 series count: {}",
+            c.series.len()
+        );
 
         // Scatter uses value axes (no category axis)
-        check!(c.category_axis.is_none(), "chart 5 should not have catAx (scatter uses valAx)");
+        check!(
+            c.category_axis.is_none(),
+            "chart 5 should not have catAx (scatter uses valAx)"
+        );
         check!(c.value_axis.is_some(), "chart 5 missing valAx");
         if let Some(ax) = &c.value_axis {
-            check!(ax.axis_type == AxisType::Value, "chart 5 valAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Left, "chart 5 valAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Value,
+                "chart 5 valAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Left,
+                "chart 5 valAx pos: {:?}",
+                ax.position
+            );
         }
 
         check!(c.legend.is_none(), "chart 5 unexpected legend");
 
         // Scatter series: yVal mapped to values, name references header cell
         if let Some(s) = c.series.first() {
-            check!(s.name.as_deref() == Some("Sheet1!$C$1"), "chart 5 s0 name: {:?}", s.name);
-            check!(formula_contains(&s.values, "$C$2:$C$7"), "chart 5 s0 yVal: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$C$1"),
+                "chart 5 s0 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_contains(&s.values, "$C$2:$C$7"),
+                "chart 5 s0 yVal: {:?}",
+                s.values
+            );
         }
     }
 
     // Chart 6: Area (areaChart)
     {
         let c = &charts[6];
-        check!(c.title.as_deref() == Some("Area"), "chart 6 title: {:?}", c.title);
-        check!(c.chart_type == ChartType::Area, "chart 6 type: {:?}", c.chart_type);
-        check!(c.series.len() == 2, "chart 6 series count: {}", c.series.len());
+        check!(
+            c.title.as_deref() == Some("Area"),
+            "chart 6 title: {:?}",
+            c.title
+        );
+        check!(
+            c.chart_type == ChartType::Area,
+            "chart 6 type: {:?}",
+            c.chart_type
+        );
+        check!(
+            c.series.len() == 2,
+            "chart 6 series count: {}",
+            c.series.len()
+        );
 
         check!(c.category_axis.is_some(), "chart 6 missing catAx");
         if let Some(ax) = &c.category_axis {
-            check!(ax.axis_type == AxisType::Category, "chart 6 catAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Bottom, "chart 6 catAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Category,
+                "chart 6 catAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Bottom,
+                "chart 6 catAx pos: {:?}",
+                ax.position
+            );
         }
         check!(c.value_axis.is_some(), "chart 6 missing valAx");
         if let Some(ax) = &c.value_axis {
-            check!(ax.axis_type == AxisType::Value, "chart 6 valAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Left, "chart 6 valAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Value,
+                "chart 6 valAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Left,
+                "chart 6 valAx pos: {:?}",
+                ax.position
+            );
         }
 
         check!(c.legend.is_none(), "chart 6 unexpected legend");
@@ -305,22 +587,46 @@ fn chart_parity_matches_excel() {
         // Series 0: Revenue
         if c.series.len() > 0 {
             let s = &c.series[0];
-            check!(s.name.as_deref() == Some("Sheet1!$B$1"), "chart 6 s0 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$B$2:$B$7"), "chart 6 s0 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$B$1"),
+                "chart 6 s0 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$B$2:$B$7"),
+                "chart 6 s0 values: {:?}",
+                s.values
+            );
             check!(s.categories.is_some(), "chart 6 s0 missing categories");
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 6 s0 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 6 s0 categories: {:?}",
+                    cat
+                );
             }
         }
 
         // Series 1: Profit
         if c.series.len() > 1 {
             let s = &c.series[1];
-            check!(s.name.as_deref() == Some("Sheet1!$C$1"), "chart 6 s1 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$C$2:$C$7"), "chart 6 s1 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$C$1"),
+                "chart 6 s1 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$C$2:$C$7"),
+                "chart 6 s1 values: {:?}",
+                s.values
+            );
             check!(s.categories.is_some(), "chart 6 s1 missing categories");
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 6 s1 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 6 s1 categories: {:?}",
+                    cat
+                );
             }
         }
     }
@@ -328,19 +634,47 @@ fn chart_parity_matches_excel() {
     // Chart 7: Radar (radarChart)
     {
         let c = &charts[7];
-        check!(c.title.as_deref() == Some("Radar"), "chart 7 title: {:?}", c.title);
-        check!(c.chart_type == ChartType::Radar, "chart 7 type: {:?}", c.chart_type);
-        check!(c.series.len() == 2, "chart 7 series count: {}", c.series.len());
+        check!(
+            c.title.as_deref() == Some("Radar"),
+            "chart 7 title: {:?}",
+            c.title
+        );
+        check!(
+            c.chart_type == ChartType::Radar,
+            "chart 7 type: {:?}",
+            c.chart_type
+        );
+        check!(
+            c.series.len() == 2,
+            "chart 7 series count: {}",
+            c.series.len()
+        );
 
         check!(c.category_axis.is_some(), "chart 7 missing catAx");
         if let Some(ax) = &c.category_axis {
-            check!(ax.axis_type == AxisType::Category, "chart 7 catAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Bottom, "chart 7 catAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Category,
+                "chart 7 catAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Bottom,
+                "chart 7 catAx pos: {:?}",
+                ax.position
+            );
         }
         check!(c.value_axis.is_some(), "chart 7 missing valAx");
         if let Some(ax) = &c.value_axis {
-            check!(ax.axis_type == AxisType::Value, "chart 7 valAx type: {:?}", ax.axis_type);
-            check!(ax.position == AxisPosition::Left, "chart 7 valAx pos: {:?}", ax.position);
+            check!(
+                ax.axis_type == AxisType::Value,
+                "chart 7 valAx type: {:?}",
+                ax.axis_type
+            );
+            check!(
+                ax.position == AxisPosition::Left,
+                "chart 7 valAx pos: {:?}",
+                ax.position
+            );
         }
 
         check!(c.legend.is_none(), "chart 7 unexpected legend");
@@ -348,22 +682,46 @@ fn chart_parity_matches_excel() {
         // Series 0: Revenue
         if c.series.len() > 0 {
             let s = &c.series[0];
-            check!(s.name.as_deref() == Some("Sheet1!$B$1"), "chart 7 s0 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$B$2:$B$7"), "chart 7 s0 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$B$1"),
+                "chart 7 s0 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$B$2:$B$7"),
+                "chart 7 s0 values: {:?}",
+                s.values
+            );
             check!(s.categories.is_some(), "chart 7 s0 missing categories");
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 7 s0 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 7 s0 categories: {:?}",
+                    cat
+                );
             }
         }
 
         // Series 1: Profit
         if c.series.len() > 1 {
             let s = &c.series[1];
-            check!(s.name.as_deref() == Some("Sheet1!$C$1"), "chart 7 s1 name: {:?}", s.name);
-            check!(formula_eq(&s.values, "Sheet1!$C$2:$C$7"), "chart 7 s1 values: {:?}", s.values);
+            check!(
+                s.name.as_deref() == Some("Sheet1!$C$1"),
+                "chart 7 s1 name: {:?}",
+                s.name
+            );
+            check!(
+                formula_eq(&s.values, "Sheet1!$C$2:$C$7"),
+                "chart 7 s1 values: {:?}",
+                s.values
+            );
             check!(s.categories.is_some(), "chart 7 s1 missing categories");
             if let Some(cat) = &s.categories {
-                check!(formula_eq(cat, "Sheet1!$A$2:$A$7"), "chart 7 s1 categories: {:?}", cat);
+                check!(
+                    formula_eq(cat, "Sheet1!$A$2:$A$7"),
+                    "chart 7 s1 categories: {:?}",
+                    cat
+                );
             }
         }
     }
@@ -371,19 +729,30 @@ fn chart_parity_matches_excel() {
     // Cross-cutting checks on ALL charts
     for (i, c) in charts.iter().enumerate() {
         check!(c.title.is_some(), "chart {i} missing title");
-        check!(!matches!(c.chart_type, ChartType::Unsupported(_)),
-            "chart {i} unsupported type: {:?}", c.chart_type);
+        check!(
+            !matches!(c.chart_type, ChartType::Unsupported(_)),
+            "chart {i} unsupported type: {:?}",
+            c.chart_type
+        );
         for (si, s) in c.series.iter().enumerate() {
             let has_values = match &s.values {
                 DataReference::Formula(f) => !f.is_empty(),
                 DataReference::Numbers(v) => !v.is_empty(),
                 DataReference::Strings(v) => !v.is_empty(),
             };
-            check!(has_values, "chart {i} series {si}: empty values {:?}", s.values);
+            check!(
+                has_values,
+                "chart {i} series {si}: empty values {:?}",
+                s.values
+            );
             // All series should have a name referencing a header cell
             check!(s.name.is_some(), "chart {i} series {si}: missing name");
             if let Some(name) = &s.name {
-                check!(name.contains("Sheet1!"), "chart {i} series {si}: name should reference Sheet1: {:?}", name);
+                check!(
+                    name.contains("Sheet1!"),
+                    "chart {i} series {si}: name should reference Sheet1: {:?}",
+                    name
+                );
             }
         }
     }
@@ -396,13 +765,6 @@ fn chart_parity_matches_excel() {
         failures.len(),
         failures.join("\n")
     );
-
-}
-
-fn chart_parity_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("data/chart-parity.xlsx")
 }
 
 fn find_sheet_with_charts(wb: &Workbook) -> Option<&duke_sheets_core::Worksheet> {
