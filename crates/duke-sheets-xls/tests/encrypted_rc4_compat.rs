@@ -7,37 +7,23 @@
 //! the original cell values.
 //!
 //! Tests are `#[ignore]`-gated and panic when prerequisites are
-//! missing rather than silent-skipping. The fixture must exist
-//! locally (regenerate with `mise run crypto:fixtures`) and a
-//! LibreOffice URP daemon must be reachable on `127.0.0.1:2002`.
-//! `mise run test:crypto-compat` orchestrates both.
+//! missing rather than silent-skipping. The fixture is auto-generated
+//! on first run by the `duke-sheets-crypto` `fixture_gen` test, and
+//! the LO container is auto-started by the test harness.
 
 use std::io::Cursor;
-use std::net::TcpStream;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use duke_sheets_crypto::xls::{encrypt_workbook_stream, XlsEncryptionVariant};
 use duke_sheets_libreoffice::bridge::LibreOfficeBridge;
+use duke_sheets_test_harness::lo::{ensure_lo, SHARED_DIR};
 use duke_sheets_xls::cfb::{CompoundFile, CompoundFileBuilder};
 
-const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
 const FIXTURE_NAME: &str = "xls_rc4_cryptoapi.plain.xls";
 const FIXTURE_PASSWORD: &str = "duke-test-pw";
 
 fn require_lo() {
-    if TcpStream::connect_timeout(
-        &"127.0.0.1:2002".parse().unwrap(),
-        Duration::from_secs(2),
-    )
-    .is_err()
-    {
-        panic!(
-            "LibreOffice URP not reachable on 127.0.0.1:2002. \
-             Start it with `mise run urp:start` or run the suite via \
-             `mise run test:crypto-compat`."
-        );
-    }
+    ensure_lo();
 }
 
 fn require_fixture() -> PathBuf {

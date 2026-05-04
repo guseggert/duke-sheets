@@ -1,31 +1,18 @@
 //! See `encrypted_agile_compat.rs` for the full setup contract. tl;dr:
 //! tests panic if LO isn't reachable rather than silently passing, and
-//! `mise run test:crypto-compat` auto-orchestrates the backend.
+//! the LO container is auto-started by the test harness on first call.
 
-use std::net::TcpStream;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use duke_sheets_core::Workbook;
 use duke_sheets_libreoffice::bridge::LibreOfficeBridge;
+use duke_sheets_test_harness::lo::{ensure_lo, SHARED_DIR};
 use duke_sheets_xlsx::{EncryptionProfile, XlsxWriter};
 
-const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
 const PASSWORD: &str = "standard-compat-pw";
 
 fn require_lo() {
-    if TcpStream::connect_timeout(
-        &"127.0.0.1:2002".parse().unwrap(),
-        Duration::from_secs(2),
-    )
-    .is_err()
-    {
-        panic!(
-            "LibreOffice URP not reachable on 127.0.0.1:2002. \
-             Start it with `mise run urp:start` or run the suite via \
-             `mise run test:crypto-compat`."
-        );
-    }
+    ensure_lo();
 }
 
 fn build_wb() -> Workbook {

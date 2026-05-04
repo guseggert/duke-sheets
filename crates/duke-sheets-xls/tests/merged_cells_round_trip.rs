@@ -121,17 +121,7 @@ fn no_merges_emits_no_record_and_round_trips_clean() {
 #[test]
 #[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_merged_cells_we_emit() {
-    use std::net::TcpStream;
-    use std::time::Duration;
-
-    if TcpStream::connect_timeout(
-        &"127.0.0.1:2002".parse().unwrap(),
-        Duration::from_secs(2),
-    )
-    .is_err()
-    {
-        panic!("LO URP not reachable; start with `mise run urp:start`");
-    }
+    duke_sheets_test_harness::lo::ensure_lo();
 
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

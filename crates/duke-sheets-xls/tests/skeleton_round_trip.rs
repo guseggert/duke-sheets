@@ -111,17 +111,7 @@ fn write_to_bytes_then_read_file_round_trips() {
 #[test]
 #[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_open_skeleton_workbook() {
-    use std::net::TcpStream;
-    use std::time::Duration;
-
-    if TcpStream::connect_timeout(
-        &"127.0.0.1:2002".parse().unwrap(),
-        Duration::from_secs(2),
-    )
-    .is_err()
-    {
-        panic!("LO URP not reachable; start with `mise run urp:start`");
-    }
+    duke_sheets_test_harness::lo::ensure_lo();
 
     let mut wb = Workbook::new();
     wb.rename_worksheet(0, "ProbeSheet").expect("rename");
@@ -161,17 +151,7 @@ fn lo_can_open_skeleton_workbook() {
 #[test]
 #[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
 fn lo_can_read_cell_values_we_emit() {
-    use std::net::TcpStream;
-    use std::time::Duration;
-
-    if TcpStream::connect_timeout(
-        &"127.0.0.1:2002".parse().unwrap(),
-        Duration::from_secs(2),
-    )
-    .is_err()
-    {
-        panic!("LO URP not reachable; start with `mise run urp:start`");
-    }
+    duke_sheets_test_harness::lo::ensure_lo();
 
     let mut wb = Workbook::new();
     wb.rename_worksheet(0, "Probe").expect("rename");
