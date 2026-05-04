@@ -134,24 +134,35 @@ impl LibreOfficeBridge {
     /// Create a new empty spreadsheet workbook.
     pub async fn create_workbook(&mut self) -> Result<Workbook<'_>> {
         // loadComponentFromURL("private:factory/scalc", "_blank", 0, ())
+        // Same retry-on-null shape as `open_workbook_inner`; freshly
+        // started LO returns null briefly while the loader spins up.
         let method = interface::load_component_from_url();
-        let result = self
-            .conn
-            .call(
-                &self.desktop,
-                &method,
-                &[
-                    UnoValue::String("private:factory/scalc".to_string()),
-                    UnoValue::String("_blank".to_string()),
-                    UnoValue::Long(0),
-                    UnoValue::Sequence(vec![]), // empty PropertyValue sequence
-                ],
-            )
-            .await?;
-
-        let doc_oid = proxy::extract_oid_from_return(&result).ok_or_else(|| {
-            BridgeError::OperationFailed("loadComponentFromURL returned null".into())
-        })?;
+        let mut attempts: u32 = 0;
+        let doc_oid = loop {
+            attempts += 1;
+            let result = self
+                .conn
+                .call(
+                    &self.desktop,
+                    &method,
+                    &[
+                        UnoValue::String("private:factory/scalc".to_string()),
+                        UnoValue::String("_blank".to_string()),
+                        UnoValue::Long(0),
+                        UnoValue::Sequence(vec![]),
+                    ],
+                )
+                .await?;
+            if let Some(oid) = proxy::extract_oid_from_return(&result) {
+                break oid;
+            }
+            if attempts >= 10 {
+                return Err(BridgeError::OperationFailed(format!(
+                    "loadComponentFromURL returned null for create after {attempts} attempts"
+                )));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        };
 
         let doc_proxy = UnoProxy::new(doc_oid, Type::interface(type_names::X_COMPONENT));
 
@@ -198,39 +209,56 @@ impl LibreOfficeBridge {
             format!("file://{abs}")
         };
 
-        let load_args: Vec<UnoValue> = match password {
-            None => Vec::new(),
-            Some(pw) => {
-                let pw_pv = make_property_value_local(
-                    "Password",
-                    UnoValue::String(pw.to_string()),
-                    Type::string(),
-                );
-                vec![pw_pv]
+        let make_load_args = || -> Vec<UnoValue> {
+            match password {
+                None => Vec::new(),
+                Some(pw) => {
+                    let pw_pv = make_property_value_local(
+                        "Password",
+                        UnoValue::String(pw.to_string()),
+                        Type::string(),
+                    );
+                    vec![pw_pv]
+                }
             }
         };
 
+        // Retry on null returns from loadComponentFromURL. Freshly
+        // started LO containers can take several seconds before the
+        // loader is ready to handle encrypted Office files; the
+        // listener answers earlier than the loader does. A null
+        // return is also produced for genuinely unloadable files,
+        // so we cap retries at ~5s rather than blocking indefinitely.
         let method = interface::load_component_from_url();
-        let result = self
-            .conn
-            .call(
-                &self.desktop,
-                &method,
-                &[
-                    UnoValue::String(url),
-                    UnoValue::String("_blank".to_string()),
-                    UnoValue::Long(0),
-                    UnoValue::Sequence(load_args),
-                ],
-            )
-            .await?;
+        let mut attempts: u32 = 0;
+        let doc_oid = loop {
+            attempts += 1;
+            let result = self
+                .conn
+                .call(
+                    &self.desktop,
+                    &method,
+                    &[
+                        UnoValue::String(url.clone()),
+                        UnoValue::String("_blank".to_string()),
+                        UnoValue::Long(0),
+                        UnoValue::Sequence(make_load_args()),
+                    ],
+                )
+                .await?;
 
-        let doc_oid = proxy::extract_oid_from_return(&result).ok_or_else(|| {
-            BridgeError::OperationFailed("loadComponentFromURL returned null for open".into())
-        })?;
+            if let Some(oid) = proxy::extract_oid_from_return(&result) {
+                break oid;
+            }
+            if attempts >= 10 {
+                return Err(BridgeError::OperationFailed(format!(
+                    "loadComponentFromURL returned null for open after {attempts} attempts"
+                )));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        };
 
         let doc_proxy = UnoProxy::new(doc_oid, Type::interface(type_names::X_COMPONENT));
-
         Ok(Workbook::new(&mut self.conn, doc_proxy))
     }
 

@@ -39,19 +39,23 @@ static ENSURED: OnceLock<()> = OnceLock::new();
 /// Ensure a LibreOffice URP container is running and reachable on
 /// localhost:2002. Builds the docker image first if it's missing.
 ///
-/// Idempotent and cheap on subsequent calls (one TCP probe + a OnceLock
-/// load). Panics with a descriptive message on failure.
+/// **Always replaces the container** on first call in a test process.
+/// LO state accumulates across opens; an aged container produces
+/// `loadComponentFromURL returned null` failures with no clean
+/// recovery path. A 3-second per-test-binary restart is cheaper than
+/// the hours of debugging that staleness has cost in this repo's
+/// history. Subsequent calls within the same process are O(1) no-ops
+/// via the `OnceLock`.
+///
+/// Once the URP port is listening this returns; the
+/// `LibreOfficeBridge::open_workbook` / `create_workbook` calls in
+/// `duke-sheets-libreoffice` retry on `loadComponentFromURL returned
+/// null`, which absorbs the loader-vs-listener startup race.
+///
+/// Panics with a descriptive message on failure.
 pub fn ensure_lo() {
     ENSURED.get_or_init(|| {
         let _ = std::fs::create_dir_all(SHARED_DIR);
-
-        // If a listener is already on 2002 (interactively started LO,
-        // a prior test run that left the container warm, etc.) we trust
-        // it and skip the build/run dance entirely.
-        if port_listening(URP_PORT) {
-            return;
-        }
-
         ensure_image();
         sweep_stale_locks();
         replace_container();
@@ -207,7 +211,7 @@ fn wait_for_port(port: u16, timeout: Duration) {
     while start.elapsed() < timeout {
         if port_listening(port) {
             eprintln!(
-                "[duke-sheets-test-harness] LibreOffice URP ready on port {port} (took {:.1}s)",
+                "[duke-sheets-test-harness] LibreOffice URP listening on port {port} (took {:.1}s)",
                 start.elapsed().as_secs_f64()
             );
             return;
