@@ -875,6 +875,9 @@ impl XlsxReader {
                         b"hyperlink" => {
                             Self::parse_hyperlink_element(worksheet, &e, sheet_rels);
                         }
+                        b"sheetProtection" => {
+                            Self::parse_sheet_protection_element(worksheet, &e);
+                        }
                         b"pageMargins" => {
                             let mut ps = worksheet.page_setup().clone();
                             for attr in e.attributes().flatten() {
@@ -1863,6 +1866,9 @@ impl XlsxReader {
                         b"hyperlink" => {
                             Self::parse_hyperlink_element(worksheet, &e, sheet_rels);
                         }
+                        b"sheetProtection" => {
+                            Self::parse_sheet_protection_element(worksheet, &e);
+                        }
                         b"pane" => Self::parse_pane_attrs(&e, worksheet),
                         b"f" if in_cell => {
                             // Self-closing formula elements appear for shared formula
@@ -2656,6 +2662,127 @@ impl XlsxReader {
             man,
             pt,
         })
+    }
+
+    /// Parse `<sheetProtection sheet="1" password="HHHH" .../>` into
+    /// the sheet's `SheetProtection` model. Per ECMA-376 §18.3.1.85,
+    /// absent attribute or value `"1"` means the action is **not**
+    /// allowed; `"0"` means it **is** allowed. The writer follows the
+    /// same convention.
+    fn parse_sheet_protection_element(
+        worksheet: &mut duke_sheets_core::Worksheet,
+        e: &quick_xml::events::BytesStart<'_>,
+    ) {
+        use duke_sheets_core::worksheet::SheetProtection;
+
+        let mut prot = SheetProtection {
+            protected: true,
+            ..Default::default()
+        };
+        let mut explicit_sheet = false;
+
+        // Excel writes `protectAttr="0"` to mean "allowed". Default
+        // for our model fields is `false` (= disallowed). When we see
+        // `"0"` we set the field to `true` (= allowed).
+        let parse_allowed = |val: &str| -> Option<bool> {
+            match val {
+                "0" | "false" => Some(true),
+                "1" | "true" => Some(false),
+                _ => None,
+            }
+        };
+
+        for attr in e.attributes().flatten() {
+            let value = match attr.unescape_value() {
+                Ok(v) => v.into_owned(),
+                Err(_) => continue,
+            };
+            match attr.key.local_name().as_ref() {
+                b"sheet" => {
+                    explicit_sheet = true;
+                    prot.protected = matches!(value.as_str(), "1" | "true");
+                }
+                b"password" => {
+                    if let Ok(h) = u16::from_str_radix(&value, 16) {
+                        prot.password_hash = Some(h);
+                    }
+                }
+                b"formatCells" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.format_cells = v;
+                    }
+                }
+                b"formatColumns" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.format_columns = v;
+                    }
+                }
+                b"formatRows" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.format_rows = v;
+                    }
+                }
+                b"insertColumns" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.insert_columns = v;
+                    }
+                }
+                b"insertRows" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.insert_rows = v;
+                    }
+                }
+                b"insertHyperlinks" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.insert_hyperlinks = v;
+                    }
+                }
+                b"deleteColumns" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.delete_columns = v;
+                    }
+                }
+                b"deleteRows" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.delete_rows = v;
+                    }
+                }
+                b"selectLockedCells" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.select_locked_cells = v;
+                    }
+                }
+                b"selectUnlockedCells" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.select_unlocked_cells = v;
+                    }
+                }
+                b"sort" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.sort = v;
+                    }
+                }
+                b"autoFilter" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.auto_filter = v;
+                    }
+                }
+                b"pivotTables" => {
+                    if let Some(v) = parse_allowed(&value) {
+                        prot.pivot_tables = v;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if !explicit_sheet {
+            // ECMA-376: presence of the element with no `sheet` attr
+            // implies sheet=1 / "protected".
+            prot.protected = true;
+        }
+
+        worksheet.set_protection(Some(prot));
     }
 
     fn parse_hyperlink_element(
