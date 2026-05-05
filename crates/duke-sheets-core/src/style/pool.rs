@@ -113,7 +113,10 @@ impl Default for StylePool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::{Color, FillStyle, fill::{GradientStop, PatternType}};
+    use crate::style::{
+        fill::{GradientStop, PatternType},
+        Color, FillStyle,
+    };
 
     #[test]
     fn test_default_style() {
@@ -161,25 +164,25 @@ mod tests {
         // Two styles that differ only by fill type
         let solid = Style::new().fill_color(Color::RED);
         let mut pattern = Style::new();
-        *pattern.fill_mut() = FillStyle::pattern(
-            PatternType::DarkGray,
-            Color::RED,
-            Color::rgb(0, 0, 255),
-        );
+        *pattern.fill_mut() =
+            FillStyle::pattern(PatternType::DarkGray, Color::RED, Color::rgb(0, 0, 255));
 
         let idx_solid = pool.get_or_insert(solid.clone());
         let idx_pattern = pool.get_or_insert(pattern.clone());
-        assert_ne!(idx_solid, idx_pattern, "different fills must get different indices");
+        assert_ne!(
+            idx_solid, idx_pattern,
+            "different fills must get different indices"
+        );
 
         // Same pattern fill deduplicates
         let mut pattern2 = Style::new();
-        *pattern2.fill_mut() = FillStyle::pattern(
-            PatternType::DarkGray,
-            Color::RED,
-            Color::rgb(0, 0, 255),
-        );
+        *pattern2.fill_mut() =
+            FillStyle::pattern(PatternType::DarkGray, Color::RED, Color::rgb(0, 0, 255));
         let idx_pattern2 = pool.get_or_insert(pattern2);
-        assert_eq!(idx_pattern, idx_pattern2, "identical pattern fills must deduplicate");
+        assert_eq!(
+            idx_pattern, idx_pattern2,
+            "identical pattern fills must deduplicate"
+        );
     }
 
     #[test]
@@ -219,6 +222,9 @@ mod tests {
             ],
         );
         let idx3 = pool.get_or_insert(style3);
-        assert_ne!(idx1, idx3, "different gradient angles must get different indices");
+        assert_ne!(
+            idx1, idx3,
+            "different gradient angles must get different indices"
+        );
     }
 }
