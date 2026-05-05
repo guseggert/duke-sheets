@@ -1086,17 +1086,7 @@ fn test_write_sheet_protection() {
 
 #[test]
 fn test_write_cell_protection_hidden_formula() {
-    // Verifying cell-protection round-trips requires a non-default
-    // Protection value, since `Protection::default()` is `{locked:
-    // false, hidden: false}` and the writer skips `<protection>`
-    // emission when the value matches default. `hidden=true` is
-    // unambiguously non-default and survives Excel's normalisation.
-    //
-    // FIXME: our `Protection::default()` differs from Excel's effective
-    // default of `locked=true`. Setting `protection.locked = false` on
-    // a Style currently does not produce an emitted `<protection>`
-    // block, so the user's "unlock this cell" intent is silently lost
-    // through round-trip. Tracked as a writer gap, not a test bug.
+    // Hidden formula bit must survive Excel re-save.
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "formula").unwrap();
@@ -1118,5 +1108,37 @@ fn test_write_cell_protection_hidden_formula() {
         b1.protection.hidden,
         "B1 hidden flag must survive round-trip, got hidden={}",
         b1.protection.hidden
+    );
+}
+
+#[test]
+fn test_write_cell_protection_unlocked() {
+    // User explicitly unlocks a cell. Per ECMA-376 §18.8.32, Excel's
+    // effective default is `locked=true`, so the writer must emit
+    // `<protection locked="0"/>` for the unlock intent to survive
+    // through Excel re-save. This is a regression test against an
+    // earlier writer bug where `Protection::default()` matched our
+    // Rust `derive(Default)` (= locked=false), causing the writer to
+    // skip emission and silently lose the user's unlock intent.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "default-locked").unwrap();
+    ws.set_cell_value("B1", "explicitly-unlocked").unwrap();
+    let mut unlocked = Style::new();
+    unlocked.protection = Protection {
+        locked: false,
+        hidden: false,
+    };
+    ws.set_cell_style("B1", &unlocked).unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    let b1 = s
+        .cell_style_at(0, 1)
+        .expect("B1 must have non-default style for unlocked state");
+    assert!(
+        !b1.protection.locked,
+        "B1 unlock intent lost in round-trip: locked={}",
+        b1.protection.locked
     );
 }
