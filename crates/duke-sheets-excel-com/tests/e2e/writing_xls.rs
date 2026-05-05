@@ -220,11 +220,44 @@ fn excel_can_read_rich_text_we_emit() {
 
     let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
-    // Excel may round-trip the cell as either a plain `String` or a
-    // `RichText`; `as_string()` only matches the former, so fall back
-    // to the Display impl which concatenates rich runs.
-    let plain = format!("{}", s.get_value_at(0, 0));
-    assert_eq!(plain, "plain bold italic loud");
+    let value = s.get_value_at(0, 0);
+
+    // Concatenated text must round-trip exactly.
+    assert_eq!(format!("{value}"), "plain bold italic loud");
+
+    // The cell must come back as RichText with at least the bold,
+    // italic, and size+color runs distinguishable from the plain run.
+    // If Excel collapsed the runs into a single span the formatting
+    // is lost — the writer's RichText emission would be effectively
+    // ineffective even though the text reads back correctly.
+    let runs = match &value {
+        CellValue::RichText(runs) => runs,
+        other => panic!("expected RichText after Excel round-trip, got {other:?}"),
+    };
+    assert!(
+        runs.len() >= 4,
+        "expected at least 4 runs (plain/bold/italic/loud), got {}: {runs:?}",
+        runs.len()
+    );
+
+    let has_bold = runs
+        .iter()
+        .any(|r| matches!(&r.font, Some(f) if f.bold == Some(true)));
+    let has_italic = runs
+        .iter()
+        .any(|r| matches!(&r.font, Some(f) if f.italic == Some(true)));
+    let has_big = runs
+        .iter()
+        .any(|r| matches!(&r.font, Some(f) if matches!(f.size, Some(s) if s >= 14.0)));
+    assert!(
+        has_bold,
+        "expected at least one run with bold=true: {runs:?}"
+    );
+    assert!(
+        has_italic,
+        "expected at least one run with italic=true: {runs:?}"
+    );
+    assert!(has_big, "expected at least one run with size>=14: {runs:?}");
 }
 
 #[test]
