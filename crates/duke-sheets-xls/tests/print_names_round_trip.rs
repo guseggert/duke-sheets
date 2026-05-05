@@ -6,6 +6,8 @@ use std::io::Cursor;
 use duke_sheets_core::{CellAddress, CellRange, Workbook};
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
+const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
+
 fn write_then_read(wb: &Workbook) -> Workbook {
     let bytes = XlsWriter::write_to_bytes(wb).expect("serialize");
     XlsReader::read(Cursor::new(&bytes)).expect("read back")
@@ -136,4 +138,62 @@ fn no_print_area_means_no_name_record() {
         .page_setup()
         .repeat_rows
         .is_none());
+}
+
+/// LibreOffice must accept our built-in NAME records (Print_Area
+/// index 0x06, Print_Titles index 0x07). The built-in NAME body
+/// uses tArea3D ptg with `ixti` referencing an EXTERNSHEET entry
+/// pointing at the local sheet — wrong byte order or off-by-one
+/// indices would render the file as a non-printable workbook.
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_read_print_names_we_emit() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "header").expect("A1");
+    ws.set_cell_value("B1", "value").expect("B1");
+    ws.set_cell_value("A2", "row1").expect("A2");
+    ws.set_cell_value("B2", 100.0).expect("B2");
+    let mut ps = ws.page_setup().clone();
+    ps.print_area = Some(range("A1", "B2"));
+    ps.repeat_rows = Some((0, 0));
+    ws.set_page_setup(ps);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("{SHARED_DIR}/duke_print_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<(String, f64), String> = rt.block_on(async {
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let a1 = wb
+            .get_cell_string("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))?;
+        let b2 = wb
+            .get_cell_value("B2")
+            .await
+            .map_err(|e| format!("B2: {e}"))?;
+        Ok((a1, b2))
+    });
+    let _ = std::fs::remove_file(&path);
+    let (a1, b2) = outcome.expect("LO must open print-names workbook");
+    assert_eq!(a1, "header");
+    assert!((b2 - 100.0).abs() < 1e-9, "B2 = {b2}");
 }

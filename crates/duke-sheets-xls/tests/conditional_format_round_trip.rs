@@ -7,6 +7,8 @@ use duke_sheets_core::conditional_format::{CfOperator, CfRuleType, ConditionalFo
 use duke_sheets_core::{CellAddress, CellRange, Workbook};
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
+const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
+
 fn write_then_read(wb: &Workbook) -> Workbook {
     let bytes = XlsWriter::write_to_bytes(wb).expect("serialize");
     XlsReader::read(Cursor::new(&bytes)).expect("read back")
@@ -158,4 +160,73 @@ fn rule_with_multiple_ranges_round_trips() {
     let rules = parsed.worksheet(0).unwrap().conditional_formats();
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].ranges.len(), 3);
+}
+
+/// LibreOffice must accept our CONDFMT + CF record bytes. We don't
+/// query the conditional-format ruleset back from LO (UNO's
+/// `XSheetConditionalEntries` API is verbose and fragile across LO
+/// versions); the test verifies LO can open the file without error
+/// and read the underlying cell values, which is enough to catch
+/// envelope-level malformations.
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_read_conditional_formats_we_emit() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 150.0).expect("A1");
+    ws.set_cell_value("A2", 50.0).expect("A2");
+    ws.set_cell_value("B1", 75.0).expect("B1");
+
+    // CellIs > 100
+    let mut r1 = ConditionalFormatRule::cell_is_greater_than("100");
+    r1.ranges = vec![range("A1", "A2")];
+    ws.add_conditional_format(r1);
+
+    // CellIs between 10..100
+    let mut r2 = ConditionalFormatRule::cell_is_between("10", "100");
+    r2.ranges = vec![range("B1", "B1")];
+    ws.add_conditional_format(r2);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("{SHARED_DIR}/duke_cf_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<(f64, f64, f64), String> = rt.block_on(async {
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let a1 = wb
+            .get_cell_value("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))?;
+        let a2 = wb
+            .get_cell_value("A2")
+            .await
+            .map_err(|e| format!("A2: {e}"))?;
+        let b1 = wb
+            .get_cell_value("B1")
+            .await
+            .map_err(|e| format!("B1: {e}"))?;
+        Ok((a1, a2, b1))
+    });
+    let _ = std::fs::remove_file(&path);
+    let (a1, a2, b1) = outcome.expect("LO must open conditional-format workbook");
+    assert!((a1 - 150.0).abs() < 1e-9, "A1 = {a1}");
+    assert!((a2 - 50.0).abs() < 1e-9, "A2 = {a2}");
+    assert!((b1 - 75.0).abs() < 1e-9, "B1 = {b1}");
 }

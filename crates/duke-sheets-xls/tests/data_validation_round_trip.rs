@@ -11,6 +11,8 @@ use duke_sheets_core::validation::{
 use duke_sheets_core::{CellAddress, CellRange, Workbook};
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
+const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
+
 fn write_then_read(wb: &Workbook) -> Workbook {
     let bytes = XlsWriter::write_to_bytes(wb).expect("serialize");
     XlsReader::read(Cursor::new(&bytes)).expect("read back")
@@ -317,4 +319,80 @@ fn no_validations_emits_no_dval_record() {
 
     let parsed = write_then_read(&wb);
     assert!(parsed.worksheet(0).unwrap().data_validations().is_empty());
+}
+
+/// LibreOffice must accept our DVAL + DV records. Exercises a list
+/// validation (inline source), a whole-number range validation, and
+/// a custom-formula validation in one workbook so a single LO open
+/// covers the variety of DV `valType` enum values our writer emits.
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_read_data_validations_we_emit() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "list").expect("A1");
+    ws.set_cell_value("B1", 50.0).expect("B1");
+    ws.set_cell_value("C1", 7.0).expect("C1");
+
+    let mut v_list = DataValidation::list("Red,Green,Blue");
+    v_list.ranges = vec![range("A1", "A1")];
+    ws.add_data_validation(v_list);
+
+    let mut v_whole =
+        DataValidation::whole_number_between(ValidationOperator::Between, "1", "100");
+    v_whole.ranges = vec![range("B1", "B1")];
+    v_whole.error_style = ValidationErrorStyle::Stop;
+    v_whole.error_title = Some("Out of range".into());
+    v_whole.error_message = Some("Enter 1..100".into());
+    ws.add_data_validation(v_whole);
+
+    let mut v_custom = DataValidation::new();
+    v_custom.validation_type = ValidationType::Custom {
+        formula: "=ISNUMBER(C1)".into(),
+    };
+    v_custom.ranges = vec![range("C1", "C1")];
+    ws.add_data_validation(v_custom);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("{SHARED_DIR}/duke_dv_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<(String, f64, f64), String> = rt.block_on(async {
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let a1 = wb
+            .get_cell_string("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))?;
+        let b1 = wb
+            .get_cell_value("B1")
+            .await
+            .map_err(|e| format!("B1: {e}"))?;
+        let c1 = wb
+            .get_cell_value("C1")
+            .await
+            .map_err(|e| format!("C1: {e}"))?;
+        Ok((a1, b1, c1))
+    });
+    let _ = std::fs::remove_file(&path);
+    let (a1, b1, c1) = outcome.expect("LO must open data-validation workbook");
+    assert_eq!(a1, "list");
+    assert!((b1 - 50.0).abs() < 1e-9, "B1 = {b1}");
+    assert!((c1 - 7.0).abs() < 1e-9, "C1 = {c1}");
 }
