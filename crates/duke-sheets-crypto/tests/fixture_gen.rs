@@ -1,17 +1,12 @@
 //! Generate password-protected workbook fixtures for crypto tests.
 //!
-//! All tests in this file are `#[ignore]`-gated: they require a running
-//! LibreOffice URP daemon on `127.0.0.1:2002` and produce files under
-//! `tests/fixtures/`. Run with:
+//! All tests in this file are `#[ignore]`-gated. They use
+//! `duke_sheets_test_harness::lo::ensure_lo()` which auto-starts the
+//! `duke-sheets-pyuno` LibreOffice container on first call, so no
+//! manual setup is needed - just:
 //!
 //! ```sh
-//! # Start LibreOffice (see crates/duke-sheets-xlsx/tests/e2e/common.rs
-//! # for the Docker image we use in CI, or soffice --accept=... locally):
-//! docker run --rm -d -p 2002:2002 -v /tmp/duke-sheets-urp:/tmp/duke-sheets-urp \
-//!   duke-sheets-pyuno bash -c 'soffice --headless \
-//!     --accept="socket,host=0.0.0.0,port=2002;urp;" & sleep infinity'
-//!
-//! cargo test -p duke-sheets-crypto --test fixture_gen -- --ignored --nocapture
+//! mise run test:lo -- -p duke-sheets-crypto --test fixture_gen -- --ignored
 //! ```
 //!
 //! Generated files land in `crates/duke-sheets-crypto/tests/fixtures/`.
