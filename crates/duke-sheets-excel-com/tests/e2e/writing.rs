@@ -6,13 +6,24 @@
 //! with `XlsxReader` to verify styles/values survived the round trip.
 
 use crate::roundtrip_through_excel;
+use duke_sheets_core::auto_filter::{AutoFilter, ColumnFilter, FilterColumn, Top10Filter};
+use duke_sheets_core::rich_text::{RichTextRun, RunFont};
 use duke_sheets_core::style::{
-    BorderLineStyle, BorderStyle, FillStyle, HorizontalAlignment, NumberFormat, Underline,
-    VerticalAlignment,
+    BorderLineStyle, BorderStyle, FillStyle, HorizontalAlignment, NumberFormat, Protection,
+    Underline, VerticalAlignment,
 };
+use duke_sheets_core::worksheet::SheetVisibility;
 use duke_sheets_core::{
-    CellRange, Color, ConditionalFormatRule, DataValidation, Style, ValidationOperator, Workbook,
+    CellAddress, CellRange, CellValue, Color, ConditionalFormatRule, DataValidation, Hyperlink,
+    Style, ValidationOperator, Workbook,
 };
+
+fn range(start: &str, end: &str) -> CellRange {
+    CellRange::new(
+        CellAddress::parse(start).unwrap(),
+        CellAddress::parse(end).unwrap(),
+    )
+}
 
 // Font tests
 
@@ -750,4 +761,362 @@ fn test_read_header_footer_from_excel() {
     assert!(!ps.scale_with_doc, "scale_with_doc should be false");
 
     crate::cleanup_fixture(&fixture);
+}
+
+// Feature parity tests (XLSX writer): verify Excel preserves the
+// feature itself, not just cell values.
+
+#[test]
+fn test_write_external_url_hyperlink() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "click").unwrap();
+    ws.set_hyperlink(
+        "A1",
+        Hyperlink {
+            target: "https://example.com/path".into(),
+            display: Some("click".into()),
+            tooltip: None,
+            location: None,
+        },
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    assert_eq!(s.get_value_at(0, 0).as_string(), Some("click"));
+    let hl = s
+        .hyperlink("A1")
+        .expect("hyperlink must survive XLSX Excel round-trip");
+    assert!(
+        hl.target.contains("example.com"),
+        "hyperlink target lost: {:?}",
+        hl.target
+    );
+}
+
+#[test]
+fn test_write_internal_hyperlink() {
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "Main").unwrap();
+    wb.add_worksheet_with_name("Other").unwrap();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "internal").unwrap();
+    ws.set_hyperlink(
+        "A1",
+        Hyperlink {
+            target: "#Other!B5".into(),
+            display: Some("internal".into()),
+            tooltip: None,
+            location: None,
+        },
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet_by_name("Main").unwrap();
+    assert_eq!(s.get_value_at(0, 0).as_string(), Some("internal"));
+    let hl = s
+        .hyperlink("A1")
+        .expect("internal hyperlink must survive XLSX Excel round-trip");
+    let combined = format!("{}|{}", hl.target, hl.location.as_deref().unwrap_or(""));
+    assert!(
+        combined.contains("Other") && combined.contains("B5"),
+        "internal target lost: target={:?} location={:?}",
+        hl.target,
+        hl.location
+    );
+}
+
+#[test]
+fn test_write_cross_sheet_formula() {
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "Calc").unwrap();
+    wb.add_worksheet_with_name("Data").unwrap();
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A1", 10.0)
+        .unwrap();
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A2", 20.0)
+        .unwrap();
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A3", 30.0)
+        .unwrap();
+    let calc = wb.worksheet_mut(0).unwrap();
+    calc.set_cell_formula("B1", "=Data!A1").unwrap();
+    calc.set_formula_result(0, 1, CellValue::Number(10.0))
+        .unwrap();
+    calc.set_cell_formula("B2", "=SUM(Data!A1:A3)").unwrap();
+    calc.set_formula_result(1, 1, CellValue::Number(60.0))
+        .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet_by_name("Calc").unwrap();
+    let v1 = s.get_value_at(0, 1);
+    match v1.effective_value() {
+        CellValue::Number(n) => assert!((n - 10.0).abs() < 1e-9, "B1 = {n}"),
+        other => panic!("B1 expected Number(10), got {other:?}"),
+    }
+    let v2 = s.get_value_at(1, 1);
+    match v2.effective_value() {
+        CellValue::Number(n) => assert!((n - 60.0).abs() < 1e-9, "B2 = {n}"),
+        other => panic!("B2 expected Number(60), got {other:?}"),
+    }
+}
+
+#[test]
+fn test_write_autofilter() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Name").unwrap();
+    ws.set_cell_value("B1", "Value").unwrap();
+    ws.set_cell_value("A2", "alpha").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", "beta").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    let mut af = AutoFilter::new(range("A1", "B3"));
+    af.filter_columns.push(FilterColumn::new(
+        1,
+        ColumnFilter::Top10(Top10Filter {
+            top: true,
+            percent: false,
+            val: 1.0,
+            filter_val: None,
+        }),
+    ));
+    ws.set_auto_filter(Some(af));
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    let af = s
+        .auto_filter()
+        .expect("autofilter must survive XLSX Excel round-trip");
+    assert_eq!(af.range.start, CellAddress::parse("A1").unwrap());
+}
+
+#[test]
+fn test_write_rich_text_runs() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let bold = RunFont {
+        bold: Some(true),
+        ..Default::default()
+    };
+    let italic = RunFont {
+        italic: Some(true),
+        ..Default::default()
+    };
+    let red_big = RunFont {
+        size: Some(16.0),
+        color: Some(Color::Indexed(2)),
+        ..Default::default()
+    };
+    ws.set_cell_value_at(
+        0,
+        0,
+        CellValue::rich_text(vec![
+            RichTextRun {
+                text: "plain ".into(),
+                font: None,
+            },
+            RichTextRun {
+                text: "bold ".into(),
+                font: Some(bold),
+            },
+            RichTextRun {
+                text: "italic ".into(),
+                font: Some(italic),
+            },
+            RichTextRun {
+                text: "loud".into(),
+                font: Some(red_big),
+            },
+        ]),
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    let value = s.get_value_at(0, 0);
+    assert_eq!(format!("{value}"), "plain bold italic loud");
+    let runs = match &value {
+        CellValue::RichText(runs) => runs,
+        other => panic!("expected RichText after Excel round-trip, got {other:?}"),
+    };
+    assert!(
+        runs.len() >= 4,
+        "expected ≥4 runs, got {}: {runs:?}",
+        runs.len()
+    );
+    let has_bold = runs
+        .iter()
+        .any(|r| matches!(&r.font, Some(f) if f.bold == Some(true)));
+    let has_italic = runs
+        .iter()
+        .any(|r| matches!(&r.font, Some(f) if f.italic == Some(true)));
+    let has_big = runs
+        .iter()
+        .any(|r| matches!(&r.font, Some(f) if matches!(f.size, Some(s) if s >= 14.0)));
+    assert!(has_bold, "bold run lost: {runs:?}");
+    assert!(has_italic, "italic run lost: {runs:?}");
+    assert!(has_big, "size-≥14 run lost: {runs:?}");
+}
+
+#[test]
+fn test_write_named_range_formula() {
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "Calc").unwrap();
+    wb.add_worksheet_with_name("Data").unwrap();
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A1", 5.0)
+        .unwrap();
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A2", 10.0)
+        .unwrap();
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A3", 15.0)
+        .unwrap();
+    wb.define_name("Numbers", "Data!$A$1:$A$3").unwrap();
+
+    let calc = wb.worksheet_mut(0).unwrap();
+    calc.set_cell_formula("B1", "=SUM(Numbers)").unwrap();
+    calc.set_formula_result(0, 1, CellValue::Number(30.0))
+        .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let names: Vec<&str> = result
+        .named_ranges()
+        .iter()
+        .map(|nr| nr.name.as_str())
+        .collect();
+    assert!(
+        names.iter().any(|n| n.contains("Numbers")),
+        "Numbers name must survive XLSX Excel round-trip; got {names:?}"
+    );
+    let s = result.worksheet_by_name("Calc").unwrap();
+    let v = s.get_value_at(0, 1);
+    match v.effective_value() {
+        CellValue::Number(n) => assert!((n - 30.0).abs() < 1e-9, "B1 = {n}"),
+        other => panic!("B1 expected Number(30), got {other:?}"),
+    }
+}
+
+#[test]
+fn test_write_print_area() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "header").unwrap();
+    ws.set_cell_value("B2", 100.0).unwrap();
+    let mut ps = ws.page_setup().clone();
+    ps.print_area = Some(range("A1", "B2"));
+    ws.set_page_setup(ps);
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    let print_area = s
+        .page_setup()
+        .print_area
+        .as_ref()
+        .expect("print_area must survive XLSX Excel round-trip");
+    assert_eq!(print_area.start, CellAddress::parse("A1").unwrap());
+    assert_eq!(print_area.end, CellAddress::parse("B2").unwrap());
+}
+
+#[test]
+fn test_write_sheet_visibility() {
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "Public").unwrap();
+    wb.add_worksheet_with_name("Hidden").unwrap();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_cell_value("A1", "p")
+        .unwrap();
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_visibility(SheetVisibility::Hidden);
+
+    let result = roundtrip_through_excel(&wb);
+    let hidden = result.worksheet_by_name("Hidden").unwrap();
+    assert!(
+        hidden.visibility() != SheetVisibility::Visible,
+        "Hidden sheet must remain non-visible; got {:?}",
+        hidden.visibility()
+    );
+}
+
+#[test]
+fn test_write_freeze_panes() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "header").unwrap();
+    ws.set_freeze_panes(1, 1);
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    let freeze = s
+        .freeze_panes()
+        .expect("freeze panes must survive XLSX Excel round-trip");
+    assert_eq!((freeze.row, freeze.col), (1, 1));
+}
+
+#[test]
+fn test_write_sheet_protection() {
+    use duke_sheets_core::worksheet::SheetProtection;
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "locked").unwrap();
+    ws.set_protection(Some(SheetProtection {
+        protected: true,
+        ..Default::default()
+    }));
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    let prot = s
+        .protection()
+        .expect("sheet protection must survive XLSX Excel round-trip");
+    assert!(prot.protected, "protected flag lost");
+}
+
+#[test]
+fn test_write_cell_protection_hidden_formula() {
+    // Verifying cell-protection round-trips requires a non-default
+    // Protection value, since `Protection::default()` is `{locked:
+    // false, hidden: false}` and the writer skips `<protection>`
+    // emission when the value matches default. `hidden=true` is
+    // unambiguously non-default and survives Excel's normalisation.
+    //
+    // FIXME: our `Protection::default()` differs from Excel's effective
+    // default of `locked=true`. Setting `protection.locked = false` on
+    // a Style currently does not produce an emitted `<protection>`
+    // block, so the user's "unlock this cell" intent is silently lost
+    // through round-trip. Tracked as a writer gap, not a test bug.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "formula").unwrap();
+    ws.set_cell_formula("B1", "=A1").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Empty).unwrap();
+    let mut hidden = Style::new();
+    hidden.protection = Protection {
+        locked: true,
+        hidden: true,
+    };
+    ws.set_cell_style("B1", &hidden).unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    let b1 = s
+        .cell_style_at(0, 1)
+        .expect("B1 should have non-default style after round-trip");
+    assert!(
+        b1.protection.hidden,
+        "B1 hidden flag must survive round-trip, got hidden={}",
+        b1.protection.hidden
+    );
 }
