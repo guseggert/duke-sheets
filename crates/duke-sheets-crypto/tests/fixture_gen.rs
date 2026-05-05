@@ -1,13 +1,7 @@
 //! Generate password-protected workbook fixtures for crypto tests.
 //!
-//! All tests in this file are `#[ignore]`-gated. They use
-//! `duke_sheets_test_harness::lo::ensure_lo()` which auto-starts the
-//! `duke-sheets-pyuno` LibreOffice container on first call, so no
-//! manual setup is needed - just:
-//!
-//! ```sh
-//! mise run test:lo -- -p duke-sheets-crypto --test fixture_gen -- --ignored
-//! ```
+//! All tests in this file are `#[ignore]`-gated and rely on
+//! `duke_sheets_test_harness::lo::ensure_lo()` to provide LibreOffice.
 //!
 //! Generated files land in `crates/duke-sheets-crypto/tests/fixtures/`.
 //! That directory is gitignored so fixtures don't bloat the repo; the
