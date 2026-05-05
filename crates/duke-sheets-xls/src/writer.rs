@@ -84,12 +84,15 @@ const HLINK_CLSID: [u8; 16] = [
     0xD0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B,
 ];
 
-/// URL moniker CLSID E0C9EA79-F9BA-CE11-8C82-00AA004BA90B in on-disk
-/// LE-mixed format. Identifies the moniker block as a URL rather than
-/// a file path. Must match the reader's URL_MONIKER constant byte-
-/// for-byte; the reader bails to "unknown moniker, skip" otherwise.
+/// URL moniker CLSID 79EAC9E0-BAF9-11CE-8C82-00AA004BA90B in on-disk
+/// LE-mixed format (Data1/Data2/Data3 stored little-endian, Data4
+/// stored byte-ordered). Identifies the moniker block as a URL rather
+/// than a file path. Must match the reader's URL_MONIKER constant
+/// byte-for-byte and the bytes Excel/LibreOffice write — earlier
+/// drafts had Data1 in the wrong direction, which produced files
+/// Excel rejected with "Open method of Workbooks class failed".
 const URL_MONIKER_CLSID: [u8; 16] = [
-    0x79, 0xEA, 0xC9, 0xE0, 0xBA, 0xF9, 0x11, 0xCE, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B,
+    0xE0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B,
 ];
 
 /// MS-XLS §2.4.169: a single MERGECELLS record can hold at most 1027
@@ -2004,13 +2007,18 @@ fn write_hlink_records(stream: &mut Vec<u8>, sheet: &Worksheet) {
 
         let mut flags: u32 = 0;
         if !is_internal {
-            flags |= 0x0001 | 0x0002; // has_moniker + is_absolute
+            flags |= 0x0001 | 0x0002; // hlstmfHasMoniker + hlstmfIsAbsolute
         }
         if location_text.is_some() {
-            flags |= 0x0008;
+            flags |= 0x0008; // hlstmfHasLocationStr (text mark)
         }
         if display.is_some() {
-            flags |= 0x0014; // has_display + has_text-mark
+            // hlstmfHasDisplayName only. The 0x04 bit
+            // (hlstmfSiteGaveDisplayName) means "displayName is implicit
+            // and not stored" — combining it with HasDisplayName is a
+            // contradiction Excel rejects with "Open method of Workbooks
+            // class failed".
+            flags |= 0x0010;
         }
         body.extend_from_slice(&flags.to_le_bytes());
 
@@ -2277,14 +2285,17 @@ fn write_conditional_formats(
             .map(|t| encode_dv_formula(t, externsheet, names))
             .unwrap_or_default();
 
-        let mut cf_body = Vec::with_capacity(6 + f1.len() + f2.len());
+        let mut cf_body = Vec::with_capacity(12 + f1.len() + f2.len());
         cf_body.push(ct);
         cf_body.push(cp);
         cf_body.extend_from_slice(&(f1.len() as u16).to_le_bytes());
         cf_body.extend_from_slice(&(f2.len() as u16).to_le_bytes());
-        // No dxf formatting override - the reader's CF parser locates
-        // the formulas by `total - cce1 - cce2`, so an empty dxf block
-        // simply means formula1 starts immediately after the header.
+        // dxfn12 header (6 bytes): all-zero flags = "no formatting
+        // override". Excel rejects CF records that omit this block
+        // ("Open method of Workbooks class failed") even though our
+        // permissive reader and LibreOffice both tolerate the
+        // shorter shape.
+        cf_body.extend_from_slice(&[0u8; 6]);
         cf_body.extend_from_slice(&f1);
         cf_body.extend_from_slice(&f2);
 

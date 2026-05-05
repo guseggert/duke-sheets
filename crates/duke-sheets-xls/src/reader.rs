@@ -2528,9 +2528,12 @@ impl XlsReader {
 
     /// Parse the moniker portion of an HLINK record.
     fn parse_hlink_moniker(data: &[u8], off: &mut usize, _is_absolute: bool) -> XlsResult<String> {
-        // URL moniker GUID (little-endian): E0C9EA79-F9BA-CE11-8C82-00AA004BA90B
+        // URL moniker GUID 79EAC9E0-BAF9-11CE-8C82-00AA004BA90B in
+        // on-disk LE-mixed format (Data1/2/3 little-endian, Data4
+        // byte-ordered). Must match the writer's URL_MONIKER_CLSID
+        // and the bytes Excel/LibreOffice produce.
         const URL_MONIKER: [u8; 16] = [
-            0x79, 0xEA, 0xC9, 0xE0, 0xBA, 0xF9, 0x11, 0xCE, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B,
+            0xE0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B,
             0xA9, 0x0B,
         ];
         // File moniker GUID: 00000303-0000-0000-C000-000000000046
