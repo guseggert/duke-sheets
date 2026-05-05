@@ -242,6 +242,50 @@ pub fn roundtrip_through_excel(wb: &duke_sheets_core::Workbook) -> duke_sheets_c
     result
 }
 
+/// Write a workbook as XLS (BIFF8) with duke-sheets, push to the VM, open
+/// in real Excel (asserting no repair), re-save as XLS (FileFormat=56),
+/// pull back, and read with `XlsReader`.
+pub fn roundtrip_through_excel_xls(wb: &duke_sheets_core::Workbook) -> duke_sheets_core::Workbook {
+    use duke_sheets_xls::{XlsReader, XlsWriter};
+    use std::io::Cursor;
+
+    let input = temp_fixture_xls();
+    let output = temp_fixture_xls();
+
+    let buf = XlsWriter::write_to_bytes(wb).expect("XlsWriter::write_to_bytes");
+    std::fs::write(&input.host_path, &buf)
+        .unwrap_or_else(|e| panic!("write {}: {e}", input.host_path.display()));
+
+    ensure_vm_temp_dir();
+    push_file_to_vm(&input);
+
+    let bridge = excel_bridge();
+    let excel = bridge.lock().unwrap();
+    let opened = excel
+        .open_workbook(&input.vm_path)
+        .expect("Excel should open our XLS without error");
+
+    let wb_name = opened.name().expect("get workbook name");
+    assert!(
+        !wb_name.contains("Repaired"),
+        "Excel repaired the XLS file! Workbook name: {wb_name}"
+    );
+
+    // FileFormat=56 = xlExcel8 (.xls / BIFF8 / Excel 97-2003)
+    opened
+        .save_as(&output.vm_path, 56)
+        .expect("Excel SaveAs xls");
+    opened.close().expect("close workbook");
+
+    pull_file_from_vm(&output);
+    let result = XlsReader::read_file(&output.host_path).expect("XlsReader::read_file");
+
+    cleanup_fixture(&input);
+    cleanup_fixture(&output);
+
+    result
+}
+
 /// Write a workbook as XLSB with duke-sheets, push to the VM, open in real
 /// Excel (asserting no repair), re-save as XLSB (FileFormat=50), pull back,
 /// and read with `XlsbReader`.

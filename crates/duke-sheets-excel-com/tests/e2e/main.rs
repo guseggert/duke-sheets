@@ -37,6 +37,7 @@ mod roundtrip;
 mod selections;
 mod smoke;
 mod writing;
+mod writing_xls;
 mod xls_reader;
 mod xlsb_parity;
 
