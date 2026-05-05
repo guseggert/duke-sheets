@@ -131,12 +131,28 @@ impl Style {
 }
 
 /// Cell protection settings
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Protection {
     /// Cell is locked (protected when sheet is protected)
     pub locked: bool,
     /// Formula is hidden when sheet is protected
     pub hidden: bool,
+}
+
+impl Default for Protection {
+    /// Excel's effective default is `locked=true, hidden=false` (per
+    /// ECMA-376 §18.8.32: the `protection` element's `locked` attribute
+    /// defaults to "1"). Aligning the Rust default with Excel means
+    /// that writers can use `Protection::default()` as the
+    /// skip-emission baseline and that round-trip readers report
+    /// locked-by-default cells correctly even when the file omits the
+    /// `<protection>` element.
+    fn default() -> Self {
+        Self {
+            locked: true,
+            hidden: false,
+        }
+    }
 }
 
 impl Protection {
