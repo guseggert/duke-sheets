@@ -47,6 +47,14 @@ fn excel_can_read_hyperlinks_we_emit() {
     let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("click"));
+    let hl = s
+        .hyperlink("A1")
+        .expect("hyperlink must survive Excel round-trip");
+    assert!(
+        hl.target.contains("example.com"),
+        "hyperlink target lost after round-trip: {:?}",
+        hl.target
+    );
 }
 
 #[test]
@@ -119,6 +127,14 @@ fn excel_can_read_autofilter_we_emit() {
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("Name"));
     assert_eq!(s.get_value_at(0, 1).as_string(), Some("Value"));
+    let af = s
+        .auto_filter()
+        .expect("autofilter must survive Excel round-trip");
+    assert_eq!(
+        af.range.start,
+        CellAddress::parse("A1").unwrap(),
+        "autofilter range start lost"
+    );
 }
 
 #[test]
@@ -148,6 +164,11 @@ fn excel_can_read_data_validations_we_emit() {
     let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("list"));
+    let validations = s.data_validations();
+    assert!(
+        !validations.is_empty(),
+        "data validations must survive Excel round-trip"
+    );
 }
 
 #[test]
@@ -174,6 +195,11 @@ fn excel_can_read_conditional_formats_we_emit() {
         CellValue::Number(n) => assert!((n - 150.0).abs() < 1e-9),
         other => panic!("A1 expected Number(150), got {other:?}"),
     }
+    let rules = s.conditional_formats();
+    assert!(
+        !rules.is_empty(),
+        "conditional format rules must survive Excel round-trip"
+    );
 }
 
 #[test]
@@ -319,6 +345,13 @@ fn excel_can_read_print_names_we_emit() {
     let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("header"));
+    let print_area = s
+        .page_setup()
+        .print_area
+        .as_ref()
+        .expect("print_area must survive Excel round-trip");
+    assert_eq!(print_area.start, CellAddress::parse("A1").unwrap());
+    assert_eq!(print_area.end, CellAddress::parse("B2").unwrap());
 }
 
 #[test]
@@ -348,6 +381,18 @@ fn excel_can_read_visual_state_we_emit() {
     let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet_by_name("Public").unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("p"));
+    let freeze = s.freeze_panes().expect("freeze panes must survive");
+    assert_eq!(
+        (freeze.row, freeze.col),
+        (1, 1),
+        "freeze panes lost after round-trip"
+    );
+    let hidden = result.worksheet_by_name("Hidden").unwrap();
+    assert!(
+        hidden.visibility() != SheetVisibility::Visible,
+        "Hidden sheet must remain non-visible after round-trip; got {:?}",
+        hidden.visibility()
+    );
 }
 
 #[test]
@@ -365,6 +410,10 @@ fn excel_can_read_protection_state_we_emit() {
     let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("locked"));
+    let prot = s
+        .protection()
+        .expect("sheet protection must survive Excel round-trip");
+    assert!(prot.protected, "protected flag lost after round-trip");
 }
 
 #[test]
@@ -381,4 +430,11 @@ fn excel_can_read_dimensions_we_emit() {
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("tall"));
     assert_eq!(s.get_value_at(0, 1).as_string(), Some("wide"));
+    // Row 0 should retain a non-default height. Excel may round or
+    // adjust slightly, so allow ±1 pt slack.
+    let h = s.row_height(0);
+    assert!((h - 36.0).abs() < 1.0, "row 0 height = {h} (expected ~36)",);
+    // Column B (index 1) should retain a non-default width.
+    let w = s.column_width(1);
+    assert!(w > 20.0 && w < 30.0, "col B width = {w} (expected ~25)",);
 }
