@@ -10,6 +10,8 @@ use duke_sheets_core::auto_filter::{
 use duke_sheets_core::{CellAddress, CellRange, Workbook};
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
+const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
+
 fn write_then_read(wb: &Workbook) -> Workbook {
     let bytes = XlsWriter::write_to_bytes(wb).expect("serialize");
     XlsReader::read(Cursor::new(&bytes)).expect("read back")
@@ -263,4 +265,72 @@ fn no_autofilter_means_no_filtermode_record() {
 
     let parsed = write_then_read(&wb);
     assert!(parsed.worksheet(0).unwrap().auto_filter().is_none());
+}
+
+/// LibreOffice must accept our AUTOFILTER + FILTERMODE +
+/// `_FilterDatabase` NAME triple. We verify by reading the cells
+/// back; LO would refuse to open the file (returning a parse error
+/// or `Repaired` warning) if the records were malformed at the
+/// envelope level.
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_read_autofilter_we_emit() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Name").expect("A1 header");
+    ws.set_cell_value("B1", "Value").expect("B1 header");
+    ws.set_cell_value("A2", "alpha").expect("A2");
+    ws.set_cell_value("B2", 10.0).expect("B2");
+    ws.set_cell_value("A3", "beta").expect("A3");
+    ws.set_cell_value("B3", 20.0).expect("B3");
+
+    let mut af = AutoFilter::new(range("A1", "B3"));
+    af.filter_columns.push(FilterColumn::new(
+        1,
+        ColumnFilter::Top10(Top10Filter {
+            top: true,
+            percent: false,
+            val: 1.0,
+            filter_val: None,
+        }),
+    ));
+    ws.set_auto_filter(Some(af));
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("{SHARED_DIR}/duke_autofilter_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<(String, f64), String> = rt.block_on(async {
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let a1 = wb
+            .get_cell_string("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))?;
+        let b3 = wb
+            .get_cell_value("B3")
+            .await
+            .map_err(|e| format!("B3: {e}"))?;
+        Ok((a1, b3))
+    });
+    let _ = std::fs::remove_file(&path);
+    let (a1, b3) = outcome.expect("LO must open autofilter workbook");
+    assert_eq!(a1, "Name");
+    assert!((b3 - 20.0).abs() < 1e-9, "B3 = {b3}");
 }
