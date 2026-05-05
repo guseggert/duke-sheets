@@ -9,6 +9,8 @@ use duke_sheets_core::worksheet::{PageBreak, PageOrientation};
 use duke_sheets_core::Workbook;
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
+const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
+
 fn write_then_read(wb: &Workbook) -> Workbook {
     let bytes = XlsWriter::write_to_bytes(wb).expect("serialize");
     XlsReader::read(Cursor::new(&bytes)).expect("read back")
@@ -285,4 +287,64 @@ fn full_page_setup_combination_round_trips() {
     assert_eq!(ps.odd_footer.as_deref(), Some("Footer"));
     assert!(ps.print_gridlines);
     assert!(ps.print_headings);
+}
+
+/// LibreOffice must accept our SETUP / HEADER / FOOTER / margin /
+/// PRINTHEADERS / PRINTGRIDLINES / HPAGEBREAKS / VPAGEBREAKS bundle.
+/// Any one of these emitted with bad bytes (wrong endian, off
+/// length, missing reserved fields) would cause LO's loader to flag
+/// the file as corrupt or recompute a different page layout.
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_read_page_setup_we_emit() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "page1").expect("A1");
+    let mut ps = ws.page_setup().clone();
+    ps.orientation = PageOrientation::Landscape;
+    ps.left_margin = 0.5;
+    ps.right_margin = 0.5;
+    ps.top_margin = 0.75;
+    ps.bottom_margin = 0.75;
+    ps.header_margin = 0.3;
+    ps.footer_margin = 0.3;
+    ps.odd_header = Some("Page Header".into());
+    ps.odd_footer = Some("Page &P of &N".into());
+    ps.print_gridlines = true;
+    ps.print_headings = true;
+    ps.scale = 80;
+    ws.set_page_setup(ps);
+    ws.add_row_break(5);
+    ws.add_col_break(3);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("{SHARED_DIR}/duke_pagesetup_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<String, String> = rt.block_on(async {
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        wb.get_cell_string("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))
+    });
+    let _ = std::fs::remove_file(&path);
+    let a1 = outcome.expect("LO must open page-setup workbook");
+    assert_eq!(a1, "page1");
 }

@@ -7,6 +7,8 @@ use std::io::Cursor;
 use duke_sheets_core::Workbook;
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
+const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
+
 fn write_then_read(wb: &Workbook) -> Workbook {
     let bytes = XlsWriter::write_to_bytes(wb).expect("serialize");
     XlsReader::read(Cursor::new(&bytes)).expect("read back")
@@ -171,4 +173,56 @@ fn combined_column_width_and_hidden_round_trips() {
         sheet.column_width(1)
     );
     assert!(sheet.is_column_hidden(1));
+}
+
+/// LibreOffice must accept ROW + COLINFO records.
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_read_row_column_dimensions_we_emit() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "tall").expect("A1");
+    ws.set_cell_value("B1", "wide").expect("B1");
+    ws.set_row_height(0, 36.0);
+    ws.set_column_width(1, 25.0);
+    ws.set_column_width(2, 12.0);
+    ws.set_column_hidden(2, true);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("{SHARED_DIR}/duke_dims_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<(String, String), String> = rt.block_on(async {
+        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
+            "127.0.0.1",
+            2002,
+        )
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let a1 = wb
+            .get_cell_string("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))?;
+        let b1 = wb
+            .get_cell_string("B1")
+            .await
+            .map_err(|e| format!("B1: {e}"))?;
+        Ok((a1, b1))
+    });
+    let _ = std::fs::remove_file(&path);
+    let (a1, b1) = outcome.expect("LO must open dimensions workbook");
+    assert_eq!(a1, "tall");
+    assert_eq!(b1, "wide");
 }
