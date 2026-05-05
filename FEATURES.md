@@ -336,7 +336,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Sheet protection flag | R✔ W● | R✖ W✖ | R✔ W✔ | R✖ W✖ | `xls_e2e::sheet_properties::sheet_protection`, `sheet_protection_round_trip::protected_sheet_round_trips_flag`, `excel_com_e2e::writing_xls::excel_can_read_protection_state_we_emit` | §18.3.1.79 |
+| Sheet protection flag | R✔ W✔ | R✖ W✖ | R✔ W✔ | R✖ W✖ | `xls_e2e::sheet_properties::sheet_protection`, `sheet_protection_round_trip::protected_sheet_round_trips_flag`, `excel_com_e2e::writing::test_write_sheet_protection`, `excel_com_e2e::writing_xls::excel_can_read_protection_state_we_emit` | §18.3.1.79 | XLSX writer emits `<sheetProtection sheet="1" .../>`; reader parses it back and Excel preserves it through round-trip |
 | Sheet protection: password hash | R✖ W✖ | R✖ W✖ | R✔ W✔ | R✖ W✖ | `sheet_protection_round_trip::protected_sheet_with_password_hash_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_protection_state_we_emit` | §18.3.1.79 | XLS PASSWORD record (0x0013) carries the 16-bit hash; survives Excel round-trip |
 | Sheet protection: specific permissions (objects/scenarios/formatCells/...) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.79 |
 | Protected ranges (protectedRange) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.64 |
