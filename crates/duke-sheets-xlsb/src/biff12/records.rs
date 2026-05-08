@@ -83,9 +83,13 @@ pub const BRT_BEGIN_MERGE_CELLS: u16 = 0x00B1;
 pub const BRT_END_MERGE_CELLS: u16 = 0x00B2;
 
 pub const BRT_MARGINS: u16 = 0x01DC;
-pub const BRT_PAGE_SETUP: u16 = 0x01DD;
-pub const BRT_PRINT_OPTIONS: u16 = 0x01DE;
+pub const BRT_PRINT_OPTIONS: u16 = 0x01DD;
+pub const BRT_PAGE_SETUP: u16 = 0x01DE;
+// BrtBeginHeaderFooter is followed by HeaderFooterString fields and
+// then BrtEndHeaderFooter even though all the data is in the Begin
+// record itself.
 pub const BRT_HEADER_FOOTER: u16 = 0x01DF;
+pub const BRT_END_HEADER_FOOTER: u16 = 0x01E0;
 
 pub const BRT_H_LINK: u16 = 0x01EE;
 
@@ -102,9 +106,13 @@ pub const BRT_END_COLOR_SCALE: u16 = 0x01D6; // 470
 pub const BRT_CFVO: u16 = 0x01D7; // 471
 pub const BRT_CF_COLOR: u16 = 0x0234; // 564
 
-pub const BRT_BEGIN_DVAL: u16 = 0x0198;
-pub const BRT_END_DVAL: u16 = 0x0199;
-pub const BRT_DVAL: u16 = 0x019A;
+// Per LibreOffice's battle-tested BIFF12 constants and Excel emission:
+// BrtBeginDVals = 0x023D, BrtEndDVals = 0x023E, BrtDVal = 0x0040.
+// The MS-XLSB section numbers (2.4.55, 2.4.356) refer to TOC entries,
+// not record IDs; the actual record IDs are different.
+pub const BRT_BEGIN_DVAL: u16 = 0x023D;
+pub const BRT_END_DVAL: u16 = 0x023E;
+pub const BRT_DVAL: u16 = 0x0040;
 
 pub const BRT_BEGIN_COMMENT_AUTHORS: u16 = 0x0278;
 pub const BRT_END_COMMENT_AUTHORS: u16 = 0x0279;
