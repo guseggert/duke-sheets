@@ -38,6 +38,7 @@ mod selections;
 mod smoke;
 mod writing;
 mod writing_xls;
+mod writing_xlsb;
 mod xls_reader;
 mod xlsb_parity;
 
