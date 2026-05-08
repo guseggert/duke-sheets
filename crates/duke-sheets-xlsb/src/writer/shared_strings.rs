@@ -16,7 +16,9 @@ pub(crate) enum SstEntry {
 }
 
 pub(crate) struct SstRichRun {
-    pub ich: u32,
+    /// Character index into the parent XLString. Bounded to u16 by
+    /// the on-disk format ([MS-XLSB] §2.5.157 StrRun).
+    pub ich: u16,
     pub font_idx: Option<usize>,
 }
 
@@ -144,8 +146,20 @@ pub(crate) fn build_sst(workbook: &Workbook) -> SstMap {
                                 Some(idx)
                             }
                         };
+                        // Per [MS-XLSB] §2.5.157 ich is u16. The parent
+                        // XLString is itself capped at 32,767 chars, so
+                        // legitimate input always fits; clamp loudly on
+                        // pathological overflow rather than silently
+                        // truncating.
+                        let ich_u16 = u16::try_from(current_cu).unwrap_or_else(|_| {
+                            log::warn!(
+                                "rich text run ich {} exceeds u16; clamping to u16::MAX",
+                                current_cu
+                            );
+                            u16::MAX
+                        });
                         sst_runs.push(SstRichRun {
-                            ich: current_cu,
+                            ich: ich_u16,
                             font_idx,
                         });
                         current_cu += run.text.encode_utf16().count() as u32;
@@ -198,15 +212,21 @@ pub(crate) fn write_sst<W: Write + Seek>(
                 rw.write_record(records::BRT_SS_ITEM, &item)?;
             }
             SstEntry::Rich { text, runs } => {
+                // RichStr per [MS-XLSB] §2.5.139:
+                //   1 byte flags (bit 0 = fRichStr)
+                //   XLWideString text
+                //   u32 dwSizeStrRun
+                //   StrRun × dwSizeStrRun, where each StrRun is
+                //   u16 ich + u16 ifnt (4 bytes total) per §2.5.157.
                 let mut item = Vec::new();
                 item.push(0x01u8); // fRichStr
                 item.extend_from_slice(&encode_wide_str(text));
                 item.extend_from_slice(&(runs.len() as u32).to_le_bytes());
                 for run in runs {
                     item.extend_from_slice(&run.ich.to_le_bytes());
-                    let ifnt = match run.font_idx {
-                        None => 0u32,
-                        Some(idx) => rich_font_ids.get(idx).copied().unwrap_or(0) as u32,
+                    let ifnt: u16 = match run.font_idx {
+                        None => 0,
+                        Some(idx) => rich_font_ids.get(idx).copied().unwrap_or(0),
                     };
                     item.extend_from_slice(&ifnt.to_le_bytes());
                 }
