@@ -67,15 +67,16 @@ fn parse_rich_runs(text: &str, data: &[u8], fonts: &[FontStyle]) -> Vec<RichText
     }
 
     let c_runs = parser::read_u32(data, 0) as usize;
-    if c_runs == 0 || data.len() < 4 + c_runs * 8 {
+    // Per [MS-XLSB] §2.5.157 each StrRun is u16 ich + u16 ifnt = 4 bytes.
+    if c_runs == 0 || data.len() < 4 + c_runs * 4 {
         return vec![RichTextRun::plain(text.to_string())];
     }
 
     let mut markers: Vec<(u32, u32)> = Vec::with_capacity(c_runs);
     for i in 0..c_runs {
-        let off = 4 + i * 8;
-        let ich = parser::read_u32(data, off);
-        let ifnt = parser::read_u32(data, off + 4);
+        let off = 4 + i * 4;
+        let ich = parser::read_u16(data, off) as u32;
+        let ifnt = parser::read_u16(data, off + 2) as u32;
         markers.push((ich, ifnt));
     }
 
@@ -203,7 +204,7 @@ mod tests {
         data
     }
 
-    fn build_sst_rich(text: &str, runs: &[(u32, u32)]) -> Vec<u8> {
+    fn build_sst_rich(text: &str, runs: &[(u16, u16)]) -> Vec<u8> {
         let count = 1u32;
         let mut header = Vec::new();
         header.extend_from_slice(&count.to_le_bytes());
