@@ -4,7 +4,6 @@ use std::io::{Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
-
 use crate::biff12::compiler::{compile_formula, CompileContext};
 use crate::biff12::{encode_wide_str, records, RecordWriter};
 use crate::error::XlsbResult;
@@ -153,9 +152,13 @@ fn write_user_name_records<W: Write>(
     let sheet_names: Vec<String> = (0..workbook.sheet_count())
         .map(|i| workbook.worksheet(i).unwrap().name().to_string())
         .collect();
+    // Named-range definitions don't reference each other in this
+    // codepath, so an empty defined_names is fine; PtgName lookups
+    // here would warn-and-skip.
     let compile_ctx = CompileContext {
         sheet_names,
         xlfn_names: xlfn_names.clone(),
+        defined_names: Vec::new(),
     };
 
     for nr in workbook.named_ranges().iter() {
@@ -206,6 +209,7 @@ fn write_print_name_records<W: Write>(
     let compile_ctx = CompileContext {
         sheet_names,
         xlfn_names: xlfn_names.clone(),
+        defined_names: Vec::new(),
     };
 
     for i in 0..workbook.sheet_count() {

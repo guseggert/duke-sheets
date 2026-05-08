@@ -14,6 +14,10 @@ pub(crate) struct CompileContext {
     /// Maps uppercase function name (e.g. "IFS") to 1-based name index
     /// for _xlfn.* functions not in the standard FTAB.
     pub xlfn_names: HashMap<String, u32>,
+    /// User-defined names in workbook emission order. NameRef lookups
+    /// match case-insensitively and emit a 1-based index into this
+    /// list as a PtgName payload.
+    pub defined_names: Vec<String>,
 }
 
 pub(crate) struct CompiledFormula {
@@ -64,9 +68,26 @@ fn emit_expr(
 
         FormulaExpr::Array(rows) => emit_array(rows, out, extra),
 
-        FormulaExpr::NameRef(_) => {
-            log::warn!("named range compilation not supported, emitting #NAME?");
-            emit_error(&CellError::Name, out)
+        FormulaExpr::NameRef(name) => {
+            // Resolve to a 1-based index into the BrtName sequence.
+            // Match case-insensitively per Excel's convention.
+            let upper = name.to_ascii_uppercase();
+            let idx_0based = ctx
+                .defined_names
+                .iter()
+                .position(|n| n.to_ascii_uppercase() == upper);
+            match idx_0based {
+                Some(i) => {
+                    // PtgName R-class, then 4-byte 1-based name index.
+                    out.push(ptg::PTG_NAME);
+                    out.extend_from_slice(&((i as u32) + 1).to_le_bytes());
+                    Ok(())
+                }
+                None => {
+                    log::warn!("unknown named range '{}', emitting #NAME?", name);
+                    emit_error(&CellError::Name, out)
+                }
+            }
         }
         FormulaExpr::StructuredRef(_) => {
             log::warn!("structured reference compilation not supported, emitting #REF!");
@@ -123,7 +144,7 @@ fn emit_array(
     extra: &mut Vec<u8>,
 ) -> Result<(), String> {
     // tArray V-class placeholder: 1 ptg byte + 14 reserved bytes
-    out.push(ptg::PTG_ARRAY | 0x20);
+    out.push(ptg::v_class(ptg::PTG_ARRAY));
     out.extend_from_slice(&[0u8; 14]);
 
     let nr = rows.len();
@@ -201,14 +222,14 @@ fn emit_cell_ref(
     match &cell_ref.sheet {
         None => {
             // tRef V-class
-            out.push(ptg::PTG_REF | 0x20);
+            out.push(ptg::v_class(ptg::PTG_REF));
             out.extend_from_slice(&cell_ref.address.row.to_le_bytes());
             out.extend_from_slice(&encode_col_word(&cell_ref.address).to_le_bytes());
         }
         Some(sheet_name) => {
             let sheet_idx = resolve_sheet_index(sheet_name, ctx)?;
             // tRef3d V-class
-            out.push(ptg::PTG_REF_3D | 0x20);
+            out.push(ptg::v_class(ptg::PTG_REF_3D));
             out.extend_from_slice(&(sheet_idx as u16).to_le_bytes());
             out.extend_from_slice(&cell_ref.address.row.to_le_bytes());
             out.extend_from_slice(&encode_col_word(&cell_ref.address).to_le_bytes());
@@ -228,7 +249,7 @@ fn emit_range_ref(
     match &range_ref.sheet {
         None => {
             // tArea V-class
-            out.push(ptg::PTG_AREA | 0x20);
+            out.push(ptg::v_class(ptg::PTG_AREA));
             out.extend_from_slice(&start.row.to_le_bytes());
             out.extend_from_slice(&end.row.to_le_bytes());
             out.extend_from_slice(&encode_col_word(start).to_le_bytes());
@@ -236,8 +257,11 @@ fn emit_range_ref(
         }
         Some(sheet_name) => {
             let sheet_idx = resolve_sheet_index(sheet_name, ctx)?;
-            // tArea3d V-class
-            out.push(ptg::PTG_AREA_3D | 0x20);
+            // tArea3d R-class. Excel emits the R-class form (0x3B)
+            // for cross-sheet range references; emitting V-class
+            // (0x5B) instead causes Excel to collapse the range to
+            // its last cell during SUM-style evaluation.
+            out.push(ptg::PTG_AREA_3D);
             out.extend_from_slice(&(sheet_idx as u16).to_le_bytes());
             out.extend_from_slice(&start.row.to_le_bytes());
             out.extend_from_slice(&end.row.to_le_bytes());
@@ -320,19 +344,19 @@ fn emit_function(
         let actual_argc = args.len() as u8;
 
         if declared_argc < 254 && declared_argc as u8 == actual_argc {
-            out.push(ptg::PTG_FUNC | 0x20);
+            out.push(ptg::v_class(ptg::PTG_FUNC));
             out.extend_from_slice(&func_idx.to_le_bytes());
         } else {
-            out.push(ptg::PTG_FUNC_VAR | 0x20);
+            out.push(ptg::v_class(ptg::PTG_FUNC_VAR));
             out.push(actual_argc);
             out.extend_from_slice(&func_idx.to_le_bytes());
         }
     } else if let Some(&name_idx) = ctx.xlfn_names.get(&lookup_name.to_ascii_uppercase()) {
         // tName (V-class): ptg byte + name_idx as u32
-        out.push(ptg::PTG_NAME | 0x20);
+        out.push(ptg::v_class(ptg::PTG_NAME));
         out.extend_from_slice(&name_idx.to_le_bytes());
         // tFuncVar (V-class) with func_idx=0xFF: argc includes the tName ref
-        out.push(ptg::PTG_FUNC_VAR | 0x20);
+        out.push(ptg::v_class(ptg::PTG_FUNC_VAR));
         out.push((args.len() + 1) as u8);
         out.extend_from_slice(&0x00FFu16.to_le_bytes());
     } else {
@@ -352,6 +376,7 @@ mod tests {
         CompileContext {
             sheet_names: vec!["Sheet1".to_string(), "Sheet2".to_string()],
             xlfn_names: HashMap::new(),
+            defined_names: Vec::new(),
         }
     }
 

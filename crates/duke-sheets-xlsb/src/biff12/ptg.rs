@@ -5,11 +5,22 @@
 //! IDs themselves are the same.
 //!
 //! Token bytes 0x00-0x1F are unclassified (operators, constants, tAttr).
-//! Token bytes 0x20-0x7F are classified: the base type is `byte & 0x1F`
-//! (when base >= 0x20), with class bits in bits 5-6:
-//!   - 0x00 = Reference (R)
-//!   - 0x20 = Value (V)
-//!   - 0x40 = Array (A)
+//!
+//! Token bytes >= 0x20 are classified: the byte packs a 5-bit ptg id
+//! in bits 0-4, a 2-bit PtgDataType in bits 5-6, and a reserved bit
+//! in bit 7. The PtgDataType encoding is per [MS-XLS] §2.5.198.16:
+//!
+//!   - R-class (Reference): bits[6:5] = 0b01, byte += 0x20
+//!   - V-class (Value):     bits[6:5] = 0b10, byte += 0x40
+//!   - A-class (Array):     bits[6:5] = 0b11, byte += 0x60
+//!
+//! Pitfall: the constants in this module store the R-class form. To
+//! convert R→V you CANNOT use `r | 0x20`. R-class already has bit 5
+//! set, so the OR is a no-op and the byte stays R-class. Excel reads
+//! the unchanged byte as a reference and #VALUE!s on evaluation.
+//!
+//! Use `v_class(r)` (or `r + 0x20`, which works because the carry
+//! from bit 5 propagates correctly) to convert R→V.
 
 pub const PTG_EXP: u8 = 0x01;
 pub const PTG_TBL: u8 = 0x02;
@@ -77,4 +88,25 @@ pub fn base_ptg(byte: u8) -> u8 {
     } else {
         byte
     }
+}
+
+/// Convert an R-class classified ptg byte to its V-class (value) form.
+///
+/// Per [MS-XLS] §2.5.198.16 PtgDataType, the type is a 2-bit field at
+/// bit positions 5-6: R = 0b01, V = 0b10, A = 0b11. The R-class form
+/// of a token always has bit 5 set; V-class has bit 5 clear and bit 6
+/// set.
+///
+/// This helper exists because `r | 0x20` does NOT convert R→V — it's
+/// a no-op since R-class bytes already have bit 5 set. Use this
+/// helper or the `+ 0x20` arithmetic (which carries) instead.
+#[inline]
+pub const fn v_class(r: u8) -> u8 {
+    (r & !0x60) | 0x40
+}
+
+/// Convert an R-class classified ptg byte to its A-class (array) form.
+#[inline]
+pub const fn a_class(r: u8) -> u8 {
+    r | 0x40
 }
