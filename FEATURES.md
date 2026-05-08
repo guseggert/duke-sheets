@@ -15,7 +15,7 @@
 | Formula cells without cached values | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_formula_no_cached_value` | §18.3.1.40 |
 | Empty cells (formatting only) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_style_roundtrip::test_roundtrip_style_only_cells`, `cell_values_round_trip::empty_cell_with_format_only_round_trips` | §18.3.1.4 |
 | Date values (stored as numbers) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::number_formats::date_format`, `number_format_round_trip::builtin_date_format_round_trips` | §18.17.4 |
-| Rich text values | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text`, `rich_text_round_trip::three_run_rich_text_round_trips_text_and_run_count`, `excel_com_e2e::writing_xls::excel_can_read_rich_text_we_emit` | §18.4.1 |
+| Rich text values | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_rich_text`, `rich_text_round_trip::three_run_rich_text_round_trips_text_and_run_count`, `excel_com_e2e::writing_xls::excel_can_read_rich_text_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_rich_text_we_emit` | §18.4.1 |
 | Cell metadata index (`cm`) | R✔ W✔ | R✖ W✖ | R- W- | R- W- | `xlsx_e2e::formula_metadata::reader_parses_cm_attribute` | §18.3.1.4 |
 | Value metadata index (`vm`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
 | Phonetic hint (`ph`) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | §18.3.1.4 |
@@ -33,10 +33,10 @@
 | Cell references (A1) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `formula_evaluation::test_evaluate_with_cell_references`, `formula_round_trip::range_reference_in_formula_round_trips` | §18.17.2.3 |
 | Range references (A1:B2) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `formula_evaluation::test_evaluate_with_range_references`, `formula_round_trip::sum_function_round_trips` | §18.17.2.3 |
 | Full row/column refs (A:A, 1:1) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `formula_evaluation::test_evaluate_sum`, `formula_round_trip::full_column_ref_round_trips_clamped_to_biff8_row_limit`, `formula_round_trip::full_row_ref_round_trips_with_biff8_col_extent` | §18.17.2.3 |
-| Cross-sheet references | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_ref`, `cross_sheet_formula_round_trip::cross_sheet_cell_ref_round_trips` | §18.17.2.3 |
+| Cross-sheet references | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_ref`, `cross_sheet_formula_round_trip::cross_sheet_cell_ref_round_trips`, `excel_com_e2e::writing_xlsb::excel_can_evaluate_cross_sheet_formulas_we_emit` | §18.17.2.3 |
 | Quoted sheet names | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::formulas::cross_sheet_quoted_name`, `cross_sheet_formula_round_trip::quoted_sheet_name_round_trips` | §18.17.2.3 |
 | 3D references (Sheet1:Sheet3!A1) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.3 | Parses but evaluation limited |
-| Named range refs in formulas | R✔ W✔ | R✔ W✔ | R✔ W● | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression`, `named_range_round_trip::user_named_range_in_cell_formula_round_trips` | §18.2.5 | XLS round-trips formula text via tName ptg + NAME record; `Workbook::named_ranges` is not yet repopulated by the reader |
+| Named range refs in formulas | R✔ W✔ | R✔ W✔ | R✔ W● | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression`, `named_range_round_trip::user_named_range_in_cell_formula_round_trips`, `excel_com_e2e::writing_xlsb::excel_can_evaluate_named_range_formulas_we_emit` | §18.2.5 | XLS round-trips formula text via tName ptg + NAME record; `Workbook::named_ranges` is not yet repopulated by the reader; XLSB writer emits PtgName (R-class) referencing BrtName index |
 | Structured references (tables) | R✔ W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_table_with_calculated_column` | §18.17.2.3 | XLSB compiler drops structured refs |
 | Shared formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::shared_formula` | §18.3.1.40 |
 | Array formulas (CSE) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::cse_array_formula` | §18.3.1.40 |
@@ -175,8 +175,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| External URL hyperlinks | R✔ W● | R✔ W✖ | R✔ W✔ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*`, `hyperlinks_round_trip::external_url_hyperlink_round_trips`, `hyperlinks_round_trip::lo_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xls::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | Reader preserves; XLSX writer round-trip incomplete |
-| Internal hyperlinks (Sheet!A1) | R✔ W● | R✔ W✖ | R✔ W✔ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*`, `hyperlinks_round_trip::internal_hash_target_round_trips`, `hyperlinks_round_trip::lo_can_read_hyperlinks_we_emit` | §18.3.1.36 | |
+| External URL hyperlinks | R✔ W● | R✔ W✔ | R✔ W✔ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*`, `hyperlinks_round_trip::external_url_hyperlink_round_trips`, `hyperlinks_round_trip::lo_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xls::excel_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | Reader preserves; XLSX writer round-trip incomplete; XLSB writer + Excel parity verified |
+| Internal hyperlinks (Sheet!A1) | R✔ W● | R✔ W✔ | R✔ W✔ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*`, `hyperlinks_round_trip::internal_hash_target_round_trips`, `hyperlinks_round_trip::lo_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | |
 | Mailto hyperlinks | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
 | Hyperlink tooltips | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
 | Hyperlink display text | R✖ W✖ | R✖ W✖ | R✔ W✔ | R✖ W✖ | `hyperlinks_round_trip::external_url_hyperlink_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | XLS HLINK record carries display name in `cch + UTF-16LE` block; round-trip and Excel parity verify it survives |
@@ -226,7 +226,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| cellIs rules (comparison operators) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_conditional_format_cell_is`, `conditional_format_round_trip::cellis_greater_than_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_conditional_formats_we_emit` | §18.3.1.10 |
+| cellIs rules (comparison operators) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_conditional_format_cell_is`, `conditional_format_round_trip::cellis_greater_than_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_conditional_formats_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_conditional_formats_we_emit` | §18.3.1.10 |
 | Formula-based (expression) rules | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_conditional_format_expression`, `conditional_format_round_trip::expression_rule_round_trips` | §18.3.1.43 |
 | beginsWith / endsWith | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
 | containsText / notContainsText | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.10 |
@@ -256,7 +256,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| List validation (inline values) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_list`, `data_validation_round_trip::list_inline_values_round_trip`, `excel_com_e2e::writing_xls::excel_can_read_data_validations_we_emit` | §18.3.1.32 |
+| List validation (inline values) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_list`, `data_validation_round_trip::list_inline_values_round_trip`, `excel_com_e2e::writing_xls::excel_can_read_data_validations_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_data_validations_we_emit` | §18.3.1.32 |
 | List validation (cell-range source) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::data_validation::list_validation`, `data_validation_round_trip::list_cell_range_source_round_trips` | §18.3.1.32 |
 | List validation (named range source) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.32 |
 | Whole number validation | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_data_validation_number`, `data_validation_round_trip::whole_number_between_round_trips` | §18.3.1.32 |
@@ -274,7 +274,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Filter range | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_range_only`, `autofilter_round_trip::filter_range_only_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_autofilter_we_emit` | §18.3.2 |
+| Filter range | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_range_only`, `autofilter_round_trip::filter_range_only_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_autofilter_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_autofilter_we_emit` | §18.3.2 |
 | Value filter (includes) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_value_filter`, `autofilter_round_trip::value_filter_round_trips_as_equal_or` | §18.3.2.8 |
 | Custom filter (operator-based) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_custom_filter`, `autofilter_round_trip::custom_dual_condition_and_round_trips` | §18.3.2.1 |
 | Top 10 filter | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_top10`, `autofilter_round_trip::top10_filter_round_trips` | §18.3.2.10 |
@@ -289,8 +289,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Freeze panes (rows) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes`, `freeze_panes_round_trip::freeze_first_two_rows_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_visual_state_we_emit` | §18.3.1.66 |
-| Freeze panes (columns) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes`, `freeze_panes_round_trip::freeze_first_column_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_visual_state_we_emit` | §18.3.1.66 |
+| Freeze panes (rows) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes`, `freeze_panes_round_trip::freeze_first_two_rows_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_visual_state_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_visual_state_we_emit` | §18.3.1.66 |
+| Freeze panes (columns) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_selection_with_freeze_panes`, `freeze_panes_round_trip::freeze_first_column_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_visual_state_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_visual_state_we_emit` | §18.3.1.66 |
 | Freeze + split combination | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_split_panes_and_selection` | §18.3.1.66 |
 | Split panes | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_split_panes_and_selection` | §18.3.1.66 |
 | Active cell / active range | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_multi_range_sqref`, `sheet_view_round_trip::active_cell_round_trips` | §18.3.1.78 |
@@ -301,7 +301,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Row/column header visibility | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |
 | Right-to-left view | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.87 |
 | Tab color | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.82 |
-| Sheet visibility (visible/hidden/veryHidden) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::sheet_properties::hidden_sheet`, `sheet_visibility_round_trip::very_hidden_sheet_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_visual_state_we_emit` | §18.2.19 |
+| Sheet visibility (visible/hidden/veryHidden) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::sheet_properties::hidden_sheet`, `sheet_visibility_round_trip::very_hidden_sheet_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_visual_state_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_visual_state_we_emit` | §18.2.19 |
 | Named sheet views (x16 ext) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-XLSX] §2.3.17 |
 
 ## Page setup and print
@@ -314,7 +314,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Fit to width/height | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.62 |
 | Margins | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_page_setup_and_header_footer`, `page_setup_round_trip::page_margins_round_trip` | §18.3.1.59 |
 | Center horizontally / vertically on page | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.61 |
-| Print area | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area`, `print_names_round_trip::print_area_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_print_names_we_emit` | §18.2.5 |
+| Print area | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area`, `print_names_round_trip::print_area_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_print_names_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_print_names_we_emit` | §18.2.5 |
 | Print titles: repeat rows | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_repeat_rows`, `print_names_round_trip::repeat_rows_only_round_trips` | §18.2.5 |
 | Print titles: repeat columns | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_repeat_cols`, `print_names_round_trip::repeat_cols_only_round_trips` | §18.2.5 |
 | Print gridlines | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `com_e2e::xls_reader::xls_print_gridlines`, `page_setup_round_trip::print_gridlines_round_trips` | §18.3.1.70 |
@@ -336,8 +336,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Sheet protection flag | R✔ W✔ | R✖ W✖ | R✔ W✔ | R✖ W✖ | `xls_e2e::sheet_properties::sheet_protection`, `sheet_protection_round_trip::protected_sheet_round_trips_flag`, `excel_com_e2e::writing::test_write_sheet_protection`, `excel_com_e2e::writing_xls::excel_can_read_protection_state_we_emit` | §18.3.1.79 | XLSX writer emits `<sheetProtection sheet="1" .../>`; reader parses it back and Excel preserves it through round-trip |
-| Sheet protection: password hash | R✖ W✖ | R✖ W✖ | R✔ W✔ | R✖ W✖ | `sheet_protection_round_trip::protected_sheet_with_password_hash_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_protection_state_we_emit` | §18.3.1.79 | XLS PASSWORD record (0x0013) carries the 16-bit hash; survives Excel round-trip |
+| Sheet protection flag | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xls_e2e::sheet_properties::sheet_protection`, `sheet_protection_round_trip::protected_sheet_round_trips_flag`, `excel_com_e2e::writing::test_write_sheet_protection`, `excel_com_e2e::writing_xls::excel_can_read_protection_state_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_protection_state_we_emit` | §18.3.1.79 | XLSX writer emits `<sheetProtection sheet="1" .../>`; reader parses it back and Excel preserves it through round-trip; XLSB writer emits BrtSheetProtection and Excel parity verified |
+| Sheet protection: password hash | R✖ W✖ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `sheet_protection_round_trip::protected_sheet_with_password_hash_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_protection_state_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_protection_state_we_emit` | §18.3.1.79 | XLS PASSWORD record (0x0013) carries the 16-bit hash; survives Excel round-trip; XLSB BrtSheetProtection u16 password persists likewise |
 | Sheet protection: specific permissions (objects/scenarios/formatCells/...) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.79 |
 | Protected ranges (protectedRange) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.64 |
 | Workbook structure protection | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.2.30 |
