@@ -123,6 +123,14 @@ impl XlsbWriter {
             .map(|i| workbook.worksheet(i).unwrap().name().to_string())
             .collect();
 
+        // Names emitted to BrtName must be enumerable from the
+        // CompileContext so PtgName can resolve text → 1-based index.
+        let defined_names: Vec<String> = workbook
+            .named_ranges()
+            .iter()
+            .map(|nr| nr.name.clone())
+            .collect();
+
         let has_formulas = (0..workbook.sheet_count()).any(|i| {
             let ws = workbook.worksheet(i).unwrap();
             ws.iter_cells()
@@ -161,6 +169,7 @@ impl XlsbWriter {
             let compile_ctx = CompileContext {
                 sheet_names: sheet_names.clone(),
                 xlfn_names: xlfn_names.clone(),
+                defined_names: defined_names.clone(),
             };
 
             let has_raw_drawing = !ws.raw_drawing_objects.is_empty();
