@@ -1133,45 +1133,27 @@ mod tests {
         ranges: &[(u32, u32, u32, u32)],
     ) -> Vec<u8> {
         let mut payload = Vec::new();
-        let mut flags: u16 = 0;
+
+        // Bit-packed header per [MS-XLSB] §2.4.165:
+        // bits 0-3 valType, 4-6 errStyle, 7 unused, 8 fAllowBlank,
+        // 9 fSuppressCombo, 10-17 mdImeMode, 18 fShowInputMsg,
+        // 19 fShowErrorMsg, 20-23 typOperator, 24-31 reserved.
+        let mut header: u32 = 0;
+        header |= val_type & 0xF;
+        header |= (error_style & 0x7) << 4;
         if allow_blank {
-            flags |= 0x01;
+            header |= 1 << 8;
         }
         if show_input {
-            flags |= 0x04;
+            header |= 1 << 18;
         }
         if show_error {
-            flags |= 0x08;
+            header |= 1 << 19;
         }
-        payload.extend_from_slice(&flags.to_le_bytes());
-        payload.extend_from_slice(&0u16.to_le_bytes()); // padding
-        payload.extend_from_slice(&val_type.to_le_bytes());
-        payload.extend_from_slice(&error_style.to_le_bytes());
-        payload.extend_from_slice(&operator.to_le_bytes());
+        header |= (operator & 0xF) << 20;
+        payload.extend_from_slice(&header.to_le_bytes());
 
-        if formula1.is_empty() {
-            payload.extend_from_slice(&0u32.to_le_bytes());
-        } else {
-            let tokens = biff12_tstr_token(formula1);
-            payload.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
-            payload.extend_from_slice(&0u32.to_le_bytes()); // reserved
-            payload.extend_from_slice(&tokens);
-        }
-        if formula2.is_empty() {
-            payload.extend_from_slice(&0u32.to_le_bytes());
-        } else {
-            let tokens = biff12_tstr_token(formula2);
-            payload.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
-            payload.extend_from_slice(&0u32.to_le_bytes()); // reserved
-            payload.extend_from_slice(&tokens);
-        }
-
-        payload.extend_from_slice(&xlwide(error_title));
-        payload.extend_from_slice(&xlwide(error_msg));
-        payload.extend_from_slice(&xlwide(input_title));
-        payload.extend_from_slice(&xlwide(input_msg));
-
-        // sqref
+        // sqrfx (UncheckedSqRfX): cFx + cFx × UncheckedRfX
         payload.extend_from_slice(&(ranges.len() as u32).to_le_bytes());
         for &(r1, r2, c1, c2) in ranges {
             payload.extend_from_slice(&r1.to_le_bytes());
@@ -1180,7 +1162,33 @@ mod tests {
             payload.extend_from_slice(&c2.to_le_bytes());
         }
 
+        // DValStrings: 4 XLNullableWideStrings
+        payload.extend_from_slice(&xlnullwide(error_title));
+        payload.extend_from_slice(&xlnullwide(error_msg));
+        payload.extend_from_slice(&xlnullwide(input_title));
+        payload.extend_from_slice(&xlnullwide(input_msg));
+
+        // formula1, formula2 (DVParsedFormula): cce + rgce + cb + rgcb
+        for f in [formula1, formula2] {
+            if f.is_empty() {
+                payload.extend_from_slice(&0u32.to_le_bytes()); // cce
+                payload.extend_from_slice(&0u32.to_le_bytes()); // cb
+            } else {
+                let tokens = biff12_tstr_token(f);
+                payload.extend_from_slice(&(tokens.len() as u32).to_le_bytes()); // cce
+                payload.extend_from_slice(&tokens);
+                payload.extend_from_slice(&0u32.to_le_bytes()); // cb
+            }
+        }
+
         build_record(records::BRT_DVAL, &payload)
+    }
+
+    fn xlnullwide(s: &str) -> Vec<u8> {
+        if s.is_empty() {
+            return 0xFFFFFFFFu32.to_le_bytes().to_vec();
+        }
+        xlwide(s)
     }
 
     fn build_cond_fmt_payload(ccf: u32, ranges: &[(u32, u32, u32, u32)]) -> Vec<u8> {

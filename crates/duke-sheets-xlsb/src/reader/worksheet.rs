@@ -16,7 +16,6 @@ use duke_sheets_core::{AutoFilter, CellError, CellRange, CellValue, Hyperlink, W
 use super::shared_strings::SharedStringEntry;
 use duke_sheets_formula::decompile::FormulaContext;
 
-
 use crate::biff12::records;
 use crate::biff12::RecordIter;
 use crate::biff12::{parser, token_parser};
@@ -981,27 +980,35 @@ fn decompile_formula(data: &[u8], grbit_offset: usize, ctx: &FormulaContext) -> 
     }
 }
 
-// BrtDVal layout:
-// [0..2] flags (u16): bit 0=allowBlank, bit 1=suppressDropDown, bit 2=showInputMsg,
-//   bit 3=showErrorMsg
-// [4..8] validation_type (u32): 0=none,1=whole,2=decimal,3=list,4=date,5=time,6=textLength,7=custom
-// [8..12] error_style (u32): 0=stop, 1=warning, 2=information
-// [12..16] operator (u32): 0=between..7=lessThanOrEqual
-// Then XLWideString: formula1, formula2, error_title, error_message, input_title, input_message
-// Then sqref: [0..4] count (u32), then count × UncheckedRfX (16 bytes each)
+// BrtDVal layout per [MS-XLSB] §2.4.165:
+// [0..4] bit-packed header (u32):
+//   bits 0-3:   valType (4)
+//   bits 4-6:   errStyle (3)
+//   bit  7:     unused (1)
+//   bit  8:     fAllowBlank (1)
+//   bit  9:     fSuppressCombo (1)
+//   bits 10-17: mdImeMode (8)
+//   bit  18:    fShowInputMsg (1)
+//   bit  19:    fShowErrorMsg (1)
+//   bits 20-23: typOperator (4)
+//   bits 24-31: reserved (8)
+// Then sqrfx (UncheckedSqRfX): cFx u32 + cFx × UncheckedRfX (16 bytes)
+// Then DValStrings: 4 XLNullableWideStrings
+//   (strErrorTitle, strError, strPromptTitle, strPrompt)
+// Then formula1 (DVParsedFormula): cce u32 + rgce + cb u32 + rgcb
+// Then formula2 (DVParsedFormula): cce u32 + rgce + cb u32 + rgcb
 fn parse_data_validation(data: &[u8], ws: &mut Worksheet, _ctx: &FormulaContext) {
-    if data.len() < 20 {
+    if data.len() < 4 {
         return;
     }
-    let flags = parser::read_u16(data, 0);
-    let allow_blank = (flags & 0x01) != 0;
-    let suppress_dropdown = (flags & 0x02) != 0;
-    let show_input_message = (flags & 0x04) != 0;
-    let show_error_alert = (flags & 0x08) != 0;
-
-    let val_type_raw = parser::read_u32(data, 4);
-    let error_style_raw = parser::read_u32(data, 8);
-    let operator_raw = parser::read_u32(data, 12);
+    let header = parser::read_u32(data, 0);
+    let val_type_raw = header & 0xF;
+    let err_style_raw = (header >> 4) & 0x7;
+    let allow_blank = (header & (1 << 8)) != 0;
+    let suppress_dropdown = (header & (1 << 9)) != 0;
+    let show_input_message = (header & (1 << 18)) != 0;
+    let show_error_alert = (header & (1 << 19)) != 0;
+    let operator_raw = (header >> 20) & 0xF;
 
     let operator = match operator_raw {
         0 => ValidationOperator::Between,
@@ -1015,24 +1022,23 @@ fn parse_data_validation(data: &[u8], ws: &mut Worksheet, _ctx: &FormulaContext)
         _ => ValidationOperator::Between,
     };
 
-    let error_style = match error_style_raw {
+    let error_style = match err_style_raw {
         0 => ValidationErrorStyle::Stop,
         1 => ValidationErrorStyle::Warning,
         2 => ValidationErrorStyle::Information,
         _ => ValidationErrorStyle::Stop,
     };
 
-    let mut pos = 16;
-
-    let formula1 = read_dv_formula(data, &mut pos);
-    let formula2 = read_dv_formula(data, &mut pos);
-
-    let error_title = read_optional_wide_str(data, &mut pos);
-    let error_message = read_optional_wide_str(data, &mut pos);
-    let input_title = read_optional_wide_str(data, &mut pos);
-    let input_message = read_optional_wide_str(data, &mut pos);
-
+    let mut pos = 4;
     let ranges = read_sqref(data, &mut pos);
+
+    let error_title = read_nullable_wide_str(data, &mut pos);
+    let error_message = read_nullable_wide_str(data, &mut pos);
+    let input_title = read_nullable_wide_str(data, &mut pos);
+    let input_message = read_nullable_wide_str(data, &mut pos);
+
+    let formula1 = read_dv_parsed_formula(data, &mut pos);
+    let formula2 = read_dv_parsed_formula(data, &mut pos);
 
     let validation_type = match val_type_raw {
         1 => ValidationType::Whole {
@@ -1086,28 +1092,40 @@ fn parse_data_validation(data: &[u8], ws: &mut Worksheet, _ctx: &FormulaContext)
     ws.add_data_validation(validation);
 }
 
-fn read_dv_formula(data: &[u8], pos: &mut usize) -> Option<String> {
+/// Read a DVParsedFormula: cce u32 + rgce + cb u32 + rgcb.
+fn read_dv_parsed_formula(data: &[u8], pos: &mut usize) -> Option<String> {
     if *pos + 4 > data.len() {
         return None;
     }
     let cce = parser::read_u32(data, *pos) as usize;
     *pos += 4;
-    if cce == 0 {
-        return None;
-    }
-    // Skip unused bytes (4 bytes reserved)
-    if *pos + 4 > data.len() {
-        return None;
-    }
-    *pos += 4;
-    let tokens_end = *pos + cce;
-    if tokens_end > data.len() {
+
+    let rgce_end = *pos + cce;
+    if rgce_end > data.len() {
         *pos = data.len();
         return None;
     }
-    let token_bytes = &data[*pos..tokens_end];
-    *pos = tokens_end;
-    let tokens = token_parser::parse_tokens(token_bytes);
+    let token_bytes = &data[*pos..rgce_end];
+    *pos = rgce_end;
+
+    if *pos + 4 > data.len() {
+        return None;
+    }
+    let cb = parser::read_u32(data, *pos) as usize;
+    *pos += 4;
+    let rgcb_end = *pos + cb;
+    if rgcb_end > data.len() {
+        *pos = data.len();
+        return None;
+    }
+    let extra = &data[*pos..rgcb_end];
+    *pos = rgcb_end;
+
+    if cce == 0 {
+        return None;
+    }
+
+    let tokens = token_parser::parse_tokens_with_extra(token_bytes, extra);
     if tokens.is_empty() {
         return None;
     }
@@ -1119,20 +1137,6 @@ fn read_dv_formula(data: &[u8], pos: &mut usize) -> Option<String> {
         None
     } else {
         Some(formula)
-    }
-}
-
-fn read_optional_wide_str(data: &[u8], pos: &mut usize) -> Option<String> {
-    match parser::wide_str(data, *pos) {
-        Ok((s, consumed)) => {
-            *pos += consumed;
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        }
-        Err(_) => None,
     }
 }
 
@@ -1305,6 +1309,8 @@ fn parse_cf_rule_base(
     }
 }
 
+/// Read an XLNullableWideString. Returns None for a NULL string
+/// (cchCharacters == 0xFFFFFFFF) or empty string.
 fn read_nullable_wide_str(data: &[u8], pos: &mut usize) -> Option<String> {
     if *pos + 4 > data.len() {
         return None;
@@ -1314,7 +1320,17 @@ fn read_nullable_wide_str(data: &[u8], pos: &mut usize) -> Option<String> {
         *pos += 4;
         return None;
     }
-    read_optional_wide_str(data, pos)
+    match parser::wide_str(data, *pos) {
+        Ok((s, consumed)) => {
+            *pos += consumed;
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+        Err(_) => None,
+    }
 }
 
 fn read_cf_parsed_formula(data: &[u8], pos: &mut usize) -> Option<String> {

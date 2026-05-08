@@ -11,10 +11,11 @@ use duke_sheets_core::conditional_format::{
     CfOperator, CfRuleType, CfValueType, IconSetStyle, TimePeriod,
 };
 use duke_sheets_core::style::Color;
-use duke_sheets_core::validation::{ValidationErrorStyle, ValidationOperator, ValidationType};
+use duke_sheets_core::validation::{
+    DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType,
+};
 use duke_sheets_core::worksheet::PageOrientation;
 use duke_sheets_core::{CellAddress, CellError, CellValue, Worksheet};
-
 
 use super::shared_strings::SstMap;
 use super::styles::StyleMapping;
@@ -120,7 +121,7 @@ pub(crate) fn write_worksheet<W: Write + Seek>(
     write_margins(&mut rw, ws)?;
     write_header_footer(&mut rw, ws)?;
     write_page_breaks(&mut rw, ws)?;
-    write_data_validations(&mut rw, ws)?;
+    write_data_validations(&mut rw, ws, compile_ctx)?;
     write_conditional_formats(&mut rw, ws, index, dxf_mapping, compile_ctx)?;
 
     let has_comments = ws.comments().next().is_some();
@@ -731,24 +732,41 @@ fn write_page_setup<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std::
         && ps.fit_to_width.is_none()
         && ps.fit_to_height.is_none();
 
+    // Real Excel omits BrtPageSetup entirely for default values, so
+    // do the same. Excel synthesises sensible defaults on read.
     if is_default {
-        rw.write_record(records::BRT_PAGE_SETUP, &0x0010u16.to_le_bytes())
-    } else {
-        let mut payload = vec![0u8; 34];
-        payload[0..4].copy_from_slice(&(ps.paper_size as u32).to_le_bytes());
-        payload[4..8].copy_from_slice(&(ps.scale as u32).to_le_bytes());
-        payload[16..20].copy_from_slice(&1u32.to_le_bytes());
-        let fit_width = ps.fit_to_width.unwrap_or(0) as u32;
-        let fit_height = ps.fit_to_height.unwrap_or(0) as u32;
-        payload[24..28].copy_from_slice(&fit_width.to_le_bytes());
-        payload[28..32].copy_from_slice(&fit_height.to_le_bytes());
-        let mut grbit: u16 = 0;
-        if ps.orientation == PageOrientation::Landscape {
-            grbit |= 0x02;
-        }
-        payload[32..34].copy_from_slice(&grbit.to_le_bytes());
-        rw.write_record(records::BRT_PAGE_SETUP, &payload)
+        return Ok(());
     }
+
+    // BrtPageSetup payload per [MS-XLSB] §2.4.713:
+    //   iPaperSize, iScale, iRes, iVRes, iCopies, iPageStart,
+    //   iFitWidth, iFitHeight  (8 × u32 = 32 bytes)
+    //   flags (u16):
+    //     bit 0 fLeftToRight, bit 1 fLandscape, bit 2 reserved1,
+    //     bit 3 fNoColor, bit 4 fDraft, bit 5 fNotes,
+    //     bit 6 fNoOrient, bit 7 fUsePage, bit 8 fEndNotes,
+    //     bits 9-10 iErrors (2 bits), bits 11-15 reserved2 (5 bits)
+    //   szRelID (XLNullableWideString, NULL = u32 0xFFFFFFFF)
+    let mut payload = Vec::with_capacity(38);
+    payload.extend_from_slice(&(ps.paper_size as u32).to_le_bytes());
+    payload.extend_from_slice(&(ps.scale as u32).to_le_bytes());
+    payload.extend_from_slice(&0u32.to_le_bytes()); // iRes
+    payload.extend_from_slice(&0u32.to_le_bytes()); // iVRes
+    payload.extend_from_slice(&1u32.to_le_bytes()); // iCopies
+    payload.extend_from_slice(&1u32.to_le_bytes()); // iPageStart
+    payload.extend_from_slice(&(ps.fit_to_width.unwrap_or(0) as u32).to_le_bytes());
+    payload.extend_from_slice(&(ps.fit_to_height.unwrap_or(0) as u32).to_le_bytes());
+
+    let mut flags: u16 = 0;
+    if ps.orientation == PageOrientation::Landscape {
+        flags |= 1 << 1;
+    }
+    payload.extend_from_slice(&flags.to_le_bytes());
+
+    // szRelID NULL marker.
+    payload.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+
+    rw.write_record(records::BRT_PAGE_SETUP, &payload)
 }
 
 fn write_print_options<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std::io::Result<()> {
@@ -782,6 +800,12 @@ fn write_header_footer<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> st
         return Ok(());
     }
 
+    // BrtBeginHeaderFooter per [MS-XLSB] §2.4.91:
+    //   2 bytes flags (4 named bits + 12 reserved)
+    //   6 HeaderFooterString fields (XLNullableWideString):
+    //     stHeader, stFooter, stHeaderEven, stFooterEven,
+    //     stHeaderFirst, stFooterFirst.
+    // The block is closed by BrtEndHeaderFooter.
     let mut flags: u16 = 0;
     if ps.different_odd_even {
         flags |= 0x01;
@@ -798,14 +822,15 @@ fn write_header_footer<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> st
 
     let mut payload = Vec::new();
     payload.extend_from_slice(&flags.to_le_bytes());
-    payload.extend_from_slice(&encode_wide_str(ps.odd_header.as_deref().unwrap_or("")));
-    payload.extend_from_slice(&encode_wide_str(ps.odd_footer.as_deref().unwrap_or("")));
-    payload.extend_from_slice(&encode_wide_str(ps.even_header.as_deref().unwrap_or("")));
-    payload.extend_from_slice(&encode_wide_str(ps.even_footer.as_deref().unwrap_or("")));
-    payload.extend_from_slice(&encode_wide_str(ps.first_header.as_deref().unwrap_or("")));
-    payload.extend_from_slice(&encode_wide_str(ps.first_footer.as_deref().unwrap_or("")));
+    payload.extend_from_slice(&encode_nullable_wide_str(ps.odd_header.as_deref()));
+    payload.extend_from_slice(&encode_nullable_wide_str(ps.odd_footer.as_deref()));
+    payload.extend_from_slice(&encode_nullable_wide_str(ps.even_header.as_deref()));
+    payload.extend_from_slice(&encode_nullable_wide_str(ps.even_footer.as_deref()));
+    payload.extend_from_slice(&encode_nullable_wide_str(ps.first_header.as_deref()));
+    payload.extend_from_slice(&encode_nullable_wide_str(ps.first_footer.as_deref()));
 
-    rw.write_record(records::BRT_HEADER_FOOTER, &payload)
+    rw.write_record(records::BRT_HEADER_FOOTER, &payload)?;
+    rw.write_record(records::BRT_END_HEADER_FOOTER, &[])
 }
 
 fn write_sheet_protection<W: Write>(
@@ -888,79 +913,182 @@ fn write_page_breaks<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std:
 fn write_data_validations<W: Write>(
     rw: &mut RecordWriter<W>,
     ws: &Worksheet,
+    compile_ctx: &CompileContext,
 ) -> std::io::Result<()> {
     let validations = ws.data_validations();
     if validations.is_empty() {
         return Ok(());
     }
 
-    rw.write_record(records::BRT_BEGIN_DVAL, &[])?;
+    // BrtBeginDVals carries an 18-byte DVals payload per [MS-XLSB]
+    // §2.5.36: fWnClosed bit + 15 reserved bits, xLeft u32, yTop
+    // u32, unused3 u32, idvMac u32 (count of BrtDVal records).
+    let mut begin_payload = Vec::with_capacity(18);
+    begin_payload.extend_from_slice(&0u16.to_le_bytes()); // fWnClosed=0 + reserved
+    begin_payload.extend_from_slice(&0u32.to_le_bytes()); // xLeft
+    begin_payload.extend_from_slice(&0u32.to_le_bytes()); // yTop
+    begin_payload.extend_from_slice(&0u32.to_le_bytes()); // unused3
+    begin_payload.extend_from_slice(&(validations.len() as u32).to_le_bytes()); // idvMac
+    rw.write_record(records::BRT_BEGIN_DVAL, &begin_payload)?;
 
     for dv in validations {
-        let mut payload = Vec::new();
-
-        let mut flags: u16 = 0;
-        if dv.allow_blank {
-            flags |= 0x01;
-        }
-        if !dv.show_dropdown {
-            flags |= 0x02;
-        }
-        if dv.show_input_message {
-            flags |= 0x04;
-        }
-        if dv.show_error_alert {
-            flags |= 0x08;
-        }
-        payload.extend_from_slice(&flags.to_le_bytes());
-        payload.extend_from_slice(&0u16.to_le_bytes());
-
-        let (val_type_raw, operator_raw) = match &dv.validation_type {
-            ValidationType::None => (0u32, 0u32),
-            ValidationType::Whole { operator, .. } => (1, validation_op_code(operator)),
-            ValidationType::Decimal { operator, .. } => (2, validation_op_code(operator)),
-            ValidationType::List { .. } => (3, 0),
-            ValidationType::Date { operator, .. } => (4, validation_op_code(operator)),
-            ValidationType::Time { operator, .. } => (5, validation_op_code(operator)),
-            ValidationType::TextLength { operator, .. } => (6, validation_op_code(operator)),
-            ValidationType::Custom { .. } => (7, 0),
-        };
-
-        payload.extend_from_slice(&val_type_raw.to_le_bytes());
-
-        let error_style_raw: u32 = match dv.error_style {
-            ValidationErrorStyle::Stop => 0,
-            ValidationErrorStyle::Warning => 1,
-            ValidationErrorStyle::Information => 2,
-        };
-        payload.extend_from_slice(&error_style_raw.to_le_bytes());
-        payload.extend_from_slice(&operator_raw.to_le_bytes());
-
-        write_dv_formula_stub(&mut payload);
-        write_dv_formula_stub(&mut payload);
-
-        payload.extend_from_slice(&encode_wide_str(dv.error_title.as_deref().unwrap_or("")));
-        payload.extend_from_slice(&encode_wide_str(dv.error_message.as_deref().unwrap_or("")));
-        payload.extend_from_slice(&encode_wide_str(dv.input_title.as_deref().unwrap_or("")));
-        payload.extend_from_slice(&encode_wide_str(dv.input_message.as_deref().unwrap_or("")));
-
-        let count = dv.ranges.len() as u32;
-        payload.extend_from_slice(&count.to_le_bytes());
-        for range in &dv.ranges {
-            payload.extend_from_slice(&range.start.row.to_le_bytes());
-            payload.extend_from_slice(&range.end.row.to_le_bytes());
-            payload.extend_from_slice(&(range.start.col as u32).to_le_bytes());
-            payload.extend_from_slice(&(range.end.col as u32).to_le_bytes());
-        }
-
+        let payload = build_dval_payload(dv, compile_ctx);
         rw.write_record(records::BRT_DVAL, &payload)?;
     }
 
     rw.write_record(records::BRT_END_DVAL, &[])
 }
 
-fn write_dv_formula_stub(payload: &mut Vec<u8>) {
-    payload.extend_from_slice(&0u32.to_le_bytes());
+/// Build a BrtDVal record payload per [MS-XLSB] §2.4.165.
+///
+/// Layout (no fixed-size header beyond the bit-packed u32):
+///   - 4 bytes: bit-packed header
+///       bits 0-3:   valType (4)
+///       bits 4-6:   errStyle (3)
+///       bit  7:     unused (1)
+///       bit  8:     fAllowBlank (1)
+///       bit  9:     fSuppressCombo (1)
+///       bits 10-17: mdImeMode (8)
+///       bit  18:    fShowInputMsg (1)
+///       bit  19:    fShowErrorMsg (1)
+///       bits 20-23: typOperator (4)
+///       bits 24-31: reserved (8) — MUST be 0
+///   - sqrfx: UncheckedSqRfX (cFx u32 + cFx × UncheckedRfX 16 bytes each)
+///   - DValStrings: 4 XLNullableWideStrings
+///       (strErrorTitle, strError, strPromptTitle, strPrompt)
+///   - formula1: DVParsedFormula (cce u32 + rgce + cb u32 + rgcb)
+///   - formula2: DVParsedFormula (cce u32 + rgce + cb u32 + rgcb)
+fn build_dval_payload(dv: &DataValidation, compile_ctx: &CompileContext) -> Vec<u8> {
+    let mut payload = Vec::new();
+
+    let val_type: u32 = match &dv.validation_type {
+        ValidationType::None => 0,
+        ValidationType::Whole { .. } => 1,
+        ValidationType::Decimal { .. } => 2,
+        ValidationType::List { .. } => 3,
+        ValidationType::Date { .. } => 4,
+        ValidationType::Time { .. } => 5,
+        ValidationType::TextLength { .. } => 6,
+        ValidationType::Custom { .. } => 7,
+    };
+    let err_style: u32 = match dv.error_style {
+        ValidationErrorStyle::Stop => 0,
+        ValidationErrorStyle::Warning => 1,
+        ValidationErrorStyle::Information => 2,
+    };
+    let typ_operator: u32 = match &dv.validation_type {
+        ValidationType::Whole { operator, .. }
+        | ValidationType::Decimal { operator, .. }
+        | ValidationType::Date { operator, .. }
+        | ValidationType::Time { operator, .. }
+        | ValidationType::TextLength { operator, .. } => validation_op_code(operator),
+        _ => 0u32,
+    };
+
+    let suppress_combo = !dv.show_dropdown;
+
+    let mut header: u32 = 0;
+    header |= val_type & 0xF;
+    header |= (err_style & 0x7) << 4;
+    if dv.allow_blank {
+        header |= 1 << 8;
+    }
+    if suppress_combo {
+        header |= 1 << 9;
+    }
+    if dv.show_input_message {
+        header |= 1 << 18;
+    }
+    if dv.show_error_alert {
+        header |= 1 << 19;
+    }
+    header |= (typ_operator & 0xF) << 20;
+    payload.extend_from_slice(&header.to_le_bytes());
+
+    // sqrfx: UncheckedSqRfX
+    let count = dv.ranges.len() as u32;
+    payload.extend_from_slice(&count.to_le_bytes());
+    for range in &dv.ranges {
+        payload.extend_from_slice(&range.start.row.to_le_bytes());
+        payload.extend_from_slice(&range.end.row.to_le_bytes());
+        payload.extend_from_slice(&(range.start.col as u32).to_le_bytes());
+        payload.extend_from_slice(&(range.end.col as u32).to_le_bytes());
+    }
+
+    // DValStrings: 4 XLNullableWideStrings
+    payload.extend_from_slice(&encode_nullable_wide_str(dv.error_title.as_deref()));
+    payload.extend_from_slice(&encode_nullable_wide_str(dv.error_message.as_deref()));
+    payload.extend_from_slice(&encode_nullable_wide_str(dv.input_title.as_deref()));
+    payload.extend_from_slice(&encode_nullable_wide_str(dv.input_message.as_deref()));
+
+    // formula1, formula2 (DVParsedFormula)
+    let (formula1_text, formula2_text) = dv_formula_texts(&dv.validation_type);
+    write_dv_parsed_formula(&mut payload, formula1_text.as_deref(), compile_ctx);
+    write_dv_parsed_formula(&mut payload, formula2_text.as_deref(), compile_ctx);
+
+    payload
+}
+
+/// Extracts the formula1 and formula2 text from a validation type.
+///
+/// For List, formula1 is the source string wrapped in quotes (so it
+/// compiles to a tStr token). For numeric/date/time/textLength types
+/// formula1=value1 and formula2=value2 (when present). For Custom
+/// formula1 is the formula. None has no formulas.
+fn dv_formula_texts(vt: &ValidationType) -> (Option<String>, Option<String>) {
+    match vt {
+        ValidationType::None => (None, None),
+        ValidationType::Whole { value1, value2, .. }
+        | ValidationType::Decimal { value1, value2, .. }
+        | ValidationType::Date { value1, value2, .. }
+        | ValidationType::Time { value1, value2, .. }
+        | ValidationType::TextLength { value1, value2, .. } => {
+            (Some(value1.clone()), value2.clone())
+        }
+        ValidationType::List { source } => {
+            // The on-disk format stores the source as a quoted string
+            // literal; e.g. source "Red,Green,Blue" becomes the
+            // formula text `"Red,Green,Blue"` which compiles to a
+            // single tStr token.
+            (Some(format!("\"{}\"", source.replace('"', "\"\""))), None)
+        }
+        ValidationType::Custom { formula } => (Some(formula.clone()), None),
+    }
+}
+
+/// Encode a DVParsedFormula: cce(u32) + rgce + cb(u32) + rgcb.
+///
+/// Empty / missing formula is encoded with cce=0 and cb=0 (8 bytes).
+fn write_dv_parsed_formula(payload: &mut Vec<u8>, text: Option<&str>, ctx: &CompileContext) {
+    let compiled = match text {
+        Some(t) if !t.is_empty() => match compiler::compile_formula(t, ctx) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                log::warn!("DV formula compilation failed for '{t}': {e}");
+                None
+            }
+        },
+        _ => None,
+    };
+
+    let (rgce, rgcb): (&[u8], &[u8]) = match &compiled {
+        Some(c) => (&c.rgce, &c.rgcb),
+        None => (&[], &[]),
+    };
+    payload.extend_from_slice(&(rgce.len() as u32).to_le_bytes());
+    payload.extend_from_slice(rgce);
+    payload.extend_from_slice(&(rgcb.len() as u32).to_le_bytes());
+    payload.extend_from_slice(rgcb);
+}
+
+/// Encode an XLNullableWideString: cchCharacters=0xFFFFFFFF for NULL,
+/// otherwise cchCharacters + UTF-16LE bytes.
+fn encode_nullable_wide_str(s: Option<&str>) -> Vec<u8> {
+    match s {
+        None => 0xFFFFFFFFu32.to_le_bytes().to_vec(),
+        Some(text) if text.is_empty() => 0xFFFFFFFFu32.to_le_bytes().to_vec(),
+        Some(text) => encode_wide_str(text),
+    }
 }
 
 fn write_conditional_formats<W: Write>(
