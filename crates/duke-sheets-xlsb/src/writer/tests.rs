@@ -1344,7 +1344,6 @@ mod tests {
         }
     }
 
-
     fn count_xfs_in_binary(data: &[u8]) -> u32 {
         use crate::biff12::records;
         let mut iter = crate::biff12::RecordIter::new(std::io::Cursor::new(data));
@@ -1913,7 +1912,6 @@ mod tests {
         assert_eq!(ws2.column_outline_level(0), 0);
     }
 
-
     #[test]
     fn active_cell_selection_roundtrip() {
         let mut wb = Workbook::new();
@@ -2059,5 +2057,73 @@ mod tests {
             .set_print_area(duke_sheets_core::CellRange::parse("A1:D10").unwrap());
         let wb2 = round_trip(&wb);
         assert!(wb2.worksheet(0).unwrap().print_area().is_some());
+    }
+
+    #[test]
+    fn dynamic_filter_in_process_roundtrip() {
+        use duke_sheets_core::auto_filter::{
+            AutoFilter, ColumnFilter, DynamicFilter, DynamicFilterType, FilterColumn,
+        };
+        use duke_sheets_core::{CellAddress, CellRange};
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let mut af = AutoFilter::new(CellRange::new(
+            CellAddress::parse("A1").unwrap(),
+            CellAddress::parse("A5").unwrap(),
+        ));
+        af.filter_columns.push(FilterColumn::new(
+            0,
+            ColumnFilter::Dynamic(DynamicFilter {
+                filter_type: DynamicFilterType::Today,
+                val: Some(45000.5),
+                max_val: Some(45001.0),
+            }),
+        ));
+        ws.set_auto_filter(Some(af));
+
+        let wb2 = round_trip(&wb);
+        let af = wb2.worksheet(0).unwrap().auto_filter().unwrap().clone();
+        let col0 = af.filter_columns.iter().find(|fc| fc.col_id == 0).unwrap();
+        match &col0.filter {
+            ColumnFilter::Dynamic(d) => {
+                assert_eq!(d.filter_type, DynamicFilterType::Today);
+                assert_eq!(d.val, Some(45000.5));
+                assert_eq!(d.max_val, Some(45001.0));
+            }
+            other => panic!("expected Dynamic filter, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn color_filter_in_process_roundtrip() {
+        use duke_sheets_core::auto_filter::{AutoFilter, ColorFilter, ColumnFilter, FilterColumn};
+        use duke_sheets_core::{CellAddress, CellRange};
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let mut af = AutoFilter::new(CellRange::new(
+            CellAddress::parse("A1").unwrap(),
+            CellAddress::parse("A3").unwrap(),
+        ));
+        af.filter_columns.push(FilterColumn::new(
+            0,
+            ColumnFilter::Color(ColorFilter {
+                dxf_id: Some(2),
+                cell_color: false,
+            }),
+        ));
+        ws.set_auto_filter(Some(af));
+
+        let wb2 = round_trip(&wb);
+        let af = wb2.worksheet(0).unwrap().auto_filter().unwrap().clone();
+        let col0 = af.filter_columns.iter().find(|fc| fc.col_id == 0).unwrap();
+        match &col0.filter {
+            ColumnFilter::Color(c) => {
+                assert_eq!(c.dxf_id, Some(2));
+                assert!(!c.cell_color, "cell_color flag drifted");
+            }
+            other => panic!("expected Color filter, got {other:?}"),
+        }
     }
 }

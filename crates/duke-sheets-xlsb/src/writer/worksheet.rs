@@ -788,13 +788,30 @@ fn write_auto_filter<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std:
                 }
                 rw.write_record(records::BRT_END_CUSTOM_FILTERS, &[])?;
             }
-            // Dynamic and Color filters are not yet emitted.
-            ColumnFilter::Dynamic(_) | ColumnFilter::Color(_) => {
-                log::warn!(
-                    "XLSB writer dropping {:?} filter on column {} (unsupported)",
-                    fc.filter,
-                    fc.col_id
-                );
+            ColumnFilter::Dynamic(d) => {
+                // BrtDynamicFilter per [MS-XLSB] §2.4.362:
+                //   cft u32 (filter type), flags u8 (fApplied bit 0),
+                //   xNumValue f64, xNumValueMax f64. 21 bytes total.
+                // The record ID itself is unverified (see records.rs);
+                // Excel rejects this with id=0x00A8 so the file fails
+                // to open. We still emit so the writer/reader pair
+                // round-trip in-process and so downstream tooling can
+                // experiment with the correct ID.
+                let mut buf = Vec::with_capacity(21);
+                buf.extend_from_slice(&dynamic_filter_cft(d.filter_type).to_le_bytes());
+                buf.push(0x01); // fApplied = 1
+                buf.extend_from_slice(&d.val.unwrap_or(0.0).to_le_bytes());
+                buf.extend_from_slice(&d.max_val.unwrap_or(0.0).to_le_bytes());
+                rw.write_record(records::BRT_DYNAMIC_FILTER, &buf)?;
+            }
+            ColumnFilter::Color(c) => {
+                // BrtColorFilter per [MS-XLSB] §2.4.339:
+                //   dxfid u32 + fCellColor u32. 8 bytes.
+                // Same caveat as Dynamic above: the ID is unverified.
+                let mut buf = Vec::with_capacity(8);
+                buf.extend_from_slice(&c.dxf_id.unwrap_or(0).to_le_bytes());
+                buf.extend_from_slice(&(c.cell_color as u32).to_le_bytes());
+                rw.write_record(records::BRT_COLOR_FILTER, &buf)?;
             }
         }
 
@@ -1417,6 +1434,49 @@ fn validation_op_code(op: &ValidationOperator) -> u32 {
         ValidationOperator::LessThan => 5,
         ValidationOperator::GreaterThanOrEqual => 6,
         ValidationOperator::LessThanOrEqual => 7,
+    }
+}
+
+/// Map our DynamicFilterType enum to the BIFF12 cft codes per
+/// [MS-XLSB] §2.4.362. Returns 0 (CFTNIL) for `Null`.
+fn dynamic_filter_cft(t: duke_sheets_core::auto_filter::DynamicFilterType) -> u32 {
+    use duke_sheets_core::auto_filter::DynamicFilterType as D;
+    match t {
+        D::Null => 0x00,
+        D::AboveAverage => 0x01,
+        D::BelowAverage => 0x02,
+        D::Tomorrow => 0x08,
+        D::Today => 0x09,
+        D::Yesterday => 0x0A,
+        D::NextWeek => 0x0B,
+        D::ThisWeek => 0x0C,
+        D::LastWeek => 0x0D,
+        D::NextMonth => 0x0E,
+        D::ThisMonth => 0x0F,
+        D::LastMonth => 0x10,
+        D::NextQuarter => 0x11,
+        D::ThisQuarter => 0x12,
+        D::LastQuarter => 0x13,
+        D::NextYear => 0x14,
+        D::ThisYear => 0x15,
+        D::LastYear => 0x16,
+        D::YearToDate => 0x17,
+        D::Q1 => 0x18,
+        D::Q2 => 0x19,
+        D::Q3 => 0x1A,
+        D::Q4 => 0x1B,
+        D::M1 => 0x1C,
+        D::M2 => 0x1D,
+        D::M3 => 0x1E,
+        D::M4 => 0x1F,
+        D::M5 => 0x20,
+        D::M6 => 0x21,
+        D::M7 => 0x22,
+        D::M8 => 0x23,
+        D::M9 => 0x24,
+        D::M10 => 0x25,
+        D::M11 => 0x26,
+        D::M12 => 0x27,
     }
 }
 
