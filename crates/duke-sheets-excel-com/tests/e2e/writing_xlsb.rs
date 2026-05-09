@@ -189,6 +189,49 @@ fn excel_can_read_autofilter_we_emit() {
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_color_filter_we_emit() {
+    use duke_sheets_core::auto_filter::ColorFilter;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Score").unwrap();
+    ws.set_cell_value("A2", 10.0).unwrap();
+    ws.set_cell_value("A3", 20.0).unwrap();
+
+    let mut af = AutoFilter::new(range("A1", "A3"));
+    af.filter_columns.push(FilterColumn::new(
+        0,
+        ColumnFilter::Color(ColorFilter {
+            dxf_id: Some(0),
+            cell_color: true,
+        }),
+    ));
+    ws.set_auto_filter(Some(af));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let s = result.worksheet(0).unwrap();
+    let af = s
+        .auto_filter()
+        .expect("autofilter must survive Excel round-trip");
+    let col0 = af
+        .filter_columns
+        .iter()
+        .find(|fc| fc.col_id == 0)
+        .expect("color filter column on A lost");
+    match &col0.filter {
+        ColumnFilter::Color(c) => {
+            assert!(c.cell_color, "cell_color flag flipped");
+            // dxf_id may get rewritten by Excel; just ensure something
+            // is present so we know the record survived as a color
+            // filter (not a discarded one).
+            assert!(c.dxf_id.is_some(), "dxf_id stripped after round-trip");
+        }
+        other => panic!("expected Color filter on A, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_discrete_value_filter_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
