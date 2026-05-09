@@ -159,8 +159,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Hidden columns | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_hidden_rows_columns`, `row_column_dimensions_round_trip::hidden_columns_round_trip` | §18.3.1.13 |
 | Outline levels / grouping | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_outline_metadata`, `row_column_dimensions_round_trip::row_outline_level_round_trips`, `row_column_dimensions_round_trip::column_outline_level_round_trips` | §18.3.1.73 |
 | Collapsed outline state | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_e2e::formula_metadata::outline_and_sheet_view_metadata`, `row_column_dimensions_round_trip::row_collapsed_state_round_trips`, `row_column_dimensions_round_trip::column_collapsed_state_round_trips` | §18.3.1.73 |
-| Default row height | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.30 |
-| Default column width | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.30 |
+| Default row height | R✖ W✖ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `excel_com_e2e::writing_xlsb::excel_can_read_dimensions_we_emit` | §18.3.1.30 | XLSB BrtWsFmtInfo carries miyDefRwHeight in twips; the fUnsynced flag (bit 0) tells Excel the value is user-set, otherwise Excel resets it to 15pt on save. |
+| Default column width | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.30 | Excel's BrtWsFmtInfo cchDefColWidth is rewritten to the base font width (8) on save regardless of input; Excel persists per-column custom widths via BrtColInfo records instead, not via this default. Treat as best-effort hint only. |
 | Outline summary position | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.3.1.35 |
 
 ## Merged cells
@@ -178,8 +178,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 | External URL hyperlinks | R✔ W● | R✔ W✔ | R✔ W✔ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*`, `hyperlinks_round_trip::external_url_hyperlink_round_trips`, `hyperlinks_round_trip::lo_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xls::excel_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | Reader preserves; XLSX writer round-trip incomplete; XLSB writer + Excel parity verified |
 | Internal hyperlinks (Sheet!A1) | R✔ W● | R✔ W✔ | R✔ W✔ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*`, `hyperlinks_round_trip::internal_hash_target_round_trips`, `hyperlinks_round_trip::lo_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | |
 | Mailto hyperlinks | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
-| Hyperlink tooltips | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
-| Hyperlink display text | R✖ W✖ | R✖ W✖ | R✔ W✔ | R✖ W✖ | `hyperlinks_round_trip::external_url_hyperlink_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | XLS HLINK record carries display name in `cch + UTF-16LE` block; round-trip and Excel parity verify it survives |
+| Hyperlink tooltips | R✖ W✖ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `excel_com_e2e::writing_xlsb::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | XLSB BrtHLink trailing XLWideString carries the tooltip; survives Excel round-trip |
+| Hyperlink display text | R✖ W✖ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `hyperlinks_round_trip::external_url_hyperlink_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | XLS HLINK record carries display name in `cch + UTF-16LE` block; XLSB BrtHLink trailing XLWideString does the same; both round-trip survive Excel parity |
 | Hyperlinks in rich text runs | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.4.7 |
 
 ## Comments

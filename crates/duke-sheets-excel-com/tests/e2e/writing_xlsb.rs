@@ -41,8 +41,8 @@ fn excel_can_read_hyperlinks_we_emit() {
         "A1",
         Hyperlink {
             target: "https://example.com".into(),
-            display: Some("Go".into()),
-            tooltip: None,
+            display: Some("Click here".into()),
+            tooltip: Some("Visit the example site".into()),
             location: None,
         },
     )
@@ -71,6 +71,16 @@ fn excel_can_read_hyperlinks_we_emit() {
         "external target mangled: {:?}",
         hl_external.target
     );
+    assert_eq!(
+        hl_external.display.as_deref(),
+        Some("Click here"),
+        "external display text lost after round-trip"
+    );
+    assert_eq!(
+        hl_external.tooltip.as_deref(),
+        Some("Visit the example site"),
+        "external tooltip lost after round-trip"
+    );
 
     let hl_internal = s
         .hyperlink("A2")
@@ -85,6 +95,11 @@ fn excel_can_read_hyperlinks_we_emit() {
         "internal hyperlink address mangled: target={:?} location={:?}",
         hl_internal.target,
         hl_internal.location
+    );
+    assert_eq!(
+        hl_internal.display.as_deref(),
+        Some("Elsewhere"),
+        "internal display text lost after round-trip"
     );
 }
 
@@ -756,6 +771,10 @@ fn excel_can_read_dimensions_we_emit() {
     ws.set_cell_value("B1", "wide").unwrap();
     ws.set_row_height(0, 36.0);
     ws.set_column_width(1, 25.0);
+    // Non-default sheet-wide defaults: 22pt row height, 12 char col
+    // width. These travel via BrtWsFmtInfo and should survive Excel.
+    ws.set_default_row_height(22.0);
+    ws.set_default_column_width(12.0);
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let s = result.worksheet(0).unwrap();
@@ -768,6 +787,19 @@ fn excel_can_read_dimensions_we_emit() {
     // Column B (index 1) should retain a non-default width.
     let w = s.column_width(1);
     assert!(w > 20.0 && w < 30.0, "col B width = {w} (expected ~25)",);
+    // BrtWsFmtInfo carries miyDefRwHeight; the fUnsynced flag tells
+    // Excel the row height is user-set, otherwise Excel resets to 15pt
+    // on save. Verified end-to-end here.
+    let dh = s.default_row_height();
+    assert!(
+        (dh - 22.0).abs() < 1.0,
+        "default row height = {dh} (expected ~22)"
+    );
+    // Note: cchDefColWidth in BrtWsFmtInfo does NOT carry custom
+    // default column widths through Excel — Excel rewrites it to the
+    // base font width (8) regardless of input. Per-column custom
+    // widths via BrtColInfo are how Excel persists those. Don't
+    // assert default_column_width survival here.
 }
 
 #[test]
