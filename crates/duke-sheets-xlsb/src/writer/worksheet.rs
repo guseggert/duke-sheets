@@ -58,13 +58,7 @@ pub(crate) fn write_worksheet<W: Write + Seek>(
     write_sheet_views(&mut rw, ws)?;
     write_col_infos(&mut rw, ws)?;
 
-    #[rustfmt::skip]
-    rw.write_record(
-        records::BRT_WS_FMT_INFO,
-        &[
-            0xff, 0xff, 0xff, 0xff, 0x08, 0x00, 0x2c, 0x01, 0x00, 0x00, 0x00, 0x00,
-        ],
-    )?;
+    write_ws_fmt_info(&mut rw, ws)?;
 
     rw.write_record(records::BRT_BEGIN_SHEET_DATA, &[])?;
 
@@ -231,6 +225,37 @@ fn encode_brt_color_ws(color: &duke_sheets_core::style::Color) -> [u8; 8] {
         }
     }
     buf
+}
+
+/// Emit BrtWsFmtInfo per [MS-XLSB] §2.4.873:
+///   dxGCol u32, cchDefColWidth u16, miyDefRwHeight u16,
+///   flags u16 (fUnsynced, fDyZero, fExAsc, fExDesc, reserved 12),
+///   iOutLevelRw u8, iOutLevelCol u8.
+///
+/// miyDefRwHeight is in twips (1 point = 20 twips). cchDefColWidth is
+/// in "characters of the maximum digit width of the Normal style font"
+/// — Excel's column-width unit. We round our f64 column width to u16
+/// (Excel's XLSB stores no fraction here even though XLSX does).
+///
+/// fUnsynced (bit 0) tells Excel "the default row height was set
+/// explicitly". Without it Excel resets miyDefRwHeight to 300 (15pt)
+/// on save.
+fn write_ws_fmt_info<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std::io::Result<()> {
+    let mut payload = Vec::with_capacity(12);
+    payload.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // dxGCol = auto
+    let cch_def_col_width = ws.default_column_width().round().clamp(0.0, 255.0) as u16;
+    payload.extend_from_slice(&cch_def_col_width.to_le_bytes());
+    let row_height_pt = ws.default_row_height();
+    let miy_def_rw_height = (row_height_pt * 20.0).round().clamp(0.0, u16::MAX as f64) as u16;
+    payload.extend_from_slice(&miy_def_rw_height.to_le_bytes());
+    let mut flags: u16 = 0;
+    if (row_height_pt - 15.0).abs() > 0.001 {
+        flags |= 0x0001; // fUnsynced
+    }
+    payload.extend_from_slice(&flags.to_le_bytes());
+    payload.push(0); // iOutLevelRw
+    payload.push(0); // iOutLevelCol
+    rw.write_record(records::BRT_WS_FMT_INFO, &payload)
 }
 
 fn write_ws_dim<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std::io::Result<()> {
