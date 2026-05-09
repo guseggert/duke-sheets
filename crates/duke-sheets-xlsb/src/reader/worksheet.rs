@@ -246,6 +246,12 @@ pub(crate) fn read_worksheet<R: Read>(
     let mut in_col_breaks = false;
     let mut row_breaks_acc: Vec<PageBreak> = Vec::new();
     let mut col_breaks_acc: Vec<PageBreak> = Vec::new();
+    // Tracks the open BrtBeginFilterColumn block so child filter
+    // records (Top10/Filters/CustomFilters) can attach to a
+    // FilterColumn that gets pushed at BrtEndFilterColumn.
+    let mut current_filter_column: Option<duke_sheets_core::auto_filter::FilterColumn> = None;
+    let mut current_value_filter: Option<duke_sheets_core::auto_filter::ValueFilter> = None;
+    let mut current_custom_filters: Option<duke_sheets_core::auto_filter::CustomFilters> = None;
 
     loop {
         let (typ, len) = match iter.next_record(&mut buf) {
@@ -264,6 +270,100 @@ pub(crate) fn read_worksheet<R: Read>(
 
             records::BRT_BEGIN_A_FILTER => {
                 parse_auto_filter(&buf[..len], ws);
+            }
+
+            records::BRT_BEGIN_FILTER_COLUMN => {
+                if len >= 6 {
+                    use duke_sheets_core::auto_filter::{ColumnFilter, FilterColumn, ValueFilter};
+                    let col_id = parser::read_u32(&buf, 0);
+                    let flags = parser::read_u16(&buf, 4);
+                    current_filter_column = Some(FilterColumn {
+                        col_id,
+                        hidden_button: (flags & 0x01) != 0,
+                        show_button: (flags & 0x02) == 0,
+                        // Placeholder; replaced when a child filter record arrives.
+                        filter: ColumnFilter::Values(ValueFilter {
+                            values: Vec::new(),
+                            blank: false,
+                        }),
+                    });
+                }
+            }
+            records::BRT_END_FILTER_COLUMN => {
+                if let Some(mut fc) = current_filter_column.take() {
+                    use duke_sheets_core::auto_filter::ColumnFilter;
+                    if let Some(vf) = current_value_filter.take() {
+                        fc.filter = ColumnFilter::Values(vf);
+                    } else if let Some(cf) = current_custom_filters.take() {
+                        fc.filter = ColumnFilter::Custom(cf);
+                    }
+                    // Top10 sets fc.filter directly when the record
+                    // is parsed, so no merge is needed here.
+                    if let Some(af) = ws.auto_filter() {
+                        let mut af = af.clone();
+                        af.filter_columns.push(fc);
+                        ws.set_auto_filter(Some(af));
+                    }
+                }
+            }
+            records::BRT_TOP10_FILTER => {
+                if len >= 17 {
+                    use duke_sheets_core::auto_filter::{ColumnFilter, Top10Filter};
+                    if let Some(fc) = current_filter_column.as_mut() {
+                        let flags = buf[0];
+                        let val = parser::read_f64(&buf, 1);
+                        let filter_val = parser::read_f64(&buf, 9);
+                        fc.filter = ColumnFilter::Top10(Top10Filter {
+                            top: (flags & 0x01) != 0,
+                            percent: (flags & 0x02) != 0,
+                            val,
+                            filter_val: Some(filter_val),
+                        });
+                    }
+                }
+            }
+            records::BRT_BEGIN_FILTERS => {
+                if len >= 4 {
+                    use duke_sheets_core::auto_filter::ValueFilter;
+                    let blank = parser::read_u32(&buf, 0) != 0;
+                    current_value_filter = Some(ValueFilter {
+                        values: Vec::new(),
+                        blank,
+                    });
+                }
+            }
+            records::BRT_END_FILTERS => {
+                // Closed by BrtEndFilterColumn merge step.
+            }
+            records::BRT_FILTER => {
+                if let Some(vf) = current_value_filter.as_mut() {
+                    if let Ok((s, _)) = parser::wide_str(&buf, 0) {
+                        vf.values.push(s);
+                    }
+                }
+            }
+            records::BRT_BEGIN_CUSTOM_FILTERS => {
+                use duke_sheets_core::auto_filter::CustomFilters;
+                current_custom_filters = Some(CustomFilters {
+                    and: true,
+                    conditions: Vec::new(),
+                });
+            }
+            records::BRT_END_CUSTOM_FILTERS => {
+                // Closed by BrtEndFilterColumn merge step.
+            }
+            records::BRT_CUSTOM_FILTER => {
+                if let Some(cf) = current_custom_filters.as_mut() {
+                    if let Some(cond) = parse_custom_filter(&buf[..len]) {
+                        // The fOr bit lives on the second condition's
+                        // grbit; if it's set on any condition treat
+                        // the whole block as OR.
+                        if cond.1 {
+                            cf.and = false;
+                        }
+                        cf.conditions.push(cond.0);
+                    }
+                }
             }
 
             records::BRT_MARGINS => {
@@ -781,6 +881,44 @@ fn parse_auto_filter(data: &[u8], ws: &mut Worksheet) {
 
     let range = CellRange::from_indices(first_row, first_col, last_row, last_col);
     ws.set_auto_filter(Some(AutoFilter::new(range)));
+}
+
+/// Parse a BrtCustomFilter record per [MS-XLSB] §2.4.348:
+///   vts u8 + 8 bytes xNumOrError + XLNullableWideString rgch + grbit u8.
+/// Returns (condition, fOr_bit_set).
+fn parse_custom_filter(
+    data: &[u8],
+) -> Option<(duke_sheets_core::auto_filter::CustomFilterCondition, bool)> {
+    use duke_sheets_core::auto_filter::{CustomFilterCondition, FilterOperator};
+    if data.len() < 1 + 8 + 4 + 1 {
+        return None;
+    }
+    let mut pos = 1 + 8; // skip vts + xNumOrError
+    let cch = parser::read_u32(data, pos);
+    let value = if cch == 0xFFFFFFFF {
+        pos += 4;
+        String::new()
+    } else {
+        let (s, consumed) = parser::wide_str(data, pos).ok()?;
+        pos += consumed;
+        s
+    };
+    if pos >= data.len() {
+        return None;
+    }
+    let grbit = data[pos];
+    let op_bits = grbit & 0x07;
+    let or_bit = (grbit & 0x80) != 0;
+    let operator = match op_bits {
+        1 => FilterOperator::LessThan,
+        2 => FilterOperator::Equal,
+        3 => FilterOperator::LessThanOrEqual,
+        4 => FilterOperator::GreaterThan,
+        5 => FilterOperator::NotEqual,
+        6 => FilterOperator::GreaterThanOrEqual,
+        _ => FilterOperator::Equal,
+    };
+    Some((CustomFilterCondition { operator, value }, or_bit))
 }
 
 /// Parse BrtMargins record.

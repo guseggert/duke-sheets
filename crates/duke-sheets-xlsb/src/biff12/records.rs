@@ -77,6 +77,15 @@ pub const BRT_SEL: u16 = 0x0098;
 
 pub const BRT_BEGIN_A_FILTER: u16 = 0x00A1;
 pub const BRT_END_A_FILTER: u16 = 0x00A2;
+pub const BRT_BEGIN_FILTER_COLUMN: u16 = 0x00A3;
+pub const BRT_END_FILTER_COLUMN: u16 = 0x00A4;
+pub const BRT_BEGIN_FILTERS: u16 = 0x00A5;
+pub const BRT_END_FILTERS: u16 = 0x00A6;
+pub const BRT_FILTER: u16 = 0x00A7;
+pub const BRT_TOP10_FILTER: u16 = 0x00AA;
+pub const BRT_BEGIN_CUSTOM_FILTERS: u16 = 0x00AC;
+pub const BRT_END_CUSTOM_FILTERS: u16 = 0x00AD;
+pub const BRT_CUSTOM_FILTER: u16 = 0x00AE;
 
 pub const BRT_MERGE_CELL: u16 = 0x00B0;
 pub const BRT_BEGIN_MERGE_CELLS: u16 = 0x00B1;
