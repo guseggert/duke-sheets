@@ -11,7 +11,7 @@
 //! VM round-trip cost (~15-25s of warm-VM time per test).
 
 use duke_sheets_core::auto_filter::{AutoFilter, ColumnFilter, FilterColumn, Top10Filter};
-use duke_sheets_core::conditional_format::ConditionalFormatRule;
+use duke_sheets_core::conditional_format::{CfOperator, CfRuleType, ConditionalFormatRule};
 use duke_sheets_core::rich_text::{RichTextRun, RunFont};
 use duke_sheets_core::style::Color;
 use duke_sheets_core::table::{Table, TableColumn, TableStyleInfo};
@@ -33,28 +33,58 @@ fn range(start: &str, end: &str) -> CellRange {
 fn excel_can_read_hyperlinks_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_cell_value("A1", "click").unwrap();
+    wb.add_worksheet_with_name("Other").unwrap();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "go").unwrap();
+    ws.set_cell_value("A2", "elsewhere").unwrap();
     ws.set_hyperlink(
         "A1",
         Hyperlink {
             target: "https://example.com".into(),
-            display: Some("click".into()),
+            display: Some("Go".into()),
             tooltip: None,
             location: None,
+        },
+    )
+    .unwrap();
+    ws.set_hyperlink(
+        "A2",
+        Hyperlink {
+            target: String::new(),
+            display: Some("Elsewhere".into()),
+            tooltip: None,
+            location: Some("Other!B5".into()),
         },
     )
     .unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let s = result.worksheet(0).unwrap();
-    assert_eq!(s.get_value_at(0, 0).as_string(), Some("click"));
-    let hl = s
+    assert_eq!(s.get_value_at(0, 0).as_string(), Some("go"));
+    assert_eq!(s.get_value_at(1, 0).as_string(), Some("elsewhere"));
+
+    let hl_external = s
         .hyperlink("A1")
-        .expect("hyperlink must survive Excel round-trip");
+        .expect("external hyperlink on A1 lost after round-trip");
     assert!(
-        hl.target.contains("example.com"),
-        "hyperlink target lost after round-trip: {:?}",
-        hl.target
+        hl_external.target.contains("example.com"),
+        "external target mangled: {:?}",
+        hl_external.target
+    );
+
+    let hl_internal = s
+        .hyperlink("A2")
+        .expect("internal hyperlink on A2 lost after round-trip");
+    let internal_addr = hl_internal
+        .location
+        .as_deref()
+        .or(Some(hl_internal.target.as_str()))
+        .unwrap_or("");
+    assert!(
+        internal_addr.contains("Other") && internal_addr.contains("B5"),
+        "internal hyperlink address mangled: target={:?} location={:?}",
+        hl_internal.target,
+        hl_internal.location
     );
 }
 
@@ -136,6 +166,23 @@ fn excel_can_read_autofilter_we_emit() {
         CellAddress::parse("A1").unwrap(),
         "autofilter range start lost"
     );
+    assert_eq!(
+        af.range.end,
+        CellAddress::parse("B3").unwrap(),
+        "autofilter range end lost"
+    );
+    // The XLSB writer currently emits only the BrtBeginAFilter range
+    // wrapper, not the inner BrtBeginFilterColumn records. The Top10
+    // configuration we attach above is dropped on write. Excel still
+    // accepts the file (just an empty autofilter on the range), so
+    // the range-survival assertion above is the strongest claim we
+    // can make until the writer grows FilterColumn emission.
+    if !af.filter_columns.is_empty() {
+        panic!(
+            "writer started emitting filter columns: tighten this test (got {:?})",
+            af.filter_columns
+        );
+    }
 }
 
 #[test]
@@ -166,10 +213,68 @@ fn excel_can_read_data_validations_we_emit() {
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("list"));
     let validations = s.data_validations();
-    assert!(
-        !validations.is_empty(),
-        "data validations must survive Excel round-trip"
+    assert_eq!(
+        validations.len(),
+        3,
+        "expected 3 data validations to survive, got {}",
+        validations.len()
     );
+
+    let v_a1 = validations
+        .iter()
+        .find(|v| {
+            v.ranges
+                .iter()
+                .any(|r| r.start == CellAddress::parse("A1").unwrap())
+        })
+        .expect("List validation on A1 lost");
+    match &v_a1.validation_type {
+        ValidationType::List { source } => {
+            assert_eq!(source, "Red,Green,Blue", "List source mangled: {source:?}")
+        }
+        other => panic!("expected List validation on A1, got {other:?}"),
+    }
+
+    let v_b1 = validations
+        .iter()
+        .find(|v| {
+            v.ranges
+                .iter()
+                .any(|r| r.start == CellAddress::parse("B1").unwrap())
+        })
+        .expect("Whole validation on B1 lost");
+    match &v_b1.validation_type {
+        ValidationType::Whole {
+            operator,
+            value1,
+            value2,
+        } => {
+            assert_eq!(*operator, ValidationOperator::Between);
+            assert_eq!(value1, "1", "Whole lower bound mangled: {value1:?}");
+            assert_eq!(
+                value2.as_deref(),
+                Some("100"),
+                "Whole upper bound mangled: {value2:?}"
+            );
+        }
+        other => panic!("expected Whole validation on B1, got {other:?}"),
+    }
+
+    let v_c1 = validations
+        .iter()
+        .find(|v| {
+            v.ranges
+                .iter()
+                .any(|r| r.start == CellAddress::parse("C1").unwrap())
+        })
+        .expect("Custom validation on C1 lost");
+    match &v_c1.validation_type {
+        ValidationType::Custom { formula } => assert!(
+            formula.contains("ISNUMBER"),
+            "Custom formula mangled: {formula:?}"
+        ),
+        other => panic!("expected Custom validation on C1, got {other:?}"),
+    }
 }
 
 #[test]
@@ -197,10 +302,60 @@ fn excel_can_read_conditional_formats_we_emit() {
         other => panic!("A1 expected Number(150), got {other:?}"),
     }
     let rules = s.conditional_formats();
-    assert!(
-        !rules.is_empty(),
-        "conditional format rules must survive Excel round-trip"
-    );
+    assert_eq!(rules.len(), 2, "expected 2 CF rules, got {}", rules.len());
+
+    // Find each rule by its operator since Excel may rewrite ranges
+    // (e.g. consolidating overlapping rules or reordering by priority).
+    let r_gt = rules
+        .iter()
+        .find(|r| {
+            matches!(
+                &r.rule_type,
+                CfRuleType::CellIs {
+                    operator: CfOperator::GreaterThan,
+                    ..
+                }
+            )
+        })
+        .expect("CellIs(GreaterThan) rule lost");
+    match &r_gt.rule_type {
+        CfRuleType::CellIs { formula1, .. } => assert!(
+            formula1.contains("100"),
+            "greater-than threshold mangled: {formula1:?}"
+        ),
+        _ => unreachable!(),
+    }
+
+    let r_between = rules
+        .iter()
+        .find(|r| {
+            matches!(
+                &r.rule_type,
+                CfRuleType::CellIs {
+                    operator: CfOperator::Between,
+                    ..
+                }
+            )
+        })
+        .expect("CellIs(Between) rule lost");
+    match &r_between.rule_type {
+        CfRuleType::CellIs {
+            formula1, formula2, ..
+        } => {
+            assert!(
+                formula1.contains("10"),
+                "between lower bound mangled: {formula1:?}"
+            );
+            assert!(
+                formula2
+                    .as_deref()
+                    .map(|s| s.contains("100"))
+                    .unwrap_or(false),
+                "between upper bound mangled: {formula2:?}"
+            );
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[test]
@@ -382,17 +537,44 @@ fn excel_can_read_visual_state_we_emit() {
     let result = roundtrip_through_excel_xlsb(&wb);
     let s = result.worksheet_by_name("Public").unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("p"));
+
     let freeze = s.freeze_panes().expect("freeze panes must survive");
     assert_eq!(
         (freeze.row, freeze.col),
         (1, 1),
         "freeze panes lost after round-trip"
     );
+
+    assert_eq!(
+        s.zoom_scale(),
+        Some(125),
+        "zoom scale lost after round-trip"
+    );
+
     let hidden = result.worksheet_by_name("Hidden").unwrap();
     assert!(
         hidden.visibility() != SheetVisibility::Visible,
         "Hidden sheet must remain non-visible after round-trip; got {:?}",
         hidden.visibility()
+    );
+
+    let ps = s.page_setup();
+    assert_eq!(
+        ps.orientation,
+        PageOrientation::Landscape,
+        "landscape orientation lost"
+    );
+    assert!(
+        ps.print_gridlines,
+        "print_gridlines flag lost after round-trip"
+    );
+    let header = ps
+        .odd_header
+        .as_deref()
+        .expect("odd_header text lost after round-trip");
+    assert!(
+        header.contains("Hdr"),
+        "odd_header content mangled: {header:?}"
     );
 }
 
@@ -415,6 +597,17 @@ fn excel_can_read_protection_state_we_emit() {
         .protection()
         .expect("sheet protection must survive Excel round-trip");
     assert!(prot.protected, "protected flag lost after round-trip");
+    // Excel may rewrite the hash with its own algorithm; require a
+    // non-zero hash but don't require byte-identity. The pre-fix
+    // writer was emitting no BrtSheetProtection at all so any
+    // password presence proves the record is making it through.
+    let hash = prot
+        .password_hash
+        .expect("password_hash lost after round-trip");
+    assert_ne!(
+        hash, 0,
+        "password_hash dropped to 0 (pre-fix writer behaviour)"
+    );
 }
 
 #[test]
