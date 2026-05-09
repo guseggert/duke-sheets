@@ -171,17 +171,64 @@ fn excel_can_read_autofilter_we_emit() {
         CellAddress::parse("B3").unwrap(),
         "autofilter range end lost"
     );
-    // The XLSB writer currently emits only the BrtBeginAFilter range
-    // wrapper, not the inner BrtBeginFilterColumn records. The Top10
-    // configuration we attach above is dropped on write. Excel still
-    // accepts the file (just an empty autofilter on the range), so
-    // the range-survival assertion above is the strongest claim we
-    // can make until the writer grows FilterColumn emission.
-    if !af.filter_columns.is_empty() {
-        panic!(
-            "writer started emitting filter columns: tighten this test (got {:?})",
-            af.filter_columns
-        );
+
+    let top10_col = af
+        .filter_columns
+        .iter()
+        .find(|fc| fc.col_id == 1)
+        .expect("Top10 filter column on column B must survive");
+    match &top10_col.filter {
+        ColumnFilter::Top10(t) => {
+            assert!(t.top, "Top10.top flag lost (was true)");
+            assert!(!t.percent, "Top10.percent flag flipped");
+            assert!((t.val - 1.0).abs() < 1e-9, "Top10.val drifted: {}", t.val);
+        }
+        other => panic!("expected Top10 filter on column B, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_discrete_value_filter_we_emit() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Color").unwrap();
+    ws.set_cell_value("A2", "red").unwrap();
+    ws.set_cell_value("A3", "green").unwrap();
+    ws.set_cell_value("A4", "blue").unwrap();
+
+    let mut af = AutoFilter::new(range("A1", "A4"));
+    af.filter_columns.push(FilterColumn::new(
+        0,
+        ColumnFilter::Values(duke_sheets_core::auto_filter::ValueFilter {
+            values: vec!["red".into(), "blue".into()],
+            blank: false,
+        }),
+    ));
+    ws.set_auto_filter(Some(af));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let s = result.worksheet(0).unwrap();
+    let af = s
+        .auto_filter()
+        .expect("autofilter must survive Excel round-trip");
+    let col0 = af
+        .filter_columns
+        .iter()
+        .find(|fc| fc.col_id == 0)
+        .expect("discrete-values filter column on A lost");
+    match &col0.filter {
+        ColumnFilter::Values(v) => {
+            let mut sorted = v.values.clone();
+            sorted.sort();
+            assert_eq!(
+                sorted,
+                vec!["blue".to_string(), "red".to_string()],
+                "discrete filter values mangled: {:?}",
+                v.values
+            );
+        }
+        other => panic!("expected Values filter on A, got {other:?}"),
     }
 }
 
