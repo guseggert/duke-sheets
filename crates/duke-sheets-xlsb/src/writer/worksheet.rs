@@ -789,25 +789,21 @@ fn write_auto_filter<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std:
                 rw.write_record(records::BRT_END_CUSTOM_FILTERS, &[])?;
             }
             ColumnFilter::Dynamic(d) => {
-                // BrtDynamicFilter per [MS-XLSB] §2.4.362:
-                //   cft u32 (filter type), flags u8 (fApplied bit 0),
-                //   xNumValue f64, xNumValueMax f64. 21 bytes total.
-                // The record ID itself is unverified (see records.rs);
-                // Excel rejects this with id=0x00A8 so the file fails
-                // to open. We still emit so the writer/reader pair
-                // round-trip in-process and so downstream tooling can
-                // experiment with the correct ID.
+                // BrtDynamicFilter per [MS-XLSB] §2.4.362 (id 0x00AB):
+                //   cft u32 (filter type), flags u8 (fApplied bit 0
+                //   + 7 reserved), xNumValue f64, xNumValueMax f64.
+                //   21 bytes total. Excel emits flags=0 even when the
+                //   filter is actively applied, so we match.
                 let mut buf = Vec::with_capacity(21);
                 buf.extend_from_slice(&dynamic_filter_cft(d.filter_type).to_le_bytes());
-                buf.push(0x01); // fApplied = 1
+                buf.push(0);
                 buf.extend_from_slice(&d.val.unwrap_or(0.0).to_le_bytes());
                 buf.extend_from_slice(&d.max_val.unwrap_or(0.0).to_le_bytes());
                 rw.write_record(records::BRT_DYNAMIC_FILTER, &buf)?;
             }
             ColumnFilter::Color(c) => {
-                // BrtColorFilter per [MS-XLSB] §2.4.339:
+                // BrtColorFilter per [MS-XLSB] §2.4.339 (id 0x00A9):
                 //   dxfid u32 + fCellColor u32. 8 bytes.
-                // Same caveat as Dynamic above: the ID is unverified.
                 let mut buf = Vec::with_capacity(8);
                 buf.extend_from_slice(&c.dxf_id.unwrap_or(0).to_le_bytes());
                 buf.extend_from_slice(&(c.cell_color as u32).to_le_bytes());
