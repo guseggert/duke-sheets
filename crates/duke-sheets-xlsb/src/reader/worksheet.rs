@@ -74,6 +74,21 @@ pub(crate) fn read_worksheet<R: Read>(
                 parse_col_info(&buf[..len], ws);
             }
 
+            records::BRT_WS_FMT_INFO => {
+                // BrtWsFmtInfo: u32 dxGCol + u16 cchDefColWidth +
+                // u16 miyDefRwHeight (twips) + u16 flags + 2 outlines.
+                if len >= 8 {
+                    let cch_def = parser::read_u16(&buf, 4);
+                    let miy = parser::read_u16(&buf, 6);
+                    if cch_def > 0 {
+                        ws.set_default_column_width(cch_def as f64);
+                    }
+                    if miy > 0 {
+                        ws.set_default_row_height(miy as f64 / 20.0);
+                    }
+                }
+            }
+
             _ => {}
         }
     }
