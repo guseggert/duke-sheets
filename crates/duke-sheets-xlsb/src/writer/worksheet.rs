@@ -696,6 +696,8 @@ fn write_hyperlinks<W: Write>(
 }
 
 fn write_auto_filter<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std::io::Result<()> {
+    use duke_sheets_core::auto_filter::{ColumnFilter, FilterOperator};
+
     let af = match ws.auto_filter() {
         Some(af) => af,
         None => return Ok(()),
@@ -708,6 +710,97 @@ fn write_auto_filter<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std:
     payload[8..12].copy_from_slice(&(range.start.col as u32).to_le_bytes());
     payload[12..16].copy_from_slice(&(range.end.col as u32).to_le_bytes());
     rw.write_record(records::BRT_BEGIN_A_FILTER, &payload)?;
+
+    for fc in &af.filter_columns {
+        // BrtBeginFilterColumn per [MS-XLSB] §2.4.84:
+        //   dwCol u32 + flags u16 (fHideArrow bit 0, fNoBtn bit 1).
+        let mut col_payload = Vec::with_capacity(6);
+        col_payload.extend_from_slice(&(fc.col_id as u32).to_le_bytes());
+        let mut fc_flags: u16 = 0;
+        if fc.hidden_button {
+            fc_flags |= 1; // fHideArrow
+        }
+        if !fc.show_button {
+            fc_flags |= 1 << 1; // fNoBtn
+        }
+        col_payload.extend_from_slice(&fc_flags.to_le_bytes());
+        rw.write_record(records::BRT_BEGIN_FILTER_COLUMN, &col_payload)?;
+
+        match &fc.filter {
+            ColumnFilter::Top10(t) => {
+                // BrtTop10Filter per §2.4.852: 1 byte flags + 8 bytes
+                // xNumValue + 8 bytes xNumFilter. flags = fTop bit 0,
+                // fPercent bit 1, fApplied bit 2, reserved 5 bits.
+                let mut flags: u8 = 0;
+                if t.top {
+                    flags |= 1;
+                }
+                if t.percent {
+                    flags |= 1 << 1;
+                }
+                flags |= 1 << 2; // fApplied
+                let mut top_payload = Vec::with_capacity(17);
+                top_payload.push(flags);
+                top_payload.extend_from_slice(&t.val.to_le_bytes());
+                top_payload.extend_from_slice(&t.filter_val.unwrap_or(t.val).to_le_bytes());
+                rw.write_record(records::BRT_TOP10_FILTER, &top_payload)?;
+            }
+            ColumnFilter::Values(v) => {
+                // BrtBeginFilters per §2.4.85: u32 fBlank + u32 unused.
+                let mut hdr = Vec::with_capacity(8);
+                hdr.extend_from_slice(&(v.blank as u32).to_le_bytes());
+                hdr.extend_from_slice(&0u32.to_le_bytes());
+                rw.write_record(records::BRT_BEGIN_FILTERS, &hdr)?;
+                for value in &v.values {
+                    let mut buf = Vec::new();
+                    buf.extend_from_slice(&encode_wide_str(value));
+                    rw.write_record(records::BRT_FILTER, &buf)?;
+                }
+                rw.write_record(records::BRT_END_FILTERS, &[])?;
+            }
+            ColumnFilter::Custom(cf) => {
+                rw.write_record(records::BRT_BEGIN_CUSTOM_FILTERS, &[])?;
+                for cond in cf.conditions.iter().take(2) {
+                    // BrtCustomFilter per §2.4.348:
+                    //   vts u8 + 8 bytes xNumOrError + var rgch
+                    //     (XLNullableWideString) + grbit u8 (operator
+                    //     and flags).
+                    // We always store conditions as text strings, so
+                    // vts = 6 (string) and the 8 num bytes are zero.
+                    let mut buf = Vec::with_capacity(20);
+                    buf.push(6u8); // vts: vtString
+                    buf.extend_from_slice(&[0u8; 8]); // xNumOrError
+                    buf.extend_from_slice(&encode_nullable_wide_str(Some(cond.value.as_str())));
+                    let op_byte = match cond.operator {
+                        FilterOperator::LessThan => 1,
+                        FilterOperator::Equal => 2,
+                        FilterOperator::LessThanOrEqual => 3,
+                        FilterOperator::GreaterThan => 4,
+                        FilterOperator::NotEqual => 5,
+                        FilterOperator::GreaterThanOrEqual => 6,
+                    };
+                    let mut grbit: u8 = op_byte;
+                    if !cf.and {
+                        grbit |= 1 << 7; // fOr
+                    }
+                    buf.push(grbit);
+                    rw.write_record(records::BRT_CUSTOM_FILTER, &buf)?;
+                }
+                rw.write_record(records::BRT_END_CUSTOM_FILTERS, &[])?;
+            }
+            // Dynamic and Color filters are not yet emitted.
+            ColumnFilter::Dynamic(_) | ColumnFilter::Color(_) => {
+                log::warn!(
+                    "XLSB writer dropping {:?} filter on column {} (unsupported)",
+                    fc.filter,
+                    fc.col_id
+                );
+            }
+        }
+
+        rw.write_record(records::BRT_END_FILTER_COLUMN, &[])?;
+    }
+
     rw.write_record(records::BRT_END_A_FILTER, &[])
 }
 
