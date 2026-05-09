@@ -275,9 +275,9 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
 | Filter range | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_range_only`, `autofilter_round_trip::filter_range_only_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_autofilter_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_autofilter_we_emit` | §18.3.2 |
-| Value filter (includes) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_value_filter`, `autofilter_round_trip::value_filter_round_trips_as_equal_or` | §18.3.2.8 |
+| Value filter (includes) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_value_filter`, `autofilter_round_trip::value_filter_round_trips_as_equal_or`, `excel_com_e2e::writing_xlsb::excel_can_read_discrete_value_filter_we_emit` | §18.3.2.8 |
 | Custom filter (operator-based) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_custom_filter`, `autofilter_round_trip::custom_dual_condition_and_round_trips` | §18.3.2.1 |
-| Top 10 filter | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_top10`, `autofilter_round_trip::top10_filter_round_trips` | §18.3.2.10 |
+| Top 10 filter | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_top10`, `autofilter_round_trip::top10_filter_round_trips`, `excel_com_e2e::writing_xlsb::excel_can_read_autofilter_we_emit` | §18.3.2.10 |
 | Dynamic filter (above/below avg, etc.) | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_roundtrip::test_auto_filter_dynamic` | §18.3.2.5 |
 | Date group filter (year/month/day) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.2.6 |
 | Color filter | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.3.2.2 |
