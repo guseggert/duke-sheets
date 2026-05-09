@@ -189,6 +189,53 @@ fn excel_can_read_autofilter_we_emit() {
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_dynamic_filter_we_emit() {
+    use duke_sheets_core::auto_filter::{DynamicFilter, DynamicFilterType};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Score").unwrap();
+    ws.set_cell_value("A2", 10.0).unwrap();
+    ws.set_cell_value("A3", 50.0).unwrap();
+    ws.set_cell_value("A4", 90.0).unwrap();
+    ws.set_cell_value("A5", 30.0).unwrap();
+
+    let mut af = AutoFilter::new(range("A1", "A5"));
+    af.filter_columns.push(FilterColumn::new(
+        0,
+        ColumnFilter::Dynamic(DynamicFilter {
+            filter_type: DynamicFilterType::AboveAverage,
+            val: None,
+            max_val: None,
+        }),
+    ));
+    ws.set_auto_filter(Some(af));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let s = result.worksheet(0).unwrap();
+    let af = s
+        .auto_filter()
+        .expect("autofilter must survive Excel round-trip");
+    let col0 = af
+        .filter_columns
+        .iter()
+        .find(|fc| fc.col_id == 0)
+        .expect("dynamic filter column on A lost");
+    match &col0.filter {
+        ColumnFilter::Dynamic(d) => {
+            assert_eq!(
+                d.filter_type,
+                DynamicFilterType::AboveAverage,
+                "dynamic filter type drifted: {:?}",
+                d.filter_type
+            );
+        }
+        other => panic!("expected Dynamic filter on A, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_color_filter_we_emit() {
     use duke_sheets_core::auto_filter::ColorFilter;
 
