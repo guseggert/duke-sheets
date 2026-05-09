@@ -82,6 +82,15 @@ pub const BRT_END_FILTER_COLUMN: u16 = 0x00A4;
 pub const BRT_BEGIN_FILTERS: u16 = 0x00A5;
 pub const BRT_END_FILTERS: u16 = 0x00A6;
 pub const BRT_FILTER: u16 = 0x00A7;
+// BrtColorFilter at 0x00A9 confirmed by Excel round-trip parity.
+// BrtDynamicFilter's record ID is not authoritatively published and
+// Excel rejects files carrying our suspected IDs (0x00A8, 0x00AB)
+// with the spec-derived payload. The writer still emits to 0x00A8 so
+// the in-process round-trip works; flip-flopping the ID alone hasn't
+// been enough to make Excel accept the file. Real-world reference
+// XLSB samples with dynamic filters would unblock this.
+pub const BRT_DYNAMIC_FILTER: u16 = 0x00A8;
+pub const BRT_COLOR_FILTER: u16 = 0x00A9;
 pub const BRT_TOP10_FILTER: u16 = 0x00AA;
 pub const BRT_BEGIN_CUSTOM_FILTERS: u16 = 0x00AC;
 pub const BRT_END_CUSTOM_FILTERS: u16 = 0x00AD;

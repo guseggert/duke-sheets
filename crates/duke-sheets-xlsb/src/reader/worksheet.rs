@@ -322,6 +322,35 @@ pub(crate) fn read_worksheet<R: Read>(
                     }
                 }
             }
+            records::BRT_DYNAMIC_FILTER => {
+                if len >= 21 {
+                    use duke_sheets_core::auto_filter::{ColumnFilter, DynamicFilter};
+                    if let Some(fc) = current_filter_column.as_mut() {
+                        let cft = parser::read_u32(&buf, 0);
+                        // Skip the 1-byte fApplied flag at offset 4.
+                        let val = parser::read_f64(&buf, 5);
+                        let max_val = parser::read_f64(&buf, 13);
+                        fc.filter = ColumnFilter::Dynamic(DynamicFilter {
+                            filter_type: cft_to_dynamic_filter_type(cft),
+                            val: if val == 0.0 { None } else { Some(val) },
+                            max_val: if max_val == 0.0 { None } else { Some(max_val) },
+                        });
+                    }
+                }
+            }
+            records::BRT_COLOR_FILTER => {
+                if len >= 8 {
+                    use duke_sheets_core::auto_filter::{ColorFilter, ColumnFilter};
+                    if let Some(fc) = current_filter_column.as_mut() {
+                        let dxf_id = parser::read_u32(&buf, 0);
+                        let cell_color = parser::read_u32(&buf, 4) != 0;
+                        fc.filter = ColumnFilter::Color(ColorFilter {
+                            dxf_id: Some(dxf_id),
+                            cell_color,
+                        });
+                    }
+                }
+            }
             records::BRT_BEGIN_FILTERS => {
                 if len >= 4 {
                     use duke_sheets_core::auto_filter::ValueFilter;
@@ -881,6 +910,49 @@ fn parse_auto_filter(data: &[u8], ws: &mut Worksheet) {
 
     let range = CellRange::from_indices(first_row, first_col, last_row, last_col);
     ws.set_auto_filter(Some(AutoFilter::new(range)));
+}
+
+/// Map the BIFF12 cft code to our DynamicFilterType per [MS-XLSB]
+/// §2.4.362. Unknown codes map to `Null`.
+fn cft_to_dynamic_filter_type(cft: u32) -> duke_sheets_core::auto_filter::DynamicFilterType {
+    use duke_sheets_core::auto_filter::DynamicFilterType as D;
+    match cft {
+        0x01 => D::AboveAverage,
+        0x02 => D::BelowAverage,
+        0x08 => D::Tomorrow,
+        0x09 => D::Today,
+        0x0A => D::Yesterday,
+        0x0B => D::NextWeek,
+        0x0C => D::ThisWeek,
+        0x0D => D::LastWeek,
+        0x0E => D::NextMonth,
+        0x0F => D::ThisMonth,
+        0x10 => D::LastMonth,
+        0x11 => D::NextQuarter,
+        0x12 => D::ThisQuarter,
+        0x13 => D::LastQuarter,
+        0x14 => D::NextYear,
+        0x15 => D::ThisYear,
+        0x16 => D::LastYear,
+        0x17 => D::YearToDate,
+        0x18 => D::Q1,
+        0x19 => D::Q2,
+        0x1A => D::Q3,
+        0x1B => D::Q4,
+        0x1C => D::M1,
+        0x1D => D::M2,
+        0x1E => D::M3,
+        0x1F => D::M4,
+        0x20 => D::M5,
+        0x21 => D::M6,
+        0x22 => D::M7,
+        0x23 => D::M8,
+        0x24 => D::M9,
+        0x25 => D::M10,
+        0x26 => D::M11,
+        0x27 => D::M12,
+        _ => D::Null,
+    }
 }
 
 /// Parse a BrtCustomFilter record per [MS-XLSB] §2.4.348:
