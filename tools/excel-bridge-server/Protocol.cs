@@ -75,10 +75,27 @@ public static class ProtocolHelpers
             JsonValueKind.Null => null,
             JsonValueKind.True => true,
             JsonValueKind.False => false,
-            JsonValueKind.Number => el.GetDouble(),
+            // Try Int32 first for whole-number values within range. Many
+            // COM methods (e.g. Range.AutoFilter Field, Workbook.SaveAs
+            // FileFormat) expect a Long Variant rather than a Double and
+            // reject otherwise.
+            JsonValueKind.Number => NumberToComValue(el),
             JsonValueKind.String => el.GetString(),
             _ => null,
         };
+    }
+
+    private static object? NumberToComValue(JsonElement el)
+    {
+        if (el.TryGetInt32(out var i32))
+        {
+            return i32;
+        }
+        if (el.TryGetInt64(out var i64))
+        {
+            return i64;
+        }
+        return el.GetDouble();
     }
 
     /// <summary>
