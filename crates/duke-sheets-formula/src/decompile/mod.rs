@@ -51,6 +51,10 @@ pub struct NameRecord {
     pub is_builtin: bool,
     /// Raw formula token bytes from the NAME record body.
     pub formula_body: Vec<u8>,
+    /// User-supplied comment / description, when present in the source
+    /// record's optional trailing string. None for built-ins or when
+    /// the source format does not carry a comment.
+    pub comment: Option<String>,
 }
 
 /// Built-in name indices (when the `fBuiltin` flag is set in the NAME record).
