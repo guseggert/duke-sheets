@@ -85,6 +85,11 @@ enum Token {
     /// Content between [ and ] (including nested brackets preserved)
     BracketExpr(String),
 
+    /// Synthetic token: whitespace between two value-producing tokens
+    /// (the implicit intersection operator). Distinct from skip_whitespace
+    /// which silently swallows non-meaningful spaces.
+    Space,
+
     // Unknown character (for better error reporting)
     Unknown(char),
 
@@ -112,8 +117,45 @@ impl<'a> FormulaParser<'a> {
         parser
     }
 
-
     fn advance_token(&mut self) {
+        // The implicit intersection operator in Excel is whitespace
+        // between two value-producing tokens. Detect it here so the
+        // parser can consume Token::Space rather than silently
+        // collapsing the gap.
+        let prev_value_producing = matches!(
+            self.current_token,
+            Some(Token::CellRef(_))
+                | Some(Token::Number(_))
+                | Some(Token::String(_))
+                | Some(Token::Boolean(_))
+                | Some(Token::Error(_))
+                | Some(Token::Identifier(_))
+                | Some(Token::RightParen)
+                | Some(Token::RightBrace)
+                | Some(Token::BracketExpr(_))
+                | Some(Token::Percent)
+                | Some(Token::Hash)
+        );
+        let had_whitespace = self
+            .peek_char()
+            .is_some_and(|c| c.is_whitespace() && c != '\n');
+        if prev_value_producing && had_whitespace {
+            self.skip_whitespace();
+            if let Some(next) = self.peek_char() {
+                if matches!(
+                    next,
+                    'A'..='Z' | 'a'..='z' | '_' | '\'' | '$' | '(' | '0'..='9'
+                ) {
+                    self.current_token = Some(Token::Space);
+                    return;
+                }
+            }
+            // Whitespace was non-meaningful (trailing); fall through
+            // to scan as usual. self.skip_whitespace() above already
+            // moved pos past it.
+            self.current_token = Some(self.scan_token());
+            return;
+        }
         self.skip_whitespace();
         self.current_token = Some(self.scan_token());
     }
@@ -491,7 +533,6 @@ impl<'a> FormulaParser<'a> {
         i == chars.len()
     }
 
-
     fn peek_char(&self) -> Option<char> {
         self.input[self.pos..].chars().next()
     }
@@ -521,7 +562,10 @@ impl<'a> FormulaParser<'a> {
     }
 
     fn consume(&mut self) -> Token {
-        let token = self.current_token.take().unwrap_or(Token::Eof);
+        // advance_token inspects self.current_token to detect the
+        // implicit-intersection space between value-producing tokens.
+        // Use clone() rather than take() so it can do that lookup.
+        let token = self.current_token.clone().unwrap_or(Token::Eof);
         self.advance_token();
         token
     }
@@ -688,8 +732,10 @@ impl<'a> FormulaParser<'a> {
             });
         }
 
-        // Parse primary, then check for postfix operators (%, #)
-        let mut expr = self.parse_range()?;
+        // Parse primary (via intersection layer, which folds Space
+        // tokens into BinaryOp(Intersect)), then check for postfix
+        // operators (%, #).
+        let mut expr = self.parse_intersect()?;
 
         loop {
             match self.current_token() {
@@ -712,6 +758,23 @@ impl<'a> FormulaParser<'a> {
         }
 
         Ok(expr)
+    }
+
+    /// Implicit intersection: a single space between two value-
+    /// producing expressions, e.g. `A1:B3 B2:C3` (cells in both
+    /// ranges). Excel precedence: range (:) > space > union (,).
+    fn parse_intersect(&mut self) -> FormulaResult<FormulaExpr> {
+        let mut left = self.parse_range()?;
+        while matches!(self.current_token(), Token::Space) {
+            self.consume();
+            let right = self.parse_range()?;
+            left = FormulaExpr::BinaryOp {
+                op: BinaryOperator::Intersect,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
     }
 
     fn parse_range(&mut self) -> FormulaResult<FormulaExpr> {
@@ -780,7 +843,21 @@ impl<'a> FormulaParser<'a> {
 
             Token::LeftParen => {
                 self.consume();
-                let expr = self.parse_expression()?;
+                let mut expr = self.parse_expression()?;
+                // Bare parens accept comma-as-union per Excel: an
+                // unparenthesised list of refs joined with commas
+                // forms a Union expression. Function-call commas
+                // are handled separately in parse_function_call,
+                // which never reaches this branch.
+                while matches!(self.current_token(), Token::Comma) {
+                    self.consume();
+                    let right = self.parse_expression()?;
+                    expr = FormulaExpr::BinaryOp {
+                        op: BinaryOperator::Union,
+                        left: Box::new(expr),
+                        right: Box::new(right),
+                    };
+                }
                 self.expect(&Token::RightParen)?;
                 Ok(expr)
             }
@@ -1716,5 +1793,55 @@ mod tests {
         } else {
             panic!("Expected Function, got {:?}", ast);
         }
+    }
+
+    #[test]
+    fn test_parse_intersection() {
+        let ast = parse_formula("=A1:B3 B2:C3").unwrap();
+        match ast {
+            FormulaExpr::BinaryOp {
+                op: BinaryOperator::Intersect,
+                ..
+            } => {}
+            other => panic!("Expected Intersect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_intersection_in_function() {
+        let ast = parse_formula("=SUM(A1:B3 B2:C3)").unwrap();
+        let FormulaExpr::Function { name, args } = ast else {
+            panic!("Expected SUM");
+        };
+        assert_eq!(name, "SUM");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(
+            &args[0],
+            FormulaExpr::BinaryOp {
+                op: BinaryOperator::Intersect,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_union_in_parens() {
+        let ast = parse_formula("=(A1:A2,C2:C3)").unwrap();
+        match ast {
+            FormulaExpr::BinaryOp {
+                op: BinaryOperator::Union,
+                ..
+            } => {}
+            other => panic!("Expected Union, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_call_still_uses_comma_as_arg_separator() {
+        let ast = parse_formula("=SUM(A1,B1)").unwrap();
+        let FormulaExpr::Function { args, .. } = ast else {
+            panic!("Expected Function");
+        };
+        assert_eq!(args.len(), 2, "comma should be arg separator inside SUM");
     }
 }
