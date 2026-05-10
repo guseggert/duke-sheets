@@ -7,7 +7,6 @@ use duke_sheets_formula::decompile::{
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
-
 use crate::biff12::parser;
 use crate::biff12::records;
 use crate::biff12::token_parser;
@@ -31,7 +30,7 @@ pub(crate) struct WorkbookProps {
     pub date_1904: bool,
     pub active_sheet: usize,
     pub formula_ctx: FormulaContext,
-    pub named_ranges: Vec<(String, u32, String, bool)>,
+    pub named_ranges: Vec<(String, u32, String, bool, Option<String>)>,
     pub print_areas: Vec<PrintSetting>,
     pub print_titles: Vec<PrintSetting>,
 }
@@ -274,7 +273,13 @@ pub(crate) fn read_workbook<R: Read + Seek>(
         }
 
         let hidden = name_hidden_flags.get(i).copied().unwrap_or(false);
-        named_ranges.push((nr.name.clone(), nr.sheet_idx, refers_to, hidden));
+        named_ranges.push((
+            nr.name.clone(),
+            nr.sheet_idx,
+            refers_to,
+            hidden,
+            nr.comment.clone(),
+        ));
     }
 
     Ok(WorkbookProps {
@@ -348,14 +353,41 @@ fn parse_name_record(data: &[u8]) -> Option<NameRecord> {
             pos += 4;
             if cb > 0 && pos + cb <= data.len() {
                 formula_body.extend_from_slice(&data[pos..pos + cb]);
+                pos += cb;
             }
         }
     }
+
+    // Trailing strings per [MS-XLSB] §2.4.668: comment, customMenu,
+    // description, help, statusBar — each XLNullableWideString.
+    let comment = read_nullable_wide_str_at(data, &mut pos);
 
     Some(NameRecord {
         name,
         sheet_idx: itab,
         is_builtin,
         formula_body,
+        comment,
     })
+}
+
+/// Pull an XLNullableWideString starting at *pos. NULL marker
+/// (0xFFFFFFFF) consumes 4 bytes and returns None; otherwise advance
+/// past the encoded XLWideString and return the string.
+fn read_nullable_wide_str_at(data: &[u8], pos: &mut usize) -> Option<String> {
+    if *pos + 4 > data.len() {
+        return None;
+    }
+    let marker = parser::read_u32(data, *pos);
+    if marker == 0xFFFFFFFF {
+        *pos += 4;
+        return None;
+    }
+    let (s, consumed) = parser::wide_str(data, *pos).ok()?;
+    *pos += consumed;
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }

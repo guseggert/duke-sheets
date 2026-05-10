@@ -5,7 +5,7 @@ use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 use crate::biff12::compiler::{self, CompileContext};
-use crate::biff12::{encode_wide_str, records, RecordWriter};
+use crate::biff12::{encode_nullable_wide_str, encode_wide_str, records, RecordWriter};
 use crate::error::XlsbResult;
 use duke_sheets_core::conditional_format::{
     CfOperator, CfRuleType, CfValueType, IconSetStyle, TimePeriod,
@@ -1210,16 +1210,6 @@ fn write_dv_parsed_formula(payload: &mut Vec<u8>, text: Option<&str>, ctx: &Comp
     payload.extend_from_slice(rgce);
     payload.extend_from_slice(&(rgcb.len() as u32).to_le_bytes());
     payload.extend_from_slice(rgcb);
-}
-
-/// Encode an XLNullableWideString: cchCharacters=0xFFFFFFFF for NULL,
-/// otherwise cchCharacters + UTF-16LE bytes.
-fn encode_nullable_wide_str(s: Option<&str>) -> Vec<u8> {
-    match s {
-        None => 0xFFFFFFFFu32.to_le_bytes().to_vec(),
-        Some(text) if text.is_empty() => 0xFFFFFFFFu32.to_le_bytes().to_vec(),
-        Some(text) => encode_wide_str(text),
-    }
 }
 
 fn write_conditional_formats<W: Write>(

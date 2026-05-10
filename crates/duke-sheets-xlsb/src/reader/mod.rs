@@ -70,7 +70,7 @@ impl XlsbReader {
             let _ = wb.set_active_sheet(props.active_sheet);
         }
 
-        for (name, itab, refers_to, hidden) in &props.named_ranges {
+        for (name, itab, refers_to, hidden, comment) in &props.named_ranges {
             let scope = if *itab == 0xFFFFFFFF {
                 NameScope::Workbook
             } else {
@@ -79,6 +79,9 @@ impl XlsbReader {
             let mut nr = NamedRange::new(name, refers_to.as_str(), scope);
             if *hidden {
                 nr.hidden = true;
+            }
+            if let Some(c) = comment {
+                nr.comment = Some(c.clone());
             }
             wb.named_ranges_mut().define_or_update(nr);
         }

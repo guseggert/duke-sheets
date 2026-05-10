@@ -5,7 +5,7 @@ use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 use crate::biff12::compiler::{compile_formula, CompileContext};
-use crate::biff12::{encode_wide_str, records, RecordWriter};
+use crate::biff12::{encode_nullable_wide_str, encode_wide_str, records, RecordWriter};
 use crate::error::XlsbResult;
 use duke_sheets_core::named_range::NameScope;
 use duke_sheets_core::worksheet::SheetVisibility;
@@ -189,8 +189,12 @@ fn write_user_name_records<W: Write>(
         payload.extend_from_slice(&(compiled.rgcb.len() as u32).to_le_bytes());
         payload.extend_from_slice(&compiled.rgcb);
 
-        for _ in 0..5 {
-            payload.extend_from_slice(&encode_wide_str(""));
+        // Trailing strings per [MS-XLSB] §2.4.668 BrtName:
+        //   comment, customMenu, description, help, statusBar
+        // Each is an XLNullableWideString (0xFFFFFFFF cch = NULL).
+        payload.extend_from_slice(&encode_nullable_wide_str(nr.comment.as_deref()));
+        for _ in 0..4 {
+            payload.extend_from_slice(&encode_nullable_wide_str(None));
         }
 
         rw.write_record(records::BRT_NAME, &payload)?;
