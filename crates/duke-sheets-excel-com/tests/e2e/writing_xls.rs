@@ -438,3 +438,52 @@ fn excel_can_read_dimensions_we_emit() {
     let w = s.column_width(1);
     assert!(w > 20.0 && w < 30.0, "col B width = {w} (expected ~25)",);
 }
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_evaluate_intersection_we_emit() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (row, &(a, b, c)) in [(1, 2, 3), (4, 5, 6), (7, 8, 9)].iter().enumerate() {
+        ws.set_cell_value_at(row as u32, 0, a as f64).unwrap();
+        ws.set_cell_value_at(row as u32, 1, b as f64).unwrap();
+        ws.set_cell_value_at(row as u32, 2, c as f64).unwrap();
+    }
+    ws.set_cell_formula("E1", "=SUM(A1:B3 B2:C3)").unwrap();
+    ws.set_formula_result(0, 4, CellValue::Number(13.0))
+        .unwrap();
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let s = result.worksheet(0).unwrap();
+    let v = s.get_value_at(0, 4);
+    match v.effective_value() {
+        CellValue::Number(n) => assert!(
+            (n - 13.0).abs() < 1e-9,
+            "intersection sum drifted: E1 = {n}"
+        ),
+        other => panic!("E1 expected Number(13), got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_evaluate_union_we_emit() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (row, &(a, b, c)) in [(1, 2, 3), (4, 5, 6), (7, 8, 9)].iter().enumerate() {
+        ws.set_cell_value_at(row as u32, 0, a as f64).unwrap();
+        ws.set_cell_value_at(row as u32, 1, b as f64).unwrap();
+        ws.set_cell_value_at(row as u32, 2, c as f64).unwrap();
+    }
+    ws.set_cell_formula("E1", "=SUM((A1:A2,C2:C3))").unwrap();
+    ws.set_formula_result(0, 4, CellValue::Number(20.0))
+        .unwrap();
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let s = result.worksheet(0).unwrap();
+    let v = s.get_value_at(0, 4);
+    match v.effective_value() {
+        CellValue::Number(n) => assert!((n - 20.0).abs() < 1e-9, "union sum drifted: E1 = {n}"),
+        other => panic!("E1 expected Number(20), got {other:?}"),
+    }
+}
