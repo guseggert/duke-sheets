@@ -248,8 +248,12 @@ fn emit_range_ref(
 
     match &range_ref.sheet {
         None => {
-            // tArea V-class
-            out.push(ptg::v_class(ptg::PTG_AREA));
+            // tArea R-class. Same reasoning as the 3D variant below
+            // — V-class causes Excel to collapse the range to its
+            // last cell during evaluation by range-consuming
+            // functions like SUM (and breaks intersection /union
+            // operands which must be references, not values).
+            out.push(ptg::PTG_AREA);
             out.extend_from_slice(&start.row.to_le_bytes());
             out.extend_from_slice(&end.row.to_le_bytes());
             out.extend_from_slice(&encode_col_word(start).to_le_bytes());
