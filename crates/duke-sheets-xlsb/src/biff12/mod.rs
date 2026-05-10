@@ -142,6 +142,18 @@ pub(crate) fn encode_wide_str(s: &str) -> Vec<u8> {
     out
 }
 
+/// Encode an XLNullableWideString: cchCharacters=0xFFFFFFFF for NULL,
+/// otherwise cchCharacters + UTF-16LE bytes. Empty `Some("")` is
+/// treated as NULL because Excel emits the null marker for absent
+/// optional strings.
+pub(crate) fn encode_nullable_wide_str(s: Option<&str>) -> Vec<u8> {
+    match s {
+        None => 0xFFFFFFFFu32.to_le_bytes().to_vec(),
+        Some(text) if text.is_empty() => 0xFFFFFFFFu32.to_le_bytes().to_vec(),
+        Some(text) => encode_wide_str(text),
+    }
+}
+
 pub(crate) struct RecordWriter<W: std::io::Write> {
     writer: W,
 }

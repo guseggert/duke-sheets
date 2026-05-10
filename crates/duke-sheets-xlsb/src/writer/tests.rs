@@ -2126,4 +2126,27 @@ mod tests {
             other => panic!("expected Color filter, got {other:?}"),
         }
     }
+
+    #[test]
+    fn named_range_comment_roundtrip() {
+        use duke_sheets_core::named_range::{NameScope, NamedRange};
+
+        let mut wb = Workbook::new();
+        let nr =
+            NamedRange::new("MyTax", "0.07", NameScope::Workbook).with_comment("Sales tax rate");
+        wb.named_ranges_mut().define_or_update(nr);
+
+        let wb2 = round_trip(&wb);
+        let got = wb2
+            .named_ranges()
+            .iter()
+            .find(|n| n.name == "MyTax")
+            .expect("named range lost");
+        assert_eq!(
+            got.comment.as_deref(),
+            Some("Sales tax rate"),
+            "named range comment lost: {:?}",
+            got.comment
+        );
+    }
 }
