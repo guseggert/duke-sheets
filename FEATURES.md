@@ -177,7 +177,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 |---------|------|------|-----|-----|------|------|
 | External URL hyperlinks | R✔ W● | R✔ W✔ | R✔ W✔ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*`, `hyperlinks_round_trip::external_url_hyperlink_round_trips`, `hyperlinks_round_trip::lo_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xls::excel_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | Reader preserves; XLSX writer round-trip incomplete; XLSB writer + Excel parity verified |
 | Internal hyperlinks (Sheet!A1) | R✔ W● | R✔ W✔ | R✔ W✔ | R✖ W✖ | `duke-sheets-xlsx::reader::mod::hyperlink*`, `hyperlinks_round_trip::internal_hash_target_round_trips`, `hyperlinks_round_trip::lo_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | |
-| Mailto hyperlinks | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.3.1.36 | |
+| Mailto hyperlinks | R✖ W✖ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `excel_com_e2e::writing_xlsb::excel_can_read_mailto_hyperlink_we_emit` | §18.3.1.36 | `mailto:` URLs ride the existing external-hyperlink rel-id path; Excel preserves the prefix and query string |
 | Hyperlink tooltips | R✖ W✖ | R✔ W✔ | R✖ W✖ | R✖ W✖ | `excel_com_e2e::writing_xlsb::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | XLSB BrtHLink trailing XLWideString carries the tooltip; survives Excel round-trip |
 | Hyperlink display text | R✖ W✖ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `hyperlinks_round_trip::external_url_hyperlink_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_hyperlinks_we_emit`, `excel_com_e2e::writing_xlsb::excel_can_read_hyperlinks_we_emit` | §18.3.1.36 | XLS HLINK record carries display name in `cch + UTF-16LE` block; XLSB BrtHLink trailing XLWideString does the same; both round-trip survive Excel parity |
 | Hyperlinks in rich text runs | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.4.7 |
@@ -204,7 +204,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Names with formula bodies | R✔ W✔ | R✔ W✔ | R● W● | R✖ W✖ | `xls_e2e::formulas::named_range_in_expression`, `named_range_round_trip::workbook_scoped_constant_name_round_trips_in_formula` | §18.2.5 | XLS reader doesn't yet repopulate `workbook.named_ranges` |
 | Names referencing ranges | R✔ W✔ | R✔ W✔ | R● W● | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_named_ranges`, `named_range_round_trip::user_named_range_in_cell_formula_round_trips` | §18.2.5 | XLS reader doesn't yet repopulate `workbook.named_ranges` |
 | Hidden / built-in names (_xlnm.*) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `xlsx_roundtrip::test_roundtrip_print_area`, `print_names_round_trip::print_area_round_trips` | §18.2.5 |
-| Names with comments | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | §18.2.5 |
+| Names with comments | R✖ W✖ | R✔ W✔ | R- W- | R✖ W✖ | `duke-sheets-xlsb::writer::tests::named_range_comment_roundtrip` | §18.2.5 | XLSB BrtName trailing strings carry comment + customMenu + description + help + statusBar (5 XLNullableWideStrings); writer emits `comment` field, reader parses first slot back into `NamedRange.comment`. |
 
 ## Tables
 

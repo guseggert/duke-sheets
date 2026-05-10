@@ -105,6 +105,45 @@ fn excel_can_read_hyperlinks_we_emit() {
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_mailto_hyperlink_we_emit() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "email").unwrap();
+    ws.set_hyperlink(
+        "A1",
+        Hyperlink {
+            target: "mailto:foo@example.com?subject=hi".into(),
+            display: Some("Email me".into()),
+            tooltip: None,
+            location: None,
+        },
+    )
+    .unwrap();
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let s = result.worksheet(0).unwrap();
+    let hl = s
+        .hyperlink("A1")
+        .expect("mailto hyperlink lost after round-trip");
+    assert!(
+        hl.target.starts_with("mailto:"),
+        "target dropped mailto: prefix: {:?}",
+        hl.target
+    );
+    assert!(
+        hl.target.contains("foo@example.com"),
+        "mailto address mangled: {:?}",
+        hl.target
+    );
+    assert_eq!(
+        hl.display.as_deref(),
+        Some("Email me"),
+        "mailto display text lost"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_evaluate_cross_sheet_formulas_we_emit() {
     let mut wb = Workbook::new();
     wb.rename_worksheet(0, "Calc").unwrap();
