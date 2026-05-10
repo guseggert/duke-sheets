@@ -46,8 +46,8 @@
 | Defined name refs in formulas | R✔ W✔ | R✔ W✔ | R✔ W● | R✖ W✖ | `xls_e2e::formulas::named_range`, `named_range_round_trip::workbook_scoped_constant_name_round_trips_in_formula` | §18.2.5 | XLS round-trips formula text via tName ptg + NAME record; `Workbook::named_ranges` is not yet repopulated by the reader |
 | R1C1 reference mode (storage) | R✖ W✖ | R- W- | R- W- | R- W- | - | §18.2.29 |
 | Array constants in formulas | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::formulas::array_constant` | §18.17.2.5 |
-| Intersection operator (space) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.2 |
-| Range union operator (comma) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.17.2.2 |
+| Intersection operator (space) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `parser::tests::test_parse_intersection`, `parser::tests::test_parse_intersection_in_function`, `excel_com_e2e::writing_xlsb::excel_can_evaluate_intersection_we_emit` | §18.17.2.2 | Tokeniser emits Token::Space when whitespace separates two value-producing tokens; parser folds it into BinaryOp(Intersect). Compiler emits PtgIsect with R-class operand areas. Our own evaluator returns an error for the operator (Excel does the math). |
+| Range union operator (comma) | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `parser::tests::test_parse_union_in_parens`, `excel_com_e2e::writing_xlsb::excel_can_evaluate_union_we_emit` | §18.17.2.2 | Parser distinguishes function-call commas from union commas: bare parens (`(A,B)`) fold the comma into BinaryOp(Union); function-call parens (`SUM(A,B)`) keep the existing arg-separator behaviour. Compiler emits PTG_LIST. |
 | Formula evaluation (on read) | ✔ | ✔ | - | - | `formula_parity::formula_parity_matches_excel_cached_values` | - |
 | Workbook recalculation | ✔ | ✔ | - | - | `calculation::test_workbook_calculate_*` | - |
 | Circular references | ✔ | ✔ | - | - | `calculation::circular_ref*` | - |
