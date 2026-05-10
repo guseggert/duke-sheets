@@ -679,6 +679,29 @@ fn excel_can_evaluate_named_range_formulas_we_emit() {
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_named_range_comment_we_emit() {
+    use duke_sheets_core::named_range::{NameScope, NamedRange};
+
+    let mut wb = Workbook::new();
+    let nr = NamedRange::new("MyTax", "0.07", NameScope::Workbook).with_comment("Sales tax rate");
+    wb.named_ranges_mut().define_or_update(nr);
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let got = result
+        .named_ranges()
+        .iter()
+        .find(|n| n.name == "MyTax")
+        .expect("named range lost in Excel round-trip");
+    assert_eq!(
+        got.comment.as_deref(),
+        Some("Sales tax rate"),
+        "named range comment dropped by Excel: {:?}",
+        got.comment
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_evaluate_intersection_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
