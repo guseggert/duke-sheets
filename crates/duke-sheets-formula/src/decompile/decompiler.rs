@@ -1188,6 +1188,7 @@ mod tests {
                 sheet_idx: 0,
                 is_builtin: false,
                 formula_body: Vec::new(),
+                comment: None,
             }],
             base_cell: None,
         };
@@ -1271,6 +1272,7 @@ mod tests {
                 sheet_idx: 0,
                 is_builtin: false,
                 formula_body: Vec::new(),
+                comment: None,
             }],
             base_cell: None,
         };

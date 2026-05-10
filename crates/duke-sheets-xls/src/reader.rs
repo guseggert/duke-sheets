@@ -1812,6 +1812,7 @@ impl XlsReader {
             },
             is_builtin,
             formula_body,
+            comment: None,
         })
     }
 
