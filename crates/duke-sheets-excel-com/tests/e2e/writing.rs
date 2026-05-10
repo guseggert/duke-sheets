@@ -1142,3 +1142,55 @@ fn test_write_cell_protection_unlocked() {
         b1.protection.locked
     );
 }
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_evaluate_intersection_we_emit() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (row, &(a, b, c)) in [(1, 2, 3), (4, 5, 6), (7, 8, 9)].iter().enumerate() {
+        ws.set_cell_value_at(row as u32, 0, a as f64).unwrap();
+        ws.set_cell_value_at(row as u32, 1, b as f64).unwrap();
+        ws.set_cell_value_at(row as u32, 2, c as f64).unwrap();
+    }
+    // Intersection of A1:B3 with B2:C3 is the cells at B2, B3 = 5+8 = 13.
+    ws.set_cell_formula("E1", "=SUM(A1:B3 B2:C3)").unwrap();
+    ws.set_formula_result(0, 4, CellValue::Number(13.0))
+        .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    let v = s.get_value_at(0, 4);
+    match v.effective_value() {
+        CellValue::Number(n) => assert!(
+            (n - 13.0).abs() < 1e-9,
+            "intersection sum drifted: E1 = {n}"
+        ),
+        other => panic!("E1 expected Number(13), got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_evaluate_union_we_emit() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (row, &(a, b, c)) in [(1, 2, 3), (4, 5, 6), (7, 8, 9)].iter().enumerate() {
+        ws.set_cell_value_at(row as u32, 0, a as f64).unwrap();
+        ws.set_cell_value_at(row as u32, 1, b as f64).unwrap();
+        ws.set_cell_value_at(row as u32, 2, c as f64).unwrap();
+    }
+    // Union of A1:A2 and C2:C3 = {1, 4, 6, 9} = 20. Double parens are
+    // required so SUM treats the comma as union, not arg separator.
+    ws.set_cell_formula("E1", "=SUM((A1:A2,C2:C3))").unwrap();
+    ws.set_formula_result(0, 4, CellValue::Number(20.0))
+        .unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let s = result.worksheet(0).unwrap();
+    let v = s.get_value_at(0, 4);
+    match v.effective_value() {
+        CellValue::Number(n) => assert!((n - 20.0).abs() < 1e-9, "union sum drifted: E1 = {n}"),
+        other => panic!("E1 expected Number(20), got {other:?}"),
+    }
+}
