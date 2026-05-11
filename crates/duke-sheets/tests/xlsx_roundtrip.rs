@@ -990,7 +990,6 @@ fn test_auto_filter_multiple_columns() {
     ));
 }
 
-
 /// Test roundtrip of formula with numeric cached value
 #[test]
 fn test_roundtrip_formula_cached_number() {
@@ -2249,8 +2248,18 @@ fn test_roundtrip_chart_bar() {
     let mut chart = Chart::new(ChartType::ColumnClustered);
     chart.title = Some("Sales Chart".to_string());
     chart.anchor = DrawingAnchor::TwoCell {
-        from: CellMarker { col: 1, col_offset_emu: 0, row: 5, row_offset_emu: 0 },
-        to: CellMarker { col: 10, col_offset_emu: 0, row: 20, row_offset_emu: 0 },
+        from: CellMarker {
+            col: 1,
+            col_offset_emu: 0,
+            row: 5,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: 10,
+            col_offset_emu: 0,
+            row: 20,
+            row_offset_emu: 0,
+        },
         edit_as: None,
     };
     let s1 = DataSeries::new(DataReference::formula("Sheet1!$B$2:$B$5"))
@@ -2454,15 +2463,27 @@ fn test_roundtrip_multiple_charts() {
 
 #[test]
 fn test_roundtrip_chart_anchor_offsets() {
-    use duke_sheets_chart::{CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor};
+    use duke_sheets_chart::{
+        CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor,
+    };
 
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
 
     let mut chart = Chart::new(ChartType::Line);
     chart.anchor = DrawingAnchor::TwoCell {
-        from: CellMarker { col: 3, col_offset_emu: 152400, row: 7, row_offset_emu: 76200 },
-        to: CellMarker { col: 15, col_offset_emu: 304800, row: 25, row_offset_emu: 228600 },
+        from: CellMarker {
+            col: 3,
+            col_offset_emu: 152400,
+            row: 7,
+            row_offset_emu: 76200,
+        },
+        to: CellMarker {
+            col: 15,
+            col_offset_emu: 304800,
+            row: 25,
+            row_offset_emu: 228600,
+        },
         edit_as: None,
     };
     chart.add_series(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$5")));
@@ -3735,14 +3756,14 @@ fn test_roundtrip_combo_bar_line() {
         series_lines: None,
         up_down_bars: None,
         axis_ids: vec![1, 2],
-            of_pie_type: None,
-            split_type: None,
-            split_pos: None,
-            second_pie_size: None,
-            bar_shape: None,
-            floor: None,
-            side_wall: None,
-            back_wall: None,
+        of_pie_type: None,
+        split_type: None,
+        split_pos: None,
+        second_pie_size: None,
+        bar_shape: None,
+        floor: None,
+        side_wall: None,
+        back_wall: None,
         raw_ext: None,
     };
     let line_group = ChartTypeGroup {
@@ -3764,14 +3785,14 @@ fn test_roundtrip_combo_bar_line() {
         series_lines: None,
         up_down_bars: None,
         axis_ids: vec![1, 3],
-            of_pie_type: None,
-            split_type: None,
-            split_pos: None,
-            second_pie_size: None,
-            bar_shape: None,
-            floor: None,
-            side_wall: None,
-            back_wall: None,
+        of_pie_type: None,
+        split_type: None,
+        split_pos: None,
+        second_pie_size: None,
+        bar_shape: None,
+        floor: None,
+        side_wall: None,
+        back_wall: None,
         raw_ext: None,
     };
     chart.type_groups = vec![bar_group, line_group];
@@ -3899,14 +3920,14 @@ fn test_roundtrip_combo_axes() {
         series_lines: None,
         up_down_bars: None,
         axis_ids: vec![10, 20],
-            of_pie_type: None,
-            split_type: None,
-            split_pos: None,
-            second_pie_size: None,
-            bar_shape: None,
-            floor: None,
-            side_wall: None,
-            back_wall: None,
+        of_pie_type: None,
+        split_type: None,
+        split_pos: None,
+        second_pie_size: None,
+        bar_shape: None,
+        floor: None,
+        side_wall: None,
+        back_wall: None,
         raw_ext: None,
     };
     let line_group = ChartTypeGroup {
@@ -3928,14 +3949,14 @@ fn test_roundtrip_combo_axes() {
         series_lines: None,
         up_down_bars: None,
         axis_ids: vec![10, 30],
-            of_pie_type: None,
-            split_type: None,
-            split_pos: None,
-            second_pie_size: None,
-            bar_shape: None,
-            floor: None,
-            side_wall: None,
-            back_wall: None,
+        of_pie_type: None,
+        split_type: None,
+        split_pos: None,
+        second_pie_size: None,
+        bar_shape: None,
+        floor: None,
+        side_wall: None,
+        back_wall: None,
         raw_ext: None,
     };
     chart.type_groups = vec![bar_group, line_group];
@@ -4020,14 +4041,14 @@ fn test_roundtrip_single_type_group_uses_legacy() {
         series_lines: None,
         up_down_bars: None,
         axis_ids: vec![1, 2],
-            of_pie_type: None,
-            split_type: None,
-            split_pos: None,
-            second_pie_size: None,
-            bar_shape: None,
-            floor: None,
-            side_wall: None,
-            back_wall: None,
+        of_pie_type: None,
+        split_type: None,
+        split_pos: None,
+        second_pie_size: None,
+        bar_shape: None,
+        floor: None,
+        side_wall: None,
+        back_wall: None,
         raw_ext: None,
     };
     chart.type_groups = vec![group];
@@ -4098,14 +4119,14 @@ fn test_roundtrip_combo_secondary_axis_position() {
         series_lines: None,
         up_down_bars: None,
         axis_ids: vec![10, 20],
-            of_pie_type: None,
-            split_type: None,
-            split_pos: None,
-            second_pie_size: None,
-            bar_shape: None,
-            floor: None,
-            side_wall: None,
-            back_wall: None,
+        of_pie_type: None,
+        split_type: None,
+        split_pos: None,
+        second_pie_size: None,
+        bar_shape: None,
+        floor: None,
+        side_wall: None,
+        back_wall: None,
         raw_ext: None,
     };
     let line_group = ChartTypeGroup {
@@ -4127,14 +4148,14 @@ fn test_roundtrip_combo_secondary_axis_position() {
         series_lines: None,
         up_down_bars: None,
         axis_ids: vec![10, 30],
-            of_pie_type: None,
-            split_type: None,
-            split_pos: None,
-            second_pie_size: None,
-            bar_shape: None,
-            floor: None,
-            side_wall: None,
-            back_wall: None,
+        of_pie_type: None,
+        split_type: None,
+        split_pos: None,
+        second_pie_size: None,
+        bar_shape: None,
+        floor: None,
+        side_wall: None,
+        back_wall: None,
         raw_ext: None,
     };
     chart.type_groups = vec![bar_group, line_group];
@@ -5304,7 +5325,7 @@ fn test_roundtrip_multiple_chartsheets() {
             name: format!("CS{}", i + 1),
             chart,
             visibility: SheetVisibility::Visible,
-        raw_drawing_objects: Vec::new(),
+            raw_drawing_objects: Vec::new(),
         })
         .unwrap();
     }
@@ -5601,4 +5622,115 @@ fn test_images_empty_by_default() {
     XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
     let rt = XlsxReader::read(Cursor::new(&buf)).unwrap();
     assert!(rt.worksheet(0).unwrap().images().is_empty());
+}
+
+/// A 1x1 transparent PNG (68 bytes) used as a deterministic image
+/// payload for round-trip tests.
+const TEST_PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR length + name
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // width=1 height=1
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, // 8-bit RGBA + IHDR CRC
+    0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, // IDAT length + name
+    0x54, 0x78, 0x9C, 0x63, 0x60, 0x00, 0x02, 0x00, // zlib-deflated 1 pixel
+    0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F, // IDAT CRC
+    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, // IEND length + name
+    0xAE, 0x42, 0x60, 0x82, // IEND CRC
+];
+
+/// Build a TwoCell `EmbeddedImage` over a known PNG payload.
+fn test_two_cell_image(
+    id: u32,
+    name: &str,
+    from_col: u16,
+    from_row: u32,
+    to_col: u16,
+    to_row: u32,
+) -> duke_sheets_chart::EmbeddedImage {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+    EmbeddedImage {
+        id,
+        name: name.to_string(),
+        description: None,
+        anchor: DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: from_col,
+                col_offset_emu: 0,
+                row: from_row,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: to_col,
+                col_offset_emu: 0,
+                row: to_row,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+        format: ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_000_000,
+        height_emu: 2_000_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    }
+}
+
+#[test]
+fn xlsx_png_image_round_trips() {
+    use duke_sheets_chart::{DrawingAnchor, ImageFormat};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    let mut img = test_two_cell_image(1, "Pic1", 1, 2, 5, 10);
+    img.description = Some("Test image".into());
+    ws.add_image(img);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    let ws_in = rt.worksheet(0).unwrap();
+    let images = ws_in.images();
+    assert_eq!(images.len(), 1, "exactly one image must round-trip");
+
+    let img = &images[0];
+    assert_eq!(img.name, "Pic1");
+    assert_eq!(img.description.as_deref(), Some("Test image"));
+    assert_eq!(img.format, ImageFormat::Png);
+    assert_eq!(img.data, TEST_PNG_1X1, "PNG bytes must round-trip verbatim");
+    assert_eq!(img.width_emu, 1_000_000);
+    assert_eq!(img.height_emu, 2_000_000);
+    if let DrawingAnchor::TwoCell { from, to, .. } = &img.anchor {
+        assert_eq!(from.col, 1);
+        assert_eq!(from.row, 2);
+        assert_eq!(to.col, 5);
+        assert_eq!(to.row, 10);
+    } else {
+        panic!("expected TwoCell anchor, got {:?}", img.anchor);
+    }
+}
+
+#[test]
+fn xlsx_multiple_images_round_trip_on_same_sheet() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for i in 0..3u32 {
+        let name = format!("Pic{i}");
+        let img = test_two_cell_image(i + 1, &name, i as u16, i, i as u16 + 2, i + 2);
+        ws.add_image(img);
+    }
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    let images = rt.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 3);
+    assert_eq!(images[0].name, "Pic0");
+    assert_eq!(images[1].name, "Pic1");
+    assert_eq!(images[2].name, "Pic2");
 }

@@ -1194,3 +1194,66 @@ fn excel_can_evaluate_union_we_emit() {
         other => panic!("E1 expected Number(20), got {other:?}"),
     }
 }
+
+/// A valid 68-byte 1x1 transparent PNG used as a deterministic image
+/// payload for Excel parity tests.
+const TEST_PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x00, 0x02, 0x00,
+    0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+    0xAE, 0x42, 0x60, 0x82,
+];
+
+/// Excel must accept the `<xdr:pic>` + `xl/media/imageN.png` emit
+/// (no `Repaired` warning) and round-trip the PNG bytes verbatim
+/// through SaveAs.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsx_png_image_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_image(EmbeddedImage {
+        id: 1,
+        name: "Pic1".into(),
+        description: None,
+        anchor: DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 0,
+                row: 2,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 5,
+                col_offset_emu: 0,
+                row: 10,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+        format: ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_000_000,
+        height_emu: 2_000_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    });
+
+    let result = roundtrip_through_excel(&wb);
+    let images = result.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 1, "image must survive Excel re-save");
+    let img = &images[0];
+    assert_eq!(img.format, ImageFormat::Png);
+    assert_eq!(
+        img.data, TEST_PNG_1X1,
+        "PNG bytes must round-trip through Excel verbatim"
+    );
+}
