@@ -1205,6 +1205,113 @@ const TEST_PNG_1X1: &[u8] = &[
     0xAE, 0x42, 0x60, 0x82,
 ];
 
+/// Excel must accept an XLSX with a `<xdr:oneCellAnchor>` wrapped
+/// picture and preserve the OneCell anchor through SaveAs.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsx_onecell_picture_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_image(EmbeddedImage {
+        id: 1,
+        name: "OneCellPic".into(),
+        description: None,
+        anchor: DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: 2,
+                col_offset_emu: 0,
+                row: 3,
+                row_offset_emu: 0,
+            },
+            width_emu: 1_500_000,
+            height_emu: 800_000,
+        },
+        format: ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_500_000,
+        height_emu: 800_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    });
+
+    let result = roundtrip_through_excel(&wb);
+    let images = result.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 1, "OneCell picture must survive Excel");
+    let img = &images[0];
+    match &img.anchor {
+        DrawingAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            assert_eq!(from.col, 2);
+            assert_eq!(from.row, 3);
+            assert_eq!(*width_emu, 1_500_000);
+            assert_eq!(*height_emu, 800_000);
+        }
+        other => panic!("expected OneCell anchor after Excel round-trip, got {other:?}"),
+    }
+}
+
+/// Excel must accept an XLSX with a `<xdr:absoluteAnchor>` wrapped
+/// picture and preserve the Absolute anchor through SaveAs.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xlsx_absolute_picture_we_emit() {
+    use duke_sheets_chart::{DrawingAnchor, EmbeddedImage, ImageFormat};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_image(EmbeddedImage {
+        id: 1,
+        name: "AbsolutePic".into(),
+        description: None,
+        anchor: DrawingAnchor::Absolute {
+            x_emu: 2_500_000,
+            y_emu: 1_200_000,
+            width_emu: 1_000_000,
+            height_emu: 900_000,
+        },
+        format: ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_000_000,
+        height_emu: 900_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    });
+
+    let result = roundtrip_through_excel(&wb);
+    let images = result.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 1, "Absolute picture must survive Excel");
+    let img = &images[0];
+    match &img.anchor {
+        DrawingAnchor::Absolute {
+            x_emu,
+            y_emu,
+            width_emu,
+            height_emu,
+        } => {
+            assert_eq!(*x_emu, 2_500_000);
+            assert_eq!(*y_emu, 1_200_000);
+            assert_eq!(*width_emu, 1_000_000);
+            assert_eq!(*height_emu, 900_000);
+        }
+        other => panic!("expected Absolute anchor after Excel round-trip, got {other:?}"),
+    }
+}
+
 /// Excel must accept the `<xdr:pic>` + `xl/media/imageN.png` emit
 /// (no `Repaired` warning) and round-trip the PNG bytes verbatim
 /// through SaveAs.

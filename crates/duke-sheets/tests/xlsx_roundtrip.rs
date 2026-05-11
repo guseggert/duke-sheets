@@ -5716,6 +5716,174 @@ fn xlsx_png_image_round_trips() {
 }
 
 #[test]
+fn xlsx_onecell_anchor_round_trips() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_image(EmbeddedImage {
+        id: 1,
+        name: "OneCellPic".into(),
+        description: None,
+        anchor: DrawingAnchor::OneCell {
+            from: CellMarker {
+                col: 2,
+                col_offset_emu: 50_000,
+                row: 3,
+                row_offset_emu: 70_000,
+            },
+            width_emu: 1_500_000,
+            height_emu: 800_000,
+        },
+        format: ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_500_000,
+        height_emu: 800_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    });
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    let img = &rt.worksheet(0).unwrap().images()[0];
+    if let DrawingAnchor::OneCell {
+        from,
+        width_emu,
+        height_emu,
+    } = &img.anchor
+    {
+        assert_eq!(from.col, 2);
+        assert_eq!(from.col_offset_emu, 50_000);
+        assert_eq!(from.row, 3);
+        assert_eq!(from.row_offset_emu, 70_000);
+        assert_eq!(*width_emu, 1_500_000);
+        assert_eq!(*height_emu, 800_000);
+    } else {
+        panic!(
+            "expected OneCell anchor after round-trip, got {:?}",
+            img.anchor
+        );
+    }
+    assert_eq!(img.format, ImageFormat::Png);
+    assert_eq!(img.data, TEST_PNG_1X1);
+}
+
+#[test]
+fn xlsx_absolute_anchor_round_trips() {
+    use duke_sheets_chart::{DrawingAnchor, EmbeddedImage, ImageFormat};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_image(EmbeddedImage {
+        id: 1,
+        name: "AbsolutePic".into(),
+        description: None,
+        anchor: DrawingAnchor::Absolute {
+            x_emu: 2_500_000,
+            y_emu: 1_200_000,
+            width_emu: 1_000_000,
+            height_emu: 900_000,
+        },
+        format: ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_000_000,
+        height_emu: 900_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    });
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    let img = &rt.worksheet(0).unwrap().images()[0];
+    if let DrawingAnchor::Absolute {
+        x_emu,
+        y_emu,
+        width_emu,
+        height_emu,
+    } = &img.anchor
+    {
+        assert_eq!(*x_emu, 2_500_000);
+        assert_eq!(*y_emu, 1_200_000);
+        assert_eq!(*width_emu, 1_000_000);
+        assert_eq!(*height_emu, 900_000);
+    } else {
+        panic!(
+            "expected Absolute anchor after round-trip, got {:?}",
+            img.anchor
+        );
+    }
+    assert_eq!(img.format, ImageFormat::Png);
+    assert_eq!(img.data, TEST_PNG_1X1);
+}
+
+#[test]
+fn xlsx_twocell_anchor_editas_round_trips() {
+    // editAs attribute on twoCellAnchor must round-trip. Tests
+    // editAs=oneCell and editAs=absolute via the TwoCell variant.
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs, EmbeddedImage, ImageFormat};
+
+    for ea in [EditAs::TwoCell, EditAs::OneCell, EditAs::Absolute] {
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.add_image(EmbeddedImage {
+            id: 1,
+            name: format!("Pic-{:?}", ea),
+            description: None,
+            anchor: DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col: 0,
+                    col_offset_emu: 0,
+                    row: 0,
+                    row_offset_emu: 0,
+                },
+                to: CellMarker {
+                    col: 2,
+                    col_offset_emu: 0,
+                    row: 2,
+                    row_offset_emu: 0,
+                },
+                edit_as: Some(ea.clone()),
+            },
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 1_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        });
+
+        let mut buf = Vec::new();
+        XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+        let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+        let img = &rt.worksheet(0).unwrap().images()[0];
+        if let DrawingAnchor::TwoCell { edit_as, .. } = &img.anchor {
+            assert_eq!(
+                edit_as.as_ref(),
+                Some(&ea),
+                "editAs={:?} must round-trip",
+                ea
+            );
+        } else {
+            panic!("expected TwoCell anchor");
+        }
+    }
+}
+
+#[test]
 fn xlsx_multiple_images_round_trip_on_same_sheet() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

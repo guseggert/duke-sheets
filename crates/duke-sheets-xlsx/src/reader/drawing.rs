@@ -95,6 +95,17 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
     let mut in_sp_pr = false;
     let mut sp_pr_depth: u32 = 0;
 
+    // Anchor-variant-specific state. For OneCell, the anchor's
+    // <xdr:ext> carries the picture extent (width × height in EMU).
+    // For Absolute, the anchor's <xdr:pos> carries x/y and
+    // <xdr:ext> carries width × height. The xfrm-level ext inside
+    // spPr is captured separately in pic_width_emu/pic_height_emu.
+    let mut anchor_ext_cx: i64 = 0;
+    let mut anchor_ext_cy: i64 = 0;
+    let mut anchor_pos_x: i64 = 0;
+    let mut anchor_pos_y: i64 = 0;
+    let mut twocell_edit_as: Option<duke_sheets_chart::EditAs> = None;
+
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
@@ -118,6 +129,20 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         chart_rel_id = None;
                         is_chart_ex = false;
                         raw_mc_fallback = None;
+                        twocell_edit_as = None;
+                        // Parse the optional editAs="..." attribute.
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"editAs" {
+                                if let Ok(s) = attr.unescape_value() {
+                                    twocell_edit_as = match s.as_ref() {
+                                        "twoCell" => Some(duke_sheets_chart::EditAs::TwoCell),
+                                        "oneCell" => Some(duke_sheets_chart::EditAs::OneCell),
+                                        "absolute" => Some(duke_sheets_chart::EditAs::Absolute),
+                                        _ => None,
+                                    };
+                                }
+                            }
+                        }
                         let mut w = Writer::new(Cursor::new(Vec::new()));
                         let _ = w.write_event(Event::Start(e.clone().into_owned()));
                         capture = Some(w);
@@ -129,6 +154,8 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         chart_rel_id = None;
                         is_chart_ex = false;
                         raw_mc_fallback = None;
+                        anchor_ext_cx = 0;
+                        anchor_ext_cy = 0;
                         let mut w = Writer::new(Cursor::new(Vec::new()));
                         let _ = w.write_event(Event::Start(e.clone().into_owned()));
                         capture = Some(w);
@@ -140,6 +167,10 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         chart_rel_id = None;
                         is_chart_ex = false;
                         raw_mc_fallback = None;
+                        anchor_ext_cx = 0;
+                        anchor_ext_cy = 0;
+                        anchor_pos_x = 0;
+                        anchor_pos_y = 0;
                         let mut w = Writer::new(Cursor::new(Vec::new()));
                         let _ = w.write_event(Event::Start(e.clone().into_owned()));
                         capture = Some(w);
@@ -262,6 +293,58 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         if attr.key.local_name().as_ref() == b"id" {
                             chart_rel_id = attr.unescape_value().ok().map(|s| s.to_string());
                         }
+                    }
+                }
+                // Anchor-level <xdr:ext> and <xdr:pos> live OUTSIDE
+                // the <xdr:pic>/<xdr:spPr> nesting. They carry the
+                // picture extent (OneCell / Absolute) and origin
+                // (Absolute only). Both are self-closing tags.
+                let in_any_anchor = in_two_cell_anchor || in_one_cell_anchor || in_absolute_anchor;
+                if in_any_anchor && !in_pic {
+                    match local.as_ref() {
+                        b"ext" => {
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"cx" => {
+                                        anchor_ext_cx = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse().ok())
+                                            .unwrap_or(0);
+                                    }
+                                    b"cy" => {
+                                        anchor_ext_cy = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse().ok())
+                                            .unwrap_or(0);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        b"pos" => {
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"x" => {
+                                        anchor_pos_x = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse().ok())
+                                            .unwrap_or(0);
+                                    }
+                                    b"y" => {
+                                        anchor_pos_y = attr
+                                            .unescape_value()
+                                            .ok()
+                                            .and_then(|s| s.parse().ok())
+                                            .unwrap_or(0);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 if in_pic {
@@ -406,10 +489,28 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                     b"pic" => {
                         if in_pic {
                             if let Some(rel_id) = blip_rel_id.take() {
-                                let anchor = DrawingAnchor::TwoCell {
-                                    from: from.clone(),
-                                    to: to.clone(),
-                                    edit_as: None,
+                                // Build the appropriate DrawingAnchor
+                                // variant based on which anchor element
+                                // wraps this <xdr:pic>.
+                                let anchor = if in_one_cell_anchor {
+                                    DrawingAnchor::OneCell {
+                                        from: from.clone(),
+                                        width_emu: anchor_ext_cx,
+                                        height_emu: anchor_ext_cy,
+                                    }
+                                } else if in_absolute_anchor {
+                                    DrawingAnchor::Absolute {
+                                        x_emu: anchor_pos_x,
+                                        y_emu: anchor_pos_y,
+                                        width_emu: anchor_ext_cx,
+                                        height_emu: anchor_ext_cy,
+                                    }
+                                } else {
+                                    DrawingAnchor::TwoCell {
+                                        from: from.clone(),
+                                        to: to.clone(),
+                                        edit_as: twocell_edit_as.clone(),
+                                    }
                                 };
                                 images.push(EmbeddedImage {
                                     id: pic_id,

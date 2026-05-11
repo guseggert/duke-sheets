@@ -81,42 +81,91 @@ pub(super) fn write_drawing<W: Write + Seek>(
     })
 }
 
-/// Emit one `<xdr:twoCellAnchor>` wrapping an `<xdr:pic>` element for
-/// an embedded image. Only TwoCell anchors are supported in the
-/// current writer slice; OneCell and Absolute fall through to a
-/// degenerate TwoCell at (0,0).
+/// Emit an `<xdr:twoCellAnchor>` / `<xdr:oneCellAnchor>` /
+/// `<xdr:absoluteAnchor>` wrapper around an `<xdr:pic>` element,
+/// dispatching on the source `DrawingAnchor` variant.
 fn write_picture_anchor(
     w: &mut XmlWriter,
     image: &EmbeddedImage,
     rid: &str,
     shape_idx: usize,
 ) -> XlsxResult<()> {
-    let (from, to) = match &image.anchor {
-        DrawingAnchor::TwoCell { from, to, .. } => (from.clone(), to.clone()),
-        DrawingAnchor::OneCell { from, .. } => {
-            // OneCell carries (from, width, height); we synthesise a
-            // matching `to` marker so the resulting twoCellAnchor has
-            // the correct extent. The width/height conversion from
-            // EMU to per-column/row split is approximate (~9525 EMU
-            // per pixel and ~64 default column width pixels).
-            let mut to_marker = from.clone();
-            to_marker.col += 1;
-            to_marker.row += 1;
-            (from.clone(), to_marker)
+    match &image.anchor {
+        DrawingAnchor::TwoCell { from, to, edit_as } => {
+            let mut tag = BytesStart::new("xdr:twoCellAnchor");
+            if let Some(ea) = edit_as {
+                let s = match ea {
+                    duke_sheets_chart::EditAs::TwoCell => "twoCell",
+                    duke_sheets_chart::EditAs::OneCell => "oneCell",
+                    duke_sheets_chart::EditAs::Absolute => "absolute",
+                };
+                tag.push_attribute(("editAs", s));
+            }
+            w.write_event(Event::Start(tag))?;
+            w.write_event(Event::Start(BytesStart::new("xdr:from")))?;
+            write_cell_marker(w, from)?;
+            w.write_event(Event::End(BytesEnd::new("xdr:from")))?;
+            w.write_event(Event::Start(BytesStart::new("xdr:to")))?;
+            write_cell_marker(w, to)?;
+            w.write_event(Event::End(BytesEnd::new("xdr:to")))?;
+            write_picture_element(w, image, rid, shape_idx)?;
+            w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
+            w.write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))?;
         }
-        DrawingAnchor::Absolute { .. } => (CellMarker::default(), CellMarker::default()),
-    };
+        DrawingAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            w.write_event(Event::Start(BytesStart::new("xdr:oneCellAnchor")))?;
+            w.write_event(Event::Start(BytesStart::new("xdr:from")))?;
+            write_cell_marker(w, from)?;
+            w.write_event(Event::End(BytesEnd::new("xdr:from")))?;
+            let cx_s = width_emu.to_string();
+            let cy_s = height_emu.to_string();
+            w.create_element("xdr:ext")
+                .with_attribute(("cx", cx_s.as_str()))
+                .with_attribute(("cy", cy_s.as_str()))
+                .write_empty()?;
+            write_picture_element(w, image, rid, shape_idx)?;
+            w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
+            w.write_event(Event::End(BytesEnd::new("xdr:oneCellAnchor")))?;
+        }
+        DrawingAnchor::Absolute {
+            x_emu,
+            y_emu,
+            width_emu,
+            height_emu,
+        } => {
+            w.write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))?;
+            let x_s = x_emu.to_string();
+            let y_s = y_emu.to_string();
+            w.create_element("xdr:pos")
+                .with_attribute(("x", x_s.as_str()))
+                .with_attribute(("y", y_s.as_str()))
+                .write_empty()?;
+            let cx_s = width_emu.to_string();
+            let cy_s = height_emu.to_string();
+            w.create_element("xdr:ext")
+                .with_attribute(("cx", cx_s.as_str()))
+                .with_attribute(("cy", cy_s.as_str()))
+                .write_empty()?;
+            write_picture_element(w, image, rid, shape_idx)?;
+            w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
+            w.write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))?;
+        }
+    }
+    Ok(())
+}
 
-    w.write_event(Event::Start(BytesStart::new("xdr:twoCellAnchor")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:from")))?;
-    write_cell_marker(w, &from)?;
-    w.write_event(Event::End(BytesEnd::new("xdr:from")))?;
-
-    w.write_event(Event::Start(BytesStart::new("xdr:to")))?;
-    write_cell_marker(w, &to)?;
-    w.write_event(Event::End(BytesEnd::new("xdr:to")))?;
-
+/// Emit just the `<xdr:pic>` element (without the surrounding anchor
+/// wrapper). Used by all three anchor variants.
+fn write_picture_element(
+    w: &mut XmlWriter,
+    image: &EmbeddedImage,
+    rid: &str,
+    shape_idx: usize,
+) -> XlsxResult<()> {
     w.write_event(Event::Start(BytesStart::new("xdr:pic")))?;
 
     // <xdr:nvPicPr> non-visual picture properties.
@@ -179,8 +228,6 @@ fn write_picture_anchor(
     w.write_event(Event::End(BytesEnd::new("xdr:spPr")))?;
 
     w.write_event(Event::End(BytesEnd::new("xdr:pic")))?;
-    w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
-    w.write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))?;
     Ok(())
 }
 
