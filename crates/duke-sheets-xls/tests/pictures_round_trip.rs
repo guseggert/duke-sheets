@@ -143,6 +143,76 @@ fn single_picture_round_trips() {
 }
 
 #[test]
+fn xls_top_level_width_emu_does_not_survive_user_value() {
+    // **Documented limitation.** EmbeddedImage.width_emu /
+    // height_emu (the top-level fields, not the OneCell/Absolute
+    // variant's inner width_emu/height_emu) are NOT preserved
+    // through the XLS writer. The writer only encodes the anchor
+    // cells and within-cell EMU offsets; the reader synthesises
+    // top-level width_emu/height_emu from the anchor cell range
+    // using default cell sizes (609,600 EMU per column, 190,500
+    // per row).
+    //
+    // A user who sets a top-level width_emu = 7_500_000 (arbitrary
+    // value) with a TwoCell anchor spanning 3 cols × 2 rows of
+    // default cells will see width_emu = 3 × 609,600 = 1_828_800
+    // on round-trip — their value is silently replaced.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut img = EmbeddedImage {
+        id: 1,
+        name: "Pic".into(),
+        description: None,
+        anchor: DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 0,
+                col_offset_emu: 0,
+                row: 0,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 3,
+                col_offset_emu: 0,
+                row: 2,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+        format: ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 7_500_000, // user-supplied non-default value
+        height_emu: 4_500_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    };
+    img.data = TEST_PNG_1X1.to_vec();
+    ws.add_image(img);
+
+    let parsed = write_then_read(&wb);
+    let out = &parsed.worksheet(0).unwrap().images()[0];
+
+    // The user's 7,500,000 / 4,500,000 are NOT preserved. Instead,
+    // width_emu becomes 3 cols × 609,600 = 1,828,800 and
+    // height_emu becomes 2 rows × 190,500 = 381,000.
+    assert_eq!(
+        out.width_emu, 1_828_800,
+        "top-level width_emu is overwritten by synthesised value (3 cols × default cell width)"
+    );
+    assert_eq!(
+        out.height_emu, 381_000,
+        "top-level height_emu is overwritten by synthesised value (2 rows × default row height)"
+    );
+    assert_ne!(
+        out.width_emu, 7_500_000,
+        "the user's input width_emu is silently lost — documented limitation"
+    );
+}
+
+#[test]
 fn rotation_and_flip_flags_round_trip() {
     // Picture with 90 degree clockwise rotation (60000ths of degree
     // = 5,400,000), horizontal flip, vertical flip.
@@ -394,10 +464,14 @@ fn single_bmp_picture_round_trips() {
     );
 }
 
-/// Synthetic "EMF" body. Not a valid EMF file — just a deterministic
-/// byte pattern that survives the blip wrapper. Real EMF parity
-/// against Excel would need a valid metafile (Excel re-renders
-/// metafiles on SaveAs anyway).
+/// **NOT a valid EMF file** — a deterministic byte pattern used to
+/// exercise the BLIP wrapper round-trip. Tests below verify only
+/// that the `OfficeArtBlipEMF` / `OfficeArtBlipWMF` framing + 34-byte
+/// metafileHeader correctly survive write → read; the actual
+/// metafile data is opaque to the writer and reader. Real EMF/WMF
+/// parity against Excel is not tested because (a) Excel re-renders
+/// metafiles as PNG on SaveAs anyway, (b) generating a valid EMF
+/// in pure Rust is non-trivial.
 const TEST_EMF_BYTES: &[u8] = &[
     0x01, 0x00, 0x00, 0x00, 0x68, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x80, 0x07, 0x00, 0x00, 0x38, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -436,8 +510,14 @@ const TEST_GIF_BYTES: &[u8] = &[
     0x3B, // trailer
 ];
 
+/// **In-process only**: a 110-byte hand-crafted TIFF byte pattern.
+/// The test below exercises the `OfficeArtBlipTIFF` framing (same
+/// raster layout as PNG/JPEG, no metafileHeader) but no Excel
+/// parity test is included. Excel typically converts TIFF input to
+/// PNG on SaveAs, so the format tag does not survive an Excel
+/// round-trip — only in-process is meaningful.
 #[test]
-fn single_tiff_picture_round_trips() {
+fn tiff_blip_wrapper_round_trips_in_process() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.add_image(test_image_with_format(
@@ -461,11 +541,16 @@ fn single_tiff_picture_round_trips() {
 }
 
 #[test]
-fn gif_picture_falls_back_to_png_format() {
-    // GIF has no native Office binary blip variant; the writer emits
-    // GIF input through the PNG blip path. The bytes survive
-    // verbatim through in-process round-trip, but the format tag
-    // flips to PNG on read since the reader sees a BLIP_PNG header.
+fn gif_input_is_routed_through_png_blip_and_format_tag_flips() {
+    // **Documented limitation.** GIF has no native Office binary
+    // blip variant (MS-ODRAW's msoblip* enum skips GIF entirely).
+    // The writer routes GIF input through the PNG blip path so the
+    // bytes survive in-process round-trip, but the format tag
+    // flips from Gif to Png on read because the reader sees a
+    // BLIP_PNG header.
+    //
+    // No Excel parity test for GIF — Excel converts GIF to PNG on
+    // insert anyway, so the format tag flips through Excel too.
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.add_image(test_image_with_format(
@@ -479,24 +564,26 @@ fn gif_picture_falls_back_to_png_format() {
 
     let parsed = write_then_read(&wb);
     let images = parsed.worksheet(0).unwrap().images();
-    assert_eq!(images.len(), 1, "GIF picture must round-trip");
+    assert_eq!(images.len(), 1, "GIF input must produce one round-tripped image");
     let img = &images[0];
-    // Format tag flips since GIF goes through the PNG blip path.
-    // Document this as an expected limitation; the bytes themselves
-    // still survive.
     assert_eq!(
         img.format,
         ImageFormat::Png,
-        "GIF input is emitted as PNG blip; format tag flips"
+        "GIF input flips to Png because it's emitted through the PNG blip path"
     );
     assert_eq!(
         img.data, TEST_GIF_BYTES,
-        "GIF bytes must round-trip verbatim through the PNG-blip path"
+        "GIF bytes survive verbatim even though the format tag flips"
     );
 }
 
 #[test]
-fn single_emf_picture_round_trips() {
+fn emf_blip_wrapper_round_trips_opaque_bytes_in_process() {
+    // Verifies the OfficeArtBlipEMF framing: header + UID + 34-byte
+    // metafileHeader + opaque payload survive writer → reader with
+    // exact byte equality. The payload is NOT a valid EMF file —
+    // this test is honestly named to disclose that it exercises the
+    // blip wrapper, not full EMF support.
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.add_image(test_image_with_format(
@@ -510,19 +597,21 @@ fn single_emf_picture_round_trips() {
 
     let parsed = write_then_read(&wb);
     let images = parsed.worksheet(0).unwrap().images();
-    assert_eq!(images.len(), 1, "EMF must round-trip");
+    assert_eq!(images.len(), 1, "EMF blip must round-trip");
     let img = &images[0];
     assert_eq!(img.format, ImageFormat::Emf, "format must stay EMF");
     assert_eq!(
         img.data, TEST_EMF_BYTES,
-        "EMF bytes must round-trip verbatim through the metafileHeader"
+        "Payload bytes must round-trip verbatim through the metafileHeader"
     );
 }
 
 #[test]
-fn single_wmf_picture_round_trips() {
-    // Use the same synthetic byte pattern; WMF and EMF share the
-    // metafileHeader layout.
+fn wmf_blip_wrapper_round_trips_opaque_bytes_in_process() {
+    // Same as the EMF test but for the WMF blip variant. Uses the
+    // same opaque synthetic payload — WMF and EMF share the 34-byte
+    // metafileHeader layout. Honestly disclosed as a blip-wrapper
+    // test, not a full WMF round-trip.
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.add_image(test_image_with_format(
@@ -536,12 +625,12 @@ fn single_wmf_picture_round_trips() {
 
     let parsed = write_then_read(&wb);
     let images = parsed.worksheet(0).unwrap().images();
-    assert_eq!(images.len(), 1, "WMF must round-trip");
+    assert_eq!(images.len(), 1, "WMF blip must round-trip");
     let img = &images[0];
     assert_eq!(img.format, ImageFormat::Wmf, "format must stay WMF");
     assert_eq!(
         img.data, TEST_EMF_BYTES,
-        "WMF bytes must round-trip verbatim"
+        "Payload bytes must round-trip verbatim"
     );
 }
 
