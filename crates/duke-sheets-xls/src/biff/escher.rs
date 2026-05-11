@@ -103,6 +103,22 @@ pub mod rec_type {
     /// Default split-menu color table — child of `DGG_CONTAINER`.
     /// Always exactly 16 bytes (4 ARGB entries).
     pub const SPLIT_MENU_COLORS: u16 = 0xF11E;
+
+    // ── Blip (image) record types (MS-ODRAW §2.2.20–2.2.25) ──────────
+    /// EMF (Enhanced Metafile) blip.
+    pub const BLIP_EMF: u16 = 0xF01A;
+    /// WMF (Windows Metafile) blip.
+    pub const BLIP_WMF: u16 = 0xF01B;
+    /// PICT (Mac picture) blip.
+    pub const BLIP_PICT: u16 = 0xF01C;
+    /// JPEG blip.
+    pub const BLIP_JPEG: u16 = 0xF01D;
+    /// PNG blip.
+    pub const BLIP_PNG: u16 = 0xF01E;
+    /// DIB (Device-Independent Bitmap) blip.
+    pub const BLIP_DIB: u16 = 0xF01F;
+    /// TIFF blip.
+    pub const BLIP_TIFF: u16 = 0xF029;
 }
 
 /// MS-ODRAW §2.4.24 shape type (`MSOSPT`) — the `instance` field of
@@ -117,6 +133,35 @@ pub mod shape_type {
     /// `msosptTextBox` — comments are textbox shapes anchored to a
     /// cell.
     pub const TEXT_BOX: u16 = 0x00CA;
+    /// `msosptPictureFrame` — used by embedded pictures.
+    pub const PICTURE_FRAME: u16 = 0x004B;
+}
+
+/// MS-ODRAW §2.2.32 OfficeArtFBSE blip-type codes (`btWin32`,
+/// `btMacOS`, and the `rec_instance` of the embedded blip header).
+pub mod blip_type {
+    pub const ERROR: u8 = 0x00;
+    pub const UNKNOWN: u8 = 0x01;
+    pub const EMF: u8 = 0x02;
+    pub const WMF: u8 = 0x03;
+    pub const PICT: u8 = 0x04;
+    pub const JPEG: u8 = 0x05;
+    pub const PNG: u8 = 0x06;
+    pub const DIB: u8 = 0x07;
+    pub const TIFF: u8 = 0x11;
+    pub const CMYK_JPEG: u8 = 0x12;
+}
+
+/// `rec_instance` value Excel writes for raster blip headers
+/// (MS-ODRAW §2.2.23–2.2.25). The "no-secondary-uid" form has the
+/// low bit clear; the "with-secondary-uid" form has it set.
+pub mod blip_instance {
+    /// PNG without metafileHeader / secondary UID.
+    pub const PNG: u16 = 0x6E0;
+    /// JPEG (no secondary UID).
+    pub const JPEG: u16 = 0x46A;
+    /// GIF (treated as DIB by Office binary formats).
+    pub const DIB: u16 = 0x7A8;
 }
 
 /// `FSP` flag bits — MS-ODRAW §2.2.40 `OfficeArtFSP`.
@@ -797,6 +842,242 @@ pub fn write_comment_sp_container(
     // follows the MSODRAWING record.
     write_client_textbox(&mut body);
 
+    write_container(rec_type::SP_CONTAINER, 0, &body, out);
+}
+
+/// MS-ODRAW §2.2.23 `OfficeArtBlipPNG` (and analogous variants for
+/// JPEG / DIB / etc.). Carries one image's compressed file bytes
+/// preceded by a 16-byte MD4/MD5 UID and a 1-byte tag.
+///
+/// Layout after the 8-byte record header (recVer=0,
+/// recInstance=`PNG`/`JPEG`/..., recType=`BLIP_PNG`/...):
+///
+/// ```text
+/// rgbUid     : [u8; 16]   // matches the FBSE's rgbUid
+/// tag        : u8         // 0xFF
+/// blip_data  : [u8]       // raw image file bytes
+/// ```
+#[derive(Debug, Clone)]
+pub struct OfficeArtBlip {
+    /// Record type — one of the `BLIP_*` constants in [`rec_type`].
+    pub rec_type: u16,
+    /// `rec_instance` value placed in the header — one of the
+    /// `blip_instance` constants.
+    pub rec_instance: u16,
+    /// 16-byte unique identifier of the image content. Conventionally
+    /// the MD4 hash of `data`, but Excel does not validate the value,
+    /// so any deterministic 16-byte sequence works.
+    pub rgb_uid: [u8; 16],
+    /// Image file bytes (PNG, JPEG, etc.).
+    pub data: Vec<u8>,
+}
+
+impl OfficeArtBlip {
+    /// Construct a PNG blip with the MD5-derived UID we use for
+    /// rgbUid. Excel itself uses an MD4 hash but does not validate
+    /// the value, so any deterministic 16 bytes are accepted.
+    pub fn png(data: Vec<u8>) -> Self {
+        Self {
+            rec_type: rec_type::BLIP_PNG,
+            rec_instance: blip_instance::PNG,
+            rgb_uid: rgb_uid_for(&data),
+            data,
+        }
+    }
+
+    /// Total size of this blip on disk (header + body).
+    pub fn total_size(&self) -> u32 {
+        HEADER_LEN as u32 + 16 + 1 + self.data.len() as u32
+    }
+
+    /// Body size (excluding the 8-byte record header).
+    pub fn body_size(&self) -> u32 {
+        16 + 1 + self.data.len() as u32
+    }
+
+    /// Serialise the full blip (header + UID + tag + image data) into `out`.
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        let header =
+            OfficeArtRecordHeader::atom(0, self.rec_instance, self.rec_type, self.body_size());
+        header.write_to(out);
+        out.extend_from_slice(&self.rgb_uid);
+        out.push(0xFF);
+        out.extend_from_slice(&self.data);
+    }
+}
+
+/// MS-ODRAW §2.2.32 `OfficeArtFBSE` — one entry in the `BSTORE_CONTAINER`
+/// blip-store. Wraps an [`OfficeArtBlip`] plus per-entry metadata
+/// (compression type, reference count, optional delayed-loading offset).
+///
+/// `rec_ver=2`, `rec_instance` = `bt_win32` blip-type code (the same
+/// value as the `bt_win32` field — Excel duplicates this in the
+/// header instance for fast lookup).
+#[derive(Debug, Clone)]
+pub struct OfficeArtFbse {
+    /// MS-ODRAW blip-type code (one of [`blip_type`] values) — also
+    /// placed in the header `rec_instance`.
+    pub bt_win32: u8,
+    /// Mac OS blip-type code. We mirror `bt_win32` since we don't
+    /// emit different Mac variants.
+    pub bt_mac_os: u8,
+    /// Embedded blip carrying the image bytes. `foDelay=0` so the
+    /// blip immediately follows the FBSE header.
+    pub blip: OfficeArtBlip,
+    /// Reference count. Defaults to 1 (one shape uses this blip).
+    pub c_ref: u32,
+}
+
+impl OfficeArtFbse {
+    /// Construct an FBSE wrapping the given blip with reference
+    /// count 1 and Win32/MacOS blip-type both set to the blip's
+    /// canonical code (PNG=6, JPEG=5, etc.).
+    pub fn new(blip: OfficeArtBlip) -> Self {
+        let bt = blip_type_for_rec_type(blip.rec_type);
+        Self {
+            bt_win32: bt,
+            bt_mac_os: bt,
+            blip,
+            c_ref: 1,
+        }
+    }
+
+    /// Total on-disk size (header + 36 fixed body bytes + blip total).
+    pub fn total_size(&self) -> u32 {
+        HEADER_LEN as u32 + 36 + self.blip.total_size()
+    }
+
+    /// Serialise the full FBSE record into `out`.
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        let body_len = 36 + self.blip.total_size();
+        let header = OfficeArtRecordHeader::atom(2, self.bt_win32 as u16, rec_type::FBSE, body_len);
+        header.write_to(out);
+        out.push(self.bt_win32);
+        out.push(self.bt_mac_os);
+        out.extend_from_slice(&self.blip.rgb_uid);
+        out.extend_from_slice(&[0xFF, 0x00]); // tag (constant)
+        out.extend_from_slice(&self.blip.total_size().to_le_bytes());
+        out.extend_from_slice(&self.c_ref.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes()); // foDelay (immediate)
+        out.push(0); // usage
+        out.push(0); // cbName (no name)
+        out.push(0); // unused2
+        out.push(0); // unused3
+                     // No nameData (cbName == 0). Embedded blip follows.
+        self.blip.write_to(out);
+    }
+}
+
+/// Map an `OfficeArtBlip` record type to its `OfficeArtFBSE` blip
+/// type code (the value that goes in `btWin32` / `btMacOS` and the
+/// FBSE header's `rec_instance`).
+fn blip_type_for_rec_type(rt: u16) -> u8 {
+    match rt {
+        rec_type::BLIP_EMF => blip_type::EMF,
+        rec_type::BLIP_WMF => blip_type::WMF,
+        rec_type::BLIP_PICT => blip_type::PICT,
+        rec_type::BLIP_JPEG => blip_type::JPEG,
+        rec_type::BLIP_PNG => blip_type::PNG,
+        rec_type::BLIP_DIB => blip_type::DIB,
+        rec_type::BLIP_TIFF => blip_type::TIFF,
+        _ => blip_type::UNKNOWN,
+    }
+}
+
+/// Compute a 16-byte unique identifier for an image. MS-ODRAW
+/// specifies MD4 here, but Excel does not validate the value — any
+/// deterministic 16-byte hash works. We use the first 16 bytes of
+/// the image's MD5, which is plenty for de-duplication purposes
+/// inside a single workbook.
+pub fn rgb_uid_for(data: &[u8]) -> [u8; 16] {
+    use md5::{Digest, Md5};
+    let hash = Md5::digest(data);
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&hash[..16]);
+    out
+}
+
+/// Build a `BSTORE_CONTAINER` carrying the given FBSE entries.
+/// Emits the full container (8-byte header + serialised FBSEs)
+/// into `out`. The header's `rec_instance` is set to the entry
+/// count, matching what Excel writes.
+pub fn write_bstore_container(fbses: &[OfficeArtFbse], out: &mut Vec<u8>) {
+    let mut body = Vec::new();
+    for fbse in fbses {
+        fbse.write_to(&mut body);
+    }
+    let header = OfficeArtRecordHeader::container(
+        rec_type::BSTORE_CONTAINER,
+        fbses.len() as u16,
+        body.len() as u32,
+    );
+    header.write_to(out);
+    out.extend_from_slice(&body);
+}
+
+/// Build the FOPT property table Excel writes for a picture-frame
+/// shape, modelled on the empirical 8-entry pattern observed via
+/// the COM bridge probe.
+///
+/// `blip_id` is the 1-based index into the workbook's blip store —
+/// the `pib` (picture blip index) FOPT property points at this.
+/// `shape_name` is the user-visible name (e.g. "Picture 1") stored
+/// in the `wzName` complex property.
+pub fn picture_fopt(blip_id: u32, shape_name: &str) -> FoptTable {
+    let mut t = FoptTable::new();
+    // 0x007F: protection booleans (lockAspectRatio etc.).
+    t.push(FoptEntry::simple(0x007F, 0x01FB_0000));
+    // 0x0104: pib (picture blip index, fBid flag set).
+    t.push(FoptEntry::blip_id(0x0104, blip_id));
+    // 0x013F: geometry booleans.
+    t.push(FoptEntry::simple(0x013F, 0x0006_0000));
+    // 0x01BF: fill booleans.
+    t.push(FoptEntry::simple(0x01BF, 0x0010_0000));
+    // 0x01FF: line booleans.
+    t.push(FoptEntry::simple(0x01FF, 0x0008_0000));
+    // 0x033F: shape booleans (fPrint, fHidden, …).
+    t.push(FoptEntry::simple(0x033F, 0x0018_0010));
+
+    // 0x0380: wzName (shape name) — complex property with UTF-16LE
+    // payload + trailing null. Excel sets BOTH the fBid and
+    // fComplex bits on this opid; we mirror that exactly so the
+    // bytes match.
+    let mut name_bytes: Vec<u8> = shape_name
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    name_bytes.extend_from_slice(&[0, 0]); // null terminator
+    t.push(FoptEntry {
+        id: 0x0380,
+        is_blip_id: true, // Excel sets fBid on the wzName entry
+        value: FoptValue::Complex(name_bytes),
+    });
+
+    // 0x03BF: group/shape booleans.
+    t.push(FoptEntry::simple(0x03BF, 0x0002_0000));
+    t
+}
+
+/// Build an `SP_CONTAINER` for a picture-frame shape. Emits the full
+/// container (header + FSP + FOPT + ClientAnchor + ClientData)
+/// into `out`. Pictures do NOT include a ClientTextbox marker —
+/// they have no associated TXO record.
+pub fn write_picture_sp_container(
+    spid: u32,
+    blip_id: u32,
+    shape_name: &str,
+    anchor: OfficeArtClientAnchor,
+    out: &mut Vec<u8>,
+) {
+    let mut body = Vec::new();
+    OfficeArtFsp {
+        spid,
+        grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+    }
+    .write_to(shape_type::PICTURE_FRAME, &mut body);
+    picture_fopt(blip_id, shape_name).write_to(&mut body);
+    anchor.write_to(&mut body);
+    write_client_data(&mut body);
     write_container(rec_type::SP_CONTAINER, 0, &body, out);
 }
 
@@ -1676,5 +1957,176 @@ mod tests {
         assert_eq!(fsp.spid, 1024);
         assert_eq!(st, shape_type::NOT_PRIMITIVE);
         assert_eq!(fsp.grf_persistence, fsp_flags::GROUP | fsp_flags::PATRIARCH);
+    }
+
+    #[test]
+    fn blip_png_round_trips_with_md5_uid() {
+        let png_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34];
+        let blip = OfficeArtBlip::png(png_bytes.clone());
+
+        // UID must be deterministic across runs over the same input.
+        assert_eq!(blip.rgb_uid, rgb_uid_for(&png_bytes));
+        assert_ne!(
+            blip.rgb_uid, [0u8; 16],
+            "MD5 of non-empty bytes is non-zero"
+        );
+
+        let mut out = Vec::new();
+        blip.write_to(&mut out);
+
+        // Header: rec_ver=0, rec_instance=0x6E0, rec_type=0xF01E,
+        // rec_len = 16 UID + 1 tag + N bytes.
+        let header = OfficeArtRecordHeader::read_from(&out).unwrap();
+        assert_eq!(header.rec_ver, 0);
+        assert_eq!(header.rec_instance, blip_instance::PNG);
+        assert_eq!(header.rec_type, rec_type::BLIP_PNG);
+        assert_eq!(header.rec_len, (16 + 1 + png_bytes.len()) as u32);
+
+        // UID + tag + data layout.
+        assert_eq!(&out[HEADER_LEN..HEADER_LEN + 16], &blip.rgb_uid);
+        assert_eq!(out[HEADER_LEN + 16], 0xFF);
+        assert_eq!(&out[HEADER_LEN + 17..], &png_bytes[..]);
+    }
+
+    #[test]
+    fn fbse_total_size_matches_serialised_bytes() {
+        let blip = OfficeArtBlip::png(vec![0xAA; 50]);
+        let blip_total = blip.total_size();
+        let fbse = OfficeArtFbse::new(blip);
+
+        let mut out = Vec::new();
+        fbse.write_to(&mut out);
+
+        // FBSE total = 8 (header) + 36 (fixed body) + embedded blip total.
+        assert_eq!(out.len() as u32, 8 + 36 + blip_total);
+        assert_eq!(fbse.total_size(), out.len() as u32);
+
+        // First 8 bytes are the FBSE record header.
+        let header = OfficeArtRecordHeader::read_from(&out).unwrap();
+        assert_eq!(header.rec_ver, 2);
+        assert_eq!(header.rec_instance, blip_type::PNG as u16);
+        assert_eq!(header.rec_type, rec_type::FBSE);
+        assert_eq!(header.rec_len, 36 + blip_total);
+
+        // FBSE body byte 0 = btWin32 = PNG code (0x06).
+        assert_eq!(out[HEADER_LEN], blip_type::PNG);
+        // FBSE body byte 1 = btMacOS = PNG code.
+        assert_eq!(out[HEADER_LEN + 1], blip_type::PNG);
+        // Tag bytes at body offset 18-19 = 0xFF 0x00.
+        assert_eq!(&out[HEADER_LEN + 18..HEADER_LEN + 20], &[0xFF, 0x00]);
+        // size field at body offset 20-23 should equal blip_total.
+        let size = u32::from_le_bytes([
+            out[HEADER_LEN + 20],
+            out[HEADER_LEN + 21],
+            out[HEADER_LEN + 22],
+            out[HEADER_LEN + 23],
+        ]);
+        assert_eq!(size, blip_total);
+        // cRef = 1.
+        let cref = u32::from_le_bytes([
+            out[HEADER_LEN + 24],
+            out[HEADER_LEN + 25],
+            out[HEADER_LEN + 26],
+            out[HEADER_LEN + 27],
+        ]);
+        assert_eq!(cref, 1);
+    }
+
+    #[test]
+    fn bstore_container_wraps_one_fbse() {
+        let blip = OfficeArtBlip::png(vec![0x01, 0x02, 0x03]);
+        let fbse = OfficeArtFbse::new(blip);
+        let fbse_total = fbse.total_size();
+
+        let mut out = Vec::new();
+        write_bstore_container(&[fbse], &mut out);
+
+        // BSTORE_CONTAINER header: rec_ver=0xF, rec_instance=entry count = 1.
+        let header = OfficeArtRecordHeader::read_from(&out).unwrap();
+        assert_eq!(header.rec_type, rec_type::BSTORE_CONTAINER);
+        assert!(header.is_container());
+        assert_eq!(header.rec_instance, 1);
+        assert_eq!(header.rec_len, fbse_total);
+
+        // First inner record is an FBSE.
+        let inner = OfficeArtRecordHeader::read_from(&out[HEADER_LEN..]).unwrap();
+        assert_eq!(inner.rec_type, rec_type::FBSE);
+    }
+
+    #[test]
+    fn picture_fopt_has_8_entries_and_wzname_complex_trailer() {
+        let t = picture_fopt(1, "Picture 1");
+        let entries: Vec<_> = t.entries().cloned().collect();
+        assert_eq!(entries.len(), 8);
+
+        // Entry 2 is the blip-id reference: opid=0x0104 with fBid bit set.
+        assert_eq!(entries[1].id, 0x0104);
+        assert!(entries[1].is_blip_id, "pib (0x0104) must set fBid");
+        assert_eq!(entries[1].value, FoptValue::Simple(1));
+
+        // Entry 7 is the wzName complex property containing "Picture 1\0"
+        // in UTF-16LE, with both fBid and fComplex bits set (matching
+        // Excel's emit pattern).
+        assert_eq!(entries[6].id, 0x0380);
+        assert!(entries[6].is_blip_id, "Excel sets fBid on wzName");
+        match &entries[6].value {
+            FoptValue::Complex(bytes) => {
+                // 9 chars × 2 + 2 null bytes = 20 bytes.
+                assert_eq!(bytes.len(), 20);
+                // First two bytes = 'P' = 0x50 0x00 in UTF-16LE.
+                assert_eq!(&bytes[..2], &[0x50, 0x00]);
+            }
+            FoptValue::Simple(_) => panic!("wzName must be a complex entry"),
+        }
+    }
+
+    #[test]
+    fn picture_sp_container_has_fsp_fopt_anchor_clientdata_no_textbox() {
+        let mut out = Vec::new();
+        let anchor = OfficeArtClientAnchor {
+            flag: 2,
+            col_l: 2,
+            dx_l: 80,
+            row_t: 6,
+            dy_t: 166,
+            col_r: 3,
+            dx_r: 128,
+            row_b: 10,
+            dy_b: 0,
+        };
+        write_picture_sp_container(1025, 1, "Picture 1", anchor, &mut out);
+
+        // Top-level: SP_CONTAINER.
+        let header = OfficeArtRecordHeader::read_from(&out).unwrap();
+        assert_eq!(header.rec_type, rec_type::SP_CONTAINER);
+        assert!(header.is_container());
+
+        // Walk children, confirm order: FSP, FOPT, ClientAnchor,
+        // ClientData. No ClientTextbox (pictures have no text).
+        let mut cursor = HEADER_LEN;
+        let mut saw = Vec::new();
+        while cursor < out.len() {
+            let h = OfficeArtRecordHeader::read_from(&out[cursor..]).unwrap();
+            saw.push(h.rec_type);
+            cursor += HEADER_LEN + h.rec_len as usize;
+        }
+        assert_eq!(
+            saw,
+            vec![
+                rec_type::FSP,
+                rec_type::FOPT,
+                rec_type::CLIENT_ANCHOR,
+                rec_type::CLIENT_DATA,
+            ]
+        );
+
+        // FSP must carry the picture-frame shape type and the supplied spid.
+        let (fsp, st, _) = OfficeArtFsp::read_from(&out[HEADER_LEN..]).unwrap();
+        assert_eq!(fsp.spid, 1025);
+        assert_eq!(st, shape_type::PICTURE_FRAME);
+        assert_eq!(
+            fsp.grf_persistence,
+            fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT
+        );
     }
 }

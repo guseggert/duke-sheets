@@ -15,6 +15,7 @@ duke-sheets-crypto.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 log.workspace = true
+md-5 = "0.10"
 
 [dev-dependencies]
 tempfile.workspace = true
