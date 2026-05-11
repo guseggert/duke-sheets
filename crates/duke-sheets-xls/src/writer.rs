@@ -3373,9 +3373,21 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
                 duke_sheets_chart::ImageFormat::Jpeg => {
                     OfficeArtFbse::new(OfficeArtBlip::jpeg(entry.data.clone()))
                 }
-                // Formats we don't yet emit (GIF / BMP / EMF / WMF /
-                // TIFF) fall back to PNG so we don't silently drop
-                // the bytes; Excel may reject the file in that case.
+                duke_sheets_chart::ImageFormat::Bmp => {
+                    // BMP file = 14-byte BITMAPFILEHEADER + DIB body.
+                    // The DIB blip stores only the DIB body; strip
+                    // the 14-byte file header. If the input is too
+                    // short to be a valid BMP, fall back to PNG so
+                    // the bytes still round-trip in-process.
+                    if entry.data.len() > 14 && &entry.data[..2] == b"BM" {
+                        OfficeArtFbse::new(OfficeArtBlip::dib(entry.data[14..].to_vec()))
+                    } else {
+                        OfficeArtFbse::new(OfficeArtBlip::png(entry.data.clone()))
+                    }
+                }
+                // Formats we don't yet emit (GIF / EMF / WMF / TIFF)
+                // fall back to PNG so we don't silently drop the
+                // bytes; Excel may reject the file in that case.
                 // See FEATURES.md Notes for the supported set.
                 _ => OfficeArtFbse::new(OfficeArtBlip::png(entry.data.clone())),
             })

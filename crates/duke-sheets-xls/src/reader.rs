@@ -2710,9 +2710,22 @@ impl XlsReader {
         }
         let data_start = blip_body_start + header_inner;
         let image_bytes = body[data_start..blip_body_end].to_vec();
+
+        // For DIB blips, prepend a synthesised 14-byte
+        // BITMAPFILEHEADER so the result is a complete BMP file the
+        // downstream consumer (and Excel itself) can decode.
+        let final_bytes = if matches!(format, duke_sheets_chart::ImageFormat::Bmp) {
+            bmp_file_header_for_dib(&image_bytes)
+                .into_iter()
+                .chain(image_bytes)
+                .collect()
+        } else {
+            image_bytes
+        };
+
         Some(BlipData {
             format,
-            data: image_bytes,
+            data: final_bytes,
         })
     }
 
@@ -3366,6 +3379,50 @@ impl XlsReader {
         ws.add_data_validation(validation);
         Ok(())
     }
+}
+
+/// Synthesise the 14-byte `BITMAPFILEHEADER` for a DIB body so the
+/// resulting bytes form a complete BMP file.
+///
+/// Layout:
+///   bfType     u16 = 'BM' (0x4D42)
+///   bfSize     u32 = 14 + dib.len()
+///   bfReserved u32 = 0
+///   bfOffBits  u32 = 14 + biSize + palette_size
+///
+/// `palette_size` is computed from the DIB's `biClrUsed` field
+/// (offset 32 of BITMAPINFOHEADER) — or, when zero, from the BPP
+/// (1/4/8-bit DIBs have an implicit 2/16/256-entry palette).
+/// 16/24/32-bit DIBs have no palette.
+fn bmp_file_header_for_dib(dib: &[u8]) -> [u8; 14] {
+    let mut header = [0u8; 14];
+    header[0] = b'B';
+    header[1] = b'M';
+    let total_size = 14u32 + dib.len() as u32;
+    header[2..6].copy_from_slice(&total_size.to_le_bytes());
+    // 6-9 reserved (zero)
+    let bi_size = if dib.len() >= 4 {
+        u32::from_le_bytes([dib[0], dib[1], dib[2], dib[3]])
+    } else {
+        40
+    };
+    let palette_bytes = if dib.len() >= 36 {
+        let bpp = u16::from_le_bytes([dib[14], dib[15]]);
+        let clr_used = u32::from_le_bytes([dib[32], dib[33], dib[34], dib[35]]);
+        let entries = if clr_used != 0 {
+            clr_used
+        } else if bpp <= 8 {
+            1u32 << bpp
+        } else {
+            0
+        };
+        entries * 4
+    } else {
+        0
+    };
+    let off_bits = 14u32 + bi_size + palette_bytes;
+    header[10..14].copy_from_slice(&off_bits.to_le_bytes());
+    header
 }
 
 /// Decode a UTF-16LE null-terminated byte buffer into a `String`.

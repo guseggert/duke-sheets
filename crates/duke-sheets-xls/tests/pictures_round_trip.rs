@@ -354,6 +354,67 @@ fn picture_anchor_within_cell_offsets_round_trip() {
     assert_eq!(img.height_emu, expected_height);
 }
 
+/// 58-byte 1x1 24-bit BMP (white pixel). Has the standard 14-byte
+/// BITMAPFILEHEADER + 40-byte BITMAPINFOHEADER + 4-byte pixel row.
+const TEST_BMP_1X1: &[u8] = &[
+    0x42, 0x4D, 0x3A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00, 0x00, 0x00, 0x28, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x18, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x13, 0x0B, 0x00, 0x00, 0x13, 0x0B, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00,
+];
+
+#[test]
+fn single_bmp_picture_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").expect("A1");
+    ws.add_image(test_image_with_format(
+        1,
+        "BmpPic",
+        1,
+        2,
+        ImageFormat::Bmp,
+        TEST_BMP_1X1,
+    ));
+
+    let parsed = write_then_read(&wb);
+    let images = parsed.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 1);
+    let img = &images[0];
+    assert_eq!(img.format, ImageFormat::Bmp, "format must stay BMP");
+    // Writer strips the 14-byte BITMAPFILEHEADER; reader synthesises
+    // a fresh one. The synthesised header has different bfSize and
+    // bfOffBits (computed) but the body (DIB info+palette+pixels) is
+    // identical.
+    assert_eq!(&img.data[..2], b"BM", "BMP signature must survive");
+    assert_eq!(
+        &img.data[14..],
+        &TEST_BMP_1X1[14..],
+        "DIB body (info header + palette + pixels) must round-trip verbatim"
+    );
+}
+
+#[test]
+fn png_and_bmp_coexist_on_one_sheet() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_image(test_image(1, "PngPic", 0, 0));
+    ws.add_image(test_image_with_format(
+        2,
+        "BmpPic",
+        5,
+        5,
+        ImageFormat::Bmp,
+        TEST_BMP_1X1,
+    ));
+
+    let parsed = write_then_read(&wb);
+    let images = parsed.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[0].format, ImageFormat::Png);
+    assert_eq!(images[1].format, ImageFormat::Bmp);
+}
+
 #[test]
 fn single_jpeg_picture_round_trips() {
     let mut wb = Workbook::new();

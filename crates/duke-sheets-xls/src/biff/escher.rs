@@ -895,6 +895,19 @@ impl OfficeArtBlip {
         }
     }
 
+    /// Construct a DIB (Device-Independent Bitmap) blip. Used for
+    /// BMP input. The caller must pass the BMP **without** the
+    /// 14-byte `BITMAPFILEHEADER` — the DIB blip stores only the
+    /// `BITMAPINFOHEADER` + optional palette + pixel data.
+    pub fn dib(data: Vec<u8>) -> Self {
+        Self {
+            rec_type: rec_type::BLIP_DIB,
+            rec_instance: blip_instance::DIB,
+            rgb_uid: rgb_uid_for(&data),
+            data,
+        }
+    }
+
     /// Total size of this blip on disk (header + body).
     pub fn total_size(&self) -> u32 {
         HEADER_LEN as u32 + 16 + 1 + self.data.len() as u32

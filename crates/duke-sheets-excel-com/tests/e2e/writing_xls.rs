@@ -954,6 +954,75 @@ fn excel_can_read_xls_absolute_image_we_emit() {
     }
 }
 
+/// 58-byte 1x1 24-bit BMP (white pixel).
+const TEST_BMP_1X1: &[u8] = &[
+    0x42, 0x4D, 0x3A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00, 0x00, 0x00, 0x28, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x18, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x13, 0x0B, 0x00, 0x00, 0x13, 0x0B, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00,
+];
+
+/// BMP parity: Excel converts BMP input to PNG internally on
+/// SaveAs (verified via probe). The test asserts Excel accepts our
+/// DIB blip emit (no Repaired warning) and a single image survives
+/// the round-trip. The format on the way back will be PNG (Excel's
+/// re-encoding), so we assert the count + acceptance, not byte
+/// equality.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xls_bmp_image_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "bmp-anchor").unwrap();
+    ws.add_image(EmbeddedImage {
+        id: 1,
+        name: "BmpPic".into(),
+        description: None,
+        anchor: DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 0,
+                row: 1,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 4,
+                col_offset_emu: 0,
+                row: 6,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+        format: ImageFormat::Bmp,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_000_000,
+        height_emu: 1_000_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_BMP_1X1.to_vec(),
+        svg_data: None,
+    });
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let images = result.worksheet(0).unwrap().images();
+    assert_eq!(
+        images.len(),
+        1,
+        "BMP picture must survive Excel re-save (possibly as PNG)"
+    );
+    // Excel re-encodes BMP as PNG on SaveAs; format may flip to PNG.
+    let img = &images[0];
+    assert!(
+        matches!(img.format, ImageFormat::Bmp | ImageFormat::Png),
+        "expected BMP or PNG after Excel round-trip, got {:?}",
+        img.format
+    );
+}
+
 /// JPEG variant of the picture parity test. Confirms our writer
 /// dispatches OfficeArtBlipJPEG correctly and Excel preserves the
 /// JPEG bytes verbatim through its SaveAs.
