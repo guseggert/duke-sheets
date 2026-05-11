@@ -695,4 +695,16 @@ fn excel_can_read_xls_png_image_we_emit() {
         img.data, TEST_PNG_1X1,
         "PNG bytes must round-trip through Excel verbatim"
     );
+    match &img.anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            // Excel may adjust within-cell EMU offsets when it
+            // re-saves; we only assert the cell *range* is preserved
+            // (top-left and bottom-right cell indices).
+            assert_eq!(from.col, 2, "from col must survive");
+            assert_eq!(from.row, 3, "from row must survive");
+            assert_eq!(to.col, 5, "to col must survive");
+            assert_eq!(to.row, 8, "to row must survive");
+        }
+        other => panic!("expected TwoCell anchor after round-trip, got {other:?}"),
+    }
 }
