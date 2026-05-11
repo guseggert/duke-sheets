@@ -7,6 +7,7 @@
 //! CONTINUE records (type 0x003C) extend the body of the preceding record
 //! beyond the 8224-byte per-record limit.
 
+pub mod escher;
 pub mod formula;
 pub mod parser;
 pub mod records;
