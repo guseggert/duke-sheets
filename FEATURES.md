@@ -429,8 +429,8 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Image parsing (PNG/JPEG) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | `xlsx_roundtrip::test_images_empty_by_default` | §20.4 (DrawingML) |
-| Image positioning (two-cell anchor) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.4.2.10 |
+| Image parsing (PNG/JPEG) | R✔ W✔ | R✖ W✖ | R● W● | R✖ W✖ | `xlsx_roundtrip::xlsx_png_image_round_trips`, `duke-sheets-xls::pictures_round_trip::single_picture_round_trips`, `excel_com_e2e::writing::excel_can_read_xlsx_png_image_we_emit`, `excel_com_e2e::writing_xls::excel_can_read_xls_png_image_we_emit` | §20.4 (DrawingML), MS-ODRAW | XLS supports PNG end-to-end (writer emits FBSE + OfficeArtBlipPNG, reader pulls bytes from BSTORE_CONTAINER). Non-PNG formats (JPEG/GIF/BMP/EMF/WMF) currently round-trip raw bytes but always emit as PNG blip; per-format Blip variants will need their own writer wiring. Width/height in EMU and rotation/flip flags do not yet survive XLS round-trip. |
+| Image positioning (two-cell anchor) | R✔ W✔ | R✖ W✖ | R✔ W✔ | R✖ W✖ | `duke-sheets-xls::pictures_round_trip::single_picture_round_trips` | §20.4.2.10 |
 | Image positioning (one-cell anchor) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.4.2.1 |
 | Image positioning (absolute anchor) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.4.2.3 |
 | Image editAs (move/size with cells) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §20.4.2.8 |
