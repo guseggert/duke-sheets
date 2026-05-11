@@ -69,6 +69,11 @@ const DVAL_RECORD: u16 = 0x01B2;
 const DV_RECORD: u16 = 0x01BE;
 const CONDFMT_RECORD: u16 = 0x01B0;
 const CF_RECORD: u16 = 0x01B1;
+const MSODRAWINGGROUP_RECORD: u16 = 0x00EB;
+const MSODRAWING_RECORD: u16 = 0x00EC;
+const NOTE_RECORD: u16 = 0x001C;
+const OBJ_RECORD: u16 = 0x005D;
+const TXO_RECORD: u16 = 0x01B6;
 
 /// Built-in NAME index for `Print_Area` (MS-XLS §2.5.4).
 const BUILTIN_NAME_PRINT_AREA: u8 = 0x06;
@@ -241,6 +246,8 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     write_user_name_records(&mut stream, workbook, &externsheet_table, &name_table);
     write_print_name_records(&mut stream, workbook);
     sst.write_records(&mut stream)?;
+    let drawing_state = compute_drawing_state(workbook);
+    write_msodrawinggroup(&mut stream, &drawing_state);
     write_eof(&mut stream);
 
     let mut sheet_bof_offsets = Vec::with_capacity(workbook.sheet_count());
@@ -274,6 +281,9 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_autofilter_records(&mut stream, sheet);
         write_data_validations(&mut stream, sheet, &externsheet_table, &name_table);
         write_conditional_formats(&mut stream, sheet, &externsheet_table, &name_table);
+        if let Some(sheet_drawing) = drawing_state.sheets.get(&sheet_idx) {
+            write_sheet_drawing_records(&mut stream, sheet_drawing);
+        }
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
     }
@@ -3109,6 +3119,408 @@ fn write_boundsheet8_with_placeholder_offset(
     stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
     stream.extend_from_slice(&body);
     Ok(())
+}
+
+/// First shape ID used by the patriarch of the first drawing. MS-ODRAW
+/// reserves shape IDs in clusters of 1024; cluster 0 (IDs 0–1023) is
+/// reserved by the spec, so user-allocated shape IDs start at 1024.
+const PATRIARCH_SPID_BASE: u32 = 1024;
+
+/// Pre-computed drawing layout for a workbook. Captures which sheets
+/// have comments (and so need an `MSODRAWING` record), what shape IDs
+/// have been allocated to their patriarchs and comments, and the
+/// global cluster table that goes inside `MSODRAWINGGROUP`'s `FDGG`
+/// atom.
+#[derive(Debug, Default)]
+struct DrawingState {
+    /// Per-sheet drawings keyed by sheet index. Sheets without
+    /// comments are absent.
+    sheets: HashMap<usize, SheetDrawing>,
+    /// Drawing indices in workbook order; lets us emit cluster entries
+    /// and sheet drawings deterministically.
+    ordered_sheet_indices: Vec<usize>,
+    /// Total shape count across all drawings (patriarch + comments per
+    /// sheet, summed). Goes into `FDGG.csp_saved`.
+    csp_total: u32,
+    /// Number of drawings (sheets with shapes). Goes into
+    /// `FDGG.cdg_saved`.
+    cdg_total: u32,
+    /// One past the highest shape ID used across the workbook. Goes
+    /// into `FDGG.spid_max`.
+    spid_max: u32,
+}
+
+impl DrawingState {
+    fn is_empty(&self) -> bool {
+        self.cdg_total == 0
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SheetDrawing {
+    /// 1-based drawing ID (`OfficeArtFDG.dgid`).
+    dgid: u16,
+    /// Shape ID of the patriarch group (the implicit root group).
+    patriarch_spid: u32,
+    /// One per comment, in stable iteration order (sorted by row,
+    /// then column).
+    comments: Vec<CommentShape>,
+}
+
+#[derive(Debug, Clone)]
+struct CommentShape {
+    /// Escher shape ID stored in this comment's `OfficeArtFSP.spid`.
+    spid: u32,
+    /// 1-based per-sheet object ID. Excel's `OBJ.ftCmo.id` and
+    /// `NOTE.objId` use this value to link a comment's drawing
+    /// object to its cell-anchored note.
+    obj_id: u16,
+    /// `txid` value placed in the `FOPT` `TEXT_ID` slot. Chosen as a
+    /// monotonically-increasing per-comment counter; Excel itself
+    /// picks an arbitrary unique value per shape.
+    text_id: u32,
+    /// Cell row this comment is anchored to.
+    row: u32,
+    /// Cell column this comment is anchored to.
+    col: u16,
+    /// Author string from `CellComment.author`.
+    author: String,
+    /// Comment body text from `CellComment.text`.
+    text: String,
+    /// Whether the comment box is visible by default (sets `NOTE.flags`
+    /// bit 1).
+    visible: bool,
+}
+
+/// Walk every sheet in `workbook`, allocate drawing IDs and shape
+/// IDs, and assemble the [`DrawingState`] used by both
+/// [`write_msodrawinggroup`] and [`write_sheet_drawing_records`].
+fn compute_drawing_state(workbook: &Workbook) -> DrawingState {
+    let mut state = DrawingState::default();
+    let mut next_dgid: u16 = 1;
+    let mut next_spid = PATRIARCH_SPID_BASE;
+    let mut next_text_id: u32 = 1;
+    let mut highest_spid_used: u32 = 0;
+
+    for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
+        let comment_count = sheet.comment_count();
+        if comment_count == 0 {
+            continue;
+        }
+
+        let patriarch_spid = next_spid;
+        next_spid += 1;
+
+        let mut comments_sorted: Vec<_> = sheet.comments().collect();
+        comments_sorted.sort_by_key(|((row, col), _)| (*row, *col));
+
+        let mut comments = Vec::with_capacity(comment_count);
+        for (i, ((row, col), comment)) in comments_sorted.iter().enumerate() {
+            let spid = next_spid;
+            next_spid += 1;
+            comments.push(CommentShape {
+                spid,
+                obj_id: (i + 1) as u16,
+                text_id: next_text_id,
+                row: *row,
+                col: *col,
+                author: comment.author.clone(),
+                text: comment.text.clone(),
+                visible: comment.visible,
+            });
+            next_text_id = next_text_id.wrapping_add(1);
+        }
+        highest_spid_used = highest_spid_used.max(next_spid - 1);
+
+        state.sheets.insert(
+            sheet_idx,
+            SheetDrawing {
+                dgid: next_dgid,
+                patriarch_spid,
+                comments,
+            },
+        );
+        state.ordered_sheet_indices.push(sheet_idx);
+        state.cdg_total += 1;
+        state.csp_total += 1 + comment_count as u32;
+        next_dgid += 1;
+
+        // Round up to the next 1024-aligned base so the next drawing
+        // lives in its own cluster (matching Excel's per-drawing
+        // cluster allocation in MS-ODRAW §2.2.46).
+        next_spid = next_spid.div_ceil(1024) * 1024;
+    }
+    state.spid_max = highest_spid_used + 1;
+    state
+}
+
+/// Emit the workbook-globals `MSODRAWINGGROUP` (BIFF 0xEB) record
+/// carrying the global Office Art drawing context: `FDGG` shape-ID
+/// allocator state, default-property `FOPT`, and the
+/// `SplitMenuColorContainer` palette. No-op if no sheet has comments.
+fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
+    if state.is_empty() {
+        return;
+    }
+
+    use crate::biff::escher::{
+        dgg_default_fopt, rec_type as er, write_container, IdCluster, OfficeArtFdgg,
+        SplitMenuColors,
+    };
+
+    let mut dgg_body = Vec::new();
+    let clusters: Vec<IdCluster> = state
+        .ordered_sheet_indices
+        .iter()
+        .filter_map(|i| state.sheets.get(i))
+        .map(|sd| IdCluster {
+            dgid: sd.dgid as u32,
+            cspid_cur: (sd.comments.len() + 1) as u32, // patriarch + comments
+        })
+        .collect();
+    OfficeArtFdgg {
+        spid_max: state.spid_max,
+        csp_saved: state.csp_total,
+        cdg_saved: state.cdg_total,
+        clusters,
+    }
+    .write_to(&mut dgg_body);
+    dgg_default_fopt().write_to(&mut dgg_body);
+    SplitMenuColors::EXCEL_DEFAULT.write_to(&mut dgg_body);
+
+    let mut record_body = Vec::new();
+    write_container(er::DGG_CONTAINER, 0, &dgg_body, &mut record_body);
+
+    write_biff_record(stream, MSODRAWINGGROUP_RECORD, &record_body);
+}
+
+/// Emit per-sheet drawing records: one `MSODRAWING` with the full
+/// `DgContainer` (patriarch + comment SP_CONTAINERs), then one
+/// `OBJ` + `TXO` (+ two `CONTINUE`s) per comment, then one `NOTE`
+/// per comment. No-op if the sheet has no comments.
+fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
+    use crate::biff::escher::{
+        comment_fopt, fsp_flags, rec_type as er, shape_type, write_client_data,
+        write_client_textbox, write_container, write_patriarch_sp_container, OfficeArtClientAnchor,
+        OfficeArtFdg, OfficeArtFsp,
+    };
+
+    // Build the SPGR_CONTAINER body: patriarch SP_CONTAINER first,
+    // then one SP_CONTAINER per comment.
+    let mut spgr_body = Vec::new();
+    write_patriarch_sp_container(drawing.patriarch_spid, &mut spgr_body);
+
+    for comment in &drawing.comments {
+        let mut sp_body = Vec::new();
+        OfficeArtFsp {
+            spid: comment.spid,
+            grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+        }
+        .write_to(shape_type::TEXT_BOX, &mut sp_body);
+        comment_fopt(comment.text_id).write_to(&mut sp_body);
+        OfficeArtClientAnchor::comment_default(comment.row, comment.col).write_to(&mut sp_body);
+        write_client_data(&mut sp_body);
+        write_client_textbox(&mut sp_body);
+
+        write_container(er::SP_CONTAINER, 0, &sp_body, &mut spgr_body);
+    }
+
+    // Wrap SPGR_CONTAINER inside DG_CONTAINER, prefixed by FDG.
+    let mut dg_body = Vec::new();
+    let spid_last = drawing
+        .comments
+        .last()
+        .map(|c| c.spid)
+        .unwrap_or(drawing.patriarch_spid);
+    OfficeArtFdg {
+        csp_saved: drawing.comments.len() as u32 + 1,
+        spid_last,
+    }
+    .write_to(drawing.dgid, &mut dg_body);
+    write_container(er::SPGR_CONTAINER, 0, &spgr_body, &mut dg_body);
+
+    let mut drawing_bytes = Vec::new();
+    write_container(er::DG_CONTAINER, drawing.dgid, &dg_body, &mut drawing_bytes);
+    write_biff_record(stream, MSODRAWING_RECORD, &drawing_bytes);
+
+    // OBJ + TXO + CONTINUE×2 per comment, in shape order.
+    for comment in &drawing.comments {
+        write_comment_obj(stream, comment);
+        write_comment_txo(stream, comment);
+    }
+
+    // NOTE records last, also in shape order.
+    for comment in &drawing.comments {
+        write_comment_note(stream, comment);
+    }
+}
+
+/// Emit an `OBJ` record (BIFF 0x005D) for a comment shape. Carries
+/// three sub-records:
+/// - `ftCmo` (0x0015): common object data with `ot=0x19` (note) and
+///   `id` set to the comment's 1-based shape index.
+/// - `ftNts` (0x000D): notes-specific data with a unique 16-byte
+///   GUID; we derive a deterministic GUID from the shape ID so the
+///   bytes are reproducible across runs.
+/// - `ftEnd` (0x0000): terminator.
+fn write_comment_obj(stream: &mut Vec<u8>, comment: &CommentShape) {
+    let mut body = Vec::new();
+
+    // ftCmo: rt(2) cb(2) ot(2) id(2) grbit(2) reserved(12) = 22 bytes total,
+    // body length cb = 18 (the bytes after rt+cb).
+    body.extend_from_slice(&0x0015u16.to_le_bytes()); // rt = ftCmo
+    body.extend_from_slice(&0x0012u16.to_le_bytes()); // cb = 18
+    body.extend_from_slice(&0x0019u16.to_le_bytes()); // ot = note/comment
+    body.extend_from_slice(&comment.obj_id.to_le_bytes()); // id (matches NOTE.objId)
+    body.extend_from_slice(&0x4011u16.to_le_bytes()); // grbit: fPrintable | fAutoSize
+    body.extend_from_slice(&[0u8; 12]); // 12 reserved zero bytes
+
+    // ftNts: rt(2) cb(2) guid(16) fSharedNote(u32) reserved(2) = 28 bytes total,
+    // cb = 22.
+    body.extend_from_slice(&0x000Du16.to_le_bytes()); // rt = ftNts
+    body.extend_from_slice(&0x0016u16.to_le_bytes()); // cb = 22
+    body.extend_from_slice(&deterministic_guid(comment.text_id)); // 16-byte GUID
+    body.extend_from_slice(&0u32.to_le_bytes()); // fSharedNote = 0 (not threaded)
+    body.extend_from_slice(&[0u8; 2]); // 2 reserved zero bytes
+
+    // ftEnd: rt(2) cb(2) = 4 bytes total.
+    body.extend_from_slice(&0x0000u16.to_le_bytes()); // rt = ftEnd
+    body.extend_from_slice(&0x0000u16.to_le_bytes()); // cb = 0
+
+    write_biff_record(stream, OBJ_RECORD, &body);
+}
+
+/// Derive a 16-byte GUID from a per-shape counter. The bytes are
+/// arbitrary but deterministic across writer runs; Excel itself
+/// emits values that look like uninitialised memory, so any
+/// well-formed 16-byte blob is accepted.
+fn deterministic_guid(seed: u32) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    out[..4].copy_from_slice(&seed.to_le_bytes());
+    // Variant + version stamp: RFC 4122 v4-shaped to look plausible.
+    out[6] = 0x40;
+    out[8] = 0x80;
+    out
+}
+
+/// Emit a `TXO` record (BIFF 0x01B6) plus its two `CONTINUE`
+/// records carrying the comment's text and a single formatting run.
+///
+/// TXO header layout (MS-XLS §2.4.324, 18 bytes):
+///
+/// - `flags` (u16): horizontal/vertical alignment, text-locked flag.
+///   We write `0x0212` to match Excel: halign=left, valign=top,
+///   `fLockText=1`.
+/// - `rot` (u16): rotation (0 = horizontal).
+/// - 6 bytes reserved.
+/// - `cchText` (u16): character count of the text.
+/// - `cbRuns` (u16): total length of the formatting runs block
+///   (8 bytes per run, two runs = 16).
+/// - 4 bytes reserved.
+fn write_comment_txo(stream: &mut Vec<u8>, comment: &CommentShape) {
+    let utf16: Vec<u16> = comment.text.encode_utf16().collect();
+    let high_byte = utf16.iter().any(|&u| u > 0xFF);
+
+    // TXO header.
+    let mut header = Vec::with_capacity(18);
+    header.extend_from_slice(&0x0212u16.to_le_bytes()); // flags
+    header.extend_from_slice(&0u16.to_le_bytes()); // rot
+    header.extend_from_slice(&[0u8; 6]); // reserved
+    header.extend_from_slice(&(utf16.len() as u16).to_le_bytes()); // cchText
+    header.extend_from_slice(&16u16.to_le_bytes()); // cbRuns = 2 runs × 8 bytes
+    header.extend_from_slice(&[0u8; 2]); // ifntEmpty
+    header.extend_from_slice(&[0u8; 2]); // reserved3
+    write_biff_record(stream, TXO_RECORD, &header);
+
+    // First CONTINUE: text payload prefixed by a 1-byte grbit
+    // (0x00 = compressed Latin-1, 0x01 = UTF-16LE).
+    let mut text_body = Vec::with_capacity(1 + utf16.len() * 2);
+    if high_byte {
+        text_body.push(0x01);
+        for u in &utf16 {
+            text_body.extend_from_slice(&u.to_le_bytes());
+        }
+    } else {
+        text_body.push(0x00);
+        for u in &utf16 {
+            text_body.push(*u as u8);
+        }
+    }
+    write_biff_record(stream, CONTINUE_RECORD, &text_body);
+
+    // Second CONTINUE: formatting runs. Two TxoRun entries (8 bytes
+    // each): (ich=0, ifnt=0, reserved=0) opens the default-font run,
+    // (ich=text_len, ifnt=0, reserved=0) closes it. This produces a
+    // single-run plain-text comment.
+    let mut runs_body = Vec::with_capacity(16);
+    runs_body.extend_from_slice(&0u16.to_le_bytes()); // ich = 0
+    runs_body.extend_from_slice(&0u16.to_le_bytes()); // ifnt = 0
+    runs_body.extend_from_slice(&[0u8; 4]); // reserved
+    runs_body.extend_from_slice(&(utf16.len() as u16).to_le_bytes()); // ich = end
+    runs_body.extend_from_slice(&0u16.to_le_bytes()); // ifnt = 0
+    runs_body.extend_from_slice(&[0u8; 4]); // reserved
+    write_biff_record(stream, CONTINUE_RECORD, &runs_body);
+}
+
+/// Emit a `NOTE` record (BIFF 0x001C) that anchors a comment to a
+/// cell. Layout: row(u16) + col(u16) + flags(u16) + objId(u16) +
+/// author(XLUnicodeString).
+///
+/// The author string is emitted as `XLUnicodeString`: cch(u16) +
+/// fHighByte(u8) + chars. A trailing padding byte rounds the record
+/// to an even length, matching Excel's emit.
+fn write_comment_note(stream: &mut Vec<u8>, comment: &CommentShape) {
+    let row_u16 = if comment.row > u16::MAX as u32 {
+        u16::MAX
+    } else {
+        comment.row as u16
+    };
+    let flags: u16 = if comment.visible { 0x0002 } else { 0x0000 };
+
+    let mut body = Vec::new();
+    body.extend_from_slice(&row_u16.to_le_bytes());
+    body.extend_from_slice(&comment.col.to_le_bytes());
+    body.extend_from_slice(&flags.to_le_bytes());
+    body.extend_from_slice(&comment.obj_id.to_le_bytes());
+
+    // Author as XLUnicodeString.
+    let utf16: Vec<u16> = comment.author.encode_utf16().collect();
+    let high_byte = utf16.iter().any(|&u| u > 0xFF);
+    body.extend_from_slice(&(utf16.len() as u16).to_le_bytes());
+    body.push(if high_byte { 0x01 } else { 0x00 });
+    if high_byte {
+        for u in &utf16 {
+            body.extend_from_slice(&u.to_le_bytes());
+        }
+    } else {
+        for u in &utf16 {
+            body.push(*u as u8);
+        }
+    }
+
+    // Pad to even length (Excel emits a trailing zero).
+    if body.len() % 2 != 0 {
+        body.push(0);
+    }
+
+    write_biff_record(stream, NOTE_RECORD, &body);
+}
+
+/// Generic BIFF8 record emitter: `(record_type LE)` + `(body_len LE)`
+/// + `body`. Panics in debug builds if `body` exceeds 8224 bytes,
+/// since BIFF8 caps a single record's body at that size and longer
+/// content must be split with `CONTINUE` records. (Our callers stay
+/// well below that limit; the assert exists to catch future
+/// regressions.)
+fn write_biff_record(stream: &mut Vec<u8>, record_type: u16, body: &[u8]) {
+    debug_assert!(
+        body.len() <= BIFF_MAX_RECORD_BODY,
+        "BIFF record 0x{record_type:04X} body is {} bytes; max is {BIFF_MAX_RECORD_BODY}",
+        body.len()
+    );
+    stream.extend_from_slice(&record_type.to_le_bytes());
+    stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    stream.extend_from_slice(body);
 }
 
 #[cfg(test)]
