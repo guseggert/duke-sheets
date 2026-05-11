@@ -475,26 +475,30 @@ pub struct OfficeArtClientAnchor {
 }
 
 impl OfficeArtClientAnchor {
-    /// Build a "comment-default" anchor that places the textbox
-    /// starting just past the right edge of `(row, col)` and spanning
-    /// roughly two cells wide × four rows tall — the layout Excel
-    /// itself uses for newly-created comments. The exact pixel
-    /// offsets match the BIFF8 defaults observed in Excel output.
+    /// Build a "comment-default" anchor that mirrors Excel's own
+    /// placement for a freshly-added comment on `(row, col)`. The
+    /// textbox starts one column to the right of the anchor cell on
+    /// the same row and extends two columns wide by four rows tall.
+    ///
+    /// The exact pixel offsets (`dx_l`, `dy_t`, `dx_r`, `dy_b`) and
+    /// the `flag = 3` ("do not move or size with cells") setting are
+    /// what Excel itself writes — verified by driving Excel via the
+    /// COM bridge and inspecting the emitted `OfficeArtClientAnchor`
+    /// bytes.
     pub fn comment_default(row: u32, col: u16) -> Self {
-        // Excel's defaults: start one column right and one row down,
-        // extend two columns and four rows further.
-        let row_t = row.saturating_add(1).min(u16::MAX as u32) as u16;
+        let row_t = row.min(u16::MAX as u32) as u16;
         let col_l = col.saturating_add(1);
         Self {
-            flag: 0,
+            // Excel uses flag=3 for comment anchors (msoAnchorFreeFloating).
+            flag: 3,
             col_l,
-            dx_l: 15 * 64, // ~15/64ths into the cell
+            dx_l: 240,
             row_t,
-            dy_t: 0,
+            dy_t: 26,
             col_r: col_l.saturating_add(2),
-            dx_r: 15 * 64,
+            dx_r: 496,
             row_b: row_t.saturating_add(4),
-            dy_b: 0,
+            dy_b: 13,
         }
     }
 
@@ -718,13 +722,19 @@ pub struct SplitMenuColors {
 
 impl SplitMenuColors {
     /// The exact 16-byte palette Excel emits for new workbooks.
+    /// Values verified by driving Excel via the COM bridge and
+    /// inspecting the `OfficeArtSplitMenuColorContainer` bytes inside
+    /// `MSODRAWINGGROUP`.
+    ///
+    /// All four `u32` slots are `OfficeArtCOLORREF` values. The high
+    /// byte selects the colour type (`0x08` = scheme colour,
+    /// `0x10` = system colour); the low 24 bits index into the
+    /// referenced palette.
     pub const EXCEL_DEFAULT: Self = Self {
-        // Office colour-picker scheme indices (`OfficeArtCOLORREF`):
-        // 0x0800_0000 means "scheme colour, index 0" (fill).
-        fill_color: 0x0800_0000,
-        line_color: 0x0800_0008,    // scheme index 8 (line)
-        shadow_color: 0x0800_0010,  // scheme index 16 (shadow)
-        three_d_color: 0x0800_0018, // scheme index 24 (3-D)
+        fill_color: 0x0800_000D,
+        line_color: 0x0800_000C,
+        shadow_color: 0x0800_0017,
+        three_d_color: 0x1000_00F7,
     };
 
     /// Serialise the full atom (header + 16-byte body).
@@ -891,6 +901,48 @@ impl FoptEntry {
             value: FoptValue::Complex(value),
         }
     }
+}
+
+/// Build the 14-entry `FoptTable` Excel writes for a freshly-created
+/// cell comment. The exact property IDs and values are what Excel
+/// itself emits — verified by driving Excel via the COM bridge and
+/// inspecting the `FOPT` payload on a comment textbox shape.
+///
+/// `text_id` is the per-shape `txid` placed in the `TEXT_ID` slot
+/// (property `0x0080`). Excel writes a different value for every
+/// shape; we use a per-comment counter so the values stay distinct
+/// across a workbook.
+pub fn comment_fopt(text_id: u32) -> FoptTable {
+    let mut t = FoptTable::new();
+    t.push(FoptEntry::simple(fopt_id::TEXT_ID, text_id));
+    t.push(FoptEntry::simple(0x008B, 0x0000_0002)); // related text props
+    t.push(FoptEntry::simple(fopt_id::TEXT_BOOLEAN_PROPS, 0x0008_0008));
+    t.push(FoptEntry::simple(0x0158, 0)); // reserved text prop
+    t.push(FoptEntry::simple(fopt_id::FILL_COLOR, 0x0800_0050));
+    t.push(FoptEntry::simple(fopt_id::FILL_BACK_COLOR, 0x0800_0050));
+    t.push(FoptEntry::simple(fopt_id::FILL_CR_MOD, 0x1000_00F4));
+    t.push(FoptEntry::simple(fopt_id::FILL_BOOLEAN_PROPS, 0x0010_0010));
+    t.push(FoptEntry::simple(fopt_id::LINE_COLOR, 0x0800_0051));
+    t.push(FoptEntry::simple(0x01C3, 0x1000_00F4)); // line colour mod
+    t.push(FoptEntry::simple(0x0201, 0x0800_0051)); // shadow colour
+    t.push(FoptEntry::simple(0x0203, 0x1000_00F4)); // shadow colour mod
+    t.push(FoptEntry::simple(
+        fopt_id::SHADOW_BOOLEAN_PROPS,
+        0x0003_0001,
+    ));
+    t.push(FoptEntry::simple(fopt_id::GROUP_SHAPE_PROPS, 0x0002_0002));
+    t
+}
+
+/// Build the 3-entry `FoptTable` Excel writes inside the workbook's
+/// `MSODRAWINGGROUP` (the global default property table). Values
+/// verified empirically.
+pub fn dgg_default_fopt() -> FoptTable {
+    let mut t = FoptTable::new();
+    t.push(FoptEntry::simple(fopt_id::TEXT_BOOLEAN_PROPS, 0x0008_0008));
+    t.push(FoptEntry::simple(fopt_id::FILL_COLOR, 0x0800_0041));
+    t.push(FoptEntry::simple(fopt_id::LINE_COLOR, 0x0800_0040));
+    t
 }
 
 /// Office Art property table (MS-ODRAW §2.3.1 `OfficeArtFOPT`).
@@ -1361,12 +1413,19 @@ mod tests {
     #[test]
     fn client_anchor_round_trips_comment_default() {
         // Comment at row=10, col=4 should produce an anchor starting
-        // at (col=5, row=11) and extending two columns + four rows.
+        // at (col=5, row=10) on the same row, extending two columns
+        // wide and four rows tall — matching Excel's own default
+        // placement.
         let anchor = OfficeArtClientAnchor::comment_default(10, 4);
+        assert_eq!(anchor.flag, 3);
         assert_eq!(anchor.col_l, 5);
-        assert_eq!(anchor.row_t, 11);
+        assert_eq!(anchor.row_t, 10);
         assert_eq!(anchor.col_r, 7);
-        assert_eq!(anchor.row_b, 15);
+        assert_eq!(anchor.row_b, 14);
+        assert_eq!(anchor.dx_l, 240);
+        assert_eq!(anchor.dy_t, 26);
+        assert_eq!(anchor.dx_r, 496);
+        assert_eq!(anchor.dy_b, 13);
 
         let mut out = Vec::new();
         anchor.write_to(&mut out);
@@ -1397,8 +1456,8 @@ mod tests {
 
     #[test]
     fn client_anchor_handles_row_overflow_gracefully() {
-        // Anchoring near u16::MAX must not panic. saturating_add caps
-        // row_t at u16::MAX; row_b clamps relative to that.
+        // Anchoring near u16::MAX must not panic; min() clamps row_t
+        // at u16::MAX and saturating_add caps col_l and row_b.
         let anchor = OfficeArtClientAnchor::comment_default(u16::MAX as u32, u16::MAX - 5);
         assert_eq!(anchor.row_t, u16::MAX);
         assert_eq!(anchor.col_l, u16::MAX - 4);
@@ -1485,11 +1544,12 @@ mod tests {
         assert_eq!(out.len(), 24);
         // Header bytes match the existing header round-trip test.
         assert_eq!(&out[..8], &[0x40, 0x00, 0x1E, 0xF1, 0x10, 0x00, 0x00, 0x00]);
-        // Body: four scheme-colour entries.
-        assert_eq!(&out[8..12], &0x0800_0000u32.to_le_bytes());
-        assert_eq!(&out[12..16], &0x0800_0008u32.to_le_bytes());
-        assert_eq!(&out[16..20], &0x0800_0010u32.to_le_bytes());
-        assert_eq!(&out[20..24], &0x0800_0018u32.to_le_bytes());
+        // Body: the four scheme-colour entries Excel itself writes
+        // (verified via the COM bridge probe).
+        assert_eq!(&out[8..12], &0x0800_000Du32.to_le_bytes());
+        assert_eq!(&out[12..16], &0x0800_000Cu32.to_le_bytes());
+        assert_eq!(&out[16..20], &0x0800_0017u32.to_le_bytes());
+        assert_eq!(&out[20..24], &0x1000_00F7u32.to_le_bytes());
     }
 
     #[test]
@@ -1556,6 +1616,46 @@ mod tests {
             fsp.grf_persistence,
             fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT
         );
+    }
+
+    #[test]
+    fn comment_fopt_has_14_entries_matching_excel() {
+        // Verified by driving Excel via the bridge: every freshly-
+        // created comment gets a 14-entry FOPT in this exact order.
+        let t = comment_fopt(0x12345678);
+        let entries: Vec<_> = t.entries().cloned().collect();
+        assert_eq!(entries.len(), 14);
+        // Spot-check the well-known IDs and values.
+        assert_eq!(entries[0].id, fopt_id::TEXT_ID);
+        assert_eq!(entries[0].value, FoptValue::Simple(0x12345678));
+        assert_eq!(entries[2].id, fopt_id::TEXT_BOOLEAN_PROPS);
+        assert_eq!(entries[2].value, FoptValue::Simple(0x0008_0008));
+        assert_eq!(entries[4].id, fopt_id::FILL_COLOR);
+        assert_eq!(entries[4].value, FoptValue::Simple(0x0800_0050));
+        assert_eq!(entries[8].id, fopt_id::LINE_COLOR);
+        assert_eq!(entries[8].value, FoptValue::Simple(0x0800_0051));
+        assert_eq!(entries[13].id, fopt_id::GROUP_SHAPE_PROPS);
+        assert_eq!(entries[13].value, FoptValue::Simple(0x0002_0002));
+
+        // Serialise and confirm rec_instance carries the entry count.
+        let mut out = Vec::new();
+        t.write_to(&mut out);
+        let header = OfficeArtRecordHeader::read_from(&out).unwrap();
+        assert_eq!(header.rec_instance, 14);
+        assert_eq!(header.rec_len, 14 * 6);
+    }
+
+    #[test]
+    fn dgg_default_fopt_has_3_entries_matching_excel() {
+        let t = dgg_default_fopt();
+        let entries: Vec<_> = t.entries().cloned().collect();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].id, fopt_id::TEXT_BOOLEAN_PROPS);
+        assert_eq!(entries[0].value, FoptValue::Simple(0x0008_0008));
+        assert_eq!(entries[1].id, fopt_id::FILL_COLOR);
+        assert_eq!(entries[1].value, FoptValue::Simple(0x0800_0041));
+        assert_eq!(entries[2].id, fopt_id::LINE_COLOR);
+        assert_eq!(entries[2].value, FoptValue::Simple(0x0800_0040));
     }
 
     #[test]
