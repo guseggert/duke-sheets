@@ -60,6 +60,9 @@ pub const HLINKTOOLTIP: u16 = 0x0800; // Hyperlink tooltip (FRT record)
 pub const NOTE: u16 = 0x001C; // Cell note (comment reference)
 pub const OBJ: u16 = 0x005D; // Drawing object
 pub const TXO: u16 = 0x01B6; // Text object (comment text)
+pub const MSODRAWINGGROUP: u16 = 0x00EB; // Workbook-globals Escher drawing context
+pub const MSODRAWING: u16 = 0x00EC; // Per-sheet Escher drawing (shapes)
+pub const MSODRAWINGSELECTION: u16 = 0x00ED; // Drawing selection state (rarely emitted)
 
 // ── Conditional formatting ──────────────────────────────────────────────
 pub const CONDFMT: u16 = 0x01B0; // Conditional formatting range header
