@@ -314,6 +314,252 @@ pub mod fopt_id {
     pub const GROUP_SHAPE_PROPS: u16 = 0x033F;
 }
 
+/// MS-ODRAW §2.2.40 `OfficeArtFSP` — shape descriptor atom.
+///
+/// One per shape, inside an `SP_CONTAINER`. Carries:
+/// - The 32-bit shape ID (`spid`) — must be unique within the
+///   workbook and used by the BIFF `OBJ.ftCmo.id` field to link the
+///   drawing object to its host-application record.
+/// - A 32-bit `grfPersistence` flag bag (see [`fsp_flags`]) describing
+///   the shape's relationship to its container, deletion state, and
+///   geometry source.
+///
+/// The shape **type** (e.g. textbox = `0x00CA`) lives in the
+/// containing record header's `rec_instance` field, not in the FSP
+/// body. Always 8 bytes after the header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OfficeArtFsp {
+    /// 32-bit unique shape ID.
+    pub spid: u32,
+    /// Bitfield of [`fsp_flags`] values.
+    pub grf_persistence: u32,
+}
+
+impl OfficeArtFsp {
+    /// Serialise the full FSP atom (header + 8-byte body) into `out`.
+    /// `shape_type` is the MSOSPT value placed in the header
+    /// `rec_instance` field. Pass [`shape_type::TEXT_BOX`] for
+    /// comments.
+    pub fn write_to(&self, shape_type: u16, out: &mut Vec<u8>) {
+        let header = OfficeArtRecordHeader::atom(2, shape_type, rec_type::FSP, 8);
+        header.write_to(out);
+        out.extend_from_slice(&self.spid.to_le_bytes());
+        out.extend_from_slice(&self.grf_persistence.to_le_bytes());
+    }
+
+    /// Parse a full FSP atom from `bytes`. Returns `(fsp, shape_type, bytes_consumed)`.
+    pub fn read_from(bytes: &[u8]) -> XlsResult<(Self, u16, usize)> {
+        let header = OfficeArtRecordHeader::read_from(bytes)?;
+        if header.rec_type != rec_type::FSP {
+            return Err(XlsError::InvalidFormat(format!(
+                "expected FSP (0x{:04X}), found 0x{:04X}",
+                rec_type::FSP,
+                header.rec_type
+            )));
+        }
+        if header.rec_len != 8 {
+            return Err(XlsError::InvalidFormat(format!(
+                "FSP body must be 8 bytes, got {}",
+                header.rec_len
+            )));
+        }
+        if bytes.len() < HEADER_LEN + 8 {
+            return Err(XlsError::InvalidFormat("FSP truncated".into()));
+        }
+        let spid = u32::from_le_bytes([
+            bytes[HEADER_LEN],
+            bytes[HEADER_LEN + 1],
+            bytes[HEADER_LEN + 2],
+            bytes[HEADER_LEN + 3],
+        ]);
+        let grf_persistence = u32::from_le_bytes([
+            bytes[HEADER_LEN + 4],
+            bytes[HEADER_LEN + 5],
+            bytes[HEADER_LEN + 6],
+            bytes[HEADER_LEN + 7],
+        ]);
+        Ok((
+            Self {
+                spid,
+                grf_persistence,
+            },
+            header.rec_instance,
+            HEADER_LEN + 8,
+        ))
+    }
+}
+
+/// MS-ODRAW §2.2.38 `OfficeArtFSPGR` — group-shape rectangle atom.
+///
+/// One per `SPGR_CONTAINER`, immediately preceding the contained
+/// shapes. Defines the group's logical coordinate space as a
+/// rectangle (xLeft, yTop, xRight, yBottom) in EMUs. The
+/// patriarch group at the root of a sheet's drawing tree
+/// conventionally uses (0, 0, 0, 0). Always 16 bytes after header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OfficeArtFspgr {
+    pub x_left: i32,
+    pub y_top: i32,
+    pub x_right: i32,
+    pub y_bottom: i32,
+}
+
+impl OfficeArtFspgr {
+    /// Serialise the full FSPGR atom (header + 16-byte body).
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        let header = OfficeArtRecordHeader::atom(1, 0, rec_type::FSPGR, 16);
+        header.write_to(out);
+        out.extend_from_slice(&self.x_left.to_le_bytes());
+        out.extend_from_slice(&self.y_top.to_le_bytes());
+        out.extend_from_slice(&self.x_right.to_le_bytes());
+        out.extend_from_slice(&self.y_bottom.to_le_bytes());
+    }
+
+    /// Parse a full FSPGR atom. Returns `(fspgr, bytes_consumed)`.
+    pub fn read_from(bytes: &[u8]) -> XlsResult<(Self, usize)> {
+        let header = OfficeArtRecordHeader::read_from(bytes)?;
+        if header.rec_type != rec_type::FSPGR {
+            return Err(XlsError::InvalidFormat(format!(
+                "expected FSPGR (0x{:04X}), found 0x{:04X}",
+                rec_type::FSPGR,
+                header.rec_type
+            )));
+        }
+        if header.rec_len != 16 || bytes.len() < HEADER_LEN + 16 {
+            return Err(XlsError::InvalidFormat("FSPGR truncated".into()));
+        }
+        let read_i32 = |off: usize| -> i32 {
+            i32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+        };
+        Ok((
+            Self {
+                x_left: read_i32(HEADER_LEN),
+                y_top: read_i32(HEADER_LEN + 4),
+                x_right: read_i32(HEADER_LEN + 8),
+                y_bottom: read_i32(HEADER_LEN + 12),
+            },
+            HEADER_LEN + 16,
+        ))
+    }
+}
+
+/// MS-XLS §2.5.193 `OfficeArtClientAnchor` for Excel — anchors a shape
+/// to a cell range. 18-byte body following the 8-byte header.
+///
+/// Coordinate units:
+/// - `dx_l` / `dx_r`: fraction of the cell's width, in 1024ths.
+/// - `dy_t` / `dy_b`: fraction of the cell's height, in 256ths.
+///
+/// `flag` controls cell-tracking behaviour: 0 = move+size with cells,
+/// 2 = move only, 3 = neither (free-floating).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OfficeArtClientAnchor {
+    /// Behaviour flags. 0 = default (move and size with cells).
+    pub flag: u16,
+    /// Left column.
+    pub col_l: u16,
+    /// X offset within left cell (1024ths of cell width).
+    pub dx_l: u16,
+    /// Top row.
+    pub row_t: u16,
+    /// Y offset within top cell (256ths of cell height).
+    pub dy_t: u16,
+    /// Right column (inclusive).
+    pub col_r: u16,
+    /// X offset within right cell.
+    pub dx_r: u16,
+    /// Bottom row (inclusive).
+    pub row_b: u16,
+    /// Y offset within bottom cell.
+    pub dy_b: u16,
+}
+
+impl OfficeArtClientAnchor {
+    /// Build a "comment-default" anchor that places the textbox
+    /// starting just past the right edge of `(row, col)` and spanning
+    /// roughly two cells wide × four rows tall — the layout Excel
+    /// itself uses for newly-created comments. The exact pixel
+    /// offsets match the BIFF8 defaults observed in Excel output.
+    pub fn comment_default(row: u32, col: u16) -> Self {
+        // Excel's defaults: start one column right and one row down,
+        // extend two columns and four rows further.
+        let row_t = row.saturating_add(1).min(u16::MAX as u32) as u16;
+        let col_l = col.saturating_add(1);
+        Self {
+            flag: 0,
+            col_l,
+            dx_l: 15 * 64, // ~15/64ths into the cell
+            row_t,
+            dy_t: 0,
+            col_r: col_l.saturating_add(2),
+            dx_r: 15 * 64,
+            row_b: row_t.saturating_add(4),
+            dy_b: 0,
+        }
+    }
+
+    /// Serialise the full anchor atom (header + 18-byte body).
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        let header = OfficeArtRecordHeader::atom(0, 0, rec_type::CLIENT_ANCHOR, 18);
+        header.write_to(out);
+        out.extend_from_slice(&self.flag.to_le_bytes());
+        out.extend_from_slice(&self.col_l.to_le_bytes());
+        out.extend_from_slice(&self.dx_l.to_le_bytes());
+        out.extend_from_slice(&self.row_t.to_le_bytes());
+        out.extend_from_slice(&self.dy_t.to_le_bytes());
+        out.extend_from_slice(&self.col_r.to_le_bytes());
+        out.extend_from_slice(&self.dx_r.to_le_bytes());
+        out.extend_from_slice(&self.row_b.to_le_bytes());
+        out.extend_from_slice(&self.dy_b.to_le_bytes());
+    }
+
+    /// Parse a full anchor atom. Returns `(anchor, bytes_consumed)`.
+    pub fn read_from(bytes: &[u8]) -> XlsResult<(Self, usize)> {
+        let header = OfficeArtRecordHeader::read_from(bytes)?;
+        if header.rec_type != rec_type::CLIENT_ANCHOR {
+            return Err(XlsError::InvalidFormat(format!(
+                "expected ClientAnchor (0x{:04X}), found 0x{:04X}",
+                rec_type::CLIENT_ANCHOR,
+                header.rec_type
+            )));
+        }
+        if header.rec_len != 18 || bytes.len() < HEADER_LEN + 18 {
+            return Err(XlsError::InvalidFormat("ClientAnchor truncated".into()));
+        }
+        let read_u16 = |off: usize| u16::from_le_bytes([bytes[off], bytes[off + 1]]);
+        Ok((
+            Self {
+                flag: read_u16(HEADER_LEN),
+                col_l: read_u16(HEADER_LEN + 2),
+                dx_l: read_u16(HEADER_LEN + 4),
+                row_t: read_u16(HEADER_LEN + 6),
+                dy_t: read_u16(HEADER_LEN + 8),
+                col_r: read_u16(HEADER_LEN + 10),
+                dx_r: read_u16(HEADER_LEN + 12),
+                row_b: read_u16(HEADER_LEN + 14),
+                dy_b: read_u16(HEADER_LEN + 16),
+            },
+            HEADER_LEN + 18,
+        ))
+    }
+}
+
+/// MS-ODRAW §2.2.31 `OfficeArtClientData` — empty marker atom that
+/// signals "the following BIFF records (`OBJ`, `TXO`, etc.) describe
+/// the host-application data for this shape". Body is zero bytes.
+pub fn write_client_data(out: &mut Vec<u8>) {
+    let header = OfficeArtRecordHeader::atom(0, 0, rec_type::CLIENT_DATA, 0);
+    header.write_to(out);
+}
+
+/// MS-ODRAW §2.2.34 `OfficeArtClientTextbox` — empty marker atom that
+/// signals "this shape has text; the text content lives in the next
+/// BIFF `TXO` record". Body is zero bytes.
+pub fn write_client_textbox(out: &mut Vec<u8>) {
+    let header = OfficeArtRecordHeader::atom(0, 0, rec_type::CLIENT_TEXTBOX, 0);
+    header.write_to(out);
+}
+
 /// One entry in an Office Art FOPT property table (MS-ODRAW §2.3.1
 /// `OfficeArtFOPTE`).
 ///
@@ -773,5 +1019,122 @@ mod tests {
         let (parsed, consumed) = FoptTable::read_from(&out).unwrap();
         assert_eq!(consumed, 8);
         assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn fsp_round_trips_textbox_shape() {
+        let fsp = OfficeArtFsp {
+            spid: 0x0400, // shape id 1024
+            grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+        };
+        let mut out = Vec::new();
+        fsp.write_to(shape_type::TEXT_BOX, &mut out);
+
+        // Header: rec_ver=2, rec_instance=TEXT_BOX (0xCA), rec_type=FSP, rec_len=8.
+        // Byte 0: 2 (low) | (0xCA & 0x0F) << 4 = 2 | 0xA0 = 0xA2.
+        // Byte 1: 0xCA >> 4 = 0x0C.
+        // Then 0x0A 0xF0 (FSP type LE), 0x08 0x00 0x00 0x00 (len=8).
+        assert_eq!(&out[..8], &[0xA2, 0x0C, 0x0A, 0xF0, 0x08, 0x00, 0x00, 0x00]);
+        // Body: spid LE + flags LE.
+        assert_eq!(&out[8..12], &0x0400u32.to_le_bytes());
+        assert_eq!(
+            &out[12..16],
+            &(fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT).to_le_bytes()
+        );
+
+        let (parsed, st, consumed) = OfficeArtFsp::read_from(&out).unwrap();
+        assert_eq!(parsed, fsp);
+        assert_eq!(st, shape_type::TEXT_BOX);
+        assert_eq!(consumed, out.len());
+    }
+
+    #[test]
+    fn fsp_read_rejects_wrong_body_length() {
+        // Build a deliberately corrupt FSP with rec_len=4.
+        let mut out = Vec::new();
+        let bad_header = OfficeArtRecordHeader::atom(2, shape_type::TEXT_BOX, rec_type::FSP, 4);
+        bad_header.write_to(&mut out);
+        out.extend_from_slice(&[0, 0, 0, 0]);
+        let err = OfficeArtFsp::read_from(&out).unwrap_err();
+        match err {
+            XlsError::InvalidFormat(m) => assert!(m.contains("8 bytes"), "msg: {m}"),
+            other => panic!("expected InvalidFormat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fspgr_round_trips_zero_rect() {
+        let fspgr = OfficeArtFspgr::default();
+        let mut out = Vec::new();
+        fspgr.write_to(&mut out);
+
+        // Header: rec_ver=1, rec_instance=0, rec_type=FSPGR (0xF009), rec_len=16.
+        assert_eq!(&out[..8], &[0x01, 0x00, 0x09, 0xF0, 0x10, 0x00, 0x00, 0x00]);
+        // Body: four LE i32 zeros.
+        assert_eq!(&out[8..24], &[0u8; 16]);
+
+        let (parsed, consumed) = OfficeArtFspgr::read_from(&out).unwrap();
+        assert_eq!(parsed, fspgr);
+        assert_eq!(consumed, 24);
+    }
+
+    #[test]
+    fn fspgr_preserves_negative_coordinates() {
+        let fspgr = OfficeArtFspgr {
+            x_left: -100,
+            y_top: -200,
+            x_right: 300,
+            y_bottom: 400,
+        };
+        let mut out = Vec::new();
+        fspgr.write_to(&mut out);
+        let (parsed, _) = OfficeArtFspgr::read_from(&out).unwrap();
+        assert_eq!(parsed, fspgr);
+    }
+
+    #[test]
+    fn client_anchor_round_trips_comment_default() {
+        // Comment at row=10, col=4 should produce an anchor starting
+        // at (col=5, row=11) and extending two columns + four rows.
+        let anchor = OfficeArtClientAnchor::comment_default(10, 4);
+        assert_eq!(anchor.col_l, 5);
+        assert_eq!(anchor.row_t, 11);
+        assert_eq!(anchor.col_r, 7);
+        assert_eq!(anchor.row_b, 15);
+
+        let mut out = Vec::new();
+        anchor.write_to(&mut out);
+
+        // Header: rec_ver=0, rec_instance=0, rec_type=ClientAnchor (0xF010), rec_len=18.
+        assert_eq!(&out[..8], &[0x00, 0x00, 0x10, 0xF0, 0x12, 0x00, 0x00, 0x00]);
+
+        let (parsed, consumed) = OfficeArtClientAnchor::read_from(&out).unwrap();
+        assert_eq!(parsed, anchor);
+        assert_eq!(consumed, 26); // 8 header + 18 body
+    }
+
+    #[test]
+    fn client_data_writes_empty_atom() {
+        let mut out = Vec::new();
+        write_client_data(&mut out);
+        // Header: rec_ver=0, rec_instance=0, rec_type=CLIENT_DATA (0xF011), rec_len=0.
+        assert_eq!(out, [0x00, 0x00, 0x11, 0xF0, 0x00, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn client_textbox_writes_empty_atom() {
+        let mut out = Vec::new();
+        write_client_textbox(&mut out);
+        // Header: rec_ver=0, rec_instance=0, rec_type=CLIENT_TEXTBOX (0xF00D), rec_len=0.
+        assert_eq!(out, [0x00, 0x00, 0x0D, 0xF0, 0x00, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn client_anchor_handles_row_overflow_gracefully() {
+        // Anchoring near u16::MAX must not panic. saturating_add caps
+        // row_t at u16::MAX; row_b clamps relative to that.
+        let anchor = OfficeArtClientAnchor::comment_default(u16::MAX as u32, u16::MAX - 5);
+        assert_eq!(anchor.row_t, u16::MAX);
+        assert_eq!(anchor.col_l, u16::MAX - 4);
     }
 }
