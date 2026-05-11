@@ -577,3 +577,57 @@ fn excel_can_read_unicode_comment_we_emit() {
         c.text
     );
 }
+
+/// Multi-sheet comments: exercises the per-drawing 1024-aligned
+/// shape-ID cluster allocation. A workbook with comments on
+/// non-contiguous sheets must produce one FDGG cluster entry per
+/// drawing and unique shape IDs across the workbook.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_comments_across_multiple_sheets_we_emit() {
+    use duke_sheets_core::CellComment;
+
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "Alpha").unwrap();
+    wb.add_worksheet_with_name("Beta").unwrap();
+    wb.add_worksheet_with_name("Gamma").unwrap();
+
+    // Alpha gets two comments; Beta is empty; Gamma gets one. This
+    // forces the writer to allocate two clusters (dgid 1 and 2)
+    // because Beta has no shapes to take a cluster slot.
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_comment_at(0, 0, CellComment::new("Alice", "Alpha A1"));
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_comment_at(3, 3, CellComment::new("Alice", "Alpha D4"));
+    wb.worksheet_mut(2)
+        .unwrap()
+        .set_comment_at(5, 5, CellComment::new("Carol", "Gamma F6"));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    assert_eq!(result.worksheet(0).unwrap().comment_count(), 2);
+    assert_eq!(result.worksheet(1).unwrap().comment_count(), 0);
+    assert_eq!(result.worksheet(2).unwrap().comment_count(), 1);
+    assert!(result
+        .worksheet(0)
+        .unwrap()
+        .comment_at(0, 0)
+        .unwrap()
+        .text
+        .contains("Alpha A1"));
+    assert!(result
+        .worksheet(0)
+        .unwrap()
+        .comment_at(3, 3)
+        .unwrap()
+        .text
+        .contains("Alpha D4"));
+    assert!(result
+        .worksheet(2)
+        .unwrap()
+        .comment_at(5, 5)
+        .unwrap()
+        .text
+        .contains("Gamma F6"));
+}

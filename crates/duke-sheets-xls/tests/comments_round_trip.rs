@@ -171,10 +171,40 @@ fn lo_can_open_xls_with_comments_we_emit() {
 }
 
 #[test]
+fn visible_comment_flag_round_trips() {
+    // The CellComment.visible bit must survive: writer sets NOTE
+    // flags bit 1 (0x0002), reader pulls it back out.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "v").unwrap();
+    ws.set_comment_at(
+        0,
+        0,
+        CellComment::new("Alice", "Visible note").with_visible(true),
+    );
+    ws.set_comment_at(1, 0, CellComment::new("Alice", "Hidden note"));
+
+    let parsed = write_then_read(&wb);
+    let ws_in = parsed.worksheet(0).unwrap();
+    assert!(
+        ws_in.comment_at(0, 0).unwrap().visible,
+        "visible=true must round-trip"
+    );
+    assert!(
+        !ws_in.comment_at(1, 0).unwrap().visible,
+        "visible=false must round-trip"
+    );
+}
+
+#[test]
 fn empty_workbook_emits_no_drawing_records() {
     // A workbook with zero comments must not emit MSODRAWINGGROUP or
-    // MSODRAWING records — confirm by writing, parsing, and asserting
-    // no comments are present on any sheet.
+    // MSODRAWING records.
+    //
+    // To make this a precise check (not just "reader sees no
+    // comments"), we walk the CFB envelope, extract the /Workbook
+    // stream, then scan BIFF record headers within that stream for
+    // record types 0xEB or 0xEC. Any hit is a writer bug.
     let mut wb = Workbook::new();
     wb.worksheet_mut(0)
         .unwrap()
@@ -183,18 +213,34 @@ fn empty_workbook_emits_no_drawing_records() {
 
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
 
-    // Direct byte scan: the BIFF record types 0xEB / 0xEC must not
-    // appear in the stream. (We scan the whole CFB envelope which is
-    // a strict superset of the workbook stream — any sighting is a
-    // bug.)
-    let needle_drawing_group = [0xEB, 0x00];
-    let needle_drawing = [0xEC, 0x00];
-    let drawing_group_present = bytes.windows(2).any(|w| w == needle_drawing_group);
-    let drawing_present = bytes.windows(2).any(|w| w == needle_drawing);
-    // The byte sequences could appear in CFB sector data by chance,
-    // so we round-trip and assert there's still no comment showing.
-    let _ = (drawing_group_present, drawing_present);
-
     let parsed = XlsReader::read(Cursor::new(&bytes)).expect("read back");
     assert_eq!(parsed.worksheet(0).unwrap().comment_count(), 0);
+
+    // Walk the workbook stream as a series of BIFF records and
+    // verify no MSODRAWINGGROUP (0x00EB) or MSODRAWING (0x00EC)
+    // appears. We re-use the reader's CFB extractor by going
+    // through the public Cursor path: the workbook stream is the
+    // contents of /Workbook in the CFB envelope.
+    let stream = extract_workbook_stream(&bytes);
+    let mut off = 0usize;
+    while off + 4 <= stream.len() {
+        let rt = u16::from_le_bytes([stream[off], stream[off + 1]]);
+        let body_len = u16::from_le_bytes([stream[off + 2], stream[off + 3]]) as usize;
+        assert!(
+            rt != 0x00EB && rt != 0x00EC,
+            "no-comment workbook emitted drawing record 0x{rt:04X} at offset {off}"
+        );
+        off += 4 + body_len;
+        if off + 4 > stream.len() {
+            break;
+        }
+    }
+}
+
+/// Extract the `/Workbook` stream from a CFB envelope using the
+/// crate's own CFB reader.
+fn extract_workbook_stream(cfb_bytes: &[u8]) -> Vec<u8> {
+    let comp = duke_sheets_xls::cfb::CompoundFile::open(Cursor::new(cfb_bytes))
+        .expect("CFB open");
+    comp.read_stream("/Workbook").expect("Workbook stream")
 }
