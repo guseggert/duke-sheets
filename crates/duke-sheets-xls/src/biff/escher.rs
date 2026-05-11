@@ -544,6 +544,272 @@ impl OfficeArtClientAnchor {
     }
 }
 
+/// MS-ODRAW §2.2.46 `OfficeArtIDCL` — one entry in an FDGG cluster
+/// table. An "ID cluster" reserves a block of 1024 shape IDs for a
+/// specific drawing (worksheet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IdCluster {
+    /// Drawing ID this cluster belongs to (a 1-based per-sheet
+    /// identifier matching `OfficeArtFDG.dgid`).
+    pub dgid: u32,
+    /// Number of shape IDs already used in this cluster.
+    pub cspid_cur: u32,
+}
+
+/// MS-ODRAW §2.2.48 `OfficeArtFDGG` — drawing-group atom (one per
+/// `DGG_CONTAINER`). Tracks the global shape-ID allocator state and
+/// per-drawing cluster reservations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfficeArtFdgg {
+    /// One past the highest shape ID ever used in this workbook.
+    pub spid_max: u32,
+    /// Total saved shapes across all drawings.
+    pub csp_saved: u32,
+    /// Total saved drawings (i.e. sheets that have an `MSODRAWING`).
+    pub cdg_saved: u32,
+    /// ID cluster reservations (one per drawing that has shapes).
+    pub clusters: Vec<IdCluster>,
+}
+
+impl OfficeArtFdgg {
+    /// Serialise the full FDGG atom (header + body) into `out`.
+    ///
+    /// MS-ODRAW writes the `cidcl` count as `clusters.len() + 1`
+    /// because the array is indexed from 1; we replicate that quirk
+    /// here.
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        // Body: 4 u32 + 8 bytes per cluster.
+        let body_len = (16 + self.clusters.len() * 8) as u32;
+        let header = OfficeArtRecordHeader::atom(0, 0, rec_type::FDGG, body_len);
+        header.write_to(out);
+        out.extend_from_slice(&self.spid_max.to_le_bytes());
+        out.extend_from_slice(&((self.clusters.len() as u32) + 1).to_le_bytes());
+        out.extend_from_slice(&self.csp_saved.to_le_bytes());
+        out.extend_from_slice(&self.cdg_saved.to_le_bytes());
+        for cluster in &self.clusters {
+            out.extend_from_slice(&cluster.dgid.to_le_bytes());
+            out.extend_from_slice(&cluster.cspid_cur.to_le_bytes());
+        }
+    }
+
+    /// Parse a full FDGG atom from `bytes`. Returns `(fdgg, bytes_consumed)`.
+    pub fn read_from(bytes: &[u8]) -> XlsResult<(Self, usize)> {
+        let header = OfficeArtRecordHeader::read_from(bytes)?;
+        if header.rec_type != rec_type::FDGG {
+            return Err(XlsError::InvalidFormat(format!(
+                "expected FDGG (0x{:04X}), found 0x{:04X}",
+                rec_type::FDGG,
+                header.rec_type
+            )));
+        }
+        if header.rec_len < 16 || bytes.len() < HEADER_LEN + header.rec_len as usize {
+            return Err(XlsError::InvalidFormat("FDGG truncated".into()));
+        }
+        let read_u32 = |off: usize| {
+            u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+        };
+        let spid_max = read_u32(HEADER_LEN);
+        let cidcl = read_u32(HEADER_LEN + 4);
+        let csp_saved = read_u32(HEADER_LEN + 8);
+        let cdg_saved = read_u32(HEADER_LEN + 12);
+
+        // `cidcl` is written as `clusters.len() + 1`; reverse that.
+        let cluster_count = cidcl.saturating_sub(1) as usize;
+        let need = 16 + cluster_count * 8;
+        if (header.rec_len as usize) < need {
+            return Err(XlsError::InvalidFormat(format!(
+                "FDGG declares {cluster_count} clusters but rec_len {} bytes is too short",
+                header.rec_len
+            )));
+        }
+        let mut clusters = Vec::with_capacity(cluster_count);
+        for i in 0..cluster_count {
+            let off = HEADER_LEN + 16 + i * 8;
+            clusters.push(IdCluster {
+                dgid: read_u32(off),
+                cspid_cur: read_u32(off + 4),
+            });
+        }
+        Ok((
+            Self {
+                spid_max,
+                csp_saved,
+                cdg_saved,
+                clusters,
+            },
+            HEADER_LEN + header.rec_len as usize,
+        ))
+    }
+}
+
+/// MS-ODRAW §2.2.49 `OfficeArtFDG` — per-drawing atom (one per
+/// `DG_CONTAINER`). Tracks the shape count and last shape ID used in
+/// this drawing (sheet).
+///
+/// The `dgid` (drawing ID) is encoded in the containing header's
+/// `rec_instance`, not in the FDG body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OfficeArtFdg {
+    /// Number of shapes saved in this drawing (including the
+    /// patriarch).
+    pub csp_saved: u32,
+    /// One past the highest shape ID used in this drawing.
+    pub spid_last: u32,
+}
+
+impl OfficeArtFdg {
+    /// Serialise the full FDG atom (header + 8 body bytes) into
+    /// `out`. `dgid` is placed in the header `rec_instance` per
+    /// MS-ODRAW §2.2.49.
+    pub fn write_to(&self, dgid: u16, out: &mut Vec<u8>) {
+        let header = OfficeArtRecordHeader::atom(0, dgid, rec_type::FDG, 8);
+        header.write_to(out);
+        out.extend_from_slice(&self.csp_saved.to_le_bytes());
+        out.extend_from_slice(&self.spid_last.to_le_bytes());
+    }
+
+    /// Parse a full FDG atom. Returns `(fdg, dgid, bytes_consumed)`.
+    pub fn read_from(bytes: &[u8]) -> XlsResult<(Self, u16, usize)> {
+        let header = OfficeArtRecordHeader::read_from(bytes)?;
+        if header.rec_type != rec_type::FDG {
+            return Err(XlsError::InvalidFormat(format!(
+                "expected FDG (0x{:04X}), found 0x{:04X}",
+                rec_type::FDG,
+                header.rec_type
+            )));
+        }
+        if header.rec_len != 8 || bytes.len() < HEADER_LEN + 8 {
+            return Err(XlsError::InvalidFormat("FDG truncated".into()));
+        }
+        let csp_saved = u32::from_le_bytes([
+            bytes[HEADER_LEN],
+            bytes[HEADER_LEN + 1],
+            bytes[HEADER_LEN + 2],
+            bytes[HEADER_LEN + 3],
+        ]);
+        let spid_last = u32::from_le_bytes([
+            bytes[HEADER_LEN + 4],
+            bytes[HEADER_LEN + 5],
+            bytes[HEADER_LEN + 6],
+            bytes[HEADER_LEN + 7],
+        ]);
+        Ok((
+            Self {
+                csp_saved,
+                spid_last,
+            },
+            header.rec_instance,
+            HEADER_LEN + 8,
+        ))
+    }
+}
+
+/// MS-ODRAW §2.2.83 `OfficeArtSplitMenuColorContainer` — the default
+/// 16-byte palette (4 ARGB entries) that appears in every
+/// `DGG_CONTAINER`. Excel's defaults are the standard colour-picker
+/// fill, line, shadow, and 3-D colours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SplitMenuColors {
+    pub fill_color: u32,
+    pub line_color: u32,
+    pub shadow_color: u32,
+    pub three_d_color: u32,
+}
+
+impl SplitMenuColors {
+    /// The exact 16-byte palette Excel emits for new workbooks.
+    pub const EXCEL_DEFAULT: Self = Self {
+        // Office colour-picker scheme indices (`OfficeArtCOLORREF`):
+        // 0x0800_0000 means "scheme colour, index 0" (fill).
+        fill_color: 0x0800_0000,
+        line_color: 0x0800_0008,    // scheme index 8 (line)
+        shadow_color: 0x0800_0010,  // scheme index 16 (shadow)
+        three_d_color: 0x0800_0018, // scheme index 24 (3-D)
+    };
+
+    /// Serialise the full atom (header + 16-byte body).
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        // Per MS-ODRAW the rec_instance is 4 (entry count).
+        let header = OfficeArtRecordHeader::atom(0, 4, rec_type::SPLIT_MENU_COLORS, 16);
+        header.write_to(out);
+        out.extend_from_slice(&self.fill_color.to_le_bytes());
+        out.extend_from_slice(&self.line_color.to_le_bytes());
+        out.extend_from_slice(&self.shadow_color.to_le_bytes());
+        out.extend_from_slice(&self.three_d_color.to_le_bytes());
+    }
+}
+
+/// Write a generic Office Art container record: an 8-byte header
+/// (`rec_ver=0xF`) wrapping the given `body` bytes. Used by callers
+/// that have already serialised the container's contents and need
+/// only the header.
+///
+/// This single helper covers `SP_CONTAINER`, `SPGR_CONTAINER`,
+/// `DG_CONTAINER`, `DGG_CONTAINER`, and `BSTORE_CONTAINER`. The
+/// `rec_instance` field is record-specific:
+/// - `DG_CONTAINER` uses the drawing id.
+/// - `BSTORE_CONTAINER` uses the blip-store entry count.
+/// - Other containers use 0.
+pub fn write_container(rec_type_id: u16, rec_instance: u16, body: &[u8], out: &mut Vec<u8>) {
+    let header = OfficeArtRecordHeader::container(rec_type_id, rec_instance, body.len() as u32);
+    header.write_to(out);
+    out.extend_from_slice(body);
+}
+
+/// Build an `SP_CONTAINER` for a comment textbox shape, anchored to
+/// `(row, col)`, with the FOPT properties given. Emits the full
+/// container (header + FSP + FOPT + ClientAnchor + ClientData +
+/// ClientTextbox) into `out`.
+///
+/// `spid` is the unique shape ID; the caller is responsible for
+/// allocating it via a [`ShapeIdAllocator`]-style counter.
+pub fn write_comment_sp_container(
+    spid: u32,
+    row: u32,
+    col: u16,
+    properties: &FoptTable,
+    out: &mut Vec<u8>,
+) {
+    let mut body = Vec::new();
+    // FSP: textbox, with anchor + master flags.
+    OfficeArtFsp {
+        spid,
+        grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+    }
+    .write_to(shape_type::TEXT_BOX, &mut body);
+    // FOPT (caller-supplied).
+    properties.write_to(&mut body);
+    // ClientAnchor at the requested cell.
+    OfficeArtClientAnchor::comment_default(row, col).write_to(&mut body);
+    // ClientData marker.
+    write_client_data(&mut body);
+    // ClientTextbox marker — text content is in the BIFF TXO that
+    // follows the MSODRAWING record.
+    write_client_textbox(&mut body);
+
+    write_container(rec_type::SP_CONTAINER, 0, &body, out);
+}
+
+/// Build the patriarch `SP_CONTAINER` for a sheet's drawing — the
+/// implicit root group shape. Exactly one per `SPGR_CONTAINER` at
+/// the top of the sheet's drawing tree.
+///
+/// Body = FSPGR (zero rectangle) + FSP (GROUP|PATRIARCH flags,
+/// shape_type = NOT_PRIMITIVE).
+pub fn write_patriarch_sp_container(spid: u32, out: &mut Vec<u8>) {
+    let mut body = Vec::new();
+    // FSPGR with zero rectangle.
+    OfficeArtFspgr::default().write_to(&mut body);
+    // FSP marking this shape as the per-sheet patriarch group.
+    OfficeArtFsp {
+        spid,
+        grf_persistence: fsp_flags::GROUP | fsp_flags::PATRIARCH,
+    }
+    .write_to(shape_type::NOT_PRIMITIVE, &mut body);
+
+    write_container(rec_type::SP_CONTAINER, 0, &body, out);
+}
+
 /// MS-ODRAW §2.2.31 `OfficeArtClientData` — empty marker atom that
 /// signals "the following BIFF records (`OBJ`, `TXO`, etc.) describe
 /// the host-application data for this shape". Body is zero bytes.
@@ -1136,5 +1402,179 @@ mod tests {
         let anchor = OfficeArtClientAnchor::comment_default(u16::MAX as u32, u16::MAX - 5);
         assert_eq!(anchor.row_t, u16::MAX);
         assert_eq!(anchor.col_l, u16::MAX - 4);
+    }
+
+    #[test]
+    fn fdgg_round_trips_one_cluster_one_drawing() {
+        // Single sheet, single comment: spid_max=1025 (1024 base + 1),
+        // one cluster for drawing 1 with one shape used.
+        let f = OfficeArtFdgg {
+            spid_max: 1025,
+            csp_saved: 2, // patriarch + comment
+            cdg_saved: 1,
+            clusters: vec![IdCluster {
+                dgid: 1,
+                cspid_cur: 2,
+            }],
+        };
+        let mut out = Vec::new();
+        f.write_to(&mut out);
+
+        // Header: rec_ver=0, rec_instance=0, rec_type=FDGG (0xF006),
+        // rec_len = 16 + 8 = 24.
+        assert_eq!(&out[..8], &[0x00, 0x00, 0x06, 0xF0, 0x18, 0x00, 0x00, 0x00]);
+        // Body: spid_max=1025, cidcl=2 (clusters.len()+1), csp_saved=2,
+        // cdg_saved=1, then 8 bytes for the cluster.
+        assert_eq!(&out[8..12], &1025u32.to_le_bytes());
+        assert_eq!(&out[12..16], &2u32.to_le_bytes());
+        assert_eq!(&out[16..20], &2u32.to_le_bytes());
+        assert_eq!(&out[20..24], &1u32.to_le_bytes());
+        assert_eq!(&out[24..28], &1u32.to_le_bytes()); // cluster dgid
+        assert_eq!(&out[28..32], &2u32.to_le_bytes()); // cluster cspid_cur
+
+        let (parsed, consumed) = OfficeArtFdgg::read_from(&out).unwrap();
+        assert_eq!(parsed, f);
+        assert_eq!(consumed, out.len());
+    }
+
+    #[test]
+    fn fdgg_round_trips_zero_clusters() {
+        let f = OfficeArtFdgg {
+            spid_max: 0,
+            csp_saved: 0,
+            cdg_saved: 0,
+            clusters: vec![],
+        };
+        let mut out = Vec::new();
+        f.write_to(&mut out);
+        // cidcl is `clusters.len() + 1` = 1, even for an empty cluster table.
+        let cidcl = u32::from_le_bytes([out[12], out[13], out[14], out[15]]);
+        assert_eq!(cidcl, 1);
+        let (parsed, _) = OfficeArtFdgg::read_from(&out).unwrap();
+        assert_eq!(parsed, f);
+    }
+
+    #[test]
+    fn fdg_round_trips_with_dgid_in_instance() {
+        let f = OfficeArtFdg {
+            csp_saved: 2,
+            spid_last: 1025,
+        };
+        let mut out = Vec::new();
+        f.write_to(1, &mut out);
+        // Header: rec_ver=0, rec_instance=1 (dgid), rec_type=FDG (0xF008),
+        // rec_len=8.
+        // Byte 0: rec_ver=0 in low nibble, instance low 4 bits = 1 => 0x10.
+        // Byte 1: instance bits 11..4 = 0.
+        assert_eq!(&out[..8], &[0x10, 0x00, 0x08, 0xF0, 0x08, 0x00, 0x00, 0x00]);
+        // Body: csp_saved=2, spid_last=1025.
+        assert_eq!(&out[8..12], &2u32.to_le_bytes());
+        assert_eq!(&out[12..16], &1025u32.to_le_bytes());
+
+        let (parsed, dgid, consumed) = OfficeArtFdg::read_from(&out).unwrap();
+        assert_eq!(parsed, f);
+        assert_eq!(dgid, 1);
+        assert_eq!(consumed, 16);
+    }
+
+    #[test]
+    fn split_menu_colors_writes_excel_default_palette() {
+        let mut out = Vec::new();
+        SplitMenuColors::EXCEL_DEFAULT.write_to(&mut out);
+        // 8 header + 16 body = 24 bytes.
+        assert_eq!(out.len(), 24);
+        // Header bytes match the existing header round-trip test.
+        assert_eq!(&out[..8], &[0x40, 0x00, 0x1E, 0xF1, 0x10, 0x00, 0x00, 0x00]);
+        // Body: four scheme-colour entries.
+        assert_eq!(&out[8..12], &0x0800_0000u32.to_le_bytes());
+        assert_eq!(&out[12..16], &0x0800_0008u32.to_le_bytes());
+        assert_eq!(&out[16..20], &0x0800_0010u32.to_le_bytes());
+        assert_eq!(&out[20..24], &0x0800_0018u32.to_le_bytes());
+    }
+
+    #[test]
+    fn write_container_wraps_body_with_correct_header() {
+        // Empty SP_CONTAINER: rec_ver=0xF, rec_instance=0, rec_len=0.
+        let mut out = Vec::new();
+        write_container(rec_type::SP_CONTAINER, 0, &[], &mut out);
+        assert_eq!(out, [0x0F, 0x00, 0x04, 0xF0, 0x00, 0x00, 0x00, 0x00]);
+
+        // Container with three body bytes: rec_len=3.
+        let mut out2 = Vec::new();
+        write_container(rec_type::DG_CONTAINER, 1, &[0xAA, 0xBB, 0xCC], &mut out2);
+        // Byte 0: rec_ver=0xF in low nibble, instance low 4 bits = 1 => 0x1F.
+        // Byte 1: instance bits 11..4 = 0.
+        assert_eq!(
+            &out2[..8],
+            &[0x1F, 0x00, 0x02, 0xF0, 0x03, 0x00, 0x00, 0x00]
+        );
+        assert_eq!(&out2[8..], &[0xAA, 0xBB, 0xCC]);
+    }
+
+    #[test]
+    fn comment_sp_container_contains_expected_children() {
+        let mut props = FoptTable::new();
+        props.push(FoptEntry::simple(fopt_id::FILL_COLOR, 0x00FF_FFE1));
+        props.push(FoptEntry::simple(fopt_id::GROUP_SHAPE_PROPS, 0));
+
+        let mut out = Vec::new();
+        write_comment_sp_container(1024, 3, 2, &props, &mut out);
+
+        // The first 8 bytes must be an SP_CONTAINER header.
+        let header = OfficeArtRecordHeader::read_from(&out).unwrap();
+        assert_eq!(header.rec_type, rec_type::SP_CONTAINER);
+        assert!(header.is_container());
+
+        // Walk the body and confirm we see FSP, FOPT, ClientAnchor,
+        // ClientData, ClientTextbox in that order.
+        let mut cursor = HEADER_LEN;
+        let saw: Vec<u16> = std::iter::from_fn(|| {
+            if cursor >= out.len() {
+                return None;
+            }
+            let h = OfficeArtRecordHeader::read_from(&out[cursor..]).unwrap();
+            cursor += HEADER_LEN + h.rec_len as usize;
+            Some(h.rec_type)
+        })
+        .collect();
+        assert_eq!(
+            saw,
+            vec![
+                rec_type::FSP,
+                rec_type::FOPT,
+                rec_type::CLIENT_ANCHOR,
+                rec_type::CLIENT_DATA,
+                rec_type::CLIENT_TEXTBOX,
+            ]
+        );
+
+        // FSP's spid must be 1024.
+        let (fsp, st, _) = OfficeArtFsp::read_from(&out[HEADER_LEN..]).unwrap();
+        assert_eq!(fsp.spid, 1024);
+        assert_eq!(st, shape_type::TEXT_BOX);
+        assert_eq!(
+            fsp.grf_persistence,
+            fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT
+        );
+    }
+
+    #[test]
+    fn patriarch_sp_container_has_fspgr_then_fsp() {
+        let mut out = Vec::new();
+        write_patriarch_sp_container(1024, &mut out);
+
+        let header = OfficeArtRecordHeader::read_from(&out).unwrap();
+        assert_eq!(header.rec_type, rec_type::SP_CONTAINER);
+
+        // First child should be FSPGR.
+        let first = OfficeArtRecordHeader::read_from(&out[HEADER_LEN..]).unwrap();
+        assert_eq!(first.rec_type, rec_type::FSPGR);
+
+        // Second child should be FSP with the PATRIARCH + GROUP flags.
+        let second_off = HEADER_LEN + HEADER_LEN + first.rec_len as usize;
+        let (fsp, st, _) = OfficeArtFsp::read_from(&out[second_off..]).unwrap();
+        assert_eq!(fsp.spid, 1024);
+        assert_eq!(st, shape_type::NOT_PRIMITIVE);
+        assert_eq!(fsp.grf_persistence, fsp_flags::GROUP | fsp_flags::PATRIARCH);
     }
 }
