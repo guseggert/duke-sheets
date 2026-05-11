@@ -31,6 +31,17 @@ use crate::styles::{self, StyleContext};
 /// XLS file reader.
 pub struct XlsReader;
 
+/// One embedded image's raw bytes + format, extracted from a
+/// `MSODRAWINGGROUP`'s `BSTORE_CONTAINER`. The 1-based position of
+/// each entry in the workbook's blip-store vector is the `pib`
+/// (picture blip id) that picture shapes reference via their FOPT
+/// `0x0104` property.
+#[derive(Debug, Clone)]
+struct BlipData {
+    format: duke_sheets_chart::ImageFormat,
+    data: Vec<u8>,
+}
+
 /// Metadata for a sheet parsed from the BOUNDSHEET record.
 #[derive(Debug)]
 struct SheetInfo {
@@ -215,6 +226,10 @@ impl XlsReader {
         let mut supbooks: Vec<SupBook> = Vec::new();
         let mut extern_sheet: Vec<ExternSheetEntry> = Vec::new();
         let mut names: Vec<NameRecord> = Vec::new();
+        // Workbook-globals blip store, populated from MSODRAWINGGROUP
+        // records. Indexed 1-based by the FOPT `pib` (picture blip id)
+        // property referenced from picture SP_CONTAINERs.
+        let mut blip_store: Vec<BlipData> = Vec::new();
 
         // Find where globals end by iterating until we see an EOF
         // after the first BOF (globals BOF).
@@ -304,6 +319,9 @@ impl XlsReader {
                     if let Ok(nr) = Self::parse_name(&rec.data) {
                         names.push(nr);
                     }
+                }
+                records::MSODRAWINGGROUP if in_globals => {
+                    Self::parse_msodrawinggroup(&rec.data, &mut blip_store);
                 }
                 _ => {}
             }
@@ -413,6 +431,7 @@ impl XlsReader {
                     &style_ctx,
                     &formula_ctx,
                     af_range,
+                    &blip_store,
                 )?;
             }
 
@@ -507,6 +526,7 @@ impl XlsReader {
         style_ctx: &StyleContext,
         formula_ctx: &FormulaContext,
         auto_filter_range: Option<&CellRange>,
+        blip_store: &[BlipData],
     ) -> XlsResult<()> {
         // We need to track the last FORMULA record to associate a STRING record
         let mut pending_formula_cell: Option<(u32, u16)> = None;
@@ -542,6 +562,16 @@ impl XlsReader {
         // Hyperlink tooltip: HLINKTOOLTIP records keyed by (row, col)
         let mut hlink_tooltips: std::collections::HashMap<(u32, u16), String> =
             std::collections::HashMap::new();
+
+        // Per-sheet Escher byte stream: all MSODRAWING record bodies
+        // concatenated in BIFF order. The picture SP_CONTAINERs and
+        // ClientTextbox markers live here, possibly split across
+        // multiple records.
+        let mut escher_bytes: Vec<u8> = Vec::new();
+        // OBJ records' ftCmo.ot codes in BIFF order. Used after the
+        // record loop to link OBJ entries to picture SP_CONTAINERs
+        // by position.
+        let mut obj_kinds: Vec<u16> = Vec::new();
 
         for rec in records {
             match rec.record_type {
@@ -705,8 +735,16 @@ impl XlsReader {
                         }
                     }
                 }
-                // ── Comments (OBJ → TXO → NOTE) ──────────────────────
-                records::OBJ => last_obj_id = Self::parse_obj_id(&rec.data),
+                // ── Drawing / comments (OBJ → TXO → NOTE) ────────────
+                records::MSODRAWING => {
+                    escher_bytes.extend_from_slice(&rec.data);
+                }
+                records::OBJ => {
+                    last_obj_id = Self::parse_obj_id(&rec.data);
+                    if let Some(kind) = Self::parse_obj_kind(&rec.data) {
+                        obj_kinds.push(kind);
+                    }
+                }
                 records::TXO => {
                     if let Some(oid) = last_obj_id.take() {
                         if let Some(text) = Self::parse_txo_text(&rec.data, &rec.continue_offsets) {
@@ -907,6 +945,10 @@ impl XlsReader {
         } else if !auto_filter_columns.is_empty() {
             log::warn!("AUTOFILTER records found without _FilterDatabase name");
         }
+
+        // Walk the per-sheet Escher byte stream (concatenated MSODRAWING
+        // bodies) for picture shapes and add them to the worksheet.
+        Self::parse_escher_pictures(&escher_bytes, &obj_kinds, blip_store, ws);
 
         Ok(())
     }
@@ -2329,6 +2371,295 @@ impl XlsReader {
         }
     }
 
+    /// Walk the per-sheet concatenated Escher byte stream looking for
+    /// picture `SP_CONTAINER`s and add an `EmbeddedImage` to `ws`
+    /// for each one whose blip resolves into `blip_store`.
+    ///
+    /// `obj_kinds` is the sequence of `ftCmo.ot` values for the
+    /// sheet's OBJ records, in BIFF order. The Escher tree's shape
+    /// order matches this sequence (modulo the patriarch which has
+    /// no OBJ), so we can sanity-check picture shapes against
+    /// `ot == 0x08`.
+    fn parse_escher_pictures(
+        escher_bytes: &[u8],
+        _obj_kinds: &[u16],
+        blip_store: &[BlipData],
+        ws: &mut duke_sheets_core::Worksheet,
+    ) {
+        use crate::biff::escher::{OfficeArtRecordHeader, HEADER_LEN};
+        if escher_bytes.is_empty() {
+            return;
+        }
+        // Walk top-level records. Most files emit one DG_CONTAINER,
+        // optionally followed by trailing fragments (Excel splits
+        // SP_CONTAINERs across MSODRAWING boundaries for textboxes).
+        let mut cursor = 0;
+        while cursor + HEADER_LEN <= escher_bytes.len() {
+            let Ok(h) = OfficeArtRecordHeader::read_from(&escher_bytes[cursor..]) else {
+                return;
+            };
+            let body_start = cursor + HEADER_LEN;
+            let body_end = body_start + h.rec_len as usize;
+            if body_end > escher_bytes.len() {
+                return;
+            }
+            if h.is_container() {
+                Self::walk_escher_for_pictures(&escher_bytes[body_start..body_end], blip_store, ws);
+            }
+            cursor = body_end;
+        }
+    }
+
+    /// Recurse into Escher container payloads, calling
+    /// `extract_picture` whenever we land on an `SP_CONTAINER` whose
+    /// FSP shape type is `PICTURE_FRAME`.
+    fn walk_escher_for_pictures(
+        body: &[u8],
+        blip_store: &[BlipData],
+        ws: &mut duke_sheets_core::Worksheet,
+    ) {
+        use crate::biff::escher::{rec_type as er, OfficeArtRecordHeader, HEADER_LEN};
+        let mut cursor = 0;
+        while cursor + HEADER_LEN <= body.len() {
+            let Ok(h) = OfficeArtRecordHeader::read_from(&body[cursor..]) else {
+                return;
+            };
+            let inner_start = cursor + HEADER_LEN;
+            let inner_end = inner_start + h.rec_len as usize;
+            if inner_end > body.len() {
+                return;
+            }
+            if h.is_container() {
+                let inner = &body[inner_start..inner_end];
+                if h.rec_type == er::SP_CONTAINER {
+                    Self::extract_picture(inner, blip_store, ws);
+                } else {
+                    Self::walk_escher_for_pictures(inner, blip_store, ws);
+                }
+            }
+            cursor = inner_end;
+        }
+    }
+
+    /// Inspect an `SP_CONTAINER` body. If its FSP shape type is
+    /// `PICTURE_FRAME` and its FOPT contains a `pib` (`0x0104`)
+    /// entry resolving into `blip_store`, build an `EmbeddedImage`
+    /// and call `ws.add_image()`.
+    fn extract_picture(
+        sp_body: &[u8],
+        blip_store: &[BlipData],
+        ws: &mut duke_sheets_core::Worksheet,
+    ) {
+        use crate::biff::escher::{
+            rec_type as er, shape_type, FoptTable, FoptValue, OfficeArtClientAnchor, OfficeArtFsp,
+            OfficeArtRecordHeader, HEADER_LEN,
+        };
+
+        let mut fsp_spid: u32 = 0;
+        let mut is_picture = false;
+        let mut blip_id: Option<u32> = None;
+        let mut shape_name: Option<String> = None;
+        let mut anchor: Option<OfficeArtClientAnchor> = None;
+
+        let mut cursor = 0;
+        while cursor + HEADER_LEN <= sp_body.len() {
+            let Ok(h) = OfficeArtRecordHeader::read_from(&sp_body[cursor..]) else {
+                return;
+            };
+            let body_end = cursor + HEADER_LEN + h.rec_len as usize;
+            if body_end > sp_body.len() {
+                return;
+            }
+            match h.rec_type {
+                er::FSP => {
+                    if let Ok((fsp, st, _)) = OfficeArtFsp::read_from(&sp_body[cursor..]) {
+                        fsp_spid = fsp.spid;
+                        is_picture = st == shape_type::PICTURE_FRAME;
+                    }
+                }
+                er::FOPT => {
+                    if let Ok((table, _)) = FoptTable::read_from(&sp_body[cursor..]) {
+                        for entry in table.entries() {
+                            if entry.id == 0x0104 {
+                                if let FoptValue::Simple(v) = entry.value {
+                                    blip_id = Some(v);
+                                }
+                            } else if entry.id == 0x0380 {
+                                if let FoptValue::Complex(bytes) = &entry.value {
+                                    shape_name = Some(decode_utf16le_null_terminated(bytes));
+                                }
+                            }
+                        }
+                    }
+                }
+                er::CLIENT_ANCHOR => {
+                    if let Ok((a, _)) = OfficeArtClientAnchor::read_from(&sp_body[cursor..]) {
+                        anchor = Some(a);
+                    }
+                }
+                _ => {}
+            }
+            cursor = body_end;
+        }
+
+        if !is_picture {
+            return;
+        }
+        let Some(id) = blip_id else { return };
+        let idx = id.saturating_sub(1) as usize;
+        let Some(blip) = blip_store.get(idx) else {
+            return;
+        };
+        let anchor = anchor.unwrap_or_default();
+        let name = shape_name.unwrap_or_else(|| format!("Picture {fsp_spid}"));
+        let image = duke_sheets_chart::EmbeddedImage {
+            id: fsp_spid,
+            name,
+            description: None,
+            anchor: duke_sheets_chart::DrawingAnchor::TwoCell {
+                from: duke_sheets_chart::CellMarker {
+                    col: anchor.col_l,
+                    col_offset_emu: 0,
+                    row: anchor.row_t as u32,
+                    row_offset_emu: 0,
+                },
+                to: duke_sheets_chart::CellMarker {
+                    col: anchor.col_r,
+                    col_offset_emu: 0,
+                    row: anchor.row_b as u32,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
+            },
+            format: blip.format,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 0,
+            height_emu: 0,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: blip.data.clone(),
+            svg_data: None,
+        };
+        ws.add_image(image);
+    }
+
+    // ── Drawing record parsers ───────────────────────────────────────────
+
+    /// Walk a `MSODRAWINGGROUP` record's body to extract every
+    /// `OfficeArtBlip*` payload from its embedded `BSTORE_CONTAINER`,
+    /// appending one [`BlipData`] entry per image into `blip_store`.
+    ///
+    /// Failures inside the Escher tree are swallowed and skipped —
+    /// the reader is intentionally permissive so a malformed drawing
+    /// group cannot prevent reading the rest of the workbook.
+    fn parse_msodrawinggroup(data: &[u8], blip_store: &mut Vec<BlipData>) {
+        use crate::biff::escher::{rec_type as er, OfficeArtRecordHeader, HEADER_LEN};
+
+        // The MSODRAWINGGROUP body wraps a single `DggContainer` whose
+        // children include `BStoreContainer` (if any images exist).
+        let mut cursor = 0;
+        while cursor + HEADER_LEN <= data.len() {
+            let Ok(h) = OfficeArtRecordHeader::read_from(&data[cursor..]) else {
+                return;
+            };
+            let body_start = cursor + HEADER_LEN;
+            let body_end = body_start + h.rec_len as usize;
+            if body_end > data.len() {
+                return;
+            }
+            let body = &data[body_start..body_end];
+            if h.is_container() {
+                if h.rec_type == er::BSTORE_CONTAINER {
+                    Self::parse_bstore_container(body, blip_store);
+                } else {
+                    // Recurse into other containers (e.g. DggContainer
+                    // wrapping a BStoreContainer).
+                    Self::parse_msodrawinggroup(body, blip_store);
+                }
+            }
+            cursor = body_end;
+        }
+    }
+
+    /// Walk a `BSTORE_CONTAINER` body, decoding each `FBSE` child to
+    /// extract its embedded blip's image bytes + format.
+    fn parse_bstore_container(body: &[u8], blip_store: &mut Vec<BlipData>) {
+        use crate::biff::escher::{rec_type as er, OfficeArtRecordHeader, HEADER_LEN};
+        let mut cursor = 0;
+        while cursor + HEADER_LEN <= body.len() {
+            let Ok(h) = OfficeArtRecordHeader::read_from(&body[cursor..]) else {
+                return;
+            };
+            let entry_start = cursor + HEADER_LEN;
+            let entry_end = entry_start + h.rec_len as usize;
+            if entry_end > body.len() {
+                return;
+            }
+            if h.rec_type == er::FBSE {
+                if let Some(blip) = Self::parse_fbse_entry(&body[entry_start..entry_end]) {
+                    blip_store.push(blip);
+                }
+            }
+            cursor = entry_end;
+        }
+    }
+
+    /// Parse an `OFFICEARTFBSE` body and extract its embedded blip.
+    /// Returns `None` for malformed entries or formats we don't yet
+    /// recognise.
+    ///
+    /// Body layout (MS-ODRAW §2.2.32): 36 fixed bytes (btWin32,
+    /// btMacOS, rgbUid, tag, size, cRef, foDelay, usage, cbName,
+    /// unused2, unused3), then optional `nameData` (cbName bytes),
+    /// then the embedded blip record.
+    fn parse_fbse_entry(body: &[u8]) -> Option<BlipData> {
+        use crate::biff::escher::{rec_type as er, OfficeArtRecordHeader, HEADER_LEN};
+        if body.len() < 36 {
+            return None;
+        }
+        let cb_name = body[33] as usize;
+        let blip_start = 36 + cb_name;
+        if blip_start + HEADER_LEN > body.len() {
+            return None;
+        }
+        let h = OfficeArtRecordHeader::read_from(&body[blip_start..]).ok()?;
+        let blip_body_start = blip_start + HEADER_LEN;
+        let blip_body_end = blip_body_start + h.rec_len as usize;
+        if blip_body_end > body.len() {
+            return None;
+        }
+        let format = match h.rec_type {
+            er::BLIP_PNG => duke_sheets_chart::ImageFormat::Png,
+            er::BLIP_JPEG => duke_sheets_chart::ImageFormat::Jpeg,
+            er::BLIP_DIB => duke_sheets_chart::ImageFormat::Bmp,
+            er::BLIP_EMF => duke_sheets_chart::ImageFormat::Emf,
+            er::BLIP_WMF => duke_sheets_chart::ImageFormat::Wmf,
+            er::BLIP_TIFF => duke_sheets_chart::ImageFormat::Tiff,
+            _ => return None,
+        };
+        // Blip body = rgbUid (16) + optional secondary UID (16) + tag (1)
+        // + image bytes. The instance's low bit selects the
+        // secondary-UID variant; we honour it but only use the
+        // image-byte tail.
+        let has_secondary_uid = (h.rec_instance & 0x0001) != 0;
+        let header_inner = if has_secondary_uid {
+            16 + 16 + 1
+        } else {
+            16 + 1
+        };
+        if header_inner > body.len() - blip_body_start {
+            return None;
+        }
+        let data_start = blip_body_start + header_inner;
+        let image_bytes = body[data_start..blip_body_end].to_vec();
+        Some(BlipData {
+            format,
+            data: image_bytes,
+        })
+    }
+
     // ── Comment record parsers (OBJ → TXO → NOTE) ───────────────────────
 
     /// Extract the object ID from an OBJ record.
@@ -2346,6 +2677,23 @@ impl XlsReader {
             return None;
         }
         Some(u16::from_le_bytes([data[6], data[7]]))
+    }
+
+    /// Extract the object **kind** (`ot`) from an OBJ record's
+    /// `ftCmo` sub-record. Values per MS-XLS §2.5.180:
+    ///
+    /// - `0x08` = picture
+    /// - `0x19` = note / comment
+    /// - others = various controls / shapes
+    fn parse_obj_kind(data: &[u8]) -> Option<u16> {
+        if data.len() < 6 {
+            return None;
+        }
+        let rt = u16::from_le_bytes([data[0], data[1]]);
+        if rt != 0x0015 {
+            return None;
+        }
+        Some(u16::from_le_bytes([data[4], data[5]]))
     }
 
     /// Extract text from a TXO record (with merged CONTINUE data).
@@ -2964,6 +3312,20 @@ impl XlsReader {
     }
 }
 
+/// Decode a UTF-16LE null-terminated byte buffer into a `String`.
+/// Strips the trailing `\0` if present; tolerates odd-length input
+/// by ignoring the dangling byte.
+fn decode_utf16le_null_terminated(bytes: &[u8]) -> String {
+    let mut units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    if units.last() == Some(&0) {
+        units.pop();
+    }
+    String::from_utf16_lossy(&units)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3023,8 +3385,17 @@ mod tests {
         let refs: Vec<&BiffRecord> = records.iter().collect();
         let formula_ctx = FormulaContext::new(vec!["Sheet1".to_string()]);
         let style_ctx = crate::styles::StyleContext::new();
-        XlsReader::parse_sheet_records(&refs, &mut ws, &[], &[], &style_ctx, &formula_ctx, None)
-            .unwrap();
+        XlsReader::parse_sheet_records(
+            &refs,
+            &mut ws,
+            &[],
+            &[],
+            &style_ctx,
+            &formula_ctx,
+            None,
+            &[],
+        )
+        .unwrap();
         ws
     }
 
@@ -3329,6 +3700,7 @@ mod tests {
                 &style_ctx,
                 &formula_ctx,
                 None,
+                &[],
             )
             .unwrap();
             ws

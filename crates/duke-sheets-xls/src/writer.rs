@@ -3127,20 +3127,25 @@ fn write_boundsheet8_with_placeholder_offset(
 const PATRIARCH_SPID_BASE: u32 = 1024;
 
 /// Pre-computed drawing layout for a workbook. Captures which sheets
-/// have comments (and so need an `MSODRAWING` record), what shape IDs
-/// have been allocated to their patriarchs and comments, and the
-/// global cluster table that goes inside `MSODRAWINGGROUP`'s `FDGG`
-/// atom.
+/// have shapes (comments and/or pictures), what shape IDs have been
+/// allocated to their patriarchs, pictures, and comments, plus the
+/// global blip store and cluster table that go inside the
+/// `MSODRAWINGGROUP`.
 #[derive(Debug, Default)]
 struct DrawingState {
-    /// Per-sheet drawings keyed by sheet index. Sheets without
-    /// comments are absent.
+    /// Per-sheet drawings keyed by sheet index. Sheets without shapes
+    /// are absent.
     sheets: HashMap<usize, SheetDrawing>,
     /// Drawing indices in workbook order; lets us emit cluster entries
     /// and sheet drawings deterministically.
     ordered_sheet_indices: Vec<usize>,
-    /// Total shape count across all drawings (patriarch + comments per
-    /// sheet, summed). Goes into `FDGG.csp_saved`.
+    /// Workbook-wide blip store. One entry per embedded image across
+    /// all sheets, in deterministic order. The 1-based index into
+    /// this vec is the `pib` (picture blip id) referenced by each
+    /// picture shape's `FOPT` `0x0104` entry.
+    blip_store: Vec<BlipEntry>,
+    /// Total shape count across all drawings (patriarch + pictures +
+    /// comments per sheet, summed). Goes into `FDGG.csp_saved`.
     csp_total: u32,
     /// Number of drawings (sheets with shapes). Goes into
     /// `FDGG.cdg_saved`.
@@ -3156,15 +3161,42 @@ impl DrawingState {
     }
 }
 
+/// A single image queued for emission in the workbook-globals blip
+/// store. Index in `DrawingState.blip_store` (+1) is the `pib` the
+/// picture shape's FOPT references.
+#[derive(Debug, Clone)]
+struct BlipEntry {
+    format: duke_sheets_chart::ImageFormat,
+    data: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 struct SheetDrawing {
     /// 1-based drawing ID (`OfficeArtFDG.dgid`).
     dgid: u16,
     /// Shape ID of the patriarch group (the implicit root group).
     patriarch_spid: u32,
+    /// One per picture on this sheet, in stable iteration order
+    /// (same order as `Worksheet::images()`).
+    pictures: Vec<PictureShape>,
     /// One per comment, in stable iteration order (sorted by row,
     /// then column).
     comments: Vec<CommentShape>,
+}
+
+#[derive(Debug, Clone)]
+struct PictureShape {
+    /// Escher shape ID stored in this picture's `OfficeArtFSP.spid`.
+    spid: u32,
+    /// 1-based per-sheet object ID placed in `OBJ.ftCmo.id`.
+    obj_id: u16,
+    /// 1-based index into `DrawingState.blip_store`; referenced by
+    /// the picture's FOPT `pib` (`0x0104`) property.
+    blip_id: u32,
+    /// User-visible shape name (e.g. `"Picture 1"`).
+    shape_name: String,
+    /// Cell-anchor footprint copied from the `EmbeddedImage`.
+    anchor: duke_sheets_chart::DrawingAnchor,
 }
 
 #[derive(Debug, Clone)]
@@ -3195,32 +3227,60 @@ struct CommentShape {
 /// Walk every sheet in `workbook`, allocate drawing IDs and shape
 /// IDs, and assemble the [`DrawingState`] used by both
 /// [`write_msodrawinggroup`] and [`write_sheet_drawing_records`].
+///
+/// Within each drawing, shape IDs are allocated in order:
+///   patriarch → pictures (in `Worksheet::images()` order) → comments
+///   (in sorted row/col order). Each drawing starts in its own
+///   1024-aligned cluster.
 fn compute_drawing_state(workbook: &Workbook) -> DrawingState {
     let mut state = DrawingState::default();
     let mut next_dgid: u16 = 1;
     let mut next_spid = PATRIARCH_SPID_BASE;
     let mut next_text_id: u32 = 1;
+    let mut next_blip_id: u32 = 1;
     let mut highest_spid_used: u32 = 0;
 
     for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
         let comment_count = sheet.comment_count();
-        if comment_count == 0 {
+        let picture_count = sheet.image_count();
+        if comment_count == 0 && picture_count == 0 {
             continue;
         }
 
         let patriarch_spid = next_spid;
         next_spid += 1;
 
+        let mut next_obj_id: u16 = 1;
+        let mut pictures = Vec::with_capacity(picture_count);
+        for image in sheet.images() {
+            let spid = next_spid;
+            next_spid += 1;
+            let blip_id = next_blip_id;
+            next_blip_id += 1;
+            state.blip_store.push(BlipEntry {
+                format: image.format,
+                data: image.data.clone(),
+            });
+            pictures.push(PictureShape {
+                spid,
+                obj_id: next_obj_id,
+                blip_id,
+                shape_name: image.name.clone(),
+                anchor: image.anchor.clone(),
+            });
+            next_obj_id += 1;
+        }
+
         let mut comments_sorted: Vec<_> = sheet.comments().collect();
         comments_sorted.sort_by_key(|((row, col), _)| (*row, *col));
 
         let mut comments = Vec::with_capacity(comment_count);
-        for (i, ((row, col), comment)) in comments_sorted.iter().enumerate() {
+        for ((row, col), comment) in comments_sorted.iter() {
             let spid = next_spid;
             next_spid += 1;
             comments.push(CommentShape {
                 spid,
-                obj_id: (i + 1) as u16,
+                obj_id: next_obj_id,
                 text_id: next_text_id,
                 row: *row,
                 col: *col,
@@ -3228,21 +3288,24 @@ fn compute_drawing_state(workbook: &Workbook) -> DrawingState {
                 text: comment.text.clone(),
                 visible: comment.visible,
             });
+            next_obj_id += 1;
             next_text_id = next_text_id.wrapping_add(1);
         }
         highest_spid_used = highest_spid_used.max(next_spid - 1);
 
+        let total_shapes = 1 + picture_count + comment_count;
         state.sheets.insert(
             sheet_idx,
             SheetDrawing {
                 dgid: next_dgid,
                 patriarch_spid,
+                pictures,
                 comments,
             },
         );
         state.ordered_sheet_indices.push(sheet_idx);
         state.cdg_total += 1;
-        state.csp_total += 1 + comment_count as u32;
+        state.csp_total += total_shapes as u32;
         next_dgid += 1;
 
         // Round up to the next 1024-aligned base so the next drawing
@@ -3264,8 +3327,8 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
     }
 
     use crate::biff::escher::{
-        dgg_default_fopt, rec_type as er, write_container, IdCluster, OfficeArtFdgg,
-        SplitMenuColors,
+        dgg_default_fopt, rec_type as er, write_bstore_container, write_container, IdCluster,
+        OfficeArtBlip, OfficeArtFbse, OfficeArtFdgg, SplitMenuColors,
     };
 
     let mut dgg_body = Vec::new();
@@ -3275,7 +3338,8 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
         .filter_map(|i| state.sheets.get(i))
         .map(|sd| IdCluster {
             dgid: sd.dgid as u32,
-            cspid_cur: (sd.comments.len() + 1) as u32, // patriarch + comments
+            // patriarch + pictures + comments.
+            cspid_cur: (1 + sd.pictures.len() + sd.comments.len()) as u32,
         })
         .collect();
     OfficeArtFdgg {
@@ -3285,6 +3349,26 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
         clusters,
     }
     .write_to(&mut dgg_body);
+
+    // If the workbook embeds any images, emit a `BSTORE_CONTAINER`
+    // ahead of the default FOPT carrying one FBSE+Blip per image.
+    if !state.blip_store.is_empty() {
+        let fbses: Vec<OfficeArtFbse> = state
+            .blip_store
+            .iter()
+            .map(|entry| match entry.format {
+                duke_sheets_chart::ImageFormat::Png => {
+                    OfficeArtFbse::new(OfficeArtBlip::png(entry.data.clone()))
+                }
+                // For the MVP slice we only ship PNG support; other
+                // formats round-trip raw bytes but Excel may treat
+                // them as PNG until per-format Blip variants land.
+                _ => OfficeArtFbse::new(OfficeArtBlip::png(entry.data.clone())),
+            })
+            .collect();
+        write_bstore_container(&fbses, &mut dgg_body);
+    }
+
     dgg_default_fopt().write_to(&mut dgg_body);
     SplitMenuColors::EXCEL_DEFAULT.write_to(&mut dgg_body);
 
@@ -3332,7 +3416,7 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
 /// then walk the resulting Escher tree.
 fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
     use crate::biff::escher::{
-        comment_fopt, fsp_flags, rec_type as er, shape_type, write_client_data,
+        comment_fopt, fsp_flags, picture_fopt, rec_type as er, shape_type, write_client_data,
         write_client_textbox, write_container, write_patriarch_sp_container, OfficeArtClientAnchor,
         OfficeArtFdg, OfficeArtFsp, OfficeArtRecordHeader, HEADER_LEN,
     };
@@ -3375,58 +3459,78 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
         })
         .collect();
 
+    // Picture SP_CONTAINERs are self-contained — pictures have no
+    // associated TXO, so their SP_CONTAINERs close cleanly with
+    // ClientData (no ClientTextbox interleave) inside the first
+    // MSODRAWING record.
+    let mut picture_bytes_total: Vec<u8> = Vec::new();
+    for picture in &drawing.pictures {
+        let mut sp_body = Vec::new();
+        OfficeArtFsp {
+            spid: picture.spid,
+            grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+        }
+        .write_to(shape_type::PICTURE_FRAME, &mut sp_body);
+        picture_fopt(picture.blip_id, &picture.shape_name).write_to(&mut sp_body);
+        client_anchor_from_drawing_anchor(&picture.anchor).write_to(&mut sp_body);
+        write_client_data(&mut sp_body);
+        write_container(er::SP_CONTAINER, 0, &sp_body, &mut picture_bytes_total);
+    }
+
     // The patriarch SP_CONTAINER (FSPGR + FSP) is self-contained.
     let mut patriarch_bytes = Vec::new();
     write_patriarch_sp_container(drawing.patriarch_spid, &mut patriarch_bytes);
 
     // SP_CONTAINER's `rec_len` is its payload size only (no header):
     // sum of pre_obj + post_obj bytes.
-    let sp_payload_len = |c: &CommentBytes| -> u32 { (c.pre_obj.len() + c.post_obj.len()) as u32 };
+    let comment_sp_payload_len =
+        |c: &CommentBytes| -> u32 { (c.pre_obj.len() + c.post_obj.len()) as u32 };
 
     // Compute logical container sizes top-down so each header carries
     // its full rec_len (the byte counts span across MSODRAWING records).
-    //
-    // - SP_CONTAINER total size (header + payload) = 8 + sp_payload_len.
-    // - SPGR_CONTAINER's rec_len = patriarch bytes (already total) +
-    //   sum of all comment SP_CONTAINER totals.
-    // - DG_CONTAINER's rec_len = FDG total (16) + SPGR_CONTAINER total
-    //   (8 + spgr_payload_len).
     let spgr_payload_len: u32 = patriarch_bytes.len() as u32
+        + picture_bytes_total.len() as u32
         + comments
             .iter()
-            .map(|(c, _)| HEADER_LEN as u32 + sp_payload_len(c))
+            .map(|(c, _)| HEADER_LEN as u32 + comment_sp_payload_len(c))
             .sum::<u32>();
     let fdg_total_len = HEADER_LEN as u32 + 8;
     let dg_payload_len = fdg_total_len + HEADER_LEN as u32 + spgr_payload_len;
 
     // First MSODRAWING: opens the DG_CONTAINER, FDG, SPGR_CONTAINER,
-    // patriarch SP_CONTAINER, and the first comment's SP_CONTAINER up
-    // through ClientData.
-    //
-    // MS-ODRAW §2.2.13: DG_CONTAINER's rec_instance is 0; the drawing
-    // ID lives in the FDG atom's rec_instance instead.
+    // patriarch SP_CONTAINER, all picture SP_CONTAINERs, and (if any
+    // comments) the first comment's SP_CONTAINER up through ClientData.
     let mut first_drawing = Vec::new();
     OfficeArtRecordHeader::container(er::DG_CONTAINER, 0, dg_payload_len)
         .write_to(&mut first_drawing);
+    // spid_last is the highest spid used in this drawing.
     let spid_last = drawing
         .comments
         .last()
         .map(|c| c.spid)
+        .or_else(|| drawing.pictures.last().map(|p| p.spid))
         .unwrap_or(drawing.patriarch_spid);
     OfficeArtFdg {
-        csp_saved: drawing.comments.len() as u32 + 1,
+        csp_saved: (1 + drawing.pictures.len() + drawing.comments.len()) as u32,
         spid_last,
     }
     .write_to(drawing.dgid, &mut first_drawing);
     OfficeArtRecordHeader::container(er::SPGR_CONTAINER, 0, spgr_payload_len)
         .write_to(&mut first_drawing);
     first_drawing.extend_from_slice(&patriarch_bytes);
+    first_drawing.extend_from_slice(&picture_bytes_total);
     if let Some((c0, _)) = comments.first() {
-        OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, sp_payload_len(c0))
+        OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, comment_sp_payload_len(c0))
             .write_to(&mut first_drawing);
         first_drawing.extend_from_slice(&c0.pre_obj);
     }
     write_biff_record(stream, MSODRAWING_RECORD, &first_drawing);
+
+    // Picture OBJs (one per picture, in shape order). No TXO or
+    // continuation MSODRAWING follows.
+    for picture in &drawing.pictures {
+        write_picture_obj(stream, picture);
+    }
 
     // Per-comment interleave: OBJ, MSODRAWING (ClientTextbox), TXO,
     // CONTINUE × 2. For comments after the first, prefix each
@@ -3434,35 +3538,113 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
     for (idx, (cb, shape)) in comments.iter().enumerate() {
         write_comment_obj(stream, shape);
 
-        // After OBJ: close the previous SP_CONTAINER with its
-        // ClientTextbox in its own MSODRAWING record. For comments
-        // beyond the first, the NEXT comment's SP_CONTAINER opens
-        // BEFORE this comment's ClientTextbox? No — Excel emits:
-        //   MSODRAWING (ClientTextbox of comment_N)
-        // standalone for the closing marker, then a separate
-        // MSODRAWING for the next comment's SP_CONTAINER start.
-        // Mirror that layout.
         let mut close_drawing = Vec::new();
         close_drawing.extend_from_slice(&cb.post_obj);
         write_biff_record(stream, MSODRAWING_RECORD, &close_drawing);
 
         write_comment_txo(stream, shape);
 
-        // If there's a next comment, open its SP_CONTAINER in its
-        // own MSODRAWING record (per Excel's emit pattern).
         if let Some((next_cb, _)) = comments.get(idx + 1) {
             let mut open_drawing = Vec::new();
-            OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, sp_payload_len(next_cb))
+            OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, comment_sp_payload_len(next_cb))
                 .write_to(&mut open_drawing);
             open_drawing.extend_from_slice(&next_cb.pre_obj);
             write_biff_record(stream, MSODRAWING_RECORD, &open_drawing);
         }
     }
 
-    // NOTE records at the end, in shape order.
+    // NOTE records at the end, in comment order.
     for (_, shape) in &comments {
         write_comment_note(stream, shape);
     }
+}
+
+/// Translate a `duke_sheets_chart::DrawingAnchor` to the
+/// `OfficeArtClientAnchor` BIFF8 layout. For the MVP slice we
+/// implement TwoCell directly; OneCell and Absolute collapse to a
+/// best-effort TwoCell that covers the same area.
+fn client_anchor_from_drawing_anchor(
+    anchor: &duke_sheets_chart::DrawingAnchor,
+) -> crate::biff::escher::OfficeArtClientAnchor {
+    use crate::biff::escher::OfficeArtClientAnchor;
+    use duke_sheets_chart::DrawingAnchor;
+
+    match anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => OfficeArtClientAnchor {
+            // flag=2 = move with cells but don't resize, matching the
+            // behaviour Excel writes for a freshly-inserted picture.
+            flag: 2,
+            col_l: from.col,
+            dx_l: 0,
+            row_t: from.row as u16,
+            dy_t: 0,
+            col_r: to.col,
+            dx_r: 0,
+            row_b: to.row as u16,
+            dy_b: 0,
+        },
+        DrawingAnchor::OneCell { from, .. } => OfficeArtClientAnchor {
+            flag: 2,
+            col_l: from.col,
+            dx_l: 0,
+            row_t: from.row as u16,
+            dy_t: 0,
+            col_r: from.col.saturating_add(1),
+            dx_r: 0,
+            row_b: (from.row as u16).saturating_add(1),
+            dy_b: 0,
+        },
+        DrawingAnchor::Absolute { .. } => OfficeArtClientAnchor {
+            flag: 3,
+            col_l: 0,
+            dx_l: 0,
+            row_t: 0,
+            dy_t: 0,
+            col_r: 1,
+            dx_r: 0,
+            row_b: 1,
+            dy_b: 0,
+        },
+    }
+}
+
+/// Emit an `OBJ` record (BIFF 0x005D) for a picture shape. Carries
+/// four sub-records:
+/// - `ftCmo` (0x0015): common object data with `ot=0x08` (picture)
+///   and `id` set to the shape's 1-based per-sheet object ID.
+/// - `ftCf` (0x0007): clipboard format. We emit `0xFFFF` (no
+///   clipboard format / opaque blob), matching Excel's emit.
+/// - `ftPioGrbit` (0x0008): picture options (auto-pict, no print, …);
+///   all-zero matches the default settings Excel applies to inserted
+///   pictures.
+/// - `ftEnd` (0x0000): terminator.
+fn write_picture_obj(stream: &mut Vec<u8>, picture: &PictureShape) {
+    let mut body = Vec::new();
+
+    // ftCmo: rt + cb + ot + id + grbit + 12 reserved bytes = 22 bytes total,
+    // cb = 18.
+    body.extend_from_slice(&0x0015u16.to_le_bytes()); // rt = ftCmo
+    body.extend_from_slice(&0x0012u16.to_le_bytes()); // cb = 18
+    body.extend_from_slice(&0x0008u16.to_le_bytes()); // ot = picture
+    body.extend_from_slice(&picture.obj_id.to_le_bytes()); // id
+    body.extend_from_slice(&0x6011u16.to_le_bytes()); // grbit: fLocked|fAutoFill|fAutoLine|fPrintable
+    body.extend_from_slice(&[0u8; 12]); // reserved
+
+    // ftCf: rt + cb + cf = 6 bytes total, cb = 2.
+    body.extend_from_slice(&0x0007u16.to_le_bytes()); // rt = ftCf
+    body.extend_from_slice(&0x0002u16.to_le_bytes()); // cb = 2
+    body.extend_from_slice(&0xFFFFu16.to_le_bytes()); // cf = no clipboard format
+
+    // ftPioGrbit: rt + cb + grbit = 6 bytes total, cb = 2.
+    body.extend_from_slice(&0x0008u16.to_le_bytes()); // rt = ftPioGrbit
+    body.extend_from_slice(&0x0002u16.to_le_bytes()); // cb = 2
+    body.extend_from_slice(&0x0000u16.to_le_bytes()); // grbit = no flags
+
+    // ftEnd: rt + cb = 4 bytes total, cb = 0.
+    body.extend_from_slice(&0x0000u16.to_le_bytes()); // rt = ftEnd
+    body.extend_from_slice(&0x0000u16.to_le_bytes()); // cb = 0
+
+    write_biff_record(stream, OBJ_RECORD, &body);
 }
 
 /// Emit an `OBJ` record (BIFF 0x005D) for a comment shape. Carries
