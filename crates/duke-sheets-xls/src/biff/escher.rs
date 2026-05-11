@@ -885,6 +885,16 @@ impl OfficeArtBlip {
         }
     }
 
+    /// Construct a JPEG blip. Same UID scheme as PNG.
+    pub fn jpeg(data: Vec<u8>) -> Self {
+        Self {
+            rec_type: rec_type::BLIP_JPEG,
+            rec_instance: blip_instance::JPEG,
+            rgb_uid: rgb_uid_for(&data),
+            data,
+        }
+    }
+
     /// Total size of this blip on disk (header + body).
     pub fn total_size(&self) -> u32 {
         HEADER_LEN as u32 + 16 + 1 + self.data.len() as u32

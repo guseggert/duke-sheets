@@ -3360,9 +3360,13 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
                 duke_sheets_chart::ImageFormat::Png => {
                     OfficeArtFbse::new(OfficeArtBlip::png(entry.data.clone()))
                 }
-                // For the MVP slice we only ship PNG support; other
-                // formats round-trip raw bytes but Excel may treat
-                // them as PNG until per-format Blip variants land.
+                duke_sheets_chart::ImageFormat::Jpeg => {
+                    OfficeArtFbse::new(OfficeArtBlip::jpeg(entry.data.clone()))
+                }
+                // Formats we don't yet emit (GIF / BMP / EMF / WMF /
+                // TIFF) fall back to PNG so we don't silently drop
+                // the bytes; Excel may reject the file in that case.
+                // See FEATURES.md Notes for the supported set.
                 _ => OfficeArtFbse::new(OfficeArtBlip::png(entry.data.clone())),
             })
             .collect();
