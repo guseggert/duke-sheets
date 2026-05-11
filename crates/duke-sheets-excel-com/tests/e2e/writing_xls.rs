@@ -707,6 +707,22 @@ fn excel_can_read_xls_png_image_we_emit() {
         }
         other => panic!("expected TwoCell anchor after round-trip, got {other:?}"),
     }
+
+    // Width/height in EMU should be synthesised on read from the
+    // anchor cell range × default cell sizes. We don't pin exact
+    // values (Excel may adjust the anchor), only that they are
+    // non-zero — proving the writer-side anchor encoding survives
+    // and the reader correctly computes dimensions.
+    assert!(
+        img.width_emu > 0,
+        "width_emu must be non-zero after Excel round-trip; got {}",
+        img.width_emu
+    );
+    assert!(
+        img.height_emu > 0,
+        "height_emu must be non-zero after Excel round-trip; got {}",
+        img.height_emu
+    );
 }
 
 /// 632-byte 1x1 RGB JPEG at quality 50 (PIL-generated). Same

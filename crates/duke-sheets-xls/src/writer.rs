@@ -3563,10 +3563,38 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
     }
 }
 
+/// One EMU unit of the ClientAnchor `dxL`/`dxR` field, in EMUs.
+/// MS-XLS encodes within-cell horizontal offsets in 1024ths of the
+/// cell's width; with Excel's default column width of 64 pixels
+/// (609,600 EMU) one `dxL` unit equals 595 EMU.
+pub(crate) const ANCHOR_DX_EMU_PER_UNIT: i64 = 595;
+/// One EMU unit of the ClientAnchor `dyT`/`dyB` field, in EMUs.
+/// MS-XLS encodes within-cell vertical offsets in 256ths of the
+/// row's height; with Excel's default row height of 15 pt
+/// (190,500 EMU) one `dyT` unit equals 744 EMU.
+pub(crate) const ANCHOR_DY_EMU_PER_UNIT: i64 = 744;
+
+fn emu_to_dx_units(emu: i64) -> u16 {
+    let units = (emu / ANCHOR_DX_EMU_PER_UNIT).clamp(0, 1023);
+    units as u16
+}
+
+fn emu_to_dy_units(emu: i64) -> u16 {
+    let units = (emu / ANCHOR_DY_EMU_PER_UNIT).clamp(0, 255);
+    units as u16
+}
+
 /// Translate a `duke_sheets_chart::DrawingAnchor` to the
 /// `OfficeArtClientAnchor` BIFF8 layout. For the MVP slice we
 /// implement TwoCell directly; OneCell and Absolute collapse to a
 /// best-effort TwoCell that covers the same area.
+///
+/// Within-cell EMU offsets carried by the source `CellMarker` are
+/// quantised to the anchor's 1024ths-of-cell-width / 256ths-of-cell-
+/// height units. The reader inverts the same quantisation, so EMU
+/// values that are multiples of `ANCHOR_DX_EMU_PER_UNIT` /
+/// `ANCHOR_DY_EMU_PER_UNIT` round-trip exactly; others snap to the
+/// nearest unit boundary.
 fn client_anchor_from_drawing_anchor(
     anchor: &duke_sheets_chart::DrawingAnchor,
 ) -> crate::biff::escher::OfficeArtClientAnchor {
@@ -3579,20 +3607,20 @@ fn client_anchor_from_drawing_anchor(
             // behaviour Excel writes for a freshly-inserted picture.
             flag: 2,
             col_l: from.col,
-            dx_l: 0,
+            dx_l: emu_to_dx_units(from.col_offset_emu),
             row_t: from.row as u16,
-            dy_t: 0,
+            dy_t: emu_to_dy_units(from.row_offset_emu),
             col_r: to.col,
-            dx_r: 0,
+            dx_r: emu_to_dx_units(to.col_offset_emu),
             row_b: to.row as u16,
-            dy_b: 0,
+            dy_b: emu_to_dy_units(to.row_offset_emu),
         },
         DrawingAnchor::OneCell { from, .. } => OfficeArtClientAnchor {
             flag: 2,
             col_l: from.col,
-            dx_l: 0,
+            dx_l: emu_to_dx_units(from.col_offset_emu),
             row_t: from.row as u16,
-            dy_t: 0,
+            dy_t: emu_to_dy_units(from.row_offset_emu),
             col_r: from.col.saturating_add(1),
             dx_r: 0,
             row_b: (from.row as u16).saturating_add(1),

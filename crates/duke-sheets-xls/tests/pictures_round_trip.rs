@@ -143,6 +143,67 @@ fn single_picture_round_trips() {
 }
 
 #[test]
+fn picture_anchor_within_cell_offsets_round_trip() {
+    // Within-cell EMU offsets quantise to ClientAnchor 1024ths/256ths.
+    // Use offsets that are exact multiples of the writer's per-unit
+    // constants (595 EMU / dx unit, 744 EMU / dy unit) so the
+    // round-trip is exact.
+    let dx_unit = 595i64;
+    let dy_unit = 744i64;
+    let from_col_off = 10 * dx_unit; // 5,950 EMU
+    let from_row_off = 4 * dy_unit; // 2,976 EMU
+    let to_col_off = 50 * dx_unit; // 29,750 EMU
+    let to_row_off = 12 * dy_unit; // 8,928 EMU
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut img = test_image(1, "Picture 1", 1, 2);
+    img.anchor = DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 1,
+            col_offset_emu: from_col_off,
+            row: 2,
+            row_offset_emu: from_row_off,
+        },
+        to: CellMarker {
+            col: 4,
+            col_offset_emu: to_col_off,
+            row: 7,
+            row_offset_emu: to_row_off,
+        },
+        edit_as: None,
+    };
+    ws.add_image(img);
+
+    let parsed = write_then_read(&wb);
+    let images = parsed.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 1);
+    if let DrawingAnchor::TwoCell { from, to, .. } = &images[0].anchor {
+        assert_eq!(from.col_offset_emu, from_col_off);
+        assert_eq!(from.row_offset_emu, from_row_off);
+        assert_eq!(to.col_offset_emu, to_col_off);
+        assert_eq!(to.row_offset_emu, to_row_off);
+    } else {
+        panic!("expected TwoCell anchor");
+    }
+
+    // Synthesised width/height should reflect the cell span at
+    // Excel's default cell sizes plus the within-cell delta.
+    let img = &images[0];
+    assert!(img.width_emu > 0, "width_emu should be synthesised non-zero");
+    assert!(
+        img.height_emu > 0,
+        "height_emu should be synthesised non-zero"
+    );
+
+    // Span: 4-1=3 cols × 609,600 + (to_off - from_off).
+    let expected_width = 3 * 609_600 + (to_col_off - from_col_off);
+    let expected_height = 5 * 190_500 + (to_row_off - from_row_off);
+    assert_eq!(img.width_emu, expected_width);
+    assert_eq!(img.height_emu, expected_height);
+}
+
+#[test]
 fn single_jpeg_picture_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();

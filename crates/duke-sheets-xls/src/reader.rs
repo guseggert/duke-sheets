@@ -2512,6 +2512,31 @@ impl XlsReader {
         };
         let anchor = anchor.unwrap_or_default();
         let name = shape_name.unwrap_or_else(|| format!("Picture {fsp_spid}"));
+
+        // Reverse the writer's EMU↔anchor-unit quantisation. The
+        // writer's `emu_to_dx_units` / `emu_to_dy_units` use the
+        // same per-unit constants.
+        let dx_emu_per_unit: i64 = 595;
+        let dy_emu_per_unit: i64 = 744;
+        let from_col_off = anchor.dx_l as i64 * dx_emu_per_unit;
+        let from_row_off = anchor.dy_t as i64 * dy_emu_per_unit;
+        let to_col_off = anchor.dx_r as i64 * dx_emu_per_unit;
+        let to_row_off = anchor.dy_b as i64 * dy_emu_per_unit;
+
+        // Synthesise the picture's overall width / height in EMU
+        // from the anchored cell range plus default cell sizes.
+        // Excel itself does not store an absolute EMU dimension on
+        // XLS pictures — the bounding box is implicit in the cell
+        // anchor — so this is a best-effort estimate using Excel's
+        // default column width (8.43 char ≈ 64 px ≈ 609,600 EMU)
+        // and row height (15 pt = 190,500 EMU).
+        const DEFAULT_COL_EMU: i64 = 609_600;
+        const DEFAULT_ROW_EMU: i64 = 190_500;
+        let col_span = (anchor.col_r as i64 - anchor.col_l as i64).max(0);
+        let row_span = (anchor.row_b as i64 - anchor.row_t as i64).max(0);
+        let width_emu = (col_span * DEFAULT_COL_EMU + to_col_off - from_col_off).max(0);
+        let height_emu = (row_span * DEFAULT_ROW_EMU + to_row_off - from_row_off).max(0);
+
         let image = duke_sheets_chart::EmbeddedImage {
             id: fsp_spid,
             name,
@@ -2519,23 +2544,23 @@ impl XlsReader {
             anchor: duke_sheets_chart::DrawingAnchor::TwoCell {
                 from: duke_sheets_chart::CellMarker {
                     col: anchor.col_l,
-                    col_offset_emu: 0,
+                    col_offset_emu: from_col_off,
                     row: anchor.row_t as u32,
-                    row_offset_emu: 0,
+                    row_offset_emu: from_row_off,
                 },
                 to: duke_sheets_chart::CellMarker {
                     col: anchor.col_r,
-                    col_offset_emu: 0,
+                    col_offset_emu: to_col_off,
                     row: anchor.row_b as u32,
-                    row_offset_emu: 0,
+                    row_offset_emu: to_row_off,
                 },
                 edit_as: None,
             },
             format: blip.format,
             media_path: String::new(),
             svg_media_path: None,
-            width_emu: 0,
-            height_emu: 0,
+            width_emu,
+            height_emu,
             rotation: None,
             flip_h: false,
             flip_v: false,
