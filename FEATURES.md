@@ -186,10 +186,10 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Plain-text comments with author | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xlsx_formatting_roundtrip::test_roundtrip_cell_comments` | §18.7.5 |
-| Comments with Unicode text | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::comments::comment_unicode` | §18.7.5 |
+| Plain-text comments with author | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `duke-sheets-xls::comments_round_trip::single_comment_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_comment_we_emit` | §18.7.5 |
+| Comments with Unicode text | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `duke-sheets-xls::comments_round_trip::unicode_comment_text_round_trips`, `excel_com_e2e::writing_xls::excel_can_read_unicode_comment_we_emit` | §18.7.5 |
 | Rich text in comments | R✔ W✔ | R✔ W✔ | R● W✖ | R✖ W✖ | `com_e2e::rich_text::read_rich_text_from_excel` | §18.7.5 |
-| Multiple comments per sheet | R✔ W✔ | R✔ W✔ | R✔ W✖ | R✖ W✖ | `xls_e2e::comments::multiple_comments` | §18.7.5 |
+| Multiple comments per sheet | R✔ W✔ | R✔ W✔ | R✔ W✔ | R✖ W✖ | `duke-sheets-xls::comments_round_trip::multiple_comments_on_same_sheet_round_trip`, `excel_com_e2e::writing_xls::excel_can_read_multiple_comments_we_emit` | §18.7.5 |
 | VML legacy drawing for comments | R✔ W✔ | R- W- | R- W- | R- W- | `xlsx_formatting_roundtrip::test_comments_emit_vml_and_legacy_drawing` | §14.1 (VML) |
 | Comment positioning (anchor) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §14.1 (VML) |
 | Threaded comments (modern) | R✖ W✖ | R✖ W✖ | R- W- | R- W- | - | [MS-XLSX] §2.3.19 |
