@@ -3385,10 +3385,16 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
                         OfficeArtFbse::new(OfficeArtBlip::png(entry.data.clone()))
                     }
                 }
-                // Formats we don't yet emit (GIF / EMF / WMF / TIFF)
-                // fall back to PNG so we don't silently drop the
-                // bytes; Excel may reject the file in that case.
-                // See FEATURES.md Notes for the supported set.
+                duke_sheets_chart::ImageFormat::Emf => {
+                    OfficeArtFbse::new(OfficeArtBlip::emf(entry.data.clone()))
+                }
+                duke_sheets_chart::ImageFormat::Wmf => {
+                    OfficeArtFbse::new(OfficeArtBlip::wmf(entry.data.clone()))
+                }
+                // Formats we don't yet emit (GIF / TIFF) fall back
+                // to PNG so we don't silently drop the bytes;
+                // Excel may reject the file in that case. See
+                // FEATURES.md Notes for the supported set.
                 _ => OfficeArtFbse::new(OfficeArtBlip::png(entry.data.clone())),
             })
             .collect();

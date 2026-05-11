@@ -2695,15 +2695,19 @@ impl XlsReader {
             er::BLIP_TIFF => duke_sheets_chart::ImageFormat::Tiff,
             _ => return None,
         };
-        // Blip body = rgbUid (16) + optional secondary UID (16) + tag (1)
-        // + image bytes. The instance's low bit selects the
-        // secondary-UID variant; we honour it but only use the
-        // image-byte tail.
+        // Blip body layout depends on format:
+        //   PNG/JPEG/DIB (raster): rgbUid (16) [+ rgbUidPrimary (16)] +
+        //     tag (1) + image bytes.
+        //   EMF/WMF (metafile): rgbUid (16) [+ rgbUidPrimary (16)] +
+        //     metafileHeader (34) + (possibly compressed) data bytes.
+        // The instance's low bit selects the secondary-UID variant.
         let has_secondary_uid = (h.rec_instance & 0x0001) != 0;
+        let is_metafile = matches!(h.rec_type, er::BLIP_EMF | er::BLIP_WMF);
+        let suffix_len = if is_metafile { 34 } else { 1 };
         let header_inner = if has_secondary_uid {
-            16 + 16 + 1
+            16 + 16 + suffix_len
         } else {
-            16 + 1
+            16 + suffix_len
         };
         if header_inner > body.len() - blip_body_start {
             return None;

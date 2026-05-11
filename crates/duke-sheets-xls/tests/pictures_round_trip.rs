@@ -394,6 +394,71 @@ fn single_bmp_picture_round_trips() {
     );
 }
 
+/// Synthetic "EMF" body. Not a valid EMF file — just a deterministic
+/// byte pattern that survives the blip wrapper. Real EMF parity
+/// against Excel would need a valid metafile (Excel re-renders
+/// metafiles on SaveAs anyway).
+const TEST_EMF_BYTES: &[u8] = &[
+    0x01, 0x00, 0x00, 0x00, 0x68, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x80, 0x07, 0x00, 0x00, 0x38, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0xF0, 0x1A, 0x00, 0x00, 0xA0, 0x0F, 0x00, 0x00, 0x20, 0x45, 0x4D, 0x46, 0x00, 0x00, 0x01, 0x00,
+    0x6C, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x80, 0x07, 0x00, 0x00, 0x38, 0x04, 0x00, 0x00, 0x20, 0x03, 0x00, 0x00, 0xE0, 0x01, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xCC, 0x4F, 0x00, 0x00, 0x60, 0x37, 0x00, 0x00,
+    0x0E, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+    0x14, 0x00, 0x00, 0x00,
+];
+
+#[test]
+fn single_emf_picture_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_image(test_image_with_format(
+        1,
+        "EmfPic",
+        1,
+        1,
+        ImageFormat::Emf,
+        TEST_EMF_BYTES,
+    ));
+
+    let parsed = write_then_read(&wb);
+    let images = parsed.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 1, "EMF must round-trip");
+    let img = &images[0];
+    assert_eq!(img.format, ImageFormat::Emf, "format must stay EMF");
+    assert_eq!(
+        img.data, TEST_EMF_BYTES,
+        "EMF bytes must round-trip verbatim through the metafileHeader"
+    );
+}
+
+#[test]
+fn single_wmf_picture_round_trips() {
+    // Use the same synthetic byte pattern; WMF and EMF share the
+    // metafileHeader layout.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_image(test_image_with_format(
+        1,
+        "WmfPic",
+        1,
+        1,
+        ImageFormat::Wmf,
+        TEST_EMF_BYTES,
+    ));
+
+    let parsed = write_then_read(&wb);
+    let images = parsed.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 1, "WMF must round-trip");
+    let img = &images[0];
+    assert_eq!(img.format, ImageFormat::Wmf, "format must stay WMF");
+    assert_eq!(
+        img.data, TEST_EMF_BYTES,
+        "WMF bytes must round-trip verbatim"
+    );
+}
+
 #[test]
 fn png_and_bmp_coexist_on_one_sheet() {
     let mut wb = Workbook::new();

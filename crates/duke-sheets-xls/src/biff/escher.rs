@@ -162,6 +162,66 @@ pub mod blip_instance {
     pub const JPEG: u16 = 0x46A;
     /// GIF (treated as DIB by Office binary formats).
     pub const DIB: u16 = 0x7A8;
+    /// EMF (Enhanced Metafile) — no secondary UID.
+    pub const EMF: u16 = 0x3D4;
+    /// WMF (Windows Metafile) — no secondary UID.
+    pub const WMF: u16 = 0x216;
+}
+
+/// MS-ODRAW §2.2.20 `OfficeArtMetafileHeader` — 34-byte prefix
+/// inside an EMF/WMF/PICT blip describing the metafile's
+/// uncompressed size, bounding box (in device units), logical size
+/// (in EMU), saved size, and compression / filter algorithms.
+///
+/// For the MVP we emit bounded defaults: an empty bounds rect,
+/// zero EMU size, no compression. Excel re-renders metafile blips
+/// during SaveAs anyway (it converts EMF/WMF to PNG internally), so
+/// these values are only consulted when readers display the file
+/// as-is without round-tripping through Excel.
+#[derive(Debug, Clone, Copy)]
+pub struct OfficeArtMetafileHeader {
+    /// Uncompressed size of the metafile data (bytes).
+    pub cb_size: u32,
+    /// Bounding box in device units (i32 left, top, right, bottom).
+    pub rc_bounds: [i32; 4],
+    /// Logical size in EMU (i32 cx, cy).
+    pub pt_size: [i32; 2],
+    /// Size of the BLIPFileData payload as stored (compressed).
+    pub cb_save: u32,
+    /// Compression algorithm: `0xFE` = none, `0x00` = deflate.
+    pub compression: u8,
+    /// Filter: always `0xFE`.
+    pub filter: u8,
+}
+
+impl OfficeArtMetafileHeader {
+    /// Construct a no-compression metafile header for the given
+    /// uncompressed data length. `rc_bounds` and `pt_size` are
+    /// initialised to zero; callers can override after construction.
+    pub fn uncompressed(data_len: u32) -> Self {
+        Self {
+            cb_size: data_len,
+            rc_bounds: [0; 4],
+            pt_size: [0; 2],
+            cb_save: data_len,
+            compression: 0xFE,
+            filter: 0xFE,
+        }
+    }
+
+    /// Serialise the 34-byte header into `out`.
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.cb_size.to_le_bytes());
+        for v in &self.rc_bounds {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in &self.pt_size {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&self.cb_save.to_le_bytes());
+        out.push(self.compression);
+        out.push(self.filter);
+    }
 }
 
 /// `FSP` flag bits — MS-ODRAW §2.2.40 `OfficeArtFSP`.
@@ -868,6 +928,9 @@ pub struct OfficeArtBlip {
     /// the MD4 hash of `data`, but Excel does not validate the value,
     /// so any deterministic 16-byte sequence works.
     pub rgb_uid: [u8; 16],
+    /// Optional metafile header — present for EMF/WMF/PICT blips,
+    /// absent for raster (PNG/JPEG/DIB).
+    pub metafile_header: Option<OfficeArtMetafileHeader>,
     /// Image file bytes (PNG, JPEG, etc.).
     pub data: Vec<u8>,
 }
@@ -881,6 +944,7 @@ impl OfficeArtBlip {
             rec_type: rec_type::BLIP_PNG,
             rec_instance: blip_instance::PNG,
             rgb_uid: rgb_uid_for(&data),
+            metafile_header: None,
             data,
         }
     }
@@ -891,6 +955,7 @@ impl OfficeArtBlip {
             rec_type: rec_type::BLIP_JPEG,
             rec_instance: blip_instance::JPEG,
             rgb_uid: rgb_uid_for(&data),
+            metafile_header: None,
             data,
         }
     }
@@ -904,27 +969,76 @@ impl OfficeArtBlip {
             rec_type: rec_type::BLIP_DIB,
             rec_instance: blip_instance::DIB,
             rgb_uid: rgb_uid_for(&data),
+            metafile_header: None,
+            data,
+        }
+    }
+
+    /// Construct an EMF (Enhanced Metafile) blip. EMF/WMF/PICT
+    /// blips carry a 34-byte `OfficeArtMetafileHeader` between the
+    /// UID and the file data; we emit a default header with no
+    /// compression and zero bounds (Excel re-renders metafiles on
+    /// SaveAs so the bounds don't affect round-trip fidelity).
+    pub fn emf(data: Vec<u8>) -> Self {
+        let metafile_header = OfficeArtMetafileHeader::uncompressed(data.len() as u32);
+        Self {
+            rec_type: rec_type::BLIP_EMF,
+            rec_instance: blip_instance::EMF,
+            rgb_uid: rgb_uid_for(&data),
+            metafile_header: Some(metafile_header),
+            data,
+        }
+    }
+
+    /// Construct a WMF (Windows Metafile) blip. Same metafile-header
+    /// scheme as EMF.
+    pub fn wmf(data: Vec<u8>) -> Self {
+        let metafile_header = OfficeArtMetafileHeader::uncompressed(data.len() as u32);
+        Self {
+            rec_type: rec_type::BLIP_WMF,
+            rec_instance: blip_instance::WMF,
+            rgb_uid: rgb_uid_for(&data),
+            metafile_header: Some(metafile_header),
             data,
         }
     }
 
     /// Total size of this blip on disk (header + body).
     pub fn total_size(&self) -> u32 {
-        HEADER_LEN as u32 + 16 + 1 + self.data.len() as u32
+        HEADER_LEN as u32 + self.body_size()
     }
 
-    /// Body size (excluding the 8-byte record header).
+    /// Body size (excluding the 8-byte record header). For raster
+    /// blips this is `16 (UID) + 1 (tag) + data.len()`. For metafile
+    /// blips (EMF/WMF) it is `16 (UID) + 34 (metafileHeader) +
+    /// data.len()` — note that there is no separate `tag` byte for
+    /// metafiles since the metafileHeader's `filter` field plays
+    /// the equivalent role.
     pub fn body_size(&self) -> u32 {
-        16 + 1 + self.data.len() as u32
+        let uid_len = if (self.rec_instance & 0x0001) != 0 {
+            16 + 16
+        } else {
+            16
+        };
+        let suffix = match self.metafile_header {
+            Some(_) => 34,
+            None => 1, // tag byte
+        };
+        uid_len + suffix + self.data.len() as u32
     }
 
-    /// Serialise the full blip (header + UID + tag + image data) into `out`.
+    /// Serialise the full blip (header + UID + tag/metafileHeader +
+    /// image data) into `out`.
     pub fn write_to(&self, out: &mut Vec<u8>) {
         let header =
             OfficeArtRecordHeader::atom(0, self.rec_instance, self.rec_type, self.body_size());
         header.write_to(out);
         out.extend_from_slice(&self.rgb_uid);
-        out.push(0xFF);
+        if let Some(meta) = &self.metafile_header {
+            meta.write_to(out);
+        } else {
+            out.push(0xFF);
+        }
         out.extend_from_slice(&self.data);
     }
 }
