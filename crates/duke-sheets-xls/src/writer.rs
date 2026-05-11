@@ -3391,10 +3391,19 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
                 duke_sheets_chart::ImageFormat::Wmf => {
                     OfficeArtFbse::new(OfficeArtBlip::wmf(entry.data.clone()))
                 }
-                // Formats we don't yet emit (GIF / TIFF) fall back
-                // to PNG so we don't silently drop the bytes;
-                // Excel may reject the file in that case. See
-                // FEATURES.md Notes for the supported set.
+                duke_sheets_chart::ImageFormat::Tiff => {
+                    OfficeArtFbse::new(OfficeArtBlip::tiff(entry.data.clone()))
+                }
+                // GIF has no native Office binary blip variant
+                // (msoblip* enum in MS-ODRAW skips GIF entirely).
+                // Office converts GIF to PNG on insert; we mirror
+                // that by emitting GIF input through the PNG blip
+                // path so the bytes round-trip in-process even if
+                // the format tag flips to PNG. See FEATURES.md.
+                duke_sheets_chart::ImageFormat::Gif => {
+                    OfficeArtFbse::new(OfficeArtBlip::png(entry.data.clone()))
+                }
+                // Catch-all for any future format additions.
                 _ => OfficeArtFbse::new(OfficeArtBlip::png(entry.data.clone())),
             })
             .collect();

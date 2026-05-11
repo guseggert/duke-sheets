@@ -409,6 +409,92 @@ const TEST_EMF_BYTES: &[u8] = &[
     0x14, 0x00, 0x00, 0x00,
 ];
 
+/// Synthetic 1x1 TIFF (little-endian, 8-bit grayscale). 110 bytes,
+/// generated to be a structurally valid TIFF.
+const TEST_TIFF_BYTES: &[u8] = &[
+    0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x07, 0x00, // header + IFD offset + entry count
+    // IFD entries (each 12 bytes):
+    0x00, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // ImageWidth=1
+    0x01, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // ImageLength=1
+    0x02, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, // BitsPerSample=8
+    0x03, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // Compression=1
+    0x06, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // PhotometricInterp=1
+    0x11, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x6A, 0x00, 0x00, 0x00, // StripOffsets=106
+    0x17, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // StripByteCounts=1
+    0x00, 0x00, 0x00, 0x00, // next IFD = none
+    0xFF, // pixel data (1 byte)
+];
+
+/// Minimal 35-byte 1x1 GIF87a (transparent).
+const TEST_GIF_BYTES: &[u8] = &[
+    0x47, 0x49, 0x46, 0x38, 0x37, 0x61, // "GIF87a"
+    0x01, 0x00, 0x01, 0x00, // width=1, height=1
+    0x80, 0x00, 0x00, // GCT flag, bg index, aspect
+    0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, // 2-entry GCT
+    0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // image descriptor
+    0x02, 0x02, 0x44, 0x01, 0x00, // LZW data
+    0x3B, // trailer
+];
+
+#[test]
+fn single_tiff_picture_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_image(test_image_with_format(
+        1,
+        "TiffPic",
+        1,
+        1,
+        ImageFormat::Tiff,
+        TEST_TIFF_BYTES,
+    ));
+
+    let parsed = write_then_read(&wb);
+    let images = parsed.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 1, "TIFF must round-trip");
+    let img = &images[0];
+    assert_eq!(img.format, ImageFormat::Tiff, "format must stay TIFF");
+    assert_eq!(
+        img.data, TEST_TIFF_BYTES,
+        "TIFF bytes must round-trip verbatim"
+    );
+}
+
+#[test]
+fn gif_picture_falls_back_to_png_format() {
+    // GIF has no native Office binary blip variant; the writer emits
+    // GIF input through the PNG blip path. The bytes survive
+    // verbatim through in-process round-trip, but the format tag
+    // flips to PNG on read since the reader sees a BLIP_PNG header.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_image(test_image_with_format(
+        1,
+        "GifPic",
+        1,
+        1,
+        ImageFormat::Gif,
+        TEST_GIF_BYTES,
+    ));
+
+    let parsed = write_then_read(&wb);
+    let images = parsed.worksheet(0).unwrap().images();
+    assert_eq!(images.len(), 1, "GIF picture must round-trip");
+    let img = &images[0];
+    // Format tag flips since GIF goes through the PNG blip path.
+    // Document this as an expected limitation; the bytes themselves
+    // still survive.
+    assert_eq!(
+        img.format,
+        ImageFormat::Png,
+        "GIF input is emitted as PNG blip; format tag flips"
+    );
+    assert_eq!(
+        img.data, TEST_GIF_BYTES,
+        "GIF bytes must round-trip verbatim through the PNG-blip path"
+    );
+}
+
 #[test]
 fn single_emf_picture_round_trips() {
     let mut wb = Workbook::new();

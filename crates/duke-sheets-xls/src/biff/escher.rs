@@ -160,12 +160,14 @@ pub mod blip_instance {
     pub const PNG: u16 = 0x6E0;
     /// JPEG (no secondary UID).
     pub const JPEG: u16 = 0x46A;
-    /// GIF (treated as DIB by Office binary formats).
+    /// DIB / BMP (no secondary UID).
     pub const DIB: u16 = 0x7A8;
     /// EMF (Enhanced Metafile) — no secondary UID.
     pub const EMF: u16 = 0x3D4;
     /// WMF (Windows Metafile) — no secondary UID.
     pub const WMF: u16 = 0x216;
+    /// TIFF (no secondary UID).
+    pub const TIFF: u16 = 0x6E4;
 }
 
 /// MS-ODRAW §2.2.20 `OfficeArtMetafileHeader` — 34-byte prefix
@@ -968,6 +970,18 @@ impl OfficeArtBlip {
         Self {
             rec_type: rec_type::BLIP_DIB,
             rec_instance: blip_instance::DIB,
+            rgb_uid: rgb_uid_for(&data),
+            metafile_header: None,
+            data,
+        }
+    }
+
+    /// Construct a TIFF blip. Same raster layout as PNG/JPEG (no
+    /// metafileHeader).
+    pub fn tiff(data: Vec<u8>) -> Self {
+        Self {
+            rec_type: rec_type::BLIP_TIFF,
+            rec_instance: blip_instance::TIFF,
             rgb_uid: rgb_uid_for(&data),
             metafile_header: None,
             data,
