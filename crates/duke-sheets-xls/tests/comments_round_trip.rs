@@ -20,6 +20,8 @@ use std::io::Cursor;
 use duke_sheets_core::{CellComment, Workbook};
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
+const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
+
 fn write_then_read(wb: &Workbook) -> Workbook {
     let bytes = XlsWriter::write_to_bytes(wb).expect("serialize");
     XlsReader::read(Cursor::new(&bytes)).expect("read back")
@@ -112,6 +114,59 @@ fn comments_on_multiple_sheets_round_trip() {
     assert_eq!(
         parsed.worksheet(2).unwrap().comment_at(4, 4).unwrap().text,
         "sheet 3 comment"
+    );
+}
+
+/// LibreOffice envelope check: write an XLS with one comment, push to
+/// the LO shared dir, open via URP, read the anchor cell's value back.
+///
+/// This is a smoke test — if the OBJ/TXO/NOTE chain or the Escher
+/// tree is malformed, LO refuses to open the file and the bridge
+/// `open_workbook` call errors. Deeper inspection of the comment's
+/// text via UNO is fragile across LO versions, so we settle for
+/// confirming the file is well-formed enough to load.
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_open_xls_with_comments_we_emit() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).expect("A1");
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "Loadable note"));
+    ws.set_cell_value("B2", "hello").expect("B2");
+    ws.set_comment_at(1, 1, CellComment::new("Bob", "Second note"));
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("{SHARED_DIR}/duke_comments_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<f64, String> = rt.block_on(async {
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+        let mut wb_in = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let a1 = wb_in
+            .get_cell_value("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))?;
+        Ok(a1)
+    });
+    let _ = std::fs::remove_file(&path);
+    let a1 = outcome.expect("LO must open our XLS with comments without error");
+    assert!(
+        (a1 - 42.0).abs() < 1e-9,
+        "A1 must round-trip; got {a1} (expected 42)"
     );
 }
 

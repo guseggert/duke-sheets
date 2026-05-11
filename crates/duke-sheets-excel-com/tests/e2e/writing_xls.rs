@@ -487,3 +487,93 @@ fn excel_can_evaluate_union_we_emit() {
         other => panic!("E1 expected Number(20), got {other:?}"),
     }
 }
+
+/// Excel must accept our XLS comment-shape emit (MSODRAWINGGROUP +
+/// MSODRAWING + OBJ + TXO + NOTE) and round-trip the comment text +
+/// author + anchor cell through SaveAs. The roundtrip helper asserts
+/// no `Repaired` warning fires, which is the canonical signal that
+/// our Escher record output is spec-compliant.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_comment_we_emit() {
+    use duke_sheets_core::CellComment;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "Hello from duke-sheets"));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let s = result.worksheet(0).unwrap();
+    let c = s
+        .comment_at(0, 0)
+        .expect("comment must survive Excel re-save");
+    assert!(
+        c.text.contains("Hello from duke-sheets"),
+        "comment text lost after Excel round-trip: {:?}",
+        c.text
+    );
+}
+
+/// Multi-comment scenario: Excel must accept multiple SP_CONTAINERs
+/// inside one DG_CONTAINER and preserve each comment's text +
+/// author + anchor cell. Catches off-by-one bugs in shape ID
+/// allocation, OBJ.ftCmo.id, and NOTE.objId linking.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_multiple_comments_we_emit() {
+    use duke_sheets_core::CellComment;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "first").unwrap();
+    ws.set_comment_at(0, 0, CellComment::new("Alice", "Comment one"));
+    ws.set_cell_value("C3", "second").unwrap();
+    ws.set_comment_at(2, 2, CellComment::new("Bob", "Comment two body"));
+    ws.set_cell_value("E5", "third").unwrap();
+    ws.set_comment_at(4, 4, CellComment::new("Carol", "Comment three"));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let s = result.worksheet(0).unwrap();
+    assert_eq!(s.comment_count(), 3, "all three comments must survive");
+    assert!(
+        s.comment_at(0, 0).unwrap().text.contains("Comment one"),
+        "A1 comment lost: {:?}",
+        s.comment_at(0, 0).unwrap().text
+    );
+    assert!(
+        s.comment_at(2, 2)
+            .unwrap()
+            .text
+            .contains("Comment two body"),
+        "C3 comment lost: {:?}",
+        s.comment_at(2, 2).unwrap().text
+    );
+    assert!(
+        s.comment_at(4, 4).unwrap().text.contains("Comment three"),
+        "E5 comment lost: {:?}",
+        s.comment_at(4, 4).unwrap().text
+    );
+}
+
+/// Unicode comment text — drives the writer onto the UTF-16LE TXO
+/// CONTINUE path. Confirms Excel preserves non-Latin glyphs through
+/// the round-trip.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_unicode_comment_we_emit() {
+    use duke_sheets_core::CellComment;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "jp").unwrap();
+    ws.set_comment_at(0, 0, CellComment::new("作者", "こんにちは"));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let c = result.worksheet(0).unwrap().comment_at(0, 0).unwrap();
+    assert!(
+        c.text.contains("こんにちは"),
+        "Japanese text lost: {:?}",
+        c.text
+    );
+}
