@@ -578,6 +578,158 @@ fn excel_can_read_unicode_comment_we_emit() {
     );
 }
 
+/// Mixed picture + comment on the same sheet. The XLS writer
+/// places ALL picture SP_CONTAINERs into the first MSODRAWING then
+/// starts the first comment's SP_CONTAINER in the same record (up
+/// through ClientData), then interleaves comment OBJ / TXO /
+/// CONTINUE with continuation MSODRAWING records carrying the
+/// ClientTextbox markers. This is an unusual layout — Excel might
+/// reject the BIFF stream ordering. The parity test catches that.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xls_picture_and_comment_on_same_sheet_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+    use duke_sheets_core::CellComment;
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").unwrap();
+    ws.add_image(EmbeddedImage {
+        id: 1,
+        name: "MixedPic".into(),
+        description: None,
+        anchor: DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 0,
+                row: 1,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 4,
+                col_offset_emu: 0,
+                row: 5,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+        format: ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_000_000,
+        height_emu: 1_000_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    });
+    ws.set_comment_at(
+        7,
+        5,
+        CellComment::new("Alice", "Mixed-with-picture comment"),
+    );
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let s = result.worksheet(0).unwrap();
+    assert_eq!(s.image_count(), 1, "picture must survive Excel re-save");
+    assert_eq!(s.comment_count(), 1, "comment must survive Excel re-save");
+    let img = &s.images()[0];
+    assert_eq!(img.format, ImageFormat::Png);
+    assert_eq!(img.data, TEST_PNG_1X1, "PNG bytes preserved");
+    let c = s.comment_at(7, 5).expect("comment at G8 must exist");
+    assert!(
+        c.text.contains("Mixed-with-picture comment"),
+        "comment text lost: {:?}",
+        c.text
+    );
+}
+
+/// Multi-sheet pictures: exercises the per-drawing 1024-aligned
+/// shape-ID cluster allocation when pictures (not comments) live on
+/// non-contiguous sheets. Two separate FDGG cluster entries are
+/// emitted; Excel must accept the multi-cluster layout and both
+/// pictures must survive Excel's SaveAs.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xls_pictures_across_multiple_sheets_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+
+    fn pic(name: &str, col: u16, row: u32) -> EmbeddedImage {
+        EmbeddedImage {
+            id: 1,
+            name: name.to_string(),
+            description: None,
+            anchor: DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col,
+                    col_offset_emu: 0,
+                    row,
+                    row_offset_emu: 0,
+                },
+                to: CellMarker {
+                    col: col + 2,
+                    col_offset_emu: 0,
+                    row: row + 2,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
+            },
+            format: ImageFormat::Png,
+            media_path: String::new(),
+            svg_media_path: None,
+            width_emu: 1_000_000,
+            height_emu: 1_000_000,
+            rotation: None,
+            flip_h: false,
+            flip_v: false,
+            data: TEST_PNG_1X1.to_vec(),
+            svg_data: None,
+        }
+    }
+
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "Alpha").unwrap();
+    wb.add_worksheet_with_name("Beta").unwrap();
+    wb.add_worksheet_with_name("Gamma").unwrap();
+
+    // Picture on Alpha and Gamma; Beta is empty. Forces two FDGG
+    // cluster entries with non-contiguous drawing IDs.
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_image(pic("Pic on Alpha", 1, 1));
+    wb.worksheet_mut(2)
+        .unwrap()
+        .add_image(pic("Pic on Gamma", 3, 3));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    assert_eq!(
+        result.worksheet(0).unwrap().image_count(),
+        1,
+        "Alpha's picture must survive"
+    );
+    assert_eq!(
+        result.worksheet(1).unwrap().image_count(),
+        0,
+        "Beta must stay empty"
+    );
+    assert_eq!(
+        result.worksheet(2).unwrap().image_count(),
+        1,
+        "Gamma's picture must survive"
+    );
+    assert_eq!(
+        result.worksheet(0).unwrap().images()[0].data,
+        TEST_PNG_1X1,
+        "Alpha PNG bytes preserved"
+    );
+    assert_eq!(
+        result.worksheet(2).unwrap().images()[0].data,
+        TEST_PNG_1X1,
+        "Gamma PNG bytes preserved"
+    );
+}
+
 /// Multi-sheet comments: exercises the per-drawing 1024-aligned
 /// shape-ID cluster allocation. A workbook with comments on
 /// non-contiguous sheets must produce one FDGG cluster entry per

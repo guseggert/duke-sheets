@@ -3462,51 +3462,29 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
         OfficeArtFdg, OfficeArtFsp, OfficeArtRecordHeader, HEADER_LEN,
     };
 
-    // Per-comment payload: build each SpContainer in two halves so the
-    // ClientTextbox marker can be emitted into a separate MSODRAWING
-    // after the OBJ for that shape.
-    struct CommentBytes {
-        /// FSP + FOPT + ClientAnchor + ClientData. These are the
-        /// bytes that fit "before OBJ".
-        pre_obj: Vec<u8>,
-        /// ClientTextbox atom (8 bytes). Emitted after OBJ to close
-        /// the SpContainer.
+    // Each shape boils down to its SP_CONTAINER bytes split into two
+    // halves around the OBJ record:
+    //   - `pre_obj`: SP_CONTAINER header + FSP + FOPT + ClientAnchor
+    //                + ClientData. Emitted in a MSODRAWING that
+    //                precedes the shape's OBJ.
+    //   - `post_obj`: ClientTextbox marker (8 bytes) for comments,
+    //                empty for pictures. Emitted in a MSODRAWING
+    //                that follows the OBJ — Excel uses the position
+    //                of the ClientTextbox in the BIFF stream to
+    //                associate the next TXO with this shape.
+    //   - `obj`: the OBJ record bytes themselves.
+    //   - `post_txo`: TXO + CONTINUE×2 for comments (text + run);
+    //                empty for pictures.
+    struct ShapeRecord {
+        sp_payload: Vec<u8>, // header is added separately
         post_obj: Vec<u8>,
+        obj: Vec<u8>,
+        post_txo: Vec<u8>,
     }
 
-    let comments: Vec<(CommentBytes, &CommentShape)> = drawing
-        .comments
-        .iter()
-        .map(|c| {
-            let mut pre = Vec::new();
-            OfficeArtFsp {
-                spid: c.spid,
-                grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
-            }
-            .write_to(shape_type::TEXT_BOX, &mut pre);
-            comment_fopt(c.text_id).write_to(&mut pre);
-            OfficeArtClientAnchor::comment_default(c.row, c.col).write_to(&mut pre);
-            write_client_data(&mut pre);
-
-            let mut post = Vec::new();
-            write_client_textbox(&mut post);
-            (
-                CommentBytes {
-                    pre_obj: pre,
-                    post_obj: post,
-                },
-                c,
-            )
-        })
-        .collect();
-
-    // Picture SP_CONTAINERs are self-contained — pictures have no
-    // associated TXO, so their SP_CONTAINERs close cleanly with
-    // ClientData (no ClientTextbox interleave) inside the first
-    // MSODRAWING record.
-    let mut picture_bytes_total: Vec<u8> = Vec::new();
-    for picture in &drawing.pictures {
-        let mut sp_body = Vec::new();
+    fn picture_record(picture: &PictureShape, anchor_emit: Vec<u8>) -> ShapeRecord {
+        use crate::biff::escher::picture_fopt_with;
+        let mut pre = Vec::new();
         let mut grf = fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT;
         if picture.flip_h {
             grf |= fsp_flags::FLIP_H;
@@ -3518,45 +3496,90 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
             spid: picture.spid,
             grf_persistence: grf,
         }
-        .write_to(shape_type::PICTURE_FRAME, &mut sp_body);
-        crate::biff::escher::picture_fopt_with(
-            picture.blip_id,
-            &picture.shape_name,
-            picture.rotation,
-        )
-        .write_to(&mut sp_body);
-        client_anchor_from_drawing_anchor(&picture.anchor).write_to(&mut sp_body);
-        write_client_data(&mut sp_body);
-        write_container(er::SP_CONTAINER, 0, &sp_body, &mut picture_bytes_total);
+        .write_to(shape_type::PICTURE_FRAME, &mut pre);
+        picture_fopt_with(picture.blip_id, &picture.shape_name, picture.rotation)
+            .write_to(&mut pre);
+        pre.extend_from_slice(&anchor_emit);
+        write_client_data(&mut pre);
+
+        let mut obj = Vec::new();
+        write_picture_obj_to_vec(&mut obj, picture);
+        ShapeRecord {
+            sp_payload: pre,
+            post_obj: Vec::new(),
+            obj,
+            post_txo: Vec::new(),
+        }
     }
 
-    // The patriarch SP_CONTAINER (FSPGR + FSP) is self-contained.
+    fn comment_record(comment: &CommentShape) -> ShapeRecord {
+        let mut pre = Vec::new();
+        OfficeArtFsp {
+            spid: comment.spid,
+            grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+        }
+        .write_to(shape_type::TEXT_BOX, &mut pre);
+        comment_fopt(comment.text_id).write_to(&mut pre);
+        OfficeArtClientAnchor::comment_default(comment.row, comment.col).write_to(&mut pre);
+        write_client_data(&mut pre);
+
+        let mut post = Vec::new();
+        write_client_textbox(&mut post);
+
+        let mut obj = Vec::new();
+        write_comment_obj_to_vec(&mut obj, comment);
+
+        let mut post_txo = Vec::new();
+        write_comment_txo_to_vec(&mut post_txo, comment);
+
+        ShapeRecord {
+            sp_payload: pre,
+            post_obj: post,
+            obj,
+            post_txo,
+        }
+    }
+
+    // Build ShapeRecord for every shape in canonical order:
+    // pictures first (lower spids), then comments. This must match
+    // the order shapes appear in the SPGR_CONTAINER so OBJ records
+    // line up with SP_CONTAINERs by BIFF stream position.
+    let mut shape_records: Vec<ShapeRecord> = Vec::new();
+    for picture in &drawing.pictures {
+        let mut anchor = Vec::new();
+        client_anchor_from_drawing_anchor(&picture.anchor).write_to(&mut anchor);
+        shape_records.push(picture_record(picture, anchor));
+    }
+    for (_, comment) in drawing.comments.iter().enumerate().map(|(i, c)| (i, c)) {
+        shape_records.push(comment_record(comment));
+    }
+
+    // The patriarch SP_CONTAINER (FSPGR + FSP) is always emitted
+    // first inside MSODRAWING #1 along with the DG header + FDG +
+    // SPGR header.
     let mut patriarch_bytes = Vec::new();
     write_patriarch_sp_container(drawing.patriarch_spid, &mut patriarch_bytes);
 
-    // SP_CONTAINER's `rec_len` is its payload size only (no header):
-    // sum of pre_obj + post_obj bytes.
-    let comment_sp_payload_len =
-        |c: &CommentBytes| -> u32 { (c.pre_obj.len() + c.post_obj.len()) as u32 };
+    // Logical SP_CONTAINER total = header (8) + sp_payload + post_obj.
+    let sp_total_size =
+        |r: &ShapeRecord| -> u32 { (HEADER_LEN + r.sp_payload.len() + r.post_obj.len()) as u32 };
+    let sp_payload_size =
+        |r: &ShapeRecord| -> u32 { (r.sp_payload.len() + r.post_obj.len()) as u32 };
 
-    // Compute logical container sizes top-down so each header carries
-    // its full rec_len (the byte counts span across MSODRAWING records).
-    let spgr_payload_len: u32 = patriarch_bytes.len() as u32
-        + picture_bytes_total.len() as u32
-        + comments
-            .iter()
-            .map(|(c, _)| HEADER_LEN as u32 + comment_sp_payload_len(c))
-            .sum::<u32>();
+    // SPGR_CONTAINER's rec_len spans the patriarch and every shape.
+    let spgr_payload_len: u32 =
+        patriarch_bytes.len() as u32 + shape_records.iter().map(sp_total_size).sum::<u32>();
     let fdg_total_len = HEADER_LEN as u32 + 8;
     let dg_payload_len = fdg_total_len + HEADER_LEN as u32 + spgr_payload_len;
 
-    // First MSODRAWING: opens the DG_CONTAINER, FDG, SPGR_CONTAINER,
-    // patriarch SP_CONTAINER, all picture SP_CONTAINERs, and (if any
-    // comments) the first comment's SP_CONTAINER up through ClientData.
+    // MSODRAWING #1: DG_CONTAINER header + FDG + SPGR_CONTAINER
+    // header + patriarch SP_CONTAINER + (if any shape) the FIRST
+    // shape's SP_CONTAINER header + sp_payload (i.e. up through
+    // ClientData; ClientTextbox lands in a separate MSODRAWING
+    // after the OBJ for comment shapes).
     let mut first_drawing = Vec::new();
     OfficeArtRecordHeader::container(er::DG_CONTAINER, 0, dg_payload_len)
         .write_to(&mut first_drawing);
-    // spid_last is the highest spid used in this drawing.
     let spid_last = drawing
         .comments
         .last()
@@ -3571,44 +3594,41 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
     OfficeArtRecordHeader::container(er::SPGR_CONTAINER, 0, spgr_payload_len)
         .write_to(&mut first_drawing);
     first_drawing.extend_from_slice(&patriarch_bytes);
-    first_drawing.extend_from_slice(&picture_bytes_total);
-    if let Some((c0, _)) = comments.first() {
-        OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, comment_sp_payload_len(c0))
+    if let Some(first) = shape_records.first() {
+        OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, sp_payload_size(first))
             .write_to(&mut first_drawing);
-        first_drawing.extend_from_slice(&c0.pre_obj);
+        first_drawing.extend_from_slice(&first.sp_payload);
     }
     write_biff_record(stream, MSODRAWING_RECORD, &first_drawing);
 
-    // Picture OBJs (one per picture, in shape order). No TXO or
-    // continuation MSODRAWING follows.
-    for picture in &drawing.pictures {
-        write_picture_obj(stream, picture);
-    }
+    // For each shape: emit OBJ; if it has a post_obj (comment's
+    // ClientTextbox), emit that in a separate MSODRAWING; then
+    // emit its TXO+CONTINUEs; finally, if there's a next shape,
+    // open its SP_CONTAINER in a fresh MSODRAWING.
+    for idx in 0..shape_records.len() {
+        let rec = &shape_records[idx];
+        stream.extend_from_slice(&rec.obj);
 
-    // Per-comment interleave: OBJ, MSODRAWING (ClientTextbox), TXO,
-    // CONTINUE × 2. For comments after the first, prefix each
-    // MSODRAWING with the SP_CONTAINER header + pre_obj bytes too.
-    for (idx, (cb, shape)) in comments.iter().enumerate() {
-        write_comment_obj(stream, shape);
+        if !rec.post_obj.is_empty() {
+            write_biff_record(stream, MSODRAWING_RECORD, &rec.post_obj);
+        }
+        if !rec.post_txo.is_empty() {
+            stream.extend_from_slice(&rec.post_txo);
+        }
 
-        let mut close_drawing = Vec::new();
-        close_drawing.extend_from_slice(&cb.post_obj);
-        write_biff_record(stream, MSODRAWING_RECORD, &close_drawing);
-
-        write_comment_txo(stream, shape);
-
-        if let Some((next_cb, _)) = comments.get(idx + 1) {
+        if let Some(next) = shape_records.get(idx + 1) {
             let mut open_drawing = Vec::new();
-            OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, comment_sp_payload_len(next_cb))
+            OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, sp_payload_size(next))
                 .write_to(&mut open_drawing);
-            open_drawing.extend_from_slice(&next_cb.pre_obj);
+            open_drawing.extend_from_slice(&next.sp_payload);
             write_biff_record(stream, MSODRAWING_RECORD, &open_drawing);
         }
     }
 
-    // NOTE records at the end, in comment order.
-    for (_, shape) in &comments {
-        write_comment_note(stream, shape);
+    // NOTE records at the end, in comment order. Pictures have no
+    // NOTE record.
+    for comment in &drawing.comments {
+        write_comment_note(stream, comment);
     }
 }
 
@@ -3765,7 +3785,9 @@ fn client_anchor_from_drawing_anchor(
 ///   all-zero matches the default settings Excel applies to inserted
 ///   pictures.
 /// - `ftEnd` (0x0000): terminator.
-fn write_picture_obj(stream: &mut Vec<u8>, picture: &PictureShape) {
+/// Emit a picture's `OBJ` record bytes (ftCmo with ot=0x08, plus
+/// ftCf / ftPioGrbit / ftEnd subrecords) into `out`.
+fn write_picture_obj_to_vec(out: &mut Vec<u8>, picture: &PictureShape) {
     let mut body = Vec::new();
 
     // ftCmo: rt + cb + ot + id + grbit + 12 reserved bytes = 22 bytes total,
@@ -3791,7 +3813,7 @@ fn write_picture_obj(stream: &mut Vec<u8>, picture: &PictureShape) {
     body.extend_from_slice(&0x0000u16.to_le_bytes()); // rt = ftEnd
     body.extend_from_slice(&0x0000u16.to_le_bytes()); // cb = 0
 
-    write_biff_record(stream, OBJ_RECORD, &body);
+    write_biff_record(out, OBJ_RECORD, &body);
 }
 
 /// Emit an `OBJ` record (BIFF 0x005D) for a comment shape. Carries
@@ -3802,7 +3824,10 @@ fn write_picture_obj(stream: &mut Vec<u8>, picture: &PictureShape) {
 ///   GUID; we derive a deterministic GUID from the shape ID so the
 ///   bytes are reproducible across runs.
 /// - `ftEnd` (0x0000): terminator.
-fn write_comment_obj(stream: &mut Vec<u8>, comment: &CommentShape) {
+/// Emit a comment's `OBJ` record bytes (the full BIFF record header
+/// + body) into `out`. Used by drawing emission where OBJ bytes are
+/// queued before being interleaved with MSODRAWING / TXO records.
+fn write_comment_obj_to_vec(out: &mut Vec<u8>, comment: &CommentShape) {
     let mut body = Vec::new();
 
     // ftCmo: rt(2) cb(2) ot(2) id(2) grbit(2) reserved(12) = 22 bytes total,
@@ -3826,7 +3851,7 @@ fn write_comment_obj(stream: &mut Vec<u8>, comment: &CommentShape) {
     body.extend_from_slice(&0x0000u16.to_le_bytes()); // rt = ftEnd
     body.extend_from_slice(&0x0000u16.to_le_bytes()); // cb = 0
 
-    write_biff_record(stream, OBJ_RECORD, &body);
+    write_biff_record(out, OBJ_RECORD, &body);
 }
 
 /// Derive a 16-byte GUID from a per-shape counter. The bytes are
@@ -3856,7 +3881,9 @@ fn deterministic_guid(seed: u32) -> [u8; 16] {
 /// - `cbRuns` (u16): total length of the formatting runs block
 ///   (8 bytes per run, two runs = 16).
 /// - 4 bytes reserved.
-fn write_comment_txo(stream: &mut Vec<u8>, comment: &CommentShape) {
+/// Emit a comment's `TXO` record + the two `CONTINUE` records that
+/// carry its text payload and formatting runs.
+fn write_comment_txo_to_vec(out: &mut Vec<u8>, comment: &CommentShape) {
     let utf16: Vec<u16> = comment.text.encode_utf16().collect();
     let high_byte = utf16.iter().any(|&u| u > 0xFF);
 
@@ -3869,7 +3896,7 @@ fn write_comment_txo(stream: &mut Vec<u8>, comment: &CommentShape) {
     header.extend_from_slice(&16u16.to_le_bytes()); // cbRuns = 2 runs × 8 bytes
     header.extend_from_slice(&[0u8; 2]); // ifntEmpty
     header.extend_from_slice(&[0u8; 2]); // reserved3
-    write_biff_record(stream, TXO_RECORD, &header);
+    write_biff_record(out, TXO_RECORD, &header);
 
     // First CONTINUE: text payload prefixed by a 1-byte grbit
     // (0x00 = compressed Latin-1, 0x01 = UTF-16LE).
@@ -3885,7 +3912,7 @@ fn write_comment_txo(stream: &mut Vec<u8>, comment: &CommentShape) {
             text_body.push(*u as u8);
         }
     }
-    write_biff_record(stream, CONTINUE_RECORD, &text_body);
+    write_biff_record(out, CONTINUE_RECORD, &text_body);
 
     // Second CONTINUE: formatting runs. Two TxoRun entries (8 bytes
     // each): (ich=0, ifnt=0, reserved=0) opens the default-font run,
@@ -3898,7 +3925,7 @@ fn write_comment_txo(stream: &mut Vec<u8>, comment: &CommentShape) {
     runs_body.extend_from_slice(&(utf16.len() as u16).to_le_bytes()); // ich = end
     runs_body.extend_from_slice(&0u16.to_le_bytes()); // ifnt = 0
     runs_body.extend_from_slice(&[0u8; 4]); // reserved
-    write_biff_record(stream, CONTINUE_RECORD, &runs_body);
+    write_biff_record(out, CONTINUE_RECORD, &runs_body);
 }
 
 /// Emit a `NOTE` record (BIFF 0x001C) that anchors a comment to a
