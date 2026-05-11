@@ -260,6 +260,304 @@ impl OfficeArtRecordHeader {
     }
 }
 
+/// FOPT property IDs — MS-ODRAW §2.3. Only the subset the XLS writer
+/// emits or the reader recognises is named here. Property IDs are
+/// 14-bit identifiers; bits 14 and 15 of the on-disk `opid` are
+/// `fBid` and `fComplex` respectively (see [`FoptEntry`]).
+pub mod fopt_id {
+    // ── Text properties (§2.3.21, ids 0x0080–0x00BF) ─────────────────
+    /// `txid` (0x0080) — TXO link / text ID.
+    pub const TEXT_ID: u16 = 0x0080;
+    /// `dxTextLeft` (0x0081) — left inset in EMUs.
+    pub const DX_TEXT_LEFT: u16 = 0x0081;
+    /// `dyTextTop` (0x0082) — top inset in EMUs.
+    pub const DY_TEXT_TOP: u16 = 0x0082;
+    /// `dxTextRight` (0x0083) — right inset in EMUs.
+    pub const DX_TEXT_RIGHT: u16 = 0x0083;
+    /// `dyTextBottom` (0x0084) — bottom inset in EMUs.
+    pub const DY_TEXT_BOTTOM: u16 = 0x0084;
+    /// `WrapText` (0x0085) — wrap mode for the text in the shape.
+    pub const WRAP_TEXT: u16 = 0x0085;
+    /// `anchorText` (0x0087) — vertical anchor of the text.
+    pub const ANCHOR_TEXT: u16 = 0x0087;
+    /// `txflTextFlow` (0x0088) — text flow direction.
+    pub const TXFL_TEXT_FLOW: u16 = 0x0088;
+    /// Boolean-bag of text flags (§2.3.21.42 `gtextBooleanProperties`).
+    pub const TEXT_BOOLEAN_PROPS: u16 = 0x00BF;
+
+    // ── Fill properties (§2.3.7, ids 0x0180–0x01BF) ──────────────────
+    /// `fillType` (0x0180).
+    pub const FILL_TYPE: u16 = 0x0180;
+    /// `fillColor` (0x0181) — primary fill colour (`OfficeArtCOLORREF`).
+    pub const FILL_COLOR: u16 = 0x0181;
+    /// `fillBackColor` (0x0183) — secondary fill colour.
+    pub const FILL_BACK_COLOR: u16 = 0x0183;
+    /// `fillCrMod` (0x0185) — fill colour mod.
+    pub const FILL_CR_MOD: u16 = 0x0185;
+    /// Boolean-bag of fill flags (§2.3.7.44 `FillStyleBooleanProperties`).
+    pub const FILL_BOOLEAN_PROPS: u16 = 0x01BF;
+
+    // ── Line properties (§2.3.8, ids 0x01C0–0x01FF) ──────────────────
+    /// `lineColor` (0x01C0).
+    pub const LINE_COLOR: u16 = 0x01C0;
+    /// `lineWidth` (0x01CB) — line width in EMUs.
+    pub const LINE_WIDTH: u16 = 0x01CB;
+    /// Boolean-bag of line flags (§2.3.8.44 `LineStyleBooleanProperties`).
+    pub const LINE_BOOLEAN_PROPS: u16 = 0x01FF;
+
+    // ── Shadow properties (§2.3.13, ids 0x0200–0x023F) ───────────────
+    /// Boolean-bag of shadow flags.
+    pub const SHADOW_BOOLEAN_PROPS: u16 = 0x023F;
+
+    // ── Shape properties (§2.3.4, ids 0x0300–0x033F) ─────────────────
+    /// Boolean-bag of group-shape flags (`fHidden`, `fPrint`, etc).
+    pub const GROUP_SHAPE_PROPS: u16 = 0x033F;
+}
+
+/// One entry in an Office Art FOPT property table (MS-ODRAW §2.3.1
+/// `OfficeArtFOPTE`).
+///
+/// On disk every entry is exactly 6 bytes:
+///
+/// ```text
+///   bits 0..13   property id
+///   bit 14       fBid     (op is a blip ID rather than a literal)
+///   bit 15       fComplex (op is the length of a trailing complex payload)
+///   bits 16..47  op       (value, blip id, or complex-payload length)
+/// ```
+///
+/// We model this as a separate [`FoptEntry::value`] enum so callers do
+/// not have to manage the `fComplex` bit by hand. The on-disk packing
+/// is performed by [`FoptTable::write_to`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoptEntry {
+    /// 14-bit property id (see [`fopt_id`] for known names).
+    pub id: u16,
+    /// `fBid` flag — `true` when `value` is a blip ID rather than a
+    /// literal value. Only meaningful for simple entries.
+    pub is_blip_id: bool,
+    /// Property value. Simple entries pack a `u32` into the `op`
+    /// field; complex entries store opaque bytes following all
+    /// entries.
+    pub value: FoptValue,
+}
+
+/// Body of an [`FoptEntry`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FoptValue {
+    /// 4-byte `op` field is the literal value.
+    Simple(u32),
+    /// `op` is the length of these bytes; the bytes themselves are
+    /// stored in the complex-data trailer after the entry array.
+    Complex(Vec<u8>),
+}
+
+impl FoptEntry {
+    /// Construct a simple-valued entry (`fComplex=0`, `fBid=0`).
+    pub fn simple(id: u16, value: u32) -> Self {
+        Self {
+            id: id & 0x3FFF,
+            is_blip_id: false,
+            value: FoptValue::Simple(value),
+        }
+    }
+
+    /// Construct a blip-id-valued entry (`fComplex=0`, `fBid=1`).
+    pub fn blip_id(id: u16, value: u32) -> Self {
+        Self {
+            id: id & 0x3FFF,
+            is_blip_id: true,
+            value: FoptValue::Simple(value),
+        }
+    }
+
+    /// Construct a complex-valued entry (`fComplex=1`).
+    pub fn complex(id: u16, value: Vec<u8>) -> Self {
+        Self {
+            id: id & 0x3FFF,
+            is_blip_id: false,
+            value: FoptValue::Complex(value),
+        }
+    }
+}
+
+/// Office Art property table (MS-ODRAW §2.3.1 `OfficeArtFOPT`).
+///
+/// Wraps an ordered list of [`FoptEntry`] values plus an
+/// implicit trailing complex-data block. The [`Self::write_to`] /
+/// [`Self::read_from`] helpers serialise to and from the full atom
+/// including its 8-byte [`OfficeArtRecordHeader`].
+///
+/// Property order matters: MS-ODRAW requires entries be sorted in
+/// ascending `id` order. Callers should add properties in numeric
+/// order; [`Self::sort_entries`] enforces this before serialisation.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FoptTable {
+    entries: Vec<FoptEntry>,
+}
+
+impl FoptTable {
+    /// Construct an empty table.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of entries in the table.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// `true` iff the table has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Append an entry.
+    pub fn push(&mut self, entry: FoptEntry) {
+        self.entries.push(entry);
+    }
+
+    /// Iterate over entries in their current order.
+    pub fn entries(&self) -> impl Iterator<Item = &FoptEntry> {
+        self.entries.iter()
+    }
+
+    /// Sort entries by ascending `id`, as required by MS-ODRAW for
+    /// the on-disk form. Callers that add entries in ascending id
+    /// order can skip this; [`Self::write_to`] does NOT auto-sort,
+    /// so misordered tables emit misordered bytes.
+    pub fn sort_entries(&mut self) {
+        self.entries.sort_by_key(|e| e.id);
+    }
+
+    /// Total payload length (entry array + complex-data trailer),
+    /// not including the 8-byte record header.
+    fn payload_len(&self) -> u32 {
+        let entries_len = self.entries.len() * 6;
+        let complex_len: usize = self
+            .entries
+            .iter()
+            .map(|e| match &e.value {
+                FoptValue::Complex(bytes) => bytes.len(),
+                FoptValue::Simple(_) => 0,
+            })
+            .sum();
+        (entries_len + complex_len) as u32
+    }
+
+    /// Serialise the full FOPT atom (header + entries + complex
+    /// trailer) into `out`.
+    ///
+    /// The `rec_instance` field of the header is set to the entry
+    /// count, per MS-ODRAW §2.3.1; the `rec_ver` is 3 (atom).
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        let header = OfficeArtRecordHeader::atom(
+            3,
+            self.entries.len() as u16,
+            rec_type::FOPT,
+            self.payload_len(),
+        );
+        header.write_to(out);
+
+        // Entry array.
+        for entry in &self.entries {
+            let mut opid = entry.id & 0x3FFF;
+            if entry.is_blip_id {
+                opid |= 0x4000;
+            }
+            let op = match &entry.value {
+                FoptValue::Simple(v) => *v,
+                FoptValue::Complex(bytes) => {
+                    opid |= 0x8000;
+                    bytes.len() as u32
+                }
+            };
+            out.extend_from_slice(&opid.to_le_bytes());
+            out.extend_from_slice(&op.to_le_bytes());
+        }
+
+        // Complex-data trailer.
+        for entry in &self.entries {
+            if let FoptValue::Complex(bytes) = &entry.value {
+                out.extend_from_slice(bytes);
+            }
+        }
+    }
+
+    /// Parse a full FOPT atom (header included) from `bytes`.
+    ///
+    /// Returns `(table, bytes_consumed)`. The caller is expected to
+    /// have positioned `bytes` at the start of the header.
+    pub fn read_from(bytes: &[u8]) -> XlsResult<(Self, usize)> {
+        let header = OfficeArtRecordHeader::read_from(bytes)?;
+        if header.rec_type != rec_type::FOPT {
+            return Err(XlsError::InvalidFormat(format!(
+                "expected FOPT (0x{:04X}), found 0x{:04X}",
+                rec_type::FOPT,
+                header.rec_type
+            )));
+        }
+        let entry_count = header.rec_instance as usize;
+        let payload_start = HEADER_LEN;
+        let entry_bytes_len = entry_count * 6;
+        if bytes.len() < payload_start + entry_bytes_len {
+            return Err(XlsError::InvalidFormat(format!(
+                "FOPT truncated: need {} entry bytes, have {}",
+                entry_bytes_len,
+                bytes.len() - payload_start
+            )));
+        }
+
+        // First pass: parse entry headers, remember complex-data lengths.
+        let mut entries = Vec::with_capacity(entry_count);
+        let mut complex_lens = Vec::with_capacity(entry_count);
+        for i in 0..entry_count {
+            let off = payload_start + i * 6;
+            let opid = u16::from_le_bytes([bytes[off], bytes[off + 1]]);
+            let op = u32::from_le_bytes([
+                bytes[off + 2],
+                bytes[off + 3],
+                bytes[off + 4],
+                bytes[off + 5],
+            ]);
+            let id = opid & 0x3FFF;
+            let is_blip_id = (opid & 0x4000) != 0;
+            let is_complex = (opid & 0x8000) != 0;
+            if is_complex {
+                complex_lens.push((entries.len(), op as usize));
+                entries.push(FoptEntry {
+                    id,
+                    is_blip_id,
+                    value: FoptValue::Complex(Vec::new()),
+                });
+            } else {
+                entries.push(FoptEntry {
+                    id,
+                    is_blip_id,
+                    value: FoptValue::Simple(op),
+                });
+            }
+        }
+
+        // Second pass: pull complex trailers in entry order.
+        let mut cursor = payload_start + entry_bytes_len;
+        let payload_end = payload_start + header.rec_len as usize;
+        for (entry_idx, len) in complex_lens {
+            if cursor + len > payload_end || cursor + len > bytes.len() {
+                return Err(XlsError::InvalidFormat(format!(
+                    "FOPT complex trailer for entry {entry_idx} overruns payload"
+                )));
+            }
+            if let FoptValue::Complex(buf) = &mut entries[entry_idx].value {
+                buf.extend_from_slice(&bytes[cursor..cursor + len]);
+            }
+            cursor += len;
+        }
+
+        Ok((Self { entries }, payload_start + header.rec_len as usize))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,5 +648,130 @@ mod tests {
     fn total_len_includes_header() {
         let h = OfficeArtRecordHeader::atom(0, 0, rec_type::FOPT, 42);
         assert_eq!(h.total_len(), 8 + 42);
+    }
+
+    #[test]
+    fn fopt_round_trips_three_simple_entries() {
+        // A representative comment-textbox-ish FOPT:
+        //   fillColor    = 0xFFFFE1 (light yellow)
+        //   lineColor    = 0x000000
+        //   group flags  = 0x000A0000 (fHidden + fPrint defaults)
+        let mut t = FoptTable::new();
+        t.push(FoptEntry::simple(fopt_id::FILL_COLOR, 0x00FF_FFE1));
+        t.push(FoptEntry::simple(fopt_id::LINE_COLOR, 0));
+        t.push(FoptEntry::simple(fopt_id::GROUP_SHAPE_PROPS, 0x000A_0000));
+
+        let mut out = Vec::new();
+        t.write_to(&mut out);
+
+        // Header: rec_ver=3, rec_instance=3 (entry count), rec_type=FOPT
+        // (0xF00B), rec_len=18 (3 entries × 6 bytes).
+        // Byte 0: rec_ver=3 in low nibble, instance low 4 bits = 3 => 0x33.
+        // Byte 1: instance bits 11..4 = 0 => 0x00.
+        // Bytes 2-3: 0xF00B LE => 0B F0.
+        // Bytes 4-7: 18 LE => 12 00 00 00.
+        assert_eq!(&out[..8], &[0x33, 0x00, 0x0B, 0xF0, 0x12, 0x00, 0x00, 0x00]);
+
+        let (parsed, consumed) = FoptTable::read_from(&out).expect("FOPT parses");
+        assert_eq!(consumed, out.len());
+        assert_eq!(parsed.len(), 3);
+        let entries: Vec<_> = parsed.entries().cloned().collect();
+        assert_eq!(
+            entries[0],
+            FoptEntry::simple(fopt_id::FILL_COLOR, 0x00FF_FFE1)
+        );
+        assert_eq!(entries[1], FoptEntry::simple(fopt_id::LINE_COLOR, 0));
+        assert_eq!(
+            entries[2],
+            FoptEntry::simple(fopt_id::GROUP_SHAPE_PROPS, 0x000A_0000)
+        );
+    }
+
+    #[test]
+    fn fopt_complex_entry_trails_after_simple_array() {
+        // One simple entry followed by one complex entry: the simple
+        // value lives in the entry's op field, the complex bytes live
+        // in the trailer.
+        let mut t = FoptTable::new();
+        t.push(FoptEntry::simple(fopt_id::FILL_COLOR, 0xDEADBEEF));
+        t.push(FoptEntry::complex(0x017F, vec![0xAA, 0xBB, 0xCC, 0xDD]));
+
+        let mut out = Vec::new();
+        t.write_to(&mut out);
+
+        // 8 header + 12 entries + 4 complex = 24 bytes total.
+        assert_eq!(out.len(), 24);
+        // The header's rec_len covers entries+complex (not header itself).
+        let header = OfficeArtRecordHeader::read_from(&out).unwrap();
+        assert_eq!(header.rec_len, 16);
+        assert_eq!(header.rec_instance, 2);
+        // Second entry's opid must have fComplex set: 0x017F | 0x8000 = 0x817F.
+        let second_opid = u16::from_le_bytes([out[8 + 6], out[8 + 6 + 1]]);
+        assert_eq!(second_opid, 0x817F);
+        // And its op field carries the complex-data length, not the value.
+        let second_op = u32::from_le_bytes([out[16], out[17], out[18], out[19]]);
+        assert_eq!(second_op, 4);
+        // Trailer bytes match what we pushed.
+        assert_eq!(&out[20..24], &[0xAA, 0xBB, 0xCC, 0xDD]);
+
+        let (parsed, _) = FoptTable::read_from(&out).unwrap();
+        let entries: Vec<_> = parsed.entries().cloned().collect();
+        assert_eq!(entries[0].id, fopt_id::FILL_COLOR);
+        assert_eq!(entries[0].value, FoptValue::Simple(0xDEADBEEF));
+        assert_eq!(entries[1].id, 0x017F);
+        assert_eq!(
+            entries[1].value,
+            FoptValue::Complex(vec![0xAA, 0xBB, 0xCC, 0xDD])
+        );
+    }
+
+    #[test]
+    fn fopt_blip_id_entry_sets_fbid_bit() {
+        // Picture-blip-reference entry: id=0x0104 (pibName? actually pib
+        // is 0x0104), with fBid=1 and value=blip_id 1.
+        let t = {
+            let mut t = FoptTable::new();
+            t.push(FoptEntry::blip_id(0x0104, 1));
+            t
+        };
+        let mut out = Vec::new();
+        t.write_to(&mut out);
+
+        // opid = 0x0104 | 0x4000 (fBid) = 0x4104.
+        let opid = u16::from_le_bytes([out[8], out[9]]);
+        assert_eq!(opid, 0x4104);
+
+        let (parsed, _) = FoptTable::read_from(&out).unwrap();
+        let e = parsed.entries().next().unwrap();
+        assert!(e.is_blip_id);
+        assert_eq!(e.value, FoptValue::Simple(1));
+    }
+
+    #[test]
+    fn fopt_read_rejects_wrong_rec_type() {
+        // A header that claims to be DGG_CONTAINER instead of FOPT.
+        let bogus = OfficeArtRecordHeader::container(rec_type::DGG_CONTAINER, 0, 0);
+        let mut out = Vec::new();
+        bogus.write_to(&mut out);
+        let err = FoptTable::read_from(&out).unwrap_err();
+        match err {
+            XlsError::InvalidFormat(m) => assert!(m.contains("FOPT"), "msg: {m}"),
+            other => panic!("expected InvalidFormat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fopt_round_trips_zero_entries() {
+        let t = FoptTable::new();
+        let mut out = Vec::new();
+        t.write_to(&mut out);
+        // 8-byte header + 0 payload.
+        assert_eq!(out.len(), 8);
+        let header = OfficeArtRecordHeader::read_from(&out).unwrap();
+        assert_eq!(header.rec_instance, 0);
+        assert_eq!(header.rec_len, 0);
+        let (parsed, consumed) = FoptTable::read_from(&out).unwrap();
+        assert_eq!(consumed, 8);
+        assert!(parsed.is_empty());
     }
 }
