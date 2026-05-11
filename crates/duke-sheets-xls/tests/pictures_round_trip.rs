@@ -143,6 +143,40 @@ fn single_picture_round_trips() {
 }
 
 #[test]
+fn rotation_and_flip_flags_round_trip() {
+    // Picture with 90 degree clockwise rotation (60000ths of degree
+    // = 5,400,000), horizontal flip, vertical flip.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut img = test_image(1, "Picture 1", 1, 2);
+    img.rotation = Some(5_400_000);
+    img.flip_h = true;
+    img.flip_v = true;
+    ws.add_image(img);
+
+    let parsed = write_then_read(&wb);
+    let img = &parsed.worksheet(0).unwrap().images()[0];
+    assert_eq!(img.rotation, Some(5_400_000), "rotation must round-trip");
+    assert!(img.flip_h, "flip_h must round-trip");
+    assert!(img.flip_v, "flip_v must round-trip");
+}
+
+#[test]
+fn no_rotation_no_flip_round_trips_clean() {
+    // Picture with default orientation must round-trip with rotation=None,
+    // flip_h=false, flip_v=false (FOPT 0x0004 entry must be omitted).
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_image(test_image(1, "Picture 1", 0, 0));
+
+    let parsed = write_then_read(&wb);
+    let img = &parsed.worksheet(0).unwrap().images()[0];
+    assert_eq!(img.rotation, None, "rotation must stay None");
+    assert!(!img.flip_h, "flip_h must stay false");
+    assert!(!img.flip_v, "flip_v must stay false");
+}
+
+#[test]
 fn twocell_anchor_edit_as_round_trips() {
     // editAs=TwoCell (or None) maps to ClientAnchor flag=0
     // (move+resize with cells). Round-trip should preserve the

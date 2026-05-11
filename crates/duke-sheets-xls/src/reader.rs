@@ -2457,8 +2457,11 @@ impl XlsReader {
 
         let mut fsp_spid: u32 = 0;
         let mut is_picture = false;
+        let mut flip_h = false;
+        let mut flip_v = false;
         let mut blip_id: Option<u32> = None;
         let mut shape_name: Option<String> = None;
+        let mut rotation: Option<i32> = None;
         let mut anchor: Option<OfficeArtClientAnchor> = None;
 
         let mut cursor = 0;
@@ -2475,19 +2478,32 @@ impl XlsReader {
                     if let Ok((fsp, st, _)) = OfficeArtFsp::read_from(&sp_body[cursor..]) {
                         fsp_spid = fsp.spid;
                         is_picture = st == shape_type::PICTURE_FRAME;
+                        flip_h =
+                            (fsp.grf_persistence & crate::biff::escher::fsp_flags::FLIP_H) != 0;
+                        flip_v =
+                            (fsp.grf_persistence & crate::biff::escher::fsp_flags::FLIP_V) != 0;
                     }
                 }
                 er::FOPT => {
                     if let Ok((table, _)) = FoptTable::read_from(&sp_body[cursor..]) {
                         for entry in table.entries() {
-                            if entry.id == 0x0104 {
-                                if let FoptValue::Simple(v) = entry.value {
-                                    blip_id = Some(v);
+                            match entry.id {
+                                0x0004 => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        rotation = Some(v as i32);
+                                    }
                                 }
-                            } else if entry.id == 0x0380 {
-                                if let FoptValue::Complex(bytes) = &entry.value {
-                                    shape_name = Some(decode_utf16le_null_terminated(bytes));
+                                0x0104 => {
+                                    if let FoptValue::Simple(v) = entry.value {
+                                        blip_id = Some(v);
+                                    }
                                 }
+                                0x0380 => {
+                                    if let FoptValue::Complex(bytes) = &entry.value {
+                                        shape_name = Some(decode_utf16le_null_terminated(bytes));
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -2576,9 +2592,9 @@ impl XlsReader {
             svg_media_path: None,
             width_emu,
             height_emu,
-            rotation: None,
-            flip_h: false,
-            flip_v: false,
+            rotation,
+            flip_h,
+            flip_v,
             data: blip.data.clone(),
             svg_data: None,
         };

@@ -3197,6 +3197,13 @@ struct PictureShape {
     shape_name: String,
     /// Cell-anchor footprint copied from the `EmbeddedImage`.
     anchor: duke_sheets_chart::DrawingAnchor,
+    /// Optional rotation in 60,000ths of a degree. Goes into the
+    /// picture's FOPT `0x0004` property when set.
+    rotation: Option<i32>,
+    /// Horizontal flip — sets the FSP `FLIP_H` flag bit.
+    flip_h: bool,
+    /// Vertical flip — sets the FSP `FLIP_V` flag bit.
+    flip_v: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -3267,6 +3274,9 @@ fn compute_drawing_state(workbook: &Workbook) -> DrawingState {
                 blip_id,
                 shape_name: image.name.clone(),
                 anchor: image.anchor.clone(),
+                rotation: image.rotation,
+                flip_h: image.flip_h,
+                flip_v: image.flip_v,
             });
             next_obj_id += 1;
         }
@@ -3420,7 +3430,7 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
 /// then walk the resulting Escher tree.
 fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
     use crate::biff::escher::{
-        comment_fopt, fsp_flags, picture_fopt, rec_type as er, shape_type, write_client_data,
+        comment_fopt, fsp_flags, rec_type as er, shape_type, write_client_data,
         write_client_textbox, write_container, write_patriarch_sp_container, OfficeArtClientAnchor,
         OfficeArtFdg, OfficeArtFsp, OfficeArtRecordHeader, HEADER_LEN,
     };
@@ -3470,12 +3480,24 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
     let mut picture_bytes_total: Vec<u8> = Vec::new();
     for picture in &drawing.pictures {
         let mut sp_body = Vec::new();
+        let mut grf = fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT;
+        if picture.flip_h {
+            grf |= fsp_flags::FLIP_H;
+        }
+        if picture.flip_v {
+            grf |= fsp_flags::FLIP_V;
+        }
         OfficeArtFsp {
             spid: picture.spid,
-            grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+            grf_persistence: grf,
         }
         .write_to(shape_type::PICTURE_FRAME, &mut sp_body);
-        picture_fopt(picture.blip_id, &picture.shape_name).write_to(&mut sp_body);
+        crate::biff::escher::picture_fopt_with(
+            picture.blip_id,
+            &picture.shape_name,
+            picture.rotation,
+        )
+        .write_to(&mut sp_body);
         client_anchor_from_drawing_anchor(&picture.anchor).write_to(&mut sp_body);
         write_client_data(&mut sp_body);
         write_container(er::SP_CONTAINER, 0, &sp_body, &mut picture_bytes_total);

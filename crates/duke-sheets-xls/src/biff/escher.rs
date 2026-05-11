@@ -1034,7 +1034,27 @@ pub fn write_bstore_container(fbses: &[OfficeArtFbse], out: &mut Vec<u8>) {
 /// `shape_name` is the user-visible name (e.g. "Picture 1") stored
 /// in the `wzName` complex property.
 pub fn picture_fopt(blip_id: u32, shape_name: &str) -> FoptTable {
+    picture_fopt_with(blip_id, shape_name, None)
+}
+
+/// Picture FOPT with an optional rotation. `rotation` is in 60,000ths
+/// of a degree (the OOXML / OfficeArt unit). `None` omits the
+/// `0x0004` rotation property entirely (matching Excel's emit for
+/// pictures with no rotation).
+///
+/// FOPT entries must appear in ascending `id` order; the rotation
+/// property is inserted before the existing `0x007F` protection
+/// entry when present.
+pub fn picture_fopt_with(blip_id: u32, shape_name: &str, rotation: Option<i32>) -> FoptTable {
     let mut t = FoptTable::new();
+
+    // 0x0004: rotation (60,000ths of a degree). Goes first because
+    // FOPT requires ascending opid order. We only emit this entry
+    // if rotation is set; absence means "no rotation".
+    if let Some(rot) = rotation {
+        t.push(FoptEntry::simple(0x0004, rot as u32));
+    }
+
     // 0x007F: protection booleans (lockAspectRatio etc.).
     t.push(FoptEntry::simple(0x007F, 0x01FB_0000));
     // 0x0104: pib (picture blip index, fBid flag set).

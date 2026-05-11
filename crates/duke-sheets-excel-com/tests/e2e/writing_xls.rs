@@ -770,6 +770,66 @@ const TEST_JPEG_1X1: &[u8] = &[
     0xA2, 0x8A, 0x2B, 0xCB, 0x3E, 0xF0, 0xFF, 0xD9,
 ];
 
+/// Picture rotation and flip flags: writer must encode rotation in
+/// the FOPT `0x0004` property and flip H/V in the FSP grfPersistence
+/// flag bits. Excel must accept the file and the rotation +
+/// flip flags must round-trip.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_xls_picture_rotation_and_flip_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "rotated").unwrap();
+    ws.add_image(EmbeddedImage {
+        id: 1,
+        name: "RotatedPic".into(),
+        description: None,
+        anchor: DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: 1,
+                col_offset_emu: 0,
+                row: 1,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: 4,
+                col_offset_emu: 0,
+                row: 5,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        },
+        format: ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_000_000,
+        height_emu: 1_000_000,
+        rotation: Some(5_400_000), // 90 degrees clockwise
+        flip_h: true,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    });
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let images = result.worksheet(0).unwrap().images();
+    assert_eq!(
+        images.len(),
+        1,
+        "rotated picture must survive Excel re-save"
+    );
+    let img = &images[0];
+    assert_eq!(
+        img.rotation,
+        Some(5_400_000),
+        "rotation must round-trip through Excel"
+    );
+    assert!(img.flip_h, "flip_h must round-trip through Excel");
+    assert!(!img.flip_v, "flip_v=false must round-trip through Excel");
+}
+
 /// OneCell anchor variant: input has only a `from` cell + width/height
 /// in EMU. Writer encodes via ClientAnchor flag=2 (move only). Excel
 /// must accept the file and the picture's visual area must survive
