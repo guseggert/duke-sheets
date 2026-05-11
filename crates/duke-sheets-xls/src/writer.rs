@@ -3294,39 +3294,120 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
     write_biff_record(stream, MSODRAWINGGROUP_RECORD, &record_body);
 }
 
-/// Emit per-sheet drawing records: one `MSODRAWING` with the full
-/// `DgContainer` (patriarch + comment SP_CONTAINERs), then one
-/// `OBJ` + `TXO` (+ two `CONTINUE`s) per comment, then one `NOTE`
-/// per comment. No-op if the sheet has no comments.
+/// Emit per-sheet drawing records, mirroring the interleaved pattern
+/// Excel itself writes.
+///
+/// The shape tree is logically one `DgContainer` per sheet, but its
+/// bytes are split across multiple `MSODRAWING` records so that each
+/// comment's `ClientTextbox` marker can sit AFTER that comment's
+/// `OBJ` record in the BIFF stream. Excel uses the position of the
+/// `ClientTextbox` (relative to OBJ) to associate the following
+/// `TXO` record with the correct shape; a writer that emits a
+/// shape's `ClientTextbox` before its `OBJ` produces a file Excel
+/// refuses to open with `RPC failed (0x800706BE)`.
+///
+/// Layout emitted, for `N` comments:
+///
+/// ```text
+/// MSODRAWING #1   = DgContainer header + FDG + SpgrContainer header
+///                   + patriarch SpContainer
+///                   + comment[0] SpContainer header
+///                   + comment[0]: FSP + FOPT + ClientAnchor + ClientData
+/// OBJ #1
+/// MSODRAWING #2   = comment[0]: ClientTextbox (closes SpContainer 0)
+/// TXO #1 + CONTINUE×2
+/// MSODRAWING #3   = comment[1] SpContainer header
+///                   + comment[1]: FSP + FOPT + ClientAnchor + ClientData
+/// OBJ #2
+/// MSODRAWING #4   = comment[1]: ClientTextbox
+/// TXO #2 + CONTINUE×2
+/// ... (one MSODRAWING-pair per remaining comment)
+/// NOTE #1 .. NOTE #N
+/// ```
+///
+/// The `DgContainer` / `SpgrContainer` / per-comment `SpContainer`
+/// header `rec_len` fields all reflect their LOGICAL byte counts
+/// across the entire concatenated drawing stream. Readers
+/// concatenate the bodies of all `MSODRAWING` records for a sheet,
+/// then walk the resulting Escher tree.
 fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
     use crate::biff::escher::{
         comment_fopt, fsp_flags, rec_type as er, shape_type, write_client_data,
         write_client_textbox, write_container, write_patriarch_sp_container, OfficeArtClientAnchor,
-        OfficeArtFdg, OfficeArtFsp,
+        OfficeArtFdg, OfficeArtFsp, OfficeArtRecordHeader, HEADER_LEN,
     };
 
-    // Build the SPGR_CONTAINER body: patriarch SP_CONTAINER first,
-    // then one SP_CONTAINER per comment.
-    let mut spgr_body = Vec::new();
-    write_patriarch_sp_container(drawing.patriarch_spid, &mut spgr_body);
-
-    for comment in &drawing.comments {
-        let mut sp_body = Vec::new();
-        OfficeArtFsp {
-            spid: comment.spid,
-            grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
-        }
-        .write_to(shape_type::TEXT_BOX, &mut sp_body);
-        comment_fopt(comment.text_id).write_to(&mut sp_body);
-        OfficeArtClientAnchor::comment_default(comment.row, comment.col).write_to(&mut sp_body);
-        write_client_data(&mut sp_body);
-        write_client_textbox(&mut sp_body);
-
-        write_container(er::SP_CONTAINER, 0, &sp_body, &mut spgr_body);
+    // Per-comment payload: build each SpContainer in two halves so the
+    // ClientTextbox marker can be emitted into a separate MSODRAWING
+    // after the OBJ for that shape.
+    struct CommentBytes {
+        /// FSP + FOPT + ClientAnchor + ClientData. These are the
+        /// bytes that fit "before OBJ".
+        pre_obj: Vec<u8>,
+        /// ClientTextbox atom (8 bytes). Emitted after OBJ to close
+        /// the SpContainer.
+        post_obj: Vec<u8>,
     }
 
-    // Wrap SPGR_CONTAINER inside DG_CONTAINER, prefixed by FDG.
-    let mut dg_body = Vec::new();
+    let comments: Vec<(CommentBytes, &CommentShape)> = drawing
+        .comments
+        .iter()
+        .map(|c| {
+            let mut pre = Vec::new();
+            OfficeArtFsp {
+                spid: c.spid,
+                grf_persistence: fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+            }
+            .write_to(shape_type::TEXT_BOX, &mut pre);
+            comment_fopt(c.text_id).write_to(&mut pre);
+            OfficeArtClientAnchor::comment_default(c.row, c.col).write_to(&mut pre);
+            write_client_data(&mut pre);
+
+            let mut post = Vec::new();
+            write_client_textbox(&mut post);
+            (
+                CommentBytes {
+                    pre_obj: pre,
+                    post_obj: post,
+                },
+                c,
+            )
+        })
+        .collect();
+
+    // The patriarch SP_CONTAINER (FSPGR + FSP) is self-contained.
+    let mut patriarch_bytes = Vec::new();
+    write_patriarch_sp_container(drawing.patriarch_spid, &mut patriarch_bytes);
+
+    // SP_CONTAINER's `rec_len` is its payload size only (no header):
+    // sum of pre_obj + post_obj bytes.
+    let sp_payload_len = |c: &CommentBytes| -> u32 { (c.pre_obj.len() + c.post_obj.len()) as u32 };
+
+    // Compute logical container sizes top-down so each header carries
+    // its full rec_len (the byte counts span across MSODRAWING records).
+    //
+    // - SP_CONTAINER total size (header + payload) = 8 + sp_payload_len.
+    // - SPGR_CONTAINER's rec_len = patriarch bytes (already total) +
+    //   sum of all comment SP_CONTAINER totals.
+    // - DG_CONTAINER's rec_len = FDG total (16) + SPGR_CONTAINER total
+    //   (8 + spgr_payload_len).
+    let spgr_payload_len: u32 = patriarch_bytes.len() as u32
+        + comments
+            .iter()
+            .map(|(c, _)| HEADER_LEN as u32 + sp_payload_len(c))
+            .sum::<u32>();
+    let fdg_total_len = HEADER_LEN as u32 + 8;
+    let dg_payload_len = fdg_total_len + HEADER_LEN as u32 + spgr_payload_len;
+
+    // First MSODRAWING: opens the DG_CONTAINER, FDG, SPGR_CONTAINER,
+    // patriarch SP_CONTAINER, and the first comment's SP_CONTAINER up
+    // through ClientData.
+    //
+    // MS-ODRAW §2.2.13: DG_CONTAINER's rec_instance is 0; the drawing
+    // ID lives in the FDG atom's rec_instance instead.
+    let mut first_drawing = Vec::new();
+    OfficeArtRecordHeader::container(er::DG_CONTAINER, 0, dg_payload_len)
+        .write_to(&mut first_drawing);
     let spid_last = drawing
         .comments
         .last()
@@ -3336,22 +3417,51 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
         csp_saved: drawing.comments.len() as u32 + 1,
         spid_last,
     }
-    .write_to(drawing.dgid, &mut dg_body);
-    write_container(er::SPGR_CONTAINER, 0, &spgr_body, &mut dg_body);
+    .write_to(drawing.dgid, &mut first_drawing);
+    OfficeArtRecordHeader::container(er::SPGR_CONTAINER, 0, spgr_payload_len)
+        .write_to(&mut first_drawing);
+    first_drawing.extend_from_slice(&patriarch_bytes);
+    if let Some((c0, _)) = comments.first() {
+        OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, sp_payload_len(c0))
+            .write_to(&mut first_drawing);
+        first_drawing.extend_from_slice(&c0.pre_obj);
+    }
+    write_biff_record(stream, MSODRAWING_RECORD, &first_drawing);
 
-    let mut drawing_bytes = Vec::new();
-    write_container(er::DG_CONTAINER, drawing.dgid, &dg_body, &mut drawing_bytes);
-    write_biff_record(stream, MSODRAWING_RECORD, &drawing_bytes);
+    // Per-comment interleave: OBJ, MSODRAWING (ClientTextbox), TXO,
+    // CONTINUE × 2. For comments after the first, prefix each
+    // MSODRAWING with the SP_CONTAINER header + pre_obj bytes too.
+    for (idx, (cb, shape)) in comments.iter().enumerate() {
+        write_comment_obj(stream, shape);
 
-    // OBJ + TXO + CONTINUE×2 per comment, in shape order.
-    for comment in &drawing.comments {
-        write_comment_obj(stream, comment);
-        write_comment_txo(stream, comment);
+        // After OBJ: close the previous SP_CONTAINER with its
+        // ClientTextbox in its own MSODRAWING record. For comments
+        // beyond the first, the NEXT comment's SP_CONTAINER opens
+        // BEFORE this comment's ClientTextbox? No — Excel emits:
+        //   MSODRAWING (ClientTextbox of comment_N)
+        // standalone for the closing marker, then a separate
+        // MSODRAWING for the next comment's SP_CONTAINER start.
+        // Mirror that layout.
+        let mut close_drawing = Vec::new();
+        close_drawing.extend_from_slice(&cb.post_obj);
+        write_biff_record(stream, MSODRAWING_RECORD, &close_drawing);
+
+        write_comment_txo(stream, shape);
+
+        // If there's a next comment, open its SP_CONTAINER in its
+        // own MSODRAWING record (per Excel's emit pattern).
+        if let Some((next_cb, _)) = comments.get(idx + 1) {
+            let mut open_drawing = Vec::new();
+            OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, sp_payload_len(next_cb))
+                .write_to(&mut open_drawing);
+            open_drawing.extend_from_slice(&next_cb.pre_obj);
+            write_biff_record(stream, MSODRAWING_RECORD, &open_drawing);
+        }
     }
 
-    // NOTE records last, also in shape order.
-    for comment in &drawing.comments {
-        write_comment_note(stream, comment);
+    // NOTE records at the end, in shape order.
+    for (_, shape) in &comments {
+        write_comment_note(stream, shape);
     }
 }
 
