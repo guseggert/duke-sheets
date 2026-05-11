@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 
-
 use crate::axis::Axis;
 use crate::config::{ChartDataTable, DisplayBlanksAs, Layout, View3D};
 use crate::data_labels::DataLabels;
@@ -10,7 +9,6 @@ use crate::formatting::ChartShapeProperties;
 use crate::legend::Legend;
 use crate::series::DataSeries;
 use crate::text_properties::TextProperties;
-
 
 /// Chart types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,7 +233,6 @@ impl Chart {
         }
     }
 
-
     /// Set chart title
     pub fn with_title<S: Into<String>>(mut self, title: S) -> Self {
         self.title = Some(title.into());
@@ -304,9 +301,8 @@ impl Default for DrawingAnchor {
     }
 }
 
-
 /// Image format for embedded images.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageFormat {
     Png,
     Jpeg,

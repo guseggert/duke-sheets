@@ -645,6 +645,10 @@ impl XlsxWriter {
         let mut global_chart_num = 1usize;
         let mut chart_ex_numbering: Vec<(usize, usize, usize)> = Vec::new();
         let mut global_chart_ex_num = 1usize;
+        // (sheet_idx, image_idx_in_sheet, global_image_num). The
+        // global counter feeds `xl/media/image{N}.<ext>` filenames.
+        let mut image_numbering: Vec<(usize, usize, usize)> = Vec::new();
+        let mut global_image_num = 1usize;
         let mut drawing_numbering: Vec<(usize, usize)> = Vec::new();
         let mut global_drawing_num = 1usize;
         for (i, sheet) in workbook.worksheets().enumerate() {
@@ -654,7 +658,8 @@ impl XlsxWriter {
                 .any(|c| !matches!(c.chart_type, duke_sheets_chart::ChartType::Unsupported(_)));
             let has_charts_ex = sheet.chart_ex_count() > 0;
             let has_raw_objects = !sheet.raw_drawing_objects.is_empty();
-            if has_supported || has_charts_ex || has_raw_objects {
+            let has_images = sheet.image_count() > 0;
+            if has_supported || has_charts_ex || has_raw_objects || has_images {
                 drawing_numbering.push((i, global_drawing_num));
                 global_drawing_num += 1;
                 for (j, c) in sheet.charts().iter().enumerate() {
@@ -666,6 +671,10 @@ impl XlsxWriter {
                 for j in 0..sheet.chart_ex_count() {
                     chart_ex_numbering.push((i, j, global_chart_ex_num));
                     global_chart_ex_num += 1;
+                }
+                for j in 0..sheet.image_count() {
+                    image_numbering.push((i, j, global_image_num));
+                    global_image_num += 1;
                 }
             }
         }
@@ -699,6 +708,7 @@ impl XlsxWriter {
             &drawing_numbering,
             &chart_numbering,
             &chart_ex_numbering,
+            &image_numbering,
             global_chart_num - 1, // total standard charts (for style/color numbering)
             &cs_drawing_numbering,
             &cs_chart_numbering,
@@ -791,10 +801,35 @@ impl XlsxWriter {
                     .collect();
                 let chartex_global_nums: Vec<usize> =
                     sheet_chartex_globals.iter().map(|&(_, gn)| gn).collect();
+                // Collect images for this sheet with their global
+                // image-part numbers (image1.<ext>, image2.<ext>, ...).
+                let sheet_image_globals: Vec<(usize, usize)> = image_numbering
+                    .iter()
+                    .filter(|(si, _, _)| *si == i)
+                    .map(|(_, ji, gn)| (*ji, *gn))
+                    .collect();
+                let drawing_images: Vec<drawing::DrawingImage> = sheet_image_globals
+                    .iter()
+                    .map(|&(ji, gn)| drawing::DrawingImage {
+                        image: &sheet.images()[ji],
+                        global_num: gn,
+                    })
+                    .collect();
+                let image_rels: Vec<(usize, &'static str)> = drawing_images
+                    .iter()
+                    .map(|di| {
+                        (
+                            di.global_num,
+                            drawing::image_format_extension(di.image.format),
+                        )
+                    })
+                    .collect();
+
                 drawing::write_drawing(
                     &mut zip,
                     &chart_refs,
                     &chartex_refs,
+                    &drawing_images,
                     &sheet.raw_drawing_objects,
                     dn,
                 )?;
@@ -803,7 +838,15 @@ impl XlsxWriter {
                     dn,
                     &chart_global_nums,
                     &chartex_global_nums,
+                    &image_rels,
                 )?;
+
+                // Write image binary parts (xl/media/imageN.<ext>).
+                for (ji, gn) in &sheet_image_globals {
+                    let img = &sheet.images()[*ji];
+                    let ext = drawing::image_format_extension(img.format);
+                    drawing::write_media_part(&mut zip, *gn, ext, &img.data)?;
+                }
                 for &(ji, gn) in &sheet_chart_globals {
                     chart::write_chart_part(&mut zip, &sheet.charts()[ji], gn)?;
                     Self::write_chart_style_color_parts(&mut zip, &sheet.charts()[ji], gn)?;
@@ -842,7 +885,7 @@ impl XlsxWriter {
                     &cs.raw_drawing_objects,
                     dn,
                 )?;
-                drawing::write_drawing_rels(&mut zip, dn, &[cn], &[])?;
+                drawing::write_drawing_rels(&mut zip, dn, &[cn], &[], &[])?;
                 chart::write_chart_part(&mut zip, &cs.chart, cn)?;
                 Self::write_chart_style_color_parts(&mut zip, &cs.chart, cn)?;
             } else if let Some(dn) = cs_dn {
@@ -854,7 +897,7 @@ impl XlsxWriter {
                     &cs.raw_drawing_objects,
                     dn,
                 )?;
-                drawing::write_drawing_rels(&mut zip, dn, &[], &[])?;
+                drawing::write_drawing_rels(&mut zip, dn, &[], &[], &[])?;
             }
         }
         zip.finish()?;
@@ -870,6 +913,7 @@ impl XlsxWriter {
         drawing_numbering: &[(usize, usize)],
         chart_numbering: &[(usize, usize, usize)],
         chart_ex_numbering: &[(usize, usize, usize)],
+        image_numbering: &[(usize, usize, usize)],
         total_standard_charts: usize,
         cs_drawing_numbering: &[(usize, usize)],
         cs_chart_numbering: &[(usize, usize)],
@@ -895,6 +939,32 @@ impl XlsxWriter {
                         "ContentType",
                         "application/vnd.openxmlformats-officedocument.vmlDrawing",
                     ))
+                    .write_empty()?;
+            }
+
+            // One Default per unique image extension. Maps file
+            // extension to the IANA MIME type Excel expects in
+            // [Content_Types].xml for embedded image parts.
+            let mut seen_image_exts = std::collections::BTreeSet::new();
+            for &(sheet_idx, image_idx, _) in image_numbering {
+                let img = &workbook.worksheets().nth(sheet_idx).unwrap().images()[image_idx];
+                let ext = drawing::image_format_extension(img.format);
+                if !seen_image_exts.insert(ext) {
+                    continue;
+                }
+                let mime = match img.format {
+                    duke_sheets_chart::ImageFormat::Png => "image/png",
+                    duke_sheets_chart::ImageFormat::Jpeg => "image/jpeg",
+                    duke_sheets_chart::ImageFormat::Gif => "image/gif",
+                    duke_sheets_chart::ImageFormat::Bmp => "image/bmp",
+                    duke_sheets_chart::ImageFormat::Tiff => "image/tiff",
+                    duke_sheets_chart::ImageFormat::Emf => "image/x-emf",
+                    duke_sheets_chart::ImageFormat::Wmf => "image/x-wmf",
+                    duke_sheets_chart::ImageFormat::Svg => "image/svg+xml",
+                };
+                w.create_element("Default")
+                    .with_attribute(("Extension", ext))
+                    .with_attribute(("ContentType", mime))
                     .write_empty()?;
             }
             w.create_element("Override")

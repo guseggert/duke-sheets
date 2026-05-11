@@ -2,7 +2,7 @@ use std::io::{Seek, Write};
 
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 
-use duke_sheets_chart::{CellMarker, Chart, ChartEx, DrawingAnchor};
+use duke_sheets_chart::{CellMarker, Chart, ChartEx, DrawingAnchor, EmbeddedImage};
 
 use super::{write_xml_part, XlsxResult, XmlWriter, NS_DOC_RELS, NS_RELATIONSHIPS, RT_CHART};
 
@@ -14,11 +14,24 @@ const NS_CX: &str = "http://schemas.microsoft.com/office/drawing/2014/chartex";
 const NS_MC: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 const NS_CX1: &str = "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex";
 const RT_CHART_EX: &str = "http://schemas.microsoft.com/office/2014/relationships/chartEx";
+/// OOXML relationship type for embedded image parts (`xl/media/*`).
+pub(super) const RT_IMAGE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+
+/// One image referenced by a sheet's drawing, paired with the global
+/// part number used for its filename in `xl/media/imageN.<ext>`. The
+/// pair lets the drawing writer and the rels writer agree on which
+/// rId points at which media part.
+pub(super) struct DrawingImage<'a> {
+    pub image: &'a EmbeddedImage,
+    pub global_num: usize,
+}
 
 pub(super) fn write_drawing<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     charts: &[&Chart],
     charts_ex: &[&ChartEx],
+    images: &[DrawingImage<'_>],
     raw_drawing_objects: &[Vec<u8>],
     drawing_num: usize,
 ) -> XlsxResult<()> {
@@ -48,6 +61,17 @@ pub(super) fn write_drawing<W: Write + Seek>(
             )?;
         }
 
+        // Pictures: rId numbering continues after charts + chartEx.
+        let pic_rid_start = charts.len() + charts_ex.len() + 1;
+        for (i, drawing_image) in images.iter().enumerate() {
+            let rid = format!("rId{}", pic_rid_start + i);
+            // Shape ID space follows the chart-frame convention used
+            // elsewhere in this file: the first non-DOM object is id=2,
+            // then incrementing.
+            let shape_idx = charts.len() + charts_ex.len() + i;
+            write_picture_anchor(w, drawing_image.image, &rid, shape_idx)?;
+        }
+
         for raw in raw_drawing_objects {
             w.get_mut().write_all(raw)?;
         }
@@ -55,6 +79,109 @@ pub(super) fn write_drawing<W: Write + Seek>(
         w.write_event(Event::End(BytesEnd::new("xdr:wsDr")))?;
         Ok(())
     })
+}
+
+/// Emit one `<xdr:twoCellAnchor>` wrapping an `<xdr:pic>` element for
+/// an embedded image. Only TwoCell anchors are supported in the
+/// current writer slice; OneCell and Absolute fall through to a
+/// degenerate TwoCell at (0,0).
+fn write_picture_anchor(
+    w: &mut XmlWriter,
+    image: &EmbeddedImage,
+    rid: &str,
+    shape_idx: usize,
+) -> XlsxResult<()> {
+    let (from, to) = match &image.anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => (from.clone(), to.clone()),
+        DrawingAnchor::OneCell { from, .. } => {
+            // OneCell carries (from, width, height); we synthesise a
+            // matching `to` marker so the resulting twoCellAnchor has
+            // the correct extent. The width/height conversion from
+            // EMU to per-column/row split is approximate (~9525 EMU
+            // per pixel and ~64 default column width pixels).
+            let mut to_marker = from.clone();
+            to_marker.col += 1;
+            to_marker.row += 1;
+            (from.clone(), to_marker)
+        }
+        DrawingAnchor::Absolute { .. } => (CellMarker::default(), CellMarker::default()),
+    };
+
+    w.write_event(Event::Start(BytesStart::new("xdr:twoCellAnchor")))?;
+
+    w.write_event(Event::Start(BytesStart::new("xdr:from")))?;
+    write_cell_marker(w, &from)?;
+    w.write_event(Event::End(BytesEnd::new("xdr:from")))?;
+
+    w.write_event(Event::Start(BytesStart::new("xdr:to")))?;
+    write_cell_marker(w, &to)?;
+    w.write_event(Event::End(BytesEnd::new("xdr:to")))?;
+
+    w.write_event(Event::Start(BytesStart::new("xdr:pic")))?;
+
+    // <xdr:nvPicPr> non-visual picture properties.
+    w.write_event(Event::Start(BytesStart::new("xdr:nvPicPr")))?;
+    let cnv_id = (shape_idx + 2).to_string();
+    let mut cnv_pr = BytesStart::new("xdr:cNvPr");
+    cnv_pr.push_attribute(("id", cnv_id.as_str()));
+    cnv_pr.push_attribute(("name", image.name.as_str()));
+    if let Some(desc) = image.description.as_deref() {
+        cnv_pr.push_attribute(("descr", desc));
+    }
+    w.write_event(Event::Empty(cnv_pr))?;
+    w.write_event(Event::Start(BytesStart::new("xdr:cNvPicPr")))?;
+    let mut pic_locks = BytesStart::new("a:picLocks");
+    pic_locks.push_attribute(("noChangeAspect", "1"));
+    w.write_event(Event::Empty(pic_locks))?;
+    w.write_event(Event::End(BytesEnd::new("xdr:cNvPicPr")))?;
+    w.write_event(Event::End(BytesEnd::new("xdr:nvPicPr")))?;
+
+    // <xdr:blipFill> blip reference to the image part.
+    w.write_event(Event::Start(BytesStart::new("xdr:blipFill")))?;
+    let mut blip = BytesStart::new("a:blip");
+    blip.push_attribute(("xmlns:r", NS_DOC_RELS));
+    blip.push_attribute(("r:embed", rid));
+    w.write_event(Event::Empty(blip))?;
+    w.write_event(Event::Start(BytesStart::new("a:stretch")))?;
+    w.write_event(Event::Empty(BytesStart::new("a:fillRect")))?;
+    w.write_event(Event::End(BytesEnd::new("a:stretch")))?;
+    w.write_event(Event::End(BytesEnd::new("xdr:blipFill")))?;
+
+    // <xdr:spPr> shape properties: xfrm with image-supplied geometry.
+    w.write_event(Event::Start(BytesStart::new("xdr:spPr")))?;
+    let mut xfrm = BytesStart::new("a:xfrm");
+    if let Some(rot) = image.rotation {
+        xfrm.push_attribute(("rot", rot.to_string().as_str()));
+    }
+    if image.flip_h {
+        xfrm.push_attribute(("flipH", "1"));
+    }
+    if image.flip_v {
+        xfrm.push_attribute(("flipV", "1"));
+    }
+    w.write_event(Event::Start(xfrm))?;
+    w.create_element("a:off")
+        .with_attribute(("x", "0"))
+        .with_attribute(("y", "0"))
+        .write_empty()?;
+    let cx_s = image.width_emu.to_string();
+    let cy_s = image.height_emu.to_string();
+    w.create_element("a:ext")
+        .with_attribute(("cx", cx_s.as_str()))
+        .with_attribute(("cy", cy_s.as_str()))
+        .write_empty()?;
+    w.write_event(Event::End(BytesEnd::new("a:xfrm")))?;
+    let mut prst = BytesStart::new("a:prstGeom");
+    prst.push_attribute(("prst", "rect"));
+    w.write_event(Event::Start(prst))?;
+    w.write_event(Event::Empty(BytesStart::new("a:avLst")))?;
+    w.write_event(Event::End(BytesEnd::new("a:prstGeom")))?;
+    w.write_event(Event::End(BytesEnd::new("xdr:spPr")))?;
+
+    w.write_event(Event::End(BytesEnd::new("xdr:pic")))?;
+    w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
+    w.write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))?;
+    Ok(())
 }
 
 pub(super) fn write_chartsheet_drawing<W: Write + Seek>(
@@ -304,6 +431,7 @@ pub(super) fn write_drawing_rels<W: Write + Seek>(
     drawing_num: usize,
     chart_nums: &[usize],
     chart_ex_nums: &[usize],
+    image_parts: &[(usize, &'static str)],
 ) -> XlsxResult<()> {
     let path = format!("xl/drawings/_rels/drawing{}.xml.rels", drawing_num);
     write_xml_part(zip, &path, |w| {
@@ -332,7 +460,47 @@ pub(super) fn write_drawing_rels<W: Write + Seek>(
                 .write_empty()?;
         }
 
+        let pic_rid_start = chart_nums.len() + chart_ex_nums.len() + 1;
+        for (i, (global_num, ext)) in image_parts.iter().enumerate() {
+            let rid = format!("rId{}", pic_rid_start + i);
+            let target = format!("../media/image{global_num}.{ext}");
+            w.create_element("Relationship")
+                .with_attribute(("Id", rid.as_str()))
+                .with_attribute(("Type", RT_IMAGE))
+                .with_attribute(("Target", target.as_str()))
+                .write_empty()?;
+        }
+
         w.write_event(Event::End(BytesEnd::new("Relationships")))?;
         Ok(())
     })
+}
+
+/// Map an `ImageFormat` to the file extension used in `xl/media/`.
+pub(super) fn image_format_extension(fmt: duke_sheets_chart::ImageFormat) -> &'static str {
+    use duke_sheets_chart::ImageFormat;
+    match fmt {
+        ImageFormat::Png => "png",
+        ImageFormat::Jpeg => "jpeg",
+        ImageFormat::Gif => "gif",
+        ImageFormat::Bmp => "bmp",
+        ImageFormat::Tiff => "tiff",
+        ImageFormat::Emf => "emf",
+        ImageFormat::Wmf => "wmf",
+        ImageFormat::Svg => "svg",
+    }
+}
+
+/// Write the raw image bytes as a part `xl/media/imageN.<ext>` inside
+/// the zip archive.
+pub(super) fn write_media_part<W: Write + Seek>(
+    zip: &mut zip::ZipWriter<W>,
+    global_num: usize,
+    ext: &str,
+    bytes: &[u8],
+) -> XlsxResult<()> {
+    let path = format!("xl/media/image{global_num}.{ext}");
+    zip.start_file(&path, zip::write::SimpleFileOptions::default())?;
+    zip.write_all(bytes)?;
+    Ok(())
 }
