@@ -3585,9 +3585,17 @@ fn emu_to_dy_units(emu: i64) -> u16 {
 }
 
 /// Translate a `duke_sheets_chart::DrawingAnchor` to the
-/// `OfficeArtClientAnchor` BIFF8 layout. For the MVP slice we
-/// implement TwoCell directly; OneCell and Absolute collapse to a
-/// best-effort TwoCell that covers the same area.
+/// `OfficeArtClientAnchor` BIFF8 layout.
+///
+/// XLS's ClientAnchor has a single byte layout (top-left and
+/// bottom-right cells + within-cell EMU offsets) for all three
+/// OOXML anchor variants. The `flag` field encodes the variant
+/// semantics:
+///   0 = move + resize with cells (OOXML `editAs="twoCell"`)
+///   2 = move only, don't resize (OOXML `editAs="oneCell"` or
+///       `xdr:oneCellAnchor`)
+///   3 = no move, no resize (OOXML `editAs="absolute"` or
+///       `xdr:absoluteAnchor`)
 ///
 /// Within-cell EMU offsets carried by the source `CellMarker` are
 /// quantised to the anchor's 1024ths-of-cell-width / 256ths-of-cell-
@@ -3599,13 +3607,45 @@ fn client_anchor_from_drawing_anchor(
     anchor: &duke_sheets_chart::DrawingAnchor,
 ) -> crate::biff::escher::OfficeArtClientAnchor {
     use crate::biff::escher::OfficeArtClientAnchor;
-    use duke_sheets_chart::DrawingAnchor;
+    use duke_sheets_chart::{DrawingAnchor, EditAs};
+
+    /// Default column width in EMU (8.43 char ≈ 64 px).
+    const DEFAULT_COL_EMU: i64 = 609_600;
+    /// Default row height in EMU (15 pt).
+    const DEFAULT_ROW_EMU: i64 = 190_500;
+
+    /// Convert an `EditAs` enum into the ClientAnchor flag.
+    fn edit_as_to_flag(edit_as: &Option<EditAs>) -> u16 {
+        match edit_as {
+            None | Some(EditAs::TwoCell) => 0,
+            Some(EditAs::OneCell) => 2,
+            Some(EditAs::Absolute) => 3,
+        }
+    }
+
+    /// For OneCell / Absolute → compute the (col_r, dx_r, row_b,
+    /// dy_b) fields by adding width/height EMU to the (col, offset)
+    /// starting point at default cell sizes.
+    fn extend_anchor(
+        start_col: u16,
+        start_off_x: i64,
+        width: i64,
+        start_row: u32,
+        start_off_y: i64,
+        height: i64,
+    ) -> (u16, i64, u32, i64) {
+        let total_x = start_col as i64 * DEFAULT_COL_EMU + start_off_x + width;
+        let end_col = (total_x / DEFAULT_COL_EMU).max(0) as u16;
+        let end_off_x = total_x - end_col as i64 * DEFAULT_COL_EMU;
+        let total_y = start_row as i64 * DEFAULT_ROW_EMU + start_off_y + height;
+        let end_row = (total_y / DEFAULT_ROW_EMU).max(0) as u32;
+        let end_off_y = total_y - end_row as i64 * DEFAULT_ROW_EMU;
+        (end_col, end_off_x, end_row, end_off_y)
+    }
 
     match anchor {
-        DrawingAnchor::TwoCell { from, to, .. } => OfficeArtClientAnchor {
-            // flag=2 = move with cells but don't resize, matching the
-            // behaviour Excel writes for a freshly-inserted picture.
-            flag: 2,
+        DrawingAnchor::TwoCell { from, to, edit_as } => OfficeArtClientAnchor {
+            flag: edit_as_to_flag(edit_as),
             col_l: from.col,
             dx_l: emu_to_dx_units(from.col_offset_emu),
             row_t: from.row as u16,
@@ -3615,28 +3655,54 @@ fn client_anchor_from_drawing_anchor(
             row_b: to.row as u16,
             dy_b: emu_to_dy_units(to.row_offset_emu),
         },
-        DrawingAnchor::OneCell { from, .. } => OfficeArtClientAnchor {
-            flag: 2,
-            col_l: from.col,
-            dx_l: emu_to_dx_units(from.col_offset_emu),
-            row_t: from.row as u16,
-            dy_t: emu_to_dy_units(from.row_offset_emu),
-            col_r: from.col.saturating_add(1),
-            dx_r: 0,
-            row_b: (from.row as u16).saturating_add(1),
-            dy_b: 0,
-        },
-        DrawingAnchor::Absolute { .. } => OfficeArtClientAnchor {
-            flag: 3,
-            col_l: 0,
-            dx_l: 0,
-            row_t: 0,
-            dy_t: 0,
-            col_r: 1,
-            dx_r: 0,
-            row_b: 1,
-            dy_b: 0,
-        },
+        DrawingAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            let (col_r, off_r, row_b, off_b) = extend_anchor(
+                from.col,
+                from.col_offset_emu,
+                *width_emu,
+                from.row,
+                from.row_offset_emu,
+                *height_emu,
+            );
+            OfficeArtClientAnchor {
+                flag: 2,
+                col_l: from.col,
+                dx_l: emu_to_dx_units(from.col_offset_emu),
+                row_t: from.row as u16,
+                dy_t: emu_to_dy_units(from.row_offset_emu),
+                col_r,
+                dx_r: emu_to_dx_units(off_r),
+                row_b: row_b.min(u16::MAX as u32) as u16,
+                dy_b: emu_to_dy_units(off_b),
+            }
+        }
+        DrawingAnchor::Absolute {
+            x_emu,
+            y_emu,
+            width_emu,
+            height_emu,
+        } => {
+            // Absolute coordinates are relative to (0, 0); position
+            // the from cell at the origin with the x/y offsets.
+            let (col_l, off_l, row_t, off_t) = extend_anchor(0, 0, *x_emu, 0, 0, *y_emu);
+            let (col_r, off_r, row_b, off_b) =
+                extend_anchor(col_l, off_l, *width_emu, row_t, off_t, *height_emu);
+            OfficeArtClientAnchor {
+                flag: 3,
+                col_l,
+                dx_l: emu_to_dx_units(off_l),
+                row_t: row_t.min(u16::MAX as u32) as u16,
+                dy_t: emu_to_dy_units(off_t),
+                col_r,
+                dx_r: emu_to_dx_units(off_r),
+                row_b: row_b.min(u16::MAX as u32) as u16,
+                dy_b: emu_to_dy_units(off_b),
+            }
+        }
     }
 }
 

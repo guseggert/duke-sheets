@@ -7,7 +7,7 @@
 
 use std::io::Cursor;
 
-use duke_sheets_chart::{CellMarker, DrawingAnchor, EmbeddedImage, ImageFormat};
+use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs, EmbeddedImage, ImageFormat};
 use duke_sheets_core::Workbook;
 use duke_sheets_xls::{XlsReader, XlsWriter};
 
@@ -139,6 +139,123 @@ fn single_picture_round_trips() {
         assert_eq!(to.row, 8);
     } else {
         panic!("expected TwoCell anchor, got {:?}", img.anchor);
+    }
+}
+
+#[test]
+fn twocell_anchor_edit_as_round_trips() {
+    // editAs=TwoCell (or None) maps to ClientAnchor flag=0
+    // (move+resize with cells). Round-trip should preserve the
+    // editAs setting as TwoCell since the reader maps flag=0 →
+    // TwoCell.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut img = test_image(1, "Picture 1", 1, 2);
+    img.anchor = DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: 1,
+            col_offset_emu: 0,
+            row: 2,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: 4,
+            col_offset_emu: 0,
+            row: 7,
+            row_offset_emu: 0,
+        },
+        edit_as: Some(EditAs::TwoCell),
+    };
+    ws.add_image(img);
+
+    let parsed = write_then_read(&wb);
+    let img = &parsed.worksheet(0).unwrap().images()[0];
+    if let DrawingAnchor::TwoCell { edit_as, .. } = &img.anchor {
+        assert_eq!(*edit_as, Some(EditAs::TwoCell));
+    } else {
+        panic!("expected TwoCell");
+    }
+}
+
+#[test]
+fn onecell_anchor_round_trips_with_visual_area_preserved() {
+    // OneCell input: from cell + width/height in EMU.
+    // Writer encodes this as a TwoCell-style ClientAnchor with
+    // flag=2 (move only). Reader maps flag=2 back to TwoCell with
+    // editAs=OneCell. The variant tag is lost but the visual area
+    // is preserved.
+    const COL_EMU: i64 = 609_600;
+    const ROW_EMU: i64 = 190_500;
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut img = test_image(1, "Picture 1", 0, 0);
+    img.anchor = DrawingAnchor::OneCell {
+        from: CellMarker {
+            col: 2,
+            col_offset_emu: 0,
+            row: 3,
+            row_offset_emu: 0,
+        },
+        // Exactly 3 columns × 2 rows worth of default cells.
+        width_emu: 3 * COL_EMU,
+        height_emu: 2 * ROW_EMU,
+    };
+    ws.add_image(img);
+
+    let parsed = write_then_read(&wb);
+    let img = &parsed.worksheet(0).unwrap().images()[0];
+    match &img.anchor {
+        DrawingAnchor::TwoCell {
+            from,
+            to,
+            edit_as,
+        } => {
+            assert_eq!(from.col, 2);
+            assert_eq!(from.row, 3);
+            assert_eq!(to.col, 5, "OneCell width must extend by 3 cols");
+            assert_eq!(to.row, 5, "OneCell height must extend by 2 rows");
+            assert_eq!(*edit_as, Some(EditAs::OneCell));
+        }
+        other => panic!("expected TwoCell with editAs=OneCell, got {other:?}"),
+    }
+    assert_eq!(img.width_emu, 3 * COL_EMU);
+    assert_eq!(img.height_emu, 2 * ROW_EMU);
+}
+
+#[test]
+fn absolute_anchor_round_trips_with_visual_area_preserved() {
+    // Absolute input: explicit x/y position + width/height in EMU.
+    // Writer encodes this as a TwoCell-style ClientAnchor with
+    // flag=3 (no move, no resize). Reader maps flag=3 back to
+    // TwoCell with editAs=Absolute.
+    const COL_EMU: i64 = 609_600;
+    const ROW_EMU: i64 = 190_500;
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut img = test_image(1, "Picture 1", 0, 0);
+    img.anchor = DrawingAnchor::Absolute {
+        x_emu: 4 * COL_EMU,
+        y_emu: 3 * ROW_EMU,
+        width_emu: 2 * COL_EMU,
+        height_emu: 4 * ROW_EMU,
+    };
+    ws.add_image(img);
+
+    let parsed = write_then_read(&wb);
+    let img = &parsed.worksheet(0).unwrap().images()[0];
+    match &img.anchor {
+        DrawingAnchor::TwoCell {
+            from,
+            to,
+            edit_as,
+        } => {
+            assert_eq!(from.col, 4, "Absolute x must land in col 4");
+            assert_eq!(from.row, 3, "Absolute y must land in row 3");
+            assert_eq!(to.col, 6, "width extends from col 4 by 2");
+            assert_eq!(to.row, 7, "height extends from row 3 by 4");
+            assert_eq!(*edit_as, Some(EditAs::Absolute));
+        }
+        other => panic!("expected TwoCell with editAs=Absolute, got {other:?}"),
     }
 }
 

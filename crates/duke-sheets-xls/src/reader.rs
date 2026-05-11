@@ -2537,6 +2537,21 @@ impl XlsReader {
         let width_emu = (col_span * DEFAULT_COL_EMU + to_col_off - from_col_off).max(0);
         let height_emu = (row_span * DEFAULT_ROW_EMU + to_row_off - from_row_off).max(0);
 
+        // Map the ClientAnchor flag back to the OOXML `editAs`
+        // hint:
+        //   0 → editAs="twoCell"  (move + resize with cells)
+        //   2 → editAs="oneCell"  (move only)
+        //   3 → editAs="absolute" (no move, no resize)
+        // OneCell and Absolute inputs collapse to TwoCell on
+        // read since the byte layout is identical; the editAs hint
+        // preserves the semantic intent so a downstream XLSX writer
+        // can re-emit the appropriate variant.
+        let edit_as = match anchor.flag {
+            0 => Some(duke_sheets_chart::EditAs::TwoCell),
+            2 => Some(duke_sheets_chart::EditAs::OneCell),
+            3 => Some(duke_sheets_chart::EditAs::Absolute),
+            _ => None,
+        };
         let image = duke_sheets_chart::EmbeddedImage {
             id: fsp_spid,
             name,
@@ -2554,7 +2569,7 @@ impl XlsReader {
                     row: anchor.row_b as u32,
                     row_offset_emu: to_row_off,
                 },
-                edit_as: None,
+                edit_as,
             },
             format: blip.format,
             media_path: String::new(),
