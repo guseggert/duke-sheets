@@ -1742,7 +1742,7 @@ fn write_user_name_records(
             };
             if let Ok(expr) = duke_sheets_formula::parse_formula(&to_parse) {
                 let mut bytes = Vec::new();
-                if compile_ptgs_with_context(&expr, &mut bytes, externsheet, name_table).is_ok() {
+                if compile_ptgs_with_context(&expr, &mut bytes, externsheet, name_table, OperandClass::V).is_ok() {
                     bytes
                 } else {
                     Vec::new()
@@ -2518,7 +2518,7 @@ fn encode_dv_formula(value: &str, externsheet: &ExternSheetTable, names: &NameTa
     };
     if let Ok(expr) = duke_sheets_formula::parse_formula(&to_parse) {
         let mut bytes = Vec::new();
-        if compile_ptgs_with_context(&expr, &mut bytes, externsheet, names).is_ok() {
+        if compile_ptgs_with_context(&expr, &mut bytes, externsheet, names, OperandClass::V).is_ok() {
             return bytes;
         }
     }
@@ -2672,7 +2672,7 @@ fn try_write_formula_record(
         return false;
     };
     let mut tokens = Vec::with_capacity(32);
-    if compile_ptgs_with_context(&expr, &mut tokens, externsheet, names).is_err() {
+    if compile_ptgs_with_context(&expr, &mut tokens, externsheet, names, OperandClass::V).is_err() {
         return false;
     }
     if tokens.len() > u16::MAX as usize {
@@ -2784,7 +2784,23 @@ fn compile_ptgs(
         out,
         &ExternSheetTable::default(),
         &NameTable::default(),
+        OperandClass::V,
     )
+}
+
+/// PTG operand class. MS-XLS represents references in two flavors:
+/// V (value) and R (reference). Most expressions want V — Excel
+/// dereferences the cell as soon as it appears. Intersection and
+/// union operators, however, need R-class operands because the
+/// operators themselves manipulate cell ranges, not their values.
+/// 3D area references are an exception: they use R-class even
+/// outside intersection/union context per MS-XLS §2.5.198.103,
+/// because V-class causes Excel to collapse the range to its last
+/// cell during SUM-style evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperandClass {
+    V,
+    R,
 }
 
 fn compile_ptgs_with_context(
@@ -2792,6 +2808,7 @@ fn compile_ptgs_with_context(
     out: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    operand_class: OperandClass,
 ) -> Result<(), UnsupportedToken> {
     use duke_sheets_formula::ast::{BinaryOperator, UnaryOperator};
     use duke_sheets_formula::FormulaExpr;
@@ -2819,13 +2836,23 @@ fn compile_ptgs_with_context(
                     .ixti_for_sheet(sheet_name)
                     .ok_or(UnsupportedToken)?;
                 // tRef3D V class = base 0x3A | V-class 0x20 = 0x5A.
+                // R-class variant is 0x3A (base) | R-class 0x00 = 0x3A.
                 // (0x5C is tRefErr3D - decompiles to "#REF!".)
-                out.push(0x5A);
+                let opcode = match operand_class {
+                    OperandClass::R => 0x3A,
+                    OperandClass::V => 0x5A,
+                };
+                out.push(opcode);
                 out.extend_from_slice(&ixti.to_le_bytes());
                 push_ref_payload(out, &cref.address)?;
                 return Ok(());
             }
-            out.push(0x44); // PTG_REF (V class)
+            // PTG_REF base = 0x04; R-class = 0x24, V-class = 0x44.
+            let opcode = match operand_class {
+                OperandClass::R => 0x24,
+                OperandClass::V => 0x44,
+            };
+            out.push(opcode);
             push_ref_payload(out, &cref.address)?;
         }
         FormulaExpr::RangeRef(rref) => {
@@ -2833,12 +2860,19 @@ fn compile_ptgs_with_context(
                 let ixti = externsheet
                     .ixti_for_sheet(sheet_name)
                     .ok_or(UnsupportedToken)?;
+                // 3D areas always use R-class — V-class causes
+                // Excel to collapse the range to a single cell.
                 out.push(0x3B); // PTG_AREA3D (R class)
                 out.extend_from_slice(&ixti.to_le_bytes());
                 push_area_payload(out, &rref.range)?;
                 return Ok(());
             }
-            out.push(0x45); // PTG_AREA (V class)
+            // PTG_AREA base = 0x05; R-class = 0x25, V-class = 0x45.
+            let opcode = match operand_class {
+                OperandClass::R => 0x25,
+                OperandClass::V => 0x45,
+            };
+            out.push(opcode);
             push_area_payload(out, &rref.range)?;
         }
         FormulaExpr::BinaryOp { op, left, right } => {
@@ -2850,13 +2884,26 @@ fn compile_ptgs_with_context(
             // sheet extent.
             if matches!(op, BinaryOperator::Range) {
                 if let Some(area) = full_column_or_row_range(left, right) {
-                    out.push(0x45); // PTG_AREA (V class)
+                    let opcode = match operand_class {
+                        OperandClass::R => 0x25,
+                        OperandClass::V => 0x45,
+                    };
+                    out.push(opcode);
                     push_area_payload(out, &area)?;
                     return Ok(());
                 }
             }
-            compile_ptgs_with_context(left, out, externsheet, names)?;
-            compile_ptgs_with_context(right, out, externsheet, names)?;
+            // Intersection / union / range operators require R-class
+            // operands. Other operators use V-class for their operands
+            // unless the parent context already forced R-class.
+            let child_class = match op {
+                BinaryOperator::Intersect | BinaryOperator::Union | BinaryOperator::Range => {
+                    OperandClass::R
+                }
+                _ => operand_class,
+            };
+            compile_ptgs_with_context(left, out, externsheet, names, child_class)?;
+            compile_ptgs_with_context(right, out, externsheet, names, child_class)?;
             out.push(match op {
                 BinaryOperator::Add => 0x03,
                 BinaryOperator::Subtract => 0x04,
@@ -2870,13 +2917,17 @@ fn compile_ptgs_with_context(
                 BinaryOperator::GreaterEqual => 0x0C,
                 BinaryOperator::GreaterThan => 0x0D,
                 BinaryOperator::NotEqual => 0x0E,
-                BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
-                    return Err(UnsupportedToken)
-                }
+                // BIFF8 PTGs per MS-XLS §2.5.198.x:
+                //   0x0F PtgIsect (intersection, space operator)
+                //   0x10 PtgUnion (union, comma inside range parens)
+                //   0x11 PtgRange (range, colon operator)
+                BinaryOperator::Intersect => 0x0F,
+                BinaryOperator::Union => 0x10,
+                BinaryOperator::Range => 0x11,
             });
         }
         FormulaExpr::UnaryOp { op, operand } => {
-            compile_ptgs_with_context(operand, out, externsheet, names)?;
+            compile_ptgs_with_context(operand, out, externsheet, names, operand_class)?;
             out.push(match op {
                 UnaryOperator::Negate => 0x13,
                 UnaryOperator::Percent => 0x14,
@@ -2896,7 +2947,7 @@ fn compile_ptgs_with_context(
                 if matches!(arg, FormulaExpr::Empty) {
                     out.push(0x16); // PTG_MISS_ARG
                 } else {
-                    compile_ptgs_with_context(arg, out, externsheet, names)?;
+                    compile_ptgs_with_context(arg, out, externsheet, names, OperandClass::V)?;
                 }
             }
             // Always emit tFuncVar (V class, 0x42) so the variable-

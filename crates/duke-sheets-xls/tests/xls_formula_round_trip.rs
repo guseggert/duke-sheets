@@ -1,14 +1,11 @@
-//! Tests that PIN known XLS formula round-trip limitations. Each
-//! test documents what survives, what doesn't, and references the
-//! FEATURES.md notes column for the relevant row.
+//! Round-trip tests for XLS formula expressions that exercise
+//! reference operators: intersection (space), union (comma), range
+//! (colon), cross-sheet refs, and named-range references.
 //!
-//! The audit that landed this file found that intersection and
-//! union formula text is silently dropped by the XLS writer →
-//! reader round-trip, even though the cached value survives. The
-//! FEATURES.md cells for those rows are R●/W● (partial) rather
-//! than R✔/W✔. These tests assert the loss so a future fix to the
-//! XLS formula compiler can be detected (the tests would flip from
-//! "documents loss" to "fix landed, please update FEATURES.md").
+//! Originally landed during the cheat audit to PIN the loss of
+//! intersection / union formula text through the XLS writer; the
+//! follow-up fix (PtgIsect / PtgUnion / PtgRange emission with
+//! R-class operands) flipped these to positive assertions.
 
 use std::io::Cursor;
 
@@ -21,16 +18,10 @@ fn write_then_read(wb: &Workbook) -> Workbook {
 }
 
 #[test]
-fn intersection_formula_text_is_lost_through_xls_roundtrip() {
-    // Pin the documented XLS limitation: the writer drops the
-    // intersection operator from the emitted formula bytes, so the
-    // reader returns no formula text for cells that used `=SUM(A B)`
-    // style intersection formulas. The cached value (set explicitly
-    // via set_formula_result) survives.
-    //
-    // If this assertion ever flips to `Some(...)`, the XLS formula
-    // compiler has been fixed and FEATURES.md row 49 (Intersection)
-    // should be updated from R●/W● to R✔/W✔ for the XLS column.
+fn intersection_formula_text_survives_xls_roundtrip() {
+    // The XLS compiler emits PtgIsect (0x0F) for `=SUM(A1:B3 B2:C3)`
+    // with R-class PtgArea operands so Excel can intersect the two
+    // ranges to get cells B2 and B3 (5 + 8 = 13).
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     for r in 0..3u32 {
@@ -45,15 +36,13 @@ fn intersection_formula_text_is_lost_through_xls_roundtrip() {
 
     let parsed = write_then_read(&wb);
     let s = parsed.worksheet(0).unwrap();
-    assert_eq!(
-        s.get_formula_at(0, 4),
-        None,
-        "documented XLS limitation: intersection formula text not \
-         preserved; if this returns Some(...) the writer was fixed \
-         and FEATURES.md should be updated"
+    let f = s
+        .get_formula_at(0, 4)
+        .expect("intersection formula text must survive XLS round-trip");
+    assert!(
+        f.contains("A1:B3") && f.contains("B2:C3"),
+        "intersection ranges lost from formula: {f:?}"
     );
-    // The cached value still survives, so applications that only
-    // read the displayed cell value still work for these formulas.
     match s.get_value_at(0, 4).effective_value() {
         CellValue::Number(n) => assert!((n - 13.0).abs() < 1e-9),
         other => panic!("E1 expected Number(13), got {other:?}"),
@@ -61,10 +50,10 @@ fn intersection_formula_text_is_lost_through_xls_roundtrip() {
 }
 
 #[test]
-fn union_formula_text_is_lost_through_xls_roundtrip() {
-    // Same documented limitation as the intersection case above but
-    // for the comma union operator inside bare parens. If this ever
-    // returns Some(...), update FEATURES.md row 50 (Range union).
+fn union_formula_text_survives_xls_roundtrip() {
+    // The XLS compiler emits PtgUnion (0x10) for `=SUM((A1:A2,C2:C3))`
+    // with R-class PtgArea operands. SUM collects the four cells
+    // {A1, A2, C2, C3} = 1+4+6+9 = 20.
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     for r in 0..3u32 {
@@ -79,10 +68,12 @@ fn union_formula_text_is_lost_through_xls_roundtrip() {
 
     let parsed = write_then_read(&wb);
     let s = parsed.worksheet(0).unwrap();
-    assert_eq!(
-        s.get_formula_at(0, 4),
-        None,
-        "documented XLS limitation: union formula text not preserved"
+    let f = s
+        .get_formula_at(0, 4)
+        .expect("union formula text must survive XLS round-trip");
+    assert!(
+        f.contains("A1:A2") && f.contains("C2:C3"),
+        "union ranges lost from formula: {f:?}"
     );
     match s.get_value_at(0, 4).effective_value() {
         CellValue::Number(n) => assert!((n - 20.0).abs() < 1e-9),
