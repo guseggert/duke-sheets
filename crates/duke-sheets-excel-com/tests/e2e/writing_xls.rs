@@ -513,6 +513,11 @@ fn excel_can_read_comment_we_emit() {
         "comment text lost after Excel round-trip: {:?}",
         c.text
     );
+    assert!(
+        c.author.contains("Alice"),
+        "comment author lost after Excel round-trip: {:?}",
+        c.author
+    );
 }
 
 /// Multi-comment scenario: Excel must accept multiple SP_CONTAINERs
@@ -536,29 +541,31 @@ fn excel_can_read_multiple_comments_we_emit() {
     let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.comment_count(), 3, "all three comments must survive");
+
+    // Verify each comment's text AND author land on the correct cell.
+    // Without per-author assertion, the test would silently pass if
+    // Excel scrambled the author–text mapping during NOTE re-save.
+    let c1 = s.comment_at(0, 0).unwrap();
+    assert!(c1.text.contains("Comment one"), "A1 text: {:?}", c1.text);
+    assert!(c1.author.contains("Alice"), "A1 author: {:?}", c1.author);
+
+    let c2 = s.comment_at(2, 2).unwrap();
     assert!(
-        s.comment_at(0, 0).unwrap().text.contains("Comment one"),
-        "A1 comment lost: {:?}",
-        s.comment_at(0, 0).unwrap().text
+        c2.text.contains("Comment two body"),
+        "C3 text: {:?}",
+        c2.text
     );
-    assert!(
-        s.comment_at(2, 2)
-            .unwrap()
-            .text
-            .contains("Comment two body"),
-        "C3 comment lost: {:?}",
-        s.comment_at(2, 2).unwrap().text
-    );
-    assert!(
-        s.comment_at(4, 4).unwrap().text.contains("Comment three"),
-        "E5 comment lost: {:?}",
-        s.comment_at(4, 4).unwrap().text
-    );
+    assert!(c2.author.contains("Bob"), "C3 author: {:?}", c2.author);
+
+    let c3 = s.comment_at(4, 4).unwrap();
+    assert!(c3.text.contains("Comment three"), "E5 text: {:?}", c3.text);
+    assert!(c3.author.contains("Carol"), "E5 author: {:?}", c3.author);
 }
 
-/// Unicode comment text — drives the writer onto the UTF-16LE TXO
-/// CONTINUE path. Confirms Excel preserves non-Latin glyphs through
-/// the round-trip.
+/// Unicode comment text + author — drives the writer onto the
+/// UTF-16LE TXO CONTINUE and NOTE author paths. Confirms Excel
+/// preserves non-Latin glyphs through both the text and the author
+/// field during the round-trip.
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_unicode_comment_we_emit() {
@@ -575,6 +582,11 @@ fn excel_can_read_unicode_comment_we_emit() {
         c.text.contains("こんにちは"),
         "Japanese text lost: {:?}",
         c.text
+    );
+    assert!(
+        c.author.contains("作者"),
+        "Japanese author lost: {:?}",
+        c.author
     );
 }
 
@@ -761,27 +773,44 @@ fn excel_can_read_comments_across_multiple_sheets_we_emit() {
     assert_eq!(result.worksheet(0).unwrap().comment_count(), 2);
     assert_eq!(result.worksheet(1).unwrap().comment_count(), 0);
     assert_eq!(result.worksheet(2).unwrap().comment_count(), 1);
-    assert!(result
-        .worksheet(0)
-        .unwrap()
-        .comment_at(0, 0)
-        .unwrap()
-        .text
-        .contains("Alpha A1"));
-    assert!(result
-        .worksheet(0)
-        .unwrap()
-        .comment_at(3, 3)
-        .unwrap()
-        .text
-        .contains("Alpha D4"));
-    assert!(result
-        .worksheet(2)
-        .unwrap()
-        .comment_at(5, 5)
-        .unwrap()
-        .text
-        .contains("Gamma F6"));
+
+    // Verify text + author per comment so a mis-mapping across
+    // sheets would be caught.
+    let alpha_a1 = result.worksheet(0).unwrap().comment_at(0, 0).unwrap();
+    assert!(
+        alpha_a1.text.contains("Alpha A1"),
+        "Alpha A1 text: {:?}",
+        alpha_a1.text
+    );
+    assert!(
+        alpha_a1.author.contains("Alice"),
+        "Alpha A1 author: {:?}",
+        alpha_a1.author
+    );
+
+    let alpha_d4 = result.worksheet(0).unwrap().comment_at(3, 3).unwrap();
+    assert!(
+        alpha_d4.text.contains("Alpha D4"),
+        "Alpha D4 text: {:?}",
+        alpha_d4.text
+    );
+    assert!(
+        alpha_d4.author.contains("Alice"),
+        "Alpha D4 author: {:?}",
+        alpha_d4.author
+    );
+
+    let gamma_f6 = result.worksheet(2).unwrap().comment_at(5, 5).unwrap();
+    assert!(
+        gamma_f6.text.contains("Gamma F6"),
+        "Gamma F6 text: {:?}",
+        gamma_f6.text
+    );
+    assert!(
+        gamma_f6.author.contains("Carol"),
+        "Gamma F6 author: {:?}",
+        gamma_f6.author
+    );
 }
 
 /// A 68-byte 1x1 transparent PNG with verified chunk CRCs, used as
