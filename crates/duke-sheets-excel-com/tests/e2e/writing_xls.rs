@@ -97,6 +97,19 @@ fn excel_can_evaluate_cross_sheet_formulas_we_emit() {
         CellValue::Number(n) => assert!((n - 60.0).abs() < 1e-9, "B2 = {n}"),
         other => panic!("B2 expected Number(60), got {other:?}"),
     }
+    // Verify formula structure survives — without this, Excel could
+    // have inlined the cross-sheet ref (e.g. "=10") and the cached
+    // value would still match.
+    let f1 = s.get_formula_at(0, 1).expect("B1 still a formula");
+    assert!(
+        f1.contains("Data") && f1.contains("A1"),
+        "cross-sheet ref lost from B1 formula: {f1:?}"
+    );
+    let f2 = s.get_formula_at(1, 1).expect("B2 still a formula");
+    assert!(
+        f2.contains("SUM") && f2.contains("Data") && f2.contains("A1:A3"),
+        "cross-sheet SUM lost from B2 formula: {f2:?}"
+    );
 }
 
 #[test]
@@ -328,6 +341,22 @@ fn excel_can_evaluate_named_range_formulas_we_emit() {
         CellValue::Number(n) => assert!((n - 3.0).abs() < 1e-9, "B2 = {n}"),
         other => panic!("B2 expected Number(3), got {other:?}"),
     }
+    // Verify named ranges survive in the formula text. The
+    // workbook-level `workbook.named_ranges()` map is documented as
+    // NOT being repopulated by the XLS reader (FEATURES.md rows
+    // 202-205 with R●/W● for XLS), so we only check the formula
+    // text here, pinned by xls_formula_round_trip::
+    // named_range_in_formula_text_survives_xls_roundtrip in-process.
+    let f1 = s.get_formula_at(0, 1).expect("B1 still a formula");
+    assert!(
+        f1.contains("Numbers"),
+        "named range Numbers lost from B1: {f1:?}"
+    );
+    let f2 = s.get_formula_at(1, 1).expect("B2 still a formula");
+    assert!(
+        f2.contains("TaxRate"),
+        "named range TaxRate lost from B2: {f2:?}"
+    );
 }
 
 #[test]
@@ -352,6 +381,20 @@ fn excel_can_read_print_names_we_emit() {
         .expect("print_area must survive Excel round-trip");
     assert_eq!(print_area.start, CellAddress::parse("A1").unwrap());
     assert_eq!(print_area.end, CellAddress::parse("B2").unwrap());
+
+    // repeat_rows must survive — set on input but previously not
+    // asserted. A regression dropping repeat_rows would have gone
+    // unnoticed.
+    let repeat_rows = s
+        .page_setup()
+        .repeat_rows
+        .expect("repeat_rows must survive Excel round-trip");
+    assert_eq!(
+        repeat_rows,
+        (0, 0),
+        "repeat_rows lost or mangled: {:?}",
+        repeat_rows
+    );
 }
 
 #[test]
@@ -393,6 +436,30 @@ fn excel_can_read_visual_state_we_emit() {
         "Hidden sheet must remain non-visible after round-trip; got {:?}",
         hidden.visibility()
     );
+
+    // Page setup fields were set on input but previously not asserted.
+    // A regression dropping landscape orientation, gridline printing,
+    // header text, or left_margin would have gone unnoticed.
+    let ps = s.page_setup();
+    assert_eq!(
+        ps.orientation,
+        PageOrientation::Landscape,
+        "landscape orientation lost"
+    );
+    assert!(ps.print_gridlines, "print_gridlines flag lost");
+    let header = ps
+        .odd_header
+        .as_deref()
+        .expect("odd_header text lost after round-trip");
+    assert!(
+        header.contains("Hdr"),
+        "odd_header content mangled: {header:?}"
+    );
+    assert!(
+        (ps.left_margin - 0.5).abs() < 0.05,
+        "left_margin lost or mangled: {} (expected ~0.5)",
+        ps.left_margin
+    );
 }
 
 #[test]
@@ -414,6 +481,15 @@ fn excel_can_read_protection_state_we_emit() {
         .protection()
         .expect("sheet protection must survive Excel round-trip");
     assert!(prot.protected, "protected flag lost after round-trip");
+
+    // Excel rewrites the password hash with its own algorithm. We
+    // can't require byte-identity but we can require something
+    // non-zero — a writer that dropped the password entirely would
+    // produce password_hash=None or Some(0).
+    let hash = prot
+        .password_hash
+        .expect("password_hash lost after round-trip");
+    assert_ne!(hash, 0, "password_hash dropped to 0 — writer regression");
 }
 
 #[test]
@@ -463,6 +539,13 @@ fn excel_can_evaluate_intersection_we_emit() {
         ),
         other => panic!("E1 expected Number(13), got {other:?}"),
     }
+    // Note: the XLS writer drops the intersection formula text on
+    // serialise (documented limitation — see
+    // xls_formula_round_trip::intersection_formula_text_is_lost_through_xls_roundtrip
+    // and FEATURES.md row 49). We only verify the cached value
+    // survives the Excel round-trip here. Once the XLS formula
+    // compiler is fixed to preserve PtgIsect, strengthen this
+    // assertion to check the formula text.
 }
 
 #[test]
@@ -486,6 +569,10 @@ fn excel_can_evaluate_union_we_emit() {
         CellValue::Number(n) => assert!((n - 20.0).abs() < 1e-9, "union sum drifted: E1 = {n}"),
         other => panic!("E1 expected Number(20), got {other:?}"),
     }
+    // Note: same as the intersection test above — the XLS writer
+    // drops the union formula text on serialise (documented
+    // limitation, FEATURES.md row 50). We assert only the cached
+    // value here.
 }
 
 /// Excel must accept our XLS comment-shape emit (MSODRAWINGGROUP +

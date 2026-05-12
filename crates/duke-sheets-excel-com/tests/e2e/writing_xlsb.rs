@@ -182,6 +182,25 @@ fn excel_can_evaluate_cross_sheet_formulas_we_emit() {
         CellValue::Number(n) => assert!((n - 60.0).abs() < 1e-9, "B2 = {n}"),
         other => panic!("B2 expected Number(60), got {other:?}"),
     }
+
+    // Verify the formula TEXT survived too — otherwise Excel could
+    // have inlined the cross-sheet reference (e.g. rewritten "=Data!A1"
+    // as "=10") and the cached value would still match but the
+    // formula structure would be lost.
+    let f1 = s
+        .get_formula_at(0, 1)
+        .expect("B1 must still be a formula after Excel re-save");
+    assert!(
+        f1.contains("Data") && f1.contains("A1"),
+        "cross-sheet ref lost from B1 formula: {f1:?}"
+    );
+    let f2 = s
+        .get_formula_at(1, 1)
+        .expect("B2 must still be a formula after Excel re-save");
+    assert!(
+        f2.contains("SUM") && f2.contains("Data") && f2.contains("A1:A3"),
+        "cross-sheet SUM lost from B2 formula: {f2:?}"
+    );
 }
 
 #[test]
@@ -675,6 +694,37 @@ fn excel_can_evaluate_named_range_formulas_we_emit() {
         CellValue::Number(n) => assert!((n - 3.0).abs() < 1e-9, "B2 = {n}"),
         other => panic!("B2 expected Number(3), got {other:?}"),
     }
+
+    // Verify the named range names appear in the formula text — without
+    // this, Excel could have inlined the named references and the test
+    // would silently pass even if the named ranges were dropped.
+    let f1 = s.get_formula_at(0, 1).expect("B1 still a formula");
+    assert!(
+        f1.contains("Numbers"),
+        "named range Numbers lost from B1 formula: {f1:?}"
+    );
+    let f2 = s.get_formula_at(1, 1).expect("B2 still a formula");
+    assert!(
+        f2.contains("TaxRate"),
+        "named range TaxRate lost from B2 formula: {f2:?}"
+    );
+
+    // Both named ranges must still be defined in the resulting
+    // workbook (not just survive as formula text but no actual
+    // definition).
+    let names: Vec<&str> = result
+        .named_ranges()
+        .iter()
+        .map(|n| n.name.as_str())
+        .collect();
+    assert!(
+        names.contains(&"Numbers"),
+        "named range 'Numbers' not in workbook after re-save: {names:?}"
+    );
+    assert!(
+        names.contains(&"TaxRate"),
+        "named range 'TaxRate' not in workbook after re-save: {names:?}"
+    );
 }
 
 #[test]
@@ -727,6 +777,16 @@ fn excel_can_evaluate_intersection_we_emit() {
         ),
         other => panic!("E1 expected Number(13), got {other:?}"),
     }
+    // Verify the intersection operator survives in the formula text —
+    // Excel could otherwise have rewritten the formula to a value or
+    // a different expression that happens to produce 13.
+    let formula = s
+        .get_formula_at(0, 4)
+        .expect("E1 must still be a formula after Excel re-save");
+    assert!(
+        formula.contains("A1:B3") && formula.contains("B2:C3"),
+        "intersection ranges lost from formula: {formula:?}"
+    );
 }
 
 #[test]
@@ -753,6 +813,16 @@ fn excel_can_evaluate_union_we_emit() {
         CellValue::Number(n) => assert!((n - 20.0).abs() < 1e-9, "union sum drifted: E1 = {n}"),
         other => panic!("E1 expected Number(20), got {other:?}"),
     }
+    // Verify the union operator survives. The formula should still
+    // reference both A1:A2 and C2:C3 — otherwise Excel could have
+    // inlined or rewritten the union.
+    let formula = s
+        .get_formula_at(0, 4)
+        .expect("E1 must still be a formula after Excel re-save");
+    assert!(
+        formula.contains("A1:A2") && formula.contains("C2:C3"),
+        "union ranges lost from formula: {formula:?}"
+    );
 }
 
 #[test]
@@ -777,6 +847,21 @@ fn excel_can_read_print_names_we_emit() {
         .expect("print_area must survive Excel round-trip");
     assert_eq!(print_area.start, CellAddress::parse("A1").unwrap());
     assert_eq!(print_area.end, CellAddress::parse("B2").unwrap());
+
+    // repeat_rows = (0, 0) means "repeat row 1 at top of each printed
+    // page". This was set on the input but previously not asserted —
+    // a writer regression that dropped repeat_rows would have gone
+    // unnoticed.
+    let repeat_rows = s
+        .page_setup()
+        .repeat_rows
+        .expect("repeat_rows must survive Excel round-trip");
+    assert_eq!(
+        repeat_rows,
+        (0, 0),
+        "repeat_rows lost or mangled: {:?}",
+        repeat_rows
+    );
 }
 
 #[test]
@@ -844,6 +929,13 @@ fn excel_can_read_visual_state_we_emit() {
     assert!(
         header.contains("Hdr"),
         "odd_header content mangled: {header:?}"
+    );
+    // left_margin was set on input but previously not asserted.
+    // Excel may round slightly (inches), so allow ±0.05 inch.
+    assert!(
+        (ps.left_margin - 0.5).abs() < 0.05,
+        "left_margin lost or mangled: {} (expected ~0.5)",
+        ps.left_margin
     );
 }
 
@@ -983,5 +1075,30 @@ fn excel_can_read_table_we_emit() {
         tables[0].reference,
         range("A1", "B3"),
         "table reference lost"
+    );
+
+    // style_info and header_row_count were set on the input but
+    // previously not asserted. A writer regression that dropped the
+    // style metadata or header row count would have gone unnoticed.
+    let style = tables[0]
+        .style_info
+        .as_ref()
+        .expect("style_info must survive Excel round-trip");
+    assert!(
+        style
+            .name
+            .as_deref()
+            .map(|s| s.contains("TableStyleMedium"))
+            .unwrap_or(false),
+        "table style name lost: {:?}",
+        style.name
+    );
+    assert!(
+        style.show_row_stripes,
+        "show_row_stripes flag lost after round-trip"
+    );
+    assert_eq!(
+        tables[0].header_row_count, 1,
+        "header_row_count must survive Excel round-trip"
     );
 }

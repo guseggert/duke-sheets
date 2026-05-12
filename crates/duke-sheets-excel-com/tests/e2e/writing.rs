@@ -1168,6 +1168,11 @@ fn excel_can_evaluate_intersection_we_emit() {
         ),
         other => panic!("E1 expected Number(13), got {other:?}"),
     }
+    let formula = s.get_formula_at(0, 4).expect("E1 must still be a formula");
+    assert!(
+        formula.contains("A1:B3") && formula.contains("B2:C3"),
+        "intersection ranges lost from formula: {formula:?}"
+    );
 }
 
 #[test]
@@ -1193,6 +1198,11 @@ fn excel_can_evaluate_union_we_emit() {
         CellValue::Number(n) => assert!((n - 20.0).abs() < 1e-9, "union sum drifted: E1 = {n}"),
         other => panic!("E1 expected Number(20), got {other:?}"),
     }
+    let formula = s.get_formula_at(0, 4).expect("E1 must still be a formula");
+    assert!(
+        formula.contains("A1:A2") && formula.contains("C2:C3"),
+        "union ranges lost from formula: {formula:?}"
+    );
 }
 
 /// A valid 68-byte 1x1 transparent PNG used as a deterministic image
