@@ -50,7 +50,7 @@ fn only_formula_tokens(wb: &Workbook) -> Vec<u8> {
 }
 
 #[test]
-fn named_constant_formula_uses_reference_class_name_ptg() {
+fn named_constant_formula_uses_value_class_name_ptg() {
     let mut wb = Workbook::new();
     wb.define_name("MyTax", "0.07").unwrap();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -61,8 +61,8 @@ fn named_constant_formula_uses_reference_class_name_ptg() {
     let tokens = only_formula_tokens(&wb);
     assert_eq!(
         tokens.first().copied(),
-        Some(0x23),
-        "defined names stay R-class so range names survive SUM(); tokens={tokens:02X?}"
+        Some(0x43),
+        "scalar defined names must emit V-class PtgName (0x43); tokens={tokens:02X?}"
     );
 
     let parsed = write_then_read(&wb);
@@ -97,11 +97,16 @@ fn named_range_intersection_uses_reference_class_name_ptgs() {
     let tokens = only_formula_tokens(&wb);
     assert_eq!(
         tokens.first().copied(),
+        Some(0x29),
+        "SUM over a reference expression must start with PtgMemFunc; tokens={tokens:02X?}"
+    );
+    assert_eq!(
+        tokens.get(3).copied(),
         Some(0x23),
         "left NameRef must emit R-class PtgName (0x23); tokens={tokens:02X?}"
     );
     assert_eq!(
-        tokens.get(5).copied(),
+        tokens.get(8).copied(),
         Some(0x23),
         "right NameRef must emit R-class PtgName (0x23); tokens={tokens:02X?}"
     );
@@ -142,11 +147,16 @@ fn named_range_union_uses_reference_class_name_ptgs() {
     let tokens = only_formula_tokens(&wb);
     assert_eq!(
         tokens.first().copied(),
+        Some(0x29),
+        "SUM over a reference expression must start with PtgMemFunc; tokens={tokens:02X?}"
+    );
+    assert_eq!(
+        tokens.get(3).copied(),
         Some(0x23),
         "left NameRef must emit R-class PtgName (0x23); tokens={tokens:02X?}"
     );
     assert_eq!(
-        tokens.get(5).copied(),
+        tokens.get(8).copied(),
         Some(0x23),
         "right NameRef must emit R-class PtgName (0x23); tokens={tokens:02X?}"
     );
@@ -183,11 +193,16 @@ fn range_operator_with_named_endpoints_emits_ptg_range() {
     let tokens = only_formula_tokens(&wb);
     assert_eq!(
         tokens.first().copied(),
+        Some(0x29),
+        "SUM over a reference expression must start with PtgMemFunc; tokens={tokens:02X?}"
+    );
+    assert_eq!(
+        tokens.get(3).copied(),
         Some(0x23),
         "left endpoint must emit R-class PtgName (0x23); tokens={tokens:02X?}"
     );
     assert_eq!(
-        tokens.get(5).copied(),
+        tokens.get(8).copied(),
         Some(0x23),
         "right endpoint must emit R-class PtgName (0x23); tokens={tokens:02X?}"
     );

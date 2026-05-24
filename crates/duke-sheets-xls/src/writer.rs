@@ -1682,23 +1682,50 @@ fn write_mergecells(stream: &mut Vec<u8>, sheet: &Worksheet) {
 /// insensitively to mirror Excel's name resolution.
 #[derive(Debug, Default)]
 struct NameTable {
-    by_name: HashMap<String, u16>,
+    by_name: HashMap<String, NameInfo>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NameInfo {
+    idx: u16,
+    body_class: OperandClass,
 }
 
 impl NameTable {
     fn idx_for_name(&self, name: &str) -> Option<u16> {
-        self.by_name.get(&name.to_ascii_lowercase()).copied()
+        self.by_name
+            .get(&name.to_ascii_lowercase())
+            .map(|info| info.idx)
+    }
+
+    fn body_class_for_name(&self, name: &str) -> Option<OperandClass> {
+        self.by_name
+            .get(&name.to_ascii_lowercase())
+            .map(|info| info.body_class)
     }
 }
 
 fn build_name_table(workbook: &Workbook) -> NameTable {
     let mut by_name = HashMap::new();
-    for (i, nr) in workbook.named_ranges().iter().enumerate() {
+    for (i, nr) in user_names_in_xls_emit_order(workbook)
+        .into_iter()
+        .enumerate()
+    {
         if i >= u16::MAX as usize {
             break;
         }
+        let body_class = parse_name_body(&nr.refers_to)
+            .as_ref()
+            .map(name_body_operand_class)
+            .unwrap_or(OperandClass::V);
         // Names are 1-based in tName ptg encoding.
-        by_name.insert(nr.name.to_ascii_lowercase(), (i as u16) + 1);
+        by_name.insert(
+            nr.name.to_ascii_lowercase(),
+            NameInfo {
+                idx: (i as u16) + 1,
+                body_class,
+            },
+        );
     }
     NameTable { by_name }
 }
@@ -1728,21 +1755,25 @@ fn write_user_name_records(
 ) {
     use duke_sheets_core::named_range::NameScope;
 
-    for nr in workbook.named_ranges().iter() {
+    for nr in user_names_in_xls_emit_order(workbook) {
         let name_units: Vec<u16> = nr.name.encode_utf16().collect();
         if name_units.is_empty() || name_units.len() > u8::MAX as usize {
             continue;
         }
 
         let formula_body: Vec<u8> = {
-            let to_parse = if nr.refers_to.starts_with('=') {
-                nr.refers_to.clone()
-            } else {
-                format!("={}", nr.refers_to)
-            };
-            if let Ok(expr) = duke_sheets_formula::parse_formula(&to_parse) {
+            if let Some(expr) = parse_name_body(&nr.refers_to) {
                 let mut bytes = Vec::new();
-                if compile_ptgs_with_context(&expr, &mut bytes, externsheet, name_table, OperandClass::V).is_ok() {
+                let operand_class = name_body_operand_class(&expr);
+                if compile_ptgs_with_context(
+                    &expr,
+                    &mut bytes,
+                    externsheet,
+                    name_table,
+                    operand_class,
+                )
+                .is_ok()
+                {
                     bytes
                 } else {
                     Vec::new()
@@ -1795,6 +1826,60 @@ fn write_user_name_records(
     }
 }
 
+fn parse_name_body(refers_to: &str) -> Option<duke_sheets_formula::FormulaExpr> {
+    let to_parse = if refers_to.starts_with('=') {
+        refers_to.to_string()
+    } else {
+        format!("={refers_to}")
+    };
+    duke_sheets_formula::parse_formula(&to_parse).ok()
+}
+
+fn name_body_operand_class(expr: &duke_sheets_formula::FormulaExpr) -> OperandClass {
+    use duke_sheets_formula::ast::BinaryOperator;
+    use duke_sheets_formula::FormulaExpr;
+
+    // NAME/Lbl formula bodies that represent direct references need
+    // reference-class operands. MS-XLS's Lbl example stores a name's
+    // PtgRef3d with type=reference, and Excel returns #VALUE! for a
+    // range operator over names if the name bodies were value-class.
+    match expr {
+        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::NameRef(_) => {
+            OperandClass::R
+        }
+        FormulaExpr::BinaryOp { op, .. } => match op {
+            BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
+                OperandClass::R
+            }
+            _ => OperandClass::V,
+        },
+        _ => OperandClass::V,
+    }
+}
+
+fn user_names_in_xls_emit_order(
+    workbook: &Workbook,
+) -> Vec<&duke_sheets_core::named_range::NamedRange> {
+    // Excel SaveAs emits user-defined NAME/Lbl records ordered by name.
+    // Keep our name table in the same order so PtgName indexes remain
+    // stable through Excel's open/save cycle.
+    let mut names = workbook.named_ranges().iter().collect::<Vec<_>>();
+    names.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+            .then_with(|| name_scope_sort_key(&a.scope).cmp(&name_scope_sort_key(&b.scope)))
+    });
+    names
+}
+
+fn name_scope_sort_key(scope: &duke_sheets_core::named_range::NameScope) -> usize {
+    match scope {
+        duke_sheets_core::named_range::NameScope::Workbook => 0,
+        duke_sheets_core::named_range::NameScope::Sheet(idx) => idx.saturating_add(1),
+    }
+}
+
 /// Maps sheet names to their EXTERNSHEET ixti index, with case-
 /// insensitive lookup to match Excel's name resolution. Built once per
 /// workbook write; passed to `compile_ptgs_with_externsheet` so 3D
@@ -1805,6 +1890,8 @@ struct ExternSheetTable {
     by_name: HashMap<String, u16>,
     /// Sheet count, for SUPBOOK self-ref ctab.
     sheet_count: u16,
+    /// EXTERNSHEET entries in ixti order. Values are 0-based sheet indexes.
+    entries: Vec<u16>,
 }
 
 impl ExternSheetTable {
@@ -1814,16 +1901,124 @@ impl ExternSheetTable {
 }
 
 fn build_externsheet_table(workbook: &Workbook) -> ExternSheetTable {
-    let mut by_name = HashMap::new();
-    for (idx, sheet) in workbook.worksheets().enumerate() {
-        if idx > u16::MAX as usize {
-            continue;
+    let sheets = workbook
+        .worksheets()
+        .enumerate()
+        .filter_map(|(idx, sheet)| {
+            if idx > u16::MAX as usize {
+                None
+            } else {
+                Some((idx as u16, sheet.name().to_string()))
+            }
+        })
+        .collect::<Vec<_>>();
+    let sheet_by_name = sheets
+        .iter()
+        .map(|(idx, name)| (name.to_ascii_lowercase(), *idx))
+        .collect::<HashMap<_, _>>();
+
+    let mut entries = Vec::new();
+    for sheet_name in formula_referenced_sheet_names(workbook) {
+        if let Some(idx) = sheet_by_name.get(&sheet_name.to_ascii_lowercase()) {
+            if !entries.contains(idx) {
+                entries.push(*idx);
+            }
         }
-        by_name.insert(sheet.name().to_ascii_lowercase(), idx as u16);
+    }
+    for (idx, _) in &sheets {
+        if !entries.contains(idx) {
+            entries.push(*idx);
+        }
+    }
+
+    let mut by_name = HashMap::new();
+    for (ixti, sheet_idx) in entries.iter().enumerate() {
+        if let Some((_, name)) = sheets.iter().find(|(idx, _)| idx == sheet_idx) {
+            by_name.insert(name.to_ascii_lowercase(), ixti as u16);
+        }
     }
     ExternSheetTable {
         by_name,
         sheet_count: workbook.sheet_count().min(u16::MAX as usize) as u16,
+        entries,
+    }
+}
+
+fn formula_referenced_sheet_names(workbook: &Workbook) -> Vec<String> {
+    let mut names = Vec::new();
+    for sheet in workbook.worksheets() {
+        for (_, _, formula) in sheet.formula_cells() {
+            collect_formula_text_sheet_names(formula, &mut names);
+        }
+    }
+    for named_range in user_names_in_xls_emit_order(workbook) {
+        collect_formula_text_sheet_names(&named_range.refers_to, &mut names);
+    }
+    names
+}
+
+fn collect_formula_text_sheet_names(formula: &str, out: &mut Vec<String>) {
+    let formula = if formula.starts_with('=') {
+        formula.to_string()
+    } else {
+        format!("={formula}")
+    };
+    if let Ok(expr) = duke_sheets_formula::parse_formula(&formula) {
+        collect_formula_expr_sheet_names(&expr, out);
+    }
+}
+
+fn collect_formula_expr_sheet_names(
+    expr: &duke_sheets_formula::FormulaExpr,
+    out: &mut Vec<String>,
+) {
+    use duke_sheets_formula::FormulaExpr;
+
+    match expr {
+        FormulaExpr::CellRef(cell_ref) => {
+            if let Some(sheet) = cell_ref.sheet.as_ref() {
+                push_unique_sheet_name(out, sheet);
+            }
+        }
+        FormulaExpr::RangeRef(range_ref) => {
+            if let Some(sheet) = range_ref.sheet.as_ref() {
+                push_unique_sheet_name(out, sheet);
+            }
+        }
+        FormulaExpr::BinaryOp { left, right, .. } => {
+            collect_formula_expr_sheet_names(left, out);
+            collect_formula_expr_sheet_names(right, out);
+        }
+        FormulaExpr::UnaryOp { operand, .. } => collect_formula_expr_sheet_names(operand, out),
+        FormulaExpr::Function { args, .. } => {
+            for arg in args {
+                collect_formula_expr_sheet_names(arg, out);
+            }
+        }
+        FormulaExpr::Array(rows) => {
+            for row in rows {
+                for item in row {
+                    collect_formula_expr_sheet_names(item, out);
+                }
+            }
+        }
+        FormulaExpr::Number(_)
+        | FormulaExpr::String(_)
+        | FormulaExpr::Boolean(_)
+        | FormulaExpr::Error(_)
+        | FormulaExpr::NameRef(_)
+        | FormulaExpr::StructuredRef(_)
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::Empty => {}
+    }
+}
+
+fn push_unique_sheet_name(out: &mut Vec<String>, sheet: &str) {
+    if !out
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(sheet))
+    {
+        out.push(sheet.to_string());
     }
 }
 
@@ -1832,10 +2027,9 @@ fn build_externsheet_table(workbook: &Workbook) -> ExternSheetTable {
 ///
 /// SUPBOOK self-ref body: ctab(u16) + cch(u16=0x0401 sentinel).
 /// EXTERNSHEET body: count(u16) + count × (sup_book_idx u16,
-/// itabFirst u16, itabLast u16). With one entry per sheet pointing
-/// to (supbook 0, sheet_idx, sheet_idx), tRef3D / tArea3D ptgs can
-/// embed `ixti = sheet_idx` and the reader decompiles back to
-/// `Sheet!Cell` formula text.
+/// itabFirst u16, itabLast u16). Entries are ordered by first
+/// formula use so tRef3D/tArea3D ixti values match Excel's SaveAs
+/// ordering for referenced sheets.
 fn write_supbook_and_externsheet(
     stream: &mut Vec<u8>,
     _workbook: &Workbook,
@@ -1851,15 +2045,15 @@ fn write_supbook_and_externsheet(
     stream.extend_from_slice(&0x0401u16.to_le_bytes());
 
     // EXTERNSHEET
-    let count = table.sheet_count;
+    let count = table.entries.len().min(u16::MAX as usize) as u16;
     let body_len = 2 + (count as usize) * 6;
     stream.extend_from_slice(&EXTERNSHEET_RECORD.to_le_bytes());
     stream.extend_from_slice(&(body_len as u16).to_le_bytes());
     stream.extend_from_slice(&count.to_le_bytes());
-    for i in 0..count {
+    for sheet_idx in table.entries.iter().take(count as usize) {
         stream.extend_from_slice(&0u16.to_le_bytes()); // sup_book_idx
-        stream.extend_from_slice(&i.to_le_bytes()); // first_sheet
-        stream.extend_from_slice(&i.to_le_bytes()); // last_sheet
+        stream.extend_from_slice(&sheet_idx.to_le_bytes()); // first_sheet
+        stream.extend_from_slice(&sheet_idx.to_le_bytes()); // last_sheet
     }
 }
 
@@ -2518,7 +2712,8 @@ fn encode_dv_formula(value: &str, externsheet: &ExternSheetTable, names: &NameTa
     };
     if let Ok(expr) = duke_sheets_formula::parse_formula(&to_parse) {
         let mut bytes = Vec::new();
-        if compile_ptgs_with_context(&expr, &mut bytes, externsheet, names, OperandClass::V).is_ok() {
+        if compile_ptgs_with_context(&expr, &mut bytes, externsheet, names, OperandClass::V).is_ok()
+        {
             return bytes;
         }
     }
@@ -2672,6 +2867,14 @@ fn try_write_formula_record(
         return false;
     };
     let mut tokens = Vec::with_capacity(32);
+    // MS-XLS Rgce: a formula containing any volatile function (NOW, RAND,
+    // TODAY, OFFSET, INDIRECT, etc.) is prefixed with PtgAttrVolatile so the
+    // recalculation engine knows to re-evaluate this cell on every change.
+    // Excel always emits this prefix; matching it preserves byte parity
+    // through an Excel open/save round-trip.
+    if formula_expr_is_volatile(&expr) {
+        tokens.extend_from_slice(&[0x19, 0x01, 0x00, 0x00]); // PtgAttrVolatile
+    }
     if compile_ptgs_with_context(&expr, &mut tokens, externsheet, names, OperandClass::V).is_err() {
         return false;
     }
@@ -2815,8 +3018,13 @@ fn compile_ptgs_with_context(
 
     match expr {
         FormulaExpr::Number(n) => {
-            out.push(0x1F); // PTG_NUM
-            out.extend_from_slice(&n.to_le_bytes());
+            if let Some(i) = number_as_ptg_int(*n) {
+                out.push(0x1E); // PTG_INT
+                out.extend_from_slice(&i.to_le_bytes());
+            } else {
+                out.push(0x1F); // PTG_NUM
+                out.extend_from_slice(&n.to_le_bytes());
+            }
         }
         FormulaExpr::String(s) => {
             out.push(0x17); // PTG_STR
@@ -2943,26 +3151,42 @@ fn compile_ptgs_with_context(
             if args.len() > u8::MAX as usize {
                 return Err(UnsupportedToken);
             }
-            for arg in args {
+            if idx == 4 && args.len() == 1 && !matches!(args[0], FormulaExpr::Empty) {
+                emit_optimized_sum(&args[0], out, externsheet, names)?;
+                return Ok(());
+            }
+            for (arg_idx, arg) in args.iter().enumerate() {
                 if matches!(arg, FormulaExpr::Empty) {
                     out.push(0x16); // PTG_MISS_ARG
                 } else {
-                    compile_ptgs_with_context(arg, out, externsheet, names, OperandClass::V)?;
+                    let arg_class = function_arg_class(idx, arg_idx);
+                    compile_ptgs_with_context(arg, out, externsheet, names, arg_class)?;
                 }
             }
-            // Always emit tFuncVar (V class, 0x42) so the variable-
-            // argument count is encoded inline with the token; the
-            // reader handles fixed-arity functions decoded this way
-            // identically to the more compact tFunc form.
-            out.push(0x42);
-            out.push(args.len() as u8);
-            out.extend_from_slice(&idx.to_le_bytes());
+            // Use PtgFunc (0x41, V class) for fixed-arity functions where
+            // the actual arg count matches the declared fixed count.
+            // Otherwise emit PtgFuncVar (0x42, V class) which carries the
+            // argument count inline. Matches Excel's canonical emission.
+            if function_is_fixed_arity(idx, args.len()) {
+                out.push(0x41); // PTG_FUNC V class
+                out.extend_from_slice(&idx.to_le_bytes());
+            } else {
+                out.push(0x42); // PTG_FUNC_VAR V class
+                out.push(args.len() as u8);
+                out.extend_from_slice(&idx.to_le_bytes());
+            }
         }
         FormulaExpr::NameRef(name) => {
             let idx = names.idx_for_name(name).ok_or(UnsupportedToken)?;
-            // Keep defined names R-class: Excel dereferences scalar names
-            // but needs reference-class names when they point at ranges.
-            out.push(0x23); // PTG_NAME (R class)
+            let name_class = match operand_class {
+                OperandClass::R => OperandClass::R,
+                OperandClass::V => names.body_class_for_name(name).unwrap_or(OperandClass::V),
+            };
+            let opcode = match name_class {
+                OperandClass::R => 0x23,
+                OperandClass::V => 0x43,
+            };
+            out.push(opcode);
             out.extend_from_slice(&idx.to_le_bytes());
             out.extend_from_slice(&0u16.to_le_bytes()); // 2 reserved bytes
         }
@@ -2974,6 +3198,151 @@ fn compile_ptgs_with_context(
         }
     }
     Ok(())
+}
+
+fn emit_optimized_sum(
+    arg: &duke_sheets_formula::FormulaExpr,
+    out: &mut Vec<u8>,
+    externsheet: &ExternSheetTable,
+    names: &NameTable,
+) -> Result<(), UnsupportedToken> {
+    use duke_sheets_formula::ast::BinaryOperator;
+    use duke_sheets_formula::FormulaExpr;
+
+    if let FormulaExpr::BinaryOp { op, .. } = arg {
+        if matches!(
+            op,
+            BinaryOperator::Intersect | BinaryOperator::Union | BinaryOperator::Range
+        ) {
+            let mut ref_tokens = Vec::new();
+            compile_ptgs_with_context(arg, &mut ref_tokens, externsheet, names, OperandClass::R)?;
+            if ref_tokens.len() > u16::MAX as usize {
+                return Err(UnsupportedToken);
+            }
+            out.push(0x29); // PTG_MEM_FUNC
+            out.extend_from_slice(&(ref_tokens.len() as u16).to_le_bytes());
+            out.extend_from_slice(&ref_tokens);
+            if matches!(op, BinaryOperator::Union) {
+                out.push(0x15); // PTG_PAREN, matching Excel's union-in-SUM emit
+            }
+            push_attr_sum(out);
+            return Ok(());
+        }
+    }
+
+    compile_ptgs_with_context(arg, out, externsheet, names, OperandClass::V)?;
+    push_attr_sum(out);
+    Ok(())
+}
+
+fn push_attr_sum(out: &mut Vec<u8>) {
+    // PtgAttrSum (MS-XLS Rgce: `expression PtgAttrSum`) is Excel's
+    // canonical single-argument SUM encoding. The final two bytes are
+    // reserved/ignored for this subtype; Excel-authored files may contain
+    // non-deterministic values there, so tests normalize them for compare.
+    out.extend_from_slice(&[0x19, 0x10, 0x00, 0x00]);
+}
+
+fn number_as_ptg_int(n: f64) -> Option<u16> {
+    if n.is_finite() && n.fract() == 0.0 && (0.0..=u16::MAX as f64).contains(&n) {
+        Some(n as u16)
+    } else {
+        None
+    }
+}
+
+/// Return true if a function should be encoded with PtgFunc (fixed-arity,
+/// 0x21/0x41/0x61) rather than PtgFuncVar (0x22/0x42/0x62) when called with
+/// `actual_argc` arguments.
+///
+/// The MS-XLS Ftab grammar declares each function's parameter list; functions
+/// whose grammar has no optional brackets (`[arg]`) or repetition (`*N(arg)`)
+/// have a fixed parameter count, and Excel encodes them with PtgFunc (which
+/// omits the argument count, recovering one byte per call).
+///
+/// We mirror Excel's exact emission, so this table is grown empirically from
+/// Excel-authored byte parity tests rather than from the spec grammar alone.
+/// Adding a function here without confirming via Excel parity risks emitting
+/// PtgFunc for a function Excel treats as variable-arity.
+fn function_is_fixed_arity(iftab: u16, actual_argc: usize) -> bool {
+    // For PtgFunc the argc is implicit from Ftab. If our actual count doesn't
+    // match what Ftab declares for that iftab, fall back to PtgFuncVar.
+    let declared = crate::biff::formula::function_table::function_argc(iftab) as usize;
+    if actual_argc != declared {
+        return false;
+    }
+    matches!(
+        iftab,
+        2 | 3                                    // ISNA, ISERROR
+        | 15 | 16 | 17 | 18                      // SIN, COS, TAN, ATAN
+        | 19                                     // PI (0 arg)
+        | 20 | 21 | 22 | 23                      // SQRT, EXP, LN, LOG10
+        | 24 | 25 | 26 | 27                      // ABS, INT, SIGN, ROUND
+        | 30 | 31 | 32 | 33                      // REPT, MID, LEN, VALUE
+        | 34 | 35                                // TRUE, FALSE (0 arg)
+        | 38 | 39                                // NOT, MOD
+        | 63                                     // RAND (0 arg, volatile)
+        | 74                                     // NOW (0 arg, volatile)
+        | 97 | 98 | 99                           // ATAN2, ASIN, ACOS
+        | 221                                    // TODAY (0 arg, volatile)
+    )
+}
+
+/// Return the operand class Excel expects for the `arg_idx`-th argument of
+/// the function whose Ftab index is `iftab`. Functions whose argument is
+/// declared `ref` in MS-XLS Ftab take R-class operands; the default is V.
+fn function_arg_class(iftab: u16, arg_idx: usize) -> OperandClass {
+    match (iftab, arg_idx) {
+        (8, 0) | (9, 0) => OperandClass::R, // ROW(ref), COLUMN(ref)
+        (75, 0) => OperandClass::R,         // AREAS(ref)
+        (78, 0) => OperandClass::R,         // OFFSET(ref, ...)
+        _ => OperandClass::V,
+    }
+}
+
+/// Return true if `iftab` names a volatile BIFF function (one whose result
+/// depends on data outside the formula's direct operands, so Excel must
+/// re-evaluate on every change). Grown empirically from Excel-authored
+/// byte parity tests.
+fn function_is_volatile(iftab: u16) -> bool {
+    matches!(
+        iftab,
+        63   // RAND
+        | 74  // NOW
+        | 78  // OFFSET
+        | 148 // INDIRECT
+        | 219 // INFO (reserved/empty slot - placeholder, not actually 219)
+        | 221 // TODAY
+        | 244 // INFO
+        | 255 // User Defined Function (assumed volatile in BIFF8)
+    )
+}
+
+/// True if `expr` calls a volatile function transitively. The XLS writer
+/// uses this to decide whether to prefix the FORMULA token stream with a
+/// PtgAttrVolatile attribute.
+fn formula_expr_is_volatile(expr: &duke_sheets_formula::FormulaExpr) -> bool {
+    use duke_sheets_formula::FormulaExpr;
+
+    match expr {
+        FormulaExpr::Function { name, args } => {
+            let iftab = crate::biff::formula::function_table::function_index(name);
+            if let Some(idx) = iftab {
+                if function_is_volatile(idx) {
+                    return true;
+                }
+            }
+            args.iter().any(formula_expr_is_volatile)
+        }
+        FormulaExpr::BinaryOp { left, right, .. } => {
+            formula_expr_is_volatile(left) || formula_expr_is_volatile(right)
+        }
+        FormulaExpr::UnaryOp { operand, .. } => formula_expr_is_volatile(operand),
+        FormulaExpr::Array(rows) => rows
+            .iter()
+            .any(|row| row.iter().any(formula_expr_is_volatile)),
+        _ => false,
+    }
 }
 
 fn push_ref_payload(

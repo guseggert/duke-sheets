@@ -17,14 +17,323 @@ use duke_sheets_core::style::Color;
 use duke_sheets_core::validation::{DataValidation, ValidationOperator, ValidationType};
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
 use duke_sheets_core::{CellAddress, CellRange, CellValue, Hyperlink, Workbook};
+use duke_sheets_excel_com::{ChainStep, SheetRef};
+use excel_com_protocol::ResponseData;
+use serde_json::json;
 
-use crate::roundtrip_through_excel_xls;
+use crate::{
+    cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
+    roundtrip_through_excel_xls, roundtrip_through_excel_xls_bytes, temp_fixture_xls,
+    xls_formula_ptg_streams_for_compare,
+};
 
 fn range(start: &str, end: &str) -> CellRange {
     CellRange::new(
         CellAddress::parse(start).unwrap(),
         CellAddress::parse(end).unwrap(),
     )
+}
+
+fn named_formula_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    wb.rename_worksheet(0, "Calc").unwrap();
+    wb.add_worksheet_with_name("Data").unwrap();
+    let data_values = [[5.0, 2.0, 3.0], [10.0, 20.0, 30.0], [15.0, 30.0, 45.0]];
+    let data = wb.worksheet_mut(1).unwrap();
+    for (row, values) in data_values.iter().enumerate() {
+        for (col, value) in values.iter().enumerate() {
+            data.set_cell_value_at(row as u32, col as u16, *value)
+                .unwrap();
+        }
+    }
+
+    wb.define_name("Numbers", "Data!$A$1:$A$3").unwrap();
+    wb.define_name("TaxRate", "0.1").unwrap();
+    wb.define_name("LeftBlock", "Data!$A$1:$B$3").unwrap();
+    wb.define_name("RightBlock", "Data!$B$2:$C$3").unwrap();
+    wb.define_name("TopCells", "Data!$A$1:$A$2").unwrap();
+    wb.define_name("RightCells", "Data!$C$2:$C$3").unwrap();
+    wb.define_name("StartCell", "Data!$A$1").unwrap();
+    wb.define_name("EndCell", "Data!$A$3").unwrap();
+
+    let calc = wb.worksheet_mut(0).unwrap();
+    calc.set_cell_formula("B1", "=SUM(Numbers)").unwrap();
+    calc.set_formula_result(0, 1, CellValue::Number(30.0))
+        .unwrap();
+    calc.set_cell_formula("B2", "=B1*TaxRate").unwrap();
+    calc.set_formula_result(1, 1, CellValue::Number(3.0))
+        .unwrap();
+    calc.set_cell_formula("B3", "=TaxRate*2").unwrap();
+    calc.set_formula_result(2, 1, CellValue::Number(0.2))
+        .unwrap();
+    calc.set_cell_formula("B4", "=SUM(LeftBlock RightBlock)")
+        .unwrap();
+    calc.set_formula_result(3, 1, CellValue::Number(50.0))
+        .unwrap();
+    calc.set_cell_formula("B5", "=SUM((TopCells,RightCells))")
+        .unwrap();
+    calc.set_formula_result(4, 1, CellValue::Number(90.0))
+        .unwrap();
+    calc.set_cell_formula("B6", "=SUM(StartCell:EndCell)")
+        .unwrap();
+    calc.set_formula_result(5, 1, CellValue::Number(30.0))
+        .unwrap();
+
+    wb
+}
+
+fn rename_excel_sheet(
+    excel: &duke_sheets_excel_com::ExcelBridge,
+    workbook_handle: u64,
+    index: u32,
+    name: &str,
+) {
+    excel
+        .set(
+            workbook_handle,
+            vec![SheetRef::Index(index).to_chain_step()],
+            "Name",
+            serde_json::Value::from(name),
+        )
+        .expect("rename Excel worksheet");
+}
+
+fn add_excel_worksheet_after(
+    excel: &duke_sheets_excel_com::ExcelBridge,
+    workbook_handle: u64,
+    after_index: u32,
+    name: &str,
+) {
+    let after_handle = excel
+        .navigate(
+            workbook_handle,
+            vec![SheetRef::Index(after_index).to_chain_step()],
+        )
+        .expect("navigate worksheet for insert");
+    let response = excel
+        .invoke(
+            workbook_handle,
+            vec![ChainStep::Property("Worksheets".to_string())],
+            "Add",
+            vec![serde_json::Value::Null, json!({"$ref": after_handle})],
+        )
+        .expect("add Excel worksheet");
+    let _ = excel.release(after_handle);
+    let sheet_handle = match response {
+        Some(ResponseData::Handle { handle }) => handle,
+        other => panic!("expected worksheet handle from Add, got {other:?}"),
+    };
+    excel
+        .set(sheet_handle, vec![], "Name", serde_json::Value::from(name))
+        .expect("rename added worksheet");
+    excel
+        .release(sheet_handle)
+        .expect("release added worksheet");
+}
+
+fn define_excel_name(
+    excel: &duke_sheets_excel_com::ExcelBridge,
+    workbook_handle: u64,
+    name: &str,
+    refers_to: &str,
+) {
+    let response = excel
+        .invoke(
+            workbook_handle,
+            vec![ChainStep::Property("Names".to_string())],
+            "Add",
+            vec![
+                serde_json::Value::from(name),
+                serde_json::Value::from(refers_to),
+            ],
+        )
+        .expect("define Excel name");
+    if let Some(ResponseData::Handle { handle }) = response {
+        excel.release(handle).expect("release name handle");
+    }
+}
+
+fn excel_authored_named_formula_xls_bytes() -> Vec<u8> {
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let mut wb = excel.create_workbook().expect("create Excel workbook");
+        rename_excel_sheet(&excel, wb.handle(), 0, "Calc");
+        add_excel_worksheet_after(&excel, wb.handle(), 0, "Data");
+        for (row, values) in [[5.0, 2.0, 3.0], [10.0, 20.0, 30.0], [15.0, 30.0, 45.0]]
+            .iter()
+            .enumerate()
+        {
+            for (col, value) in values.iter().enumerate() {
+                let cell = format!("{}{}", (b'A' + col as u8) as char, row + 1);
+                wb.set_cell_value_on_sheet(SheetRef::Name("Data".into()), &cell, *value)
+                    .expect("set Excel data cell");
+            }
+        }
+
+        for (name, refers_to) in [
+            ("Numbers", "=Data!$A$1:$A$3"),
+            ("TaxRate", "=0.1"),
+            ("LeftBlock", "=Data!$A$1:$B$3"),
+            ("RightBlock", "=Data!$B$2:$C$3"),
+            ("TopCells", "=Data!$A$1:$A$2"),
+            ("RightCells", "=Data!$C$2:$C$3"),
+            ("StartCell", "=Data!$A$1"),
+            ("EndCell", "=Data!$A$3"),
+        ] {
+            define_excel_name(&excel, wb.handle(), name, refers_to);
+        }
+
+        wb.set_active_sheet_name("Calc");
+        for (cell, formula) in [
+            ("B1", "=SUM(Numbers)"),
+            ("B2", "=B1*TaxRate"),
+            ("B3", "=TaxRate*2"),
+            ("B4", "=SUM(LeftBlock RightBlock)"),
+            ("B5", "=SUM((TopCells,RightCells))"),
+            ("B6", "=SUM(StartCell:EndCell)"),
+        ] {
+            wb.set_cell_formula(cell, formula)
+                .expect("set Excel formula");
+        }
+        excel.recalculate().expect("Excel recalculate");
+        wb.save_as(&fixture.vm_path, 56).expect("Excel SaveAs xls");
+        wb.close().expect("close Excel-authored workbook");
+    }
+
+    pull_file_from_vm(&fixture);
+    let bytes = std::fs::read(&fixture.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
+    cleanup_fixture(&fixture);
+    bytes
+}
+
+/// Formulas exercised by the function-arity byte parity test. Listed in
+/// (cell, formula, cached_result) order; the same cell/order is used both by
+/// our writer and the Excel-authored fixture so PTG streams line up
+/// positionally.
+///
+/// `SUM(plain_area)` and `AVERAGE(plain_area)` are intentionally omitted:
+/// when set via the Excel COM `Range.Formula` API, Excel materializes those
+/// as a `PtgName` UDF wrapper (iftab=255) rather than a direct
+/// `PtgFuncVar`. The behavior is consistent with `=SUM(<defined_name>)` byte
+/// parity already covered by `excel_can_evaluate_named_range_formulas_we_emit`.
+const FUNCTION_ARITY_FORMULAS: &[(&str, &str, f64)] = &[
+    // Fixed-arity → PtgFunc
+    ("B1", "=SQRT(A1)", 2.0),                              // iftab=20
+    ("B2", "=ABS(A2)", 3.0),                               // iftab=24
+    ("B3", "=LEN(A3)", 5.0),                               // iftab=32
+    ("B4", "=ROUND(A1,1)", 4.0),                           // iftab=27
+    ("B5", "=PI()", std::f64::consts::PI),                 // iftab=19
+    ("B7", "=SIN(A1)", -0.7568024953079282),               // iftab=15
+    ("B8", "=COS(A1)", -0.6536436208636119),               // iftab=16
+    ("B9", "=TAN(A1)", 1.1578212823495777),                // iftab=17
+    ("B10", "=INT(A1)", 4.0),                              // iftab=25
+    ("B11", "=SIGN(A2)", -1.0),                            // iftab=26
+    ("B12", "=NOT(A4)", 1.0),                              // iftab=38
+    ("B13", "=MOD(A1,3)", 1.0),                            // iftab=39
+    ("B14", "=ATAN2(A1,A1)", std::f64::consts::FRAC_PI_4), // iftab=97
+    ("B15", "=ISNA(A1)", 0.0),                             // iftab=2
+    ("B16", "=ISERROR(A1)", 0.0),                          // iftab=3
+    // Variable-arity → PtgFuncVar
+    ("B6", "=ROW(A1)", 1.0), // iftab=8 (var)
+];
+
+fn function_arity_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 4.0).unwrap();
+    ws.set_cell_value("A2", -3.0).unwrap();
+    ws.set_cell_value("A3", "hello").unwrap();
+    ws.set_cell_value_at(3, 0, false).unwrap(); // A4 = FALSE for NOT(A4)
+    for (cell, formula, expected) in FUNCTION_ARITY_FORMULAS {
+        ws.set_cell_formula(cell, formula).unwrap();
+        let addr = CellAddress::parse(cell).unwrap();
+        ws.set_formula_result(addr.row, addr.col, CellValue::Number(*expected))
+            .unwrap();
+    }
+    wb
+}
+
+fn excel_authored_function_arity_xls_bytes() -> Vec<u8> {
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let mut wb = excel.create_workbook().expect("create Excel workbook");
+        wb.set_cell_value("A1", 4.0).expect("set A1");
+        wb.set_cell_value("A2", -3.0).expect("set A2");
+        wb.set_cell_value("A3", "hello").expect("set A3");
+        wb.set_cell_value("A4", false).expect("set A4");
+        for (cell, formula, _) in FUNCTION_ARITY_FORMULAS {
+            wb.set_cell_formula(cell, formula)
+                .expect("set Excel formula");
+        }
+        excel.recalculate().expect("Excel recalculate");
+        wb.save_as(&fixture.vm_path, 56).expect("Excel SaveAs xls");
+        wb.close().expect("close Excel-authored workbook");
+    }
+
+    pull_file_from_vm(&fixture);
+    let bytes = std::fs::read(&fixture.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
+    cleanup_fixture(&fixture);
+    bytes
+}
+
+/// Volatile functions: Excel prefixes any FORMULA whose token stream
+/// references one of these with a PtgAttrVolatile (0x19, flags=0x01) so the
+/// recalc engine knows to re-evaluate on every change. Without the prefix
+/// Excel still recalculates the cell but the saved bytes differ from
+/// Excel's canonical output.
+const VOLATILE_FORMULAS: &[(&str, &str, f64)] = &[
+    ("B1", "=NOW()", 45000.0),   // iftab=74, 0 args
+    ("B2", "=RAND()", 0.5),      // iftab=63, 0 args
+    ("B3", "=TODAY()", 45000.0), // iftab=221, 0 args
+    // OFFSET is volatile; result value isn't asserted byte-for-byte.
+    ("B4", "=OFFSET(A1,0,0)", 4.0), // iftab=78, variable args, ref-class arg 0
+    // INDIRECT is volatile.
+    ("B5", "=INDIRECT(\"A1\")", 4.0), // iftab=148, variable args
+];
+
+fn volatile_function_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 4.0).unwrap();
+    for (cell, formula, expected) in VOLATILE_FORMULAS {
+        ws.set_cell_formula(cell, formula).unwrap();
+        let addr = CellAddress::parse(cell).unwrap();
+        ws.set_formula_result(addr.row, addr.col, CellValue::Number(*expected))
+            .unwrap();
+    }
+    wb
+}
+
+fn excel_authored_volatile_function_xls_bytes() -> Vec<u8> {
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let mut wb = excel.create_workbook().expect("create Excel workbook");
+        wb.set_cell_value("A1", 4.0).expect("set A1");
+        for (cell, formula, _) in VOLATILE_FORMULAS {
+            wb.set_cell_formula(cell, formula)
+                .expect("set Excel formula");
+        }
+        excel.recalculate().expect("Excel recalculate");
+        wb.save_as(&fixture.vm_path, 56).expect("Excel SaveAs xls");
+        wb.close().expect("close Excel-authored workbook");
+    }
+
+    pull_file_from_vm(&fixture);
+    let bytes = std::fs::read(&fixture.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
+    cleanup_fixture(&fixture);
+    bytes
 }
 
 #[test]
@@ -85,7 +394,12 @@ fn excel_can_evaluate_cross_sheet_formulas_we_emit() {
     calc.set_formula_result(1, 1, CellValue::Number(60.0))
         .unwrap();
 
-    let result = roundtrip_through_excel_xls(&wb);
+    let (result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
+    assert_eq!(
+        xls_formula_ptg_streams_for_compare(&writer_bytes),
+        xls_formula_ptg_streams_for_compare(&excel_bytes),
+        "Excel canonicalized our XLS cross-sheet formula token streams"
+    );
     let s = result.worksheet_by_name("Calc").unwrap();
     let v1 = s.get_value_at(0, 1);
     match v1.effective_value() {
@@ -302,44 +616,34 @@ fn excel_can_read_rich_text_we_emit() {
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_evaluate_named_range_formulas_we_emit() {
-    let mut wb = Workbook::new();
-    wb.rename_worksheet(0, "Calc").unwrap();
-    wb.add_worksheet_with_name("Data").unwrap();
-    wb.worksheet_mut(1)
-        .unwrap()
-        .set_cell_value("A1", 5.0)
-        .unwrap();
-    wb.worksheet_mut(1)
-        .unwrap()
-        .set_cell_value("A2", 10.0)
-        .unwrap();
-    wb.worksheet_mut(1)
-        .unwrap()
-        .set_cell_value("A3", 15.0)
-        .unwrap();
+    let wb = named_formula_workbook();
 
-    wb.define_name("Numbers", "Data!$A$1:$A$3").unwrap();
-    wb.define_name("TaxRate", "0.1").unwrap();
+    let (result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
+    let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    let excel_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
+    assert_eq!(
+        writer_ptgs, excel_ptgs,
+        "Excel canonicalized our XLS formula token streams"
+    );
+    assert_eq!(
+        writer_ptgs,
+        xls_formula_ptg_streams_for_compare(&excel_authored_named_formula_xls_bytes()),
+        "our XLS formula token streams differ from Excel-authored output"
+    );
 
-    let calc = wb.worksheet_mut(0).unwrap();
-    calc.set_cell_formula("B1", "=SUM(Numbers)").unwrap();
-    calc.set_formula_result(0, 1, CellValue::Number(30.0))
-        .unwrap();
-    calc.set_cell_formula("B2", "=B1*TaxRate").unwrap();
-    calc.set_formula_result(1, 1, CellValue::Number(3.0))
-        .unwrap();
-
-    let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet_by_name("Calc").unwrap();
-    let v1 = s.get_value_at(0, 1);
-    match v1.effective_value() {
-        CellValue::Number(n) => assert!((n - 30.0).abs() < 1e-9, "B1 = {n}"),
-        other => panic!("B1 expected Number(30), got {other:?}"),
-    }
-    let v2 = s.get_value_at(1, 1);
-    match v2.effective_value() {
-        CellValue::Number(n) => assert!((n - 3.0).abs() < 1e-9, "B2 = {n}"),
-        other => panic!("B2 expected Number(3), got {other:?}"),
+    for (row, expected) in [
+        (0, 30.0),
+        (1, 3.0),
+        (2, 0.2),
+        (3, 50.0),
+        (4, 90.0),
+        (5, 30.0),
+    ] {
+        match s.get_value_at(row, 1).effective_value() {
+            CellValue::Number(n) => assert!((n - expected).abs() < 1e-9, "B{} = {n}", row + 1),
+            other => panic!("B{} expected Number({expected}), got {other:?}", row + 1),
+        }
     }
     // Verify named ranges survive in the formula text. The
     // workbook-level `workbook.named_ranges()` map is documented as
@@ -356,6 +660,61 @@ fn excel_can_evaluate_named_range_formulas_we_emit() {
     assert!(
         f2.contains("TaxRate"),
         "named range TaxRate lost from B2: {f2:?}"
+    );
+    for (row, expected_names) in [
+        (2, &["TaxRate"][..]),
+        (3, &["LeftBlock", "RightBlock"][..]),
+        (4, &["TopCells", "RightCells"][..]),
+        (5, &["StartCell", "EndCell"][..]),
+    ] {
+        let formula = s
+            .get_formula_at(row, 1)
+            .unwrap_or_else(|| panic!("B{} still a formula", row + 1));
+        for expected_name in expected_names {
+            assert!(
+                formula.contains(expected_name),
+                "named range {expected_name} lost from B{}: {formula:?}",
+                row + 1
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_byte_parity_for_function_arity_we_emit() {
+    let wb = function_arity_workbook();
+    let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
+    let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
+    assert_eq!(
+        writer_ptgs, resave_ptgs,
+        "Excel canonicalized our XLS function formula token streams on re-save"
+    );
+    let authored_ptgs =
+        xls_formula_ptg_streams_for_compare(&excel_authored_function_arity_xls_bytes());
+    assert_eq!(
+        writer_ptgs, authored_ptgs,
+        "our XLS function formula token streams differ from Excel-authored output"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_byte_parity_for_volatile_functions_we_emit() {
+    let wb = volatile_function_workbook();
+    let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
+    let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
+    assert_eq!(
+        writer_ptgs, resave_ptgs,
+        "Excel canonicalized our XLS volatile formula token streams on re-save"
+    );
+    let authored_ptgs =
+        xls_formula_ptg_streams_for_compare(&excel_authored_volatile_function_xls_bytes());
+    assert_eq!(
+        writer_ptgs, authored_ptgs,
+        "our XLS volatile formula token streams differ from Excel-authored output"
     );
 }
 
@@ -474,7 +833,12 @@ fn excel_can_read_protection_state_we_emit() {
         ..Default::default()
     }));
 
-    let result = roundtrip_through_excel_xls(&wb);
+    let (result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
+    assert_eq!(
+        xls_formula_ptg_streams_for_compare(&writer_bytes),
+        xls_formula_ptg_streams_for_compare(&excel_bytes),
+        "Excel canonicalized our XLS intersection formula token streams"
+    );
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("locked"));
     let prot = s
@@ -502,7 +866,12 @@ fn excel_can_read_dimensions_we_emit() {
     ws.set_row_height(0, 36.0);
     ws.set_column_width(1, 25.0);
 
-    let result = roundtrip_through_excel_xls(&wb);
+    let (result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
+    assert_eq!(
+        xls_formula_ptg_streams_for_compare(&writer_bytes),
+        xls_formula_ptg_streams_for_compare(&excel_bytes),
+        "Excel canonicalized our XLS union formula token streams"
+    );
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("tall"));
     assert_eq!(s.get_value_at(0, 1).as_string(), Some("wide"));

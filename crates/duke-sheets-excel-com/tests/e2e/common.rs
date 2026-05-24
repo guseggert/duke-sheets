@@ -246,8 +246,16 @@ pub fn roundtrip_through_excel(wb: &duke_sheets_core::Workbook) -> duke_sheets_c
 /// in real Excel (asserting no repair), re-save as XLS (FileFormat=56),
 /// pull back, and read with `XlsReader`.
 pub fn roundtrip_through_excel_xls(wb: &duke_sheets_core::Workbook) -> duke_sheets_core::Workbook {
+    roundtrip_through_excel_xls_bytes(wb).0
+}
+
+/// XLS writer parity helper that also returns the pre-Excel writer bytes and
+/// Excel's re-saved bytes. Tests use the bytes to compare BIFF formula token
+/// streams against Excel's canonical save output without another VM trip.
+pub fn roundtrip_through_excel_xls_bytes(
+    wb: &duke_sheets_core::Workbook,
+) -> (duke_sheets_core::Workbook, Vec<u8>, Vec<u8>) {
     use duke_sheets_xls::{XlsReader, XlsWriter};
-    use std::io::Cursor;
 
     let input = temp_fixture_xls();
     let output = temp_fixture_xls();
@@ -278,12 +286,115 @@ pub fn roundtrip_through_excel_xls(wb: &duke_sheets_core::Workbook) -> duke_shee
     opened.close().expect("close workbook");
 
     pull_file_from_vm(&output);
+    let output_bytes = std::fs::read(&output.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", output.host_path.display()));
     let result = XlsReader::read_file(&output.host_path).expect("XlsReader::read_file");
 
     cleanup_fixture(&input);
     cleanup_fixture(&output);
 
-    result
+    (result, buf, output_bytes)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XlsFormulaPtgStream {
+    pub row: u16,
+    pub col: u16,
+    pub tokens: Vec<u8>,
+}
+
+/// Extract raw FORMULA-record PTG bytes keyed by cell position.
+///
+/// This deliberately preserves opcode/class bytes instead of going through the
+/// normal formula parser, because token class is exactly what byte-parity tests
+/// need to pin.
+pub fn xls_formula_ptg_streams(bytes: &[u8]) -> Vec<XlsFormulaPtgStream> {
+    use duke_sheets_xls::{biff, cfb::CompoundFile};
+    use std::io::Cursor;
+
+    let cfb = CompoundFile::open(Cursor::new(bytes)).expect("open XLS CFB");
+    let stream_path = if cfb.exists("/Workbook") {
+        "/Workbook"
+    } else {
+        "/Book"
+    };
+    let stream = cfb.read_stream(stream_path).expect("read workbook stream");
+    let records = biff::read_all_records(&mut Cursor::new(stream)).expect("read BIFF records");
+    records
+        .iter()
+        .filter(|rec| rec.record_type == biff::records::FORMULA)
+        .map(|rec| {
+            assert!(rec.data.len() >= 22, "FORMULA record too short");
+            let row = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+            let col = u16::from_le_bytes([rec.data[2], rec.data[3]]);
+            let cce = u16::from_le_bytes([rec.data[20], rec.data[21]]) as usize;
+            assert!(
+                rec.data.len() >= 22 + cce,
+                "FORMULA record token stream truncated"
+            );
+            XlsFormulaPtgStream {
+                row,
+                col,
+                tokens: rec.data[22..22 + cce].to_vec(),
+            }
+        })
+        .collect()
+}
+
+/// Extract FORMULA PTGs in the form used for byte parity checks.
+///
+/// This is byte-for-byte except for PtgAttrSum's two reserved bytes. Excel's
+/// own authored output has produced different non-zero values in those bytes
+/// across runs, and MS-XLS defines the SUM attribute by its flag bit rather
+/// than those reserved payload bytes.
+pub fn xls_formula_ptg_streams_for_compare(bytes: &[u8]) -> Vec<XlsFormulaPtgStream> {
+    xls_formula_ptg_streams(bytes)
+        .into_iter()
+        .map(|mut stream| {
+            normalize_attr_sum_reserved_bytes(&mut stream.tokens);
+            stream
+        })
+        .collect()
+}
+
+fn normalize_attr_sum_reserved_bytes(tokens: &mut [u8]) {
+    use duke_sheets_xls::biff::formula::ptg;
+
+    let mut pos = 0usize;
+    while pos < tokens.len() {
+        let raw = tokens[pos];
+        let base = ptg::base_ptg(raw);
+        pos += 1;
+        match base {
+            ptg::PTG_ATTR => {
+                if pos + 3 > tokens.len() {
+                    break;
+                }
+                let flags = tokens[pos];
+                let attr_data = u16::from_le_bytes([tokens[pos + 1], tokens[pos + 2]]) as usize;
+                if (flags & ptg::ATTR_SUM) != 0 {
+                    tokens[pos + 1] = 0;
+                    tokens[pos + 2] = 0;
+                }
+                pos += 3;
+                if (flags & ptg::ATTR_CHOOSE) != 0 {
+                    pos = pos.saturating_add((attr_data + 1) * 2);
+                }
+            }
+            ptg::PTG_STR => {
+                if pos + 2 > tokens.len() {
+                    break;
+                }
+                let len = tokens[pos] as usize;
+                let flags = tokens[pos + 1];
+                pos += 2 + if (flags & 0x01) != 0 { len * 2 } else { len };
+            }
+            _ => match ptg::token_data_size(base) {
+                Some(size) => pos = pos.saturating_add(size),
+                None => break,
+            },
+        }
+    }
 }
 
 /// Write a workbook as XLSB with duke-sheets, push to the VM, open in real
