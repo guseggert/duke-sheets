@@ -2960,6 +2960,8 @@ fn compile_ptgs_with_context(
         }
         FormulaExpr::NameRef(name) => {
             let idx = names.idx_for_name(name).ok_or(UnsupportedToken)?;
+            // Keep defined names R-class: Excel dereferences scalar names
+            // but needs reference-class names when they point at ranges.
             out.push(0x23); // PTG_NAME (R class)
             out.extend_from_slice(&idx.to_le_bytes());
             out.extend_from_slice(&0u16.to_le_bytes()); // 2 reserved bytes
