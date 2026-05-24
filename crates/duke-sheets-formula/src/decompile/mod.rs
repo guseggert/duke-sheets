@@ -9,7 +9,10 @@ pub mod function_table;
 pub mod parsed_token;
 
 pub use decompiler::decompile;
-pub use function_table::{function_argc, function_index, function_name};
+pub use function_table::{
+    expr_calls_volatile_function, function_arg_class, function_argc, function_index,
+    function_is_fixed_arity, function_is_volatile, function_name, OperandClass,
+};
 pub use parsed_token::ParsedToken;
 
 /// A SUPBOOK record: describes a supporting workbook reference.

@@ -618,6 +618,147 @@ pub fn function_argc(idx: u16) -> u16 {
     }
 }
 
+/// PTG operand class for function arguments and reference tokens.
+///
+/// See [MS-XLS] §2.5.198 "Tokens (Ptg)" for the V/R/A class distinction.
+/// The class is encoded in the low bits of certain PTG opcodes (e.g.
+/// PtgRef 0x24=R, 0x44=V, 0x64=A; PtgArea 0x25=R, 0x45=V, 0x65=A).
+///
+/// Only the R and V classes are used by the current writer paths.
+/// Array class (A) is reserved for array-formula encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperandClass {
+    /// Reference class — operand must be a cell/range/name reference.
+    R,
+    /// Value class — operand is coerced to a value before use.
+    V,
+}
+
+/// True if function `iftab` accepts `actual_argc` as a fixed-arity call,
+/// suitable for PtgFunc (0x41) emission. Otherwise the writer must emit
+/// PtgFuncVar (0x42) with an explicit argument count.
+///
+/// MS-XLS [MS-XLS] §2.5.198.62 / §2.5.198.63 defines PtgFunc and PtgFuncVar:
+/// PtgFunc carries no argc byte and assumes the Ftab declares a fixed count
+/// matching `actual_argc`. Functions whose Ftab argc is 254/255 (variable)
+/// always require PtgFuncVar; for fixed-argc functions Excel may still choose
+/// PtgFuncVar in some emission paths.
+///
+/// The allow-list below is grown empirically from Excel-authored byte-parity
+/// tests rather than the spec grammar alone, since Excel's emission may diverge
+/// from the spec-implied fixed/variable boundary.
+pub fn function_is_fixed_arity(iftab: u16, actual_argc: usize) -> bool {
+    let declared = function_argc(iftab) as usize;
+    if actual_argc != declared {
+        return false;
+    }
+    matches!(
+        iftab,
+        2 | 3                                    // ISNA, ISERROR
+        | 15 | 16 | 17 | 18                      // SIN, COS, TAN, ATAN
+        | 19                                     // PI (0 arg)
+        | 20 | 21 | 22 | 23                      // SQRT, EXP, LN, LOG10
+        | 24 | 25 | 26 | 27                      // ABS, INT, SIGN, ROUND
+        | 30 | 31 | 32 | 33                      // REPT, MID, LEN, VALUE
+        | 34 | 35                                // TRUE, FALSE (0 arg)
+        | 38 | 39                                // NOT, MOD
+        | 63                                     // RAND (0 arg, volatile)
+        | 74                                     // NOW (0 arg, volatile)
+        | 97 | 98 | 99                           // ATAN2, ASIN, ACOS
+        | 221                                    // TODAY (0 arg, volatile)
+    )
+}
+
+/// PTG operand class Excel expects for the `arg_idx`-th argument of the
+/// function whose Ftab index is `iftab`. Defaults to V for unrecognized
+/// functions.
+///
+/// MS-XLS [MS-XLS] §2.5.198 defines per-function argument grammars in the
+/// Ftab spec. Most arguments are `(ref/val)` — accepting either class — but
+/// some are declared `ref` and must be emitted R-class to preserve range
+/// iteration; otherwise Excel collapses the range to its last cell during
+/// evaluation.
+///
+/// Aggregator functions (SUM, AVERAGE, MIN, MAX, etc.) take `(ref/val)`
+/// arguments; when the operand is a reference, Excel emits R-class so the
+/// function iterates over the range. We return R unconditionally for these
+/// because the writer's leaf emitters fall through to V for token types where
+/// class doesn't apply (PtgNum, PtgInt, etc.).
+pub fn function_arg_class(iftab: u16, arg_idx: usize) -> OperandClass {
+    match (iftab, arg_idx) {
+        // Functions whose Ftab grammar declares the arg as `ref` (not
+        // `(ref/val)`) — Excel always emits R-class operands here.
+        (8, 0) | (9, 0) => OperandClass::R, // ROW(ref), COLUMN(ref)
+        (75, 0) => OperandClass::R,         // AREAS(ref)
+        (78, 0) => OperandClass::R,         // OFFSET(ref, ...)
+        // Aggregators with `(ref/val)` arg positions: see fn-doc.
+        (0, _) => OperandClass::R,   // COUNT
+        (4, _) => OperandClass::R,   // SUM
+        (5, _) => OperandClass::R,   // AVERAGE
+        (6, _) => OperandClass::R,   // MIN
+        (7, _) => OperandClass::R,   // MAX
+        (12, _) => OperandClass::R,  // STDEV
+        (46, _) => OperandClass::R,  // VAR
+        (169, _) => OperandClass::R, // COUNTA
+        (183, _) => OperandClass::R, // PRODUCT
+        _ => OperandClass::V,
+    }
+}
+
+/// True if `iftab` names a volatile function — one whose result depends on
+/// state outside its direct operands so Excel must re-evaluate the formula
+/// on every workbook change.
+///
+/// MS-XLS [MS-XLS] §2.5.198.42 PtgAttrVolatile is emitted as the first token
+/// of a formula whose AST calls a volatile function transitively. Use
+/// [`expr_calls_volatile_function`] for the AST walk.
+///
+/// User-defined functions (iftab 255) are considered volatile by convention
+/// because BIFF8 cannot statically determine UDF purity; the current XLS
+/// writer never reaches this branch because `function_index` returns None for
+/// names not in FTAB, but the entry is retained for callers that test the
+/// numeric iftab directly.
+pub fn function_is_volatile(iftab: u16) -> bool {
+    matches!(
+        iftab,
+        63    // RAND
+        | 74  // NOW
+        | 78  // OFFSET
+        | 148 // INDIRECT
+        | 221 // TODAY
+        | 244 // INFO
+        | 255 // User Defined Function (assumed volatile in BIFF8)
+    )
+}
+
+/// True if `expr` calls a volatile function transitively. Walks the AST to
+/// find any [`crate::FormulaExpr::Function`] node whose `name` resolves to a
+/// volatile Ftab index.
+///
+/// Drives PtgAttrVolatile prefix emission in the XLS/XLSB writers.
+pub fn expr_calls_volatile_function(expr: &crate::FormulaExpr) -> bool {
+    use crate::FormulaExpr;
+
+    match expr {
+        FormulaExpr::Function { name, args } => {
+            if let Some(idx) = function_index(name) {
+                if function_is_volatile(idx) {
+                    return true;
+                }
+            }
+            args.iter().any(expr_calls_volatile_function)
+        }
+        FormulaExpr::BinaryOp { left, right, .. } => {
+            expr_calls_volatile_function(left) || expr_calls_volatile_function(right)
+        }
+        FormulaExpr::UnaryOp { operand, .. } => expr_calls_volatile_function(operand),
+        FormulaExpr::Array(rows) => rows
+            .iter()
+            .any(|row| row.iter().any(expr_calls_volatile_function)),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,5 +824,137 @@ mod tests {
     fn test_function_index_not_found() {
         assert_eq!(function_index("NOTAFUNCTION"), None);
         assert_eq!(function_index(""), None);
+    }
+
+    #[test]
+    fn fixed_arity_requires_matching_argc() {
+        // PI is declared 0-arg, fixed.
+        assert!(function_is_fixed_arity(19, 0));
+        // ABS is declared 1-arg, fixed.
+        assert!(function_is_fixed_arity(24, 1));
+        // ABS with 2 args is never fixed (mismatch with FTAB).
+        assert!(!function_is_fixed_arity(24, 2));
+        // SUM is variable-argc (FTAB declares 255); never fixed.
+        assert!(!function_is_fixed_arity(4, 1));
+        assert!(!function_is_fixed_arity(4, 5));
+    }
+
+    #[test]
+    fn fixed_arity_excludes_non_allowlisted() {
+        // COUNTA (169) has FTAB argc=255 (variable) — never fixed.
+        assert!(!function_is_fixed_arity(169, 1));
+        // VLOOKUP (102) has FTAB argc=4 but is not on the allow-list —
+        // Excel emits PtgFuncVar for it.
+        assert!(!function_is_fixed_arity(102, 4));
+    }
+
+    #[test]
+    fn arg_class_aggregators_use_r_class() {
+        assert_eq!(function_arg_class(0, 0), OperandClass::R); // COUNT
+        assert_eq!(function_arg_class(4, 0), OperandClass::R); // SUM
+        assert_eq!(function_arg_class(5, 0), OperandClass::R); // AVERAGE
+        assert_eq!(function_arg_class(6, 0), OperandClass::R); // MIN
+        assert_eq!(function_arg_class(7, 0), OperandClass::R); // MAX
+        assert_eq!(function_arg_class(12, 0), OperandClass::R); // STDEV
+        assert_eq!(function_arg_class(46, 0), OperandClass::R); // VAR
+        assert_eq!(function_arg_class(169, 0), OperandClass::R); // COUNTA
+        assert_eq!(function_arg_class(183, 0), OperandClass::R); // PRODUCT
+    }
+
+    #[test]
+    fn arg_class_ref_functions_use_r_class() {
+        assert_eq!(function_arg_class(8, 0), OperandClass::R); // ROW
+        assert_eq!(function_arg_class(9, 0), OperandClass::R); // COLUMN
+        assert_eq!(function_arg_class(75, 0), OperandClass::R); // AREAS
+        assert_eq!(function_arg_class(78, 0), OperandClass::R); // OFFSET arg 0
+        // OFFSET arg 1..3 take values (rows, cols, height, width) — V-class.
+        assert_eq!(function_arg_class(78, 1), OperandClass::V);
+        assert_eq!(function_arg_class(78, 2), OperandClass::V);
+    }
+
+    #[test]
+    fn arg_class_default_is_v() {
+        // Unknown function falls through to V.
+        assert_eq!(function_arg_class(9999, 0), OperandClass::V);
+        // IF (1) is not on the R-class list — V by default.
+        assert_eq!(function_arg_class(1, 0), OperandClass::V);
+        // VLOOKUP arg 0 is V.
+        assert_eq!(function_arg_class(102, 0), OperandClass::V);
+    }
+
+    #[test]
+    fn volatile_known_functions() {
+        assert!(function_is_volatile(63)); // RAND
+        assert!(function_is_volatile(74)); // NOW
+        assert!(function_is_volatile(78)); // OFFSET
+        assert!(function_is_volatile(148)); // INDIRECT
+        assert!(function_is_volatile(221)); // TODAY
+        assert!(function_is_volatile(244)); // INFO
+    }
+
+    #[test]
+    fn volatile_excludes_non_volatile() {
+        assert!(!function_is_volatile(4)); // SUM
+        assert!(!function_is_volatile(102)); // VLOOKUP
+        assert!(!function_is_volatile(219)); // ADDRESS (not volatile)
+        assert!(!function_is_volatile(345)); // SUMIF
+    }
+
+    #[test]
+    fn expr_volatile_detects_direct_call() {
+        use crate::FormulaExpr;
+
+        let now = FormulaExpr::Function {
+            name: "NOW".to_string(),
+            args: vec![],
+        };
+        assert!(expr_calls_volatile_function(&now));
+
+        let sum = FormulaExpr::Function {
+            name: "SUM".to_string(),
+            args: vec![FormulaExpr::Number(1.0), FormulaExpr::Number(2.0)],
+        };
+        assert!(!expr_calls_volatile_function(&sum));
+    }
+
+    #[test]
+    fn expr_volatile_detects_nested_call() {
+        use crate::ast::BinaryOperator;
+        use crate::FormulaExpr;
+
+        // SUM(NOW(), 1) — NOW is nested inside SUM args
+        let expr = FormulaExpr::Function {
+            name: "SUM".to_string(),
+            args: vec![
+                FormulaExpr::Function {
+                    name: "NOW".to_string(),
+                    args: vec![],
+                },
+                FormulaExpr::Number(1.0),
+            ],
+        };
+        assert!(expr_calls_volatile_function(&expr));
+
+        // 1 + RAND() — volatile inside binary op
+        let expr = FormulaExpr::BinaryOp {
+            op: BinaryOperator::Add,
+            left: Box::new(FormulaExpr::Number(1.0)),
+            right: Box::new(FormulaExpr::Function {
+                name: "RAND".to_string(),
+                args: vec![],
+            }),
+        };
+        assert!(expr_calls_volatile_function(&expr));
+    }
+
+    #[test]
+    fn expr_volatile_case_insensitive() {
+        use crate::FormulaExpr;
+
+        let lowercase = FormulaExpr::Function {
+            name: "now".to_string(),
+            args: vec![],
+        };
+        assert!(expr_calls_volatile_function(&lowercase));
     }
 }

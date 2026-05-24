@@ -2872,7 +2872,7 @@ fn try_write_formula_record(
     // recalculation engine knows to re-evaluate this cell on every change.
     // Excel always emits this prefix; matching it preserves byte parity
     // through an Excel open/save round-trip.
-    if formula_expr_is_volatile(&expr) {
+    if expr_calls_volatile_function(&expr) {
         tokens.extend_from_slice(&[0x19, 0x01, 0x00, 0x00]); // PtgAttrVolatile
     }
     if compile_ptgs_with_context(&expr, &mut tokens, externsheet, names, OperandClass::V).is_err() {
@@ -2991,20 +2991,14 @@ fn compile_ptgs(
     )
 }
 
-/// PTG operand class. MS-XLS represents references in two flavors:
-/// V (value) and R (reference). Most expressions want V — Excel
-/// dereferences the cell as soon as it appears. Intersection and
-/// union operators, however, need R-class operands because the
-/// operators themselves manipulate cell ranges, not their values.
-/// 3D area references are an exception: they use R-class even
-/// outside intersection/union context per MS-XLS §2.5.198.103,
-/// because V-class causes Excel to collapse the range to its last
-/// cell during SUM-style evaluation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OperandClass {
-    V,
-    R,
-}
+// PTG operand class and per-function metadata live in duke-sheets-formula
+// because they're shared between the XLS (BIFF8) and XLSB (BIFF12) writers.
+// MS-XLS §2.5.198 defines the V/R/A class distinction; this writer only uses
+// V and R. See `OperandClass` in the formula crate for the full rationale.
+use duke_sheets_formula::decompile::function_table::{
+    expr_calls_volatile_function, function_arg_class, function_index, function_is_fixed_arity,
+    OperandClass,
+};
 
 fn compile_ptgs_with_context(
     expr: &duke_sheets_formula::FormulaExpr,
@@ -3148,7 +3142,7 @@ fn compile_ptgs_with_context(
             });
         }
         FormulaExpr::Function { name, args } => {
-            let Some(idx) = crate::biff::formula::function_table::function_index(name) else {
+            let Some(idx) = function_index(name) else {
                 return Err(UnsupportedToken);
             };
             if args.len() > u8::MAX as usize {
@@ -3257,116 +3251,6 @@ fn number_as_ptg_int(n: f64) -> Option<u16> {
         Some(n as u16)
     } else {
         None
-    }
-}
-
-/// Return true if a function should be encoded with PtgFunc (fixed-arity,
-/// 0x21/0x41/0x61) rather than PtgFuncVar (0x22/0x42/0x62) when called with
-/// `actual_argc` arguments.
-///
-/// The MS-XLS Ftab grammar declares each function's parameter list; functions
-/// whose grammar has no optional brackets (`[arg]`) or repetition (`*N(arg)`)
-/// have a fixed parameter count, and Excel encodes them with PtgFunc (which
-/// omits the argument count, recovering one byte per call).
-///
-/// We mirror Excel's exact emission, so this table is grown empirically from
-/// Excel-authored byte parity tests rather than from the spec grammar alone.
-/// Adding a function here without confirming via Excel parity risks emitting
-/// PtgFunc for a function Excel treats as variable-arity.
-fn function_is_fixed_arity(iftab: u16, actual_argc: usize) -> bool {
-    // For PtgFunc the argc is implicit from Ftab. If our actual count doesn't
-    // match what Ftab declares for that iftab, fall back to PtgFuncVar.
-    let declared = crate::biff::formula::function_table::function_argc(iftab) as usize;
-    if actual_argc != declared {
-        return false;
-    }
-    matches!(
-        iftab,
-        2 | 3                                    // ISNA, ISERROR
-        | 15 | 16 | 17 | 18                      // SIN, COS, TAN, ATAN
-        | 19                                     // PI (0 arg)
-        | 20 | 21 | 22 | 23                      // SQRT, EXP, LN, LOG10
-        | 24 | 25 | 26 | 27                      // ABS, INT, SIGN, ROUND
-        | 30 | 31 | 32 | 33                      // REPT, MID, LEN, VALUE
-        | 34 | 35                                // TRUE, FALSE (0 arg)
-        | 38 | 39                                // NOT, MOD
-        | 63                                     // RAND (0 arg, volatile)
-        | 74                                     // NOW (0 arg, volatile)
-        | 97 | 98 | 99                           // ATAN2, ASIN, ACOS
-        | 221 // TODAY (0 arg, volatile)
-    )
-}
-
-/// Return the operand class Excel expects for the `arg_idx`-th argument of
-/// the function whose Ftab index is `iftab`. Functions whose argument is
-/// declared `ref` in MS-XLS Ftab take R-class operands; the default is V.
-fn function_arg_class(iftab: u16, arg_idx: usize) -> OperandClass {
-    match (iftab, arg_idx) {
-        // Functions whose Ftab grammar declares the arg as `ref` (not
-        // `(ref/val)`) — Excel always emits R-class operands here.
-        (8, 0) | (9, 0) => OperandClass::R, // ROW(ref), COLUMN(ref)
-        (75, 0) => OperandClass::R,         // AREAS(ref)
-        (78, 0) => OperandClass::R,         // OFFSET(ref, ...)
-        // Aggregators with `(ref/val)` arg positions: when the operand
-        // is a reference (cell/range/name), Excel emits it R-class to
-        // preserve range iteration; this fn returns R unconditionally
-        // because the writer's leaf emitters fall through to V for token
-        // types where class doesn't apply (PtgNum, PtgInt, etc.).
-        (0, _) => OperandClass::R,   // COUNT
-        (4, _) => OperandClass::R,   // SUM
-        (5, _) => OperandClass::R,   // AVERAGE
-        (6, _) => OperandClass::R,   // MIN
-        (7, _) => OperandClass::R,   // MAX
-        (12, _) => OperandClass::R,  // STDEV
-        (46, _) => OperandClass::R,  // VAR
-        (169, _) => OperandClass::R, // COUNTA
-        (183, _) => OperandClass::R, // PRODUCT
-        _ => OperandClass::V,
-    }
-}
-
-/// Return true if `iftab` names a volatile BIFF function (one whose result
-/// depends on data outside the formula's direct operands, so Excel must
-/// re-evaluate on every change). Grown empirically from Excel-authored
-/// byte parity tests.
-fn function_is_volatile(iftab: u16) -> bool {
-    matches!(
-        iftab,
-        63   // RAND
-        | 74  // NOW
-        | 78  // OFFSET
-        | 148 // INDIRECT
-        | 219 // INFO (reserved/empty slot - placeholder, not actually 219)
-        | 221 // TODAY
-        | 244 // INFO
-        | 255 // User Defined Function (assumed volatile in BIFF8)
-    )
-}
-
-/// True if `expr` calls a volatile function transitively. The XLS writer
-/// uses this to decide whether to prefix the FORMULA token stream with a
-/// PtgAttrVolatile attribute.
-fn formula_expr_is_volatile(expr: &duke_sheets_formula::FormulaExpr) -> bool {
-    use duke_sheets_formula::FormulaExpr;
-
-    match expr {
-        FormulaExpr::Function { name, args } => {
-            let iftab = crate::biff::formula::function_table::function_index(name);
-            if let Some(idx) = iftab {
-                if function_is_volatile(idx) {
-                    return true;
-                }
-            }
-            args.iter().any(formula_expr_is_volatile)
-        }
-        FormulaExpr::BinaryOp { left, right, .. } => {
-            formula_expr_is_volatile(left) || formula_expr_is_volatile(right)
-        }
-        FormulaExpr::UnaryOp { operand, .. } => formula_expr_is_volatile(operand),
-        FormulaExpr::Array(rows) => rows
-            .iter()
-            .any(|row| row.iter().any(formula_expr_is_volatile)),
-        _ => false,
     }
 }
 
