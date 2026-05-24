@@ -364,3 +364,32 @@ fn named_range_in_formula_text_survives_xls_roundtrip() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn randbetween_formula_emits_volatile_attr_prefix() {
+    // RANDBETWEEN(bottom, top) is volatile per Excel docs — its output
+    // depends on the recalculation cycle, not just its operands, so Excel
+    // emits PtgAttrVolatile (0x19 0x01 0x00 0x00) as the first token of
+    // every formula whose AST calls it. This test pins that emission.
+    //
+    // RED test for the bug surfaced during the function-metadata audit:
+    // the runtime `FunctionRegistry` marks RANDBETWEEN volatile, but the
+    // writer's iftab-based `function_is_volatile` list did not, so we
+    // omitted the prefix. After the registry unification this passes.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=RANDBETWEEN(1,10)").unwrap();
+    ws.set_formula_result(0, 0, CellValue::Number(5.0)).unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    assert_eq!(
+        tokens.first().copied(),
+        Some(0x19),
+        "RANDBETWEEN formula must start with PtgAttrVolatile (0x19); tokens={tokens:02X?}"
+    );
+    assert_eq!(
+        tokens.get(1).copied(),
+        Some(0x01),
+        "PtgAttrVolatile subtype byte must be 0x01; tokens={tokens:02X?}"
+    );
+}
