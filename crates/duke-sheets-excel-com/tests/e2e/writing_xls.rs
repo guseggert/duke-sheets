@@ -214,12 +214,6 @@ fn excel_authored_named_formula_xls_bytes() -> Vec<u8> {
 /// (cell, formula, cached_result) order; the same cell/order is used both by
 /// our writer and the Excel-authored fixture so PTG streams line up
 /// positionally.
-///
-/// `SUM(plain_area)` and `AVERAGE(plain_area)` are intentionally omitted:
-/// when set via the Excel COM `Range.Formula` API, Excel materializes those
-/// as a `PtgName` UDF wrapper (iftab=255) rather than a direct
-/// `PtgFuncVar`. The behavior is consistent with `=SUM(<defined_name>)` byte
-/// parity already covered by `excel_can_evaluate_named_range_formulas_we_emit`.
 const FUNCTION_ARITY_FORMULAS: &[(&str, &str, f64)] = &[
     // Fixed-arity → PtgFunc
     ("B1", "=SQRT(A1)", 2.0),                              // iftab=20
@@ -238,7 +232,11 @@ const FUNCTION_ARITY_FORMULAS: &[(&str, &str, f64)] = &[
     ("B15", "=ISNA(A1)", 0.0),                             // iftab=2
     ("B16", "=ISERROR(A1)", 0.0),                          // iftab=3
     // Variable-arity → PtgFuncVar
-    ("B6", "=ROW(A1)", 1.0), // iftab=8 (var)
+    ("B6", "=ROW(A1)", 1.0),         // iftab=8 (var, ref arg)
+    ("B17", "=SUM(A1:A2)", 1.0),     // iftab=4 (PtgAttrSum form, R-class operand)
+    ("B18", "=AVERAGE(A1:A2)", 0.5), // iftab=5 (PtgFuncVar, R-class operand)
+    ("B19", "=MIN(A1:A2)", -3.0),    // iftab=6
+    ("B20", "=MAX(A1:A2)", 4.0),     // iftab=7
 ];
 
 fn function_arity_workbook() -> Workbook {

@@ -3101,14 +3101,17 @@ fn compile_ptgs_with_context(
                     return Ok(());
                 }
             }
-            // Intersection / union / range operators require R-class
-            // operands. Other operators use V-class for their operands
-            // unless the parent context already forced R-class.
+            // Intersection / union / range operators take reference
+            // operands. All other binary operators (arithmetic, comparison,
+            // concat) take values regardless of the surrounding context:
+            // multiplying a cell ref always wants the cell's value, even
+            // if the parent context was a reference position. Matches
+            // MS-XLS §2.5.198 value-vs-reference operator rules.
             let child_class = match op {
                 BinaryOperator::Intersect | BinaryOperator::Union | BinaryOperator::Range => {
                     OperandClass::R
                 }
-                _ => operand_class,
+                _ => OperandClass::V,
             };
             compile_ptgs_with_context(left, out, externsheet, names, child_class)?;
             compile_ptgs_with_context(right, out, externsheet, names, child_class)?;
@@ -3230,7 +3233,13 @@ fn emit_optimized_sum(
         }
     }
 
-    compile_ptgs_with_context(arg, out, externsheet, names, OperandClass::V)?;
+    // Excel emits the PtgAttrSum form with the SUM arg in R-class context
+    // when the arg is a reference; for non-ref args (numbers, value
+    // expressions) the leaf token has no class bits so passing R is a
+    // no-op there. Pull the class from the function metadata so the rule
+    // stays in one place.
+    let arg_class = function_arg_class(4, 0);
+    compile_ptgs_with_context(arg, out, externsheet, names, arg_class)?;
     push_attr_sum(out);
     Ok(())
 }
@@ -3284,7 +3293,7 @@ fn function_is_fixed_arity(iftab: u16, actual_argc: usize) -> bool {
         | 63                                     // RAND (0 arg, volatile)
         | 74                                     // NOW (0 arg, volatile)
         | 97 | 98 | 99                           // ATAN2, ASIN, ACOS
-        | 221                                    // TODAY (0 arg, volatile)
+        | 221 // TODAY (0 arg, volatile)
     )
 }
 
@@ -3293,9 +3302,25 @@ fn function_is_fixed_arity(iftab: u16, actual_argc: usize) -> bool {
 /// declared `ref` in MS-XLS Ftab take R-class operands; the default is V.
 fn function_arg_class(iftab: u16, arg_idx: usize) -> OperandClass {
     match (iftab, arg_idx) {
+        // Functions whose Ftab grammar declares the arg as `ref` (not
+        // `(ref/val)`) — Excel always emits R-class operands here.
         (8, 0) | (9, 0) => OperandClass::R, // ROW(ref), COLUMN(ref)
         (75, 0) => OperandClass::R,         // AREAS(ref)
         (78, 0) => OperandClass::R,         // OFFSET(ref, ...)
+        // Aggregators with `(ref/val)` arg positions: when the operand
+        // is a reference (cell/range/name), Excel emits it R-class to
+        // preserve range iteration; this fn returns R unconditionally
+        // because the writer's leaf emitters fall through to V for token
+        // types where class doesn't apply (PtgNum, PtgInt, etc.).
+        (0, _) => OperandClass::R,   // COUNT
+        (4, _) => OperandClass::R,   // SUM
+        (5, _) => OperandClass::R,   // AVERAGE
+        (6, _) => OperandClass::R,   // MIN
+        (7, _) => OperandClass::R,   // MAX
+        (12, _) => OperandClass::R,  // STDEV
+        (46, _) => OperandClass::R,  // VAR
+        (169, _) => OperandClass::R, // COUNTA
+        (183, _) => OperandClass::R, // PRODUCT
         _ => OperandClass::V,
     }
 }

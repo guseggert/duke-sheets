@@ -343,21 +343,26 @@ pub fn xls_formula_ptg_streams(bytes: &[u8]) -> Vec<XlsFormulaPtgStream> {
 
 /// Extract FORMULA PTGs in the form used for byte parity checks.
 ///
-/// This is byte-for-byte except for PtgAttrSum's two reserved bytes. Excel's
-/// own authored output has produced different non-zero values in those bytes
-/// across runs, and MS-XLS defines the SUM attribute by its flag bit rather
-/// than those reserved payload bytes.
+/// Identical to [`xls_formula_ptg_streams`] except that the two bytes after
+/// a PtgAttrSum's flags byte are zeroed. MS-XLS §2.5.198.41 PtgAttrSum
+/// defines those two bytes as `unused (2 bytes): Undefined and MUST be
+/// ignored.` so authored files may carry uninitialized stack values there.
+/// Likewise MS-XLS §2.5.198.42 PtgAttrVolatile defines two `unused` bytes
+/// in the same position; zero them out as well so a future Excel emission
+/// that puts garbage there doesn't make tests flake.
 pub fn xls_formula_ptg_streams_for_compare(bytes: &[u8]) -> Vec<XlsFormulaPtgStream> {
     xls_formula_ptg_streams(bytes)
         .into_iter()
         .map(|mut stream| {
-            normalize_attr_sum_reserved_bytes(&mut stream.tokens);
+            normalize_attr_reserved_bytes(&mut stream.tokens);
             stream
         })
         .collect()
 }
 
-fn normalize_attr_sum_reserved_bytes(tokens: &mut [u8]) {
+/// Zero out the per-MS-XLS "undefined" bytes inside PtgAttrSum / PtgAttrVolatile
+/// so test comparisons aren't sensitive to whatever Excel left in them.
+fn normalize_attr_reserved_bytes(tokens: &mut [u8]) {
     use duke_sheets_xls::biff::formula::ptg;
 
     let mut pos = 0usize;
@@ -372,7 +377,9 @@ fn normalize_attr_sum_reserved_bytes(tokens: &mut [u8]) {
                 }
                 let flags = tokens[pos];
                 let attr_data = u16::from_le_bytes([tokens[pos + 1], tokens[pos + 2]]) as usize;
-                if (flags & ptg::ATTR_SUM) != 0 {
+                // PtgAttrSum (§2.5.198.41) and PtgAttrVolatile (§2.5.198.42)
+                // both have 2 unused bytes right after the flags byte.
+                if (flags & (ptg::ATTR_SUM | ptg::ATTR_VOLATILE)) != 0 {
                     tokens[pos + 1] = 0;
                     tokens[pos + 2] = 0;
                 }
