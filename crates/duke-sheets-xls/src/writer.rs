@@ -3152,6 +3152,16 @@ fn compile_ptgs_with_context(
                 emit_optimized_sum(&args[0], out, externsheet, names)?;
                 return Ok(());
             }
+            // IF gets MS-XLS PtgAttrIf / PtgAttrGoto short-circuit optimization
+            // ([MS-XLS] §2.5.198.39 / §2.5.198.37). Excel always emits this
+            // for IF — matching it is required for byte-for-byte parity.
+            if idx == 1 && (args.len() == 2 || args.len() == 3) {
+                if emit_optimized_if(args, out, externsheet, names)? {
+                    return Ok(());
+                }
+                // emit_optimized_if returns Ok(false) when token offsets
+                // would overflow u16; fall through to the plain emission.
+            }
             for (arg_idx, arg) in args.iter().enumerate() {
                 if matches!(arg, FormulaExpr::Empty) {
                     out.push(0x16); // PTG_MISS_ARG
@@ -3236,6 +3246,119 @@ fn emit_optimized_sum(
     compile_ptgs_with_context(arg, out, externsheet, names, arg_class)?;
     push_attr_sum(out);
     Ok(())
+}
+
+/// Emit IF with Excel's MS-XLS short-circuit optimization tokens.
+///
+/// Excel always emits IF using [MS-XLS] §2.5.198.39 PtgAttrIf and
+/// §2.5.198.37 PtgAttrGoto so only one branch is evaluated at runtime.
+/// Matching the layout byte-for-byte is required for parity through
+/// Excel open/save round-trips.
+///
+/// For `IF(cond, t, f)` (3-arg form):
+/// ```text
+/// cond
+/// PtgAttrIf  [offset = t_size + 4]    skip to f-branch if cond is FALSE
+/// t_branch
+/// PtgAttrSkip [offset = f_size + 7]   skip past f-branch + trailing skip + 3
+/// f_branch
+/// PtgAttrSkip [offset = 3]            trailing marker
+/// PtgFuncVar(IF, argc=3) V-class
+/// ```
+///
+/// For `IF(cond, t)` (2-arg form):
+/// ```text
+/// cond
+/// PtgAttrIf  [offset = t_size + 4]    skip to PtgFuncVar if cond is FALSE
+/// t_branch
+/// PtgAttrSkip [offset = 3]            trailing marker
+/// PtgFuncVar(IF, argc=2) V-class
+/// ```
+///
+/// The trailing PtgAttrSkip offset of 3 (one less than the 4-byte
+/// PtgFuncVar) appears in every Excel-authored IF; the spec is silent
+/// on what it points at but the constant matches all observed cases.
+///
+/// Returns `Ok(false)` when branch byte sizes would overflow the u16
+/// offset field; the caller then falls back to the plain
+/// PtgFuncVar(IF) emission.
+fn emit_optimized_if(
+    args: &[duke_sheets_formula::FormulaExpr],
+    out: &mut Vec<u8>,
+    externsheet: &ExternSheetTable,
+    names: &NameTable,
+) -> Result<bool, UnsupportedToken> {
+    use duke_sheets_formula::FormulaExpr;
+
+    // Reject if any branch is Empty (e.g. `=IF(,1,2)`) — Excel handles
+    // the omitted form with a different token shape. Fall back to plain
+    // PtgFuncVar emission, which the caller will do.
+    if args.iter().any(|a| matches!(a, FormulaExpr::Empty)) {
+        return Ok(false);
+    }
+
+    let cond = &args[0];
+    let t_branch = &args[1];
+    let f_branch = args.get(2);
+    let argc = args.len() as u8;
+
+    // Compile cond directly into the output stream — it precedes the
+    // PtgAttrIf and isn't constrained by any offset calculation.
+    let cond_class = function_arg_class(1, 0);
+    compile_ptgs_with_context(cond, out, externsheet, names, cond_class)?;
+
+    // Compile each branch into a scratch buffer so we can measure the
+    // byte counts before emitting the PtgAttr offsets.
+    let mut t_bytes = Vec::with_capacity(32);
+    let t_class = function_arg_class(1, 1);
+    compile_ptgs_with_context(t_branch, &mut t_bytes, externsheet, names, t_class)?;
+
+    let mut f_bytes = Vec::new();
+    if let Some(f) = f_branch {
+        let f_class = function_arg_class(1, 2);
+        compile_ptgs_with_context(f, &mut f_bytes, externsheet, names, f_class)?;
+    }
+
+    // PtgAttrIf offset = bytes after PtgAttrIf to skip when cond is FALSE.
+    // Lands at start of f-branch (3-arg) or PtgFuncVar (2-arg). The 4 is
+    // the size of the PtgAttrSkip that follows t_branch.
+    let attr_if_offset = t_bytes.len().checked_add(4).ok_or(UnsupportedToken)?;
+    if attr_if_offset > u16::MAX as usize {
+        return Ok(false);
+    }
+
+    out.push(0x19);
+    out.push(0x02); // ATTR_IF
+    out.extend_from_slice(&(attr_if_offset as u16).to_le_bytes());
+    out.extend_from_slice(&t_bytes);
+
+    if f_branch.is_some() {
+        // First PtgAttrSkip: jump past f_branch + trailing PtgAttrSkip + 3.
+        // The 3 is the offset value the trailing PtgAttrSkip itself carries
+        // (matching Excel's emission; the spec does not describe what byte
+        // this points at, but the constant is stable across all observed
+        // Excel-authored IF formulas).
+        let skip_after_t = f_bytes.len().checked_add(7).ok_or(UnsupportedToken)?;
+        if skip_after_t > u16::MAX as usize {
+            return Ok(false);
+        }
+        out.push(0x19);
+        out.push(0x08); // ATTR_SKIP
+        out.extend_from_slice(&(skip_after_t as u16).to_le_bytes());
+        out.extend_from_slice(&f_bytes);
+    }
+
+    // Trailing PtgAttrSkip with constant offset 3.
+    out.push(0x19);
+    out.push(0x08);
+    out.extend_from_slice(&3u16.to_le_bytes());
+
+    // PtgFuncVar V-class for IF (iftab=1).
+    out.push(0x42);
+    out.push(argc);
+    out.extend_from_slice(&1u16.to_le_bytes());
+
+    Ok(true)
 }
 
 fn push_attr_sum(out: &mut Vec<u8>) {

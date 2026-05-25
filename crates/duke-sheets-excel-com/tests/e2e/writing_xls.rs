@@ -310,6 +310,55 @@ fn volatile_function_workbook() -> Workbook {
     wb
 }
 
+/// IF-optimization formulas: Excel emits `IF` using PtgAttrIf + PtgAttrGoto
+/// (MS-XLS §2.5.198.39 / §2.5.198.37) so only one branch is evaluated at
+/// runtime. Covers both the 3-arg and 2-arg forms across literal-only,
+/// reference-bearing, and arithmetic branches.
+const IF_FORMULAS: &[(&str, &str, f64)] = &[
+    ("B1", "=IF(A1>0,1,2)", 1.0),
+    ("B2", "=IF(A1>0,A1,0)", 4.0),
+    ("B3", "=IF(A1>0,A1*2,A1)", 8.0),
+    ("B4", "=IF(A1<0,A1)", 0.0),
+    ("B5", "=IF(A1>0,A1*2)", 8.0),
+];
+
+fn if_optimization_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 4.0).unwrap();
+    for (cell, formula, expected) in IF_FORMULAS {
+        ws.set_cell_formula(cell, formula).unwrap();
+        let addr = CellAddress::parse(cell).unwrap();
+        ws.set_formula_result(addr.row, addr.col, CellValue::Number(*expected))
+            .unwrap();
+    }
+    wb
+}
+
+fn excel_authored_if_optimization_xls_bytes() -> Vec<u8> {
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create Excel workbook");
+        wb.set_cell_value("A1", 4.0).expect("set A1");
+        for (cell, formula, _) in IF_FORMULAS {
+            wb.set_cell_formula(cell, formula)
+                .expect("set Excel formula");
+        }
+        excel.recalculate().expect("Excel recalculate");
+        wb.save_as(&fixture.vm_path, 56).expect("Excel SaveAs xls");
+        wb.close().expect("close Excel-authored workbook");
+    }
+
+    pull_file_from_vm(&fixture);
+    let bytes = std::fs::read(&fixture.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
+    cleanup_fixture(&fixture);
+    bytes
+}
+
 fn excel_authored_volatile_function_xls_bytes() -> Vec<u8> {
     let fixture = temp_fixture_xls();
     ensure_vm_temp_dir();
@@ -694,6 +743,25 @@ fn excel_byte_parity_for_function_arity_we_emit() {
     assert_eq!(
         writer_ptgs, authored_ptgs,
         "our XLS function formula token streams differ from Excel-authored output"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_byte_parity_for_if_optimization_we_emit() {
+    let wb = if_optimization_workbook();
+    let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
+    let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
+    assert_eq!(
+        writer_ptgs, resave_ptgs,
+        "Excel canonicalized our XLS IF formula token streams on re-save"
+    );
+    let authored_ptgs =
+        xls_formula_ptg_streams_for_compare(&excel_authored_if_optimization_xls_bytes());
+    assert_eq!(
+        writer_ptgs, authored_ptgs,
+        "our XLS IF formula token streams differ from Excel-authored output"
     );
 }
 

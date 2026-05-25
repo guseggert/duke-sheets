@@ -1080,6 +1080,12 @@ impl FunctionRegistry {
             max_args: Some(3),
             implementation: logical::fn_if,
             volatile: false,
+            // IF's Ftab grammar is `IF: (val, val_or_ref, [val_or_ref])`.
+            // Args 1 and 2 are `val_or_ref` so when the operand is a naked
+            // reference (PtgRef/PtgArea/PtgName) Excel emits R-class to
+            // preserve the reference; for value expressions the leaf
+            // class machinery degrades to V automatically.
+            arg_classes: &[OperandClass::V, OperandClass::R, OperandClass::R],
             ..Default::default()
         });
 

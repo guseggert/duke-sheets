@@ -366,6 +366,76 @@ fn named_range_in_formula_text_survives_xls_roundtrip() {
 }
 
 #[test]
+fn if_3arg_formula_emits_attr_if_skip_chain() {
+    // IF(cond, t, f) compiles to an MS-XLS optimized 3-token chain
+    // (MS-XLS §2.5.198.39 PtgAttrIf + §2.5.198.37 PtgAttrGoto) that
+    // short-circuits one branch. Excel emits:
+    //   cond
+    //   PtgAttrIf [offset = t_size + 4]
+    //   t_branch
+    //   PtgAttrSkip [offset = f_size + 7]
+    //   f_branch
+    //   PtgAttrSkip [offset = 3]
+    //   PtgFuncVar(IF, argc=3)
+    //
+    // For `=IF(A1>0,1,2)`: t = PtgInt(1) = 3 bytes, f = PtgInt(2) = 3.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 5.0).unwrap();
+    ws.set_cell_formula("B1", "=IF(A1>0,1,2)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(1.0)).unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    // 5 (PtgRef) + 3 (PtgInt) + 1 (PtgGT) + 4 (PtgAttrIf) + 3 (PtgInt)
+    //   + 4 (PtgAttrSkip) + 3 (PtgInt) + 4 (PtgAttrSkip) + 4 (PtgFuncVar)
+    //   = 31 bytes
+    assert_eq!(
+        tokens.len(),
+        31,
+        "expected 31 token bytes for 3-arg IF; got {tokens:02X?}"
+    );
+    // PtgAttrIf at byte 9, offset 7 = t_size(3) + 4
+    assert_eq!(&tokens[9..13], &[0x19, 0x02, 0x07, 0x00]);
+    // PtgAttrSkip at byte 16, offset 10 = f_size(3) + 7
+    assert_eq!(&tokens[16..20], &[0x19, 0x08, 0x0A, 0x00]);
+    // PtgAttrSkip at byte 23, offset 3 (trailing)
+    assert_eq!(&tokens[23..27], &[0x19, 0x08, 0x03, 0x00]);
+    // PtgFuncVar(IF=1, argc=3) V-class
+    assert_eq!(&tokens[27..31], &[0x42, 0x03, 0x01, 0x00]);
+}
+
+#[test]
+fn if_2arg_formula_emits_attr_if_skip_chain() {
+    // 2-arg IF(cond, t): no false branch. PtgAttrIf jumps directly to
+    // the trailing PtgAttrSkip + PtgFuncVar(IF, argc=2) if cond is false.
+    //   cond
+    //   PtgAttrIf [offset = t_size + 4]
+    //   t_branch
+    //   PtgAttrSkip [offset = 3]
+    //   PtgFuncVar(IF, argc=2)
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 5.0).unwrap();
+    ws.set_cell_formula("B1", "=IF(A1>0,A1*2)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(10.0))
+        .unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    // 5 + 3 + 1 + 4 + (5 PtgRef + 3 PtgInt + 1 PtgMul) + 4 + 4 = 30
+    assert_eq!(
+        tokens.len(),
+        30,
+        "expected 30 token bytes for 2-arg IF; got {tokens:02X?}"
+    );
+    // PtgAttrIf at byte 9, offset 13 = t_size(9) + 4
+    assert_eq!(&tokens[9..13], &[0x19, 0x02, 0x0D, 0x00]);
+    // PtgAttrSkip at byte 22, offset 3
+    assert_eq!(&tokens[22..26], &[0x19, 0x08, 0x03, 0x00]);
+    // PtgFuncVar(IF=1, argc=2) V-class
+    assert_eq!(&tokens[26..30], &[0x42, 0x02, 0x01, 0x00]);
+}
+
+#[test]
 fn randbetween_formula_emits_volatile_attr_prefix() {
     // RANDBETWEEN(bottom, top) is volatile per Excel docs — its output
     // depends on the recalculation cycle, not just its operands, so Excel
