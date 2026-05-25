@@ -436,6 +436,31 @@ fn if_2arg_formula_emits_attr_if_skip_chain() {
 }
 
 #[test]
+fn date_function_integer_args_emit_ptg_int() {
+    // DATE(year, month, day) takes three integer arguments. Year values
+    // through 2079 and small month/day integers all fit in u16, so they
+    // must emit as PtgInt (0x1E, 3 bytes) rather than PtgNum (0x1F, 9
+    // bytes). Excel encodes this way so we match for byte parity and
+    // because PtgInt is more compact.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=DATE(2020,1,1)").unwrap();
+    ws.set_formula_result(0, 0, CellValue::Number(43831.0))
+        .unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    // PtgInt(2020) at byte 0: 0x1E 0xE4 0x07 (2020 = 0x07E4)
+    assert_eq!(&tokens[0..3], &[0x1E, 0xE4, 0x07]);
+    // PtgInt(1) at byte 3
+    assert_eq!(&tokens[3..6], &[0x1E, 0x01, 0x00]);
+    // PtgInt(1) at byte 6
+    assert_eq!(&tokens[6..9], &[0x1E, 0x01, 0x00]);
+    // PtgFuncVar argc=3 iftab=65 (DATE)
+    assert_eq!(&tokens[9..13], &[0x42, 0x03, 0x41, 0x00]);
+    assert_eq!(tokens.len(), 13);
+}
+
+#[test]
 fn randbetween_formula_emits_volatile_attr_prefix() {
     // RANDBETWEEN(bottom, top) is volatile per Excel docs — its output
     // depends on the recalculation cycle, not just its operands, so Excel

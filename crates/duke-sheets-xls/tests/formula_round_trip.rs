@@ -27,8 +27,7 @@ fn arithmetic_formula_round_trips_with_text_intact() {
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
     let formula = sheet.get_formula_at(0, 2).expect("C1 has a formula");
-    assert!(formula.contains("A1") && formula.contains("B1"));
-    assert!(formula.contains('+'));
+    assert_eq!(formula, "=A1+B1");
     let cached = sheet.get_value("C1").expect("C1 cached");
     assert_eq!(cached.as_number(), Some(30.0));
 }
@@ -45,8 +44,7 @@ fn comparison_formula_round_trips() {
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
     let formula = sheet.get_formula_at(0, 1).expect("formula present");
-    assert!(formula.contains('>'));
-    assert!(formula.contains("A1"));
+    assert_eq!(formula, "=A1>3");
     let cached = sheet.get_value("B1").expect("cached");
     assert_eq!(cached.as_bool(), Some(true));
 }
@@ -85,8 +83,7 @@ fn unary_minus_formula_round_trips() {
     let parsed = write_then_read(&wb);
     let sheet = parsed.worksheet(0).unwrap();
     let formula = sheet.get_formula_at(0, 1).expect("formula present");
-    assert!(formula.contains('-'));
-    assert!(formula.contains("A1"));
+    assert_eq!(formula, "=-A1");
     assert_eq!(
         sheet.get_value("B1").expect("cached").as_number(),
         Some(-10.0)
@@ -107,8 +104,7 @@ fn percent_operator_round_trips() {
     let formula = sheet
         .get_formula_at(0, 1)
         .expect("percent operator must round-trip via formula path");
-    assert!(formula.contains('%'), "got {formula:?}");
-    assert!(formula.contains("A1"), "got {formula:?}");
+    assert_eq!(formula, "=A1%");
 }
 
 #[test]
@@ -125,8 +121,7 @@ fn concat_operator_round_trips_via_formula_path() {
     let formula = sheet
         .get_formula_at(0, 1)
         .expect("concat operator must round-trip via formula path");
-    assert!(formula.contains('&'), "got {formula:?}");
-    assert!(formula.contains("A1"), "got {formula:?}");
+    assert_eq!(formula, "=A1&\" world\"");
 }
 
 #[test]
