@@ -295,6 +295,14 @@ const VOLATILE_FORMULAS: &[(&str, &str, f64)] = &[
     ("B4", "=OFFSET(A1,0,0)", 4.0), // iftab=78, variable args, ref-class arg 0
     // INDIRECT is volatile.
     ("B5", "=INDIRECT(\"A1\")", 4.0), // iftab=148, variable args
+    //
+    // RANDBETWEEN (iftab=464) and INFO (iftab=244) — both fixed for runtime/
+    // writer volatile-flag drift in the FunctionDef unification — are NOT in
+    // this batch because Excel re-save behaviour is environment-dependent
+    // (RANDBETWEEN was Analysis ToolPak before Excel 2010 and depending on
+    // the bridge's Excel version may resolve to #N/A on recalc; INFO returns
+    // host-OS-specific strings). Regression coverage for those bugs lives in
+    // duke-sheets-xls's xls_formula_round_trip.rs as token-level unit tests.
 ];
 
 fn volatile_function_workbook() -> Workbook {
