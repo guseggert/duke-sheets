@@ -510,6 +510,42 @@ fn choose_naked_ref_branch_uses_r_class() {
 }
 
 #[test]
+fn if_formula_text_survives_round_trip() {
+    // Beyond byte parity, the formula text must survive a write → read
+    // cycle. The decompiler treats PtgAttrIf / PtgAttrSkip / PtgAttrVolatile
+    // as no-op hints (they don't push values on the stack), so the
+    // round-tripped formula should be the natural IF call.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 5.0).unwrap();
+    ws.set_cell_formula("B1", "=IF(A1>0,1,2)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(1.0)).unwrap();
+    ws.set_cell_formula("B2", "=IF(A1<0,A1)").unwrap();
+    ws.set_formula_result(1, 1, CellValue::Number(0.0)).unwrap();
+
+    let parsed = write_then_read(&wb);
+    let s = parsed.worksheet(0).unwrap();
+    assert_eq!(s.get_formula_at(0, 1).as_deref(), Some("=IF(A1>0,1,2)"));
+    assert_eq!(s.get_formula_at(1, 1).as_deref(), Some("=IF(A1<0,A1)"));
+}
+
+#[test]
+fn choose_formula_text_survives_round_trip() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 2.0).unwrap();
+    ws.set_cell_formula("B1", "=CHOOSE(A1,10,20,30)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(20.0)).unwrap();
+
+    let parsed = write_then_read(&wb);
+    let s = parsed.worksheet(0).unwrap();
+    assert_eq!(
+        s.get_formula_at(0, 1).as_deref(),
+        Some("=CHOOSE(A1,10,20,30)")
+    );
+}
+
+#[test]
 fn date_function_integer_args_emit_ptg_int() {
     // DATE(year, month, day) takes three integer arguments. Year values
     // through 2079 and small month/day integers all fit in u16, so they
