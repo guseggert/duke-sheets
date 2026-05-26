@@ -376,6 +376,7 @@ impl FunctionRegistry {
             max_args: Some(2),
             implementation: math::fn_power,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -578,6 +579,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: math::fn_degrees,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -590,6 +592,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: math::fn_radians,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -811,6 +814,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: math_extra::fn_fact,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
         self.register(FunctionDef {
@@ -1482,6 +1486,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: text::fn_char,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -1494,6 +1499,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: text::fn_code,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -1531,6 +1537,8 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: text::fn_t,
             volatile: false,
+            fixed_arity: true,
+            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
 
@@ -1543,6 +1551,8 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: text::fn_n,
             volatile: false,
+            fixed_arity: true,
+            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
 
@@ -1765,6 +1775,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: info::fn_isblank,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -1777,6 +1788,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: info::fn_isnumber,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -1789,6 +1801,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: info::fn_istext,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -1838,6 +1851,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: info_extra::fn_iserr,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
         self.register(FunctionDef {
@@ -1868,6 +1882,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: info_extra::fn_islogical,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
         self.register(FunctionDef {
@@ -1878,6 +1893,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: info_extra::fn_isnontext,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
         self.register(FunctionDef {
@@ -1888,6 +1904,8 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: info_extra::fn_isref,
             volatile: false,
+            fixed_arity: true,
+            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
         self.register(FunctionDef {
@@ -1898,6 +1916,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: info_extra::fn_error_type,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
         self.register(FunctionDef {
@@ -1908,6 +1927,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: info_extra::fn_type,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
         self.register(FunctionDef {
@@ -2071,6 +2091,7 @@ impl FunctionRegistry {
             max_args: Some(3),
             implementation: date::fn_date,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -2083,6 +2104,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: date::fn_year,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -2095,6 +2117,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: date::fn_month,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -2107,6 +2130,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: date::fn_day,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -2129,6 +2153,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: date::fn_hour,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -2140,6 +2165,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: date::fn_minute,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -2151,6 +2177,7 @@ impl FunctionRegistry {
             max_args: Some(1),
             implementation: date::fn_second,
             volatile: false,
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -2740,6 +2767,8 @@ impl FunctionRegistry {
             max_args: None,
             implementation: statistical::fn_countblank,
             volatile: false,
+            fixed_arity: true,
+            arg_classes: &[OperandClass::R],
             ..Default::default()
         });
 

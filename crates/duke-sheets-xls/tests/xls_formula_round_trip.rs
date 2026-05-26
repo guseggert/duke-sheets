@@ -529,9 +529,11 @@ fn date_function_integer_args_emit_ptg_int() {
     assert_eq!(&tokens[3..6], &[0x1E, 0x01, 0x00]);
     // PtgInt(1) at byte 6
     assert_eq!(&tokens[6..9], &[0x1E, 0x01, 0x00]);
-    // PtgFuncVar argc=3 iftab=65 (DATE)
-    assert_eq!(&tokens[9..13], &[0x42, 0x03, 0x41, 0x00]);
-    assert_eq!(tokens.len(), 13);
+    // PtgFunc V-class iftab=65 (DATE) — DATE has fixed_arity=true in the
+    // FunctionDef registry, so Excel emits the 3-byte PtgFunc instead of
+    // PtgFuncVar.
+    assert_eq!(&tokens[9..12], &[0x41, 0x41, 0x00]);
+    assert_eq!(tokens.len(), 12);
 }
 
 #[test]

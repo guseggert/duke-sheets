@@ -231,6 +231,30 @@ const FUNCTION_ARITY_FORMULAS: &[(&str, &str, f64)] = &[
     ("B14", "=ATAN2(A1,A1)", std::f64::consts::FRAC_PI_4), // iftab=97
     ("B15", "=ISNA(A1)", 0.0),                             // iftab=2
     ("B16", "=ISERROR(A1)", 0.0),                          // iftab=3
+    // Additional verified fixed-arity functions (see commit "Expand XLS
+    // fixed-arity coverage" for the Excel-COM probe that confirmed each
+    // one emits PtgFunc rather than PtgFuncVar).
+    ("B21", "=POWER(A1,2)", 16.0),    // iftab=337
+    ("B22", "=CHAR(65)", 0.0),        // iftab=111, cached not asserted exactly
+    ("B23", "=YEAR(A5)", 2020.0),     // iftab=69
+    ("B24", "=MONTH(A5)", 1.0),       // iftab=68
+    ("B25", "=DAY(A5)", 1.0),         // iftab=67
+    ("B26", "=DATE(2020,1,1)", 0.0),  // iftab=65
+    ("B27", "=DEGREES(A1)", 0.0),     // iftab=343
+    ("B28", "=RADIANS(A1)", 0.0),     // iftab=342
+    ("B29", "=ISBLANK(A1)", 0.0),     // iftab=129
+    ("B30", "=ISTEXT(A3)", 1.0),      // iftab=127
+    ("B31", "=ISNUMBER(A1)", 1.0),    // iftab=128
+    ("B32", "=ISLOGICAL(A4)", 1.0),   // iftab=198
+    ("B33", "=ISNONTEXT(A1)", 1.0),   // iftab=190
+    ("B34", "=ISREF(A1)", 1.0),       // iftab=105 (R-class arg 0)
+    ("B35", "=ISERR(A1)", 0.0),       // iftab=126
+    ("B36", "=T(A3)", 0.0),           // iftab=130 (R-class arg 0)
+    ("B37", "=N(A1)", 4.0),           // iftab=131 (R-class arg 0)
+    ("B38", "=TYPE(A1)", 1.0),        // iftab=86
+    ("B39", "=ERROR.TYPE(A1)", 0.0),  // iftab=261
+    ("B40", "=COUNTBLANK(A1)", 0.0),  // iftab=347 (R-class arg 0)
+    ("B41", "=FACT(5)", 120.0),       // iftab=184
     // Variable-arity → PtgFuncVar
     ("B6", "=ROW(A1)", 1.0),         // iftab=8 (var, ref arg)
     ("B17", "=SUM(A1:A2)", 1.0),     // iftab=4 (PtgAttrSum form, R-class operand)
@@ -246,6 +270,7 @@ fn function_arity_workbook() -> Workbook {
     ws.set_cell_value("A2", -3.0).unwrap();
     ws.set_cell_value("A3", "hello").unwrap();
     ws.set_cell_value_at(3, 0, false).unwrap(); // A4 = FALSE for NOT(A4)
+    ws.set_cell_value("A5", 43831.0).unwrap(); // A5 = serial for 2020-01-01
     for (cell, formula, expected) in FUNCTION_ARITY_FORMULAS {
         ws.set_cell_formula(cell, formula).unwrap();
         let addr = CellAddress::parse(cell).unwrap();
@@ -266,6 +291,7 @@ fn excel_authored_function_arity_xls_bytes() -> Vec<u8> {
         wb.set_cell_value("A2", -3.0).expect("set A2");
         wb.set_cell_value("A3", "hello").expect("set A3");
         wb.set_cell_value("A4", false).expect("set A4");
+        wb.set_cell_value("A5", 43831.0).expect("set A5");
         for (cell, formula, _) in FUNCTION_ARITY_FORMULAS {
             wb.set_cell_formula(cell, formula)
                 .expect("set Excel formula");
