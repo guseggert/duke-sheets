@@ -2406,6 +2406,11 @@ impl FunctionRegistry {
             max_args: None, // Up to 254 values
             implementation: lookup::fn_choose,
             volatile: false,
+            // CHOOSE's Ftab grammar is `CHOOSE: (val, *val_or_ref)`. Arg 0
+            // (the selector) is always V; the rest are `val_or_ref` so naked
+            // references in a choice position emit R-class. Matches IF.
+            arg_classes: &[OperandClass::V],
+            default_arg_class: OperandClass::R,
             ..Default::default()
         });
 

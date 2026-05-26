@@ -436,6 +436,80 @@ fn if_2arg_formula_emits_attr_if_skip_chain() {
 }
 
 #[test]
+fn choose_3_branches_emit_attr_choose_with_jump_table() {
+    // CHOOSE(selector, c0, c1, c2) compiles to a PtgAttrChoose with a
+    // 4-entry u16 jump table (one entry per choice + final exit entry).
+    // Jump offsets are measured from the start of the table to the byte
+    // position of each choice (or PtgFuncVar for the exit). Each choice
+    // is followed by a PtgAttrSkip whose offset lands at the last byte
+    // of the formula (matching IF's pattern). MS-XLS §2.5.198.40
+    // PtgAttrChoose.
+    //
+    // For =CHOOSE(A1,10,20,30) with A1 as the selector and PtgInt(N)
+    // for each branch (each 3 bytes), the expected layout is exactly
+    // what Excel emits.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 2.0).unwrap();
+    ws.set_cell_formula("B1", "=CHOOSE(A1,10,20,30)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(20.0))
+        .unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    // 5 (PtgRef V A1) + 12 (PtgAttrChoose + 4-entry table) + (3+4)*3 - 4 (no
+    //   skip after last choice; replaced by trailing 4) + 4 (PtgFuncVar)
+    // = 5 + 12 + 9 + 4 + 9 + 4 + 9 + 4 + 4 = 42
+    assert_eq!(
+        tokens.len(),
+        42,
+        "expected 42 token bytes for 3-arg CHOOSE; got {tokens:02X?}"
+    );
+    // Selector A1 (V class)
+    assert_eq!(&tokens[0..5], &[0x44, 0x00, 0x00, 0x00, 0xC0]);
+    // PtgAttrChoose with nc=3
+    assert_eq!(&tokens[5..9], &[0x19, 0x04, 0x03, 0x00]);
+    // Jump table: 8, 15, 22, 29 (each as little-endian u16)
+    assert_eq!(
+        &tokens[9..17],
+        &[0x08, 0x00, 0x0F, 0x00, 0x16, 0x00, 0x1D, 0x00]
+    );
+    // Choice 0 = PtgInt(10) + PtgAttrSkip offset=17
+    assert_eq!(&tokens[17..20], &[0x1E, 0x0A, 0x00]);
+    assert_eq!(&tokens[20..24], &[0x19, 0x08, 0x11, 0x00]);
+    // Choice 1 = PtgInt(20) + PtgAttrSkip offset=10
+    assert_eq!(&tokens[24..27], &[0x1E, 0x14, 0x00]);
+    assert_eq!(&tokens[27..31], &[0x19, 0x08, 0x0A, 0x00]);
+    // Choice 2 = PtgInt(30) + trailing PtgAttrSkip offset=3
+    assert_eq!(&tokens[31..34], &[0x1E, 0x1E, 0x00]);
+    assert_eq!(&tokens[34..38], &[0x19, 0x08, 0x03, 0x00]);
+    // PtgFuncVar argc=4 iftab=100 (CHOOSE)
+    assert_eq!(&tokens[38..42], &[0x42, 0x04, 0x64, 0x00]);
+}
+
+#[test]
+fn choose_naked_ref_branch_uses_r_class() {
+    // CHOOSE choices are val_or_ref like IF's t/f args. Naked PtgRef in
+    // a choice position must emit R-class (0x24) to preserve the reference;
+    // a value expression (A1*2) emits V-class via the BinaryOp forcing rule.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 2.0).unwrap();
+    ws.set_cell_formula("B1", "=CHOOSE(A1,A1,A1*2)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(2.0)).unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    // Selector at bytes 0..5 = PtgRef V (0x44)
+    assert_eq!(tokens[0], 0x44);
+    // After PtgAttrChoose (bytes 5-14: 4-byte header + 6-byte 3-entry table
+    // for nc=2), choice 0 starts at byte 15. Naked A1 → PtgRef R-class
+    // (0x24) preserving the reference.
+    assert_eq!(tokens[15], 0x24, "tokens={tokens:02X?}");
+    // After PtgAttrSkip (bytes 20-23), choice 1 (A1*2) starts at byte 24 —
+    // PtgRef V-class (0x44) because the BinaryOp arm forces V children.
+    assert_eq!(tokens[24], 0x44, "tokens={tokens:02X?}");
+}
+
+#[test]
 fn date_function_integer_args_emit_ptg_int() {
     // DATE(year, month, day) takes three integer arguments. Year values
     // through 2079 and small month/day integers all fit in u16, so they

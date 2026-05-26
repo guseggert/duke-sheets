@@ -3162,6 +3162,14 @@ fn compile_ptgs_with_context(
                 // emit_optimized_if returns Ok(false) when token offsets
                 // would overflow u16; fall through to the plain emission.
             }
+            // CHOOSE gets MS-XLS PtgAttrChoose jump-table optimization
+            // ([MS-XLS] §2.5.198.40). Like IF, Excel always emits this so
+            // matching is required for byte-for-byte parity.
+            if idx == 100 && args.len() >= 2 {
+                if emit_optimized_choose(args, out, externsheet, names)? {
+                    return Ok(());
+                }
+            }
             for (arg_idx, arg) in args.iter().enumerate() {
                 if matches!(arg, FormulaExpr::Empty) {
                     out.push(0x16); // PTG_MISS_ARG
@@ -3357,6 +3365,148 @@ fn emit_optimized_if(
     out.push(0x42);
     out.push(argc);
     out.extend_from_slice(&1u16.to_le_bytes());
+
+    Ok(true)
+}
+
+/// Emit CHOOSE with Excel's MS-XLS short-circuit jump-table optimization.
+///
+/// [MS-XLS] §2.5.198.40 PtgAttrChoose carries a fixed-shape `nc`
+/// (number of choices) and an array of `nc+1` u16 jump offsets. The
+/// k-th offset (0..nc) is the byte distance from the start of the
+/// offset table to the start of the k-th choice's token bytes. The
+/// final entry (index `nc`) points to PtgFuncVar — used when the
+/// selector is out of range so no choice is executed.
+///
+/// Layout for `CHOOSE(selector, c0, c1, ..., c_{nc-1})`:
+///
+/// ```text
+/// selector
+/// PtgAttrChoose [nc, off_0, off_1, ..., off_nc]   (4 + (nc+1)*2 bytes)
+/// c0
+/// PtgAttrSkip [offset = points to last byte]      (4 bytes)
+/// c1
+/// PtgAttrSkip [offset = points to last byte]      (4 bytes)
+/// ...
+/// c_{nc-1}
+/// PtgAttrSkip [offset = 3]                        (4 bytes, trailing)
+/// PtgFuncVar(CHOOSE, argc=nc+1) V-class
+/// ```
+///
+/// Each post-choice PtgAttrSkip jumps to the last byte of the formula
+/// (matching IF). Its offset is the sum of remaining `(choice_size + 4)`
+/// terms plus the trailing 3 — the trailing PtgAttrSkip itself has
+/// offset 3.
+///
+/// Returns `Ok(false)` when offsets would overflow u16; the caller
+/// then falls back to the plain PtgFuncVar(CHOOSE) emission.
+fn emit_optimized_choose(
+    args: &[duke_sheets_formula::FormulaExpr],
+    out: &mut Vec<u8>,
+    externsheet: &ExternSheetTable,
+    names: &NameTable,
+) -> Result<bool, UnsupportedToken> {
+    use duke_sheets_formula::FormulaExpr;
+
+    if args.len() < 2 || args.iter().any(|a| matches!(a, FormulaExpr::Empty)) {
+        return Ok(false);
+    }
+
+    let selector = &args[0];
+    let choices = &args[1..];
+    let nc = choices.len();
+    if nc > u16::MAX as usize {
+        return Ok(false);
+    }
+    let argc = args.len() as u8;
+
+    // Compile selector inline (V class for CHOOSE arg 0).
+    let selector_class = function_arg_class(100, 0);
+    compile_ptgs_with_context(selector, out, externsheet, names, selector_class)?;
+
+    // Compile each choice into scratch.
+    let mut choice_bytes: Vec<Vec<u8>> = Vec::with_capacity(nc);
+    for (i, c) in choices.iter().enumerate() {
+        let mut buf = Vec::with_capacity(16);
+        let class = function_arg_class(100, i + 1);
+        compile_ptgs_with_context(c, &mut buf, externsheet, names, class)?;
+        choice_bytes.push(buf);
+    }
+
+    // Jump-table offsets. The k-th offset points to the start of choice k
+    // (or PtgFuncVar for k = nc). All are measured from the start of the
+    // offset table itself, which sits immediately after `19 04 nc_lo nc_hi`.
+    let table_size = (nc + 1)
+        .checked_mul(2)
+        .ok_or(UnsupportedToken)?;
+    let mut offsets: Vec<u16> = Vec::with_capacity(nc + 1);
+    let mut running: usize = table_size;
+    for choice in &choice_bytes {
+        if running > u16::MAX as usize {
+            return Ok(false);
+        }
+        offsets.push(running as u16);
+        running = running
+            .checked_add(choice.len())
+            .and_then(|x| x.checked_add(4)) // PtgAttrSkip after this choice
+            .ok_or(UnsupportedToken)?;
+    }
+    if running > u16::MAX as usize {
+        return Ok(false);
+    }
+    offsets.push(running as u16); // final/exit entry
+
+    // Emit PtgAttrChoose.
+    out.push(0x19);
+    out.push(0x04); // ATTR_CHOOSE
+    out.extend_from_slice(&(nc as u16).to_le_bytes());
+    for off in &offsets {
+        out.extend_from_slice(&off.to_le_bytes());
+    }
+
+    // Emit each choice followed by a PtgAttrSkip. The trailing skip uses
+    // offset 3 (matching IF); middle skips accumulate the remaining
+    // (choice + skip) sizes plus 3.
+    //
+    // For the k-th PtgAttrSkip (0-indexed, after choice k):
+    //   offset = sum_{j>k}(choice_sizes[j] + 4) + 3
+    let mut remaining_after: usize = 0;
+    // First compute total bytes after position-K-after-skip for each K.
+    // Walk in reverse to accumulate.
+    let mut skip_offsets: Vec<u16> = vec![0; nc];
+    for k in (0..nc).rev() {
+        if k + 1 == nc {
+            skip_offsets[k] = 3;
+        } else {
+            // Bytes from end-of-skip-K to last-byte:
+            //   = choice_{k+1}_size + 4 (skip_{k+1}) + remaining_after_{k+1}
+            let nxt = choice_bytes[k + 1]
+                .len()
+                .checked_add(4)
+                .and_then(|x| x.checked_add(remaining_after))
+                .ok_or(UnsupportedToken)?;
+            if nxt + 3 > u16::MAX as usize {
+                return Ok(false);
+            }
+            skip_offsets[k] = (nxt + 3) as u16;
+            remaining_after = nxt;
+        }
+    }
+    // remaining_after now equals 0 if nc == 1 (only the trailing skip),
+    // or sum_{j>0}(c_j+4) when nc > 1 — unused after the reverse walk.
+    let _ = remaining_after;
+
+    for (k, choice) in choice_bytes.iter().enumerate() {
+        out.extend_from_slice(choice);
+        out.push(0x19);
+        out.push(0x08); // ATTR_SKIP
+        out.extend_from_slice(&skip_offsets[k].to_le_bytes());
+    }
+
+    // PtgFuncVar V-class for CHOOSE (iftab=100).
+    out.push(0x42);
+    out.push(argc);
+    out.extend_from_slice(&100u16.to_le_bytes());
 
     Ok(true)
 }
