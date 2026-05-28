@@ -2197,12 +2197,11 @@ fn excel_byte_parity_for_atp_functions_we_emit() {
 /// EXTERNNAME ordering / nameindex assignment matches Excel's: a divergent
 /// order would shift every nameindex.
 ///
-/// Scope: this verifies byte-parity of the formula token streams and all
-/// EXTERNNAME record bodies. It does not re-open our file in Excel —
-/// `excel_byte_parity_for_atp_functions_we_emit` covers "Excel opens our
-/// add-in file with no Repair", and the SUPBOOK/EXTERNSHEET structure is
-/// identical regardless of function count (only the EXTERNNAME count scales,
-/// and those bytes are compared here).
+/// Verifies three things: (1) Excel opens our file with no "Repaired"
+/// warning (via the round-trip helper) so the full 93-EXTERNNAME add-in
+/// structure is valid at scale; (2) byte-parity of every formula token
+/// stream; (3) byte-parity of all 93 EXTERNNAME record bodies, including
+/// their alphabetical order.
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
@@ -2237,9 +2236,9 @@ fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
     let excel_bytes = std::fs::read(&fixture.host_path).unwrap();
     cleanup_fixture(&fixture);
 
-    // Build our writer's bytes from the SAME accepted formulas (VM-free).
-    // A cached result is required: the XLS writer only emits FORMULA records
-    // for cells that carry a value.
+    // Build our writer's workbook from the SAME accepted formulas. A cached
+    // result is required: the XLS writer only emits FORMULA records for cells
+    // that carry a value.
     let mut wb = Workbook::new();
     {
         let ws = wb.worksheet_mut(0).unwrap();
@@ -2253,7 +2252,11 @@ fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
                 .unwrap();
         }
     }
-    let our_bytes = duke_sheets_xls::XlsWriter::write_to_bytes(&wb).expect("our write");
+    // Round-trip our file through Excel: this writes our bytes, opens them in
+    // Excel asserting no "Repaired" warning (so the 93-EXTERNNAME add-in
+    // structure is proven valid at scale, not just openable at 5 functions),
+    // and returns our writer's bytes for the parity comparison.
+    let (_result, our_bytes, _resave) = roundtrip_through_excel_xls_bytes(&wb);
 
     // The full range is expected to be valid — any rejection is a real
     // metadata bug (wrong min_args) to investigate, not a function to skip.
