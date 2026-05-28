@@ -51,6 +51,13 @@ const XLSB_FORMULA_FORMULAS: &[(&str, &str, f64)] = &[
     ("B12", "=+A1", 2.0),              // PtgUplus
     ("B13", "=(A1+A2)*2", 10.0),       // PtgParen
     ("B14", "=((A1))", 2.0),           // nested PtgParen
+    // NOTE: array constants (=SUM({1,2,3})) are NOT yet byte-parity-clean on
+    // XLSB. The pre-existing emit_array emits PtgArray V-class (should be
+    // A-class 0x60) and its BIFF12 rgcb layout is unverified against native
+    // authoring; Excel repairs our output into a PtgName+PtgFuncVar(UDF)
+    // wrapper. XLS array constants ARE done (PtgArray + rgcb, verified).
+    // Tracked as a follow-up: needs native XLSB array dump + an rgcb-aware
+    // XLSB extractor (current one captures only rgce).
 ];
 
 fn xlsb_formula_workbook() -> Workbook {
