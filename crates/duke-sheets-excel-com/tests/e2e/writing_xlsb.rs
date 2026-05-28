@@ -237,6 +237,11 @@ fn excel_byte_parity_for_xlsb_atp_functions_we_emit() {
         writer_ptgs, resave_ptgs,
         "Excel canonicalized our XLSB ATP token streams on re-save"
     );
+    assert_eq!(
+        writer_ptgs.len(),
+        XLSB_ATP_FORMULAS.len(),
+        "expected one formula stream per ATP formula"
+    );
     let authored_ptgs = xlsb_formula_ptg_streams_for_compare(&excel_authored_xlsb_atp_bytes());
     assert_eq!(
         writer_ptgs, authored_ptgs,

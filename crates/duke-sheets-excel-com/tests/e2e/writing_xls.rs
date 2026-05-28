@@ -2159,6 +2159,12 @@ fn excel_byte_parity_for_atp_functions_we_emit() {
         "Excel canonicalized our XLS ATP formula token streams on re-save"
     );
 
+    assert_eq!(
+        writer_ptgs.len(),
+        ATP_FORMULAS.len(),
+        "expected one formula stream per ATP formula"
+    );
+
     let authored_bytes = excel_authored_atp_xls_bytes();
     let authored_ptgs = xls_formula_ptg_streams_for_compare(&authored_bytes);
     assert_eq!(
@@ -2171,6 +2177,13 @@ fn excel_byte_parity_for_atp_functions_we_emit() {
     // placeholder formula) against Excel's native output.
     let writer_externnames = xls_externname_record_bodies(&writer_bytes);
     let authored_externnames = xls_externname_record_bodies(&authored_bytes);
+    // Guard against a vacuous [] == [] pass: there are 5 distinct add-in
+    // functions, so both sides must carry 5 EXTERNNAME records.
+    assert_eq!(
+        writer_externnames.len(),
+        5,
+        "writer must emit one EXTERNNAME per distinct add-in function"
+    );
     assert_eq!(
         writer_externnames, authored_externnames,
         "our EXTERNNAME records differ from Excel-authored output"
