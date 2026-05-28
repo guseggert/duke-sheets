@@ -635,7 +635,17 @@ fn resolve_namex(ctx: &FormulaContext, extern_sheet_idx: u16, name_idx: u16) -> 
     if let Some(entry) = ctx.extern_sheet.get(eidx) {
         if let Some(supbook) = ctx.supbooks.get(entry.sup_book_idx as usize) {
             match supbook {
-                SupBook::SelfRef { .. } | SupBook::AddIn => {
+                SupBook::AddIn => {
+                    // 1-based index into the AddIn SUPBOOK's EXTERNNAME list
+                    // (Analysis-ToolPak add-in function names).
+                    if let Some(name) =
+                        nth_extern_name(ctx, entry.sup_book_idx, name_idx)
+                    {
+                        return name;
+                    }
+                    return format!("_namex{}", name_idx);
+                }
+                SupBook::SelfRef { .. } => {
                     // 1-based index into workbook's NAME records
                     let idx = (name_idx as usize).wrapping_sub(1);
                     return ctx
@@ -652,6 +662,19 @@ fn resolve_namex(ctx: &FormulaContext, extern_sheet_idx: u16, name_idx: u16) -> 
     }
 
     format!("_namex{}", name_idx)
+}
+
+/// Resolve the `name_idx`-th (1-based) EXTERNNAME belonging to the given
+/// SUPBOOK index.
+fn nth_extern_name(ctx: &FormulaContext, supbook_idx: u16, name_idx: u16) -> Option<String> {
+    if name_idx == 0 {
+        return None;
+    }
+    ctx.extern_names
+        .iter()
+        .filter(|en| en.supbook_idx == supbook_idx)
+        .nth((name_idx - 1) as usize)
+        .map(|en| en.name.clone())
 }
 
 /// Resolve a tRefN/tAreaN signed offset to an absolute (row, col).
@@ -727,6 +750,7 @@ mod tests {
             extern_sheet,
             supbooks,
             names: Vec::new(),
+            extern_names: Vec::new(),
             base_cell: None,
         }
     }
@@ -1149,6 +1173,7 @@ mod tests {
     fn test_3d_area_multi_sheet_range() {
         // EXTERNSHEET entry with first_sheet=0, last_sheet=2 → Sheet1:Sheet3
         let ctx = FormulaContext {
+            extern_names: Vec::new(),
             sheet_names: vec![
                 "Sheet1".to_string(),
                 "Sheet2".to_string(),
@@ -1180,6 +1205,7 @@ mod tests {
     #[test]
     fn test_name_lookup() {
         let ctx = FormulaContext {
+            extern_names: Vec::new(),
             sheet_names: vec!["Sheet1".to_string()],
             supbooks: vec![],
             extern_sheet: vec![],
@@ -1260,6 +1286,7 @@ mod tests {
     #[test]
     fn test_namex_self_ref() {
         let ctx = FormulaContext {
+            extern_names: Vec::new(),
             sheet_names: vec!["Sheet1".to_string()],
             supbooks: vec![SupBook::SelfRef { sheet_count: 1 }],
             extern_sheet: vec![ExternSheetEntry {
@@ -1433,6 +1460,7 @@ mod tests {
         // empty sheet prefix. Ref3d should output just the cell reference
         // without a leading '!'.
         let ctx = FormulaContext {
+            extern_names: Vec::new(),
             sheet_names: vec!["Sheet1".to_string()],
             supbooks: vec![SupBook::SelfRef { sheet_count: 1 }],
             extern_sheet: vec![ExternSheetEntry {
@@ -1463,6 +1491,7 @@ mod tests {
     fn test_area3d_empty_sheet_prefix() {
         // Same scenario for Area3d with workbook-level EXTERNSHEET entry.
         let ctx = FormulaContext {
+            extern_names: Vec::new(),
             sheet_names: vec!["Sheet1".to_string()],
             supbooks: vec![SupBook::SelfRef { sheet_count: 1 }],
             extern_sheet: vec![ExternSheetEntry {

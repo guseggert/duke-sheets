@@ -234,6 +234,8 @@ pub(crate) fn read_workbook<R: Read + Seek>(
         extern_sheet: extern_sheet_entries,
         supbooks,
         names,
+        // XLSB add-in EXTERNNAME parsing (BrtExternName) is not yet wired up.
+        extern_names: Vec::new(),
         base_cell: None,
     };
 

@@ -364,6 +364,30 @@ pub fn xls_formula_ptg_streams_for_compare(bytes: &[u8]) -> Vec<XlsFormulaPtgStr
         .collect()
 }
 
+/// Extract the raw bodies of all EXTERNNAME (0x0023) records, in file order.
+///
+/// Used to byte-compare Analysis-ToolPak add-in function EXTERNNAME emission
+/// against Excel's native output — the FORMULA-stream comparison only pins the
+/// PtgNameX `nameindex`, not the external-name record contents themselves.
+pub fn xls_externname_record_bodies(bytes: &[u8]) -> Vec<Vec<u8>> {
+    use duke_sheets_xls::{biff, cfb::CompoundFile};
+    use std::io::Cursor;
+
+    let cfb = CompoundFile::open(Cursor::new(bytes)).expect("open XLS CFB");
+    let stream_path = if cfb.exists("/Workbook") {
+        "/Workbook"
+    } else {
+        "/Book"
+    };
+    let stream = cfb.read_stream(stream_path).expect("read workbook stream");
+    let records = biff::read_all_records(&mut Cursor::new(stream)).expect("read BIFF records");
+    records
+        .iter()
+        .filter(|rec| rec.record_type == biff::records::EXTERNNAME)
+        .map(|rec| rec.data.clone())
+        .collect()
+}
+
 /// Zero out the per-MS-XLS "undefined" bytes inside PtgAttrSum / PtgAttrVolatile
 /// so test comparisons aren't sensitive to whatever Excel left in them.
 fn normalize_attr_reserved_bytes(tokens: &mut [u8]) {

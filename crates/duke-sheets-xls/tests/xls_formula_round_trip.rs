@@ -923,3 +923,91 @@ fn randbetween_formula_emits_volatile_attr_prefix() {
         "PtgAttrVolatile subtype byte must be 0x01; tokens={tokens:02X?}"
     );
 }
+
+#[test]
+fn atp_function_emits_namex_funcvar_udf() {
+    // Analysis-ToolPak functions (Ftab 384..=476) are not native BIFF8
+    // functions: Excel serializes them as an add-in UDF call. The token
+    // stream for `=EDATE(A1,12)` is:
+    //   PtgNameX(ixti=0, nameindex=1)   39 00 00 01 00 00 00   (7 bytes)
+    //   PtgRef A1 (R-class)             24 + 4-byte payload    (5 bytes)
+    //   PtgInt(12)                      1E 0C 00               (3 bytes)
+    //   PtgFuncVar(argc=3, iftab=0xFF)  42 03 FF 00            (4 bytes)
+    // argc = nargs + 1 (the PtgNameX counts as the first operand); iftab
+    // 0x00FF is the "user-defined function" sentinel.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 40000.0).unwrap();
+    ws.set_cell_formula("B1", "=EDATE(A1,12)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(40000.0)).unwrap();
+
+    let tokens = only_formula_tokens_at(&wb, 0, 1);
+    assert_eq!(
+        &tokens[0..7],
+        &[0x39, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
+        "expected PtgNameX(ixti=0, nameindex=1, reserved=0); got {tokens:02X?}"
+    );
+    assert_eq!(
+        tokens[7], 0x24,
+        "A1 arg must be R-class PtgRef (0x24); got {tokens:02X?}"
+    );
+    assert_eq!(
+        &tokens[12..15],
+        &[0x1E, 0x0C, 0x00],
+        "expected PtgInt(12); got {tokens:02X?}"
+    );
+    assert_eq!(
+        &tokens[15..19],
+        &[0x42, 0x03, 0xFF, 0x00],
+        "expected PtgFuncVar(argc=3, iftab=0x00FF); got {tokens:02X?}"
+    );
+    assert_eq!(tokens.len(), 19, "unexpected token length: {tokens:02X?}");
+}
+
+#[test]
+fn atp_functions_get_alphabetical_nameindex() {
+    // EXTERNNAME records are emitted one per distinct add-in function,
+    // sorted alphabetically, with a 1-based nameindex. With EDATE, GCD,
+    // and NETWORKDAYS in use the order is EDATE(1), GCD(2), NETWORKDAYS(3).
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 40000.0).unwrap();
+    ws.set_cell_value("B1", 41000.0).unwrap();
+    ws.set_cell_formula("C1", "=NETWORKDAYS(A1,B1)").unwrap();
+    ws.set_cell_formula("C2", "=EDATE(A1,12)").unwrap();
+    ws.set_cell_formula("C3", "=GCD(A1,B1)").unwrap();
+    ws.set_formula_result(0, 2, CellValue::Number(1.0)).unwrap();
+    ws.set_formula_result(1, 2, CellValue::Number(1.0)).unwrap();
+    ws.set_formula_result(2, 2, CellValue::Number(1.0)).unwrap();
+
+    let nameindex_of = |row: u16| -> u16 {
+        let t = only_formula_tokens_at(&wb, row, 2);
+        assert_eq!(t[0], 0x39, "row {row} must start with PtgNameX; got {t:02X?}");
+        u16::from_le_bytes([t[3], t[4]])
+    };
+    assert_eq!(nameindex_of(1), 1, "EDATE should be nameindex 1");
+    assert_eq!(nameindex_of(2), 2, "GCD should be nameindex 2");
+    assert_eq!(nameindex_of(0), 3, "NETWORKDAYS should be nameindex 3");
+}
+
+#[test]
+fn atp_function_round_trips_text_via_externname() {
+    // After the writer emits a PtgNameX + EXTERNNAME, the reader must
+    // resolve the name back through the AddIn SUPBOOK's external-name
+    // table (not the defined-name table) so the formula text survives.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 40000.0).unwrap();
+    ws.set_cell_formula("B1", "=EDATE(A1,12)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(40000.0)).unwrap();
+
+    let parsed = write_then_read(&wb);
+    let s = parsed.worksheet(0).unwrap();
+    let f = s
+        .get_formula_at(0, 1)
+        .expect("ATP formula text must survive XLS round-trip");
+    assert!(
+        f.contains("EDATE") && f.contains("A1"),
+        "ATP function EDATE lost from formula: {f:?}"
+    );
+}

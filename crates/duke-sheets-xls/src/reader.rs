@@ -18,7 +18,9 @@ use duke_sheets_core::{
 };
 
 use crate::biff::formula::token_parser::ParsedToken;
-use crate::biff::formula::{ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES};
+use crate::biff::formula::{
+    ExternName, ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES,
+};
 use crate::biff::parser::{read_f64, read_rk, read_u16, read_u32, read_u8};
 use crate::biff::records;
 use crate::biff::strings::{
@@ -225,6 +227,7 @@ impl XlsReader {
         let mut workbook_password_hash: Option<u16> = None;
         let mut supbooks: Vec<SupBook> = Vec::new();
         let mut extern_sheet: Vec<ExternSheetEntry> = Vec::new();
+        let mut extern_names: Vec<ExternName> = Vec::new();
         let mut names: Vec<NameRecord> = Vec::new();
         // Workbook-globals blip store, populated from MSODRAWINGGROUP
         // records. Indexed 1-based by the FOPT `pib` (picture blip id)
@@ -315,6 +318,18 @@ impl XlsReader {
                         extern_sheet = entries;
                     }
                 }
+                records::EXTERNNAME if in_globals => {
+                    // EXTERNNAME records follow the SUPBOOK they belong to, so
+                    // associate each with the most recently seen SUPBOOK.
+                    if !supbooks.is_empty() {
+                        if let Ok(name) = Self::parse_externname(&rec.data) {
+                            extern_names.push(ExternName {
+                                supbook_idx: (supbooks.len() - 1) as u16,
+                                name,
+                            });
+                        }
+                    }
+                }
                 records::NAME if in_globals => {
                     if let Ok(nr) = Self::parse_name(&rec.data) {
                         names.push(nr);
@@ -347,6 +362,7 @@ impl XlsReader {
             extern_sheet,
             supbooks,
             names,
+            extern_names,
             base_cell: None,
         };
 
@@ -1289,6 +1305,7 @@ impl XlsReader {
                                 extern_sheet: formula_ctx.extern_sheet.clone(),
                                 supbooks: formula_ctx.supbooks.clone(),
                                 names: formula_ctx.names.clone(),
+                                extern_names: formula_ctx.extern_names.clone(),
                                 base_cell: Some((row, col)),
                             };
                             let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
@@ -1561,6 +1578,7 @@ impl XlsReader {
             extern_sheet: formula_ctx.extern_sheet.clone(),
             supbooks: formula_ctx.supbooks.clone(),
             names: formula_ctx.names.clone(),
+            extern_names: formula_ctx.extern_names.clone(),
             base_cell: Some((cell_row, cell_col)),
         };
         let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
@@ -1714,7 +1732,7 @@ impl XlsReader {
 
     /// Parse a SUPBOOK record.
     ///
-    /// Self-reference: cch == 0x0401. Add-in: ctab == 1, cch == 0x003A.
+    /// Self-reference: cch == 0x0401. Add-in: ctab == 1, cch == 0x3A01.
     /// External: virtPath + sheet names.
     fn parse_supbook(data: &[u8]) -> XlsResult<SupBook> {
         if data.len() < 4 {
@@ -1729,8 +1747,9 @@ impl XlsReader {
             return Ok(SupBook::SelfRef { sheet_count: ctab });
         }
 
-        if ctab == 1 && cch == 0x003A {
-            // Add-in functions sentinel
+        if ctab == 1 && cch == 0x3A01 {
+            // Add-in functions sentinel (MS-XLS §2.4.273: ctab=0x0001,
+            // cch=0x3A01). Followed by one EXTERNNAME per add-in function.
             return Ok(SupBook::AddIn);
         }
 
@@ -1791,6 +1810,22 @@ impl XlsReader {
         }
 
         Ok(entries)
+    }
+
+    /// Parse an EXTERNNAME (0x0023) record, returning the external name string.
+    ///
+    /// Body (MS-XLS §2.4.150): grbit(2) + reserved(2) + reserved(2) + the name
+    /// as a ShortXLUnicodeString (cch:1, grbit:1, chars). The trailing
+    /// name-definition formula is ignored — for an add-in function it is a
+    /// `#REF!` placeholder (`02 00 1C 17`).
+    fn parse_externname(data: &[u8]) -> XlsResult<String> {
+        if data.len() < 8 {
+            return Err(XlsError::Parse("EXTERNNAME record too short".into()));
+        }
+        let cch = data[6] as u16;
+        let flags = data[7];
+        let mut off = 8;
+        read_character_data(data, &mut off, cch, flags)
     }
 
     /// Parse a NAME (defined name / Lbl) record.
@@ -4310,6 +4345,7 @@ mod tests {
             extern_sheet: vec![],
             supbooks: vec![],
             names: vec![],
+            extern_names: vec![],
             base_cell: None,
         };
 

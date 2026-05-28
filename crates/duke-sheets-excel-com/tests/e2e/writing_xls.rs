@@ -24,7 +24,7 @@ use serde_json::json;
 use crate::{
     cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
     roundtrip_through_excel_xls, roundtrip_through_excel_xls_bytes, temp_fixture_xls,
-    xls_formula_ptg_streams_for_compare,
+    xls_externname_record_bodies, xls_formula_ptg_streams_for_compare,
 };
 
 fn range(start: &str, end: &str) -> CellRange {
@@ -2090,5 +2090,89 @@ fn excel_can_read_xls_jpeg_image_we_emit() {
     assert_eq!(
         img.data, TEST_JPEG_1X1,
         "JPEG bytes must round-trip through Excel verbatim"
+    );
+}
+
+/// Analysis-ToolPak add-in functions (Ftab 384..=476). Excel does not emit a
+/// native PtgFunc/PtgFuncVar for these; instead it writes an AddIn SUPBOOK
+/// with one EXTERNNAME per distinct function and references it from each
+/// formula via PtgNameX + PtgFuncVar(iftab=0x00FF). Sorted alphabetically the
+/// distinct names here are EDATE(1), EOMONTH(2), GCD(3), NETWORKDAYS(4),
+/// WORKDAY(5) — the 1-based EXTERNNAME nameindex.
+const ATP_FORMULAS: &[(&str, &str, f64)] = &[
+    ("B1", "=EDATE(A1,12)", 0.0),       // iftab=449, fixed 2-arg
+    ("B2", "=EOMONTH(A1,1)", 0.0),      // iftab=450, fixed 2-arg
+    ("B3", "=GCD(A1,A2)", 0.0),         // iftab=473, variable-arity
+    ("B4", "=NETWORKDAYS(A1,A2)", 0.0), // iftab=472, variable-arity
+    ("B5", "=WORKDAY(A1,5)", 0.0),      // iftab=471, variable-arity
+];
+
+fn atp_function_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 43831.0).unwrap(); // 2020-01-01 serial
+    ws.set_cell_value("A2", 43862.0).unwrap(); // 2020-02-01 serial
+    for (cell, formula, expected) in ATP_FORMULAS {
+        ws.set_cell_formula(cell, formula).unwrap();
+        let addr = CellAddress::parse(cell).unwrap();
+        ws.set_formula_result(addr.row, addr.col, CellValue::Number(*expected))
+            .unwrap();
+    }
+    wb
+}
+
+fn excel_authored_atp_xls_bytes() -> Vec<u8> {
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let mut wb = excel.create_workbook().expect("create Excel workbook");
+        wb.set_cell_value("A1", 43831.0).expect("set A1");
+        wb.set_cell_value("A2", 43862.0).expect("set A2");
+        for (cell, formula, _) in ATP_FORMULAS {
+            wb.set_cell_formula(cell, formula)
+                .expect("set Excel formula");
+        }
+        excel.recalculate().expect("Excel recalculate");
+        wb.save_as(&fixture.vm_path, 56).expect("Excel SaveAs xls");
+        wb.close().expect("close Excel-authored workbook");
+    }
+
+    pull_file_from_vm(&fixture);
+    let bytes = std::fs::read(&fixture.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
+    cleanup_fixture(&fixture);
+    bytes
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_byte_parity_for_atp_functions_we_emit() {
+    let wb = atp_function_workbook();
+    let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
+
+    let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
+    assert_eq!(
+        writer_ptgs, resave_ptgs,
+        "Excel canonicalized our XLS ATP formula token streams on re-save"
+    );
+
+    let authored_bytes = excel_authored_atp_xls_bytes();
+    let authored_ptgs = xls_formula_ptg_streams_for_compare(&authored_bytes);
+    assert_eq!(
+        writer_ptgs, authored_ptgs,
+        "our XLS ATP (PtgNameX) token streams differ from Excel-authored output"
+    );
+
+    // The formula streams only pin the PtgNameX nameindex; byte-compare the
+    // EXTERNNAME records themselves (grbit / reserved / cch / name / #REF!
+    // placeholder formula) against Excel's native output.
+    let writer_externnames = xls_externname_record_bodies(&writer_bytes);
+    let authored_externnames = xls_externname_record_bodies(&authored_bytes);
+    assert_eq!(
+        writer_externnames, authored_externnames,
+        "our EXTERNNAME records differ from Excel-authored output"
     );
 }

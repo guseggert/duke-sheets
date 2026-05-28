@@ -44,6 +44,18 @@ pub struct ExternSheetEntry {
     pub last_sheet: u16,
 }
 
+/// An external name (EXTERNNAME / Lbl) record, tagged with the SUPBOOK it
+/// belongs to. For Analysis-ToolPak add-in functions the `name` is the
+/// function name (EDATE, NETWORKDAYS, …); a `PtgNameX` resolves to it by its
+/// 1-based position within the owning SUPBOOK's external-name list.
+#[derive(Debug, Clone)]
+pub struct ExternName {
+    /// 0-based index into the `supbooks` array of the owning SUPBOOK.
+    pub supbook_idx: u16,
+    /// The external name string.
+    pub name: String,
+}
+
 /// A defined name record (NAME / Lbl).
 #[derive(Debug, Clone)]
 pub struct NameRecord {
@@ -90,6 +102,9 @@ pub struct FormulaContext {
     pub supbooks: Vec<SupBook>,
     /// Defined name records.
     pub names: Vec<NameRecord>,
+    /// External name records (EXTERNNAME), used to resolve PtgNameX tokens —
+    /// notably Analysis-ToolPak add-in function calls.
+    pub extern_names: Vec<ExternName>,
     /// Base cell position for shared formula offset resolution.
     /// When set, tRefN/tAreaN offsets are adjusted relative to this cell.
     pub base_cell: Option<(u32, u16)>,
@@ -103,6 +118,7 @@ impl FormulaContext {
             extern_sheet: Vec::new(),
             supbooks: Vec::new(),
             names: Vec::new(),
+            extern_names: Vec::new(),
             base_cell: None,
         }
     }

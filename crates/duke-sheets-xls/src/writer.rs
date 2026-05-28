@@ -63,6 +63,7 @@ const HLINK_RECORD: u16 = 0x01B8;
 const NAME_RECORD: u16 = 0x0018;
 const SUPBOOK_RECORD: u16 = 0x01AE;
 const EXTERNSHEET_RECORD: u16 = 0x0017;
+const EXTERNNAME_RECORD: u16 = 0x0023;
 const AUTOFILTER_RECORD: u16 = 0x009E;
 const FILTERMODE_RECORD: u16 = 0x009B;
 const DVAL_RECORD: u16 = 0x01B2;
@@ -240,10 +241,11 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         lbplypos_field_offsets.push(body_start);
     }
 
-    let externsheet_table = build_externsheet_table(workbook);
+    let addin_table = build_addin_table(workbook);
+    let externsheet_table = build_externsheet_table(workbook, !addin_table.is_empty());
     let name_table = build_name_table(workbook);
-    write_supbook_and_externsheet(&mut stream, workbook, &externsheet_table);
-    write_user_name_records(&mut stream, workbook, &externsheet_table, &name_table);
+    write_supbook_and_externsheet(&mut stream, &externsheet_table, &addin_table);
+    write_user_name_records(&mut stream, workbook, &externsheet_table, &name_table, &addin_table);
     write_print_name_records(&mut stream, workbook);
     sst.write_records(&mut stream)?;
     let drawing_state = compute_drawing_state(workbook);
@@ -266,6 +268,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
             &styles,
             &externsheet_table,
             &name_table,
+            &addin_table,
         );
         write_page_break_records(&mut stream, sheet);
         write_header_footer_records(&mut stream, sheet);
@@ -279,8 +282,14 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_mergecells(&mut stream, sheet);
         write_hlink_records(&mut stream, sheet);
         write_autofilter_records(&mut stream, sheet);
-        write_data_validations(&mut stream, sheet, &externsheet_table, &name_table);
-        write_conditional_formats(&mut stream, sheet, &externsheet_table, &name_table);
+        write_data_validations(&mut stream, sheet, &externsheet_table, &name_table, &addin_table);
+        write_conditional_formats(
+            &mut stream,
+            sheet,
+            &externsheet_table,
+            &name_table,
+            &addin_table,
+        );
         if let Some(sheet_drawing) = drawing_state.sheets.get(&sheet_idx) {
             write_sheet_drawing_records(&mut stream, sheet_drawing);
         }
@@ -1752,6 +1761,7 @@ fn write_user_name_records(
     workbook: &Workbook,
     externsheet: &ExternSheetTable,
     name_table: &NameTable,
+    addins: &AddinTable,
 ) {
     use duke_sheets_core::named_range::NameScope;
 
@@ -1775,6 +1785,7 @@ fn write_user_name_records(
                     &mut extra,
                     externsheet,
                     name_table,
+                    addins,
                     operand_class,
                 )
                 .is_ok()
@@ -1898,15 +1909,30 @@ struct ExternSheetTable {
     sheet_count: u16,
     /// EXTERNSHEET entries in ixti order. Values are 0-based sheet indexes.
     entries: Vec<u16>,
+    /// True when the workbook uses Analysis-ToolPak add-in functions. The
+    /// AddIn SUPBOOK then occupies SUPBOOK index 0 and an XTI for it is
+    /// prepended to the EXTERNSHEET at ixti 0, so the sheet XTIs that
+    /// `by_name` indexes are shifted up by one and reference SUPBOOK 1.
+    addin_present: bool,
 }
 
 impl ExternSheetTable {
     fn ixti_for_sheet(&self, name: &str) -> Option<u16> {
         self.by_name.get(&name.to_ascii_lowercase()).copied()
     }
+
+    /// SUPBOOK index the sheet XTIs reference: 1 when an AddIn SUPBOOK
+    /// precedes the self-ref SUPBOOK, 0 otherwise.
+    fn self_ref_supbook_idx(&self) -> u16 {
+        if self.addin_present {
+            1
+        } else {
+            0
+        }
+    }
 }
 
-fn build_externsheet_table(workbook: &Workbook) -> ExternSheetTable {
+fn build_externsheet_table(workbook: &Workbook, addin_present: bool) -> ExternSheetTable {
     let sheets = workbook
         .worksheets()
         .enumerate()
@@ -1937,16 +1963,123 @@ fn build_externsheet_table(workbook: &Workbook) -> ExternSheetTable {
         }
     }
 
+    // When an AddIn SUPBOOK is present its XTI is prepended at ixti 0, so
+    // every sheet XTI shifts up by one.
+    let ixti_base: u16 = if addin_present { 1 } else { 0 };
     let mut by_name = HashMap::new();
     for (ixti, sheet_idx) in entries.iter().enumerate() {
         if let Some((_, name)) = sheets.iter().find(|(idx, _)| idx == sheet_idx) {
-            by_name.insert(name.to_ascii_lowercase(), ixti as u16);
+            by_name.insert(name.to_ascii_lowercase(), ixti as u16 + ixti_base);
         }
     }
     ExternSheetTable {
         by_name,
         sheet_count: workbook.sheet_count().min(u16::MAX as usize) as u16,
         entries,
+        addin_present,
+    }
+}
+
+/// Table of Analysis-ToolPak add-in functions used anywhere in the workbook,
+/// in the order Excel writes their EXTERNNAME records: distinct canonical
+/// names sorted alphabetically (ASCII), each assigned a 1-based `nameindex`.
+///
+/// BIFF8 serializes ATP functions (Ftab 384..=476) as an add-in UDF call:
+/// `PtgNameX` references an EXTERNNAME record in the AddIn SUPBOOK by this
+/// 1-based index. See [`write_supbook_and_externsheet`].
+#[derive(Debug, Default)]
+struct AddinTable {
+    /// Canonical (uppercase) names in EXTERNNAME emission order.
+    names: Vec<String>,
+    /// Uppercase name → 1-based nameindex.
+    by_name: HashMap<String, u16>,
+}
+
+impl AddinTable {
+    fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    /// 1-based EXTERNNAME index for an add-in function name, or None when the
+    /// name was not collected (caller should fall back to native emission).
+    fn nameindex_for(&self, name: &str) -> Option<u16> {
+        self.by_name.get(&name.to_ascii_uppercase()).copied()
+    }
+}
+
+fn build_addin_table(workbook: &Workbook) -> AddinTable {
+    use std::collections::BTreeSet;
+    let mut set: BTreeSet<String> = BTreeSet::new();
+    for sheet in workbook.worksheets() {
+        for (_, _, formula) in sheet.formula_cells() {
+            collect_addin_function_names(formula, &mut set);
+        }
+    }
+    for named_range in user_names_in_xls_emit_order(workbook) {
+        collect_addin_function_names(&named_range.refers_to, &mut set);
+    }
+    let names: Vec<String> = set.into_iter().collect();
+    let by_name = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.clone(), (i + 1) as u16))
+        .collect();
+    AddinTable { names, by_name }
+}
+
+fn collect_addin_function_names(formula: &str, out: &mut std::collections::BTreeSet<String>) {
+    let formula = if formula.starts_with('=') {
+        formula.to_string()
+    } else {
+        format!("={formula}")
+    };
+    if let Ok(expr) = duke_sheets_formula::parse_formula(&formula) {
+        collect_addin_names_expr(&expr, out);
+    }
+}
+
+fn collect_addin_names_expr(
+    expr: &duke_sheets_formula::FormulaExpr,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    use duke_sheets_formula::decompile::{function_index, function_is_biff8_addin, function_name};
+    use duke_sheets_formula::FormulaExpr;
+
+    match expr {
+        FormulaExpr::Function { name, args } => {
+            if let Some(idx) = function_index(name) {
+                if function_is_biff8_addin(idx) {
+                    // Canonical (uppercase) name so EXTERNNAME spelling and
+                    // sort order are independent of how the user typed it.
+                    out.insert(function_name(idx).to_string());
+                }
+            }
+            for arg in args {
+                collect_addin_names_expr(arg, out);
+            }
+        }
+        FormulaExpr::BinaryOp { left, right, .. } => {
+            collect_addin_names_expr(left, out);
+            collect_addin_names_expr(right, out);
+        }
+        FormulaExpr::UnaryOp { operand, .. } => collect_addin_names_expr(operand, out),
+        FormulaExpr::Array(rows) => {
+            for row in rows {
+                for item in row {
+                    collect_addin_names_expr(item, out);
+                }
+            }
+        }
+        FormulaExpr::Number(_)
+        | FormulaExpr::String(_)
+        | FormulaExpr::Boolean(_)
+        | FormulaExpr::Error(_)
+        | FormulaExpr::NameRef(_)
+        | FormulaExpr::CellRef(_)
+        | FormulaExpr::RangeRef(_)
+        | FormulaExpr::StructuredRef(_)
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::Empty => {}
     }
 }
 
@@ -2028,39 +2161,104 @@ fn push_unique_sheet_name(out: &mut Vec<String>, sheet: &str) {
     }
 }
 
-/// Emit a SUPBOOK self-reference (MS-XLS §2.4.273) followed by an
-/// EXTERNSHEET (§2.4.105) with one entry per worksheet.
+/// Emit the SUPBOOK / EXTERNNAME / EXTERNSHEET records (MS-XLS §2.4.273,
+/// §2.4.150, §2.4.105) for the global substream.
 ///
-/// SUPBOOK self-ref body: ctab(u16) + cch(u16=0x0401 sentinel).
-/// EXTERNSHEET body: count(u16) + count × (sup_book_idx u16,
-/// itabFirst u16, itabLast u16). Entries are ordered by first
-/// formula use so tRef3D/tArea3D ixti values match Excel's SaveAs
-/// ordering for referenced sheets.
+/// Without add-in functions this is a single self-ref SUPBOOK
+/// (ctab=sheet_count, cch=0x0401) plus an EXTERNSHEET with one XTI per
+/// referenced worksheet (sup_book_idx=0).
+///
+/// With Analysis-ToolPak add-in functions present, Excel writes:
+///   SUPBOOK #0  AddIn sentinel (ctab=0x0001, cch=0x3A01)
+///   EXTERNNAME  one per distinct add-in function (nameindex order)
+///   SUPBOOK #1  self-ref
+///   EXTERNSHEET XTI[0] = AddIn (sup=0, itab=0xFFFE workbook-level), then
+///               the sheet XTIs referencing self-ref SUPBOOK #1 at ixti 1+.
+///
+/// EXTERNSHEET XTI body: sup_book_idx(u16) + itabFirst(i16) + itabLast(i16).
+/// XTIs are ordered by first formula use so tRef3D/tArea3D ixti values match
+/// Excel's SaveAs ordering for referenced sheets.
 fn write_supbook_and_externsheet(
     stream: &mut Vec<u8>,
-    _workbook: &Workbook,
     table: &ExternSheetTable,
+    addins: &AddinTable,
 ) {
     if table.sheet_count == 0 {
         return;
     }
-    // SUPBOOK
+
+    if !addins.is_empty() {
+        // AddIn SUPBOOK sentinel: ctab=0x0001, cch=0x3A01.
+        stream.extend_from_slice(&SUPBOOK_RECORD.to_le_bytes());
+        stream.extend_from_slice(&4u16.to_le_bytes());
+        stream.extend_from_slice(&0x0001u16.to_le_bytes());
+        stream.extend_from_slice(&0x3A01u16.to_le_bytes());
+        // EXTERNNAME records belong to the SUPBOOK immediately preceding
+        // them, so emit them right after the AddIn SUPBOOK.
+        for name in &addins.names {
+            write_addin_externname(stream, name);
+        }
+    }
+
+    // Self-ref SUPBOOK: ctab=sheet_count, cch=0x0401.
     stream.extend_from_slice(&SUPBOOK_RECORD.to_le_bytes());
     stream.extend_from_slice(&4u16.to_le_bytes());
     stream.extend_from_slice(&table.sheet_count.to_le_bytes());
     stream.extend_from_slice(&0x0401u16.to_le_bytes());
 
     // EXTERNSHEET
-    let count = table.entries.len().min(u16::MAX as usize) as u16;
-    let body_len = 2 + (count as usize) * 6;
+    let self_ref_sup = table.self_ref_supbook_idx();
+    let sheet_count = table.entries.len().min(u16::MAX as usize);
+    let total = (if table.addin_present {
+        sheet_count + 1
+    } else {
+        sheet_count
+    })
+    .min(u16::MAX as usize) as u16;
+    let body_len = 2 + (total as usize) * 6;
     stream.extend_from_slice(&EXTERNSHEET_RECORD.to_le_bytes());
     stream.extend_from_slice(&(body_len as u16).to_le_bytes());
-    stream.extend_from_slice(&count.to_le_bytes());
-    for sheet_idx in table.entries.iter().take(count as usize) {
-        stream.extend_from_slice(&0u16.to_le_bytes()); // sup_book_idx
+    stream.extend_from_slice(&total.to_le_bytes());
+    if table.addin_present {
+        // XTI[0]: the AddIn SUPBOOK, workbook-level scope (itab=0xFFFE).
+        stream.extend_from_slice(&0u16.to_le_bytes());
+        stream.extend_from_slice(&0xFFFEu16.to_le_bytes());
+        stream.extend_from_slice(&0xFFFEu16.to_le_bytes());
+    }
+    for sheet_idx in table.entries.iter().take(sheet_count) {
+        stream.extend_from_slice(&self_ref_sup.to_le_bytes()); // sup_book_idx
         stream.extend_from_slice(&sheet_idx.to_le_bytes()); // first_sheet
         stream.extend_from_slice(&sheet_idx.to_le_bytes()); // last_sheet
     }
+}
+
+/// Emit one EXTERNNAME record (MS-XLS §2.4.150) describing an Analysis-ToolPak
+/// add-in function.
+///
+/// Body layout (matches Excel's native output):
+/// ```text
+/// grbit      (2 bytes) = 0x0000
+/// reserved   (2 bytes) = 0x0000   (sheet index / not used for add-ins)
+/// reserved   (2 bytes) = 0x0000   (not used)
+/// cch        (1 byte)  = name length
+/// grbit      (1 byte)  = 0x00     (compressed: one byte per character)
+/// name       (cch bytes, ASCII)
+/// cce        (2 bytes) = 0x0002   name-definition formula length
+/// rgce       = 1C 17              PtgErr(#REF!) — never-evaluated placeholder
+/// ```
+fn write_addin_externname(stream: &mut Vec<u8>, name: &str) {
+    let name_bytes = name.as_bytes(); // ATP function names are ASCII
+    let mut body = Vec::with_capacity(6 + 2 + name_bytes.len() + 4);
+    body.extend_from_slice(&0u16.to_le_bytes()); // grbit
+    body.extend_from_slice(&0u16.to_le_bytes()); // reserved
+    body.extend_from_slice(&0u16.to_le_bytes()); // reserved
+    body.push(name_bytes.len() as u8); // cch
+    body.push(0x00); // grbit: compressed/ASCII
+    body.extend_from_slice(name_bytes);
+    body.extend_from_slice(&[0x02, 0x00, 0x1C, 0x17]); // cce=2, PtgErr #REF!
+    stream.extend_from_slice(&EXTERNNAME_RECORD.to_le_bytes());
+    stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    stream.extend_from_slice(&body);
 }
 
 fn write_print_name_records(stream: &mut Vec<u8>, workbook: &Workbook) {
@@ -2418,6 +2616,7 @@ fn write_conditional_formats(
     sheet: &Worksheet,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    addins: &AddinTable,
 ) {
     use duke_sheets_core::conditional_format::{CfOperator, CfRuleType};
 
@@ -2489,10 +2688,10 @@ fn write_conditional_formats(
         };
 
         let f1 = formula1_text
-            .map(|t| encode_dv_formula(t, externsheet, names))
+            .map(|t| encode_dv_formula(t, externsheet, names, addins))
             .unwrap_or_default();
         let f2 = formula2_text
-            .map(|t| encode_dv_formula(t, externsheet, names))
+            .map(|t| encode_dv_formula(t, externsheet, names, addins))
             .unwrap_or_default();
 
         let mut cf_body = Vec::with_capacity(12 + f1.len() + f2.len());
@@ -2541,6 +2740,7 @@ fn write_data_validations(
     sheet: &Worksheet,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    addins: &AddinTable,
 ) {
     use duke_sheets_core::validation::{ValidationErrorStyle, ValidationOperator, ValidationType};
 
@@ -2641,14 +2841,14 @@ fn write_data_validations(
         };
 
         let formula1 = value1
-            .map(|t| encode_dv_formula(t, externsheet, names))
+            .map(|t| encode_dv_formula(t, externsheet, names, addins))
             .unwrap_or_default();
         body.extend_from_slice(&(formula1.len() as u16).to_le_bytes());
         body.extend_from_slice(&0u16.to_le_bytes()); // unused
         body.extend_from_slice(&formula1);
 
         let formula2 = value2
-            .map(|t| encode_dv_formula(t, externsheet, names))
+            .map(|t| encode_dv_formula(t, externsheet, names, addins))
             .unwrap_or_default();
         body.extend_from_slice(&(formula2.len() as u16).to_le_bytes());
         body.extend_from_slice(&0u16.to_le_bytes()); // unused
@@ -2707,7 +2907,12 @@ fn push_dv_unicode_string(buf: &mut Vec<u8>, s: &str) {
 ///     formula expression. Fall back to a single tStr ptg that
 ///     decompiles back to a quoted string; the reader strips the
 ///     surrounding quotes when the fExplicit-list flag is set.
-fn encode_dv_formula(value: &str, externsheet: &ExternSheetTable, names: &NameTable) -> Vec<u8> {
+fn encode_dv_formula(
+    value: &str,
+    externsheet: &ExternSheetTable,
+    names: &NameTable,
+    addins: &AddinTable,
+) -> Vec<u8> {
     if value.is_empty() {
         return Vec::new();
     }
@@ -2725,6 +2930,7 @@ fn encode_dv_formula(value: &str, externsheet: &ExternSheetTable, names: &NameTa
             &mut extra,
             externsheet,
             names,
+            addins,
             OperandClass::V,
         )
         .is_ok()
@@ -2784,6 +2990,7 @@ fn write_cell_records(
     styles: &StyleTables,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    addins: &AddinTable,
 ) {
     let mut cells: Vec<_> = sheet.iter_cells().collect();
     cells.sort_by_key(|(row, col, _)| (*row, *col));
@@ -2806,6 +3013,7 @@ fn write_cell_records(
                 sst,
                 externsheet,
                 names,
+                addins,
             ) {
                 continue;
             }
@@ -2869,6 +3077,7 @@ fn try_write_formula_record(
     sst: &SstTable,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    addins: &AddinTable,
 ) -> bool {
     // duke-sheets-formula's parse_formula requires the leading '=';
     // ensure it's present without double-prefixing.
@@ -2895,8 +3104,16 @@ fn try_write_formula_record(
     // follows the rgce in the FORMULA record. The cce field counts only the
     // rgce (tokens); rgcb bytes come after.
     let mut extra = Vec::new();
-    if compile_ptgs_with_context(&expr, &mut tokens, &mut extra, externsheet, names, OperandClass::V)
-        .is_err()
+    if compile_ptgs_with_context(
+        &expr,
+        &mut tokens,
+        &mut extra,
+        externsheet,
+        names,
+        addins,
+        OperandClass::V,
+    )
+    .is_err()
     {
         return false;
     }
@@ -3014,6 +3231,7 @@ fn compile_ptgs(
         &mut extra,
         &ExternSheetTable::default(),
         &NameTable::default(),
+        &AddinTable::default(),
         OperandClass::V,
     )
 }
@@ -3023,8 +3241,8 @@ fn compile_ptgs(
 // MS-XLS §2.5.198 defines the V/R/A class distinction; this writer only uses
 // V and R. See `OperandClass` in the formula crate for the full rationale.
 use duke_sheets_formula::decompile::function_table::{
-    expr_calls_volatile_function, function_arg_class, function_index, function_is_fixed_arity,
-    function_returns_reference, OperandClass,
+    expr_calls_volatile_function, function_arg_class, function_index, function_is_biff8_addin,
+    function_is_fixed_arity, function_returns_reference, OperandClass,
 };
 
 fn compile_ptgs_with_context(
@@ -3033,6 +3251,7 @@ fn compile_ptgs_with_context(
     extra: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    addins: &AddinTable,
     operand_class: OperandClass,
 ) -> Result<(), UnsupportedToken> {
     use duke_sheets_formula::ast::{BinaryOperator, UnaryOperator};
@@ -3135,8 +3354,8 @@ fn compile_ptgs_with_context(
                 }
                 _ => OperandClass::V,
             };
-            compile_ptgs_with_context(left, out, extra, externsheet, names, child_class)?;
-            compile_ptgs_with_context(right, out, extra, externsheet, names, child_class)?;
+            compile_ptgs_with_context(left, out, extra, externsheet, names, addins, child_class)?;
+            compile_ptgs_with_context(right, out, extra, externsheet, names, addins, child_class)?;
             out.push(match op {
                 BinaryOperator::Add => 0x03,
                 BinaryOperator::Subtract => 0x04,
@@ -3160,7 +3379,7 @@ fn compile_ptgs_with_context(
             });
         }
         FormulaExpr::UnaryOp { op, operand } => {
-            compile_ptgs_with_context(operand, out, extra, externsheet, names, operand_class)?;
+            compile_ptgs_with_context(operand, out, extra, externsheet, names, addins, operand_class)?;
             out.push(match op {
                 UnaryOperator::Plus => 0x12,    // PtgUplus
                 UnaryOperator::Negate => 0x13,  // PtgUminus
@@ -3178,15 +3397,54 @@ fn compile_ptgs_with_context(
             if args.len() > u8::MAX as usize {
                 return Err(UnsupportedToken);
             }
+            // Analysis-ToolPak add-in functions (Ftab 384..=476) are not native
+            // BIFF8 functions: Excel serializes them as an add-in UDF call —
+            // a PtgNameX referencing an EXTERNNAME in the AddIn SUPBOOK,
+            // followed by R-class (by-reference) arguments and a PtgFuncVar
+            // with the UDF sentinel iftab 0x00FF whose argument count includes
+            // the PtgNameX operand. See `write_supbook_and_externsheet`.
+            //
+            // Falls through to native emission when the name was not collected
+            // into the AddinTable (e.g. a function used only in a data-
+            // validation formula, which the pre-scan does not visit) or when
+            // the argument count would overflow the PtgFuncVar byte.
+            if function_is_biff8_addin(idx) && args.len() < u8::MAX as usize {
+                if let Some(nameindex) = addins.nameindex_for(name) {
+                    out.push(0x39); // PtgNameX
+                    out.extend_from_slice(&0u16.to_le_bytes()); // ixti = 0 (AddIn XTI)
+                    out.extend_from_slice(&nameindex.to_le_bytes()); // 1-based
+                    out.extend_from_slice(&0u16.to_le_bytes()); // reserved
+                    for arg in args {
+                        if matches!(arg, FormulaExpr::Empty) {
+                            out.push(0x16); // PTG_MISS_ARG
+                        } else {
+                            compile_ptgs_with_context(
+                                arg,
+                                out,
+                                extra,
+                                externsheet,
+                                names,
+                                addins,
+                                OperandClass::R,
+                            )?;
+                        }
+                    }
+                    // PtgFuncVar argc counts the PtgNameX as the first operand.
+                    out.push(ptg_func_var_opcode(func_token_class(idx, operand_class)));
+                    out.push((args.len() + 1) as u8);
+                    out.extend_from_slice(&0x00FFu16.to_le_bytes()); // iftab = UDF
+                    return Ok(());
+                }
+            }
             if idx == 4 && args.len() == 1 && !matches!(args[0], FormulaExpr::Empty) {
-                emit_optimized_sum(&args[0], out, extra, externsheet, names)?;
+                emit_optimized_sum(&args[0], out, extra, externsheet, names, addins)?;
                 return Ok(());
             }
             // IF gets MS-XLS PtgAttrIf / PtgAttrGoto short-circuit optimization
             // ([MS-XLS] §2.5.198.39 / §2.5.198.37). Excel always emits this
             // for IF — matching it is required for byte-for-byte parity.
             if idx == 1 && (args.len() == 2 || args.len() == 3) {
-                if emit_optimized_if(args, out, extra, externsheet, names, operand_class)? {
+                if emit_optimized_if(args, out, extra, externsheet, names, addins, operand_class)? {
                     return Ok(());
                 }
                 // emit_optimized_if returns Ok(false) when token offsets
@@ -3196,7 +3454,8 @@ fn compile_ptgs_with_context(
             // ([MS-XLS] §2.5.198.40). Like IF, Excel always emits this so
             // matching is required for byte-for-byte parity.
             if idx == 100 && args.len() >= 2 {
-                if emit_optimized_choose(args, out, extra, externsheet, names, operand_class)? {
+                if emit_optimized_choose(args, out, extra, externsheet, names, addins, operand_class)?
+                {
                     return Ok(());
                 }
             }
@@ -3205,7 +3464,9 @@ fn compile_ptgs_with_context(
                     out.push(0x16); // PTG_MISS_ARG
                 } else {
                     let arg_class = function_arg_class(idx, arg_idx);
-                    compile_ptgs_with_context(arg, out, extra, externsheet, names, arg_class)?;
+                    compile_ptgs_with_context(
+                        arg, out, extra, externsheet, names, addins, arg_class,
+                    )?;
                 }
             }
             // PtgFunc (fixed-arity) or PtgFuncVar (variable-arity). The token's
@@ -3318,6 +3579,7 @@ fn emit_optimized_sum(
     extra: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    addins: &AddinTable,
 ) -> Result<(), UnsupportedToken> {
     use duke_sheets_formula::ast::BinaryOperator;
     use duke_sheets_formula::FormulaExpr;
@@ -3334,6 +3596,7 @@ fn emit_optimized_sum(
                 extra,
                 externsheet,
                 names,
+                addins,
                 OperandClass::R,
             )?;
             if ref_tokens.len() > u16::MAX as usize {
@@ -3356,7 +3619,7 @@ fn emit_optimized_sum(
     // no-op there. Pull the class from the function metadata so the rule
     // stays in one place.
     let arg_class = function_arg_class(4, 0);
-    compile_ptgs_with_context(arg, out, extra, externsheet, names, arg_class)?;
+    compile_ptgs_with_context(arg, out, extra, externsheet, names, addins, arg_class)?;
     push_attr_sum(out);
     Ok(())
 }
@@ -3435,6 +3698,7 @@ fn emit_optimized_if(
     extra: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    addins: &AddinTable,
     operand_class: OperandClass,
 ) -> Result<bool, UnsupportedToken> {
     use duke_sheets_formula::FormulaExpr;
@@ -3457,16 +3721,32 @@ fn emit_optimized_if(
     // token stream that the caller's fallback would then duplicate.
     let cond_class = function_arg_class(1, 0);
     let mut cond_bytes = Vec::with_capacity(16);
-    compile_ptgs_with_context(cond, &mut cond_bytes, extra, externsheet, names, cond_class)?;
+    compile_ptgs_with_context(
+        cond,
+        &mut cond_bytes,
+        extra,
+        externsheet,
+        names,
+        addins,
+        cond_class,
+    )?;
 
     let mut t_bytes = Vec::with_capacity(32);
     let t_class = function_arg_class(1, 1);
-    compile_ptgs_with_context(t_branch, &mut t_bytes, extra, externsheet, names, t_class)?;
+    compile_ptgs_with_context(
+        t_branch,
+        &mut t_bytes,
+        extra,
+        externsheet,
+        names,
+        addins,
+        t_class,
+    )?;
 
     let mut f_bytes = Vec::new();
     if let Some(f) = f_branch {
         let f_class = function_arg_class(1, 2);
-        compile_ptgs_with_context(f, &mut f_bytes, extra, externsheet, names, f_class)?;
+        compile_ptgs_with_context(f, &mut f_bytes, extra, externsheet, names, addins, f_class)?;
     }
 
     // PtgAttrIf offset = bytes after PtgAttrIf to skip when cond is FALSE.
@@ -3557,6 +3837,7 @@ fn emit_optimized_choose(
     extra: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    addins: &AddinTable,
     operand_class: OperandClass,
 ) -> Result<bool, UnsupportedToken> {
     use duke_sheets_formula::FormulaExpr;
@@ -3585,6 +3866,7 @@ fn emit_optimized_choose(
         extra,
         externsheet,
         names,
+        addins,
         selector_class,
     )?;
 
@@ -3593,7 +3875,7 @@ fn emit_optimized_choose(
     for (i, c) in choices.iter().enumerate() {
         let mut buf = Vec::with_capacity(16);
         let class = function_arg_class(100, i + 1);
-        compile_ptgs_with_context(c, &mut buf, extra, externsheet, names, class)?;
+        compile_ptgs_with_context(c, &mut buf, extra, externsheet, names, addins, class)?;
         choice_bytes.push(buf);
     }
 
@@ -4792,8 +5074,10 @@ mod tests {
         let r = emit_optimized_if(
             &args,
             &mut out,
+            &mut Vec::new(),
             &ExternSheetTable::default(),
             &NameTable::default(),
+            &AddinTable::default(),
             OperandClass::V,
         );
         assert!(matches!(r, Ok(false)), "expected overflow → Ok(false), got {r:?}");
@@ -4817,8 +5101,10 @@ mod tests {
         let r = emit_optimized_choose(
             &args,
             &mut out,
+            &mut Vec::new(),
             &ExternSheetTable::default(),
             &NameTable::default(),
+            &AddinTable::default(),
             OperandClass::V,
         );
         assert!(matches!(r, Ok(false)), "expected overflow → Ok(false), got {r:?}");

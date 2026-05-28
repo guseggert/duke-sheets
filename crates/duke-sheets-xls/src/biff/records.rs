@@ -24,6 +24,7 @@ pub const PROTECT: u16 = 0x0012; // Sheet/workbook protection flag
 pub const PASSWORD: u16 = 0x0013; // Sheet/workbook protection password hash
 pub const SUPBOOK: u16 = 0x01AE; // Supporting workbook (self-ref, add-in, or external)
 pub const EXTERNSHEET: u16 = 0x0017; // Sheet reference index table (maps to SUPBOOK entries)
+pub const EXTERNNAME: u16 = 0x0023; // External name (add-in function / external defined name)
 pub const NAME: u16 = 0x0018; // Defined name (a.k.a. Lbl / DEFINEDNAME)
 
 // ── Cell records ────────────────────────────────────────────────────────
