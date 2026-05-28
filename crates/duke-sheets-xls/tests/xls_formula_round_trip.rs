@@ -600,6 +600,32 @@ fn if_in_value_function_emits_v_class_inner_func() {
 }
 
 #[test]
+fn vlookup_table_array_emits_r_class() {
+    // VLOOKUP(lookup_value, table_array, col_index): the table_array (arg 1)
+    // is a reference, emitted R-class PtgArea (0x25); lookup_value (arg 0)
+    // and col_index (arg 2) are V-class. Shared FunctionDef fix verified
+    // byte-for-byte on XLSB; this pins the XLS side at token level.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 2.0).unwrap();
+    ws.set_cell_value("A2", 3.0).unwrap();
+    ws.set_cell_value("A3", 4.0).unwrap();
+    ws.set_cell_formula("B1", "=VLOOKUP(A1,A1:A3,1)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(2.0)).unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    // lookup_value A1 → V-class PtgRef (0x44).
+    assert_eq!(tokens[0], 0x44, "lookup_value must be V-class; {tokens:02X?}");
+    // table_array A1:A3 → R-class PtgArea (0x25) at byte 5.
+    assert_eq!(
+        tokens[5], 0x25,
+        "table_array must be R-class PtgArea; {tokens:02X?}"
+    );
+    // Ends with PtgFuncVar (0x42) argc=3 iftab=102 (VLOOKUP).
+    assert_eq!(&tokens[tokens.len() - 4..], &[0x42, 0x03, 0x66, 0x00]);
+}
+
+#[test]
 fn index_emits_r_class_array_arg() {
     // INDEX(array, row, [col]): the first arg is a reference, emitted
     // R-class PtgArea (0x25). At top level the INDEX token is V-class

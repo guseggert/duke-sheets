@@ -2437,6 +2437,12 @@ impl FunctionRegistry {
             max_args: Some(4),
             implementation: lookup::fn_vlookup,
             volatile: false,
+            // VLOOKUP(lookup_value, table_array, col_index, [range_lookup]).
+            // Arg 1 (table_array) is a reference → R-class; the rest are
+            // values. Verified against Excel XLSB authoring. (Without this,
+            // Excel reads our V-class area where it expects a reference and
+            // repairs it into a PtgName + PtgFuncVar(UDF) wrapper.)
+            arg_classes: &[OperandClass::V, OperandClass::R],
             ..Default::default()
         });
 

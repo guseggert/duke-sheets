@@ -449,6 +449,263 @@ pub fn roundtrip_through_excel_xlsb(wb: &duke_sheets_core::Workbook) -> duke_she
     result
 }
 
+/// Like [`roundtrip_through_excel_xlsb`] but also returns the raw writer
+/// bytes and Excel's re-saved bytes, for byte-parity comparison of the
+/// formula PTG streams. Mirrors [`roundtrip_through_excel_xls_bytes`].
+pub fn roundtrip_through_excel_xlsb_bytes(
+    wb: &duke_sheets_core::Workbook,
+) -> (duke_sheets_core::Workbook, Vec<u8>, Vec<u8>) {
+    use duke_sheets_xlsb::{XlsbReader, XlsbWriter};
+    use std::io::Cursor;
+
+    let input = temp_fixture_xlsb();
+    let output = temp_fixture_xlsb();
+
+    let mut buf = Vec::new();
+    XlsbWriter::write(wb, Cursor::new(&mut buf)).expect("XlsbWriter::write");
+    std::fs::write(&input.host_path, &buf)
+        .unwrap_or_else(|e| panic!("write {}: {e}", input.host_path.display()));
+
+    ensure_vm_temp_dir();
+    push_file_to_vm(&input);
+
+    let bridge = excel_bridge();
+    let excel = bridge.lock().unwrap();
+    let opened = excel
+        .open_workbook(&input.vm_path)
+        .expect("Excel should open our XLSB without error");
+
+    let wb_name = opened.name().expect("get workbook name");
+    assert!(
+        !wb_name.contains("Repaired"),
+        "Excel repaired the XLSB file! Workbook name: {wb_name}"
+    );
+
+    opened
+        .save_as(&output.vm_path, 50)
+        .expect("Excel SaveAs xlsb");
+    opened.close().expect("close workbook");
+
+    pull_file_from_vm(&output);
+    let output_bytes = std::fs::read(&output.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", output.host_path.display()));
+    let result = XlsbReader::read_file(&output.host_path).expect("XlsbReader::read_file");
+
+    cleanup_fixture(&input);
+    cleanup_fixture(&output);
+
+    (result, buf, output_bytes)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XlsbFormulaPtgStream {
+    pub row: u32,
+    pub col: u32,
+    pub rgce: Vec<u8>,
+}
+
+/// Extract raw BIFF12 formula token (`rgce`) bytes keyed by cell, from every
+/// worksheet binary part inside an `.xlsb` zip. Preserves opcode/class bytes
+/// (like the XLS helper) so byte-parity tests can pin token class.
+///
+/// Walks `BrtRowHdr` to track the current row and `BrtCellFmla{Num,Bool,
+/// Error,String}` records for the formula structure
+/// (`grbit(2) + cce(u32) + rgce + cb(u32) + rgcb`). Results are sorted by
+/// (row, col).
+pub fn xlsb_formula_ptg_streams(bytes: &[u8]) -> Vec<XlsbFormulaPtgStream> {
+    use duke_sheets_xlsb::biff12::{records, RecordIter};
+    use std::io::Cursor;
+
+    let mut streams = Vec::new();
+    let reader = Cursor::new(bytes);
+    let mut zip = zip::ZipArchive::new(reader).expect("open xlsb zip");
+
+    // Collect worksheet bin names first (borrow of zip is released before reads).
+    let sheet_names: Vec<String> = (0..zip.len())
+        .filter_map(|i| {
+            let f = zip.by_index(i).ok()?;
+            let name = f.name().to_string();
+            if name.starts_with("xl/worksheets/") && name.ends_with(".bin") {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for name in sheet_names {
+        let mut data = Vec::new();
+        {
+            use std::io::Read;
+            let mut f = zip.by_name(&name).expect("read sheet bin");
+            f.read_to_end(&mut data).expect("read sheet bin bytes");
+        }
+
+        let mut iter = RecordIter::new(Cursor::new(&data));
+        let mut buf = Vec::new();
+        let mut current_row: u32 = 0;
+        loop {
+            let (rec_type, len) = match iter.next_record(&mut buf) {
+                Ok(t) => t,
+                Err(_) => break,
+            };
+            let payload = &buf[..len];
+            match rec_type {
+                records::BRT_ROW_HDR => {
+                    if payload.len() >= 4 {
+                        current_row =
+                            u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                    }
+                }
+                records::BRT_FMLA_NUM
+                | records::BRT_FMLA_BOOL
+                | records::BRT_FMLA_ERROR
+                | records::BRT_FMLA_STRING => {
+                    let Some((col, grbit_off)) = fmla_col_and_grbit_offset(rec_type, payload) else {
+                        continue;
+                    };
+                    let cce_off = grbit_off + 2;
+                    if cce_off + 4 > payload.len() {
+                        continue;
+                    }
+                    let cce = u32::from_le_bytes([
+                        payload[cce_off],
+                        payload[cce_off + 1],
+                        payload[cce_off + 2],
+                        payload[cce_off + 3],
+                    ]) as usize;
+                    let rgce_start = cce_off + 4;
+                    if rgce_start + cce > payload.len() {
+                        continue;
+                    }
+                    streams.push(XlsbFormulaPtgStream {
+                        row: current_row,
+                        col,
+                        rgce: payload[rgce_start..rgce_start + cce].to_vec(),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    streams.sort_by_key(|s| (s.row, s.col));
+    streams
+}
+
+/// Column index and the byte offset of the formula `grbit` for a
+/// `BrtCellFmla*` record. The Cell header is `col(u32) + iStyleRef/flags(u32)`
+/// = 8 bytes, followed by the cached value whose width depends on the record
+/// type; the formula structure begins right after.
+fn fmla_col_and_grbit_offset(rec_type: u16, payload: &[u8]) -> Option<(u32, usize)> {
+    use duke_sheets_xlsb::biff12::records;
+    if payload.len() < 8 {
+        return None;
+    }
+    let col = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    let grbit_off = match rec_type {
+        records::BRT_FMLA_NUM => 16,   // 8 + xnum(8)
+        records::BRT_FMLA_BOOL => 9,   // 8 + bool(1)
+        records::BRT_FMLA_ERROR => 9,  // 8 + err(1)
+        records::BRT_FMLA_STRING => {
+            // 8 + XLWideString(cch u32 + UTF-16LE chars)
+            if payload.len() < 12 {
+                return None;
+            }
+            let cch =
+                u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]) as usize;
+            12 + cch * 2
+        }
+        _ => return None,
+    };
+    Some((col, grbit_off))
+}
+
+/// XLSB formula PTG streams in the form used for byte parity checks: the two
+/// "undefined" bytes after a PtgAttrSum / PtgAttrVolatile flags byte are
+/// zeroed (same rationale as the XLS variant — Excel may carry uninitialized
+/// stack values there). Requires a BIFF12 token walk because reserved bytes
+/// can appear mid-stream.
+pub fn xlsb_formula_ptg_streams_for_compare(bytes: &[u8]) -> Vec<XlsbFormulaPtgStream> {
+    xlsb_formula_ptg_streams(bytes)
+        .into_iter()
+        .map(|mut s| {
+            normalize_xlsb_attr_reserved_bytes(&mut s.rgce);
+            s
+        })
+        .collect()
+}
+
+/// Zero the per-MS-XLS "undefined" bytes inside PtgAttrSum / PtgAttrVolatile
+/// in a BIFF12 token stream. Walks tokens using BIFF12 sizes (wider refs than
+/// BIFF8).
+fn normalize_xlsb_attr_reserved_bytes(tokens: &mut [u8]) {
+    use duke_sheets_xlsb::biff12::ptg;
+
+    let mut pos = 0usize;
+    while pos < tokens.len() {
+        let base = ptg::base_ptg(tokens[pos]);
+        pos += 1;
+        match base {
+            ptg::PTG_ATTR => {
+                if pos + 3 > tokens.len() {
+                    break;
+                }
+                let flags = tokens[pos];
+                let attr_data =
+                    u16::from_le_bytes([tokens[pos + 1], tokens[pos + 2]]) as usize;
+                if (flags & (ptg::ATTR_SUM | ptg::ATTR_VOLATILE)) != 0 {
+                    tokens[pos + 1] = 0;
+                    tokens[pos + 2] = 0;
+                }
+                pos += 3;
+                if (flags & ptg::ATTR_CHOOSE) != 0 {
+                    pos = pos.saturating_add((attr_data + 1) * 2);
+                }
+            }
+            ptg::PTG_STR => {
+                if pos + 2 > tokens.len() {
+                    break;
+                }
+                let cch = u16::from_le_bytes([tokens[pos], tokens[pos + 1]]) as usize;
+                pos += 2 + cch * 2;
+            }
+            _ => match biff12_token_data_size(base) {
+                Some(size) => pos = pos.saturating_add(size),
+                None => break,
+            },
+        }
+    }
+}
+
+/// Data byte count (excluding the 1 opcode byte) for fixed-size BIFF12 tokens
+/// we emit. `None` for variable/unknown tokens (walk stops). Sizes verified
+/// against `duke_sheets_xlsb::biff12::token_parser`.
+fn biff12_token_data_size(base: u8) -> Option<usize> {
+    use duke_sheets_xlsb::biff12::ptg;
+    Some(match base {
+        // Operators / no-data tokens
+        ptg::PTG_ADD | ptg::PTG_SUB | ptg::PTG_MUL | ptg::PTG_DIV | ptg::PTG_POWER
+        | ptg::PTG_CONCAT | ptg::PTG_LT | ptg::PTG_LE | ptg::PTG_EQ | ptg::PTG_GE
+        | ptg::PTG_GT | ptg::PTG_NE | ptg::PTG_ISECT | ptg::PTG_LIST | ptg::PTG_RANGE
+        | ptg::PTG_UPLUS | ptg::PTG_UMINUS | ptg::PTG_PERCENT | ptg::PTG_PAREN
+        | ptg::PTG_MISS_ARG => 0,
+        ptg::PTG_ERR | ptg::PTG_BOOL => 1,
+        ptg::PTG_INT => 2,
+        ptg::PTG_NUM => 8,
+        ptg::PTG_FUNC => 2,
+        ptg::PTG_FUNC_VAR => 3,
+        ptg::PTG_NAME => 4,
+        ptg::PTG_MEM_FUNC => 2,
+        ptg::PTG_REF | ptg::PTG_REF_ERR => 6,
+        ptg::PTG_AREA | ptg::PTG_AREA_ERR => 12,
+        ptg::PTG_NAME_X => 6,
+        ptg::PTG_REF_3D | ptg::PTG_REF_ERR_3D => 8,
+        ptg::PTG_AREA_3D | ptg::PTG_AREA_ERR_3D => 14,
+        _ => return None,
+    })
+}
+
 // WinRM helper (raw SOAP/WS-Man over HTTP, Basic auth)
 
 /// Run a PowerShell command on the VM via WinRM and return stdout.

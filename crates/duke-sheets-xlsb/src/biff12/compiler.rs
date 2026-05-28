@@ -4,7 +4,10 @@ use duke_sheets_core::{CellAddress, CellError};
 use duke_sheets_formula::ast::{
     BinaryOperator, CellReference, FormulaExpr, RangeReference, UnaryOperator,
 };
-use duke_sheets_formula::decompile::function_table::{function_argc, function_index};
+use duke_sheets_formula::decompile::function_table::{
+    expr_calls_volatile_function, function_arg_class, function_index, function_is_fixed_arity,
+    function_returns_reference, OperandClass,
+};
 use duke_sheets_formula::parse_formula;
 
 use super::ptg;
@@ -34,7 +37,15 @@ pub(crate) fn compile_formula(text: &str, ctx: &CompileContext) -> Result<Compil
     let expr = parse_formula(formula).map_err(|e| format!("{e}"))?;
     let mut rgce = Vec::new();
     let mut rgcb = Vec::new();
-    emit_expr(&expr, ctx, &mut rgce, &mut rgcb)?;
+    // A formula calling any volatile function (NOW, RAND, OFFSET, INDIRECT,
+    // ...) is prefixed with PtgAttrVolatile so Excel recalculates it every
+    // change. [MS-XLS] §2.5.198.42; BIFF12 uses the identical token shape.
+    if expr_calls_volatile_function(&expr) {
+        rgce.push(ptg::PTG_ATTR);
+        rgce.push(ptg::ATTR_VOLATILE);
+        rgce.extend_from_slice(&0u16.to_le_bytes());
+    }
+    emit_expr(&expr, ctx, &mut rgce, &mut rgcb, OperandClass::V)?;
     Ok(CompiledFormula { rgce, rgcb })
 }
 
@@ -43,6 +54,7 @@ fn emit_expr(
     ctx: &CompileContext,
     out: &mut Vec<u8>,
     extra: &mut Vec<u8>,
+    class: OperandClass,
 ) -> Result<(), String> {
     match expr {
         FormulaExpr::Number(n) => emit_number(*n, out),
@@ -51,20 +63,29 @@ fn emit_expr(
         FormulaExpr::Error(e) => emit_error(e, out),
         FormulaExpr::Empty => emit_miss_arg(out),
 
-        FormulaExpr::CellRef(cell_ref) => emit_cell_ref(cell_ref, ctx, out),
-        FormulaExpr::RangeRef(range_ref) => emit_range_ref(range_ref, ctx, out),
+        FormulaExpr::CellRef(cell_ref) => emit_cell_ref(cell_ref, ctx, out, class),
+        FormulaExpr::RangeRef(range_ref) => emit_range_ref(range_ref, ctx, out, class),
 
         FormulaExpr::BinaryOp { op, left, right } => {
-            emit_expr(left, ctx, out, extra)?;
-            emit_expr(right, ctx, out, extra)?;
+            // Range/union/intersect operate on references (R-class children);
+            // arithmetic / comparison / concat always take values regardless
+            // of context. Matches [MS-XLS] §2.5.198 value-vs-reference rules.
+            let child_class = match op {
+                BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
+                    OperandClass::R
+                }
+                _ => OperandClass::V,
+            };
+            emit_expr(left, ctx, out, extra, child_class)?;
+            emit_expr(right, ctx, out, extra, child_class)?;
             emit_binary_op(*op, out)
         }
         FormulaExpr::UnaryOp { op, operand } => {
-            emit_expr(operand, ctx, out, extra)?;
+            emit_expr(operand, ctx, out, extra, class)?;
             emit_unary_op(*op, out)
         }
 
-        FormulaExpr::Function { name, args } => emit_function(name, args, ctx, out, extra),
+        FormulaExpr::Function { name, args } => emit_function(name, args, ctx, out, extra, class),
 
         FormulaExpr::Array(rows) => emit_array(rows, out, extra),
 
@@ -78,8 +99,9 @@ fn emit_expr(
                 .position(|n| n.to_ascii_uppercase() == upper);
             match idx_0based {
                 Some(i) => {
-                    // PtgName R-class, then 4-byte 1-based name index.
-                    out.push(ptg::PTG_NAME);
+                    // PtgName takes the class of its position (R when used as
+                    // a reference operand, V at value positions).
+                    out.push(class_ptg(ptg::PTG_NAME, class));
                     out.extend_from_slice(&((i as u32) + 1).to_le_bytes());
                     Ok(())
                 }
@@ -97,6 +119,26 @@ fn emit_expr(
             log::warn!("external workbook reference compilation not supported, emitting #REF!");
             emit_error(&CellError::Ref, out)
         }
+    }
+}
+
+/// Apply an [`OperandClass`] to an R-class base ptg byte. R keeps the stored
+/// (R-class) constant; V converts via [`ptg::v_class`].
+fn class_ptg(r_base: u8, class: OperandClass) -> u8 {
+    match class {
+        OperandClass::R => r_base,
+        OperandClass::V => ptg::v_class(r_base),
+    }
+}
+
+/// Effective class for a function's PtgFunc/PtgFuncVar token: reference-class
+/// functions (IF, CHOOSE, OFFSET, INDIRECT, INDEX) take the surrounding
+/// context class; pure value functions are always V. [MS-XLS] §2.5.198.103.
+fn func_token_class(iftab: u16, context: OperandClass) -> OperandClass {
+    if function_returns_reference(iftab) {
+        context
+    } else {
+        OperandClass::V
     }
 }
 
@@ -218,18 +260,20 @@ fn emit_cell_ref(
     cell_ref: &CellReference,
     ctx: &CompileContext,
     out: &mut Vec<u8>,
+    class: OperandClass,
 ) -> Result<(), String> {
     match &cell_ref.sheet {
         None => {
-            // tRef V-class
-            out.push(ptg::v_class(ptg::PTG_REF));
+            // tRef — class of its position (V for value use, R inside an
+            // aggregator like SUM(A1,A2) which iterates its operands).
+            out.push(class_ptg(ptg::PTG_REF, class));
             out.extend_from_slice(&cell_ref.address.row.to_le_bytes());
             out.extend_from_slice(&encode_col_word(&cell_ref.address).to_le_bytes());
         }
         Some(sheet_name) => {
             let sheet_idx = resolve_sheet_index(sheet_name, ctx)?;
-            // tRef3d V-class
-            out.push(ptg::v_class(ptg::PTG_REF_3D));
+            // tRef3d
+            out.push(class_ptg(ptg::PTG_REF_3D, class));
             out.extend_from_slice(&(sheet_idx as u16).to_le_bytes());
             out.extend_from_slice(&cell_ref.address.row.to_le_bytes());
             out.extend_from_slice(&encode_col_word(&cell_ref.address).to_le_bytes());
@@ -242,18 +286,18 @@ fn emit_range_ref(
     range_ref: &RangeReference,
     ctx: &CompileContext,
     out: &mut Vec<u8>,
+    class: OperandClass,
 ) -> Result<(), String> {
     let start = &range_ref.range.start;
     let end = &range_ref.range.end;
 
     match &range_ref.sheet {
         None => {
-            // tArea R-class. Same reasoning as the 3D variant below
-            // — V-class causes Excel to collapse the range to its
-            // last cell during evaluation by range-consuming
-            // functions like SUM (and breaks intersection /union
-            // operands which must be references, not values).
-            out.push(ptg::PTG_AREA);
+            // tArea — class of its position. R-class is the common case
+            // (aggregators, intersection/union/range operands); V-class
+            // causes Excel to collapse the range to its last cell during
+            // SUM-style evaluation, so a value-context bare range is V.
+            out.push(class_ptg(ptg::PTG_AREA, class));
             out.extend_from_slice(&start.row.to_le_bytes());
             out.extend_from_slice(&end.row.to_le_bytes());
             out.extend_from_slice(&encode_col_word(start).to_le_bytes());
@@ -261,11 +305,8 @@ fn emit_range_ref(
         }
         Some(sheet_name) => {
             let sheet_idx = resolve_sheet_index(sheet_name, ctx)?;
-            // tArea3d R-class. Excel emits the R-class form (0x3B)
-            // for cross-sheet range references; emitting V-class
-            // (0x5B) instead causes Excel to collapse the range to
-            // its last cell during SUM-style evaluation.
-            out.push(ptg::PTG_AREA_3D);
+            // tArea3d — cross-sheet ranges are R-class in the common case.
+            out.push(class_ptg(ptg::PTG_AREA_3D, class));
             out.extend_from_slice(&(sheet_idx as u16).to_le_bytes());
             out.extend_from_slice(&start.row.to_le_bytes());
             out.extend_from_slice(&end.row.to_le_bytes());
@@ -325,37 +366,56 @@ fn emit_function(
     ctx: &CompileContext,
     out: &mut Vec<u8>,
     extra: &mut Vec<u8>,
+    class: OperandClass,
 ) -> Result<(), String> {
-    if name.eq_ignore_ascii_case("SUM") && args.len() == 1 {
-        emit_expr(&args[0], ctx, out, extra)?;
-        out.push(ptg::PTG_ATTR);
-        out.push(ptg::ATTR_SUM);
-        out.extend_from_slice(&0u16.to_le_bytes());
-        return Ok(());
-    }
-
-    for arg in args {
-        emit_expr(arg, ctx, out, extra)?;
-    }
-
     let lookup_name = name
         .strip_prefix("_xlfn.")
         .or_else(|| name.strip_prefix("_XLFN."))
         .unwrap_or(name);
 
     if let Some(func_idx) = function_index(lookup_name) {
-        let declared_argc = function_argc(func_idx);
-        let actual_argc = args.len() as u8;
+        // Single-arg SUM → optimized PtgAttrSum form.
+        if func_idx == 4 && args.len() == 1 && !matches!(args[0], FormulaExpr::Empty) {
+            let arg_class = function_arg_class(4, 0);
+            emit_expr(&args[0], ctx, out, extra, arg_class)?;
+            out.push(ptg::PTG_ATTR);
+            out.push(ptg::ATTR_SUM);
+            out.extend_from_slice(&0u16.to_le_bytes());
+            return Ok(());
+        }
+        // IF short-circuit (PtgAttrIf / PtgAttrGoto), 2- and 3-arg forms.
+        if func_idx == 1 && (args.len() == 2 || args.len() == 3) && emit_optimized_if(args, ctx, out, extra, class)? {
+            return Ok(());
+        }
+        // CHOOSE jump table (PtgAttrChoose).
+        if func_idx == 100 && args.len() >= 2 && emit_optimized_choose(args, ctx, out, extra, class)? {
+            return Ok(());
+        }
 
-        if declared_argc < 254 && declared_argc as u8 == actual_argc {
-            out.push(ptg::v_class(ptg::PTG_FUNC));
+        if args.len() > u8::MAX as usize {
+            return Err(format!("function '{name}' has too many arguments"));
+        }
+        for (i, arg) in args.iter().enumerate() {
+            if matches!(arg, FormulaExpr::Empty) {
+                emit_miss_arg(out)?;
+            } else {
+                emit_expr(arg, ctx, out, extra, function_arg_class(func_idx, i))?;
+            }
+        }
+
+        let tok_class = func_token_class(func_idx, class);
+        if function_is_fixed_arity(func_idx, args.len()) {
+            out.push(class_ptg(ptg::PTG_FUNC, tok_class));
             out.extend_from_slice(&func_idx.to_le_bytes());
         } else {
-            out.push(ptg::v_class(ptg::PTG_FUNC_VAR));
-            out.push(actual_argc);
+            out.push(class_ptg(ptg::PTG_FUNC_VAR, tok_class));
+            out.push(args.len() as u8);
             out.extend_from_slice(&func_idx.to_le_bytes());
         }
     } else if let Some(&name_idx) = ctx.xlfn_names.get(&lookup_name.to_ascii_uppercase()) {
+        for arg in args {
+            emit_expr(arg, ctx, out, extra, OperandClass::V)?;
+        }
         // tName (V-class): ptg byte + name_idx as u32
         out.push(ptg::v_class(ptg::PTG_NAME));
         out.extend_from_slice(&name_idx.to_le_bytes());
@@ -368,6 +428,152 @@ fn emit_function(
     }
 
     Ok(())
+}
+
+/// Emit IF with the MS-XLS PtgAttrIf / PtgAttrGoto short-circuit chain.
+/// BIFF12 uses the identical token shape as BIFF8; offsets are computed from
+/// the actual (wider) BIFF12 branch byte sizes. Returns `Ok(false)` on u16
+/// offset overflow so the caller falls back to plain PtgFuncVar emission.
+/// Mirrors the XLS writer's `emit_optimized_if`.
+fn emit_optimized_if(
+    args: &[FormulaExpr],
+    ctx: &CompileContext,
+    out: &mut Vec<u8>,
+    extra: &mut Vec<u8>,
+    class: OperandClass,
+) -> Result<bool, String> {
+    if args.iter().any(|a| matches!(a, FormulaExpr::Empty)) {
+        return Ok(false);
+    }
+    let cond = &args[0];
+    let t_branch = &args[1];
+    let f_branch = args.get(2);
+    let argc = args.len() as u8;
+
+    // Compile every part into scratch buffers first so an overflow bail
+    // leaves `out` untouched for the caller's fallback.
+    let mut cond_bytes = Vec::new();
+    emit_expr(cond, ctx, &mut cond_bytes, extra, function_arg_class(1, 0))?;
+    let mut t_bytes = Vec::new();
+    emit_expr(t_branch, ctx, &mut t_bytes, extra, function_arg_class(1, 1))?;
+    let mut f_bytes = Vec::new();
+    if let Some(f) = f_branch {
+        emit_expr(f, ctx, &mut f_bytes, extra, function_arg_class(1, 2))?;
+    }
+
+    let attr_if_offset = t_bytes.len() + 4;
+    if attr_if_offset > u16::MAX as usize {
+        return Ok(false);
+    }
+    let skip_after_t = if f_branch.is_some() {
+        let s = f_bytes.len() + 7;
+        if s > u16::MAX as usize {
+            return Ok(false);
+        }
+        Some(s as u16)
+    } else {
+        None
+    };
+
+    out.extend_from_slice(&cond_bytes);
+    out.push(ptg::PTG_ATTR);
+    out.push(ptg::ATTR_IF);
+    out.extend_from_slice(&(attr_if_offset as u16).to_le_bytes());
+    out.extend_from_slice(&t_bytes);
+    if let Some(skip) = skip_after_t {
+        out.push(ptg::PTG_ATTR);
+        out.push(ptg::ATTR_SKIP);
+        out.extend_from_slice(&skip.to_le_bytes());
+        out.extend_from_slice(&f_bytes);
+    }
+    out.push(ptg::PTG_ATTR);
+    out.push(ptg::ATTR_SKIP);
+    out.extend_from_slice(&3u16.to_le_bytes());
+    // IF is reference-class; token takes the context class.
+    out.push(class_ptg(ptg::PTG_FUNC_VAR, func_token_class(1, class)));
+    out.push(argc);
+    out.extend_from_slice(&1u16.to_le_bytes());
+    Ok(true)
+}
+
+/// Emit CHOOSE with the MS-XLS PtgAttrChoose jump table. BIFF12 uses the
+/// identical token shape as BIFF8. Returns `Ok(false)` on u16 offset overflow.
+/// Mirrors the XLS writer's `emit_optimized_choose`.
+fn emit_optimized_choose(
+    args: &[FormulaExpr],
+    ctx: &CompileContext,
+    out: &mut Vec<u8>,
+    extra: &mut Vec<u8>,
+    class: OperandClass,
+) -> Result<bool, String> {
+    if args.len() < 2 || args.iter().any(|a| matches!(a, FormulaExpr::Empty)) {
+        return Ok(false);
+    }
+    let selector = &args[0];
+    let choices = &args[1..];
+    let nc = choices.len();
+    if nc > u16::MAX as usize {
+        return Ok(false);
+    }
+    let argc = args.len() as u8;
+
+    let mut selector_bytes = Vec::new();
+    emit_expr(selector, ctx, &mut selector_bytes, extra, function_arg_class(100, 0))?;
+
+    let mut choice_bytes: Vec<Vec<u8>> = Vec::with_capacity(nc);
+    for (i, c) in choices.iter().enumerate() {
+        let mut buf = Vec::new();
+        emit_expr(c, ctx, &mut buf, extra, function_arg_class(100, i + 1))?;
+        choice_bytes.push(buf);
+    }
+
+    let table_size = (nc + 1) * 2;
+    let mut offsets: Vec<u16> = Vec::with_capacity(nc + 1);
+    let mut running = table_size;
+    for choice in &choice_bytes {
+        if running > u16::MAX as usize {
+            return Ok(false);
+        }
+        offsets.push(running as u16);
+        running += choice.len() + 4; // PtgAttrSkip after the choice
+    }
+    if running > u16::MAX as usize {
+        return Ok(false);
+    }
+    offsets.push(running as u16);
+
+    let mut skip_offsets: Vec<u16> = vec![0; nc];
+    let mut remaining_after = 0usize;
+    for k in (0..nc).rev() {
+        if k + 1 == nc {
+            skip_offsets[k] = 3;
+        } else {
+            let nxt = choice_bytes[k + 1].len() + 4 + remaining_after;
+            if nxt + 3 > u16::MAX as usize {
+                return Ok(false);
+            }
+            skip_offsets[k] = (nxt + 3) as u16;
+            remaining_after = nxt;
+        }
+    }
+
+    out.extend_from_slice(&selector_bytes);
+    out.push(ptg::PTG_ATTR);
+    out.push(ptg::ATTR_CHOOSE);
+    out.extend_from_slice(&(nc as u16).to_le_bytes());
+    for off in &offsets {
+        out.extend_from_slice(&off.to_le_bytes());
+    }
+    for (k, choice) in choice_bytes.iter().enumerate() {
+        out.extend_from_slice(choice);
+        out.push(ptg::PTG_ATTR);
+        out.push(ptg::ATTR_SKIP);
+        out.extend_from_slice(&skip_offsets[k].to_le_bytes());
+    }
+    out.push(class_ptg(ptg::PTG_FUNC_VAR, func_token_class(100, class)));
+    out.push(argc);
+    out.extend_from_slice(&100u16.to_le_bytes());
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -488,14 +694,21 @@ mod tests {
 
     #[test]
     fn if_function() {
+        // IF now uses the MS-XLS PtgAttrIf / PtgAttrGoto short-circuit chain,
+        // matching Excel's native XLSB emission. Branches are Bool literals
+        // (2 bytes each): attr_if_offset = 2+4 = 6, skip_after_t = 2+7 = 9,
+        // trailing skip = 3.
         let tokens = compile_and_parse("=IF(A1>0,TRUE,FALSE)");
-        assert_eq!(tokens.len(), 6);
+        assert_eq!(tokens.len(), 9, "tokens={tokens:?}");
         assert!(matches!(tokens[0], ParsedToken::Ref { .. }));
         assert_eq!(tokens[1], ParsedToken::Int(0));
         assert_eq!(tokens[2], ParsedToken::Gt);
-        assert_eq!(tokens[3], ParsedToken::Bool(true));
-        assert_eq!(tokens[4], ParsedToken::Bool(false));
-        assert_eq!(tokens[5], ParsedToken::Func { func_idx: 1 });
+        assert_eq!(tokens[3], ParsedToken::AttrIf { offset: 6 });
+        assert_eq!(tokens[4], ParsedToken::Bool(true));
+        assert_eq!(tokens[5], ParsedToken::AttrSkip { offset: 9 });
+        assert_eq!(tokens[6], ParsedToken::Bool(false));
+        assert_eq!(tokens[7], ParsedToken::AttrSkip { offset: 3 });
+        assert_eq!(tokens[8], ParsedToken::FuncVar { argc: 3, func_idx: 1 });
     }
 
     #[test]

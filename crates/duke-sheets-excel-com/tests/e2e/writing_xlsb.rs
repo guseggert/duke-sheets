@@ -19,7 +19,11 @@ use duke_sheets_core::validation::{DataValidation, ValidationOperator, Validatio
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
 use duke_sheets_core::{CellAddress, CellRange, CellValue, Hyperlink, Workbook};
 
-use crate::roundtrip_through_excel_xlsb;
+use crate::{
+    cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
+    roundtrip_through_excel_xlsb, roundtrip_through_excel_xlsb_bytes, temp_fixture_xlsb,
+    xlsb_formula_ptg_streams_for_compare,
+};
 
 fn range(start: &str, end: &str) -> CellRange {
     CellRange::new(
@@ -27,6 +31,83 @@ fn range(start: &str, end: &str) -> CellRange {
         CellAddress::parse(end).unwrap(),
     )
 }
+
+/// Formulas exercising the XLSB formula compiler's operand-class threading,
+/// volatile prefix, fixed-arity allow-list, IF/CHOOSE short-circuit, and
+/// reference-class function tokens. Verified byte-for-byte against Excel's
+/// native XLSB emission.
+const XLSB_FORMULA_FORMULAS: &[(&str, &str, f64)] = &[
+    ("B1", "=ABS(A1)", 2.0),           // value-class ref arg; PtgFunc
+    ("B2", "=SUM(A1,A2)", 5.0),        // R-class cell refs in aggregator
+    ("B3", "=SUM(A1:A3)", 9.0),        // single-arg SUM → PtgAttrSum, R-area
+    ("B4", "=VLOOKUP(A1,A1:A3,1)", 2.0), // not on allow-list → PtgFuncVar
+    ("B5", "=NOW()", 45000.0),         // volatile prefix
+    ("B6", "=IF(A1>0,1,2)", 1.0),      // PtgAttrIf 3-arg
+    ("B7", "=IF(A1>0,A1)", 2.0),       // PtgAttrIf 2-arg
+    ("B8", "=CHOOSE(A1,10,20)", 20.0), // PtgAttrChoose
+    ("B9", "=SUM(IF(A1>0,A1,A2))", 2.0), // nested IF R-class in SUM
+    ("B10", "=SUM(OFFSET(A1,0,0))", 2.0), // OFFSET R-class + volatile
+    ("B11", "=INDEX(A1:A3,1)", 2.0),   // INDEX arg0 R-class, V token
+];
+
+fn xlsb_formula_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 2.0).unwrap();
+    ws.set_cell_value("A2", 3.0).unwrap();
+    ws.set_cell_value("A3", 4.0).unwrap();
+    for (cell, formula, expected) in XLSB_FORMULA_FORMULAS {
+        ws.set_cell_formula(cell, formula).unwrap();
+        let addr = CellAddress::parse(cell).unwrap();
+        ws.set_formula_result(addr.row, addr.col, CellValue::Number(*expected))
+            .unwrap();
+    }
+    wb
+}
+
+fn excel_authored_xlsb_formula_bytes() -> Vec<u8> {
+    let fixture = temp_fixture_xlsb();
+    ensure_vm_temp_dir();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create Excel workbook");
+        wb.set_cell_value("A1", 2.0).unwrap();
+        wb.set_cell_value("A2", 3.0).unwrap();
+        wb.set_cell_value("A3", 4.0).unwrap();
+        for (cell, formula, _) in XLSB_FORMULA_FORMULAS {
+            wb.set_cell_formula(cell, formula).unwrap();
+        }
+        excel.recalculate().unwrap();
+        wb.save_as(&fixture.vm_path, 50).unwrap();
+        wb.close().unwrap();
+    }
+    pull_file_from_vm(&fixture);
+    let bytes = std::fs::read(&fixture.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
+    cleanup_fixture(&fixture);
+    bytes
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_byte_parity_for_xlsb_formulas_we_emit() {
+    let wb = xlsb_formula_workbook();
+    let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xlsb_bytes(&wb);
+    let writer_ptgs = xlsb_formula_ptg_streams_for_compare(&writer_bytes);
+    let resave_ptgs = xlsb_formula_ptg_streams_for_compare(&excel_bytes);
+    assert_eq!(
+        writer_ptgs, resave_ptgs,
+        "Excel canonicalized our XLSB formula token streams on re-save"
+    );
+    let authored_ptgs = xlsb_formula_ptg_streams_for_compare(&excel_authored_xlsb_formula_bytes());
+    assert_eq!(
+        writer_ptgs, authored_ptgs,
+        "our XLSB formula token streams differ from Excel-authored output"
+    );
+}
+
+
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
