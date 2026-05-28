@@ -4094,7 +4094,9 @@ impl FunctionRegistry {
             name: "ACCRINTM",
             iftab: Some(470),
             declared_argc: 5,
-            min_args: 3,
+            // ACCRINTM(issue, settlement, rate, par, [basis]): par is required,
+            // so 4 args minimum (matches Excel). Basis is the only optional.
+            min_args: 4,
             max_args: Some(5),
             implementation: financial_extra::fn_accrintm,
             volatile: false,

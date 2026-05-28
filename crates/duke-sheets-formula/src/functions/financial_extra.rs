@@ -742,7 +742,7 @@ pub fn fn_accrintm(args: &[FormulaValue], _ctx: &EvaluationContext) -> FormulaRe
         Ok(v) => v,
         Err(e) => return Ok(e),
     };
-    let par = match optional_number(args, 3, 1000.0) {
+    let par = match required_number(args, 3) {
         Ok(v) => v,
         Err(e) => return Ok(e),
     };

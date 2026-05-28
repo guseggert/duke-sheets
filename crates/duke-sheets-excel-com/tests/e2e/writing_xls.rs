@@ -2249,12 +2249,15 @@ fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
     }
     let our_bytes = duke_sheets_xls::XlsWriter::write_to_bytes(&wb).expect("our write");
 
+    // The full range is expected to be valid — any rejection is a real
+    // metadata bug (wrong min_args) to investigate, not a function to skip.
     assert!(
-        accepted.len() >= 85,
-        "expected most ATP functions accepted, got {} (rejected: {:?})",
-        accepted.len(),
+        rejected.is_empty(),
+        "Excel rejected {} ATP call(s): {:?}",
+        rejected.len(),
         rejected
     );
+    assert_eq!(accepted.len(), formulas.len(), "all ATP formulas should be authored");
 
     // Formula token streams: PtgNameX(nameindex) + R-class args + PtgFuncVar.
     let mut ours = xls_formula_ptg_streams_for_compare(&our_bytes);

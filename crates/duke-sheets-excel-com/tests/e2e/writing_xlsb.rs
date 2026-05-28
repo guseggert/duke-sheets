@@ -311,12 +311,15 @@ fn excel_byte_parity_for_all_xlsb_atp_functions_we_emit() {
 
     let ours = xlsb_formula_ptg_streams_for_compare(&our_buf);
     let excel = xlsb_formula_ptg_streams_for_compare(&excel_bytes);
+    // The full range is expected to be valid — any rejection is a real
+    // metadata bug (wrong min_args) to investigate, not a function to skip.
     assert!(
-        accepted.len() >= 85,
-        "expected most ATP functions accepted, got {} (rejected: {:?})",
-        accepted.len(),
+        rejected.is_empty(),
+        "Excel rejected {} ATP call(s): {:?}",
+        rejected.len(),
         rejected
     );
+    assert_eq!(accepted.len(), formulas.len(), "all ATP formulas should be authored");
     assert_eq!(
         ours.len(),
         accepted.len(),
