@@ -2404,13 +2404,15 @@ impl FunctionRegistry {
             max_args: Some(3),
             implementation: lookup::fn_index,
             volatile: false,
-            // INDEX is reference-class in principle, but Excel's XLS emission
-            // for it is NOT a plain R-class PtgFuncVar: when re-saving
-            // SUM(INDEX(A1:A3,1)) Excel produces a PtgName + PtgFuncVar
-            // (iftab=255 UDF) wrapper around the area whose semantics we have
-            // not yet reverse-engineered. Leaving returns_reference=false
-            // (V-class) until that form is understood — a documented known
-            // divergence, deliberately NOT in the nested-function parity batch.
+            // INDEX(array, row, [col]): arg 0 is a reference/array, emitted
+            // R-class. Verified against native Excel authoring:
+            //   =INDEX(A1:A3,1)      → PtgArea(R) PtgInt PtgFuncVar(V,29)
+            //   =SUM(INDEX(A1:A3,1)) → PtgArea(R) PtgInt PtgFuncVar(R,29) +Sum
+            // The earlier "PtgName + PtgFuncVar(iftab=255 UDF)" form was Excel
+            // REPAIRING our previously-malformed V-class first arg, not its
+            // canonical emission. arg 0 R-class + returns_reference fixes it.
+            arg_classes: &[OperandClass::R],
+            returns_reference: true,
             ..Default::default()
         });
 

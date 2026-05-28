@@ -365,9 +365,8 @@ const NESTED_FUNCTION_FORMULAS: &[(&str, &str, f64)] = &[
     ("B8", "=SUM(OFFSET(A1,0,0))", 4.0),      // OFFSET R-class in SUM (volatile)
     ("B9", "=SUM(INDIRECT(\"A1\"))", 4.0),    // INDIRECT R-class in SUM (volatile)
     ("B10", "=OFFSET(A1,0,0)", 4.0),          // OFFSET V-class at top level
-    // NOTE: INDEX deliberately omitted — Excel emits it via a PtgName +
-    // PtgFuncVar(iftab=255 UDF) wrapper in XLS that we don't yet replicate.
-    // Tracked as a known divergence in INDEX's FunctionDef.
+    ("B11", "=SUM(INDEX(A1:A3,1))", 4.0),     // INDEX R-class in SUM, arg0 R-class
+    ("B12", "=INDEX(A1:A3,1)", 4.0),          // INDEX V-class top level, arg0 R-class
 ];
 
 fn nested_function_workbook() -> Workbook {

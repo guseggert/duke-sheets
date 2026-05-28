@@ -432,12 +432,10 @@ mod tests {
         assert!(function_returns_reference(100)); // CHOOSE
         assert!(function_returns_reference(78)); // OFFSET
         assert!(function_returns_reference(148)); // INDIRECT
+        assert!(function_returns_reference(29)); // INDEX
         assert!(!function_returns_reference(24)); // ABS
         assert!(!function_returns_reference(4)); // SUM
         assert!(!function_returns_reference(102)); // VLOOKUP (returns value)
-        // INDEX (29) is reference-class in principle but its XLS emission is
-        // a PtgName+UDF form we haven't replicated; left V-class for now.
-        assert!(!function_returns_reference(29)); // INDEX (known divergence)
     }
 
     #[test]

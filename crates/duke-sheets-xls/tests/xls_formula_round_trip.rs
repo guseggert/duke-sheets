@@ -49,6 +49,31 @@ fn only_formula_tokens(wb: &Workbook) -> Vec<u8> {
     token_streams.pop().unwrap()
 }
 
+/// Token bytes for the FORMULA record at a specific (row, col). Lets a test
+/// place multiple formulas in one workbook and inspect each independently.
+fn only_formula_tokens_at(wb: &Workbook, row: u16, col: u16) -> Vec<u8> {
+    let bytes = XlsWriter::write_to_bytes(wb).expect("write");
+    let cfb = CompoundFile::open(Cursor::new(bytes)).expect("open CFB");
+    let stream_path = if cfb.exists("/Workbook") {
+        "/Workbook"
+    } else {
+        "/Book"
+    };
+    let stream = cfb.read_stream(stream_path).expect("read workbook stream");
+    let records = biff::read_all_records(&mut Cursor::new(stream)).expect("read BIFF records");
+    for rec in records.iter().filter(|r| r.record_type == biff::records::FORMULA) {
+        assert!(rec.data.len() >= 22, "FORMULA record too short");
+        let rw = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+        let cl = u16::from_le_bytes([rec.data[2], rec.data[3]]);
+        if rw == row && cl == col {
+            let cce = u16::from_le_bytes([rec.data[20], rec.data[21]]) as usize;
+            assert!(rec.data.len() >= 22 + cce, "token stream truncated");
+            return rec.data[22..22 + cce].to_vec();
+        }
+    }
+    panic!("no FORMULA record at row {row} col {col}");
+}
+
 #[test]
 fn named_constant_formula_uses_value_class_name_ptg() {
     let mut wb = Workbook::new();
@@ -572,6 +597,35 @@ fn if_in_value_function_emits_v_class_inner_func() {
     );
     // ABS is fixed-arity V-class PtgFunc (0x41) iftab=24.
     assert_eq!(&tokens[tokens.len() - 3..], &[0x41, 0x18, 0x00]);
+}
+
+#[test]
+fn index_emits_r_class_array_arg() {
+    // INDEX(array, row, [col]): the first arg is a reference, emitted
+    // R-class PtgArea (0x25). At top level the INDEX token is V-class
+    // (0x42); inside SUM it's R-class (0x22). Verified against native
+    // Excel authoring (NOT the resave, which repaired our old V-class
+    // arg into a UDF wrapper).
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 4.0).unwrap();
+    ws.set_cell_value("A2", 5.0).unwrap();
+    ws.set_cell_value("A3", 6.0).unwrap();
+    ws.set_cell_formula("B1", "=INDEX(A1:A3,1)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(4.0)).unwrap();
+    ws.set_cell_formula("B2", "=SUM(INDEX(A1:A3,1))").unwrap();
+    ws.set_formula_result(1, 1, CellValue::Number(4.0)).unwrap();
+
+    let top = only_formula_tokens_at(&wb, 0, 1);
+    // First token: PtgArea R-class (0x25) for the array arg.
+    assert_eq!(top[0], 0x25, "INDEX arg0 must be R-class PtgArea; {top:02X?}");
+    // Ends with PtgFuncVar V-class (0x42) argc=2 iftab=29.
+    assert_eq!(&top[top.len() - 4..], &[0x42, 0x02, 0x1D, 0x00]);
+
+    let in_sum = only_formula_tokens_at(&wb, 1, 1);
+    assert_eq!(in_sum[0], 0x25, "INDEX arg0 R-class in SUM too; {in_sum:02X?}");
+    // INDEX token R-class (0x22) inside SUM, then PtgAttrSum.
+    assert_eq!(&in_sum[in_sum.len() - 8..], &[0x22, 0x02, 0x1D, 0x00, 0x19, 0x10, 0x00, 0x00]);
 }
 
 #[test]
