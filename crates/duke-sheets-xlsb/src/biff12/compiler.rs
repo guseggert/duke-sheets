@@ -28,13 +28,41 @@ pub(crate) struct CompiledFormula {
     pub rgcb: Vec<u8>,
 }
 
+/// Compile a cell formula. The top-level expression is value-class.
 pub(crate) fn compile_formula(text: &str, ctx: &CompileContext) -> Result<CompiledFormula, String> {
+    compile_with_top_class(text, ctx, false)
+}
+
+/// Compile a defined-name / built-in-name body (the `refers_to` formula).
+///
+/// Unlike a cell formula, a name body that is a bare reference or range must
+/// be reference-class: a value-class range would make Excel apply implicit
+/// intersection when the name is used (collapsing `Data!A1:A3` to a single
+/// cell), so e.g. `SUM(Numbers)` would sum one cell instead of the range.
+/// Mirrors the XLS writer's `name_body_operand_class`.
+pub(crate) fn compile_name_body(
+    text: &str,
+    ctx: &CompileContext,
+) -> Result<CompiledFormula, String> {
+    compile_with_top_class(text, ctx, true)
+}
+
+fn compile_with_top_class(
+    text: &str,
+    ctx: &CompileContext,
+    name_body: bool,
+) -> Result<CompiledFormula, String> {
     let formula = if text.starts_with('=') {
         text
     } else {
         &format!("={text}")
     };
     let expr = parse_formula(formula).map_err(|e| format!("{e}"))?;
+    let top_class = if name_body {
+        name_body_operand_class(&expr)
+    } else {
+        OperandClass::V
+    };
     let mut rgce = Vec::new();
     let mut rgcb = Vec::new();
     // A formula calling any volatile function (NOW, RAND, OFFSET, INDIRECT,
@@ -45,8 +73,27 @@ pub(crate) fn compile_formula(text: &str, ctx: &CompileContext) -> Result<Compil
         rgce.push(ptg::ATTR_VOLATILE);
         rgce.extend_from_slice(&0u16.to_le_bytes());
     }
-    emit_expr(&expr, ctx, &mut rgce, &mut rgcb, OperandClass::V)?;
+    emit_expr(&expr, ctx, &mut rgce, &mut rgcb, top_class)?;
     Ok(CompiledFormula { rgce, rgcb })
+}
+
+/// Operand class for a defined-name body's top-level expression: bare
+/// references and the reference operators (range/union/intersect) are
+/// reference-class; everything else (constants, arithmetic) is value-class.
+/// Mirrors `name_body_operand_class` in the XLS writer.
+fn name_body_operand_class(expr: &FormulaExpr) -> OperandClass {
+    match expr {
+        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::NameRef(_) => {
+            OperandClass::R
+        }
+        FormulaExpr::BinaryOp { op, .. } => match op {
+            BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
+                OperandClass::R
+            }
+            _ => OperandClass::V,
+        },
+        _ => OperandClass::V,
+    }
 }
 
 fn emit_expr(

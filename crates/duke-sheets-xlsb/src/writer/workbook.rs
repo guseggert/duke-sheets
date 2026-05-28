@@ -4,7 +4,7 @@ use std::io::{Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
-use crate::biff12::compiler::{compile_formula, CompileContext};
+use crate::biff12::compiler::{compile_name_body, CompileContext};
 use crate::biff12::{encode_nullable_wide_str, encode_wide_str, records, RecordWriter};
 use crate::error::XlsbResult;
 use duke_sheets_core::named_range::NameScope;
@@ -162,7 +162,7 @@ fn write_user_name_records<W: Write>(
     };
 
     for nr in workbook.named_ranges().iter() {
-        let compiled = match compile_formula(&nr.refers_to, &compile_ctx) {
+        let compiled = match compile_name_body(&nr.refers_to, &compile_ctx) {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("skipping named range '{}': {e}", nr.name);
@@ -252,7 +252,7 @@ fn write_builtin_name_record<W: Write>(
     formula: &str,
     compile_ctx: &CompileContext,
 ) -> std::io::Result<()> {
-    let compiled = match compile_formula(formula, compile_ctx) {
+    let compiled = match compile_name_body(formula, compile_ctx) {
         Ok(c) => c,
         Err(e) => {
             log::warn!(
