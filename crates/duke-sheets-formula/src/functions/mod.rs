@@ -85,6 +85,15 @@ pub struct FunctionDef {
     /// Per-position operand class overrides (indexed by argument position).
     /// Arguments beyond this slice's length fall back to `default_arg_class`.
     pub arg_classes: &'static [OperandClass],
+    /// Whether this function can return a reference (and therefore takes the
+    /// operand class of the position it occupies). MS-XLS [MS-XLS] §2.5.198.103
+    /// distinguishes reference-class functions (IF, CHOOSE, INDEX, OFFSET, …)
+    /// from pure value functions. When `true`, the emitted PtgFunc/PtgFuncVar
+    /// token takes its parent slot's class (R when used as a reference argument,
+    /// V at value positions); when `false`, the token is always V regardless of
+    /// context. Verified empirically: `SUM(ABS(A1))` keeps ABS V-class while
+    /// `SUM(IF(...))` makes IF R-class.
+    pub returns_reference: bool,
     /// Runtime evaluator implementation. Defaults to a stub that returns
     /// an `Evaluation` error.
     pub implementation: FunctionImpl,
@@ -102,6 +111,7 @@ impl Default for FunctionDef {
             volatile: false,
             default_arg_class: OperandClass::V,
             arg_classes: &[],
+            returns_reference: false,
             implementation: fn_not_implemented,
         }
     }
@@ -1090,6 +1100,11 @@ impl FunctionRegistry {
             // preserve the reference; for value expressions the leaf
             // class machinery degrades to V automatically.
             arg_classes: &[OperandClass::V, OperandClass::R, OperandClass::R],
+            // IF can return a reference (e.g. SUM(IF(...)) iterates the picked
+            // range), so its PtgFunc/PtgFuncVar token takes the class of the
+            // position it fills. Verified: SUM(IF(...)) → IF R-class;
+            // ABS(IF(...)) → IF V-class.
+            returns_reference: true,
             ..Default::default()
         });
 
@@ -2142,6 +2157,10 @@ impl FunctionRegistry {
             max_args: Some(3),
             implementation: date::fn_time,
             volatile: false,
+            // TIME(h,m,s) is fixed 3-arg → PtgFunc. (An earlier probe
+            // misread the 0x42 iftab-low-byte of TIME=66 as a PtgFuncVar
+            // opcode; the real opcode is 0x41 PtgFunc.)
+            fixed_arity: true,
             ..Default::default()
         });
 
@@ -2220,6 +2239,13 @@ impl FunctionRegistry {
             max_args: Some(2),
             implementation: date::fn_edate,
             volatile: false,
+            // NOTE: Excel emits EDATE in XLS using the legacy Analysis ToolPak
+            // form — PtgNameX referencing an EXTERNNAME + PtgFuncVar(iftab=255
+            // UDF) — not the native iftab 449 we use. Our output is readable
+            // (449 is EDATE in the Ftab) but is NOT byte-identical to Excel's
+            // for .xls. Native-iftab emission is correct for XLSB/XLSX. Closing
+            // the XLS gap needs PtgNameX + EXTERNNAME/SUPBOOK plumbing; tracked
+            // as a known divergence, deliberately not in any byte-parity batch.
             ..Default::default()
         });
 
@@ -2231,6 +2257,10 @@ impl FunctionRegistry {
             max_args: Some(2),
             implementation: date::fn_eomonth,
             volatile: false,
+            // Same Analysis ToolPak legacy-form divergence as EDATE (see note
+            // there): Excel emits EOMONTH in XLS via PtgNameX + PtgFuncVar
+            // (iftab=255), we emit native iftab 450. Readable but not byte-
+            // identical for .xls; known divergence, not in a parity batch.
             ..Default::default()
         });
 
@@ -2438,6 +2468,10 @@ impl FunctionRegistry {
             // references in a choice position emit R-class. Matches IF.
             arg_classes: &[OperandClass::V],
             default_arg_class: OperandClass::R,
+            // Like IF, CHOOSE can return a reference, so its function token
+            // takes the class of the position it fills. Verified:
+            // IF(...,CHOOSE(...),...) → CHOOSE R-class.
+            returns_reference: true,
             ..Default::default()
         });
 

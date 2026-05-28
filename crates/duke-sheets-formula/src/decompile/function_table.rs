@@ -93,6 +93,19 @@ pub fn function_arg_class(iftab: u16, arg_idx: usize) -> OperandClass {
         .unwrap_or(def.default_arg_class)
 }
 
+/// True if `iftab` names a reference-class function — one that can return a
+/// reference and therefore takes the operand class of the position it occupies
+/// (R when used as a reference argument, V otherwise). Pure value functions
+/// return `false` and are always emitted V-class.
+///
+/// MS-XLS [MS-XLS] §2.5.198.103. Drives the function-token class bits in the
+/// XLS writer for nested calls.
+pub fn function_returns_reference(iftab: u16) -> bool {
+    registry()
+        .get_by_iftab(iftab)
+        .is_some_and(|def| def.returns_reference)
+}
+
 /// True if `iftab` names a volatile function — one whose result depends on
 /// state outside its direct operands so Excel must re-evaluate the formula
 /// on every workbook change.
@@ -350,5 +363,81 @@ mod tests {
             args: vec![FormulaExpr::Number(1.0), FormulaExpr::Number(10.0)],
         };
         assert!(expr_calls_volatile_function(&expr));
+    }
+
+    #[test]
+    fn registry_iftab_name_roundtrip_is_consistent() {
+        // Every function registered with an iftab must round-trip:
+        // function_index(name) == iftab AND function_name(iftab) == name.
+        // Catches any by_name/by_iftab index inconsistency introduced by
+        // the registration migration or future edits. (Name comparison is
+        // case-insensitive because function_index uppercases.)
+        use crate::functions::registry;
+
+        for def in registry().iter() {
+            let Some(iftab) = def.iftab else { continue };
+            assert_eq!(
+                function_name(iftab),
+                def.name,
+                "function_name({iftab}) should be {}",
+                def.name
+            );
+            assert_eq!(
+                function_index(def.name),
+                Some(iftab),
+                "function_index({}) should be {iftab}",
+                def.name
+            );
+            assert_eq!(
+                function_argc(iftab),
+                def.declared_argc,
+                "function_argc({iftab}) should match declared_argc for {}",
+                def.name
+            );
+        }
+    }
+
+    #[test]
+    fn obsolete_biff_functions_resolve_by_iftab() {
+        // Spot-check a curated set of obsolete BIFF8 macro functions against
+        // their known MS-XLS Ftab indices. These have no runtime evaluator
+        // but must still decompile by name. Values cross-checked against the
+        // published [MS-XLS] Ftab so the migration script's output is
+        // independently verified for at least these entries.
+        let known: &[(u16, &str)] = &[
+            (79, "ABSREF"),
+            (87, "ECHO"),
+            (89, "CALLER"),
+            (91, "WINDOWS"),
+            (186, "GET.WORKSPACE"),
+            (187, "GET.WINDOW"),
+            (188, "GET.DOCUMENT"),
+            (94, "ACTIVE.CELL"),
+            (110, "EXEC"),
+            (150, "CALL"),
+            (167, "IPMT"),
+        ];
+        for &(iftab, name) in known {
+            assert_eq!(function_name(iftab), name, "iftab {iftab}");
+            assert_eq!(function_index(name), Some(iftab), "name {name}");
+        }
+    }
+
+    #[test]
+    fn returns_reference_set_for_if_and_choose() {
+        // IF (1) and CHOOSE (100) are reference-class; pure value functions
+        // are not. Pins the metadata the writer uses for nested-function
+        // token class.
+        assert!(function_returns_reference(1)); // IF
+        assert!(function_returns_reference(100)); // CHOOSE
+        assert!(!function_returns_reference(24)); // ABS
+        assert!(!function_returns_reference(4)); // SUM
+    }
+
+    #[test]
+    fn time_is_fixed_arity() {
+        // Regression: an earlier probe misread TIME=66's iftab-low-byte
+        // (0x42) as a PtgFuncVar opcode. TIME is fixed 3-arg → PtgFunc.
+        assert!(function_is_fixed_arity(66, 3));
     }
 }

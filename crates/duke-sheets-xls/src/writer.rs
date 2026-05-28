@@ -2997,7 +2997,7 @@ fn compile_ptgs(
 // V and R. See `OperandClass` in the formula crate for the full rationale.
 use duke_sheets_formula::decompile::function_table::{
     expr_calls_volatile_function, function_arg_class, function_index, function_is_fixed_arity,
-    OperandClass,
+    function_returns_reference, OperandClass,
 };
 
 fn compile_ptgs_with_context(
@@ -3156,7 +3156,7 @@ fn compile_ptgs_with_context(
             // ([MS-XLS] §2.5.198.39 / §2.5.198.37). Excel always emits this
             // for IF — matching it is required for byte-for-byte parity.
             if idx == 1 && (args.len() == 2 || args.len() == 3) {
-                if emit_optimized_if(args, out, externsheet, names)? {
+                if emit_optimized_if(args, out, externsheet, names, operand_class)? {
                     return Ok(());
                 }
                 // emit_optimized_if returns Ok(false) when token offsets
@@ -3166,7 +3166,7 @@ fn compile_ptgs_with_context(
             // ([MS-XLS] §2.5.198.40). Like IF, Excel always emits this so
             // matching is required for byte-for-byte parity.
             if idx == 100 && args.len() >= 2 {
-                if emit_optimized_choose(args, out, externsheet, names)? {
+                if emit_optimized_choose(args, out, externsheet, names, operand_class)? {
                     return Ok(());
                 }
             }
@@ -3178,15 +3178,16 @@ fn compile_ptgs_with_context(
                     compile_ptgs_with_context(arg, out, externsheet, names, arg_class)?;
                 }
             }
-            // Use PtgFunc (0x41, V class) for fixed-arity functions where
-            // the actual arg count matches the declared fixed count.
-            // Otherwise emit PtgFuncVar (0x42, V class) which carries the
-            // argument count inline. Matches Excel's canonical emission.
+            // PtgFunc (fixed-arity) or PtgFuncVar (variable-arity). The token's
+            // operand-class bits come from `func_token_class`: reference-class
+            // functions (IF/CHOOSE/etc.) take the surrounding context class,
+            // value functions are always V. See `func_token_class`.
+            let class = func_token_class(idx, operand_class);
             if function_is_fixed_arity(idx, args.len()) {
-                out.push(0x41); // PTG_FUNC V class
+                out.push(ptg_func_opcode(class)); // PtgFunc
                 out.extend_from_slice(&idx.to_le_bytes());
             } else {
-                out.push(0x42); // PTG_FUNC_VAR V class
+                out.push(ptg_func_var_opcode(class)); // PtgFuncVar
                 out.push(args.len() as u8);
                 out.extend_from_slice(&idx.to_le_bytes());
             }
@@ -3256,12 +3257,46 @@ fn emit_optimized_sum(
     Ok(())
 }
 
+/// Effective operand class for a function's PtgFunc/PtgFuncVar token.
+///
+/// Reference-class functions (IF, CHOOSE, …) take the class of the position
+/// they occupy, so a function used as a reference argument is emitted R-class
+/// and one at a value position is V-class. Pure value functions are always
+/// V-class regardless of context. MS-XLS [MS-XLS] §2.5.198.103.
+fn func_token_class(iftab: u16, context: OperandClass) -> OperandClass {
+    if function_returns_reference(iftab) {
+        context
+    } else {
+        OperandClass::V
+    }
+}
+
+/// PtgFunc opcode for the given class: R=0x21, V=0x41 (A=0x61 unused here).
+fn ptg_func_opcode(class: OperandClass) -> u8 {
+    match class {
+        OperandClass::R => 0x21,
+        OperandClass::V => 0x41,
+    }
+}
+
+/// PtgFuncVar opcode for the given class: R=0x22, V=0x42 (A=0x62 unused here).
+fn ptg_func_var_opcode(class: OperandClass) -> u8 {
+    match class {
+        OperandClass::R => 0x22,
+        OperandClass::V => 0x42,
+    }
+}
+
 /// Emit IF with Excel's MS-XLS short-circuit optimization tokens.
 ///
 /// Excel always emits IF using [MS-XLS] §2.5.198.39 PtgAttrIf and
 /// §2.5.198.37 PtgAttrGoto so only one branch is evaluated at runtime.
 /// Matching the layout byte-for-byte is required for parity through
 /// Excel open/save round-trips.
+///
+/// `operand_class` is the class of the position the whole IF occupies;
+/// IF is a reference-class function so the trailing PtgFuncVar takes that
+/// class (R when the IF is itself a reference argument, e.g. `SUM(IF(...))`).
 ///
 /// For `IF(cond, t, f)` (3-arg form):
 /// ```text
@@ -3295,6 +3330,7 @@ fn emit_optimized_if(
     out: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    operand_class: OperandClass,
 ) -> Result<bool, UnsupportedToken> {
     use duke_sheets_formula::FormulaExpr;
 
@@ -3310,13 +3346,14 @@ fn emit_optimized_if(
     let f_branch = args.get(2);
     let argc = args.len() as u8;
 
-    // Compile cond directly into the output stream — it precedes the
-    // PtgAttrIf and isn't constrained by any offset calculation.
+    // Compile every part into scratch buffers FIRST so we can measure byte
+    // counts and bail on overflow WITHOUT having mutated `out`. Writing
+    // `cond` into `out` before the overflow check would leave a partial
+    // token stream that the caller's fallback would then duplicate.
     let cond_class = function_arg_class(1, 0);
-    compile_ptgs_with_context(cond, out, externsheet, names, cond_class)?;
+    let mut cond_bytes = Vec::with_capacity(16);
+    compile_ptgs_with_context(cond, &mut cond_bytes, externsheet, names, cond_class)?;
 
-    // Compile each branch into a scratch buffer so we can measure the
-    // byte counts before emitting the PtgAttr offsets.
     let mut t_bytes = Vec::with_capacity(32);
     let t_class = function_arg_class(1, 1);
     compile_ptgs_with_context(t_branch, &mut t_bytes, externsheet, names, t_class)?;
@@ -3334,25 +3371,32 @@ fn emit_optimized_if(
     if attr_if_offset > u16::MAX as usize {
         return Ok(false);
     }
+    // First PtgAttrSkip offset (3-arg only): jump past f_branch + trailing
+    // PtgAttrSkip + 3.
+    let skip_after_t = if f_branch.is_some() {
+        let s = f_bytes.len().checked_add(7).ok_or(UnsupportedToken)?;
+        if s > u16::MAX as usize {
+            return Ok(false);
+        }
+        Some(s as u16)
+    } else {
+        None
+    };
 
+    // All overflow checks passed — commit to `out`.
+    out.extend_from_slice(&cond_bytes);
     out.push(0x19);
     out.push(0x02); // ATTR_IF
     out.extend_from_slice(&(attr_if_offset as u16).to_le_bytes());
     out.extend_from_slice(&t_bytes);
 
-    if f_branch.is_some() {
-        // First PtgAttrSkip: jump past f_branch + trailing PtgAttrSkip + 3.
-        // The 3 is the offset value the trailing PtgAttrSkip itself carries
-        // (matching Excel's emission; the spec does not describe what byte
-        // this points at, but the constant is stable across all observed
-        // Excel-authored IF formulas).
-        let skip_after_t = f_bytes.len().checked_add(7).ok_or(UnsupportedToken)?;
-        if skip_after_t > u16::MAX as usize {
-            return Ok(false);
-        }
+    if let Some(skip) = skip_after_t {
+        // The 3 baked into the trailing PtgAttrSkip is stable across all
+        // observed Excel-authored IF formulas (the spec does not describe
+        // what byte it points at; we replicate Excel's exact emission).
         out.push(0x19);
         out.push(0x08); // ATTR_SKIP
-        out.extend_from_slice(&(skip_after_t as u16).to_le_bytes());
+        out.extend_from_slice(&skip.to_le_bytes());
         out.extend_from_slice(&f_bytes);
     }
 
@@ -3361,8 +3405,10 @@ fn emit_optimized_if(
     out.push(0x08);
     out.extend_from_slice(&3u16.to_le_bytes());
 
-    // PtgFuncVar V-class for IF (iftab=1).
-    out.push(0x42);
+    // PtgFuncVar for IF (iftab=1). IF is reference-class, so its token takes
+    // the class of the position it fills.
+    let class = func_token_class(1, operand_class);
+    out.push(ptg_func_var_opcode(class));
     out.push(argc);
     out.extend_from_slice(&1u16.to_le_bytes());
 
@@ -3405,6 +3451,7 @@ fn emit_optimized_choose(
     out: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
+    operand_class: OperandClass,
 ) -> Result<bool, UnsupportedToken> {
     use duke_sheets_formula::FormulaExpr;
 
@@ -3420,9 +3467,13 @@ fn emit_optimized_choose(
     }
     let argc = args.len() as u8;
 
-    // Compile selector inline (V class for CHOOSE arg 0).
+    // Compile selector into scratch (V class for CHOOSE arg 0). Everything
+    // is compiled into scratch buffers BEFORE any byte reaches `out`, so an
+    // overflow bail (Ok(false)) leaves `out` untouched for the caller's
+    // fallback to re-emit cleanly.
     let selector_class = function_arg_class(100, 0);
-    compile_ptgs_with_context(selector, out, externsheet, names, selector_class)?;
+    let mut selector_bytes = Vec::with_capacity(16);
+    compile_ptgs_with_context(selector, &mut selector_bytes, externsheet, names, selector_class)?;
 
     // Compile each choice into scratch.
     let mut choice_bytes: Vec<Vec<u8>> = Vec::with_capacity(nc);
@@ -3456,23 +3507,13 @@ fn emit_optimized_choose(
     }
     offsets.push(running as u16); // final/exit entry
 
-    // Emit PtgAttrChoose.
-    out.push(0x19);
-    out.push(0x04); // ATTR_CHOOSE
-    out.extend_from_slice(&(nc as u16).to_le_bytes());
-    for off in &offsets {
-        out.extend_from_slice(&off.to_le_bytes());
-    }
-
-    // Emit each choice followed by a PtgAttrSkip. The trailing skip uses
+    // Compute each post-choice PtgAttrSkip offset. The trailing skip uses
     // offset 3 (matching IF); middle skips accumulate the remaining
     // (choice + skip) sizes plus 3.
     //
     // For the k-th PtgAttrSkip (0-indexed, after choice k):
     //   offset = sum_{j>k}(choice_sizes[j] + 4) + 3
     let mut remaining_after: usize = 0;
-    // First compute total bytes after position-K-after-skip for each K.
-    // Walk in reverse to accumulate.
     let mut skip_offsets: Vec<u16> = vec![0; nc];
     for k in (0..nc).rev() {
         if k + 1 == nc {
@@ -3492,10 +3533,15 @@ fn emit_optimized_choose(
             remaining_after = nxt;
         }
     }
-    // remaining_after now equals 0 if nc == 1 (only the trailing skip),
-    // or sum_{j>0}(c_j+4) when nc > 1 — unused after the reverse walk.
-    let _ = remaining_after;
 
+    // All overflow checks passed — commit to `out`.
+    out.extend_from_slice(&selector_bytes);
+    out.push(0x19);
+    out.push(0x04); // ATTR_CHOOSE
+    out.extend_from_slice(&(nc as u16).to_le_bytes());
+    for off in &offsets {
+        out.extend_from_slice(&off.to_le_bytes());
+    }
     for (k, choice) in choice_bytes.iter().enumerate() {
         out.extend_from_slice(choice);
         out.push(0x19);
@@ -3503,8 +3549,10 @@ fn emit_optimized_choose(
         out.extend_from_slice(&skip_offsets[k].to_le_bytes());
     }
 
-    // PtgFuncVar V-class for CHOOSE (iftab=100).
-    out.push(0x42);
+    // PtgFuncVar for CHOOSE (iftab=100). CHOOSE is reference-class, so its
+    // token takes the class of the position it fills.
+    let class = func_token_class(100, operand_class);
+    out.push(ptg_func_var_opcode(class));
     out.push(argc);
     out.extend_from_slice(&100u16.to_le_bytes());
 

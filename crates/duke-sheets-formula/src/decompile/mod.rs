@@ -11,7 +11,8 @@ pub mod parsed_token;
 pub use decompiler::decompile;
 pub use function_table::{
     expr_calls_volatile_function, function_arg_class, function_argc, function_index,
-    function_is_fixed_arity, function_is_volatile, function_name, OperandClass,
+    function_is_fixed_arity, function_is_volatile, function_name, function_returns_reference,
+    OperandClass,
 };
 pub use parsed_token::ParsedToken;
 
