@@ -93,6 +93,27 @@ pub fn function_arg_class(iftab: u16, arg_idx: usize) -> OperandClass {
         .unwrap_or(def.default_arg_class)
 }
 
+/// True if BIFF8 emits function `iftab` via the Analysis-ToolPak add-in
+/// mechanism — a PtgNameX referencing an EXTERNNAME in an AddIn SUPBOOK,
+/// followed by PtgFuncVar with iftab=255 (UDF) — rather than a native
+/// PtgFunc/PtgFuncVar carrying the Ftab index.
+///
+/// This is exactly the contiguous Ftab range `384..=476` (HEX2BIN through
+/// FVSCHEDULE: the engineering, complex-number, financial, and date ATP
+/// functions). Determined by authoring every Ftab function in Excel and
+/// classifying its emitted token stream (comprehensive, not sampled): the
+/// range is contiguous with no exceptions. Functions 477..=484 (the CUBE
+/// functions and the Excel-2007 IFERROR/COUNTIFS/SUMIFS/AVERAGEIF/AVERAGEIFS
+/// block) and everything `<=383` are native.
+///
+/// Cross-checks with Apache POI's `AnalysisToolPak`: POI's list equals this
+/// range plus the 2007-native functions, which POI groups with ATP for
+/// *evaluation* but Excel serializes natively — so the over-inclusion is
+/// expected and this range is the authoritative BIFF8 *serialization* set.
+pub fn function_is_biff8_addin(iftab: u16) -> bool {
+    (384..=476).contains(&iftab)
+}
+
 /// True if `iftab` names a reference-class function — one that can return a
 /// reference and therefore takes the operand class of the position it occupies
 /// (R when used as a reference argument, V otherwise). Pure value functions
@@ -436,6 +457,22 @@ mod tests {
         assert!(!function_returns_reference(24)); // ABS
         assert!(!function_returns_reference(4)); // SUM
         assert!(!function_returns_reference(102)); // VLOOKUP (returns value)
+    }
+
+    #[test]
+    fn biff8_addin_range() {
+        // The ATP add-in serialization range [384, 476], determined by
+        // comprehensive Excel classification.
+        assert!(function_is_biff8_addin(384)); // HEX2BIN
+        assert!(function_is_biff8_addin(449)); // EDATE
+        assert!(function_is_biff8_addin(472)); // NETWORKDAYS
+        assert!(function_is_biff8_addin(476)); // FVSCHEDULE
+        // Just outside the range: native.
+        assert!(!function_is_biff8_addin(383)); // CUBERANKEDMEMBER
+        assert!(!function_is_biff8_addin(477)); // CUBEKPIMEMBER
+        assert!(!function_is_biff8_addin(480)); // IFERROR (2007 native)
+        assert!(!function_is_biff8_addin(345)); // SUMIF (classic native)
+        assert!(!function_is_biff8_addin(4)); // SUM
     }
 
     #[test]
