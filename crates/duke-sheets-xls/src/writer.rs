@@ -1764,15 +1764,21 @@ fn write_user_name_records(
         let formula_body: Vec<u8> = {
             if let Some(expr) = parse_name_body(&nr.refers_to) {
                 let mut bytes = Vec::new();
+                let mut extra = Vec::new();
                 let operand_class = name_body_operand_class(&expr);
+                // Array constants in a defined-name body would need the
+                // NAME record's cce/rgcb split (cce counts rgce only); that
+                // path is unsupported, so reject a non-empty rgcb here.
                 if compile_ptgs_with_context(
                     &expr,
                     &mut bytes,
+                    &mut extra,
                     externsheet,
                     name_table,
                     operand_class,
                 )
                 .is_ok()
+                    && extra.is_empty()
                 {
                     bytes
                 } else {
@@ -2712,8 +2718,18 @@ fn encode_dv_formula(value: &str, externsheet: &ExternSheetTable, names: &NameTa
     };
     if let Ok(expr) = duke_sheets_formula::parse_formula(&to_parse) {
         let mut bytes = Vec::new();
-        if compile_ptgs_with_context(&expr, &mut bytes, externsheet, names, OperandClass::V).is_ok()
+        let mut extra = Vec::new();
+        if compile_ptgs_with_context(
+            &expr,
+            &mut bytes,
+            &mut extra,
+            externsheet,
+            names,
+            OperandClass::V,
+        )
+        .is_ok()
         {
+            bytes.extend_from_slice(&extra);
             return bytes;
         }
     }
@@ -2875,16 +2891,24 @@ fn try_write_formula_record(
     if expr_calls_volatile_function(&expr) {
         tokens.extend_from_slice(&[0x19, 0x01, 0x00, 0x00]); // PtgAttrVolatile
     }
-    if compile_ptgs_with_context(&expr, &mut tokens, externsheet, names, OperandClass::V).is_err() {
+    // `extra` accumulates the rgcb (array-constant element data etc.) that
+    // follows the rgce in the FORMULA record. The cce field counts only the
+    // rgce (tokens); rgcb bytes come after.
+    let mut extra = Vec::new();
+    if compile_ptgs_with_context(&expr, &mut tokens, &mut extra, externsheet, names, OperandClass::V)
+        .is_err()
+    {
         return false;
     }
-    if tokens.len() > u16::MAX as usize {
+    // cce is a u16; the whole formula body (22 + rgce + rgcb) must also fit
+    // in the u16 record length.
+    if tokens.len() > u16::MAX as usize || 22 + tokens.len() + extra.len() > u16::MAX as usize {
         return false;
     }
 
     let cached_bytes = encode_cached_result(cached);
     stream.extend_from_slice(&FORMULA_RECORD.to_le_bytes());
-    let body_len: u16 = 22 + tokens.len() as u16;
+    let body_len: u16 = 22 + tokens.len() as u16 + extra.len() as u16;
     stream.extend_from_slice(&body_len.to_le_bytes());
     stream.extend_from_slice(&row.to_le_bytes());
     stream.extend_from_slice(&col.to_le_bytes());
@@ -2895,6 +2919,7 @@ fn try_write_formula_record(
     stream.extend_from_slice(&0u32.to_le_bytes()); // chn (cache key)
     stream.extend_from_slice(&(tokens.len() as u16).to_le_bytes());
     stream.extend_from_slice(&tokens);
+    stream.extend_from_slice(&extra);
 
     if let CellValue::String(s) = cached {
         write_string_followup(stream, s.as_ref());
@@ -2982,9 +3007,11 @@ fn compile_ptgs(
     expr: &duke_sheets_formula::FormulaExpr,
     out: &mut Vec<u8>,
 ) -> Result<(), UnsupportedToken> {
+    let mut extra = Vec::new();
     compile_ptgs_with_context(
         expr,
         out,
+        &mut extra,
         &ExternSheetTable::default(),
         &NameTable::default(),
         OperandClass::V,
@@ -3003,6 +3030,7 @@ use duke_sheets_formula::decompile::function_table::{
 fn compile_ptgs_with_context(
     expr: &duke_sheets_formula::FormulaExpr,
     out: &mut Vec<u8>,
+    extra: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
     operand_class: OperandClass,
@@ -3107,8 +3135,8 @@ fn compile_ptgs_with_context(
                 }
                 _ => OperandClass::V,
             };
-            compile_ptgs_with_context(left, out, externsheet, names, child_class)?;
-            compile_ptgs_with_context(right, out, externsheet, names, child_class)?;
+            compile_ptgs_with_context(left, out, extra, externsheet, names, child_class)?;
+            compile_ptgs_with_context(right, out, extra, externsheet, names, child_class)?;
             out.push(match op {
                 BinaryOperator::Add => 0x03,
                 BinaryOperator::Subtract => 0x04,
@@ -3132,7 +3160,7 @@ fn compile_ptgs_with_context(
             });
         }
         FormulaExpr::UnaryOp { op, operand } => {
-            compile_ptgs_with_context(operand, out, externsheet, names, operand_class)?;
+            compile_ptgs_with_context(operand, out, extra, externsheet, names, operand_class)?;
             out.push(match op {
                 UnaryOperator::Plus => 0x12,    // PtgUplus
                 UnaryOperator::Negate => 0x13,  // PtgUminus
@@ -3151,14 +3179,14 @@ fn compile_ptgs_with_context(
                 return Err(UnsupportedToken);
             }
             if idx == 4 && args.len() == 1 && !matches!(args[0], FormulaExpr::Empty) {
-                emit_optimized_sum(&args[0], out, externsheet, names)?;
+                emit_optimized_sum(&args[0], out, extra, externsheet, names)?;
                 return Ok(());
             }
             // IF gets MS-XLS PtgAttrIf / PtgAttrGoto short-circuit optimization
             // ([MS-XLS] §2.5.198.39 / §2.5.198.37). Excel always emits this
             // for IF — matching it is required for byte-for-byte parity.
             if idx == 1 && (args.len() == 2 || args.len() == 3) {
-                if emit_optimized_if(args, out, externsheet, names, operand_class)? {
+                if emit_optimized_if(args, out, extra, externsheet, names, operand_class)? {
                     return Ok(());
                 }
                 // emit_optimized_if returns Ok(false) when token offsets
@@ -3168,7 +3196,7 @@ fn compile_ptgs_with_context(
             // ([MS-XLS] §2.5.198.40). Like IF, Excel always emits this so
             // matching is required for byte-for-byte parity.
             if idx == 100 && args.len() >= 2 {
-                if emit_optimized_choose(args, out, externsheet, names, operand_class)? {
+                if emit_optimized_choose(args, out, extra, externsheet, names, operand_class)? {
                     return Ok(());
                 }
             }
@@ -3177,7 +3205,7 @@ fn compile_ptgs_with_context(
                     out.push(0x16); // PTG_MISS_ARG
                 } else {
                     let arg_class = function_arg_class(idx, arg_idx);
-                    compile_ptgs_with_context(arg, out, externsheet, names, arg_class)?;
+                    compile_ptgs_with_context(arg, out, extra, externsheet, names, arg_class)?;
                 }
             }
             // PtgFunc (fixed-arity) or PtgFuncVar (variable-arity). The token's
@@ -3208,11 +3236,77 @@ fn compile_ptgs_with_context(
             out.extend_from_slice(&idx.to_le_bytes());
             out.extend_from_slice(&0u16.to_le_bytes()); // 2 reserved bytes
         }
-        FormulaExpr::Array(_)
-        | FormulaExpr::StructuredRef(_)
-        | FormulaExpr::ExternalRef(_)
-        | FormulaExpr::Empty => {
+        FormulaExpr::Array(rows) => {
+            emit_array_constant(rows, out, extra)?;
+        }
+        FormulaExpr::StructuredRef(_) | FormulaExpr::ExternalRef(_) | FormulaExpr::Empty => {
             return Err(UnsupportedToken);
+        }
+    }
+    Ok(())
+}
+
+/// Emit a BIFF8 array constant ([MS-XLS] §2.5.198.32 PtgArray + §2.5.8
+/// SerAr). The token in `out` is an A-class PtgArray (0x60) followed by 7
+/// reserved bytes; the actual element data goes into `extra` (the rgcb that
+/// follows the rgce in the FORMULA record):
+///
+/// ```text
+/// rgcb: ccol-1 (1 byte) | crow-1 (2 bytes) | elements (row-major)
+/// element: 0x01 + f64                          (number)
+///          0x02 + XLUnicodeString (cch + grbit + chars)  (string)
+///          0x04 + bool(1) + 7 reserved          (bool)
+///          0x10 + errcode(1) + 7 reserved       (error)
+/// ```
+fn emit_array_constant(
+    rows: &[Vec<duke_sheets_formula::FormulaExpr>],
+    out: &mut Vec<u8>,
+    extra: &mut Vec<u8>,
+) -> Result<(), UnsupportedToken> {
+    use duke_sheets_formula::FormulaExpr;
+
+    let nrows = rows.len();
+    let ncols = rows.first().map_or(0, |r| r.len());
+    // Excel arrays are rectangular and non-empty; reject anything else.
+    if nrows == 0 || ncols == 0 || rows.iter().any(|r| r.len() != ncols) {
+        return Err(UnsupportedToken);
+    }
+    if ncols > 256 || nrows > 65536 {
+        return Err(UnsupportedToken);
+    }
+
+    // PtgArray token (A-class) + 7 reserved bytes, in the rgce.
+    out.push(0x60);
+    out.extend_from_slice(&[0u8; 7]);
+
+    // rgcb: column count - 1 (1 byte), row count - 1 (2 bytes), then elements.
+    extra.push((ncols - 1) as u8);
+    extra.extend_from_slice(&((nrows - 1) as u16).to_le_bytes());
+    for row in rows {
+        for cell in row {
+            match cell {
+                FormulaExpr::Number(n) => {
+                    extra.push(0x01);
+                    extra.extend_from_slice(&n.to_le_bytes());
+                }
+                FormulaExpr::Boolean(b) => {
+                    extra.push(0x04);
+                    extra.push(if *b { 1 } else { 0 });
+                    extra.extend_from_slice(&[0u8; 7]);
+                }
+                FormulaExpr::Error(e) => {
+                    extra.push(0x10);
+                    extra.push(e.code());
+                    extra.extend_from_slice(&[0u8; 7]);
+                }
+                FormulaExpr::String(s) => {
+                    extra.push(0x02);
+                    push_short_xlunicode_string(extra, s).map_err(|_| UnsupportedToken)?;
+                }
+                // Nested arrays / refs / functions aren't valid array
+                // constant elements.
+                _ => return Err(UnsupportedToken),
+            }
         }
     }
     Ok(())
@@ -3221,6 +3315,7 @@ fn compile_ptgs_with_context(
 fn emit_optimized_sum(
     arg: &duke_sheets_formula::FormulaExpr,
     out: &mut Vec<u8>,
+    extra: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
 ) -> Result<(), UnsupportedToken> {
@@ -3233,7 +3328,14 @@ fn emit_optimized_sum(
             BinaryOperator::Intersect | BinaryOperator::Union | BinaryOperator::Range
         ) {
             let mut ref_tokens = Vec::new();
-            compile_ptgs_with_context(arg, &mut ref_tokens, externsheet, names, OperandClass::R)?;
+            compile_ptgs_with_context(
+                arg,
+                &mut ref_tokens,
+                extra,
+                externsheet,
+                names,
+                OperandClass::R,
+            )?;
             if ref_tokens.len() > u16::MAX as usize {
                 return Err(UnsupportedToken);
             }
@@ -3254,7 +3356,7 @@ fn emit_optimized_sum(
     // no-op there. Pull the class from the function metadata so the rule
     // stays in one place.
     let arg_class = function_arg_class(4, 0);
-    compile_ptgs_with_context(arg, out, externsheet, names, arg_class)?;
+    compile_ptgs_with_context(arg, out, extra, externsheet, names, arg_class)?;
     push_attr_sum(out);
     Ok(())
 }
@@ -3330,6 +3432,7 @@ fn ptg_func_var_opcode(class: OperandClass) -> u8 {
 fn emit_optimized_if(
     args: &[duke_sheets_formula::FormulaExpr],
     out: &mut Vec<u8>,
+    extra: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
     operand_class: OperandClass,
@@ -3354,16 +3457,16 @@ fn emit_optimized_if(
     // token stream that the caller's fallback would then duplicate.
     let cond_class = function_arg_class(1, 0);
     let mut cond_bytes = Vec::with_capacity(16);
-    compile_ptgs_with_context(cond, &mut cond_bytes, externsheet, names, cond_class)?;
+    compile_ptgs_with_context(cond, &mut cond_bytes, extra, externsheet, names, cond_class)?;
 
     let mut t_bytes = Vec::with_capacity(32);
     let t_class = function_arg_class(1, 1);
-    compile_ptgs_with_context(t_branch, &mut t_bytes, externsheet, names, t_class)?;
+    compile_ptgs_with_context(t_branch, &mut t_bytes, extra, externsheet, names, t_class)?;
 
     let mut f_bytes = Vec::new();
     if let Some(f) = f_branch {
         let f_class = function_arg_class(1, 2);
-        compile_ptgs_with_context(f, &mut f_bytes, externsheet, names, f_class)?;
+        compile_ptgs_with_context(f, &mut f_bytes, extra, externsheet, names, f_class)?;
     }
 
     // PtgAttrIf offset = bytes after PtgAttrIf to skip when cond is FALSE.
@@ -3451,6 +3554,7 @@ fn emit_optimized_if(
 fn emit_optimized_choose(
     args: &[duke_sheets_formula::FormulaExpr],
     out: &mut Vec<u8>,
+    extra: &mut Vec<u8>,
     externsheet: &ExternSheetTable,
     names: &NameTable,
     operand_class: OperandClass,
@@ -3475,14 +3579,21 @@ fn emit_optimized_choose(
     // fallback to re-emit cleanly.
     let selector_class = function_arg_class(100, 0);
     let mut selector_bytes = Vec::with_capacity(16);
-    compile_ptgs_with_context(selector, &mut selector_bytes, externsheet, names, selector_class)?;
+    compile_ptgs_with_context(
+        selector,
+        &mut selector_bytes,
+        extra,
+        externsheet,
+        names,
+        selector_class,
+    )?;
 
     // Compile each choice into scratch.
     let mut choice_bytes: Vec<Vec<u8>> = Vec::with_capacity(nc);
     for (i, c) in choices.iter().enumerate() {
         let mut buf = Vec::with_capacity(16);
         let class = function_arg_class(100, i + 1);
-        compile_ptgs_with_context(c, &mut buf, externsheet, names, class)?;
+        compile_ptgs_with_context(c, &mut buf, extra, externsheet, names, class)?;
         choice_bytes.push(buf);
     }
 

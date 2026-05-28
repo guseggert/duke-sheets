@@ -599,6 +599,72 @@ fn if_in_value_function_emits_v_class_inner_func() {
     assert_eq!(&tokens[tokens.len() - 3..], &[0x41, 0x18, 0x00]);
 }
 
+/// Full FORMULA record token region (rgce + rgcb) for a single-cell formula,
+/// for verifying array-constant encoding where data spills into the rgcb.
+fn formula_rgce_rgcb(wb: &Workbook) -> (Vec<u8>, Vec<u8>) {
+    let bytes = XlsWriter::write_to_bytes(wb).expect("write");
+    let cfb = CompoundFile::open(Cursor::new(bytes)).expect("open CFB");
+    let stream_path = if cfb.exists("/Workbook") {
+        "/Workbook"
+    } else {
+        "/Book"
+    };
+    let stream = cfb.read_stream(stream_path).expect("read workbook stream");
+    let records = biff::read_all_records(&mut Cursor::new(stream)).expect("read BIFF records");
+    let rec = records
+        .iter()
+        .find(|r| r.record_type == biff::records::FORMULA)
+        .expect("a FORMULA record");
+    let cce = u16::from_le_bytes([rec.data[20], rec.data[21]]) as usize;
+    (
+        rec.data[22..22 + cce].to_vec(),
+        rec.data[22 + cce..].to_vec(),
+    )
+}
+
+#[test]
+fn array_constant_in_sum_emits_ptg_array_and_rgcb() {
+    // =SUM({1,2,3}) → rgce: PtgArray(0x60) + 7 reserved, then PtgAttrSum.
+    // rgcb: ncols-1(1B)=2, nrows-1(2B)=0, then three number elements
+    // (0x01 + f64). Verified against native Excel authoring.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=SUM({1,2,3})").unwrap();
+    ws.set_formula_result(0, 0, CellValue::Number(6.0)).unwrap();
+
+    let (rgce, rgcb) = formula_rgce_rgcb(&wb);
+    // rgce: 0x60 + 7 reserved (8 bytes) + PtgAttrSum (0x19 0x10 .. ..) = 12.
+    assert_eq!(rgce.len(), 12, "rgce={rgce:02X?}");
+    assert_eq!(rgce[0], 0x60, "PtgArray A-class; rgce={rgce:02X?}");
+    assert_eq!(&rgce[8..10], &[0x19, 0x10], "PtgAttrSum; rgce={rgce:02X?}");
+    // rgcb header: cols-1=2, rows-1=0.
+    assert_eq!(&rgcb[0..3], &[0x02, 0x00, 0x00], "rgcb header; rgcb={rgcb:02X?}");
+    // three numbers: 0x01 + f64
+    assert_eq!(rgcb[3], 0x01);
+    assert_eq!(f64::from_le_bytes(rgcb[4..12].try_into().unwrap()), 1.0);
+    assert_eq!(rgcb[12], 0x01);
+    assert_eq!(f64::from_le_bytes(rgcb[13..21].try_into().unwrap()), 2.0);
+    assert_eq!(rgcb[21], 0x01);
+    assert_eq!(f64::from_le_bytes(rgcb[22..30].try_into().unwrap()), 3.0);
+    assert_eq!(rgcb.len(), 30, "rgcb={rgcb:02X?}");
+}
+
+#[test]
+fn array_constant_round_trips_text() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", "=SUM({1,2;3,4})").unwrap();
+    ws.set_formula_result(0, 0, CellValue::Number(10.0)).unwrap();
+
+    let parsed = write_then_read(&wb);
+    let f = parsed
+        .worksheet(0)
+        .unwrap()
+        .get_formula_at(0, 0)
+        .expect("array formula must survive");
+    assert!(f.contains("{1,2;3,4}"), "array text lost: {f:?}");
+}
+
 #[test]
 fn unary_plus_emits_ptg_uplus() {
     // =+A1 → PtgRef, PtgUplus (0x12). Excel preserves the leading plus.

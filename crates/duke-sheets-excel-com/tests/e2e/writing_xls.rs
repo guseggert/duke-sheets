@@ -600,6 +600,66 @@ fn excel_byte_parity_for_uplus_paren_we_emit() {
     );
 }
 
+/// Array constants: Excel emits {...} as a PtgArray token (rgce) plus the
+/// element data in the rgcb. Verified byte-for-byte (the PtgArray reserved
+/// bytes and PtgAttrSum unused bytes are normalized).
+const ARRAY_FORMULAS: &[(&str, &str, f64)] = &[
+    ("B1", "=SUM({1,2,3})", 6.0),
+    ("B2", "=SUM({1,2;3,4})", 10.0),
+    ("B3", "=SUM({10,20})", 30.0),
+];
+
+fn array_constant_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (cell, formula, expected) in ARRAY_FORMULAS {
+        ws.set_cell_formula(cell, formula).unwrap();
+        let addr = CellAddress::parse(cell).unwrap();
+        ws.set_formula_result(addr.row, addr.col, CellValue::Number(*expected))
+            .unwrap();
+    }
+    wb
+}
+
+fn excel_authored_array_xls_bytes() -> Vec<u8> {
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create Excel workbook");
+        for (cell, formula, _) in ARRAY_FORMULAS {
+            wb.set_cell_formula(cell, formula).unwrap();
+        }
+        excel.recalculate().unwrap();
+        wb.save_as(&fixture.vm_path, 56).unwrap();
+        wb.close().unwrap();
+    }
+    pull_file_from_vm(&fixture);
+    let bytes = std::fs::read(&fixture.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
+    cleanup_fixture(&fixture);
+    bytes
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_byte_parity_for_array_constants_we_emit() {
+    let wb = array_constant_workbook();
+    let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
+    let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
+    assert_eq!(
+        writer_ptgs, resave_ptgs,
+        "Excel canonicalized our XLS array-constant token streams on re-save"
+    );
+    let authored_ptgs = xls_formula_ptg_streams_for_compare(&excel_authored_array_xls_bytes());
+    assert_eq!(
+        writer_ptgs, authored_ptgs,
+        "our XLS array-constant token streams differ from Excel-authored output"
+    );
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_hyperlinks_we_emit() {

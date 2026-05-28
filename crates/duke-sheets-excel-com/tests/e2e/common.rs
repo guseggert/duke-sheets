@@ -301,6 +301,9 @@ pub struct XlsFormulaPtgStream {
     pub row: u16,
     pub col: u16,
     pub tokens: Vec<u8>,
+    /// The rgcb (extra data) that follows the rgce — array-constant element
+    /// data, etc. Empty for formulas without such data.
+    pub rgcb: Vec<u8>,
 }
 
 /// Extract raw FORMULA-record PTG bytes keyed by cell position.
@@ -336,6 +339,7 @@ pub fn xls_formula_ptg_streams(bytes: &[u8]) -> Vec<XlsFormulaPtgStream> {
                 row,
                 col,
                 tokens: rec.data[22..22 + cce].to_vec(),
+                rgcb: rec.data[22 + cce..].to_vec(),
             }
         })
         .collect()
@@ -387,6 +391,16 @@ fn normalize_attr_reserved_bytes(tokens: &mut [u8]) {
                 if (flags & ptg::ATTR_CHOOSE) != 0 {
                     pos = pos.saturating_add((attr_data + 1) * 2);
                 }
+            }
+            ptg::PTG_ARRAY => {
+                // PtgArray (§2.5.198.32) has 7 unused bytes after the opcode;
+                // Excel may leave uninitialized stack values there. Zero them.
+                let n = ptg::token_data_size(ptg::PTG_ARRAY).unwrap_or(7);
+                let end = (pos + n).min(tokens.len());
+                for b in &mut tokens[pos..end] {
+                    *b = 0;
+                }
+                pos = pos.saturating_add(n);
             }
             ptg::PTG_STR => {
                 if pos + 2 > tokens.len() {
