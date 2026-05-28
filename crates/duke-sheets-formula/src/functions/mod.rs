@@ -2404,6 +2404,13 @@ impl FunctionRegistry {
             max_args: Some(3),
             implementation: lookup::fn_index,
             volatile: false,
+            // INDEX is reference-class in principle, but Excel's XLS emission
+            // for it is NOT a plain R-class PtgFuncVar: when re-saving
+            // SUM(INDEX(A1:A3,1)) Excel produces a PtgName + PtgFuncVar
+            // (iftab=255 UDF) wrapper around the area whose semantics we have
+            // not yet reverse-engineered. Leaving returns_reference=false
+            // (V-class) until that form is understood — a documented known
+            // divergence, deliberately NOT in the nested-function parity batch.
             ..Default::default()
         });
 
@@ -2548,6 +2555,9 @@ impl FunctionRegistry {
             max_args: Some(2),
             implementation: lookup::fn_indirect,
             volatile: true,
+            // INDIRECT returns a reference; verified SUM(INDIRECT(...)) →
+            // INDIRECT R-class (0x22).
+            returns_reference: true,
             ..Default::default()
         });
 
@@ -2560,6 +2570,9 @@ impl FunctionRegistry {
             implementation: lookup::fn_offset,
             volatile: true,
             arg_classes: &[OperandClass::R],
+            // OFFSET returns a reference; verified SUM(OFFSET(...)) → OFFSET
+            // R-class (0x22), top-level OFFSET → V-class (0x42).
+            returns_reference: true,
             ..Default::default()
         });
         // lookup_extra functions

@@ -4644,6 +4644,77 @@ fn write_biff_record(stream: &mut Vec<u8>, record_type: u16, body: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use duke_sheets_formula::FormulaExpr;
+
+    /// On the u16-offset overflow path, `emit_optimized_if` must return
+    /// `Ok(false)` WITHOUT having mutated `out`, so the caller's fallback
+    /// re-emits cleanly. Before the scratch-first fix, the condition was
+    /// written to `out` before the overflow check, leaving a duplicated
+    /// token. This directly verifies the invariant (the end-to-end giant-IF
+    /// test can't: any overflow-sized stream is rejected wholesale by the
+    /// cce limit regardless of duplication, so it passes either way).
+    /// Build a branch expression that compiles to more than the 65531-byte
+    /// u16 PtgAttr offset threshold without hitting the 255-arg PtgFuncVar
+    /// limit or deep AST recursion: CONCATENATE of 255 maximal (255-char)
+    /// string literals. Each PtgStr is ~258 bytes, so 255 * 258 ≈ 65790
+    /// bytes + the PtgFuncVar.
+    fn overflowing_branch() -> FormulaExpr {
+        let args: Vec<FormulaExpr> = (0..255)
+            .map(|_| FormulaExpr::String("x".repeat(255)))
+            .collect();
+        FormulaExpr::Function {
+            name: "CONCATENATE".to_string(),
+            args,
+        }
+    }
+
+    #[test]
+    fn emit_optimized_if_overflow_leaves_out_untouched() {
+        let args = vec![
+            FormulaExpr::Number(1.0), // cond
+            overflowing_branch(),     // t-branch (overflows the u16 offset)
+            FormulaExpr::Number(2.0), // f-branch
+        ];
+        let mut out = vec![0xABu8]; // sentinel
+        let r = emit_optimized_if(
+            &args,
+            &mut out,
+            &ExternSheetTable::default(),
+            &NameTable::default(),
+            OperandClass::V,
+        );
+        assert!(matches!(r, Ok(false)), "expected overflow → Ok(false), got {r:?}");
+        assert_eq!(
+            out,
+            vec![0xABu8],
+            "out must be untouched on overflow fallback; got {out:02X?}"
+        );
+    }
+
+    /// Same invariant for `emit_optimized_choose`: a giant choice trips the
+    /// jump-table u16 offset and must leave `out` untouched.
+    #[test]
+    fn emit_optimized_choose_overflow_leaves_out_untouched() {
+        let args = vec![
+            FormulaExpr::Number(1.0), // selector
+            overflowing_branch(),     // choice 0 (overflows)
+            FormulaExpr::Number(2.0), // choice 1
+        ];
+        let mut out = vec![0xCDu8]; // sentinel
+        let r = emit_optimized_choose(
+            &args,
+            &mut out,
+            &ExternSheetTable::default(),
+            &NameTable::default(),
+            OperandClass::V,
+        );
+        assert!(matches!(r, Ok(false)), "expected overflow → Ok(false), got {r:?}");
+        assert_eq!(
+            out,
+            vec![0xCDu8],
+            "out must be untouched on overflow fallback; got {out:02X?}"
+        );
+    }
 
     #[test]
     fn rejects_workbook_without_worksheets() {

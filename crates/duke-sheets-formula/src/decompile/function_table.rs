@@ -424,14 +424,20 @@ mod tests {
     }
 
     #[test]
-    fn returns_reference_set_for_if_and_choose() {
-        // IF (1) and CHOOSE (100) are reference-class; pure value functions
-        // are not. Pins the metadata the writer uses for nested-function
-        // token class.
+    fn returns_reference_set_for_ref_class_functions() {
+        // Reference-class functions take the operand class of the position
+        // they occupy (verified against Excel: R inside SUM(...), V at top
+        // level). Pure value functions are always V.
         assert!(function_returns_reference(1)); // IF
         assert!(function_returns_reference(100)); // CHOOSE
+        assert!(function_returns_reference(78)); // OFFSET
+        assert!(function_returns_reference(148)); // INDIRECT
         assert!(!function_returns_reference(24)); // ABS
         assert!(!function_returns_reference(4)); // SUM
+        assert!(!function_returns_reference(102)); // VLOOKUP (returns value)
+        // INDEX (29) is reference-class in principle but its XLS emission is
+        // a PtgName+UDF form we haven't replicated; left V-class for now.
+        assert!(!function_returns_reference(29)); // INDEX (known divergence)
     }
 
     #[test]

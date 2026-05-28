@@ -598,19 +598,18 @@ fn sum_of_if_emits_r_class_inner_func() {
 }
 
 #[test]
-fn giant_if_branch_falls_back_without_corruption() {
-    // When the IF true-branch compiles to more bytes than the u16 PtgAttrIf
-    // offset can address, emit_optimized_if returns Ok(false) and the caller
-    // falls back to plain emission. Because the total stream also exceeds the
-    // u16 cce limit, the FORMULA record can't be written and the cell falls
-    // back to its cached value. The important guarantees: no panic, and the
-    // (now scratch-first) optimizer doesn't leave a half-written, duplicated
-    // condition token in the stream.
+fn giant_if_branch_falls_back_without_panicking() {
+    // End-to-end smoke test: a giant IF must not panic on write/read and
+    // must preserve its cached value. NOTE: this does NOT verify the
+    // scratch-first no-duplication invariant — any overflow-sized stream is
+    // rejected wholesale by the u16 cce limit and falls back to the cached
+    // value regardless of whether the optimizer duplicated tokens. That
+    // invariant is verified directly by the writer unit tests
+    // `emit_optimized_{if,choose}_overflow_leaves_out_untouched`.
     //
-    // Build a true-branch that is a single SUM with ~22000 flat integer
-    // args (~66KB of PtgInt + one PtgFuncVar), comfortably past the
-    // 65531-byte PtgAttrIf threshold. A flat arg list avoids the deep AST
-    // recursion a `1+1+1+...` chain would cause.
+    // The branch is a SUM with 22000 flat integer args; this trips the
+    // 255-arg PtgFuncVar limit so emit_optimized_if returns Err (not the
+    // Ok(false) overflow path), exercising the Err-fallback to a cached cell.
     let mut branch = String::from("SUM(1");
     for _ in 0..22000 {
         branch.push_str(",1");

@@ -359,9 +359,15 @@ const NESTED_FUNCTION_FORMULAS: &[(&str, &str, f64)] = &[
     ("B2", "=IF(A1>0,3,IF(A1>10,1,2))", 3.0), // inner IF R-class (f-branch)
     ("B3", "=SUM(ABS(A1))", 4.0),             // ABS stays V-class in SUM
     ("B4", "=SUM(IF(A1>0,A1,A2))", 4.0),      // IF R-class in SUM
-    ("B5", "=CHOOSE(A1,IF(A2>0,1,2),3)", 1.0), // IF R-class in CHOOSE
-    ("B6", "=IF(A1>0,CHOOSE(A1,1,2),3)", 1.0), // CHOOSE R-class in IF
+    ("B5", "=CHOOSE(1,IF(A2>0,1,2),3)", 2.0), // IF R-class as CHOOSE choice (sel=1 → IF; A2<0 → 2)
+    ("B6", "=IF(A1>0,CHOOSE(2,10,20),3)", 20.0), // CHOOSE R-class in IF t-branch
     ("B7", "=ABS(IF(A1>0,A1,A2))", 4.0),      // IF V-class in ABS
+    ("B8", "=SUM(OFFSET(A1,0,0))", 4.0),      // OFFSET R-class in SUM (volatile)
+    ("B9", "=SUM(INDIRECT(\"A1\"))", 4.0),    // INDIRECT R-class in SUM (volatile)
+    ("B10", "=OFFSET(A1,0,0)", 4.0),          // OFFSET V-class at top level
+    // NOTE: INDEX deliberately omitted — Excel emits it via a PtgName +
+    // PtgFuncVar(iftab=255 UDF) wrapper in XLS that we don't yet replicate.
+    // Tracked as a known divergence in INDEX's FunctionDef.
 ];
 
 fn nested_function_workbook() -> Workbook {
@@ -369,6 +375,7 @@ fn nested_function_workbook() -> Workbook {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 4.0).unwrap();
     ws.set_cell_value("A2", -3.0).unwrap();
+    ws.set_cell_value("A3", 6.0).unwrap();
     for (cell, formula, expected) in NESTED_FUNCTION_FORMULAS {
         ws.set_cell_formula(cell, formula).unwrap();
         let addr = CellAddress::parse(cell).unwrap();
@@ -387,6 +394,7 @@ fn excel_authored_nested_function_xls_bytes() -> Vec<u8> {
         let wb = excel.create_workbook().expect("create Excel workbook");
         wb.set_cell_value("A1", 4.0).expect("set A1");
         wb.set_cell_value("A2", -3.0).expect("set A2");
+        wb.set_cell_value("A3", 6.0).expect("set A3");
         for (cell, formula, _) in NESTED_FUNCTION_FORMULAS {
             wb.set_cell_formula(cell, formula)
                 .expect("set Excel formula");
