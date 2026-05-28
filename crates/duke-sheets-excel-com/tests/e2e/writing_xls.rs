@@ -2190,19 +2190,25 @@ fn excel_byte_parity_for_atp_functions_we_emit() {
     );
 }
 
-/// Comprehensive: every Analysis-ToolPak function (Ftab 384..=476, minus
-/// RANDBETWEEN) in one workbook, byte-compared against Excel's native XLS
-/// emission — the add-in form (PtgNameX + EXTERNNAME, R-class args,
-/// PtgFuncVar iftab=255). Emitted in Ftab order (not alphabetical), so this
-/// also pins that our alphabetical EXTERNNAME ordering / nameindex assignment
-/// matches Excel's: a divergent order would shift every nameindex.
+/// Comprehensive: every Analysis-ToolPak function (Ftab 384..=476) in one
+/// workbook, byte-compared against Excel's native XLS emission — the add-in
+/// form (PtgNameX + EXTERNNAME, R-class args, PtgFuncVar iftab=255). Emitted
+/// in Ftab order (not alphabetical), so this also pins that our alphabetical
+/// EXTERNNAME ordering / nameindex assignment matches Excel's: a divergent
+/// order would shift every nameindex.
 ///
-/// Tolerant of formulas Excel rejects on entry (wrong `min_args` → invalid
-/// minimal call), skipping them on both sides.
+/// Scope: this verifies byte-parity of the formula token streams and all
+/// EXTERNNAME record bodies. It does not re-open our file in Excel —
+/// `excel_byte_parity_for_atp_functions_we_emit` covers "Excel opens our
+/// add-in file with no Repair", and the SUPBOOK/EXTERNSHEET structure is
+/// identical regardless of function count (only the EXTERNNAME count scales,
+/// and those bytes are compared here).
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
     let formulas = atp_all_formulas();
+    // Lock the coverage count: the add-in range is Ftab 384..=476 (93 fns).
+    assert_eq!(formulas.len(), 93, "must exercise all 93 ATP functions");
 
     // Author each in Excel (XLS); keep the accepted set + Excel's bytes.
     let fixture = temp_fixture_xls();

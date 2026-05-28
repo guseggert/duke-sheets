@@ -267,6 +267,8 @@ fn excel_byte_parity_for_all_xlsb_atp_functions_we_emit() {
     use std::io::Cursor;
 
     let formulas = atp_all_formulas();
+    // Lock the coverage count: the add-in range is Ftab 384..=476 (93 fns).
+    assert_eq!(formulas.len(), 93, "must exercise all 93 ATP functions");
 
     // Author each formula in Excel; keep the set Excel accepts + its bytes.
     let fixture = temp_fixture_xlsb();
