@@ -388,6 +388,46 @@ pub fn xls_externname_record_bodies(bytes: &[u8]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// Every Analysis-ToolPak add-in function (Ftab 384..=476) paired with a
+/// minimal valid call: `(cell, formula)` with the function's `min_args`
+/// arguments drawn from A1.. so a single workbook exercises the whole range
+/// in one Excel round-trip.
+///
+/// Emitted in Ftab-index order (NOT alphabetical), so the comparison also
+/// stress-tests the XLS EXTERNNAME ordering / nameindex assignment — a
+/// scrambled first-use order would diverge from our alphabetical sort if the
+/// assumption were wrong.
+///
+/// Two functions are excluded:
+/// - RANDBETWEEN (464): its volatility classification varies by Excel version
+///   (it was an add-in before Excel 2010), so its PtgAttrVolatile prefix is
+///   not a stable parity target.
+/// - ACCRINTM (470): our `min_args` is 3 (we treat `par` as optional), but
+///   Excel requires 4, so the minimal call we generate is invalid in Excel —
+///   a metadata/semantic divergence unrelated to ATP serialization. Excel
+///   also leaves an orphan EXTERNNAME when the rejected cell is typed, which
+///   would shift every nameindex.
+pub fn atp_all_formulas() -> Vec<(String, String)> {
+    use duke_sheets_xls::biff::formula::function_table::{function_min_args, function_name};
+
+    let mut out = Vec::new();
+    let mut row = 1u32;
+    for idx in 384u16..=476 {
+        if idx == 464 || idx == 470 {
+            continue; // see exclusions in the doc comment
+        }
+        let name = function_name(idx);
+        if name.is_empty() {
+            continue;
+        }
+        let n = function_min_args(idx).unwrap_or(1).max(1);
+        let args: Vec<String> = (1..=n).map(|i| format!("A{i}")).collect();
+        out.push((format!("B{row}"), format!("={}({})", name, args.join(","))));
+        row += 1;
+    }
+    out
+}
+
 /// Zero out the per-MS-XLS "undefined" bytes inside PtgAttrSum / PtgAttrVolatile
 /// so test comparisons aren't sensitive to whatever Excel left in them.
 fn normalize_attr_reserved_bytes(tokens: &mut [u8]) {

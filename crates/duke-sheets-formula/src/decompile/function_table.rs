@@ -57,6 +57,18 @@ pub fn function_argc(idx: u16) -> u16 {
         .unwrap_or(255)
 }
 
+/// Minimum number of arguments function `iftab` accepts, or `None` for an
+/// unknown index. Useful for synthesizing a minimal valid call.
+pub fn function_min_args(idx: u16) -> Option<usize> {
+    registry().get_by_iftab(idx).map(|def| def.min_args)
+}
+
+/// Maximum number of arguments function `iftab` accepts (`None` = unbounded or
+/// unknown index).
+pub fn function_max_args(idx: u16) -> Option<usize> {
+    registry().get_by_iftab(idx).and_then(|def| def.max_args)
+}
+
 /// True if function `iftab` accepts `actual_argc` as a fixed-arity call,
 /// suitable for PtgFunc (0x41) emission. Otherwise the writer must emit
 /// PtgFuncVar (0x42) with an explicit argument count.
@@ -66,11 +78,21 @@ pub fn function_argc(idx: u16) -> u16 {
 /// matching `actual_argc`. The per-function [`FunctionDef::fixed_arity`]
 /// allow-list is grown empirically from Excel-authored byte-parity tests.
 ///
+/// Analysis-ToolPak add-in functions (Ftab 384..=476) follow a uniform rule:
+/// those with a single valid arity (`min_args == max_args`) are emitted by
+/// Excel as PtgFunc, those with an argument range as PtgFuncVar. This was
+/// confirmed across the whole range by the comprehensive XLSB ATP parity test
+/// (`excel_byte_parity_for_all_xlsb_atp_functions_we_emit`), so the rule is
+/// derived from min/max rather than a per-function `fixed_arity` flag.
+///
 /// [`FunctionDef::fixed_arity`]: crate::functions::FunctionDef::fixed_arity
 pub fn function_is_fixed_arity(iftab: u16, actual_argc: usize) -> bool {
     let Some(def) = registry().get_by_iftab(iftab) else {
         return false;
     };
+    if function_is_biff8_addin(iftab) {
+        return def.max_args == Some(def.min_args) && actual_argc == def.min_args;
+    }
     def.fixed_arity && def.declared_argc as usize == actual_argc
 }
 

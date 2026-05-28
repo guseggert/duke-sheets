@@ -2237,12 +2237,11 @@ impl FunctionRegistry {
             declared_argc: 2,
             min_args: 2,
             max_args: Some(2),
-            // Fixed 2-arg: Excel emits native EDATE as PtgFunc (XLSB/XLSX).
-            // In XLS (BIFF8) it instead uses the Analysis-ToolPak add-in form
-            // (PtgNameX + EXTERNNAME + PtgFuncVar iftab=255), handled by the
-            // XLS writer's add-in branch; fixed_arity only affects the native
-            // (XLSB) path. Both are byte-parity verified against Excel.
-            fixed_arity: true,
+            // Native XLSB emits EDATE as PtgFunc (fixed 2-arg); XLS uses the
+            // Analysis-ToolPak add-in form (PtgNameX + EXTERNNAME). Both are
+            // byte-parity verified. The PtgFunc-vs-PtgFuncVar choice is derived
+            // from min_args == max_args for add-in functions (see
+            // function_is_fixed_arity), so no explicit fixed_arity flag here.
             implementation: date::fn_edate,
             volatile: false,
             ..Default::default()
@@ -2254,9 +2253,9 @@ impl FunctionRegistry {
             declared_argc: 2,
             min_args: 2,
             max_args: Some(2),
-            // Fixed 2-arg, same dual emission as EDATE: native PtgFunc for
-            // XLSB, Analysis-ToolPak add-in form for XLS. Byte-parity verified.
-            fixed_arity: true,
+            // Same dual emission as EDATE: native PtgFunc for XLSB,
+            // Analysis-ToolPak add-in form for XLS; fixed-arity derived from
+            // min_args == max_args (see function_is_fixed_arity).
             implementation: date::fn_eomonth,
             volatile: false,
             ..Default::default()

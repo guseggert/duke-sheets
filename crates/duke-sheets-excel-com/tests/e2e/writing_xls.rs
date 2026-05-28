@@ -22,7 +22,7 @@ use excel_com_protocol::ResponseData;
 use serde_json::json;
 
 use crate::{
-    cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
+    atp_all_formulas, cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
     roundtrip_through_excel_xls, roundtrip_through_excel_xls_bytes, temp_fixture_xls,
     xls_externname_record_bodies, xls_formula_ptg_streams_for_compare,
 };
@@ -2187,5 +2187,115 @@ fn excel_byte_parity_for_atp_functions_we_emit() {
     assert_eq!(
         writer_externnames, authored_externnames,
         "our EXTERNNAME records differ from Excel-authored output"
+    );
+}
+
+/// Comprehensive: every Analysis-ToolPak function (Ftab 384..=476, minus
+/// RANDBETWEEN) in one workbook, byte-compared against Excel's native XLS
+/// emission — the add-in form (PtgNameX + EXTERNNAME, R-class args,
+/// PtgFuncVar iftab=255). Emitted in Ftab order (not alphabetical), so this
+/// also pins that our alphabetical EXTERNNAME ordering / nameindex assignment
+/// matches Excel's: a divergent order would shift every nameindex.
+///
+/// Tolerant of formulas Excel rejects on entry (wrong `min_args` → invalid
+/// minimal call), skipping them on both sides.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
+    let formulas = atp_all_formulas();
+
+    // Author each in Excel (XLS); keep the accepted set + Excel's bytes.
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+    let mut rejected = Vec::new();
+    let mut accepted: Vec<(String, String)> = Vec::new();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create Excel workbook");
+        for i in 1..=10u32 {
+            wb.set_cell_value(&format!("A{i}"), 30000.0 + i as f64)
+                .unwrap();
+        }
+        for (cell, formula) in &formulas {
+            match wb.set_cell_formula(cell, formula) {
+                Ok(_) => accepted.push((cell.clone(), formula.clone())),
+                Err(e) => rejected.push(format!("{formula} ({e})")),
+            }
+        }
+        excel.recalculate().unwrap();
+        wb.save_as(&fixture.vm_path, 56).expect("Excel SaveAs xls");
+        wb.close().unwrap();
+    }
+    pull_file_from_vm(&fixture);
+    let excel_bytes = std::fs::read(&fixture.host_path).unwrap();
+    cleanup_fixture(&fixture);
+
+    // Build our writer's bytes from the SAME accepted formulas (VM-free).
+    // A cached result is required: the XLS writer only emits FORMULA records
+    // for cells that carry a value.
+    let mut wb = Workbook::new();
+    {
+        let ws = wb.worksheet_mut(0).unwrap();
+        for i in 1..=10u32 {
+            ws.set_cell_value_at(i - 1, 0, 30000.0 + i as f64).unwrap();
+        }
+        for (cell, formula) in &accepted {
+            ws.set_cell_formula(cell, formula).unwrap();
+            let addr = CellAddress::parse(cell).unwrap();
+            ws.set_formula_result(addr.row, addr.col, CellValue::Number(0.0))
+                .unwrap();
+        }
+    }
+    let our_bytes = duke_sheets_xls::XlsWriter::write_to_bytes(&wb).expect("our write");
+
+    assert!(
+        accepted.len() >= 85,
+        "expected most ATP functions accepted, got {} (rejected: {:?})",
+        accepted.len(),
+        rejected
+    );
+
+    // Formula token streams: PtgNameX(nameindex) + R-class args + PtgFuncVar.
+    let mut ours = xls_formula_ptg_streams_for_compare(&our_bytes);
+    let mut excel = xls_formula_ptg_streams_for_compare(&excel_bytes);
+    ours.sort_by_key(|s| (s.row, s.col));
+    excel.sort_by_key(|s| (s.row, s.col));
+    assert_eq!(
+        ours.len(),
+        excel.len(),
+        "formula record count differs: ours={} excel={}",
+        ours.len(),
+        excel.len()
+    );
+    let mut diffs = Vec::new();
+    for (w, a) in ours.iter().zip(excel.iter()) {
+        if w.tokens != a.tokens || w.rgcb != a.rgcb {
+            diffs.push(format!(
+                "r{}c{}: ours tok={:02X?} rgcb={:02X?}\n        excel tok={:02X?} rgcb={:02X?}",
+                w.row, w.col, w.tokens, w.rgcb, a.tokens, a.rgcb
+            ));
+        }
+    }
+    assert!(
+        diffs.is_empty(),
+        "XLS ATP token-stream mismatches ({} of {}):\n{}",
+        diffs.len(),
+        accepted.len(),
+        diffs.join("\n")
+    );
+
+    // EXTERNNAME records: one per distinct function, our alphabetical order
+    // must match Excel's byte-for-byte (count + bodies).
+    let our_en = xls_externname_record_bodies(&our_bytes);
+    let excel_en = xls_externname_record_bodies(&excel_bytes);
+    assert_eq!(
+        our_en.len(),
+        accepted.len(),
+        "one EXTERNNAME per accepted add-in function"
+    );
+    assert_eq!(
+        our_en, excel_en,
+        "our EXTERNNAME records (order/bodies) differ from Excel-authored output"
     );
 }

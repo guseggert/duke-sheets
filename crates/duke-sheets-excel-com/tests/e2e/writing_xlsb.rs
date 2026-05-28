@@ -20,7 +20,7 @@ use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibil
 use duke_sheets_core::{CellAddress, CellRange, CellValue, Hyperlink, Workbook};
 
 use crate::{
-    cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
+    atp_all_formulas, cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
     roundtrip_through_excel_xlsb, roundtrip_through_excel_xlsb_bytes, temp_fixture_xlsb,
     xlsb_formula_ptg_streams_for_compare,
 };
@@ -246,6 +246,99 @@ fn excel_byte_parity_for_xlsb_atp_functions_we_emit() {
     assert_eq!(
         writer_ptgs, authored_ptgs,
         "our XLSB ATP token streams differ from Excel-authored output"
+    );
+}
+
+/// Comprehensive: every Analysis-ToolPak function (Ftab 384..=476, minus
+/// RANDBETWEEN) in one workbook, byte-compared against Excel's native XLSB
+/// emission. Pins PtgFunc-vs-PtgFuncVar and R-class arguments across the whole
+/// range, not just a hand-picked sample.
+///
+/// Tolerant of formulas Excel rejects on entry (a wrong `min_args` in our
+/// metadata yields an invalid minimal call): those are recorded and skipped on
+/// both sides so the serialization check isn't derailed by arg-count metadata
+/// bugs. For XLSB there is no SUPBOOK/EXTERNNAME, so token-stream parity
+/// against Excel's authoring is sufficient (a malformed token stream would not
+/// match Excel's bytes).
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_byte_parity_for_all_xlsb_atp_functions_we_emit() {
+    use duke_sheets_xlsb::XlsbWriter;
+    use std::io::Cursor;
+
+    let formulas = atp_all_formulas();
+
+    // Author each formula in Excel; keep the set Excel accepts + its bytes.
+    let fixture = temp_fixture_xlsb();
+    ensure_vm_temp_dir();
+    let mut rejected = Vec::new();
+    let mut accepted: Vec<(String, String)> = Vec::new();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create Excel workbook");
+        for i in 1..=10u32 {
+            wb.set_cell_value(&format!("A{i}"), 30000.0 + i as f64)
+                .unwrap();
+        }
+        for (cell, formula) in &formulas {
+            match wb.set_cell_formula(cell, formula) {
+                Ok(_) => accepted.push((cell.clone(), formula.clone())),
+                Err(e) => rejected.push(format!("{formula} ({e})")),
+            }
+        }
+        excel.recalculate().unwrap();
+        wb.save_as(&fixture.vm_path, 50).unwrap();
+        wb.close().unwrap();
+    }
+    pull_file_from_vm(&fixture);
+    let excel_bytes = std::fs::read(&fixture.host_path).unwrap();
+    cleanup_fixture(&fixture);
+
+    // Build our writer's bytes from the SAME accepted formulas (VM-free).
+    let mut wb = Workbook::new();
+    {
+        let ws = wb.worksheet_mut(0).unwrap();
+        for i in 1..=10u32 {
+            ws.set_cell_value_at(i - 1, 0, 30000.0 + i as f64).unwrap();
+        }
+        for (cell, formula) in &accepted {
+            ws.set_cell_formula(cell, formula).unwrap();
+        }
+    }
+    let mut our_buf = Vec::new();
+    XlsbWriter::write(&wb, Cursor::new(&mut our_buf)).expect("our write");
+
+    let ours = xlsb_formula_ptg_streams_for_compare(&our_buf);
+    let excel = xlsb_formula_ptg_streams_for_compare(&excel_bytes);
+    assert!(
+        accepted.len() >= 85,
+        "expected most ATP functions accepted, got {} (rejected: {:?})",
+        accepted.len(),
+        rejected
+    );
+    assert_eq!(
+        ours.len(),
+        accepted.len(),
+        "our writer must emit a formula stream for every accepted ATP call"
+    );
+
+    let mut diffs = Vec::new();
+    for (i, (w, a)) in ours.iter().zip(excel.iter()).enumerate() {
+        if w.rgce != a.rgce {
+            let fname = accepted.get(i).map(|(_, f)| f.as_str()).unwrap_or("?");
+            diffs.push(format!(
+                "{fname}\n      ours ={:02X?}\n      excel={:02X?}",
+                w.rgce, a.rgce
+            ));
+        }
+    }
+    assert!(
+        diffs.is_empty() && ours == excel,
+        "XLSB ATP token-stream mismatches ({} of {}):\n{}",
+        diffs.len(),
+        accepted.len(),
+        diffs.join("\n")
     );
 }
 
