@@ -510,6 +510,136 @@ fn choose_naked_ref_branch_uses_r_class() {
 }
 
 #[test]
+fn nested_if_in_if_emits_r_class_inner_func() {
+    // Excel: a nested IF in the t/f branch of an outer IF emits the inner
+    // IF's PtgFuncVar as R-class (0x22) because IF is reference-class and
+    // the branch position is val_or_ref. The outer IF stays V-class (0x42).
+    // Verified against Excel-authored bytes for =IF(A1>0,IF(A1>10,1,2),3).
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 4.0).unwrap();
+    ws.set_cell_formula("B1", "=IF(A1>0,IF(A1>10,1,2),3)").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(2.0)).unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    // The stream contains two PtgFuncVar(iftab=1) tokens. The inner one
+    // must be R-class (0x22), the outer (final) one V-class (0x42).
+    let if_var_positions: Vec<usize> = tokens
+        .windows(4)
+        .enumerate()
+        .filter(|(_, w)| (w[0] == 0x22 || w[0] == 0x42) && w[1] == 0x03 && w[2] == 0x01 && w[3] == 0x00)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        if_var_positions.len(),
+        2,
+        "expected two IF PtgFuncVar tokens; tokens={tokens:02X?}"
+    );
+    // Inner IF (earlier in stream) = R-class
+    assert_eq!(
+        tokens[if_var_positions[0]], 0x22,
+        "inner IF must be R-class (0x22); tokens={tokens:02X?}"
+    );
+    // Outer IF (last token) = V-class
+    assert_eq!(
+        tokens[if_var_positions[1]], 0x42,
+        "outer IF must be V-class (0x42); tokens={tokens:02X?}"
+    );
+}
+
+#[test]
+fn if_in_value_function_emits_v_class_inner_func() {
+    // Excel: =ABS(IF(A1>0,A1,A2)) — ABS's arg is V-class, so the inner IF
+    // is emitted V-class (0x42). Contrast with SUM(IF(...)) where the IF is
+    // R-class. Verified against Excel-authored bytes.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 4.0).unwrap();
+    ws.set_cell_value("A2", -3.0).unwrap();
+    ws.set_cell_formula("B1", "=ABS(IF(A1>0,A1,A2))").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(4.0)).unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    // Inner IF PtgFuncVar must be V-class (0x42).
+    let if_var = tokens
+        .windows(4)
+        .find(|w| (w[0] == 0x22 || w[0] == 0x42) && w[1] == 0x03 && w[2] == 0x01 && w[3] == 0x00)
+        .map(|w| w[0]);
+    assert_eq!(
+        if_var,
+        Some(0x42),
+        "IF inside value-fn ABS must be V-class; tokens={tokens:02X?}"
+    );
+    // ABS is fixed-arity V-class PtgFunc (0x41) iftab=24.
+    assert_eq!(&tokens[tokens.len() - 3..], &[0x41, 0x18, 0x00]);
+}
+
+#[test]
+fn sum_of_if_emits_r_class_inner_func() {
+    // =SUM(IF(A1>0,A1,A2)) — SUM's arg is R-class and IF is reference-class,
+    // so the inner IF is R-class (0x22). Verified against Excel-authored bytes.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 4.0).unwrap();
+    ws.set_cell_value("A2", -3.0).unwrap();
+    ws.set_cell_formula("B1", "=SUM(IF(A1>0,A1,A2))").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(4.0)).unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    let if_var = tokens
+        .windows(4)
+        .find(|w| (w[0] == 0x22 || w[0] == 0x42) && w[1] == 0x03 && w[2] == 0x01 && w[3] == 0x00)
+        .map(|w| w[0]);
+    assert_eq!(
+        if_var,
+        Some(0x22),
+        "IF inside SUM must be R-class; tokens={tokens:02X?}"
+    );
+}
+
+#[test]
+fn giant_if_branch_falls_back_without_corruption() {
+    // When the IF true-branch compiles to more bytes than the u16 PtgAttrIf
+    // offset can address, emit_optimized_if returns Ok(false) and the caller
+    // falls back to plain emission. Because the total stream also exceeds the
+    // u16 cce limit, the FORMULA record can't be written and the cell falls
+    // back to its cached value. The important guarantees: no panic, and the
+    // (now scratch-first) optimizer doesn't leave a half-written, duplicated
+    // condition token in the stream.
+    //
+    // Build a true-branch that is a single SUM with ~22000 flat integer
+    // args (~66KB of PtgInt + one PtgFuncVar), comfortably past the
+    // 65531-byte PtgAttrIf threshold. A flat arg list avoids the deep AST
+    // recursion a `1+1+1+...` chain would cause.
+    let mut branch = String::from("SUM(1");
+    for _ in 0..22000 {
+        branch.push_str(",1");
+    }
+    branch.push(')');
+    let formula = format!("=IF(A1>0,{branch},2)");
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 5.0).unwrap();
+    ws.set_cell_formula("B1", &formula).unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(22001.0))
+        .unwrap();
+
+    // Must not panic on write or read.
+    let parsed = write_then_read(&wb);
+    let s = parsed.worksheet(0).unwrap();
+    // Cell survives as its cached value (formula too large for a FORMULA
+    // record). Either a formula or the cached number is acceptable; what
+    // matters is the value is intact and nothing is corrupted.
+    let v = s.get_value_at(0, 1);
+    assert_eq!(
+        v.effective_value(),
+        &CellValue::Number(22001.0),
+        "giant IF must round-trip its cached value without corruption"
+    );
+}
+
+#[test]
 fn if_formula_text_survives_round_trip() {
     // Beyond byte parity, the formula text must survive a write → read
     // cycle. The decompiler treats PtgAttrIf / PtgAttrSkip / PtgAttrVolatile
