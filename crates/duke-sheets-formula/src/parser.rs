@@ -858,10 +858,13 @@ impl<'a> FormulaParser<'a> {
                 while matches!(self.current_token(), Token::Comma) {
                     self.consume();
                     let right = self.parse_expression()?;
+                    // Source order: the accumulated expr is the left operand,
+                    // the new term the right. Writers emit left then right then
+                    // PtgUnion, so this matches Excel's `(a,b)` => a, b, tUnion.
                     expr = FormulaExpr::BinaryOp {
                         op: BinaryOperator::Union,
-                        left: Box::new(right),
-                        right: Box::new(expr),
+                        left: Box::new(expr),
+                        right: Box::new(right),
                     };
                     is_union = true;
                 }
