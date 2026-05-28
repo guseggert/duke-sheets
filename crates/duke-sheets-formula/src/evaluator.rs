@@ -1105,6 +1105,21 @@ fn evaluate_unary_op(
                 .ok_or_else(|| FormulaError::Evaluation("Expected number".into()))?;
             Ok(FormulaValue::Number(-n))
         }
+        UnaryOperator::Plus => {
+            // Unary plus: Excel coerces text/bool to number but otherwise
+            // passes the value through. Arrays pass through unchanged.
+            match val {
+                FormulaValue::Array { .. } => Ok(val),
+                other => match other.as_number() {
+                    Some(n) => Ok(FormulaValue::Number(n)),
+                    None => Ok(other),
+                },
+            }
+        }
+        UnaryOperator::Paren => {
+            // Parentheses are a grouping no-op at evaluation time.
+            Ok(val)
+        }
         UnaryOperator::Percent => {
             let n = val
                 .as_number()

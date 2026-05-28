@@ -48,6 +48,9 @@ const XLSB_FORMULA_FORMULAS: &[(&str, &str, f64)] = &[
     ("B9", "=SUM(IF(A1>0,A1,A2))", 2.0), // nested IF R-class in SUM
     ("B10", "=SUM(OFFSET(A1,0,0))", 2.0), // OFFSET R-class + volatile
     ("B11", "=INDEX(A1:A3,1)", 2.0),   // INDEX arg0 R-class, V token
+    ("B12", "=+A1", 2.0),              // PtgUplus
+    ("B13", "=(A1+A2)*2", 10.0),       // PtgParen
+    ("B14", "=((A1))", 2.0),           // nested PtgParen
 ];
 
 fn xlsb_formula_workbook() -> Workbook {

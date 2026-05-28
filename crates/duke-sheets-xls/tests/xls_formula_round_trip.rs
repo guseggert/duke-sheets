@@ -600,6 +600,54 @@ fn if_in_value_function_emits_v_class_inner_func() {
 }
 
 #[test]
+fn unary_plus_emits_ptg_uplus() {
+    // =+A1 → PtgRef, PtgUplus (0x12). Excel preserves the leading plus.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 2.0).unwrap();
+    ws.set_cell_formula("B1", "=+A1").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(2.0)).unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    assert_eq!(tokens[0], 0x44, "operand A1 V-class; {tokens:02X?}");
+    assert_eq!(tokens.last().copied(), Some(0x12), "trailing PtgUplus; {tokens:02X?}");
+    assert_eq!(tokens.len(), 6);
+}
+
+#[test]
+fn parentheses_emit_ptg_paren() {
+    // =(A1+A2)*2 → A1, A2, Add, PtgParen(0x15), Int(2), Mul. Excel keeps the
+    // paren as a postfix PtgParen token.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 2.0).unwrap();
+    ws.set_cell_value("A2", 3.0).unwrap();
+    ws.set_cell_formula("B1", "=(A1+A2)*2").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(10.0)).unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    // 5(ref) + 5(ref) + 1(add) + 1(paren) + 3(int) + 1(mul) = 16
+    assert_eq!(tokens.len(), 16, "{tokens:02X?}");
+    assert_eq!(tokens[10], 0x03, "PtgAdd; {tokens:02X?}");
+    assert_eq!(tokens[11], 0x15, "PtgParen; {tokens:02X?}");
+    assert_eq!(tokens[15], 0x05, "PtgMul; {tokens:02X?}");
+}
+
+#[test]
+fn nested_parentheses_emit_multiple_ptg_paren() {
+    // =((A1)) → PtgRef, PtgParen, PtgParen. Every paren pair preserved.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 2.0).unwrap();
+    ws.set_cell_formula("B1", "=((A1))").unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(2.0)).unwrap();
+
+    let tokens = only_formula_tokens(&wb);
+    assert_eq!(tokens.len(), 7, "{tokens:02X?}");
+    assert_eq!(&tokens[5..7], &[0x15, 0x15], "two PtgParen; {tokens:02X?}");
+}
+
+#[test]
 fn vlookup_table_array_emits_r_class() {
     // VLOOKUP(lookup_value, table_array, col_index): the table_array (arg 1)
     // is a reference, emitted R-class PtgArea (0x25); lookup_value (arg 0)

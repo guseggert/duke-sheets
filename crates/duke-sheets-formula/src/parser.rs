@@ -716,10 +716,15 @@ impl<'a> FormulaParser<'a> {
             });
         }
 
-        // Prefix plus (no-op)
+        // Prefix plus. Excel preserves it as a distinct PtgUplus token, so we
+        // keep it in the AST rather than dropping it.
         if matches!(self.current_token(), Token::Plus) {
             self.consume();
-            return self.parse_unary();
+            let operand = self.parse_unary()?;
+            return Ok(FormulaExpr::UnaryOp {
+                op: UnaryOperator::Plus,
+                operand: Box::new(operand),
+            });
         }
 
         // Prefix implicit intersection (@)
@@ -849,17 +854,30 @@ impl<'a> FormulaParser<'a> {
                 // forms a Union expression. Function-call commas
                 // are handled separately in parse_function_call,
                 // which never reaches this branch.
+                let mut is_union = false;
                 while matches!(self.current_token(), Token::Comma) {
                     self.consume();
                     let right = self.parse_expression()?;
                     expr = FormulaExpr::BinaryOp {
                         op: BinaryOperator::Union,
-                        left: Box::new(expr),
-                        right: Box::new(right),
+                        left: Box::new(right),
+                        right: Box::new(expr),
                     };
+                    is_union = true;
                 }
                 self.expect(&Token::RightParen)?;
-                Ok(expr)
+                // Excel preserves the parentheses as a postfix PtgParen token
+                // (even when redundant or nested). The union-in-parens form
+                // carries its own parenthesis handling in the writers'
+                // PtgMemFunc path, so don't double-wrap it here.
+                if is_union {
+                    Ok(expr)
+                } else {
+                    Ok(FormulaExpr::UnaryOp {
+                        op: UnaryOperator::Paren,
+                        operand: Box::new(expr),
+                    })
+                }
             }
 
             Token::LeftBrace => self.parse_array(),
@@ -1337,11 +1355,20 @@ mod tests {
 
     #[test]
     fn test_parse_parentheses() {
+        // Parentheses are preserved as a UnaryOp(Paren) wrapper so they
+        // round-trip to Excel's PtgParen token byte-for-byte.
         let ast = parse_formula("=(1+2)*3").unwrap();
         if let FormulaExpr::BinaryOp { op, left, right } = ast {
             assert_eq!(op, BinaryOperator::Multiply);
+            let FormulaExpr::UnaryOp {
+                op: UnaryOperator::Paren,
+                operand,
+            } = *left
+            else {
+                panic!("Expected left to be UnaryOp(Paren), got {left:?}");
+            };
             assert!(matches!(
-                *left,
+                *operand,
                 FormulaExpr::BinaryOp {
                     op: BinaryOperator::Add,
                     ..

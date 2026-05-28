@@ -348,8 +348,10 @@ fn emit_binary_op(op: BinaryOperator, out: &mut Vec<u8>) -> Result<(), String> {
 
 fn emit_unary_op(op: UnaryOperator, out: &mut Vec<u8>) -> Result<(), String> {
     let byte = match op {
+        UnaryOperator::Plus => ptg::PTG_UPLUS,
         UnaryOperator::Negate => ptg::PTG_UMINUS,
         UnaryOperator::Percent => ptg::PTG_PERCENT,
+        UnaryOperator::Paren => ptg::PTG_PAREN,
         UnaryOperator::ImplicitIntersection | UnaryOperator::SpillRange => {
             // These are dynamic array operators with no classical Ptg encoding.
             // Skip silently - the formula still evaluates via the cached value.

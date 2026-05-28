@@ -125,7 +125,14 @@ pub struct ExternalReference {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOperator {
     Negate,
+    /// Unary plus (e.g. `=+A1`). A value-coercing no-op, but Excel preserves
+    /// it as a distinct token (PtgUplus) for round-trip fidelity.
+    Plus,
     Percent,
+    /// Explicit parentheses (e.g. `=(A1+A2)`). Semantically a no-op, but Excel
+    /// preserves every paren pair as a postfix PtgParen token — including
+    /// redundant and nested parens — so we model it to round-trip exactly.
+    Paren,
     /// Implicit intersection operator (@) - selects a single value from a range
     ImplicitIntersection,
     /// Spill range operator (#) - references the entire spill range of a cell

@@ -3134,8 +3134,10 @@ fn compile_ptgs_with_context(
         FormulaExpr::UnaryOp { op, operand } => {
             compile_ptgs_with_context(operand, out, externsheet, names, operand_class)?;
             out.push(match op {
-                UnaryOperator::Negate => 0x13,
-                UnaryOperator::Percent => 0x14,
+                UnaryOperator::Plus => 0x12,    // PtgUplus
+                UnaryOperator::Negate => 0x13,  // PtgUminus
+                UnaryOperator::Percent => 0x14, // PtgPercent
+                UnaryOperator::Paren => 0x15,   // PtgParen
                 UnaryOperator::ImplicitIntersection | UnaryOperator::SpillRange => {
                     return Err(UnsupportedToken)
                 }

@@ -531,6 +531,75 @@ fn excel_authored_volatile_function_xls_bytes() -> Vec<u8> {
     bytes
 }
 
+/// Unary-plus and parenthesis preservation: Excel keeps `=+A1` as PtgUplus
+/// (0x12) and every paren pair as a postfix PtgParen (0x15), including
+/// redundant and nested parens. Verified byte-for-byte.
+const UPLUS_PAREN_FORMULAS: &[(&str, &str, f64)] = &[
+    ("B1", "=+A1", 2.0),
+    ("B2", "=(A1+A2)*2", 10.0),
+    ("B3", "=(A1)", 2.0),
+    ("B4", "=A1+(A2)", 5.0),
+    ("B5", "=-(A1)", -2.0),
+    ("B6", "=2*(A1+A2)", 10.0),
+    ("B7", "=((A1))", 2.0),
+];
+
+fn uplus_paren_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 2.0).unwrap();
+    ws.set_cell_value("A2", 3.0).unwrap();
+    for (cell, formula, expected) in UPLUS_PAREN_FORMULAS {
+        ws.set_cell_formula(cell, formula).unwrap();
+        let addr = CellAddress::parse(cell).unwrap();
+        ws.set_formula_result(addr.row, addr.col, CellValue::Number(*expected))
+            .unwrap();
+    }
+    wb
+}
+
+fn excel_authored_uplus_paren_xls_bytes() -> Vec<u8> {
+    let fixture = temp_fixture_xls();
+    ensure_vm_temp_dir();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create Excel workbook");
+        wb.set_cell_value("A1", 2.0).unwrap();
+        wb.set_cell_value("A2", 3.0).unwrap();
+        for (cell, formula, _) in UPLUS_PAREN_FORMULAS {
+            wb.set_cell_formula(cell, formula).unwrap();
+        }
+        excel.recalculate().unwrap();
+        wb.save_as(&fixture.vm_path, 56).unwrap();
+        wb.close().unwrap();
+    }
+    pull_file_from_vm(&fixture);
+    let bytes = std::fs::read(&fixture.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
+    cleanup_fixture(&fixture);
+    bytes
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_byte_parity_for_uplus_paren_we_emit() {
+    let wb = uplus_paren_workbook();
+    let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
+    let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
+    assert_eq!(
+        writer_ptgs, resave_ptgs,
+        "Excel canonicalized our XLS unary-plus/paren token streams on re-save"
+    );
+    let authored_ptgs =
+        xls_formula_ptg_streams_for_compare(&excel_authored_uplus_paren_xls_bytes());
+    assert_eq!(
+        writer_ptgs, authored_ptgs,
+        "our XLS unary-plus/paren token streams differ from Excel-authored output"
+    );
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_hyperlinks_we_emit() {
