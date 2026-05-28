@@ -482,19 +482,21 @@ fn parse_arean_fields(data: &[u8]) -> (i32, i32, i16, i16, bool, bool, bool, boo
 
 /// Parse a BIFF12 array constant from the extra-data section.
 ///
-/// BIFF12 format: cols(u32, 1-based) + rows(u32, 1-based) + elements.
-/// SerAr types: 0x00=number, 0x01=string, 0x02=bool, 0x04=error, 0x10=empty.
+/// BIFF12 format: rows(u32) + cols(u32) + row-major elements. Verified
+/// against native Excel authoring (e.g. {1,2,3} (1x3) → 01 00 00 00 03 00 00
+/// 00). SerAr types: 0x00=number, 0x01=string, 0x02=bool, 0x04=error,
+/// 0x10=empty.
 fn parse_array_constant(extra: &[u8], epos: &mut usize) -> String {
     if *epos + 8 > extra.len() {
         return "{<?>}".to_string();
     }
-    let nc = u32::from_le_bytes([
+    let nr = u32::from_le_bytes([
         extra[*epos],
         extra[*epos + 1],
         extra[*epos + 2],
         extra[*epos + 3],
     ]) as usize;
-    let nr = u32::from_le_bytes([
+    let nc = u32::from_le_bytes([
         extra[*epos + 4],
         extra[*epos + 5],
         extra[*epos + 6],
@@ -875,9 +877,9 @@ mod tests {
         let mut token_data = vec![0x60];
         token_data.extend_from_slice(&[0u8; 14]);
         let mut extra = Vec::new();
-        // BIFF12: cols(u32, 1-based) + rows(u32, 1-based)
-        extra.extend_from_slice(&3u32.to_le_bytes()); // 3 cols
+        // BIFF12: rows(u32) + cols(u32) — rows first, matching native Excel.
         extra.extend_from_slice(&1u32.to_le_bytes()); // 1 row
+        extra.extend_from_slice(&3u32.to_le_bytes()); // 3 cols
                                                       // BIFF12 SerAr: type 0x00 = number (f64)
         for val in [1.0f64, 2.0, 3.0] {
             extra.push(0x00);

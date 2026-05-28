@@ -185,16 +185,20 @@ fn emit_array(
     out: &mut Vec<u8>,
     extra: &mut Vec<u8>,
 ) -> Result<(), String> {
-    // tArray V-class placeholder: 1 ptg byte + 14 reserved bytes
-    out.push(ptg::v_class(ptg::PTG_ARRAY));
+    // PtgArray is A-class (0x60): array constants always carry the array
+    // data type. 1 ptg byte + 14 reserved bytes in the rgce. Verified
+    // against native Excel XLSB authoring.
+    out.push(ptg::a_class(ptg::PTG_ARRAY));
     out.extend_from_slice(&[0u8; 14]);
 
     let nr = rows.len();
     let nc = rows.first().map_or(0, |r| r.len());
 
-    // BIFF12 extra data: cols(u32, 1-based) + rows(u32, 1-based) + elements
-    extra.extend_from_slice(&(nc as u32).to_le_bytes());
+    // BIFF12 rgcb: rows(u32) + cols(u32) (actual counts, rows first), then
+    // row-major elements. Verified against native authoring: {1,2,3} (1x3)
+    // emits 01 00 00 00 03 00 00 00.
     extra.extend_from_slice(&(nr as u32).to_le_bytes());
+    extra.extend_from_slice(&(nc as u32).to_le_bytes());
 
     for row in rows {
         for expr in row {

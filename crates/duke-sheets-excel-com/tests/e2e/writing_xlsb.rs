@@ -32,6 +32,70 @@ fn range(start: &str, end: &str) -> CellRange {
     )
 }
 
+/// Diagnostic: author native XLSB array constants and dump the full BIFF12
+/// formula structure (rgce + cb + rgcb) from BrtCellFmla. Panics.
+#[test]
+#[ignore = "diagnostic: dumps native XLSB array rgce+rgcb"]
+fn dump_excel_authored_xlsb_arrays() {
+    use duke_sheets_xlsb::biff12::{records, RecordIter};
+    use std::io::{Cursor, Read};
+
+    let cases: &[(&str, &str)] = &[("B1", "=SUM({1,2,3})"), ("B2", "=SUM({1,2;3,4})")];
+
+    let fixture = temp_fixture_xlsb();
+    ensure_vm_temp_dir();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create Excel workbook");
+        for (cell, formula) in cases {
+            wb.set_cell_formula(cell, formula).unwrap();
+        }
+        excel.recalculate().unwrap();
+        wb.save_as(&fixture.vm_path, 50).unwrap();
+        wb.close().unwrap();
+    }
+    pull_file_from_vm(&fixture);
+    let bytes = std::fs::read(&fixture.host_path).unwrap();
+    cleanup_fixture(&fixture);
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).expect("open xlsb zip");
+    let names: Vec<String> = (0..zip.len())
+        .filter_map(|i| {
+            let f = zip.by_index(i).ok()?;
+            let n = f.name().to_string();
+            (n.starts_with("xl/worksheets/") && n.ends_with(".bin")).then_some(n)
+        })
+        .collect();
+    eprintln!("---- native XLSB array dump ----");
+    for name in names {
+        let mut data = Vec::new();
+        zip.by_name(&name)
+            .unwrap()
+            .read_to_end(&mut data)
+            .unwrap();
+        let mut iter = RecordIter::new(Cursor::new(&data));
+        let mut buf = Vec::new();
+        while let Ok((rt, len)) = iter.next_record(&mut buf) {
+            if rt == records::BRT_FMLA_NUM {
+                let p = &buf[..len];
+                let grbit = 16usize;
+                let cce =
+                    u32::from_le_bytes([p[grbit + 2], p[grbit + 3], p[grbit + 4], p[grbit + 5]])
+                        as usize;
+                let rgce_start = grbit + 6;
+                let rgce = &p[rgce_start..rgce_start + cce];
+                let cb_off = rgce_start + cce;
+                let cb = u32::from_le_bytes([p[cb_off], p[cb_off + 1], p[cb_off + 2], p[cb_off + 3]])
+                    as usize;
+                let rgcb = &p[cb_off + 4..cb_off + 4 + cb];
+                eprintln!("rgce={rgce:02X?} cb={cb} rgcb={rgcb:02X?}");
+            }
+        }
+    }
+    panic!("diagnostic dump complete");
+}
+
 /// Formulas exercising the XLSB formula compiler's operand-class threading,
 /// volatile prefix, fixed-arity allow-list, IF/CHOOSE short-circuit, and
 /// reference-class function tokens. Verified byte-for-byte against Excel's
@@ -51,13 +115,8 @@ const XLSB_FORMULA_FORMULAS: &[(&str, &str, f64)] = &[
     ("B12", "=+A1", 2.0),              // PtgUplus
     ("B13", "=(A1+A2)*2", 10.0),       // PtgParen
     ("B14", "=((A1))", 2.0),           // nested PtgParen
-    // NOTE: array constants (=SUM({1,2,3})) are NOT yet byte-parity-clean on
-    // XLSB. The pre-existing emit_array emits PtgArray V-class (should be
-    // A-class 0x60) and its BIFF12 rgcb layout is unverified against native
-    // authoring; Excel repairs our output into a PtgName+PtgFuncVar(UDF)
-    // wrapper. XLS array constants ARE done (PtgArray + rgcb, verified).
-    // Tracked as a follow-up: needs native XLSB array dump + an rgcb-aware
-    // XLSB extractor (current one captures only rgce).
+    ("B15", "=SUM({1,2,3})", 6.0),     // array constant: PtgArray(A) + rgcb
+    ("B16", "=SUM({1,2;3,4})", 10.0),  // 2x2 array constant
 ];
 
 fn xlsb_formula_workbook() -> Workbook {

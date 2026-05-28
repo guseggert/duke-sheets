@@ -516,6 +516,9 @@ pub struct XlsbFormulaPtgStream {
     pub row: u32,
     pub col: u32,
     pub rgce: Vec<u8>,
+    /// The rgcb (extra data) that follows the rgce in BrtCellFmla — array
+    /// constant element data, etc. Empty for formulas without such data.
+    pub rgcb: Vec<u8>,
 }
 
 /// Extract raw BIFF12 formula token (`rgce`) bytes keyed by cell, from every
@@ -592,10 +595,29 @@ pub fn xlsb_formula_ptg_streams(bytes: &[u8]) -> Vec<XlsbFormulaPtgStream> {
                     if rgce_start + cce > payload.len() {
                         continue;
                     }
+                    // rgcb follows the rgce: cb(u32) + rgcb(cb bytes).
+                    let cb_off = rgce_start + cce;
+                    let rgcb = if cb_off + 4 <= payload.len() {
+                        let cb = u32::from_le_bytes([
+                            payload[cb_off],
+                            payload[cb_off + 1],
+                            payload[cb_off + 2],
+                            payload[cb_off + 3],
+                        ]) as usize;
+                        let start = cb_off + 4;
+                        if start + cb <= payload.len() {
+                            payload[start..start + cb].to_vec()
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        Vec::new()
+                    };
                     streams.push(XlsbFormulaPtgStream {
                         row: current_row,
                         col,
                         rgce: payload[rgce_start..rgce_start + cce].to_vec(),
+                        rgcb,
                     });
                 }
                 _ => {}
@@ -676,6 +698,16 @@ fn normalize_xlsb_attr_reserved_bytes(tokens: &mut [u8]) {
                 if (flags & ptg::ATTR_CHOOSE) != 0 {
                     pos = pos.saturating_add((attr_data + 1) * 2);
                 }
+            }
+            ptg::PTG_ARRAY => {
+                // BIFF12 PtgArray has 14 unused bytes after the opcode; Excel
+                // leaves uninitialized stack values there. Zero them.
+                let n = 14usize;
+                let end = (pos + n).min(tokens.len());
+                for b in &mut tokens[pos..end] {
+                    *b = 0;
+                }
+                pos = pos.saturating_add(n);
             }
             ptg::PTG_STR => {
                 if pos + 2 > tokens.len() {
