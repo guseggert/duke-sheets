@@ -1014,6 +1014,37 @@ fn test_roundtrip_formula_cached_number() {
     }
 }
 
+/// Analysis-ToolPak add-in functions (EDATE, NETWORKDAYS, GCD, ...) serialize
+/// as plain formula text in XLSX — no special encoding, unlike the BIFF8
+/// add-in form (XLS) or native iftab tokens (XLSB). This pins that the text
+/// round-trips intact.
+#[test]
+fn test_roundtrip_atp_addin_functions() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    let cases = [
+        ("A1", "=EDATE(B1,12)"),
+        ("A2", "=NETWORKDAYS(B1,B2)"),
+        ("A3", "=GCD(B1,B2)"),
+    ];
+    for (cell, formula) in cases {
+        sheet.set_cell_formula(cell, formula).unwrap();
+    }
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    for (cell, formula) in cases {
+        assert_eq!(
+            formula_text_at(sheet2, cell),
+            Some(formula),
+            "ATP formula text must round-trip in XLSX for {cell}"
+        );
+    }
+}
+
 /// Test roundtrip of formula with string cached value
 #[test]
 fn test_roundtrip_formula_cached_string() {

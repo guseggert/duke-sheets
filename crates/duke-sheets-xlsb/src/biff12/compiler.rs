@@ -5,8 +5,8 @@ use duke_sheets_formula::ast::{
     BinaryOperator, CellReference, FormulaExpr, RangeReference, UnaryOperator,
 };
 use duke_sheets_formula::decompile::function_table::{
-    expr_calls_volatile_function, function_arg_class, function_index, function_is_fixed_arity,
-    function_returns_reference, OperandClass,
+    expr_calls_volatile_function, function_arg_class, function_index, function_is_biff8_addin,
+    function_is_fixed_arity, function_returns_reference, OperandClass,
 };
 use duke_sheets_formula::parse_formula;
 
@@ -401,11 +401,21 @@ fn emit_function(
         if args.len() > u8::MAX as usize {
             return Err(format!("function '{name}' has too many arguments"));
         }
+        // Analysis-ToolPak functions (Ftab 384..=476) take by-reference
+        // (R-class) arguments in Excel's native XLSB emission — the same rule
+        // as the BIFF8 add-in form. Other functions use their per-position
+        // metadata class.
+        let addin = function_is_biff8_addin(func_idx);
         for (i, arg) in args.iter().enumerate() {
             if matches!(arg, FormulaExpr::Empty) {
                 emit_miss_arg(out)?;
             } else {
-                emit_expr(arg, ctx, out, extra, function_arg_class(func_idx, i))?;
+                let arg_class = if addin {
+                    OperandClass::R
+                } else {
+                    function_arg_class(func_idx, i)
+                };
+                emit_expr(arg, ctx, out, extra, arg_class)?;
             }
         }
 

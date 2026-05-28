@@ -176,7 +176,73 @@ fn excel_byte_parity_for_xlsb_formulas_we_emit() {
     );
 }
 
+/// Analysis-ToolPak functions in XLSB. Unlike XLS (BIFF8), which serializes
+/// these via the add-in PtgNameX + EXTERNNAME mechanism, XLSB (Excel 2007+)
+/// emits them as NATIVE PtgFunc/PtgFuncVar carrying the real Ftab index —
+/// EDATE/EOMONTH are fixed-arity (PtgFunc 0x41), the rest variable-arity
+/// (PtgFuncVar 0x42). Verified byte-for-byte against Excel-authored output.
+const XLSB_ATP_FORMULAS: &[(&str, &str, f64)] = &[
+    ("B1", "=EDATE(A1,12)", 0.0),       // iftab=449, fixed 2-arg → PtgFunc
+    ("B2", "=EOMONTH(A1,1)", 0.0),      // iftab=450, fixed 2-arg → PtgFunc
+    ("B3", "=GCD(A1,A2)", 0.0),         // iftab=473, variable → PtgFuncVar
+    ("B4", "=NETWORKDAYS(A1,A2)", 0.0), // iftab=472, variable → PtgFuncVar
+    ("B5", "=WORKDAY(A1,5)", 0.0),      // iftab=471, variable → PtgFuncVar
+];
 
+fn xlsb_atp_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 43831.0).unwrap();
+    ws.set_cell_value("A2", 43862.0).unwrap();
+    for (cell, formula, expected) in XLSB_ATP_FORMULAS {
+        ws.set_cell_formula(cell, formula).unwrap();
+        let addr = CellAddress::parse(cell).unwrap();
+        ws.set_formula_result(addr.row, addr.col, CellValue::Number(*expected))
+            .unwrap();
+    }
+    wb
+}
+
+fn excel_authored_xlsb_atp_bytes() -> Vec<u8> {
+    let fixture = temp_fixture_xlsb();
+    ensure_vm_temp_dir();
+    {
+        let bridge = excel_bridge();
+        let excel = bridge.lock().unwrap();
+        let wb = excel.create_workbook().expect("create Excel workbook");
+        wb.set_cell_value("A1", 43831.0).unwrap();
+        wb.set_cell_value("A2", 43862.0).unwrap();
+        for (cell, formula, _) in XLSB_ATP_FORMULAS {
+            wb.set_cell_formula(cell, formula).unwrap();
+        }
+        excel.recalculate().unwrap();
+        wb.save_as(&fixture.vm_path, 50).unwrap();
+        wb.close().unwrap();
+    }
+    pull_file_from_vm(&fixture);
+    let bytes = std::fs::read(&fixture.host_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
+    cleanup_fixture(&fixture);
+    bytes
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_byte_parity_for_xlsb_atp_functions_we_emit() {
+    let wb = xlsb_atp_workbook();
+    let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xlsb_bytes(&wb);
+    let writer_ptgs = xlsb_formula_ptg_streams_for_compare(&writer_bytes);
+    let resave_ptgs = xlsb_formula_ptg_streams_for_compare(&excel_bytes);
+    assert_eq!(
+        writer_ptgs, resave_ptgs,
+        "Excel canonicalized our XLSB ATP token streams on re-save"
+    );
+    let authored_ptgs = xlsb_formula_ptg_streams_for_compare(&excel_authored_xlsb_atp_bytes());
+    assert_eq!(
+        writer_ptgs, authored_ptgs,
+        "our XLSB ATP token streams differ from Excel-authored output"
+    );
+}
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]

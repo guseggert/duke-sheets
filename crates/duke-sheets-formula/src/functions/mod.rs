@@ -2237,15 +2237,14 @@ impl FunctionRegistry {
             declared_argc: 2,
             min_args: 2,
             max_args: Some(2),
+            // Fixed 2-arg: Excel emits native EDATE as PtgFunc (XLSB/XLSX).
+            // In XLS (BIFF8) it instead uses the Analysis-ToolPak add-in form
+            // (PtgNameX + EXTERNNAME + PtgFuncVar iftab=255), handled by the
+            // XLS writer's add-in branch; fixed_arity only affects the native
+            // (XLSB) path. Both are byte-parity verified against Excel.
+            fixed_arity: true,
             implementation: date::fn_edate,
             volatile: false,
-            // NOTE: Excel emits EDATE in XLS using the legacy Analysis ToolPak
-            // form — PtgNameX referencing an EXTERNNAME + PtgFuncVar(iftab=255
-            // UDF) — not the native iftab 449 we use. Our output is readable
-            // (449 is EDATE in the Ftab) but is NOT byte-identical to Excel's
-            // for .xls. Native-iftab emission is correct for XLSB/XLSX. Closing
-            // the XLS gap needs PtgNameX + EXTERNNAME/SUPBOOK plumbing; tracked
-            // as a known divergence, deliberately not in any byte-parity batch.
             ..Default::default()
         });
 
@@ -2255,12 +2254,11 @@ impl FunctionRegistry {
             declared_argc: 2,
             min_args: 2,
             max_args: Some(2),
+            // Fixed 2-arg, same dual emission as EDATE: native PtgFunc for
+            // XLSB, Analysis-ToolPak add-in form for XLS. Byte-parity verified.
+            fixed_arity: true,
             implementation: date::fn_eomonth,
             volatile: false,
-            // Same Analysis ToolPak legacy-form divergence as EDATE (see note
-            // there): Excel emits EOMONTH in XLS via PtgNameX + PtgFuncVar
-            // (iftab=255), we emit native iftab 450. Readable but not byte-
-            // identical for .xls; known divergence, not in a parity batch.
             ..Default::default()
         });
 
