@@ -31,10 +31,52 @@ static BRIDGE: OnceLock<Mutex<ExcelBridge>> = OnceLock::new();
 pub fn excel_bridge() -> &'static Mutex<ExcelBridge> {
     BRIDGE.get_or_init(|| {
         ensure_excel_bridge();
+        // `ensure_excel_bridge` only waits for the COM bridge (port 9876) to
+        // answer an Init ping. On a cold VM boot the bridge can come up
+        // minutes before the Windows WinRM service (port 5985) accepts
+        // connections, and every test pushes/pulls its fixture over WinRM
+        // first — so without this gate the first batch fails with
+        // "Connection reset by peer". Wait for a real WinRM round-trip too,
+        // mirroring the LibreOffice harness's "real read probe".
+        wait_for_winrm_ready();
         let bridge = ExcelBridge::connect(ExcelBridgeConfig::default())
             .expect("Failed to connect to Excel COM bridge on localhost:9876");
         Mutex::new(bridge)
     })
+}
+
+/// Poll WinRM (port 5985) with a trivial, side-effect-free command until it
+/// completes a full round-trip, so file push/pull won't race a still-booting
+/// VM. Panics (does not silently skip) if WinRM never becomes ready.
+fn wait_for_winrm_ready() {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(180);
+    let mut attempt = 0u32;
+    loop {
+        if let Ok(out) = run_winrm_ps("Write-Output winrm-ready") {
+            if out.contains("winrm-ready") {
+                eprintln!(
+                    "[e2e] WinRM ready on port 5985 (took {:.1}s)",
+                    start.elapsed().as_secs_f64()
+                );
+                return;
+            }
+        }
+        if start.elapsed() >= timeout {
+            panic!(
+                "WinRM (localhost:5985) did not become ready within {timeout:?}; \
+                 the Windows VM may still be booting or WinRM is misconfigured"
+            );
+        }
+        attempt += 1;
+        if attempt % 10 == 0 {
+            eprintln!(
+                "[e2e] still waiting for WinRM ({:.0}s elapsed)...",
+                start.elapsed().as_secs_f64()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
 }
 
 /// A temp file path pair: the host-side path (for reading back) and the
