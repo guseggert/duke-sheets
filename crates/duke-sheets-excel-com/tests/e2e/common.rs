@@ -50,17 +50,15 @@ pub fn excel_bridge() -> &'static Mutex<ExcelBridge> {
 /// VM. Panics (does not silently skip) if WinRM never becomes ready.
 fn wait_for_winrm_ready() {
     let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(180);
+    let timeout = std::time::Duration::from_secs(240);
     let mut attempt = 0u32;
     loop {
-        if let Ok(out) = run_winrm_ps("Write-Output winrm-ready") {
-            if out.contains("winrm-ready") {
-                eprintln!(
-                    "[e2e] WinRM ready on port 5985 (took {:.1}s)",
-                    start.elapsed().as_secs_f64()
-                );
-                return;
-            }
+        if winrm_probe_once(std::time::Duration::from_secs(8)) {
+            eprintln!(
+                "[e2e] WinRM ready on port 5985 (took {:.1}s)",
+                start.elapsed().as_secs_f64()
+            );
+            return;
         }
         if start.elapsed() >= timeout {
             panic!(
@@ -77,6 +75,24 @@ fn wait_for_winrm_ready() {
         }
         std::thread::sleep(std::time::Duration::from_secs(3));
     }
+}
+
+/// Run one WinRM readiness probe, bounded to `per_attempt` wall-clock time.
+/// `run_winrm_ps` uses a 120s socket read timeout, so a connection that is
+/// accepted but stalls (WinRM mid-startup) would otherwise block the retry
+/// loop for the full 120s. Running it on a throwaway thread and waiting only
+/// `per_attempt` keeps retries responsive for every failure mode — reset
+/// (fast Err), refused (fast Err), or stall (abandoned after `per_attempt`).
+fn winrm_probe_once(per_attempt: std::time::Duration) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ok = matches!(
+            run_winrm_ps("Write-Output winrm-ready"),
+            Ok(out) if out.contains("winrm-ready")
+        );
+        let _ = tx.send(ok);
+    });
+    rx.recv_timeout(per_attempt).unwrap_or(false)
 }
 
 /// A temp file path pair: the host-side path (for reading back) and the
