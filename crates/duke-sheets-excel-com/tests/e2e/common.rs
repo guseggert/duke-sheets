@@ -28,17 +28,28 @@ static BRIDGE: OnceLock<Mutex<ExcelBridge>> = OnceLock::new();
 
 /// Get the global Excel bridge, auto-starting the Windows VM on first
 /// call if the bridge isn't already responsive. Panics on timeout.
+static VM_READY: OnceLock<()> = OnceLock::new();
+
+/// Ensure the Windows VM is fully usable before any interaction with it.
+///
+/// `ensure_excel_bridge` only waits for the COM bridge (port 9876) to answer
+/// an Init ping. On a cold VM boot the bridge comes up minutes before the
+/// Windows WinRM service (port 5985), and the test helpers push/pull each
+/// fixture over WinRM *before* connecting the COM bridge — so gating only
+/// `excel_bridge()` lets the first WinRM call race a still-booting VM and fail
+/// with "Connection refused/reset". This must therefore run at the top of
+/// every VM-touching entry point (file push/pull, temp-dir setup, and the
+/// bridge getter). Mirrors the LibreOffice harness's "real read probe".
+fn ensure_vm_ready() {
+    VM_READY.get_or_init(|| {
+        ensure_excel_bridge(); // spawn qemu + wait for COM bridge (9876)
+        wait_for_winrm_ready(); // wait for a real WinRM round-trip (5985)
+    });
+}
+
 pub fn excel_bridge() -> &'static Mutex<ExcelBridge> {
     BRIDGE.get_or_init(|| {
-        ensure_excel_bridge();
-        // `ensure_excel_bridge` only waits for the COM bridge (port 9876) to
-        // answer an Init ping. On a cold VM boot the bridge can come up
-        // minutes before the Windows WinRM service (port 5985) accepts
-        // connections, and every test pushes/pulls its fixture over WinRM
-        // first — so without this gate the first batch fails with
-        // "Connection reset by peer". Wait for a real WinRM round-trip too,
-        // mirroring the LibreOffice harness's "real read probe".
-        wait_for_winrm_ready();
+        ensure_vm_ready();
         let bridge = ExcelBridge::connect(ExcelBridgeConfig::default())
             .expect("Failed to connect to Excel COM bridge on localhost:9876");
         Mutex::new(bridge)
@@ -144,6 +155,7 @@ pub fn temp_fixture_xlsb() -> TempFixture {
 
 /// Ensure C:\temp exists inside the VM (called once).
 pub fn ensure_vm_temp_dir() {
+    ensure_vm_ready();
     static DONE: std::sync::Once = std::sync::Once::new();
     DONE.call_once(|| {
         let _ = run_winrm_ps(&format!(
@@ -157,6 +169,7 @@ pub fn ensure_vm_temp_dir() {
 /// Runs a PowerShell command that base64-encodes the file, then decodes
 /// and writes it on the host side.
 pub fn pull_file_from_vm(fixture: &TempFixture) {
+    ensure_vm_ready();
     let ps_script = format!(
         "[Convert]::ToBase64String([IO.File]::ReadAllBytes('{path}'))",
         path = fixture.vm_path
@@ -185,6 +198,7 @@ pub fn pull_file_from_vm(fixture: &TempFixture) {
 /// appended to a temp .b64 file, then the whole thing is decoded to
 /// the final binary path.
 pub fn push_file_to_vm(fixture: &TempFixture) {
+    ensure_vm_ready();
     let bytes = std::fs::read(&fixture.host_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
     let b64 = BASE64_STANDARD.encode(&bytes);
