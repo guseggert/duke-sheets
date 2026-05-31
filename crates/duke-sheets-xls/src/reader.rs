@@ -1897,35 +1897,18 @@ impl XlsReader {
         formula_body: &[u8],
         _formula_ctx: &FormulaContext,
     ) -> Option<CellRange> {
-        let pos = 0;
-        while pos < formula_body.len() {
-            let token = formula_body[pos];
-            let base = token & 0x7F;
-            match base {
-                0x3B => {
-                    if pos + 11 <= formula_body.len() {
-                        let first_row =
-                            u16::from_le_bytes([formula_body[pos + 3], formula_body[pos + 4]])
-                                as u32;
-                        let last_row =
-                            u16::from_le_bytes([formula_body[pos + 5], formula_body[pos + 6]])
-                                as u32;
-                        let first_col =
-                            u16::from_le_bytes([formula_body[pos + 7], formula_body[pos + 8]])
-                                & 0x3FFF;
-                        let last_col =
-                            u16::from_le_bytes([formula_body[pos + 9], formula_body[pos + 10]])
-                                & 0x3FFF;
-                        return Some(CellRange::from_indices(
-                            first_row, first_col, last_row, last_col,
-                        ));
-                    }
-                    break;
-                }
-                _ => break,
-            }
+        // The _FilterDatabase name body is a single tArea3d (0x3B base) that
+        // covers the filter range, so only the first token is relevant.
+        if formula_body.first().map(|t| t & 0x7F) != Some(0x3B) || formula_body.len() < 11 {
+            return None;
         }
-        None
+        let first_row = u16::from_le_bytes([formula_body[3], formula_body[4]]) as u32;
+        let last_row = u16::from_le_bytes([formula_body[5], formula_body[6]]) as u32;
+        let first_col = u16::from_le_bytes([formula_body[7], formula_body[8]]) & 0x3FFF;
+        let last_col = u16::from_le_bytes([formula_body[9], formula_body[10]]) & 0x3FFF;
+        Some(CellRange::from_indices(
+            first_row, first_col, last_row, last_col,
+        ))
     }
 
     /// Extract repeat rows and repeat cols from a Print_Titles NAME formula body.

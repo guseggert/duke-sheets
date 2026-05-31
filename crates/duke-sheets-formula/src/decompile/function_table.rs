@@ -150,15 +150,13 @@ pub fn name_body_operand_class(expr: &crate::FormulaExpr) -> OperandClass {
     use crate::ast::BinaryOperator;
     use crate::FormulaExpr;
     match expr {
-        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::NameRef(_) => {
-            OperandClass::R
-        }
-        FormulaExpr::BinaryOp { op, .. } => match op {
-            BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
-                OperandClass::R
-            }
-            _ => OperandClass::V,
-        },
+        FormulaExpr::CellRef(_)
+        | FormulaExpr::RangeRef(_)
+        | FormulaExpr::NameRef(_)
+        | FormulaExpr::BinaryOp {
+            op: BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect,
+            ..
+        } => OperandClass::R,
         _ => OperandClass::V,
     }
 }

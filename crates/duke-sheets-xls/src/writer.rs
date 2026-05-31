@@ -4461,8 +4461,8 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
 fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
     use crate::biff::escher::{
         comment_fopt, fsp_flags, rec_type as er, shape_type, write_client_data,
-        write_client_textbox, write_container, write_patriarch_sp_container, OfficeArtClientAnchor,
-        OfficeArtFdg, OfficeArtFsp, OfficeArtRecordHeader, HEADER_LEN,
+        write_client_textbox, write_patriarch_sp_container, OfficeArtClientAnchor, OfficeArtFdg,
+        OfficeArtFsp, OfficeArtRecordHeader, HEADER_LEN,
     };
 
     // Each shape boils down to its SP_CONTAINER bytes split into two
