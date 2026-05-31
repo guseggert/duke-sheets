@@ -1852,28 +1852,6 @@ fn parse_name_body(refers_to: &str) -> Option<duke_sheets_formula::FormulaExpr> 
     duke_sheets_formula::parse_formula(&to_parse).ok()
 }
 
-fn name_body_operand_class(expr: &duke_sheets_formula::FormulaExpr) -> OperandClass {
-    use duke_sheets_formula::ast::BinaryOperator;
-    use duke_sheets_formula::FormulaExpr;
-
-    // NAME/Lbl formula bodies that represent direct references need
-    // reference-class operands. MS-XLS's Lbl example stores a name's
-    // PtgRef3d with type=reference, and Excel returns #VALUE! for a
-    // range operator over names if the name bodies were value-class.
-    match expr {
-        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::NameRef(_) => {
-            OperandClass::R
-        }
-        FormulaExpr::BinaryOp { op, .. } => match op {
-            BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
-                OperandClass::R
-            }
-            _ => OperandClass::V,
-        },
-        _ => OperandClass::V,
-    }
-}
-
 fn user_names_in_xls_emit_order(
     workbook: &Workbook,
 ) -> Vec<&duke_sheets_core::named_range::NamedRange> {
@@ -3214,35 +3192,13 @@ fn encode_cached_result(value: &CellValue) -> [u8; 8] {
 #[derive(Debug)]
 struct UnsupportedToken;
 
-/// Recursively walk a `FormulaExpr` in postfix order, appending BIFF8
-/// ptg bytes to `out`. Returns `Err(UnsupportedToken)` for AST shapes
-/// that slice 5a doesn't yet emit (named ranges, function calls,
-/// structured refs, external refs, arrays, intersection/union ops);
-/// the caller falls back to emitting the cached value as a static
-/// cell record so the spreadsheet still renders correctly.
-fn compile_ptgs(
-    expr: &duke_sheets_formula::FormulaExpr,
-    out: &mut Vec<u8>,
-) -> Result<(), UnsupportedToken> {
-    let mut extra = Vec::new();
-    compile_ptgs_with_context(
-        expr,
-        out,
-        &mut extra,
-        &ExternSheetTable::default(),
-        &NameTable::default(),
-        &AddinTable::default(),
-        OperandClass::V,
-    )
-}
-
 // PTG operand class and per-function metadata live in duke-sheets-formula
 // because they're shared between the XLS (BIFF8) and XLSB (BIFF12) writers.
 // MS-XLS §2.5.198 defines the V/R/A class distinction; this writer only uses
 // V and R. See `OperandClass` in the formula crate for the full rationale.
 use duke_sheets_formula::decompile::function_table::{
     expr_calls_volatile_function, function_arg_class, function_index, function_is_biff8_addin,
-    function_is_fixed_arity, function_returns_reference, OperandClass,
+    function_is_fixed_arity, function_returns_reference, name_body_operand_class, OperandClass,
 };
 
 fn compile_ptgs_with_context(

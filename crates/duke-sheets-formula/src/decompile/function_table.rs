@@ -136,6 +136,33 @@ pub fn function_is_biff8_addin(iftab: u16) -> bool {
     (384..=476).contains(&iftab)
 }
 
+/// Operand class for the top-level expression of a defined-name / built-in
+/// name body (the `refers_to` formula).
+///
+/// A name body that is a bare reference or range must be reference-class: a
+/// value-class range makes Excel apply implicit intersection when the name is
+/// used, collapsing e.g. `Data!A1:A3` to a single cell — so `SUM(Numbers)`
+/// would sum one cell instead of the range. The reference operators
+/// (range/union/intersect) are likewise reference-class; constants and
+/// arithmetic are value-class. Shared by the XLS (BIFF8) and XLSB (BIFF12)
+/// writers so the rule can't drift between them. MS-XLS [MS-XLS] §2.5.198.103.
+pub fn name_body_operand_class(expr: &crate::FormulaExpr) -> OperandClass {
+    use crate::ast::BinaryOperator;
+    use crate::FormulaExpr;
+    match expr {
+        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::NameRef(_) => {
+            OperandClass::R
+        }
+        FormulaExpr::BinaryOp { op, .. } => match op {
+            BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
+                OperandClass::R
+            }
+            _ => OperandClass::V,
+        },
+        _ => OperandClass::V,
+    }
+}
+
 /// True if `iftab` names a reference-class function — one that can return a
 /// reference and therefore takes the operand class of the position it occupies
 /// (R when used as a reference argument, V otherwise). Pure value functions

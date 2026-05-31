@@ -6,7 +6,7 @@ use duke_sheets_formula::ast::{
 };
 use duke_sheets_formula::decompile::function_table::{
     expr_calls_volatile_function, function_arg_class, function_index, function_is_biff8_addin,
-    function_is_fixed_arity, function_returns_reference, OperandClass,
+    function_is_fixed_arity, function_returns_reference, name_body_operand_class, OperandClass,
 };
 use duke_sheets_formula::parse_formula;
 
@@ -75,25 +75,6 @@ fn compile_with_top_class(
     }
     emit_expr(&expr, ctx, &mut rgce, &mut rgcb, top_class)?;
     Ok(CompiledFormula { rgce, rgcb })
-}
-
-/// Operand class for a defined-name body's top-level expression: bare
-/// references and the reference operators (range/union/intersect) are
-/// reference-class; everything else (constants, arithmetic) is value-class.
-/// Mirrors `name_body_operand_class` in the XLS writer.
-fn name_body_operand_class(expr: &FormulaExpr) -> OperandClass {
-    match expr {
-        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::NameRef(_) => {
-            OperandClass::R
-        }
-        FormulaExpr::BinaryOp { op, .. } => match op {
-            BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
-                OperandClass::R
-            }
-            _ => OperandClass::V,
-        },
-        _ => OperandClass::V,
-    }
 }
 
 fn emit_expr(
