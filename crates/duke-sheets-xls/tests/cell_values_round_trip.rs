@@ -1,3 +1,4 @@
+#![allow(clippy::approx_constant)]
 //! Round-trip tests for the XLS writer's cell-record emission
 //! (slice 2: BLANK / NUMBER / BOOLERR records, no strings yet).
 

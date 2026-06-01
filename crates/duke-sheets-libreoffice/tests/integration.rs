@@ -1,3 +1,4 @@
+#![allow(clippy::approx_constant)]
 //! Integration tests for the LibreOffice URP bridge.
 //!
 //! These tests need a LibreOffice URP listener on localhost:2002.

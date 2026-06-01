@@ -1,3 +1,4 @@
+#![allow(clippy::approx_constant)]
 //! End-to-end tests for `Workbook::save_with(.xls, password)`.
 //!
 //! Build a Workbook with mixed numeric/string/styled/formula content,

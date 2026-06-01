@@ -1,3 +1,4 @@
+#![allow(clippy::approx_constant)]
 //! End-to-end tests for XLSX roundtrip (create -> save -> read -> verify)
 
 use duke_sheets::prelude::*;

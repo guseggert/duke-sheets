@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::approx_constant))]
 //! Pure Rust implementation of the UNO Remote Protocol (URP) for communicating
 //! with LibreOffice.
 //!

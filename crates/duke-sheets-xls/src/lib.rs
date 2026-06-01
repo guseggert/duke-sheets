@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::approx_constant))]
 //! # duke-sheets-xls
 //!
 //! XLS (BIFF8) reader for duke-sheets.

@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::approx_constant))]
 //! # duke-sheets-formula
 //!
 //! Formula parser and evaluator for duke-sheets.

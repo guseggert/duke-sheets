@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::approx_constant))]
 //! Generic COM proxy protocol for remote Excel automation.
 //!
 //! Instead of having a specific command for every Excel operation, this protocol

@@ -1,3 +1,4 @@
+#![allow(clippy::approx_constant)]
 //! End-to-end tests for duke-sheets-xlsx.
 //!
 //! Each test creates its own fixture on-demand by connecting to a running

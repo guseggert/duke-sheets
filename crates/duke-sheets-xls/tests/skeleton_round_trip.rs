@@ -1,3 +1,4 @@
+#![allow(clippy::approx_constant)]
 //! Round-trip tests for the XLS skeleton writer.
 //!
 //! Build an empty `Workbook`, write it to BIFF8 bytes, read it back

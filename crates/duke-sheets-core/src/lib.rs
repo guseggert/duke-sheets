@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::approx_constant))]
 //! # duke-sheets-core
 //!
 //! Core data structures for the duke-sheets spreadsheet library.

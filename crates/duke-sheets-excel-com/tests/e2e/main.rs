@@ -1,3 +1,4 @@
+#![allow(clippy::approx_constant)]
 //! End-to-end tests for duke-sheets-excel-com.
 //!
 //! Each test connects to a running Excel COM bridge server in a QEMU/KVM
