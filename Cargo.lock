@@ -892,6 +892,7 @@ dependencies = [
  "duke-sheets-libreoffice",
  "duke-sheets-test-harness",
  "log",
+ "md-5",
  "pretty_assertions",
  "tempfile",
  "thiserror 1.0.69",
