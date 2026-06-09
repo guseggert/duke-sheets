@@ -509,5 +509,3 @@ fn test_xlsb_cf_roundtrip() {
         .any(|r| matches!(&r.rule_type, CfRuleType::CellIs { .. }));
     assert!(has_cell_is, "cellIs should survive round-trip");
 }
-
-
