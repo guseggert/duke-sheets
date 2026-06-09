@@ -1015,6 +1015,32 @@ fn test_roundtrip_formula_cached_number() {
     }
 }
 
+/// Unary plus and redundant parentheses must survive the round trip
+/// verbatim, matching Excel's behaviour of preserving both.
+#[test]
+fn test_roundtrip_formula_unary_plus_and_parens() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+
+    sheet.set_cell_value_at(0, 0, 2.0).unwrap();
+    sheet.set_cell_formula_at(0, 1, "=+A1").unwrap();
+    sheet
+        .set_formula_result(0, 1, CellValue::Number(2.0))
+        .unwrap();
+    sheet.set_cell_formula_at(0, 2, "=(A1+1)").unwrap();
+    sheet
+        .set_formula_result(0, 2, CellValue::Number(3.0))
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(formula_text_at(sheet2, "B1"), Some("=+A1"));
+    assert_eq!(formula_text_at(sheet2, "C1"), Some("=(A1+1)"));
+}
+
 /// Analysis-ToolPak add-in functions (EDATE, NETWORKDAYS, GCD, ...) serialize
 /// as plain formula text in XLSX — no special encoding, unlike the BIFF8
 /// add-in form (XLS) or native iftab tokens (XLSB). This pins that the text

@@ -904,6 +904,26 @@ mod tests {
         assert_eq!(fd.text, "=SUM({1,2,3})");
     }
 
+    #[test]
+    fn formula_uplus_paren_roundtrip() {
+        // Redundant parens only survive if the compiler emits PtgParen;
+        // the leading plus only survives via PtgUplus.
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value_at(0, 0, 2.0).unwrap();
+        ws.set_formula_with_cached_value_at(0, 1, "=+A1", CellValue::Number(2.0))
+            .unwrap();
+        ws.set_formula_with_cached_value_at(0, 2, "=(A1+1)", CellValue::Number(3.0))
+            .unwrap();
+
+        let wb2 = round_trip(&wb);
+        let ws2 = wb2.worksheet(0).unwrap();
+        let uplus = ws2.formula_data_at(0, 1).expect("formula should exist");
+        assert_eq!(uplus.text, "=+A1");
+        let paren = ws2.formula_data_at(0, 2).expect("formula should exist");
+        assert_eq!(paren.text, "=(A1+1)");
+    }
+
     fn read_zip_entry(data: &[u8], name: &str) -> String {
         let cursor = Cursor::new(data);
         let mut archive = zip::ZipArchive::new(cursor).unwrap();
