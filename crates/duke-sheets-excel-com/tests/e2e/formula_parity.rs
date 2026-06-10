@@ -8,7 +8,6 @@ use serde_json::json;
 const VM_FIXTURE_PATH: &str = r"C:\temp\formula_parity.xlsx";
 const HOST_FIXTURE_PATH: &str = "/tmp/duke-sheets-excel/formula_parity.xlsx";
 const REPO_FIXTURE_RELATIVE_PATH: &str = "data/formula-parity.xlsx";
-const BASE_PARITY_CASE_COUNT: usize = 911;
 
 #[derive(Clone, Copy)]
 enum FormulaKind {
@@ -487,9 +486,7 @@ fn populate_tests_sheet(wb: &mut Workbook<'_>) -> Result<(), BridgeError> {
     wb.set_cell_value("D1", "Expected Type")?;
 
     let mut cases = static_formula_cases();
-    let additional_cases = additional_function_cases();
-    let additional_case_count = additional_cases.len();
-    cases.extend(additional_cases);
+    cases.extend(additional_function_cases());
     append_tier3_cache_cases(&mut cases);
     append_tier4_validation_cases(&mut cases);
 

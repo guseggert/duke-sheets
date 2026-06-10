@@ -103,6 +103,11 @@ fn excel_byte_parity_for_xlsb_formulas_we_emit() {
     let wb = xlsb_formula_workbook();
     let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xlsb_bytes(&wb);
     let writer_ptgs = xlsb_formula_ptg_streams_for_compare(&writer_bytes);
+    assert_eq!(
+        writer_ptgs.len(),
+        XLSB_FORMULA_FORMULAS.len(),
+        "formula-stream extraction came back short; the parity comparison below would be vacuous"
+    );
     let resave_ptgs = xlsb_formula_ptg_streams_for_compare(&excel_bytes);
     assert_eq!(
         writer_ptgs, resave_ptgs,
@@ -193,10 +198,10 @@ fn excel_byte_parity_for_xlsb_atp_functions_we_emit() {
 /// emission. Pins PtgFunc-vs-PtgFuncVar and R-class arguments across the whole
 /// range, not just a hand-picked sample.
 ///
-/// Tolerant of formulas Excel rejects on entry (a wrong `min_args` in our
-/// metadata yields an invalid minimal call): those are recorded and skipped on
-/// both sides so the serialization check isn't derailed by arg-count metadata
-/// bugs. For XLSB there is no SUPBOOK/EXTERNNAME, so token-stream parity
+/// Any formula Excel rejects on entry is a hard failure (a wrong `min_args`
+/// in our metadata yields an invalid minimal call), asserted via
+/// `rejected.is_empty()` below. For XLSB there is no SUPBOOK/EXTERNNAME, so
+/// token-stream parity
 /// against Excel's authoring is sufficient (a malformed token stream would not
 /// match Excel's bytes).
 #[test]
@@ -290,7 +295,6 @@ fn excel_byte_parity_for_all_xlsb_atp_functions_we_emit() {
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_hyperlinks_we_emit() {
     let mut wb = Workbook::new();
-    let ws = wb.worksheet_mut(0).unwrap();
     wb.add_worksheet_with_name("Other").unwrap();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "go").unwrap();

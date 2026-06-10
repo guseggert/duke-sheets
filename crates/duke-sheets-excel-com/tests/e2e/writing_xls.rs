@@ -291,7 +291,7 @@ fn excel_authored_function_arity_xls_bytes() -> Vec<u8> {
     {
         let bridge = excel_bridge();
         let excel = bridge.lock().unwrap();
-        let mut wb = excel.create_workbook().expect("create Excel workbook");
+        let wb = excel.create_workbook().expect("create Excel workbook");
         wb.set_cell_value("A1", 4.0).expect("set A1");
         wb.set_cell_value("A2", -3.0).expect("set A2");
         wb.set_cell_value("A3", "hello").expect("set A3");
@@ -513,7 +513,7 @@ fn excel_authored_volatile_function_xls_bytes() -> Vec<u8> {
     {
         let bridge = excel_bridge();
         let excel = bridge.lock().unwrap();
-        let mut wb = excel.create_workbook().expect("create Excel workbook");
+        let wb = excel.create_workbook().expect("create Excel workbook");
         wb.set_cell_value("A1", 4.0).expect("set A1");
         for (cell, formula, _) in VOLATILE_FORMULAS {
             wb.set_cell_formula(cell, formula)
@@ -587,6 +587,11 @@ fn excel_byte_parity_for_uplus_paren_we_emit() {
     let wb = uplus_paren_workbook();
     let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
     let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    assert_eq!(
+        writer_ptgs.len(),
+        UPLUS_PAREN_FORMULAS.len(),
+        "formula-stream extraction came back short; the parity comparison below would be vacuous"
+    );
     let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
     assert_eq!(
         writer_ptgs, resave_ptgs,
@@ -648,6 +653,11 @@ fn excel_byte_parity_for_array_constants_we_emit() {
     let wb = array_constant_workbook();
     let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
     let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    assert_eq!(
+        writer_ptgs.len(),
+        ARRAY_FORMULAS.len(),
+        "formula-stream extraction came back short; the parity comparison below would be vacuous"
+    );
     let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
     assert_eq!(
         writer_ptgs, resave_ptgs,
@@ -944,6 +954,11 @@ fn excel_can_evaluate_named_range_formulas_we_emit() {
 
     let (result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
     let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    assert_eq!(
+        writer_ptgs.len(),
+        6, // named_formula_workbook formulas B1..B6
+        "formula-stream extraction came back short; the parity comparison below would be vacuous"
+    );
     let excel_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
     assert_eq!(
         writer_ptgs, excel_ptgs,
@@ -1010,6 +1025,11 @@ fn excel_byte_parity_for_function_arity_we_emit() {
     let wb = function_arity_workbook();
     let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
     let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    assert_eq!(
+        writer_ptgs.len(),
+        FUNCTION_ARITY_FORMULAS.len(),
+        "formula-stream extraction came back short; the parity comparison below would be vacuous"
+    );
     let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
     assert_eq!(
         writer_ptgs, resave_ptgs,
@@ -1029,6 +1049,11 @@ fn excel_byte_parity_for_nested_functions_we_emit() {
     let wb = nested_function_workbook();
     let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
     let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    assert_eq!(
+        writer_ptgs.len(),
+        NESTED_FUNCTION_FORMULAS.len(),
+        "formula-stream extraction came back short; the parity comparison below would be vacuous"
+    );
     let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
     assert_eq!(
         writer_ptgs, resave_ptgs,
@@ -1048,6 +1073,11 @@ fn excel_byte_parity_for_choose_optimization_we_emit() {
     let wb = choose_optimization_workbook();
     let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
     let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    assert_eq!(
+        writer_ptgs.len(),
+        CHOOSE_FORMULAS.len(),
+        "formula-stream extraction came back short; the parity comparison below would be vacuous"
+    );
     let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
     assert_eq!(
         writer_ptgs, resave_ptgs,
@@ -1067,6 +1097,11 @@ fn excel_byte_parity_for_if_optimization_we_emit() {
     let wb = if_optimization_workbook();
     let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
     let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    assert_eq!(
+        writer_ptgs.len(),
+        IF_FORMULAS.len(),
+        "formula-stream extraction came back short; the parity comparison below would be vacuous"
+    );
     let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
     assert_eq!(
         writer_ptgs, resave_ptgs,
@@ -1086,6 +1121,11 @@ fn excel_byte_parity_for_volatile_functions_we_emit() {
     let wb = volatile_function_workbook();
     let (_result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
     let writer_ptgs = xls_formula_ptg_streams_for_compare(&writer_bytes);
+    assert_eq!(
+        writer_ptgs.len(),
+        VOLATILE_FORMULAS.len(),
+        "formula-stream extraction came back short; the parity comparison below would be vacuous"
+    );
     let resave_ptgs = xls_formula_ptg_streams_for_compare(&excel_bytes);
     assert_eq!(
         writer_ptgs, resave_ptgs,
@@ -1214,12 +1254,7 @@ fn excel_can_read_protection_state_we_emit() {
         ..Default::default()
     }));
 
-    let (result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
-    assert_eq!(
-        xls_formula_ptg_streams_for_compare(&writer_bytes),
-        xls_formula_ptg_streams_for_compare(&excel_bytes),
-        "Excel canonicalized our XLS intersection formula token streams"
-    );
+    let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("locked"));
     let prot = s
@@ -1247,12 +1282,7 @@ fn excel_can_read_dimensions_we_emit() {
     ws.set_row_height(0, 36.0);
     ws.set_column_width(1, 25.0);
 
-    let (result, writer_bytes, excel_bytes) = roundtrip_through_excel_xls_bytes(&wb);
-    assert_eq!(
-        xls_formula_ptg_streams_for_compare(&writer_bytes),
-        xls_formula_ptg_streams_for_compare(&excel_bytes),
-        "Excel canonicalized our XLS union formula token streams"
-    );
+    let result = roundtrip_through_excel_xls(&wb);
     let s = result.worksheet(0).unwrap();
     assert_eq!(s.get_value_at(0, 0).as_string(), Some("tall"));
     assert_eq!(s.get_value_at(0, 1).as_string(), Some("wide"));
@@ -2127,7 +2157,7 @@ fn excel_authored_atp_xls_bytes() -> Vec<u8> {
     {
         let bridge = excel_bridge();
         let excel = bridge.lock().unwrap();
-        let mut wb = excel.create_workbook().expect("create Excel workbook");
+        let wb = excel.create_workbook().expect("create Excel workbook");
         wb.set_cell_value("A1", 43831.0).expect("set A1");
         wb.set_cell_value("A2", 43862.0).expect("set A2");
         for (cell, formula, _) in ATP_FORMULAS {
@@ -2273,6 +2303,15 @@ fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
     let mut excel = xls_formula_ptg_streams_for_compare(&excel_bytes);
     ours.sort_by_key(|s| (s.row, s.col));
     excel.sort_by_key(|s| (s.row, s.col));
+    // Absolute anchor: both sides come from the same extractor, so a
+    // broken extractor would otherwise compare empty-vs-empty.
+    assert_eq!(
+        ours.len(),
+        accepted.len(),
+        "formula-stream extraction came back short ({} of {})",
+        ours.len(),
+        accepted.len()
+    );
     assert_eq!(
         ours.len(),
         excel.len(),
@@ -2282,10 +2321,10 @@ fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
     );
     let mut diffs = Vec::new();
     for (w, a) in ours.iter().zip(excel.iter()) {
-        if w.tokens != a.tokens || w.rgcb != a.rgcb {
+        if (w.row, w.col) != (a.row, a.col) || w.tokens != a.tokens || w.rgcb != a.rgcb {
             diffs.push(format!(
-                "r{}c{}: ours tok={:02X?} rgcb={:02X?}\n        excel tok={:02X?} rgcb={:02X?}",
-                w.row, w.col, w.tokens, w.rgcb, a.tokens, a.rgcb
+                "r{}c{} vs r{}c{}: ours tok={:02X?} rgcb={:02X?}\n        excel tok={:02X?} rgcb={:02X?}",
+                w.row, w.col, a.row, a.col, w.tokens, w.rgcb, a.tokens, a.rgcb
             ));
         }
     }
