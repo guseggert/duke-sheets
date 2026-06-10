@@ -424,6 +424,7 @@ fn write_named_styles<W: Write>(rw: &mut RecordWriter<W>) -> std::io::Result<()>
 
 pub(crate) struct DxfMapping {
     sheet_rule_dxf_ids: Vec<Vec<Option<u32>>>,
+    color_filter_dxf_id: Option<u32>,
 }
 
 impl DxfMapping {
@@ -433,6 +434,40 @@ impl DxfMapping {
             .and_then(|rules| rules.get(rule_index))
             .and_then(|id| *id)
     }
+
+    /// DXF entry backing color autofilters. `Some` whenever any sheet
+    /// carries a `ColumnFilter::Color`.
+    pub fn color_filter_dxf_id(&self) -> Option<u32> {
+        self.color_filter_dxf_id
+    }
+}
+
+/// Style synthesized for color autofilters. BrtColorFilter's dxfid
+/// MUST reference a real BrtDXF entry (Excel refuses to open the file
+/// otherwise), but our `ColorFilter` model carries only the dxf index,
+/// not the color, so back every color filter with one solid-fill DXF
+/// the way Excel pairs a color filter with a fill DXF.
+fn color_filter_dxf_style() -> Style {
+    let mut s = Style::default();
+    s.fill = duke_sheets_core::style::FillStyle::Solid {
+        color: duke_sheets_core::style::Color::Rgb { r: 255, g: 0, b: 0 },
+    };
+    s
+}
+
+fn workbook_has_color_filter(workbook: &Workbook) -> bool {
+    use duke_sheets_core::auto_filter::ColumnFilter;
+    (0..workbook.sheet_count()).any(|i| {
+        workbook
+            .worksheet(i)
+            .unwrap()
+            .auto_filter()
+            .is_some_and(|af| {
+                af.filter_columns
+                    .iter()
+                    .any(|fc| matches!(fc.filter, ColumnFilter::Color(_)))
+            })
+    })
 }
 
 fn collect_dxf_styles(workbook: &Workbook) -> Vec<Style> {
@@ -449,6 +484,14 @@ fn collect_dxf_styles(workbook: &Workbook) -> Vec<Style> {
                     dxf_styles.push(fmt.clone());
                 }
             }
+        }
+    }
+    if workbook_has_color_filter(workbook) {
+        let style = color_filter_dxf_style();
+        let key = style_hash(&style);
+        if !seen.contains_key(&key) {
+            seen.insert(key, dxf_styles.len());
+            dxf_styles.push(style);
         }
     }
     dxf_styles
@@ -476,7 +519,16 @@ fn build_dxf_mapping(workbook: &Workbook, dxf_styles: &[Style]) -> DxfMapping {
         sheet_rule_dxf_ids.push(rule_ids);
     }
 
-    DxfMapping { sheet_rule_dxf_ids }
+    let color_filter_dxf_id = if workbook_has_color_filter(workbook) {
+        style_to_idx.get(&style_hash(&color_filter_dxf_style())).copied()
+    } else {
+        None
+    };
+
+    DxfMapping {
+        sheet_rule_dxf_ids,
+        color_filter_dxf_id,
+    }
 }
 
 fn style_hash(s: &Style) -> u64 {

@@ -2140,7 +2140,10 @@ mod tests {
         let col0 = af.filter_columns.iter().find(|fc| fc.col_id == 0).unwrap();
         match &col0.filter {
             ColumnFilter::Color(c) => {
-                assert_eq!(c.dxf_id, Some(2));
+                // The dxfid is writer-assigned (it must reference the
+                // synthesized DXF entry in styles.bin), so the model's
+                // input index is not preserved — only its presence.
+                assert!(c.dxf_id.is_some(), "dxf_id lost");
                 assert!(!c.cell_color, "cell_color flag drifted");
             }
             other => panic!("expected Color filter, got {other:?}"),
@@ -2200,13 +2203,28 @@ mod tests {
             1,
             "expected exactly one BrtColorFilter (0x00A8) record"
         );
-        let mut expected = 2u32.to_le_bytes().to_vec();
+        // dxfid 0 = the writer-synthesized DXF entry; fCellColor = 0.
+        let mut expected = 0u32.to_le_bytes().to_vec();
         expected.extend_from_slice(&0u32.to_le_bytes());
         assert_eq!(color[0].1, expected, "dxfid + fCellColor payload");
         assert!(
             !recs.iter().any(|(t, _)| *t == 0x00A9),
             "0x00A9 is BrtIconFilter; a color filter must not emit it"
         );
+
+        // The dxfid must not dangle: styles.bin must carry a BrtDXF
+        // (0x01FB) entry for it, or Excel refuses to open the file.
+        let bytes = write_xlsb_bytes(&wb);
+        let styles = read_zip_entry_bytes(&bytes, "xl/styles.bin");
+        let mut iter = crate::biff12::RecordIter::new(Cursor::new(styles));
+        let mut buf = Vec::new();
+        let mut dxf_count = 0;
+        while let Ok((typ, _len)) = iter.next_record(&mut buf) {
+            if typ == 0x01FB {
+                dxf_count += 1;
+            }
+        }
+        assert!(dxf_count >= 1, "styles.bin must contain the DXF entry backing the color filter");
     }
 
     fn custom_filter_workbook(and: bool) -> Workbook {

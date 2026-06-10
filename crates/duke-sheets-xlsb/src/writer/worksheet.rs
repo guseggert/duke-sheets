@@ -108,7 +108,7 @@ pub(crate) fn write_worksheet<W: Write + Seek>(
 
     write_merge_cells(&mut rw, ws)?;
     write_hyperlinks(&mut rw, ws, &mut sheet_rels, &mut rid_counter)?;
-    write_auto_filter(&mut rw, ws)?;
+    write_auto_filter(&mut rw, ws, dxf_mapping.color_filter_dxf_id())?;
     write_sheet_protection(&mut rw, ws)?;
     write_page_setup(&mut rw, ws)?;
     write_print_options(&mut rw, ws)?;
@@ -720,7 +720,11 @@ fn write_hyperlinks<W: Write>(
     Ok(())
 }
 
-fn write_auto_filter<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std::io::Result<()> {
+fn write_auto_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    ws: &Worksheet,
+    color_filter_dxf_id: Option<u32>,
+) -> std::io::Result<()> {
     use duke_sheets_core::auto_filter::{ColumnFilter, FilterOperator};
 
     let af = match ws.auto_filter() {
@@ -828,8 +832,13 @@ fn write_auto_filter<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std:
             ColumnFilter::Color(c) => {
                 // BrtColorFilter per [MS-XLSB] §2.4.339 (id 0x00A8):
                 //   dxfid u32 + fCellColor u32. 8 bytes.
+                // The dxfid must reference a real BrtDXF entry in
+                // styles.bin — Excel refuses to open the file when it
+                // dangles — so use the writer-synthesized entry, not
+                // the model's index into some other file's dxf table.
+                let dxfid = color_filter_dxf_id.unwrap_or(0);
                 let mut buf = Vec::with_capacity(8);
-                buf.extend_from_slice(&c.dxf_id.unwrap_or(0).to_le_bytes());
+                buf.extend_from_slice(&dxfid.to_le_bytes());
                 buf.extend_from_slice(&(c.cell_color as u32).to_le_bytes());
                 rw.write_record(records::BRT_COLOR_FILTER, &buf)?;
             }
