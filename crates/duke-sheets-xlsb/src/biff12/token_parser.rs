@@ -217,8 +217,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                     break;
                 }
                 let name_idx =
-                    u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
-                        as u16;
+                    u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
                 pos += 4;
                 tokens.push(ParsedToken::Name { name_idx });
             }
@@ -233,7 +232,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                     data[pos + 3],
                     data[pos + 4],
                     data[pos + 5],
-                ]) as u16;
+                ]);
                 pos += 6;
                 tokens.push(ParsedToken::NameX {
                     extern_sheet_idx,
@@ -925,5 +924,15 @@ mod tests {
             "implausible counts must not synthesize a giant literal; got {} chars",
             text.len()
         );
+    }
+
+    #[test]
+    fn test_ptg_name_index_is_not_truncated() {
+        // BIFF12 PtgName carries a 4-byte nameindex; values above
+        // 0xFFFF must survive parsing untruncated.
+        let mut data = vec![0x43u8]; // PtgName V-class
+        data.extend_from_slice(&0x0001_2345u32.to_le_bytes());
+        let tokens = parse_tokens_with_extra(&data, &[]);
+        assert_eq!(tokens, vec![ParsedToken::Name { name_idx: 0x0001_2345 }]);
     }
 }

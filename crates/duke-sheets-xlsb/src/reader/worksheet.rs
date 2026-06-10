@@ -381,7 +381,10 @@ pub(crate) fn read_worksheet<R: Read>(
             }
             records::BRT_FILTER => {
                 if let Some(vf) = current_value_filter.as_mut() {
-                    if let Ok((s, _)) = parser::wide_str(&buf, 0) {
+                    // Slice to the record length: the reuse buffer only
+                    // grows, so parsing the whole buffer would decode
+                    // stale bytes from a previous larger record.
+                    if let Ok((s, _)) = parser::wide_str(&buf[..len], 0) {
                         vf.values.push(s);
                     }
                 }

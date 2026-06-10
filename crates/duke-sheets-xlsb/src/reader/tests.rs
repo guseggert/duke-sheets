@@ -1699,4 +1699,63 @@ mod tests {
             duke_sheets_core::worksheet::PageOrientation::Portrait
         );
     }
+
+    #[test]
+    fn brt_filter_does_not_decode_stale_buffer_bytes() {
+        use duke_sheets_core::auto_filter::ColumnFilter;
+        use duke_sheets_core::Worksheet;
+        use duke_sheets_formula::decompile::FormulaContext;
+        use std::collections::HashMap;
+
+        // The record iterator's reuse buffer only grows, so a BrtFilter
+        // whose cch exceeds its own record length must not decode bytes
+        // left over from a previous, larger record.
+        let mut stream = Vec::new();
+        stream.extend_from_slice(&build_record(records::BRT_BEGIN_SHEET_DATA, &[]));
+        stream.extend_from_slice(&build_record(records::BRT_END_SHEET_DATA, &[]));
+        // Big ignored record fills the reuse buffer with 0x41 bytes.
+        stream.extend_from_slice(&build_record(0x0FFF, &[0x41u8; 120]));
+        let mut afr = Vec::new();
+        afr.extend_from_slice(&0u32.to_le_bytes());
+        afr.extend_from_slice(&4u32.to_le_bytes());
+        afr.extend_from_slice(&0u32.to_le_bytes());
+        afr.extend_from_slice(&0u32.to_le_bytes());
+        stream.extend_from_slice(&build_record(records::BRT_BEGIN_A_FILTER, &afr));
+        let mut fc = Vec::new();
+        fc.extend_from_slice(&0u32.to_le_bytes());
+        fc.extend_from_slice(&0u16.to_le_bytes());
+        stream.extend_from_slice(&build_record(records::BRT_BEGIN_FILTER_COLUMN, &fc));
+        stream.extend_from_slice(&build_record(records::BRT_BEGIN_FILTERS, &0u32.to_le_bytes()));
+        // Malicious BrtFilter: cch claims 20 chars, carries one.
+        let mut bad = Vec::new();
+        bad.extend_from_slice(&20u32.to_le_bytes());
+        bad.extend_from_slice(&[0x58, 0x00]); // "X"
+        stream.extend_from_slice(&build_record(records::BRT_FILTER, &bad));
+        stream.extend_from_slice(&build_record(records::BRT_END_FILTERS, &[]));
+        stream.extend_from_slice(&build_record(records::BRT_END_FILTER_COLUMN, &[]));
+        stream.extend_from_slice(&build_record(records::BRT_END_A_FILTER, &[]));
+
+        let mut ws = Worksheet::new("S1".to_string());
+        crate::reader::worksheet::read_worksheet(
+            std::io::Cursor::new(stream),
+            &mut ws,
+            &[],
+            &[],
+            &FormulaContext::new(Vec::new()),
+            &HashMap::new(),
+        )
+        .expect("worksheet parse");
+
+        let af = ws.auto_filter().expect("autofilter parsed");
+        match &af.filter_columns[0].filter {
+            ColumnFilter::Values(vf) => {
+                assert!(
+                    vf.values.is_empty(),
+                    "truncated BrtFilter must be skipped, not decoded from stale bytes: {:?}",
+                    vf.values
+                );
+            }
+            other => panic!("expected Values filter, got {other:?}"),
+        }
+    }
 }

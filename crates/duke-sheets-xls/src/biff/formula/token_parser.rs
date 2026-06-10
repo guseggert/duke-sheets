@@ -249,7 +249,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 if pos + 4 > data.len() {
                     break;
                 }
-                let name_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                let name_idx = u16::from_le_bytes([data[pos], data[pos + 1]]) as u32;
                 pos += 4; // 2 bytes name_idx + 2 reserved
                 tokens.push(ParsedToken::Name { name_idx });
             }
@@ -259,7 +259,7 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                     break;
                 }
                 let extern_sheet_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
-                let name_idx = u16::from_le_bytes([data[pos + 2], data[pos + 3]]);
+                let name_idx = u16::from_le_bytes([data[pos + 2], data[pos + 3]]) as u32;
                 pos += 6; // 2+2+2 reserved
                 tokens.push(ParsedToken::NameX {
                     extern_sheet_idx,

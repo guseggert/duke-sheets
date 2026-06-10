@@ -84,14 +84,16 @@ pub enum ParsedToken {
     },
 
     // Phase 2/3 stubs (skip data, emit placeholder)
-    /// Named range reference (Phase 2).
+    /// Named range reference (Phase 2). The index is u32-wide because
+    /// BIFF12 PtgName carries a 4-byte nameindex; BIFF8 readers widen
+    /// their 2-byte ilbl.
     Name {
-        name_idx: u16,
+        name_idx: u32,
     },
     /// External name reference (Phase 2).
     NameX {
         extern_sheet_idx: u16,
-        name_idx: u16,
+        name_idx: u32,
     },
     /// 3D cell reference (Phase 2).
     Ref3d {

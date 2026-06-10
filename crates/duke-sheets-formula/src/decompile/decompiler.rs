@@ -629,7 +629,7 @@ fn direct_sheet_lookup(sheet_names: &[String], idx: u16) -> String {
 /// For self-ref SUPBOOKs, the name_idx is 1-based into the workbook's
 /// NAME record array (same as tName). For external SUPBOOKs, we emit
 /// a placeholder since we don't parse external name tables.
-fn resolve_namex(ctx: &FormulaContext, extern_sheet_idx: u16, name_idx: u16) -> String {
+fn resolve_namex(ctx: &FormulaContext, extern_sheet_idx: u16, name_idx: u32) -> String {
     let eidx = extern_sheet_idx as usize;
 
     if let Some(entry) = ctx.extern_sheet.get(eidx) {
@@ -666,7 +666,7 @@ fn resolve_namex(ctx: &FormulaContext, extern_sheet_idx: u16, name_idx: u16) -> 
 
 /// Resolve the `name_idx`-th (1-based) EXTERNNAME belonging to the given
 /// SUPBOOK index.
-fn nth_extern_name(ctx: &FormulaContext, supbook_idx: u16, name_idx: u16) -> Option<String> {
+fn nth_extern_name(ctx: &FormulaContext, supbook_idx: u16, name_idx: u32) -> Option<String> {
     if name_idx == 0 {
         return None;
     }
