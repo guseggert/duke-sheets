@@ -24,11 +24,13 @@ jobs:
           tool: cargo-fuzz
       # The fuzz crate is excluded from the workspace, so nothing else
       # compile-checks it; building all targets here prevents silent rot
-      # when core APIs change.
+      # when core APIs change. The --target pin matters: the prebuilt
+      # cargo-fuzz binary is musl-static and would otherwise default to
+      # its own (musl) compile-time triple, which lacks ASan support.
       - name: Build all fuzz targets
-        run: cargo +nightly fuzz build
+        run: cargo +nightly fuzz build --target x86_64-unknown-linux-gnu
       - name: Smoke-run reader and parser targets
         run: |
           for target in xlsb_reader xls_reader xlsx_reader formula_parser; do
-            cargo +nightly fuzz run "$target" -- -max_total_time=30
+            cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=30
           done
