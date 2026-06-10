@@ -532,14 +532,16 @@ fn emit_optimized_if(
     let argc = args.len() as u8;
 
     // Compile every part into scratch buffers first so an overflow bail
-    // leaves `out` untouched for the caller's fallback.
+    // leaves `out` AND `extra` untouched for the caller's fallback —
+    // leaked rgcb would be duplicated and shift every PtgArray offset.
+    let mut scratch_extra = Vec::new();
     let mut cond_bytes = Vec::new();
-    emit_expr(cond, ctx, &mut cond_bytes, extra, function_arg_class(1, 0))?;
+    emit_expr(cond, ctx, &mut cond_bytes, &mut scratch_extra, function_arg_class(1, 0))?;
     let mut t_bytes = Vec::new();
-    emit_expr(t_branch, ctx, &mut t_bytes, extra, function_arg_class(1, 1))?;
+    emit_expr(t_branch, ctx, &mut t_bytes, &mut scratch_extra, function_arg_class(1, 1))?;
     let mut f_bytes = Vec::new();
     if let Some(f) = f_branch {
-        emit_expr(f, ctx, &mut f_bytes, extra, function_arg_class(1, 2))?;
+        emit_expr(f, ctx, &mut f_bytes, &mut scratch_extra, function_arg_class(1, 2))?;
     }
 
     let attr_if_offset = t_bytes.len() + 4;
@@ -556,6 +558,7 @@ fn emit_optimized_if(
         None
     };
 
+    extra.extend_from_slice(&scratch_extra);
     out.extend_from_slice(&cond_bytes);
     out.push(ptg::PTG_ATTR);
     out.push(ptg::ATTR_IF);
@@ -598,13 +601,14 @@ fn emit_optimized_choose(
     }
     let argc = args.len() as u8;
 
+    let mut scratch_extra = Vec::new();
     let mut selector_bytes = Vec::new();
-    emit_expr(selector, ctx, &mut selector_bytes, extra, function_arg_class(100, 0))?;
+    emit_expr(selector, ctx, &mut selector_bytes, &mut scratch_extra, function_arg_class(100, 0))?;
 
     let mut choice_bytes: Vec<Vec<u8>> = Vec::with_capacity(nc);
     for (i, c) in choices.iter().enumerate() {
         let mut buf = Vec::new();
-        emit_expr(c, ctx, &mut buf, extra, function_arg_class(100, i + 1))?;
+        emit_expr(c, ctx, &mut buf, &mut scratch_extra, function_arg_class(100, i + 1))?;
         choice_bytes.push(buf);
     }
 
@@ -638,6 +642,7 @@ fn emit_optimized_choose(
         }
     }
 
+    extra.extend_from_slice(&scratch_extra);
     out.extend_from_slice(&selector_bytes);
     out.push(ptg::PTG_ATTR);
     out.push(ptg::ATTR_CHOOSE);

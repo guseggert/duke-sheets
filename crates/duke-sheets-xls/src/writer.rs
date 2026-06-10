@@ -3709,12 +3709,17 @@ fn emit_optimized_if(
     // counts and bail on overflow WITHOUT having mutated `out`. Writing
     // `cond` into `out` before the overflow check would leave a partial
     // token stream that the caller's fallback would then duplicate.
+    // rgcb (array-constant data) goes into a scratch too: leaking it
+    // into the real `extra` on an Ok(false) fallback would duplicate
+    // it when the caller re-emits the args, shifting every later
+    // PtgArray offset.
+    let mut scratch_extra = Vec::new();
     let cond_class = function_arg_class(1, 0);
     let mut cond_bytes = Vec::with_capacity(16);
     compile_ptgs_with_context(
         cond,
         &mut cond_bytes,
-        extra,
+        &mut scratch_extra,
         externsheet,
         names,
         addins,
@@ -3726,7 +3731,7 @@ fn emit_optimized_if(
     compile_ptgs_with_context(
         t_branch,
         &mut t_bytes,
-        extra,
+        &mut scratch_extra,
         externsheet,
         names,
         addins,
@@ -3736,7 +3741,15 @@ fn emit_optimized_if(
     let mut f_bytes = Vec::new();
     if let Some(f) = f_branch {
         let f_class = function_arg_class(1, 2);
-        compile_ptgs_with_context(f, &mut f_bytes, extra, externsheet, names, addins, f_class)?;
+        compile_ptgs_with_context(
+            f,
+            &mut f_bytes,
+            &mut scratch_extra,
+            externsheet,
+            names,
+            addins,
+            f_class,
+        )?;
     }
 
     // PtgAttrIf offset = bytes after PtgAttrIf to skip when cond is FALSE.
@@ -3758,7 +3771,8 @@ fn emit_optimized_if(
         None
     };
 
-    // All overflow checks passed — commit to `out`.
+    // All overflow checks passed — commit to `out` and `extra`.
+    extra.extend_from_slice(&scratch_extra);
     out.extend_from_slice(&cond_bytes);
     out.push(0x19);
     out.push(0x02); // ATTR_IF
@@ -3848,12 +3862,13 @@ fn emit_optimized_choose(
     // is compiled into scratch buffers BEFORE any byte reaches `out`, so an
     // overflow bail (Ok(false)) leaves `out` untouched for the caller's
     // fallback to re-emit cleanly.
+    let mut scratch_extra = Vec::new();
     let selector_class = function_arg_class(100, 0);
     let mut selector_bytes = Vec::with_capacity(16);
     compile_ptgs_with_context(
         selector,
         &mut selector_bytes,
-        extra,
+        &mut scratch_extra,
         externsheet,
         names,
         addins,
@@ -3865,7 +3880,15 @@ fn emit_optimized_choose(
     for (i, c) in choices.iter().enumerate() {
         let mut buf = Vec::with_capacity(16);
         let class = function_arg_class(100, i + 1);
-        compile_ptgs_with_context(c, &mut buf, extra, externsheet, names, addins, class)?;
+        compile_ptgs_with_context(
+            c,
+            &mut buf,
+            &mut scratch_extra,
+            externsheet,
+            names,
+            addins,
+            class,
+        )?;
         choice_bytes.push(buf);
     }
 
@@ -3919,7 +3942,8 @@ fn emit_optimized_choose(
         }
     }
 
-    // All overflow checks passed — commit to `out`.
+    // All overflow checks passed — commit to `out` and `extra`.
+    extra.extend_from_slice(&scratch_extra);
     out.extend_from_slice(&selector_bytes);
     out.push(0x19);
     out.push(0x04); // ATTR_CHOOSE
@@ -5081,15 +5105,26 @@ mod tests {
     #[test]
     fn emit_optimized_if_overflow_leaves_out_untouched() {
         let args = vec![
-            FormulaExpr::Number(1.0), // cond
+            // cond carries an array constant so the rgcb side of the
+            // no-mutation invariant is exercised too: a leaked rgcb
+            // would be duplicated by the caller's fallback and shift
+            // every later PtgArray offset.
+            FormulaExpr::Function {
+                name: "SUM".to_string(),
+                args: vec![FormulaExpr::Array(vec![vec![
+                    FormulaExpr::Number(1.0),
+                    FormulaExpr::Number(2.0),
+                ]])],
+            },
             overflowing_branch(),     // t-branch (overflows the u16 offset)
             FormulaExpr::Number(2.0), // f-branch
         ];
         let mut out = vec![0xABu8]; // sentinel
+        let mut extra = Vec::new();
         let r = emit_optimized_if(
             &args,
             &mut out,
-            &mut Vec::new(),
+            &mut extra,
             &ExternSheetTable::default(),
             &NameTable::default(),
             &AddinTable::default(),
@@ -5101,6 +5136,10 @@ mod tests {
             vec![0xABu8],
             "out must be untouched on overflow fallback; got {out:02X?}"
         );
+        assert!(
+            extra.is_empty(),
+            "extra (rgcb) must be untouched on overflow fallback; got {extra:02X?}"
+        );
     }
 
     /// Same invariant for `emit_optimized_choose`: a giant choice trips the
@@ -5110,13 +5149,20 @@ mod tests {
         let args = vec![
             FormulaExpr::Number(1.0), // selector
             overflowing_branch(),     // choice 0 (overflows)
-            FormulaExpr::Number(2.0), // choice 1
+            FormulaExpr::Function {
+                name: "SUM".to_string(),
+                args: vec![FormulaExpr::Array(vec![vec![
+                    FormulaExpr::Number(3.0),
+                    FormulaExpr::Number(4.0),
+                ]])],
+            },
         ];
         let mut out = vec![0xCDu8]; // sentinel
+        let mut extra = Vec::new();
         let r = emit_optimized_choose(
             &args,
             &mut out,
-            &mut Vec::new(),
+            &mut extra,
             &ExternSheetTable::default(),
             &NameTable::default(),
             &AddinTable::default(),
@@ -5127,6 +5173,10 @@ mod tests {
             out,
             vec![0xCDu8],
             "out must be untouched on overflow fallback; got {out:02X?}"
+        );
+        assert!(
+            extra.is_empty(),
+            "extra (rgcb) must be untouched on overflow fallback; got {extra:02X?}"
         );
     }
 
