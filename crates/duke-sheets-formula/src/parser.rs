@@ -727,6 +727,20 @@ impl<'a> FormulaParser<'a> {
     }
 
     fn parse_unary(&mut self) -> FormulaResult<FormulaExpr> {
+        // parse_unary recurses on itself without passing through
+        // parse_expression, so it needs its own depth accounting or a
+        // long prefix-operator chain overflows the stack.
+        self.depth += 1;
+        if self.depth > 256 {
+            self.depth -= 1;
+            return Err(FormulaError::Parse("formula nesting too deep".into()));
+        }
+        let result = self.parse_unary_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_unary_inner(&mut self) -> FormulaResult<FormulaExpr> {
         // Prefix unary minus
         if matches!(self.current_token(), Token::Minus) {
             self.consume();
@@ -1909,6 +1923,16 @@ mod tests {
         };
         assert_eq!(name, "IF");
         assert_eq!(args.len(), 3);
+    }
+
+    #[test]
+    fn test_deep_unary_chain_errors_instead_of_overflowing() {
+        // parse_unary recurses per prefix operator; untrusted formula
+        // text must hit the depth guard, not the process stack.
+        let formula = format!("={}1", "+".repeat(100_000));
+        assert!(parse_formula(&formula).is_err());
+        let formula = format!("={}1", "-".repeat(100_000));
+        assert!(parse_formula(&formula).is_err());
     }
 
     #[test]
