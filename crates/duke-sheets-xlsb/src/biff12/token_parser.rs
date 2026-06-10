@@ -502,7 +502,13 @@ fn parse_array_constant(extra: &[u8], epos: &mut usize) -> String {
     ]) as usize;
     *epos += 8;
 
-    if nc == 0 || nr == 0 {
+    // Each element occupies at least one byte (its type tag), so the
+    // claimed dimensions must fit the remaining data. Untrusted counts
+    // would otherwise drive a rows*cols loop (up to ~1.8e19) or a
+    // multi-gigabyte Vec reservation.
+    let remaining = extra.len() - *epos;
+    if nc == 0 || nr == 0 || nr.checked_mul(nc).is_none_or(|n| n > remaining) {
+        *epos = extra.len();
         return "{<?>}".to_string();
     }
 
@@ -893,6 +899,31 @@ mod tests {
             vec![ParsedToken::Array {
                 text: "{1,2,3}".to_string()
             }]
+        );
+    }
+
+    #[test]
+    fn test_parse_array_constant_rejects_implausible_counts() {
+        // A malicious rgcb header can claim huge dimensions; each
+        // element needs at least one byte, so the parser must bail
+        // instead of looping rows*cols times or reserving gigabytes.
+        let mut token_data = vec![0x60];
+        token_data.extend_from_slice(&[0u8; 14]);
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&1000u32.to_le_bytes()); // claimed rows
+        extra.extend_from_slice(&1000u32.to_le_bytes()); // claimed cols
+        extra.push(0x00); // one real element, not a million
+        extra.extend_from_slice(&1.0f64.to_le_bytes());
+
+        let tokens = parse_tokens_with_extra(&token_data, &extra);
+        assert_eq!(tokens.len(), 1);
+        let ParsedToken::Array { text } = &tokens[0] else {
+            panic!("expected Array token, got {:?}", tokens[0]);
+        };
+        assert!(
+            text.len() < 64,
+            "implausible counts must not synthesize a giant literal; got {} chars",
+            text.len()
         );
     }
 }

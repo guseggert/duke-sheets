@@ -1382,7 +1382,9 @@ fn read_sqref(data: &[u8], pos: &mut usize) -> Vec<CellRange> {
     }
     let count = parser::read_u32(data, *pos) as usize;
     *pos += 4;
-    let mut ranges = Vec::with_capacity(count);
+    // Untrusted count: each range needs 16 bytes, so clamp the
+    // reservation to what the record can actually hold.
+    let mut ranges = Vec::with_capacity(count.min((data.len() - *pos) / 16));
     for _ in 0..count {
         if *pos + 16 > data.len() {
             break;
