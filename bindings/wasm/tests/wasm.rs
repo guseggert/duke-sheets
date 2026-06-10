@@ -536,6 +536,69 @@ fn test_save_xlsx_bytes() {
 }
 
 #[wasm_bindgen_test]
+fn test_populated_feature_reads_through_binding() {
+    // Comments, autofilters, and data validations are read-only in the
+    // binding; build the fixture in-test with the core crates (path
+    // deps of this package), write XLSX bytes, and read it back through
+    // the binding's DTO conversions.
+    use duke_sheets_core::auto_filter::{AutoFilter, ColumnFilter, FilterColumn, ValueFilter};
+    use duke_sheets_core::comment::CellComment;
+    use duke_sheets_core::{CellAddress, CellRange};
+    use duke_sheets_core::validation::DataValidation;
+
+    let mut core_wb = duke_sheets_core::Workbook::new();
+    let ws = core_wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Score").unwrap();
+    ws.set_cell_value("A2", 1.0).unwrap();
+    ws.set_comment(
+        "A1",
+        CellComment {
+            author: "Tester".to_string(),
+            text: "fixture comment".to_string(),
+            visible: false,
+        },
+    )
+    .unwrap();
+    let mut af = AutoFilter::new(CellRange::new(
+        CellAddress::parse("A1").unwrap(),
+        CellAddress::parse("A2").unwrap(),
+    ));
+    af.filter_columns.push(FilterColumn::new(
+        0,
+        ColumnFilter::Values(ValueFilter {
+            values: vec!["1".to_string()],
+            blank: false,
+        }),
+    ));
+    ws.set_auto_filter(Some(af));
+    let mut dv = DataValidation::list("Red,Green,Blue");
+    dv.ranges = vec![CellRange::parse("C1:C5").unwrap()];
+    ws.add_data_validation(dv);
+
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    duke_sheets_xlsx::XlsxWriter::write(&core_wb, &mut bytes).unwrap();
+
+    let wb = Workbook::from_bytes(&bytes.into_inner()).unwrap();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    assert_eq!(sheet.comment_count().unwrap(), 1);
+    let comment = sheet.get_comment("A1").unwrap();
+    assert_eq!(get_string_field(&comment, "author"), "Tester");
+    assert_eq!(get_string_field(&comment, "text"), "fixture comment");
+
+    let af = sheet.auto_filter().unwrap();
+    assert!(!af.is_null(), "autofilter lost through the binding");
+    assert_eq!(get_string_field(&af, "range"), "A1:A2");
+
+    let dvs = sheet.data_validations().unwrap();
+    let dvs_arr = js_sys::Array::from(&dvs);
+    assert_eq!(dvs_arr.length(), 1);
+    let dv0 = dvs_arr.get(0);
+    assert_eq!(get_string_field(&dv0, "validationType"), "list");
+    assert_eq!(get_string_field(&dv0, "listSource"), "Red,Green,Blue");
+}
+
+#[wasm_bindgen_test]
 fn test_save_xlsb_bytes_roundtrip() {
     // XLSB carries binary formula token streams (BIFF12), so formula
     // text survival exercises the compiler and reader end to end.
