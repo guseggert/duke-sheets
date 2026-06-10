@@ -56,6 +56,8 @@ const XLSB_FORMULA_FORMULAS: &[(&str, &str, f64)] = &[
     ("B17", "=COUNTA({\"ab\",\"cde\"})", 2.0), // SerAr string elements (u16 cch)
     ("B18", "=COUNT({1,TRUE,3})", 2.0), // SerAr bool element (1 byte, no pad)
     ("B19", "=COUNT({1,#N/A,3})", 2.0), // SerAr error element (1 byte + 3 reserved)
+    ("B20", "=SUM(-A1)", -2.0),        // unary operand class under R-forced arg
+    ("B21", "=-A1+A2", 1.0),           // unary minus on a ref at value position
 ];
 
 fn xlsb_formula_workbook() -> Workbook {

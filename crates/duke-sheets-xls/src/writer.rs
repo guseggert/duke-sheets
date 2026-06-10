@@ -3335,7 +3335,15 @@ fn compile_ptgs_with_context(
             });
         }
         FormulaExpr::UnaryOp { op, operand } => {
-            compile_ptgs_with_context(operand, out, extra, externsheet, names, addins, operand_class)?;
+            // Unary value operators force their operand to V-class even
+            // inside R-forced argument positions: Excel emits tRefV for
+            // =SUM(-A1) / =SUM(A1%) (verified byte-for-byte against
+            // Excel-authored output). Paren is class-transparent.
+            let inner_class = match op {
+                UnaryOperator::Paren => operand_class,
+                _ => OperandClass::V,
+            };
+            compile_ptgs_with_context(operand, out, extra, externsheet, names, addins, inner_class)?;
             out.push(match op {
                 UnaryOperator::Plus => 0x12,    // PtgUplus
                 UnaryOperator::Negate => 0x13,  // PtgUminus

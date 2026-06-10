@@ -113,7 +113,14 @@ fn emit_expr(
             emit_binary_op(*op, out)
         }
         FormulaExpr::UnaryOp { op, operand } => {
-            emit_expr(operand, ctx, out, extra, class)?;
+            // Unary value operators force their operand to V-class even
+            // inside R-forced argument positions (Excel emits tRefV for
+            // =SUM(-A1), byte-verified); Paren is class-transparent.
+            let inner_class = match op {
+                UnaryOperator::Paren => class,
+                _ => OperandClass::V,
+            };
+            emit_expr(operand, ctx, out, extra, inner_class)?;
             emit_unary_op(*op, out)
         }
 

@@ -542,6 +542,11 @@ const UPLUS_PAREN_FORMULAS: &[(&str, &str, f64)] = &[
     ("B5", "=-(A1)", -2.0),
     ("B6", "=2*(A1+A2)", 10.0),
     ("B7", "=((A1))", 2.0),
+    // Unary operand classes: refs under unary value operators inside
+    // an R-forced argument position.
+    ("B8", "=SUM(-A1)", -2.0),
+    ("B9", "=-A1+A2", 1.0),
+    ("B10", "=SUM(A1%)", 0.02),
 ];
 
 fn uplus_paren_workbook() -> Workbook {
