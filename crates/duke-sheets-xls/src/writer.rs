@@ -4419,7 +4419,9 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
     let mut record_body = Vec::new();
     write_container(er::DGG_CONTAINER, 0, &dgg_body, &mut record_body);
 
-    write_biff_record(stream, MSODRAWINGGROUP_RECORD, &record_body);
+    // The DggContainer embeds every image's bytes (BStoreContainer),
+    // so any realistic picture pushes this past the record body cap.
+    write_biff_record_chunked(stream, MSODRAWINGGROUP_RECORD, &record_body);
 }
 
 /// Emit per-sheet drawing records, mirroring the interleaved pattern
@@ -4602,7 +4604,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
             .write_to(&mut first_drawing);
         first_drawing.extend_from_slice(&first.sp_payload);
     }
-    write_biff_record(stream, MSODRAWING_RECORD, &first_drawing);
+    write_biff_record_chunked(stream, MSODRAWING_RECORD, &first_drawing);
 
     // For each shape: emit OBJ; if it has a post_obj (comment's
     // ClientTextbox), emit that in a separate MSODRAWING; then
@@ -4613,7 +4615,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
         stream.extend_from_slice(&rec.obj);
 
         if !rec.post_obj.is_empty() {
-            write_biff_record(stream, MSODRAWING_RECORD, &rec.post_obj);
+            write_biff_record_chunked(stream, MSODRAWING_RECORD, &rec.post_obj);
         }
         if !rec.post_txo.is_empty() {
             stream.extend_from_slice(&rec.post_txo);
@@ -4624,7 +4626,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
             OfficeArtRecordHeader::container(er::SP_CONTAINER, 0, sp_payload_size(next))
                 .write_to(&mut open_drawing);
             open_drawing.extend_from_slice(&next.sp_payload);
-            write_biff_record(stream, MSODRAWING_RECORD, &open_drawing);
+            write_biff_record_chunked(stream, MSODRAWING_RECORD, &open_drawing);
         }
     }
 
@@ -4990,6 +4992,20 @@ fn write_biff_record(stream: &mut Vec<u8>, record_type: u16, body: &[u8]) {
     stream.extend_from_slice(&record_type.to_le_bytes());
     stream.extend_from_slice(&(body.len() as u16).to_le_bytes());
     stream.extend_from_slice(body);
+}
+
+/// Emit `body` as `record_type`, splitting anything beyond the
+/// 8224-byte record body cap into trailing CONTINUE records, the
+/// standard BIFF8 continuation for oversized payloads (MS-XLS §2.1.4).
+/// Used for the Escher records, whose bodies scale with embedded
+/// image sizes.
+fn write_biff_record_chunked(stream: &mut Vec<u8>, record_type: u16, body: &[u8]) {
+    let mut chunks = body.chunks(BIFF_MAX_RECORD_BODY);
+    let first = chunks.next().unwrap_or(&[]);
+    write_biff_record(stream, record_type, first);
+    for chunk in chunks {
+        write_biff_record(stream, CONTINUE_RECORD, chunk);
+    }
 }
 
 #[cfg(test)]

@@ -118,6 +118,34 @@ const TEST_JPEG_1X1: &[u8] = &[
 ];
 
 #[test]
+fn large_images_round_trip_via_continue_records() {
+    // Realistic images exceed the 8224-byte BIFF record body cap, so
+    // MSODRAWINGGROUP (which carries every blip's bytes) must be split
+    // across CONTINUE records. 20 KB covers the >8224 case; 80 KB also
+    // covers bodies whose length cannot be represented in the record's
+    // u16 size field at all.
+    for size in [20_000usize, 80_000] {
+        let mut data = TEST_PNG_1X1.to_vec();
+        data.resize(size, 0xAB);
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let mut img = test_image(1, "Big", 1, 1);
+        img.data = data.clone();
+        ws.add_image(img);
+
+        let parsed = write_then_read(&wb);
+        let images = parsed.worksheet(0).unwrap().images();
+        assert_eq!(images.len(), 1, "{size}-byte image must survive round-trip");
+        assert_eq!(
+            images[0].data(),
+            &data[..],
+            "{size}-byte image bytes must survive CONTINUE splitting"
+        );
+    }
+}
+
+#[test]
 fn single_picture_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
