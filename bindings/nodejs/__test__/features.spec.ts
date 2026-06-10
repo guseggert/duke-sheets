@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { Workbook } from "../index.js";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
@@ -13,9 +14,12 @@ import * as fs from "node:fs";
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 let fixtureDir: string;
 
-beforeAll(() => {
+beforeAll(async () => {
   fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-fixtures-"));
-  execFileSync(
+  // Async on purpose: a long synchronous child process starves the
+  // vitest worker's IPC heartbeat and fails the run with
+  // `Timeout calling "onTaskUpdate"` even after all tests pass.
+  await promisify(execFile)(
     "cargo",
     [
       "run",
@@ -28,7 +32,7 @@ beforeAll(() => {
       "--",
       fixtureDir,
     ],
-    { cwd: REPO_ROOT, stdio: "inherit" },
+    { cwd: REPO_ROOT },
   );
 }, 600_000);
 
