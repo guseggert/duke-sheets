@@ -327,12 +327,18 @@ pub(crate) fn read_worksheet<R: Read>(
                     if let Some(fc) = current_filter_column.as_mut() {
                         let flags = buf[0];
                         let val = parser::read_f64(&buf, 1);
-                        let filter_val = parser::read_f64(&buf, 9);
+                        // xNumFilter is meaningful only when fApplied
+                        // (bit 2) is set.
+                        let filter_val = if (flags & 0x04) != 0 {
+                            Some(parser::read_f64(&buf, 9))
+                        } else {
+                            None
+                        };
                         fc.filter = ColumnFilter::Top10(Top10Filter {
                             top: (flags & 0x01) != 0,
                             percent: (flags & 0x02) != 0,
                             val,
-                            filter_val: Some(filter_val),
+                            filter_val,
                         });
                     }
                 }

@@ -767,7 +767,12 @@ fn write_auto_filter<W: Write>(
                 if t.percent {
                     flags |= 1 << 1;
                 }
-                flags |= 1 << 2; // fApplied
+                // fApplied: when set, xNumFilter MUST be an actual
+                // value from the filtered range. Only claim it when we
+                // carry a computed filter value.
+                if t.filter_val.is_some() {
+                    flags |= 1 << 2;
+                }
                 let mut top_payload = Vec::with_capacity(17);
                 top_payload.push(flags);
                 top_payload.extend_from_slice(&t.val.to_le_bytes());

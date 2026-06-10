@@ -2497,6 +2497,46 @@ mod tests {
     }
 
     #[test]
+    fn top10_without_computed_value_roundtrips_none() {
+        use duke_sheets_core::auto_filter::{
+            AutoFilter, ColumnFilter, FilterColumn, Top10Filter,
+        };
+        use duke_sheets_core::{CellAddress, CellRange};
+
+        // fApplied (flags bit 2) asserts xNumFilter is a real value
+        // from the range; without a computed filter value it must stay
+        // clear, and the absence must survive the round trip instead
+        // of materializing as Some(val).
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let mut af = AutoFilter::new(CellRange::new(
+            CellAddress::parse("A1").unwrap(),
+            CellAddress::parse("A5").unwrap(),
+        ));
+        af.filter_columns.push(FilterColumn::new(
+            0,
+            ColumnFilter::Top10(Top10Filter {
+                top: true,
+                percent: false,
+                val: 3.0,
+                filter_val: None,
+            }),
+        ));
+        ws.set_auto_filter(Some(af));
+
+        let wb2 = round_trip(&wb);
+        let af2 = wb2.worksheet(0).unwrap().auto_filter().unwrap().clone();
+        match &af2.filter_columns[0].filter {
+            ColumnFilter::Top10(t) => {
+                assert!(t.top);
+                assert_eq!(t.val, 3.0);
+                assert_eq!(t.filter_val, None, "fApplied must not be claimed");
+            }
+            other => panic!("expected Top10, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn custom_filter_in_process_roundtrip() {
         use duke_sheets_core::auto_filter::{ColumnFilter, FilterOperator};
 
