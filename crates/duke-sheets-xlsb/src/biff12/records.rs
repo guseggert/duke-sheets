@@ -82,11 +82,12 @@ pub const BRT_END_FILTER_COLUMN: u16 = 0x00A4;
 pub const BRT_BEGIN_FILTERS: u16 = 0x00A5;
 pub const BRT_END_FILTERS: u16 = 0x00A6;
 pub const BRT_FILTER: u16 = 0x00A7;
-// Both record IDs confirmed empirically by dumping XLSB files Excel
-// emits when a dynamic / color filter is applied via the COM API:
-// BrtDynamicFilter = 0x00AB, BrtColorFilter = 0x00A9.
+// BrtDynamicFilter = 0x00AB confirmed empirically by dumping an XLSB
+// file Excel emits when an AboveAverage filter is applied via COM.
+// BrtColorFilter = 0x00A8 per the [MS-XLSB] §2.3 record enumeration
+// (168 = BrtColorFilter, 169 = BrtIconFilter).
 pub const BRT_DYNAMIC_FILTER: u16 = 0x00AB;
-pub const BRT_COLOR_FILTER: u16 = 0x00A9;
+pub const BRT_COLOR_FILTER: u16 = 0x00A8;
 pub const BRT_TOP10_FILTER: u16 = 0x00AA;
 pub const BRT_BEGIN_CUSTOM_FILTERS: u16 = 0x00AC;
 pub const BRT_END_CUSTOM_FILTERS: u16 = 0x00AD;

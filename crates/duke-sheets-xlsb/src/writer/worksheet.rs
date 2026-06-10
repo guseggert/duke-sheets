@@ -827,7 +827,7 @@ fn write_auto_filter<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std:
                 rw.write_record(records::BRT_DYNAMIC_FILTER, &buf)?;
             }
             ColumnFilter::Color(c) => {
-                // BrtColorFilter per [MS-XLSB] §2.4.339 (id 0x00A9):
+                // BrtColorFilter per [MS-XLSB] §2.4.339 (id 0x00A8):
                 //   dxfid u32 + fCellColor u32. 8 bytes.
                 let mut buf = Vec::with_capacity(8);
                 buf.extend_from_slice(&c.dxf_id.unwrap_or(0).to_le_bytes());

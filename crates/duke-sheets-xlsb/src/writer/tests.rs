@@ -2147,6 +2147,68 @@ mod tests {
         }
     }
 
+    /// Raw (record_type, payload) pairs of `xl/worksheets/sheet1.bin`.
+    fn sheet1_records(wb: &Workbook) -> Vec<(u16, Vec<u8>)> {
+        let bytes = write_xlsb_bytes(wb);
+        let bin = read_zip_entry_bytes(&bytes, "xl/worksheets/sheet1.bin");
+        let mut iter = crate::biff12::RecordIter::new(Cursor::new(bin));
+        let mut out = Vec::new();
+        let mut buf = Vec::new();
+        while let Ok((typ, len)) = iter.next_record(&mut buf) {
+            out.push((typ, buf[..len].to_vec()));
+        }
+        out
+    }
+
+    fn read_zip_entry_bytes(data: &[u8], name: &str) -> Vec<u8> {
+        let cursor = Cursor::new(data);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let mut file = archive.by_name(name).unwrap();
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
+        buf
+    }
+
+    #[test]
+    fn color_filter_emits_brt_color_filter_record_id() {
+        use duke_sheets_core::auto_filter::{AutoFilter, ColorFilter, ColumnFilter, FilterColumn};
+        use duke_sheets_core::{CellAddress, CellRange};
+
+        // [MS-XLSB] record enumeration: 168 (0x00A8) = BrtColorFilter
+        // (§2.4.339), 169 (0x00A9) = BrtIconFilter. A struct-level
+        // round-trip cannot catch a swapped ID (both payloads are two
+        // u32s), so pin the raw record id and payload here.
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let mut af = AutoFilter::new(CellRange::new(
+            CellAddress::parse("A1").unwrap(),
+            CellAddress::parse("A3").unwrap(),
+        ));
+        af.filter_columns.push(FilterColumn::new(
+            0,
+            ColumnFilter::Color(ColorFilter {
+                dxf_id: Some(2),
+                cell_color: false,
+            }),
+        ));
+        ws.set_auto_filter(Some(af));
+
+        let recs = sheet1_records(&wb);
+        let color: Vec<_> = recs.iter().filter(|(t, _)| *t == 0x00A8).collect();
+        assert_eq!(
+            color.len(),
+            1,
+            "expected exactly one BrtColorFilter (0x00A8) record"
+        );
+        let mut expected = 2u32.to_le_bytes().to_vec();
+        expected.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(color[0].1, expected, "dxfid + fCellColor payload");
+        assert!(
+            !recs.iter().any(|(t, _)| *t == 0x00A9),
+            "0x00A9 is BrtIconFilter; a color filter must not emit it"
+        );
+    }
+
     #[test]
     fn named_range_comment_roundtrip() {
         use duke_sheets_core::named_range::{NameScope, NamedRange};
