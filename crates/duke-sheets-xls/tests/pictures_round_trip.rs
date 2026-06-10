@@ -811,6 +811,16 @@ fn lo_can_open_xls_with_picture_we_emit() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", 42.0).expect("A1");
     ws.add_image(test_image(1, "Picture 1", 2, 3));
+    // A second image past the 8224-byte record cap, so the
+    // MSODRAWINGGROUP → CONTINUE split is validated by a real
+    // consumer's loader, not just our own reader.
+    let mut big = test_image(2, "Picture 2", 6, 3);
+    big.data = {
+        let mut d = TEST_PNG_1X1.to_vec();
+        d.resize(20_000, 0xAB);
+        d
+    };
+    ws.add_image(big);
 
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
     std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
