@@ -14,6 +14,7 @@ arbitrary = { version = "1", features = ["derive"] }
 # Target crates
 duke-sheets-xlsx = { path = "../crates/duke-sheets-xlsx" }
 duke-sheets-xls = { path = "../crates/duke-sheets-xls" }
+duke-sheets-xlsb = { path = "../crates/duke-sheets-xlsb" }
 duke-sheets-csv = { path = "../crates/duke-sheets-csv" }
 duke-sheets-formula = { path = "../crates/duke-sheets-formula" }
 duke-sheets-core = { path = "../crates/duke-sheets-core" }
@@ -60,4 +61,14 @@ doc = false
 [[bin]]
 name = "formula_eval"
 path = "fuzz_targets/formula_eval.rs"
+doc = false
+
+[[bin]]
+name = "xlsb_reader"
+path = "fuzz_targets/xlsb_reader.rs"
+doc = false
+
+[[bin]]
+name = "xlsb_roundtrip"
+path = "fuzz_targets/xlsb_roundtrip.rs"
 doc = false

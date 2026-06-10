@@ -177,6 +177,7 @@ impl FuzzContext {
                 sheet_idx: n.sheet_idx,
                 is_builtin: n.is_builtin,
                 formula_body: n.formula_body.clone(),
+                comment: None,
             })
             .collect();
 
