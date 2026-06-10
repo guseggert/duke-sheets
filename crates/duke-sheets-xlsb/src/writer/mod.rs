@@ -123,14 +123,6 @@ impl XlsbWriter {
             .map(|i| workbook.worksheet(i).unwrap().name().to_string())
             .collect();
 
-        // Names emitted to BrtName must be enumerable from the
-        // CompileContext so PtgName can resolve text → 1-based index.
-        let defined_names: Vec<String> = workbook
-            .named_ranges()
-            .iter()
-            .map(|nr| nr.name.clone())
-            .collect();
-
         let has_formulas = (0..workbook.sheet_count()).any(|i| {
             let ws = workbook.worksheet(i).unwrap();
             ws.iter_cells()
@@ -138,6 +130,23 @@ impl XlsbWriter {
         });
 
         let xlfn_names = collect_xlfn_names(workbook);
+
+        // Names emitted to BrtName must be enumerable from the
+        // CompileContext so PtgName can resolve text → ilbl. The list
+        // must mirror the records write_user_name_records actually
+        // emits: a name whose body fails to compile is skipped there,
+        // and including it here would shift every later PtgName index.
+        let name_ctx = CompileContext {
+            sheet_names: sheet_names.clone(),
+            xlfn_names: xlfn_names.clone(),
+            defined_names: Vec::new(),
+        };
+        let defined_names: Vec<String> = workbook
+            .named_ranges()
+            .iter()
+            .filter(|nr| crate::biff12::compiler::compile_name_body(&nr.refers_to, &name_ctx).is_ok())
+            .map(|nr| nr.name.clone())
+            .collect();
 
         Self::write_root_rels(&mut zip, &options)?;
         Self::write_workbook_rels(&mut zip, &options, workbook, &sst)?;

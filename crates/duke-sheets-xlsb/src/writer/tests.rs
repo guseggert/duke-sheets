@@ -2306,6 +2306,38 @@ mod tests {
     }
 
     #[test]
+    fn ptg_name_index_accounts_for_xlfn_names() {
+        use duke_sheets_core::named_range::{NameScope, NamedRange};
+
+        // PtgName's ilbl indexes the whole BrtName record stream, and
+        // _xlfn.* records are written before user names. A formula
+        // using a post-2007 function (here IFS, absent from the Ftab)
+        // plus a named-range reference must not bind the name to the
+        // _xlfn record.
+        let mut wb = Workbook::new();
+        wb.named_ranges_mut().define_or_update(NamedRange::new(
+            "MyRange",
+            "Sheet1!$A$1:$A$3",
+            NameScope::Workbook,
+        ));
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value_at(0, 0, 1.0).unwrap();
+        ws.set_cell_value_at(1, 0, 2.0).unwrap();
+        ws.set_cell_value_at(2, 0, 3.0).unwrap();
+        ws.set_formula_with_cached_value_at(0, 1, "=IFS(A1>0,1)", CellValue::Number(1.0))
+            .unwrap();
+        ws.set_formula_with_cached_value_at(0, 2, "=SUM(MyRange)", CellValue::Number(6.0))
+            .unwrap();
+
+        let wb2 = round_trip(&wb);
+        let ws2 = wb2.worksheet(0).unwrap();
+        let name_ref = ws2.formula_data_at(0, 2).expect("formula should exist");
+        assert_eq!(name_ref.text, "=SUM(MyRange)");
+        let xlfn = ws2.formula_data_at(0, 1).expect("formula should exist");
+        assert_eq!(xlfn.text, "=IFS(A1>0,1)");
+    }
+
+    #[test]
     fn named_range_comment_roundtrip() {
         use duke_sheets_core::named_range::{NameScope, NamedRange};
 

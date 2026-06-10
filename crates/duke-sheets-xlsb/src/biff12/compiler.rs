@@ -118,8 +118,10 @@ fn emit_expr(
         FormulaExpr::Array(rows) => emit_array(rows, out, extra),
 
         FormulaExpr::NameRef(name) => {
-            // Resolve to a 1-based index into the BrtName sequence.
-            // Match case-insensitively per Excel's convention.
+            // Resolve to a 1-based index into the BrtName record stream.
+            // _xlfn.* records are written before user names, so user
+            // names start at ilbl xlfn_count + 1. Match
+            // case-insensitively per Excel's convention.
             let upper = name.to_ascii_uppercase();
             let idx_0based = ctx
                 .defined_names
@@ -129,8 +131,9 @@ fn emit_expr(
                 Some(i) => {
                     // PtgName takes the class of its position (R when used as
                     // a reference operand, V at value positions).
+                    let ilbl = ctx.xlfn_names.len() as u32 + i as u32 + 1;
                     out.push(class_ptg(ptg::PTG_NAME, class));
-                    out.extend_from_slice(&((i as u32) + 1).to_le_bytes());
+                    out.extend_from_slice(&ilbl.to_le_bytes());
                     Ok(())
                 }
                 None => {
@@ -457,12 +460,14 @@ fn emit_function(
             out.extend_from_slice(&func_idx.to_le_bytes());
         }
     } else if let Some(&name_idx) = ctx.xlfn_names.get(&lookup_name.to_ascii_uppercase()) {
+        // tName ref to the _xlfn.* BrtName record is pushed BEFORE the
+        // args: PtgFuncVar with iftab 0xFF treats the bottom-most of
+        // its argc operands as the function name.
+        out.push(ptg::v_class(ptg::PTG_NAME));
+        out.extend_from_slice(&name_idx.to_le_bytes());
         for arg in args {
             emit_expr(arg, ctx, out, extra, OperandClass::V)?;
         }
-        // tName (V-class): ptg byte + name_idx as u32
-        out.push(ptg::v_class(ptg::PTG_NAME));
-        out.extend_from_slice(&name_idx.to_le_bytes());
         // tFuncVar (V-class) with func_idx=0xFF: argc includes the tName ref
         out.push(ptg::v_class(ptg::PTG_FUNC_VAR));
         out.push((args.len() + 1) as u8);
