@@ -708,6 +708,93 @@ mod tests {
         compile_formula(text, &ctx()).unwrap()
     }
 
+    mod props {
+        use super::*;
+        use duke_sheets_formula::decompile::{decompile, FormulaContext};
+        use proptest::prelude::*;
+
+        /// Bounded recursive formula-text strategy leaning on the
+        /// constructs the compiler special-cases: IF/CHOOSE/SUM attrs,
+        /// array constants, unions, parens, unary operators.
+        fn arb_formula() -> impl Strategy<Value = String> {
+            let cell = (0..26u8, 1..200u32)
+                .prop_map(|(c, r)| format!("{}{}", (b'A' + c) as char, r));
+            let area = (0..26u8, 1..50u32, 0..26u8, 1..50u32).prop_map(|(c1, r1, c2, r2)| {
+                let (c1, c2) = (c1.min(c2), c1.max(c2));
+                let (r1, r2) = (r1.min(r2), r1.max(r2));
+                format!("{}{}:{}{}", (b'A' + c1) as char, r1, (b'A' + c2) as char, r2)
+            });
+            let leaf = prop_oneof![
+                (0..10_000i32).prop_map(|n| n.to_string()),
+                Just("TRUE".to_string()),
+                Just("FALSE".to_string()),
+                cell,
+                area.clone(),
+                "[a-z ]{0,8}".prop_map(|s| format!("\"{s}\"")),
+                proptest::collection::vec(0..100i32, 1..5).prop_map(|ns| {
+                    let items: Vec<String> = ns.iter().map(|n| n.to_string()).collect();
+                    format!("{{{}}}", items.join(","))
+                }),
+            ];
+            leaf.prop_recursive(3, 24, 3, move |inner| {
+                let op = prop_oneof![
+                    Just("+"),
+                    Just("-"),
+                    Just("*"),
+                    Just("/"),
+                    Just("&"),
+                    Just("="),
+                    Just("<"),
+                ];
+                prop_oneof![
+                    (inner.clone(), op, inner.clone())
+                        .prop_map(|(a, op, b)| format!("{a}{op}{b}")),
+                    inner.clone().prop_map(|a| format!("({a})")),
+                    inner.clone().prop_map(|a| format!("-{a}")),
+                    inner.clone().prop_map(|a| format!("SUM({a})")),
+                    (inner.clone(), inner.clone())
+                        .prop_map(|(a, b)| format!("IF({a}>0,{a},{b})")),
+                    (inner.clone(), inner.clone())
+                        .prop_map(|(a, b)| format!("MAX({a},{b})")),
+                    (inner.clone(), inner.clone())
+                        .prop_map(|(a, b)| format!("CHOOSE(1,{a},{b})")),
+                    (area.clone(), area.clone())
+                        .prop_map(|(a, b)| format!("COUNT(({a},{b}))")),
+                ]
+            })
+            .prop_map(|e| format!("={e}"))
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+            /// compile → decompile must reach a fixed point after one
+            /// pass: decompiled text recompiles to the SAME bytes and
+            /// the same text. Catches asymmetries like the union-paren
+            /// loss, where each round through the writer mutated the
+            /// formula.
+            #[test]
+            fn compile_decompile_two_pass_stable(text in arb_formula()) {
+                let cctx = ctx();
+                let fctx = FormulaContext::new(vec!["Sheet1".to_string(), "Sheet2".to_string()]);
+
+                // Some generated shapes legitimately fail to compile;
+                // the property applies to everything that compiles.
+                let Ok(c1) = compile_formula(&text, &cctx) else {
+                    return Ok(());
+                };
+                let t1 = decompile(&parse_tokens_with_extra(&c1.rgce, &c1.rgcb), &fctx);
+
+                let c2 = compile_formula(&format!("={t1}"), &cctx)
+                    .expect("decompiled text must recompile");
+                let t2 = decompile(&parse_tokens_with_extra(&c2.rgce, &c2.rgcb), &fctx);
+
+                prop_assert_eq!(&t1, &t2, "text not stable; input {}", text);
+                prop_assert_eq!(&c1.rgce, &c2.rgce, "rgce not stable; input {}", text);
+                prop_assert_eq!(&c1.rgcb, &c2.rgcb, "rgcb not stable; input {}", text);
+            }
+        }
+    }
+
     fn compile_and_parse(text: &str) -> Vec<ParsedToken> {
         let compiled = compile(text);
         parse_tokens_with_extra(&compiled.rgce, &compiled.rgcb)

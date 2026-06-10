@@ -96,15 +96,15 @@ fn format_area(
     last_row_rel: bool,
     last_col_rel: bool,
 ) -> String {
-    if first_row == last_row && first_col == last_col {
-        format_ref(first_row, first_col, first_row_rel, first_col_rel)
-    } else {
-        format!(
-            "{}:{}",
-            format_ref(first_row, first_col, first_row_rel, first_col_rel),
-            format_ref(last_row, last_col, last_row_rel, last_col_rel)
-        )
-    }
+    // A degenerate area (H38:H38) keeps its colon form: Excel displays
+    // tArea tokens as ranges, and collapsing to a bare ref would make
+    // the text recompile to a PtgRef — formula bytes would mutate on
+    // every write/read cycle.
+    format!(
+        "{}:{}",
+        format_ref(first_row, first_col, first_row_rel, first_col_rel),
+        format_ref(last_row, last_col, last_row_rel, last_col_rel)
+    )
 }
 
 /// Format a BIFF8 error code byte as an Excel error string.

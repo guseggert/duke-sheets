@@ -17,6 +17,7 @@ serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+proptest.workspace = true
 
 [features]
 default = []
