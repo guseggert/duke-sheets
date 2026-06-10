@@ -536,6 +536,42 @@ fn test_save_xlsx_bytes() {
 }
 
 #[wasm_bindgen_test]
+fn test_save_xlsb_bytes_roundtrip() {
+    // XLSB carries binary formula token streams (BIFF12), so formula
+    // text survival exercises the compiler and reader end to end.
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from(1.0)).unwrap();
+    sheet.set_cell("A2", JsValue::from(2.0)).unwrap();
+    sheet.set_cell("A3", JsValue::from(3.0)).unwrap();
+    sheet.set_cell("B1", JsValue::from("label")).unwrap();
+    sheet.set_formula("C1", "=SUM(A1:A3)").unwrap();
+    sheet.set_formula("C2", "=IF(A1>0,A2,A3)").unwrap();
+    wb.calculate(None).unwrap();
+
+    let bytes = wb.save_xlsb_bytes().unwrap();
+    assert!(!bytes.is_empty(), "XLSB bytes should not be empty");
+
+    let wb2 = Workbook::from_bytes(&bytes).unwrap();
+    let sheet2 = wb2.get_sheet(0).unwrap();
+    assert_eq!(sheet2.get_cell("A1").unwrap().as_number(), Some(1.0));
+    assert_eq!(
+        sheet2.get_cell("B1").unwrap().as_text().as_deref(),
+        Some("label")
+    );
+    assert_eq!(
+        sheet2.get_formula_at(0, 2).unwrap().as_deref(),
+        Some("=SUM(A1:A3)"),
+        "XLSB formula text must survive the byte round-trip"
+    );
+    assert_eq!(
+        sheet2.get_formula_at(1, 2).unwrap().as_deref(),
+        Some("=IF(A1>0,A2,A3)")
+    );
+    assert_eq!(sheet2.get_cell("C1").unwrap().as_number(), Some(6.0));
+}
+
+#[wasm_bindgen_test]
 fn test_now_and_today_formulas() {
     // NOW() and TODAY() use Local::now() which requires chrono's wasmbind feature
     // on wasm32 targets, otherwise SystemTime::now() panics.
