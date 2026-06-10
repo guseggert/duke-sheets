@@ -97,6 +97,16 @@ enum Token {
     Eof,
 }
 
+/// Whether `name` is a callable function in the registry (with or
+/// without the `_xlfn.` future-function prefix).
+fn is_known_function(name: &str) -> bool {
+    let lookup = name
+        .strip_prefix("_xlfn.")
+        .or_else(|| name.strip_prefix("_XLFN."))
+        .unwrap_or(name);
+    crate::functions::registry().get(lookup).is_some()
+}
+
 /// Formula parser
 struct FormulaParser<'a> {
     input: &'a str,
@@ -142,10 +152,21 @@ impl<'a> FormulaParser<'a> {
         if prev_value_producing && had_whitespace {
             self.skip_whitespace();
             if let Some(next) = self.peek_char() {
-                if matches!(
-                    next,
-                    'A'..='Z' | 'a'..='z' | '_' | '\'' | '$' | '(' | '0'..='9'
-                ) {
+                // Excel swallows whitespace between a function name and
+                // its open paren: `=SUM (A1,B1)` is a call, not an
+                // intersection of the name SUM with a union. Only
+                // registry-known functions get this treatment; a plain
+                // defined name followed by parens stays an
+                // intersection.
+                let known_fn_call = next == '('
+                    && matches!(&self.current_token, Some(Token::Identifier(name))
+                        if is_known_function(name));
+                if !known_fn_call
+                    && matches!(
+                        next,
+                        'A'..='Z' | 'a'..='z' | '_' | '\'' | '$' | '(' | '0'..='9'
+                    )
+                {
                     self.current_token = Some(Token::Space);
                     return;
                 }
@@ -1868,6 +1889,43 @@ mod tests {
             },
             other => panic!("Expected Paren(Union), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_space_between_function_name_and_paren_is_a_call() {
+        // Excel swallows whitespace between a function name and its
+        // open paren; `=SUM (A1,B1)` is a 2-arg call, not an
+        // intersection of the name SUM with a union.
+        let ast = parse_formula("=SUM (A1,B1)").unwrap();
+        let FormulaExpr::Function { name, args } = ast else {
+            panic!("Expected Function, got {ast:?}");
+        };
+        assert_eq!(name, "SUM");
+        assert_eq!(args.len(), 2);
+
+        let ast = parse_formula("=IF (A1>0, 1, 2)").unwrap();
+        let FormulaExpr::Function { name, args } = ast else {
+            panic!("Expected Function, got {ast:?}");
+        };
+        assert_eq!(name, "IF");
+        assert_eq!(args.len(), 3);
+    }
+
+    #[test]
+    fn test_plain_name_before_parens_stays_intersection() {
+        // A non-function identifier followed by spaced parens is a
+        // genuine intersection (Excel's behaviour for defined names).
+        let ast = parse_formula("=foo (A1)").unwrap();
+        assert!(
+            matches!(
+                ast,
+                FormulaExpr::BinaryOp {
+                    op: BinaryOperator::Intersect,
+                    ..
+                }
+            ),
+            "expected Intersect, got {ast:?}"
+        );
     }
 
     #[test]
