@@ -1,0 +1,27 @@
+name: LibreOffice E2E
+
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'tests/fixtures/pyuno/**'
+      - '.github/workflows/lo-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  lo-envelope:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The test harness builds the duke-sheets-pyuno docker image and
+      # starts the container itself (ensure_lo); the workflow only needs
+      # docker (present on ubuntu runners) and the shared URP directory.
+      - name: Prepare shared URP directory
+        run: mkdir -p /tmp/duke-sheets-urp
+      - name: LibreOffice bridge integration tests
+        run: RUST_TEST_THREADS=1 cargo test -p duke-sheets-libreoffice --test integration -- --test-threads=1
+      - name: XLS envelope checks (lo_can)
+        run: RUST_TEST_THREADS=1 cargo test -p duke-sheets-xls lo_can -- --ignored --test-threads=1

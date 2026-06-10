@@ -1,0 +1,34 @@
+name: Fuzz
+
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'fuzz/**'
+      - '.github/workflows/fuzz.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # The fuzz crate is excluded from the workspace, so nothing else
+      # compile-checks it; building all targets here prevents silent rot
+      # when core APIs change.
+      - name: Build all fuzz targets
+        run: cargo +nightly fuzz build
+      - name: Smoke-run reader and parser targets
+        run: |
+          for target in xlsb_reader xls_reader xlsx_reader formula_parser; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=30
+          done
