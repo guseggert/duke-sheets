@@ -5947,7 +5947,10 @@ fn xlsx_multiple_images_round_trip_on_same_sheet() {
     let ws = wb.worksheet_mut(0).unwrap();
     for i in 0..3u32 {
         let name = format!("Pic{i}");
-        let img = test_two_cell_image(i + 1, &name, i as u16, i, i as u16 + 2, i + 2);
+        let mut img = test_two_cell_image(i + 1, &name, i as u16, i, i as u16 + 2, i + 2);
+        // Distinct payloads: identical bytes would let a media/rels
+        // mix-up (every rId resolving to image1.png) pass unnoticed.
+        img.data.push(i as u8);
         ws.add_image(img);
     }
 
@@ -5956,7 +5959,46 @@ fn xlsx_multiple_images_round_trip_on_same_sheet() {
     let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
     let images = rt.worksheet(0).unwrap().images();
     assert_eq!(images.len(), 3);
-    assert_eq!(images[0].name, "Pic0");
-    assert_eq!(images[1].name, "Pic1");
-    assert_eq!(images[2].name, "Pic2");
+    for i in 0..3usize {
+        assert_eq!(images[i].name, format!("Pic{i}"));
+        assert_eq!(
+            images[i].data().last().copied(),
+            Some(i as u8),
+            "image {i} bytes mixed up with another image's media part"
+        );
+    }
+}
+
+#[test]
+fn xlsx_images_round_trip_across_multiple_sheets() {
+    // Media parts are numbered globally (image1, image2, ...) while
+    // drawings and rels are per-sheet; cross-sheet numbering is
+    // exercised only by a workbook with images on more than one sheet.
+    let mut wb = Workbook::new();
+    wb.add_worksheet_with_name("Second").expect("add sheet");
+    for sheet in 0..2usize {
+        let ws = wb.worksheet_mut(sheet).unwrap();
+        for i in 0..2u32 {
+            let name = format!("S{sheet}Pic{i}");
+            let mut img = test_two_cell_image(i + 1, &name, i as u16, i, i as u16 + 2, i + 2);
+            img.data.push((sheet * 10 + i as usize) as u8);
+            ws.add_image(img);
+        }
+    }
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).expect("serialize");
+    let rt = XlsxReader::read(Cursor::new(&buf)).expect("read");
+    for sheet in 0..2usize {
+        let images = rt.worksheet(sheet).unwrap().images();
+        assert_eq!(images.len(), 2, "sheet {sheet} image count");
+        for i in 0..2usize {
+            assert_eq!(images[i].name, format!("S{sheet}Pic{i}"));
+            assert_eq!(
+                images[i].data().last().copied(),
+                Some((sheet * 10 + i) as u8),
+                "sheet {sheet} image {i} bytes resolved to the wrong media part"
+            );
+        }
+    }
 }
