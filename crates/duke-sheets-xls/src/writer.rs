@@ -5052,8 +5052,17 @@ mod tests {
     /// string literals. Each PtgStr is ~258 bytes, so 255 * 258 ≈ 65790
     /// bytes + the PtgFuncVar.
     fn overflowing_branch() -> FormulaExpr {
-        let args: Vec<FormulaExpr> = (0..255)
+        // >64 KB of token bytes while respecting the BIFF8 127-arg
+        // cap: three inner 127-arg CONCATENATEs of 255-char strings
+        // (~32 KB each).
+        let inner_args: Vec<FormulaExpr> = (0..127)
             .map(|_| FormulaExpr::String("x".repeat(255)))
+            .collect();
+        let args: Vec<FormulaExpr> = (0..3)
+            .map(|_| FormulaExpr::Function {
+                name: "CONCATENATE".to_string(),
+                args: inner_args.clone(),
+            })
             .collect();
         FormulaExpr::Function {
             name: "CONCATENATE".to_string(),

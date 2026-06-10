@@ -868,8 +868,9 @@ fn giant_if_branch_falls_back_without_panicking() {
     // `emit_optimized_{if,choose}_overflow_leaves_out_untouched`.
     //
     // The branch is a SUM with 22000 flat integer args; this trips the
-    // 255-arg PtgFuncVar limit so emit_optimized_if returns Err (not the
-    // Ok(false) overflow path), exercising the Err-fallback to a cached cell.
+    // 127-arg BIFF8 PtgFuncVar limit so emit_optimized_if returns Err (not
+    // the Ok(false) overflow path), exercising the Err-fallback to a cached
+    // cell.
     let mut branch = String::from("SUM(1");
     for _ in 0..22000 {
         branch.push_str(",1");
