@@ -20,7 +20,9 @@ use crate::biff12::compiler::CompileContext;
 use crate::error::XlsbResult;
 use duke_sheets_core::Workbook;
 use duke_sheets_formula::ast::FormulaExpr;
-use duke_sheets_formula::decompile::function_table::function_index;
+use duke_sheets_formula::decompile::function_table::{
+    function_index, name_body_operand_class, OperandClass,
+};
 use duke_sheets_formula::parse_formula;
 
 const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
@@ -140,13 +142,24 @@ impl XlsbWriter {
             sheet_names: sheet_names.clone(),
             xlfn_names: xlfn_names.clone(),
             defined_names: Vec::new(),
+            defined_name_classes: Vec::new(),
         };
-        let defined_names: Vec<String> = workbook
-            .named_ranges()
-            .iter()
-            .filter(|nr| crate::biff12::compiler::compile_name_body(&nr.refers_to, &name_ctx).is_ok())
-            .map(|nr| nr.name.clone())
-            .collect();
+        let mut defined_names: Vec<String> = Vec::new();
+        // Body class per name: range-bodied names must keep R-class
+        // PtgName tokens even at value positions (implicit
+        // intersection otherwise; same rule as name bodies).
+        let mut defined_name_classes = Vec::new();
+        for nr in workbook.named_ranges().iter() {
+            if crate::biff12::compiler::compile_name_body(&nr.refers_to, &name_ctx).is_err() {
+                continue;
+            }
+            let body = nr.refers_to.strip_prefix('=').unwrap_or(&nr.refers_to);
+            let class = parse_formula(&format!("={body}"))
+                .map(|expr| name_body_operand_class(&expr))
+                .unwrap_or(OperandClass::V);
+            defined_names.push(nr.name.clone());
+            defined_name_classes.push(class);
+        }
 
         Self::write_root_rels(&mut zip, &options)?;
         Self::write_workbook_rels(&mut zip, &options, workbook, &sst)?;
@@ -179,6 +192,7 @@ impl XlsbWriter {
                 sheet_names: sheet_names.clone(),
                 xlfn_names: xlfn_names.clone(),
                 defined_names: defined_names.clone(),
+                defined_name_classes: defined_name_classes.clone(),
             };
 
             let has_raw_drawing = !ws.raw_drawing_objects.is_empty();

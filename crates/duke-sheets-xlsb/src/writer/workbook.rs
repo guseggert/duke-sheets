@@ -159,6 +159,7 @@ fn write_user_name_records<W: Write>(
         sheet_names,
         xlfn_names: xlfn_names.clone(),
         defined_names: Vec::new(),
+        defined_name_classes: Vec::new(),
     };
 
     for nr in workbook.named_ranges().iter() {
@@ -214,6 +215,7 @@ fn write_print_name_records<W: Write>(
         sheet_names,
         xlfn_names: xlfn_names.clone(),
         defined_names: Vec::new(),
+        defined_name_classes: Vec::new(),
     };
 
     for i in 0..workbook.sheet_count() {

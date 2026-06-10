@@ -21,6 +21,10 @@ pub(crate) struct CompileContext {
     /// match case-insensitively and emit a 1-based index into this
     /// list as a PtgName payload.
     pub defined_names: Vec<String>,
+    /// Operand class of each name's body, parallel to `defined_names`.
+    /// Range-bodied names must be emitted R-class even at value
+    /// positions or Excel implicit-intersects the range.
+    pub defined_name_classes: Vec<OperandClass>,
 }
 
 pub(crate) struct CompiledFormula {
@@ -129,10 +133,21 @@ fn emit_expr(
                 .position(|n| n.to_ascii_uppercase() == upper);
             match idx_0based {
                 Some(i) => {
-                    // PtgName takes the class of its position (R when used as
-                    // a reference operand, V at value positions).
+                    // PtgName is R-class at reference positions; at value
+                    // positions it takes the class of the name's BODY —
+                    // a V-class token on a range-bodied name makes Excel
+                    // implicit-intersect the range. Mirrors the XLS
+                    // writer's Excel-verified rule.
+                    let name_class = match class {
+                        OperandClass::R => OperandClass::R,
+                        OperandClass::V => ctx
+                            .defined_name_classes
+                            .get(i)
+                            .copied()
+                            .unwrap_or(OperandClass::V),
+                    };
                     let ilbl = ctx.xlfn_names.len() as u32 + i as u32 + 1;
-                    out.push(class_ptg(ptg::PTG_NAME, class));
+                    out.push(class_ptg(ptg::PTG_NAME, name_class));
                     out.extend_from_slice(&ilbl.to_le_bytes());
                     Ok(())
                 }
@@ -646,7 +661,35 @@ mod tests {
             sheet_names: vec!["Sheet1".to_string(), "Sheet2".to_string()],
             xlfn_names: HashMap::new(),
             defined_names: Vec::new(),
+            defined_name_classes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn range_bodied_name_is_r_class_in_value_position() {
+        // A value-class PtgName on a range-bodied name makes Excel
+        // implicit-intersect the range (SUM(Numbers) summed one cell
+        // before the defined-name body fix); the same rule applies to
+        // PtgName tokens in cell formulas. Mirrors the XLS writer,
+        // whose classes are pinned byte-for-byte against Excel.
+        let ctx = CompileContext {
+            sheet_names: vec!["Sheet1".to_string()],
+            xlfn_names: HashMap::new(),
+            defined_names: vec!["MyRange".to_string(), "MyConst".to_string()],
+            defined_name_classes: vec![OperandClass::R, OperandClass::V],
+        };
+        let c = compile_formula("=MyRange+1", &ctx).unwrap();
+        assert_eq!(
+            c.rgce[0], 0x23,
+            "range-bodied name in V position must be R-class PtgName; rgce={:02X?}",
+            c.rgce
+        );
+        let c2 = compile_formula("=MyConst+1", &ctx).unwrap();
+        assert_eq!(
+            c2.rgce[0], 0x43,
+            "constant-bodied name stays V-class; rgce={:02X?}",
+            c2.rgce
+        );
     }
 
     fn compile(text: &str) -> CompiledFormula {
