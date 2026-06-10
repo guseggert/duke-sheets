@@ -23,5 +23,10 @@ jobs:
         run: mkdir -p /tmp/duke-sheets-urp
       - name: LibreOffice bridge integration tests
         run: RUST_TEST_THREADS=1 cargo test -p duke-sheets-libreoffice --test integration -- --test-threads=1
+      # The encrypted lo_can tests read password-protected fixtures that
+      # are gitignored binaries; generate them with the LO container
+      # first (the fixture_gen tests are ignore-gated).
+      - name: Generate crypto fixtures
+        run: RUST_TEST_THREADS=1 cargo test -p duke-sheets-crypto --test fixture_gen -- --ignored --test-threads=1
       - name: XLS envelope checks (lo_can)
         run: RUST_TEST_THREADS=1 cargo test -p duke-sheets-xls lo_can -- --ignored --test-threads=1
