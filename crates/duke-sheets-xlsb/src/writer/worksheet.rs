@@ -784,19 +784,18 @@ fn write_auto_filter<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std:
                 rw.write_record(records::BRT_END_FILTERS, &[])?;
             }
             ColumnFilter::Custom(cf) => {
-                rw.write_record(records::BRT_BEGIN_CUSTOM_FILTERS, &[])?;
+                // BrtBeginCustomFilters carries an i32 AND/OR flag:
+                // 0 = AND, nonzero = OR (LO CustomFilter::importRecord).
+                let join: i32 = if cf.and { 0 } else { 1 };
+                rw.write_record(records::BRT_BEGIN_CUSTOM_FILTERS, &join.to_le_bytes())?;
                 for cond in cf.conditions.iter().take(2) {
-                    // BrtCustomFilter per §2.4.348:
-                    //   vts u8 + 8 bytes xNumOrError + var rgch
-                    //     (XLNullableWideString) + grbit u8 (operator
-                    //     and flags).
+                    // BrtCustomFilter per §2.4.348 (cross-checked
+                    // against LO FilterCriterionModel::readBiffData):
+                    //   vts u8 + operator u8 + 8 bytes xNumOrError +
+                    //   rgch string, present when vts = 6 (string).
                     // We always store conditions as text strings, so
-                    // vts = 6 (string) and the 8 num bytes are zero.
-                    let mut buf = Vec::with_capacity(20);
-                    buf.push(6u8); // vts: vtString
-                    buf.extend_from_slice(&[0u8; 8]); // xNumOrError
-                    buf.extend_from_slice(&encode_nullable_wide_str(Some(cond.value.as_str())));
-                    let op_byte = match cond.operator {
+                    // vts = 6 and the 8 value bytes are zero.
+                    let op_byte: u8 = match cond.operator {
                         FilterOperator::LessThan => 1,
                         FilterOperator::Equal => 2,
                         FilterOperator::LessThanOrEqual => 3,
@@ -804,11 +803,11 @@ fn write_auto_filter<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std:
                         FilterOperator::NotEqual => 5,
                         FilterOperator::GreaterThanOrEqual => 6,
                     };
-                    let mut grbit: u8 = op_byte;
-                    if !cf.and {
-                        grbit |= 1 << 7; // fOr
-                    }
-                    buf.push(grbit);
+                    let mut buf = Vec::with_capacity(20);
+                    buf.push(6u8); // vts: vtString
+                    buf.push(op_byte);
+                    buf.extend_from_slice(&[0u8; 8]); // xNumOrError
+                    buf.extend_from_slice(&encode_wide_str(&cond.value));
                     rw.write_record(records::BRT_CUSTOM_FILTER, &buf)?;
                 }
                 rw.write_record(records::BRT_END_CUSTOM_FILTERS, &[])?;

@@ -2209,6 +2209,102 @@ mod tests {
         );
     }
 
+    fn custom_filter_workbook(and: bool) -> Workbook {
+        use duke_sheets_core::auto_filter::{
+            AutoFilter, ColumnFilter, CustomFilterCondition, CustomFilters, FilterColumn,
+            FilterOperator,
+        };
+        use duke_sheets_core::{CellAddress, CellRange};
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let mut af = AutoFilter::new(CellRange::new(
+            CellAddress::parse("A1").unwrap(),
+            CellAddress::parse("A5").unwrap(),
+        ));
+        af.filter_columns.push(FilterColumn::new(
+            0,
+            ColumnFilter::Custom(CustomFilters {
+                and,
+                conditions: vec![
+                    CustomFilterCondition {
+                        operator: FilterOperator::GreaterThan,
+                        value: "5".to_string(),
+                    },
+                    CustomFilterCondition {
+                        operator: FilterOperator::LessThan,
+                        value: "10".to_string(),
+                    },
+                ],
+            }),
+        ));
+        ws.set_auto_filter(Some(af));
+        wb
+    }
+
+    #[test]
+    fn custom_filter_emits_spec_wire_layout() {
+        // BrtCustomFilter per [MS-XLSB] §2.4.348 (cross-checked against
+        // LibreOffice's FilterCriterionModel::readBiffData): vts u8,
+        // operator u8, xNumOrError 8 bytes, then the string (32-bit cch)
+        // when vts = 6 (string). BrtBeginCustomFilters carries an i32
+        // where 0 = AND, nonzero = OR (CustomFilter::importRecord).
+        let recs = sheet1_records(&custom_filter_workbook(false));
+
+        let begin: Vec<_> = recs.iter().filter(|(t, _)| *t == 0x00AC).collect();
+        assert_eq!(begin.len(), 1, "one BrtBeginCustomFilters record");
+        assert_eq!(
+            begin[0].1,
+            1i32.to_le_bytes(),
+            "OR custom filters must carry i32 1 in BrtBeginCustomFilters"
+        );
+
+        let customs: Vec<_> = recs.iter().filter(|(t, _)| *t == 0x00AE).collect();
+        assert_eq!(customs.len(), 2, "two BrtCustomFilter records");
+
+        // vts=6 (string), operator=4 (greaterThan), 8 zero value bytes,
+        // cch=1, UTF-16LE "5".
+        let mut first = vec![6u8, 4u8];
+        first.extend_from_slice(&[0u8; 8]);
+        first.extend_from_slice(&1u32.to_le_bytes());
+        first.extend_from_slice(&[0x35, 0x00]);
+        assert_eq!(customs[0].1, first, "first BrtCustomFilter payload");
+
+        // vts=6, operator=1 (lessThan), zeros, cch=2, UTF-16LE "10".
+        let mut second = vec![6u8, 1u8];
+        second.extend_from_slice(&[0u8; 8]);
+        second.extend_from_slice(&2u32.to_le_bytes());
+        second.extend_from_slice(&[0x31, 0x00, 0x30, 0x00]);
+        assert_eq!(customs[1].1, second, "second BrtCustomFilter payload");
+
+        // AND variant: begin record payload is 0.
+        let recs_and = sheet1_records(&custom_filter_workbook(true));
+        let begin_and: Vec<_> = recs_and.iter().filter(|(t, _)| *t == 0x00AC).collect();
+        assert_eq!(begin_and[0].1, 0i32.to_le_bytes());
+    }
+
+    #[test]
+    fn custom_filter_in_process_roundtrip() {
+        use duke_sheets_core::auto_filter::{ColumnFilter, FilterOperator};
+
+        for and in [true, false] {
+            let wb2 = round_trip(&custom_filter_workbook(and));
+            let af = wb2.worksheet(0).unwrap().auto_filter().unwrap().clone();
+            let col0 = af.filter_columns.iter().find(|fc| fc.col_id == 0).unwrap();
+            match &col0.filter {
+                ColumnFilter::Custom(cf) => {
+                    assert_eq!(cf.and, and, "AND/OR flag drifted");
+                    assert_eq!(cf.conditions.len(), 2);
+                    assert_eq!(cf.conditions[0].operator, FilterOperator::GreaterThan);
+                    assert_eq!(cf.conditions[0].value, "5");
+                    assert_eq!(cf.conditions[1].operator, FilterOperator::LessThan);
+                    assert_eq!(cf.conditions[1].value, "10");
+                }
+                other => panic!("expected Custom filter, got {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn named_range_comment_roundtrip() {
         use duke_sheets_core::named_range::{NameScope, NamedRange};

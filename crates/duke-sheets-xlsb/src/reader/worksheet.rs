@@ -388,8 +388,15 @@ pub(crate) fn read_worksheet<R: Read>(
             }
             records::BRT_BEGIN_CUSTOM_FILTERS => {
                 use duke_sheets_core::auto_filter::CustomFilters;
+                // Payload is an i32 AND/OR flag: 0 = AND, nonzero = OR
+                // (LO CustomFilter::importRecord).
+                let and = if len >= 4 {
+                    parser::read_u32(&buf, 0) == 0
+                } else {
+                    true
+                };
                 current_custom_filters = Some(CustomFilters {
-                    and: true,
+                    and,
                     conditions: Vec::new(),
                 });
             }
@@ -399,13 +406,7 @@ pub(crate) fn read_worksheet<R: Read>(
             records::BRT_CUSTOM_FILTER => {
                 if let Some(cf) = current_custom_filters.as_mut() {
                     if let Some(cond) = parse_custom_filter(&buf[..len]) {
-                        // The fOr bit lives on the second condition's
-                        // grbit; if it's set on any condition treat
-                        // the whole block as OR.
-                        if cond.1 {
-                            cf.and = false;
-                        }
-                        cf.conditions.push(cond.0);
+                        cf.conditions.push(cond);
                     }
                 }
             }
@@ -970,33 +971,20 @@ fn cft_to_dynamic_filter_type(cft: u32) -> duke_sheets_core::auto_filter::Dynami
     }
 }
 
-/// Parse a BrtCustomFilter record per [MS-XLSB] §2.4.348:
-///   vts u8 + 8 bytes xNumOrError + XLNullableWideString rgch + grbit u8.
-/// Returns (condition, fOr_bit_set).
+/// Parse a BrtCustomFilter record per [MS-XLSB] §2.4.348 (cross-checked
+/// against LO FilterCriterionModel::readBiffData):
+///   vts u8 + operator u8 + 8 bytes xNumOrError + rgch string, present
+///   when vts = 6 (string). For vts = 4 (double) the value lives in the
+///   8 number bytes.
 fn parse_custom_filter(
     data: &[u8],
-) -> Option<(duke_sheets_core::auto_filter::CustomFilterCondition, bool)> {
+) -> Option<duke_sheets_core::auto_filter::CustomFilterCondition> {
     use duke_sheets_core::auto_filter::{CustomFilterCondition, FilterOperator};
-    if data.len() < 1 + 8 + 4 + 1 {
+    if data.len() < 1 + 1 + 8 {
         return None;
     }
-    let mut pos = 1 + 8; // skip vts + xNumOrError
-    let cch = parser::read_u32(data, pos);
-    let value = if cch == 0xFFFFFFFF {
-        pos += 4;
-        String::new()
-    } else {
-        let (s, consumed) = parser::wide_str(data, pos).ok()?;
-        pos += consumed;
-        s
-    };
-    if pos >= data.len() {
-        return None;
-    }
-    let grbit = data[pos];
-    let op_bits = grbit & 0x07;
-    let or_bit = (grbit & 0x80) != 0;
-    let operator = match op_bits {
+    let vts = data[0];
+    let operator = match data[1] {
         1 => FilterOperator::LessThan,
         2 => FilterOperator::Equal,
         3 => FilterOperator::LessThanOrEqual,
@@ -1005,7 +993,22 @@ fn parse_custom_filter(
         6 => FilterOperator::GreaterThanOrEqual,
         _ => FilterOperator::Equal,
     };
-    Some((CustomFilterCondition { operator, value }, or_bit))
+    let value = match vts {
+        6 => {
+            let (s, _) = parser::wide_str(data, 10).ok()?;
+            s
+        }
+        4 => {
+            let v = f64::from_le_bytes(data[2..10].try_into().ok()?);
+            if v.is_finite() && v == v.trunc() && v.abs() < 1e15 {
+                format!("{}", v as i64)
+            } else {
+                v.to_string()
+            }
+        }
+        _ => String::new(),
+    };
+    Some(CustomFilterCondition { operator, value })
 }
 
 /// Parse BrtMargins record.
