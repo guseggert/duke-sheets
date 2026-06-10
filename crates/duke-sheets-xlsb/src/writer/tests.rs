@@ -564,6 +564,32 @@ mod tests {
     }
 
     #[test]
+    fn sparse_header_footer_roundtrip() {
+        use duke_sheets_core::worksheet::PageSetup;
+
+        // Absent strings are written as XLNullableWideString null
+        // markers (0xFFFFFFFF). The reader must skip over a null
+        // marker and keep parsing: a footer-only setup means slot 1
+        // (header) is null and slot 2 (footer) carries the data.
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value_at(0, 0, "hf").unwrap();
+        let mut ps = PageSetup::default();
+        ps.odd_footer = Some("&CPage &P".to_string());
+        ps.first_footer = Some("&Cfirst".to_string());
+        ps.different_first = true;
+        ws.set_page_setup(ps);
+
+        let wb2 = round_trip(&wb);
+        let ws2 = wb2.worksheet(0).unwrap();
+        let ps2 = ws2.page_setup();
+        assert_eq!(ps2.odd_header, None);
+        assert_eq!(ps2.odd_footer.as_deref(), Some("&CPage &P"));
+        assert_eq!(ps2.first_footer.as_deref(), Some("&Cfirst"));
+        assert!(ps2.different_first);
+    }
+
+    #[test]
     fn comments_roundtrip() {
         use duke_sheets_core::comment::CellComment;
 

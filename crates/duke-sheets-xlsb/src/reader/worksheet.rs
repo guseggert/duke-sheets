@@ -1103,7 +1103,15 @@ fn parse_header_footer(data: &[u8], ws: &mut Worksheet) {
     let mut pos = 2;
     let strings: Vec<Option<String>> = (0..6)
         .map(|_| {
-            if pos >= data.len() {
+            if pos + 4 > data.len() {
+                return None;
+            }
+            // Each field is an XLNullableWideString: cch 0xFFFFFFFF is
+            // a 4-byte null marker that must be skipped, not treated
+            // as a parse failure (which would desync every later
+            // field).
+            if parser::read_u32(data, pos) == 0xFFFFFFFF {
+                pos += 4;
                 return None;
             }
             match parser::wide_str(data, pos) {
