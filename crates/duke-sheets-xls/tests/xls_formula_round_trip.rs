@@ -313,6 +313,34 @@ fn union_formula_text_survives_xls_roundtrip() {
 }
 
 #[test]
+fn union_parens_survive_outside_sum() {
+    // The parens around a union are semantic, not decorative: they make
+    // the union a single argument. =COUNT((A1,B1)) has ONE argument;
+    // dropping the parens turns it into a two-argument call, and for
+    // multi-area INDEX it shifts every later argument. The paren must
+    // survive in any context, not just the SUM PtgMemFunc path.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 1.0).unwrap();
+    ws.set_cell_value("B1", 2.0).unwrap();
+    ws.set_cell_formula("D1", "=COUNT((A1,B1))").unwrap();
+    ws.set_formula_result(0, 3, CellValue::Number(2.0)).unwrap();
+    ws.set_cell_formula("D2", "=(A1,B1)").unwrap();
+    ws.set_formula_result(1, 3, CellValue::Number(1.0)).unwrap();
+
+    let parsed = write_then_read(&wb);
+    let s = parsed.worksheet(0).unwrap();
+    assert_eq!(
+        s.get_formula_at(0, 3).expect("COUNT formula must survive"),
+        "=COUNT((A1,B1))",
+    );
+    assert_eq!(
+        s.get_formula_at(1, 3).expect("bare union formula must survive"),
+        "=(A1,B1)",
+    );
+}
+
+#[test]
 fn cross_sheet_formula_text_survives_xls_roundtrip() {
     // Sanity check that the simpler features documented as R✔/W✔
     // really do round-trip. If this regresses we've broken something

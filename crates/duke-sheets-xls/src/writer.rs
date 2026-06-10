@@ -3537,17 +3537,38 @@ fn emit_optimized_sum(
     names: &NameTable,
     addins: &AddinTable,
 ) -> Result<(), UnsupportedToken> {
-    use duke_sheets_formula::ast::BinaryOperator;
+    use duke_sheets_formula::ast::{BinaryOperator, UnaryOperator};
     use duke_sheets_formula::FormulaExpr;
 
-    if let FormulaExpr::BinaryOp { op, .. } = arg {
+    // =SUM((A1,B1)): the parser keeps the semantic parens as a Paren
+    // node around the union. Excel's emission for this shape is
+    // MemFunc + refs + PtgParen + AttrSum, so unwrap the Paren here
+    // and re-emit it after the MemFunc block.
+    let mem_arg = match arg {
+        FormulaExpr::UnaryOp {
+            op: UnaryOperator::Paren,
+            operand,
+        } if matches!(
+            &**operand,
+            FormulaExpr::BinaryOp {
+                op: BinaryOperator::Union,
+                ..
+            }
+        ) =>
+        {
+            &**operand
+        }
+        other => other,
+    };
+
+    if let FormulaExpr::BinaryOp { op, .. } = mem_arg {
         if matches!(
             op,
             BinaryOperator::Intersect | BinaryOperator::Union | BinaryOperator::Range
         ) {
             let mut ref_tokens = Vec::new();
             compile_ptgs_with_context(
-                arg,
+                mem_arg,
                 &mut ref_tokens,
                 extra,
                 externsheet,

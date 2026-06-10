@@ -854,7 +854,6 @@ impl<'a> FormulaParser<'a> {
                 // forms a Union expression. Function-call commas
                 // are handled separately in parse_function_call,
                 // which never reaches this branch.
-                let mut is_union = false;
                 while matches!(self.current_token(), Token::Comma) {
                     self.consume();
                     let right = self.parse_expression()?;
@@ -866,21 +865,18 @@ impl<'a> FormulaParser<'a> {
                         left: Box::new(expr),
                         right: Box::new(right),
                     };
-                    is_union = true;
                 }
                 self.expect(&Token::RightParen)?;
                 // Excel preserves the parentheses as a postfix PtgParen token
-                // (even when redundant or nested). The union-in-parens form
-                // carries its own parenthesis handling in the writers'
-                // PtgMemFunc path, so don't double-wrap it here.
-                if is_union {
-                    Ok(expr)
-                } else {
-                    Ok(FormulaExpr::UnaryOp {
-                        op: UnaryOperator::Paren,
-                        operand: Box::new(expr),
-                    })
-                }
+                // (even when redundant or nested). For unions the parens are
+                // semantic, not decorative: they make the union a single
+                // function argument, so the Paren node must survive in the
+                // AST. The writers' SUM PtgMemFunc path unwraps it to keep
+                // Excel's exact union-in-SUM byte shape.
+                Ok(FormulaExpr::UnaryOp {
+                    op: UnaryOperator::Paren,
+                    operand: Box::new(expr),
+                })
             }
 
             Token::LeftBrace => self.parse_array(),
@@ -1856,13 +1852,21 @@ mod tests {
 
     #[test]
     fn test_parse_union_in_parens() {
+        // The parens are semantic for unions (they make the union a
+        // single argument), so the Paren node must wrap the Union.
         let ast = parse_formula("=(A1:A2,C2:C3)").unwrap();
         match ast {
-            FormulaExpr::BinaryOp {
-                op: BinaryOperator::Union,
-                ..
-            } => {}
-            other => panic!("Expected Union, got {other:?}"),
+            FormulaExpr::UnaryOp {
+                op: UnaryOperator::Paren,
+                operand,
+            } => match *operand {
+                FormulaExpr::BinaryOp {
+                    op: BinaryOperator::Union,
+                    ..
+                } => {}
+                other => panic!("Expected Union inside Paren, got {other:?}"),
+            },
+            other => panic!("Expected Paren(Union), got {other:?}"),
         }
     }
 

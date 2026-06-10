@@ -2306,6 +2306,30 @@ mod tests {
     }
 
     #[test]
+    fn union_parens_survive_outside_sum() {
+        // Union parens are semantic: =COUNT((A1,B1)) has one argument.
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value_at(0, 0, 1.0).unwrap();
+        ws.set_cell_value_at(0, 1, 2.0).unwrap();
+        ws.set_formula_with_cached_value_at(0, 3, "=COUNT((A1,B1))", CellValue::Number(2.0))
+            .unwrap();
+        ws.set_formula_with_cached_value_at(1, 3, "=(A1,B1)", CellValue::Number(1.0))
+            .unwrap();
+
+        let wb2 = round_trip(&wb);
+        let ws2 = wb2.worksheet(0).unwrap();
+        assert_eq!(
+            ws2.formula_data_at(0, 3).expect("formula should exist").text,
+            "=COUNT((A1,B1))"
+        );
+        assert_eq!(
+            ws2.formula_data_at(1, 3).expect("formula should exist").text,
+            "=(A1,B1)"
+        );
+    }
+
+    #[test]
     fn ptg_name_index_accounts_for_xlfn_names() {
         use duke_sheets_core::named_range::{NameScope, NamedRange};
 
