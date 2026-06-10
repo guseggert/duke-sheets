@@ -1129,6 +1129,12 @@ fn build_dval_payload(dv: &DataValidation, compile_ctx: &CompileContext) -> Vec<
     let mut header: u32 = 0;
     header |= val_type & 0xF;
     header |= (err_style & 0x7) << 4;
+    // fStrLookup (bit 7): formula1 is a literal string list that the
+    // application splits into dropdown entries.
+    if matches!(&dv.validation_type, ValidationType::List { source } if list_source_is_literal(source))
+    {
+        header |= 1 << 7;
+    }
     if dv.allow_blank {
         header |= 1 << 8;
     }
@@ -1185,13 +1191,49 @@ fn dv_formula_texts(vt: &ValidationType) -> (Option<String>, Option<String>) {
             (Some(value1.clone()), value2.clone())
         }
         ValidationType::List { source } => {
-            // The on-disk format stores the source as a quoted string
-            // literal; e.g. source "Red,Green,Blue" becomes the
-            // formula text `"Red,Green,Blue"` which compiles to a
-            // single tStr token.
-            (Some(format!("\"{}\"", source.replace('"', "\"\""))), None)
+            // Literal sources ("Red,Green,Blue") are stored as a quoted
+            // string that compiles to a single tStr token (paired with
+            // the fStrLookup header bit); range/formula sources compile
+            // to reference tokens. Mirrors the XLSX writer's heuristic.
+            let text = if let Some(stripped) = source.strip_prefix('=') {
+                stripped.to_string()
+            } else if list_source_is_literal(source) {
+                format!("\"{}\"", source.replace('"', "\"\""))
+            } else {
+                source.clone()
+            };
+            (Some(text), None)
         }
         ValidationType::Custom { formula } => (Some(formula.clone()), None),
+    }
+}
+
+/// Whether a List validation source is a literal value list rather than
+/// a range reference or formula. Mirrors the XLSX writer's heuristic.
+fn list_source_is_literal(source: &str) -> bool {
+    !(source.starts_with('=')
+        || source.contains('!')
+        || source
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '$' || c == ':'))
+}
+
+/// DVParsedFormula MUST NOT contain PtgArray, PtgIsect, or PtgUnion
+/// (among others) per [MS-XLSB]; Excel repairs files that carry them.
+/// Scan the AST for those constructs before compiling.
+fn dv_formula_allowed(expr: &duke_sheets_formula::FormulaExpr) -> bool {
+    use duke_sheets_formula::ast::BinaryOperator;
+    use duke_sheets_formula::FormulaExpr;
+    match expr {
+        FormulaExpr::Array(_) => false,
+        FormulaExpr::BinaryOp { op, left, right } => {
+            !matches!(op, BinaryOperator::Union | BinaryOperator::Intersect)
+                && dv_formula_allowed(left)
+                && dv_formula_allowed(right)
+        }
+        FormulaExpr::UnaryOp { operand, .. } => dv_formula_allowed(operand),
+        FormulaExpr::Function { args, .. } => args.iter().all(dv_formula_allowed),
+        _ => true,
     }
 }
 
@@ -1200,13 +1242,26 @@ fn dv_formula_texts(vt: &ValidationType) -> (Option<String>, Option<String>) {
 /// Empty / missing formula is encoded with cce=0 and cb=0 (8 bytes).
 fn write_dv_parsed_formula(payload: &mut Vec<u8>, text: Option<&str>, ctx: &CompileContext) {
     let compiled = match text {
-        Some(t) if !t.is_empty() => match compiler::compile_formula(t, ctx) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                log::warn!("DV formula compilation failed for '{t}': {e}");
-                None
+        Some(t) if !t.is_empty() => {
+            let normalized = if t.starts_with('=') {
+                t.to_string()
+            } else {
+                format!("={t}")
+            };
+            match duke_sheets_formula::parse_formula(&normalized) {
+                Ok(expr) if !dv_formula_allowed(&expr) => {
+                    log::warn!("DV formula '{t}' uses tokens forbidden in DVParsedFormula; dropping");
+                    None
+                }
+                _ => match compiler::compile_formula(t, ctx) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        log::warn!("DV formula compilation failed for '{t}': {e}");
+                        None
+                    }
+                },
             }
-        },
+        }
         _ => None,
     };
 

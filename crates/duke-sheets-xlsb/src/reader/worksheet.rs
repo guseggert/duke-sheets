@@ -1288,7 +1288,7 @@ fn parse_data_validation(data: &[u8], ws: &mut Worksheet, _ctx: &FormulaContext)
             value2: formula2,
         },
         3 => ValidationType::List {
-            source: formula1.unwrap_or_default().trim_matches('"').to_string(),
+            source: unquote_dv_list_source(formula1.unwrap_or_default()),
         },
         4 => ValidationType::Date {
             operator,
@@ -1329,6 +1329,17 @@ fn parse_data_validation(data: &[u8], ws: &mut Worksheet, _ctx: &FormulaContext)
 }
 
 /// Read a DVParsedFormula: cce u32 + rgce + cb u32 + rgcb.
+/// Strip the outer quote pair from a literal list source and unescape
+/// doubled quotes. A bare `trim_matches('"')` would also eat quotes
+/// that belong to the value and never unescape `""`.
+fn unquote_dv_list_source(f: String) -> String {
+    if f.len() >= 2 && f.starts_with('"') && f.ends_with('"') {
+        f[1..f.len() - 1].replace("\"\"", "\"")
+    } else {
+        f
+    }
+}
+
 fn read_dv_parsed_formula(data: &[u8], pos: &mut usize) -> Option<String> {
     if *pos + 4 > data.len() {
         return None;

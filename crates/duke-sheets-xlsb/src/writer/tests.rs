@@ -715,6 +715,103 @@ mod tests {
         assert!(dvs[0].show_error_alert);
     }
 
+    /// Locate the first BrtDVal record and split out (header, formula1
+    /// rgce) for byte-level assertions.
+    fn first_dval_header_and_formula1(wb: &Workbook) -> (u32, Vec<u8>) {
+        let recs = sheet1_records(wb);
+        let (_, payload) = recs
+            .iter()
+            .find(|(t, _)| *t == 0x0040)
+            .expect("BrtDVal record present");
+        let header = u32::from_le_bytes(payload[0..4].try_into().unwrap());
+        let mut pos = 4;
+        let range_count = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
+        pos += 4 + range_count * 16;
+        // 4 DValStrings (XLNullableWideString)
+        for _ in 0..4 {
+            let cch = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            if cch != 0xFFFFFFFF {
+                pos += cch as usize * 2;
+            }
+        }
+        let cce = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
+        pos += 4;
+        (header, payload[pos..pos + cce].to_vec())
+    }
+
+    fn list_dv(source: &str) -> Workbook {
+        use duke_sheets_core::validation::DataValidation;
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let mut dv = DataValidation::list(source);
+        dv.ranges = vec![duke_sheets_core::CellRange::parse("A1:A5").unwrap()];
+        ws.add_data_validation(dv);
+        wb
+    }
+
+    #[test]
+    fn dv_list_literal_sets_str_lookup_bit() {
+        // A literal list source is stored as a tStr formula with the
+        // fStrLookup header bit (bit 7) set so Excel splits the string
+        // into dropdown entries ([MS-XLSB] BrtDVal).
+        let (header, rgce) = first_dval_header_and_formula1(&list_dv("Red,Green,Blue"));
+        assert_ne!(header & (1 << 7), 0, "fStrLookup bit must be set: {header:08X}");
+        assert_eq!(rgce.first(), Some(&0x17u8), "formula1 must be a tStr token");
+    }
+
+    #[test]
+    fn dv_list_range_source_compiles_as_reference() {
+        // A range source must compile to a reference token, not a
+        // quoted string literal, and must not set fStrLookup.
+        let (header, rgce) = first_dval_header_and_formula1(&list_dv("$A$1:$A$3"));
+        assert_eq!(header & (1 << 7), 0, "fStrLookup must be clear: {header:08X}");
+        assert_eq!(
+            rgce.first().map(|b| b & 0x1F),
+            Some(0x05),
+            "formula1 must start with a PtgArea-class token; rgce={rgce:02X?}"
+        );
+    }
+
+    #[test]
+    fn dv_custom_array_constant_formula_is_dropped() {
+        use duke_sheets_core::validation::{DataValidation, ValidationType};
+        // DVParsedFormula MUST NOT contain PtgArray (or union /
+        // intersection tokens); emit an empty formula instead of
+        // spec-invalid bytes Excel would repair away.
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let dv = DataValidation {
+            validation_type: ValidationType::Custom {
+                formula: "=SUM({1,2,3})>0".to_string(),
+            },
+            ranges: vec![duke_sheets_core::CellRange::parse("A1:A5").unwrap()],
+            ..DataValidation::list("x")
+        };
+        ws.add_data_validation(dv);
+        let (_, rgce) = first_dval_header_and_formula1(&wb);
+        assert!(
+            rgce.is_empty(),
+            "array-constant DV formula must be dropped, not emitted: {rgce:02X?}"
+        );
+    }
+
+    #[test]
+    fn dv_list_quoted_values_roundtrip() {
+        // Embedded quotes are stored doubled inside the tStr; the
+        // reader must unescape them (and strip only the outer pair).
+        let source = "Say \"Hi\",Plain";
+        let wb2 = round_trip(&list_dv(source));
+        let dvs = wb2.worksheet(0).unwrap().data_validations();
+        assert_eq!(dvs.len(), 1);
+        match &dvs[0].validation_type {
+            duke_sheets_core::validation::ValidationType::List { source: s } => {
+                assert_eq!(s, source);
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
     #[test]
     fn conditional_format_roundtrip() {
         use duke_sheets_core::conditional_format::{CfRuleType, ConditionalFormatRule};
