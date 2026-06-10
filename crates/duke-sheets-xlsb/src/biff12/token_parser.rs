@@ -573,7 +573,11 @@ fn parse_array_constant(extra: &[u8], epos: &mut usize) -> String {
                         "<?>".to_string()
                     } else {
                         let code = extra[*epos];
+                        // error byte + 3 reserved bytes (LO skips 3).
                         *epos += 1;
+                        if *epos + 3 <= extra.len() {
+                            *epos += 3;
+                        }
                         match code {
                             0x00 => "#NULL!",
                             0x07 => "#DIV/0!",

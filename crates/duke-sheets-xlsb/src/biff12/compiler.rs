@@ -238,10 +238,14 @@ fn emit_array(
                     extra.push(0x00);
                     extra.extend_from_slice(&n.to_le_bytes());
                 }
+                // SerAr element bodies per [MS-XLSB] (cross-checked
+                // against LO importArrayToken): string carries a
+                // 16-bit cch, bool is a single byte with no padding,
+                // error is a single byte plus 3 reserved bytes.
                 FormulaExpr::String(s) => {
                     extra.push(0x01);
                     let utf16: Vec<u16> = s.encode_utf16().collect();
-                    extra.extend_from_slice(&(utf16.len() as u32).to_le_bytes());
+                    extra.extend_from_slice(&(utf16.len() as u16).to_le_bytes());
                     for cu in &utf16 {
                         extra.extend_from_slice(&cu.to_le_bytes());
                     }
@@ -249,12 +253,11 @@ fn emit_array(
                 FormulaExpr::Boolean(b) => {
                     extra.push(0x02);
                     extra.push(if *b { 1 } else { 0 });
-                    extra.extend_from_slice(&[0u8; 7]);
                 }
                 FormulaExpr::Error(e) => {
                     extra.push(0x04);
                     extra.push(error_byte(e));
-                    extra.extend_from_slice(&[0u8; 7]);
+                    extra.extend_from_slice(&[0u8; 3]);
                 }
                 _ => {
                     extra.push(0x10);

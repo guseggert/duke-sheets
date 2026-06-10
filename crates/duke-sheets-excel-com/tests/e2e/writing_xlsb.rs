@@ -53,6 +53,9 @@ const XLSB_FORMULA_FORMULAS: &[(&str, &str, f64)] = &[
     ("B14", "=((A1))", 2.0),           // nested PtgParen
     ("B15", "=SUM({1,2,3})", 6.0),     // array constant: PtgArray(A) + rgcb
     ("B16", "=SUM({1,2;3,4})", 10.0),  // 2x2 array constant
+    ("B17", "=COUNTA({\"ab\",\"cde\"})", 2.0), // SerAr string elements (u16 cch)
+    ("B18", "=COUNT({1,TRUE,3})", 2.0), // SerAr bool element (1 byte, no pad)
+    ("B19", "=COUNT({1,#N/A,3})", 2.0), // SerAr error element (1 byte + 3 reserved)
 ];
 
 fn xlsb_formula_workbook() -> Workbook {

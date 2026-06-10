@@ -931,6 +931,36 @@ mod tests {
     }
 
     #[test]
+    fn formula_array_constant_mixed_types_roundtrip() {
+        // SerAr element encodings per [MS-XLSB] (cross-checked against
+        // LO importArrayToken): string = type 1 + u16 cch + UTF-16;
+        // bool = type 2 + 1 byte (no padding); error = type 4 + 1 byte
+        // + 3 reserved bytes.
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_formula_with_cached_value_at(
+            0,
+            0,
+            "=COUNTA({\"ab\",\"cde\"})",
+            CellValue::Number(2.0),
+        )
+        .unwrap();
+        ws.set_formula_with_cached_value_at(0, 1, "=OR({TRUE,FALSE})", CellValue::Boolean(true))
+            .unwrap();
+        ws.set_formula_with_cached_value_at(0, 2, "=COUNT({1,#N/A,3})", CellValue::Number(2.0))
+            .unwrap();
+
+        let wb2 = round_trip(&wb);
+        let ws2 = wb2.worksheet(0).unwrap();
+        let texts: Vec<String> = (0..3)
+            .map(|c| ws2.formula_data_at(0, c).expect("formula should exist").text.clone())
+            .collect();
+        assert_eq!(texts[0], "=COUNTA({\"ab\",\"cde\"})");
+        assert_eq!(texts[1], "=OR({TRUE,FALSE})");
+        assert_eq!(texts[2], "=COUNT({1,#N/A,3})");
+    }
+
+    #[test]
     fn formula_uplus_paren_roundtrip() {
         // Redundant parens only survive if the compiler emits PtgParen;
         // the leading plus only survives via PtgUplus.
