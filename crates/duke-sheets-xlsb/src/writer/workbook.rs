@@ -136,9 +136,10 @@ fn write_xlfn_name_records<W: Write>(
         payload.extend_from_slice(&encode_wide_str(&prefixed));
         payload.extend_from_slice(&0u32.to_le_bytes()); // cce (rgce size = 0)
         payload.extend_from_slice(&0u32.to_le_bytes()); // cb (rgcb size = 0)
-        for _ in 0..5 {
-            payload.extend_from_slice(&encode_wide_str(""));
-        }
+        // Trailing strings per [MS-XLSB] §2.4.718 BrtName: the comment
+        // (XLNullableWideString), then four strings that MUST exist if
+        // and only if fProc is set. We never write macro names.
+        payload.extend_from_slice(&encode_nullable_wide_str(None));
         rw.write_record(records::BRT_NAME, &payload)?;
     }
     Ok(())
@@ -190,13 +191,10 @@ fn write_user_name_records<W: Write>(
         payload.extend_from_slice(&(compiled.rgcb.len() as u32).to_le_bytes());
         payload.extend_from_slice(&compiled.rgcb);
 
-        // Trailing strings per [MS-XLSB] §2.4.668 BrtName:
-        //   comment, customMenu, description, help, statusBar
-        // Each is an XLNullableWideString (0xFFFFFFFF cch = NULL).
+        // Trailing strings per [MS-XLSB] §2.4.718 BrtName: the comment
+        // (XLNullableWideString), then four strings that MUST exist if
+        // and only if fProc is set. We never write macro names.
         payload.extend_from_slice(&encode_nullable_wide_str(nr.comment.as_deref()));
-        for _ in 0..4 {
-            payload.extend_from_slice(&encode_nullable_wide_str(None));
-        }
 
         rw.write_record(records::BRT_NAME, &payload)?;
     }
@@ -279,9 +277,9 @@ fn write_builtin_name_record<W: Write>(
     payload.extend_from_slice(&(compiled.rgcb.len() as u32).to_le_bytes());
     payload.extend_from_slice(&compiled.rgcb);
 
-    for _ in 0..5 {
-        payload.extend_from_slice(&encode_wide_str(""));
-    }
+    // Comment only; the four fProc-conditional strings are omitted
+    // ([MS-XLSB] §2.4.718).
+    payload.extend_from_slice(&encode_nullable_wide_str(None));
 
     rw.write_record(records::BRT_NAME, &payload)
 }

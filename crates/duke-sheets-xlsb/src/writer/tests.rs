@@ -2575,6 +2575,57 @@ mod tests {
     }
 
     #[test]
+    fn brt_name_ends_after_comment_when_not_a_macro() {
+        use duke_sheets_core::named_range::{NameScope, NamedRange};
+
+        // BrtName's four trailing strings (unusedstring1, description,
+        // helpTopic, unusedstring2) MUST exist if and only if fProc is
+        // set ([MS-XLSB] §2.4.718). We never write macro names, so the
+        // record must end right after the comment string.
+        let mut wb = Workbook::new();
+        wb.named_ranges_mut().define_or_update(
+            NamedRange::new("MyTax", "0.07", NameScope::Workbook).with_comment("rate"),
+        );
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_formula_with_cached_value_at(0, 0, "=MyTax*2", CellValue::Number(0.14))
+            .unwrap();
+
+        let bytes = write_xlsb_bytes(&wb);
+        let bin = read_zip_entry_bytes(&bytes, "xl/workbook.bin");
+        let mut iter = crate::biff12::RecordIter::new(Cursor::new(bin));
+        let mut buf = Vec::new();
+        let mut checked = 0;
+        while let Ok((typ, len)) = iter.next_record(&mut buf) {
+            if typ != 0x0027 {
+                continue; // BrtName
+            }
+            let p = &buf[..len];
+            let mut pos = 4 + 1 + 4; // flags + chKey + itab
+            let read_str = |pos: &mut usize| {
+                let cch = u32::from_le_bytes(p[*pos..*pos + 4].try_into().unwrap());
+                *pos += 4;
+                if cch != 0xFFFFFFFF {
+                    *pos += cch as usize * 2;
+                }
+            };
+            read_str(&mut pos); // name
+            let cce = u32::from_le_bytes(p[pos..pos + 4].try_into().unwrap()) as usize;
+            pos += 4 + cce;
+            let cb = u32::from_le_bytes(p[pos..pos + 4].try_into().unwrap()) as usize;
+            pos += 4 + cb;
+            read_str(&mut pos); // comment
+            assert_eq!(
+                pos,
+                len,
+                "BrtName must end after the comment; {} trailing bytes remain",
+                len - pos
+            );
+            checked += 1;
+        }
+        assert!(checked >= 1, "no BrtName records found");
+    }
+
+    #[test]
     fn named_range_comment_roundtrip() {
         use duke_sheets_core::named_range::{NameScope, NamedRange};
 
