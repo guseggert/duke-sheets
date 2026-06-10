@@ -202,14 +202,12 @@ pub fn parse_tokens_with_extra(data: &[u8], extra_data: &[u8]) -> Vec<ParsedToke
                 if pos + 3 > data.len() {
                     break;
                 }
-                let cparams = data[pos];
-                let argc = cparams & 0x7F;
-                let is_ce = (cparams & 0x80) != 0;
+                // BIFF12 cparams is a full unsigned byte (LO reads it
+                // unmasked); BIFF8's fPrompt bit does not exist here.
+                // UDF calls are identified by iftab 0xFF alone.
+                let argc = data[pos];
                 pos += 1;
-                let mut func_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
-                if is_ce {
-                    func_idx |= 0x8000;
-                }
+                let func_idx = u16::from_le_bytes([data[pos], data[pos + 1]]);
                 pos += 2;
                 tokens.push(ParsedToken::FuncVar { argc, func_idx });
             }

@@ -961,6 +961,48 @@ mod tests {
     }
 
     #[test]
+    fn many_arg_function_roundtrip() {
+        // BIFF12 PtgFuncVar cparams is a full unsigned byte (LO reads
+        // it unmasked; BIFF8's fPrompt bit does not exist here), so a
+        // 200-arg call must survive. Beyond 255 args the writer must
+        // fall back to the cached value rather than emit a wrapped
+        // argc byte.
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        let f200 = format!(
+            "=SUM({})",
+            (1..=200).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+        );
+        ws.set_formula_with_cached_value_at(0, 0, &f200, CellValue::Number(20100.0))
+            .unwrap();
+        let f300 = format!(
+            "=SUM({})",
+            (1..=300).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+        );
+        ws.set_formula_with_cached_value_at(0, 1, &f300, CellValue::Number(45150.0))
+            .unwrap();
+
+        let wb2 = round_trip(&wb);
+        let ws2 = wb2.worksheet(0).unwrap();
+        assert_eq!(
+            ws2.formula_data_at(0, 0).expect("200-arg formula").text,
+            f200,
+            "200-arg PtgFuncVar must round-trip"
+        );
+        // 300 args cannot be represented: cached value only, never a
+        // corrupt token stream.
+        assert!(
+            ws2.formula_data_at(0, 1).is_none(),
+            "300-arg formula must fall back to cached value, got {:?}",
+            ws2.formula_data_at(0, 1).map(|f| f.text.clone())
+        );
+        match ws2.get_value_at(0, 1).effective_value() {
+            CellValue::Number(n) => assert!((n - 45150.0).abs() < 1e-9),
+            other => panic!("cached value lost: {other:?}"),
+        }
+    }
+
+    #[test]
     fn formula_uplus_paren_roundtrip() {
         // Redundant parens only survive if the compiler emits PtgParen;
         // the leading plus only survives via PtgUplus.

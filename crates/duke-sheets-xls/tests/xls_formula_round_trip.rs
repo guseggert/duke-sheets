@@ -341,6 +341,44 @@ fn union_parens_survive_outside_sum() {
 }
 
 #[test]
+fn many_arg_function_respects_biff8_cparams_limit() {
+    // BIFF8 PtgFuncVar cparams is 7-bit argc + the fPrompt bit: 127
+    // args max. 100 args must round-trip; 200 args must fall back to
+    // the cached value instead of emitting a cparams byte with the
+    // fPrompt bit set (which reads back as a garbled 72-arg call).
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let f100 = format!(
+        "=SUM({})",
+        (1..=100).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+    );
+    ws.set_cell_formula("A1", &f100).unwrap();
+    ws.set_formula_result(0, 0, CellValue::Number(5050.0)).unwrap();
+    let f200 = format!(
+        "=SUM({})",
+        (1..=200).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+    );
+    ws.set_cell_formula("A2", &f200).unwrap();
+    ws.set_formula_result(1, 0, CellValue::Number(20100.0)).unwrap();
+
+    let parsed = write_then_read(&wb);
+    let s = parsed.worksheet(0).unwrap();
+    assert_eq!(
+        s.get_formula_at(0, 0).expect("100-arg formula must survive"),
+        f100,
+    );
+    assert!(
+        s.get_formula_at(1, 0).is_none(),
+        "200-arg formula must fall back to cached value, got {:?}",
+        s.get_formula_at(1, 0)
+    );
+    match s.get_value_at(1, 0).effective_value() {
+        CellValue::Number(n) => assert!((n - 20100.0).abs() < 1e-9),
+        other => panic!("cached value lost: {other:?}"),
+    }
+}
+
+#[test]
 fn cross_sheet_formula_text_survives_xls_roundtrip() {
     // Sanity check that the simpler features documented as R✔/W✔
     // really do round-trip. If this regresses we've broken something

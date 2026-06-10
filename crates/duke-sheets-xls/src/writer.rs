@@ -3350,7 +3350,11 @@ fn compile_ptgs_with_context(
             let Some(idx) = function_index(name) else {
                 return Err(UnsupportedToken);
             };
-            if args.len() > u8::MAX as usize {
+            // BIFF8 PtgFuncVar cparams is 7-bit argc + the fPrompt bit
+            // ([MS-XLS] §2.5.198.63): 127 arguments max. Beyond that,
+            // fall back to the cached value — an argc with bit 7 set
+            // reads back as a garbled call.
+            if args.len() > 0x7F {
                 return Err(UnsupportedToken);
             }
             // Analysis-ToolPak add-in functions (Ftab 384..=476) are not native
@@ -3364,7 +3368,8 @@ fn compile_ptgs_with_context(
             // into the AddinTable (e.g. a function used only in a data-
             // validation formula, which the pre-scan does not visit) or when
             // the argument count would overflow the PtgFuncVar byte.
-            if function_is_biff8_addin(idx) && args.len() < u8::MAX as usize {
+            // The +1 for the PtgNameX operand must also fit in 7 bits.
+            if function_is_biff8_addin(idx) && args.len() < 0x7F {
                 if let Some(nameindex) = addins.nameindex_for(name) {
                     out.push(0x39); // PtgNameX
                     out.extend_from_slice(&0u16.to_le_bytes()); // ixti = 0 (AddIn XTI)

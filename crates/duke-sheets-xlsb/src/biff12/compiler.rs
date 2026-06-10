@@ -413,6 +413,13 @@ fn emit_function(
         .or_else(|| name.strip_prefix("_XLFN."))
         .unwrap_or(name);
 
+    // BIFF12 PtgFuncVar cparams is a full unsigned byte: 255 args max.
+    // The guard must run before the optimizers, whose jump tables also
+    // encode the argument count in one byte.
+    if args.len() > u8::MAX as usize {
+        return Err(format!("function '{name}' has too many arguments"));
+    }
+
     if let Some(func_idx) = function_index(lookup_name) {
         // Single-arg SUM → optimized PtgAttrSum form.
         if func_idx == 4 && args.len() == 1 && !matches!(args[0], FormulaExpr::Empty) {
@@ -430,10 +437,6 @@ fn emit_function(
         // CHOOSE jump table (PtgAttrChoose).
         if func_idx == 100 && args.len() >= 2 && emit_optimized_choose(args, ctx, out, extra, class)? {
             return Ok(());
-        }
-
-        if args.len() > u8::MAX as usize {
-            return Err(format!("function '{name}' has too many arguments"));
         }
         // Analysis-ToolPak functions (Ftab 384..=476) take by-reference
         // (R-class) arguments in Excel's native XLSB emission — the same rule
@@ -463,6 +466,10 @@ fn emit_function(
             out.extend_from_slice(&func_idx.to_le_bytes());
         }
     } else if let Some(&name_idx) = ctx.xlfn_names.get(&lookup_name.to_ascii_uppercase()) {
+        // The +1 for the tName operand must also fit in the byte.
+        if args.len() + 1 > u8::MAX as usize {
+            return Err(format!("function '{name}' has too many arguments"));
+        }
         // tName ref to the _xlfn.* BrtName record is pushed BEFORE the
         // args: PtgFuncVar with iftab 0xFF treats the bottom-most of
         // its argc operands as the function name.
