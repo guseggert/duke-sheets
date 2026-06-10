@@ -607,6 +607,60 @@ fn excel_can_read_color_filter_we_emit() {
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_custom_filter_we_emit() {
+    use duke_sheets_core::auto_filter::{CustomFilterCondition, CustomFilters, FilterOperator};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Score").unwrap();
+    ws.set_cell_value("A2", 3.0).unwrap();
+    ws.set_cell_value("A3", 7.0).unwrap();
+    ws.set_cell_value("A4", 12.0).unwrap();
+
+    let mut af = AutoFilter::new(range("A1", "A4"));
+    af.filter_columns.push(FilterColumn::new(
+        0,
+        ColumnFilter::Custom(CustomFilters {
+            and: true,
+            conditions: vec![
+                CustomFilterCondition {
+                    operator: FilterOperator::GreaterThan,
+                    value: "5".to_string(),
+                },
+                CustomFilterCondition {
+                    operator: FilterOperator::LessThan,
+                    value: "10".to_string(),
+                },
+            ],
+        }),
+    ));
+    ws.set_auto_filter(Some(af));
+
+    let result = roundtrip_through_excel_xlsb(&wb);
+    let s = result.worksheet(0).unwrap();
+    let af = s
+        .auto_filter()
+        .expect("autofilter must survive Excel round-trip");
+    let col0 = af
+        .filter_columns
+        .iter()
+        .find(|fc| fc.col_id == 0)
+        .expect("custom filter column on A lost");
+    match &col0.filter {
+        ColumnFilter::Custom(cf) => {
+            assert!(cf.and, "AND flag flipped to OR");
+            assert_eq!(cf.conditions.len(), 2, "conditions lost");
+            assert_eq!(cf.conditions[0].operator, FilterOperator::GreaterThan);
+            assert_eq!(cf.conditions[0].value, "5", "first condition value");
+            assert_eq!(cf.conditions[1].operator, FilterOperator::LessThan);
+            assert_eq!(cf.conditions[1].value, "10", "second condition value");
+        }
+        other => panic!("expected Custom filter on A, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_discrete_value_filter_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1357,3 +1411,4 @@ fn excel_can_read_table_we_emit() {
         "header_row_count must survive Excel round-trip"
     );
 }
+
