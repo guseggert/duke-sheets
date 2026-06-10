@@ -1134,7 +1134,7 @@ mod tests {
     ) -> Vec<u8> {
         let mut payload = Vec::new();
 
-        // Bit-packed header per [MS-XLSB] §2.4.165:
+        // Bit-packed header per [MS-XLSB] §2.4.356:
         // bits 0-3 valType, 4-6 errStyle, 7 unused, 8 fAllowBlank,
         // 9 fSuppressCombo, 10-17 mdImeMode, 18 fShowInputMsg,
         // 19 fShowErrorMsg, 20-23 typOperator, 24-31 reserved.

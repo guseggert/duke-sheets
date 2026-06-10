@@ -1225,7 +1225,7 @@ fn decompile_formula(data: &[u8], grbit_offset: usize, ctx: &FormulaContext) -> 
     }
 }
 
-// BrtDVal layout per [MS-XLSB] §2.4.165:
+// BrtDVal layout per [MS-XLSB] §2.4.356:
 // [0..4] bit-packed header (u32):
 //   bits 0-3:   valType (4)
 //   bits 4-6:   errStyle (3)

@@ -882,7 +882,7 @@ fn write_page_setup<W: Write>(rw: &mut RecordWriter<W>, ws: &Worksheet) -> std::
         return Ok(());
     }
 
-    // BrtPageSetup payload per [MS-XLSB] §2.4.713:
+    // BrtPageSetup payload per [MS-XLSB] §2.4.722:
     //   iPaperSize, iScale, iRes, iVRes, iCopies, iPageStart,
     //   iFitWidth, iFitHeight  (8 × u32 = 32 bytes)
     //   flags (u16):
@@ -1083,7 +1083,7 @@ fn write_data_validations<W: Write>(
     rw.write_record(records::BRT_END_DVAL, &[])
 }
 
-/// Build a BrtDVal record payload per [MS-XLSB] §2.4.165.
+/// Build a BrtDVal record payload per [MS-XLSB] §2.4.356.
 ///
 /// Layout (no fixed-size header beyond the bit-packed u32):
 ///   - 4 bytes: bit-packed header
