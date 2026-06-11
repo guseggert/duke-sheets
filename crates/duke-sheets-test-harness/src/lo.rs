@@ -34,7 +34,7 @@ const URP_PORT: u16 = 2002;
 /// Maximum time to wait for the URP socket to come up after `docker run`.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
-static ENSURED: OnceLock<()> = OnceLock::new();
+static ENSURED: OnceLock<Result<(), String>> = OnceLock::new();
 
 /// Ensure a LibreOffice URP container is running and reachable on
 /// localhost:2002. Builds the docker image first if it's missing.
@@ -54,13 +54,29 @@ static ENSURED: OnceLock<()> = OnceLock::new();
 ///
 /// Panics with a descriptive message on failure.
 pub fn ensure_lo() {
-    ENSURED.get_or_init(|| {
-        let _ = std::fs::create_dir_all(SHARED_DIR);
-        ensure_image();
-        sweep_stale_locks();
-        replace_container();
-        wait_for_port(URP_PORT, STARTUP_TIMEOUT);
+    // The failure outcome is cached: a panicking initializer would
+    // leave the OnceLock uninitialized and every subsequent LO-backed
+    // test would re-pay the startup timeout. The first attempt's error
+    // is replayed instantly instead — still a hard failure, never a
+    // skip.
+    let outcome = ENSURED.get_or_init(|| {
+        std::panic::catch_unwind(|| {
+            let _ = std::fs::create_dir_all(SHARED_DIR);
+            ensure_image();
+            sweep_stale_locks();
+            replace_container();
+            wait_for_port(URP_PORT, STARTUP_TIMEOUT);
+        })
+        .map_err(|e| {
+            e.downcast_ref::<String>()
+                .cloned()
+                .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "LibreOffice startup panicked".to_string())
+        })
     });
+    if let Err(msg) = outcome {
+        panic!("{msg}\n(cached from the first startup attempt in this process)");
+    }
 }
 
 /// Probe that the URP server is genuinely ready, not just that the

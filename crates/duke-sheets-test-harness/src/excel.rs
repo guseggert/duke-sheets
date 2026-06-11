@@ -23,7 +23,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(360);
 /// here; inside the VM the same content is reachable as `\\10.0.2.4\qemu`.
 pub const SHARED_DIR: &str = "/tmp/duke-sheets-excel";
 
-static ENSURED: OnceLock<()> = OnceLock::new();
+static ENSURED: OnceLock<Result<(), String>> = OnceLock::new();
 
 /// Ensure the Excel COM bridge is running and responsive on
 /// localhost:9876. Spawns `tools/vm/qemu-start.sh` if it isn't.
@@ -31,16 +31,32 @@ static ENSURED: OnceLock<()> = OnceLock::new();
 /// Idempotent and cheap on subsequent calls. Panics with a descriptive
 /// message on failure.
 pub fn ensure_excel_bridge() {
-    ENSURED.get_or_init(|| {
-        let _ = std::fs::create_dir_all(SHARED_DIR);
+    // The failure outcome is cached: a panicking initializer would
+    // leave the OnceLock uninitialized and every subsequent test would
+    // re-pay the full startup timeout (~6 min apiece across hundreds of
+    // bridge-backed tests). The first attempt's error is replayed
+    // instantly instead — still a hard failure, never a skip.
+    let outcome = ENSURED.get_or_init(|| {
+        std::panic::catch_unwind(|| {
+            let _ = std::fs::create_dir_all(SHARED_DIR);
 
-        if bridge_responsive() {
-            return;
-        }
+            if bridge_responsive() {
+                return;
+            }
 
-        spawn_vm();
-        wait_for_bridge(STARTUP_TIMEOUT);
+            spawn_vm();
+            wait_for_bridge(STARTUP_TIMEOUT);
+        })
+        .map_err(|e| {
+            e.downcast_ref::<String>()
+                .cloned()
+                .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Excel bridge startup panicked".to_string())
+        })
     });
+    if let Err(msg) = outcome {
+        panic!("{msg}\n(cached from the first startup attempt in this process)");
+    }
 }
 
 /// Send `{"id":1,"cmd":"Init","params":{}}` to the bridge and check

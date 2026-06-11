@@ -25,11 +25,12 @@ jobs:
       # the harness auto-starts the container). They require serial
       # execution: the backend bridge singletons contend across test
       # threads, which is why the local test tasks also pin
-      # RUST_TEST_THREADS=1.
+      # RUST_TEST_THREADS=1. duke-sheets-excel-com is excluded: its
+      # non-ignored tests need the Windows VM, which CI cannot run.
       - name: Prepare shared URP directory
         run: mkdir -p /tmp/duke-sheets-urp
       - name: Run workspace tests
-        run: RUST_TEST_THREADS=1 cargo test --workspace
+        run: RUST_TEST_THREADS=1 cargo test --workspace --exclude duke-sheets-excel-com
         env:
           RUST_BACKTRACE: '1'
       - name: Clippy
