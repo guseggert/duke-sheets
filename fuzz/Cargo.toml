@@ -39,6 +39,11 @@ path = "fuzz_targets/xls_reader.rs"
 doc = false
 
 [[bin]]
+name = "cfb_reader"
+path = "fuzz_targets/cfb_reader.rs"
+doc = false
+
+[[bin]]
 name = "formula_parser"
 path = "fuzz_targets/formula_parser.rs"
 doc = false
@@ -69,6 +74,16 @@ path = "fuzz_targets/xlsb_reader.rs"
 doc = false
 
 [[bin]]
+name = "xlsb_tokens"
+path = "fuzz_targets/xlsb_tokens.rs"
+doc = false
+
+[[bin]]
 name = "xlsb_roundtrip"
 path = "fuzz_targets/xlsb_roundtrip.rs"
+doc = false
+
+[[bin]]
+name = "xls_roundtrip"
+path = "fuzz_targets/xls_roundtrip.rs"
 doc = false

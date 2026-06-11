@@ -32,6 +32,6 @@ jobs:
         run: cargo +nightly fuzz build --target x86_64-unknown-linux-gnu
       - name: Smoke-run reader and parser targets
         run: |
-          for target in xlsb_reader xls_reader xlsx_reader formula_parser; do
+          for target in cfb_reader xlsb_tokens xlsb_reader xls_reader xlsx_reader formula_parser; do
             cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=30
           done
