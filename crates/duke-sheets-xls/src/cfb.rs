@@ -126,11 +126,13 @@ impl CompoundFile {
 
         let total_fat_sectors = read_u32(&file_data, 44)? as usize;
 
-        // Sanity check: FAT sectors can't exceed the number of sectors in the file
-        let max_sectors = file_data.len() / sector_size;
-        if total_fat_sectors > max_sectors {
+        // Sanity check: header sector counts can't exceed the number of
+        // regular sectors the file can physically contain. Sector id 0
+        // starts immediately after the header, so subtract the header slot.
+        let max_regular_sectors = regular_sector_count(file_data.len(), sector_size);
+        if total_fat_sectors > max_regular_sectors {
             return Err(CfbError::InvalidFormat(format!(
-                "total FAT sectors ({total_fat_sectors}) exceeds file capacity ({max_sectors} sectors)"
+                "total FAT sectors ({total_fat_sectors}) exceeds file capacity ({max_regular_sectors} sectors)"
             )));
         }
         let first_directory_sector = read_u32(&file_data, 48)?;
@@ -139,6 +141,17 @@ impl CompoundFile {
         let total_mini_fat_sectors = read_u32(&file_data, 64)? as usize;
         let first_difat_sector = read_u32(&file_data, 68)?;
         let total_difat_sectors = read_u32(&file_data, 72)? as usize;
+
+        if total_difat_sectors > max_regular_sectors {
+            return Err(CfbError::InvalidFormat(format!(
+                "total DIFAT sectors ({total_difat_sectors}) exceeds file capacity ({max_regular_sectors} sectors)"
+            )));
+        }
+        if total_mini_fat_sectors > max_regular_sectors {
+            return Err(CfbError::InvalidFormat(format!(
+                "total mini FAT sectors ({total_mini_fat_sectors}) exceeds file capacity ({max_regular_sectors} sectors)"
+            )));
+        }
 
         let difat = read_difat(
             &file_data,
@@ -456,6 +469,10 @@ fn sector_offset(
     Ok(bytes)
 }
 
+fn regular_sector_count(file_data_len: usize, sector_size: usize) -> usize {
+    (file_data_len / sector_size).saturating_sub(1)
+}
+
 fn read_difat(
     file_data: &[u8],
     sector_size: usize,
@@ -463,6 +480,10 @@ fn read_difat(
     first_difat_sector: u32,
     total_difat_sectors: usize,
 ) -> Result<Vec<u32>, CfbError> {
+    if total_fat_sectors == 0 {
+        return Ok(Vec::new());
+    }
+
     let mut difat = Vec::with_capacity(total_fat_sectors);
 
     for i in 0..109usize {
@@ -470,6 +491,9 @@ fn read_difat(
         let sid = read_u32(file_data, offset)?;
         if sid != FREESECT {
             difat.push(sid);
+            if difat.len() == total_fat_sectors {
+                return Ok(difat);
+            }
         }
     }
 
@@ -493,6 +517,9 @@ fn read_difat(
             let sid = read_u32(sector, i * 4)?;
             if sid != FREESECT {
                 difat.push(sid);
+                if difat.len() == total_fat_sectors {
+                    return Ok(difat);
+                }
             }
         }
 
@@ -548,6 +575,14 @@ fn read_regular_chain(
 
     let mut out = Vec::new();
     if let Some(expected_size) = expected_size {
+        let max_chain_bytes = regular_sector_count(file_data.len(), sector_size)
+            .checked_mul(sector_size)
+            .ok_or_else(|| CfbError::InvalidFormat("maximum chain size overflow".into()))?;
+        if expected_size > max_chain_bytes {
+            return Err(CfbError::InvalidFormat(format!(
+                "declared stream size ({expected_size}) exceeds file capacity ({max_chain_bytes} bytes)"
+            )));
+        }
         out.reserve(expected_size);
     }
 
@@ -728,6 +763,26 @@ mod tests {
         let mut data = vec![0xAB; 5000];
         pad_to_sector_boundary(&mut data, 4096);
         assert_eq!(data.len(), 8192);
+    }
+
+    #[test]
+    fn rejects_impossible_difat_sector_count_before_allocation() {
+        let mut data = vec![0u8; 545];
+        data[..8].copy_from_slice(&CFB_MAGIC);
+        data[30..32].copy_from_slice(&9u16.to_le_bytes()); // 512-byte sectors
+        data[32..34].copy_from_slice(&6u16.to_le_bytes()); // 64-byte mini sectors
+        data[44..48].copy_from_slice(&0u32.to_le_bytes()); // no FAT sectors needed
+        data[68..72].copy_from_slice(&0u32.to_le_bytes()); // first DIFAT sector
+        data[72..76].copy_from_slice(&0x9B00_00D9u32.to_le_bytes());
+
+        let err = match CompoundFile::open(std::io::Cursor::new(data)) {
+            Ok(_) => panic!("malformed CFB unexpectedly opened"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("total DIFAT sectors"),
+            "unexpected error: {err}"
+        );
     }
 
     fn make_dir_entry(name: &str, object_type: u8, stream_size_raw: u64) -> [u8; DIR_ENTRY_LEN] {
