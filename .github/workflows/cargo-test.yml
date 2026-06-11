@@ -15,12 +15,22 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The workspace includes LO-backed e2e suites (not ignore-gated;
+      # the harness auto-starts the container). They require serial
+      # execution: the backend bridge singletons contend across test
+      # threads, which is why the local test tasks also pin
+      # RUST_TEST_THREADS=1.
+      - name: Prepare shared URP directory
+        run: mkdir -p /tmp/duke-sheets-urp
       - name: Run workspace tests
-        run: cargo test --workspace
+        run: RUST_TEST_THREADS=1 cargo test --workspace
+        env:
+          RUST_BACKTRACE: '1'
       - name: Clippy
         run: cargo clippy --workspace --all-targets

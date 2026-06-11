@@ -11,6 +11,7 @@ on:
 jobs:
   lo-envelope:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
