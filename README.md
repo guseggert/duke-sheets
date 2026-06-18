@@ -182,61 +182,61 @@ fn main() -> Result<()> {
 <!-- BENCHMARKS:START -->
 ### Benchmarks
 
-> Last updated: 2026-06-14 &middot; commit [`6326241`](../../commit/6326241)
+> Last updated: 2026-06-18 &middot; commit [`b33eaac`](../../commit/b33eaac)
 >
 > `cargo bench --features full -p duke-sheets`
 
 | Group | Case | Library | Time |
 |-------|------|---------|------|
-| xlsx_read/100_cells | - | calamine | 108.5 µs |
-| xlsx_read/100_cells | - | duke-sheets | 213.3 µs |
-| xlsx_read/100_cells | - | umya-spreadsheet | 334.4 µs |
-| xlsx_read/10k_cells | - | calamine | 6.351 ms |
-| xlsx_read/10k_cells | - | duke-sheets | 10.51 ms |
-| xlsx_read/10k_cells | - | umya-spreadsheet | 15.09 ms |
-| xlsx_read/1k_cells | - | calamine | 678.1 µs |
-| xlsx_read/1k_cells | - | duke-sheets | 1.172 ms |
-| xlsx_read/1k_cells | - | umya-spreadsheet | 1.704 ms |
-| xlsx_write_serialize/100_cells | - | duke-sheets | 384.9 µs |
-| xlsx_write_serialize/100_cells | - | umya-spreadsheet | 455.9 µs |
-| xlsx_write_serialize/10k_cells | - | duke-sheets | 20.58 ms |
-| xlsx_write_serialize/10k_cells | - | umya-spreadsheet | 17.57 ms |
-| xlsx_write_serialize/1k_cells | - | duke-sheets | 1.959 ms |
-| xlsx_write_serialize/1k_cells | - | umya-spreadsheet | 1.865 ms |
-| xlsx_write_full/100_cells | - | duke-sheets | 407.5 µs |
-| xlsx_write_full/100_cells | - | rust_xlsxwriter | 451.5 µs |
-| xlsx_write_full/100_cells | - | umya-spreadsheet | 581 µs |
-| xlsx_write_full/10k_cells | - | duke-sheets | 21.39 ms |
-| xlsx_write_full/10k_cells | - | rust_xlsxwriter | 13.79 ms |
-| xlsx_write_full/10k_cells | - | umya-spreadsheet | 23.48 ms |
-| xlsx_write_full/1k_cells | - | duke-sheets | 2.06 ms |
-| xlsx_write_full/1k_cells | - | rust_xlsxwriter | 1.471 ms |
-| xlsx_write_full/1k_cells | - | umya-spreadsheet | 2.472 ms |
-| csv_read/100_cells | - | duke-sheets | 32.46 µs |
-| csv_read/10k_cells | - | duke-sheets | 1.034 ms |
-| csv_read/1k_cells | - | duke-sheets | 132.8 µs |
-| csv_write/100_cells | - | duke-sheets | 9.42 µs |
-| csv_write/10k_cells | - | duke-sheets | 1.052 ms |
-| csv_write/1k_cells | - | duke-sheets | 96.13 µs |
-| formula_parse/complex | - | - | 14.88 µs |
-| formula_parse/medium | - | - | 7.456 µs |
-| formula_parse/simple | - | - | 2.047 µs |
-| formula_parse/throughput_1000 | - | - | 787.7 µs |
-| calculation/linear_chain | 100 | - | 77.72 µs |
-| calculation/linear_chain | 500 | - | 389.1 µs |
-| calculation/linear_chain | 1000 | - | 788.4 µs |
-| calculation/fan_out | 26 | - | 70.81 µs |
-| calculation/fan_out | 52 | - | 155.5 µs |
-| calculation/fan_out | 100 | - | 341.7 µs |
-| calculation/fan_out | 200 | - | 859.4 µs |
-| calculation/cross_sheet | 100 | - | 108.9 µs |
-| calculation/cross_sheet | 500 | - | 494.4 µs |
-| calculation/cross_sheet | 1000 | - | 991.1 µs |
-| calculation/cross_sheet | 5000 | - | 4.31 ms |
-| calculation/mixed | 100 | - | 162.2 µs |
-| calculation/mixed | 500 | - | 708.4 µs |
-| calculation/mixed | 1000 | - | 1.405 ms |
-| calculation/repeated_lookups | - | repeated_lookups | 268.4 ms |
+| xlsx_read/100_cells | - | calamine | 109.4 µs |
+| xlsx_read/100_cells | - | duke-sheets | 214.2 µs |
+| xlsx_read/100_cells | - | umya-spreadsheet | 333.7 µs |
+| xlsx_read/10k_cells | - | calamine | 6.279 ms |
+| xlsx_read/10k_cells | - | duke-sheets | 10.53 ms |
+| xlsx_read/10k_cells | - | umya-spreadsheet | 15.3 ms |
+| xlsx_read/1k_cells | - | calamine | 672.7 µs |
+| xlsx_read/1k_cells | - | duke-sheets | 1.168 ms |
+| xlsx_read/1k_cells | - | umya-spreadsheet | 1.718 ms |
+| xlsx_write_serialize/100_cells | - | duke-sheets | 387.6 µs |
+| xlsx_write_serialize/100_cells | - | umya-spreadsheet | 461.4 µs |
+| xlsx_write_serialize/10k_cells | - | duke-sheets | 20.54 ms |
+| xlsx_write_serialize/10k_cells | - | umya-spreadsheet | 17.54 ms |
+| xlsx_write_serialize/1k_cells | - | duke-sheets | 1.953 ms |
+| xlsx_write_serialize/1k_cells | - | umya-spreadsheet | 1.861 ms |
+| xlsx_write_full/100_cells | - | duke-sheets | 410.5 µs |
+| xlsx_write_full/100_cells | - | rust_xlsxwriter | 456 µs |
+| xlsx_write_full/100_cells | - | umya-spreadsheet | 582.8 µs |
+| xlsx_write_full/10k_cells | - | duke-sheets | 21.44 ms |
+| xlsx_write_full/10k_cells | - | rust_xlsxwriter | 13.85 ms |
+| xlsx_write_full/10k_cells | - | umya-spreadsheet | 23.45 ms |
+| xlsx_write_full/1k_cells | - | duke-sheets | 2.058 ms |
+| xlsx_write_full/1k_cells | - | rust_xlsxwriter | 1.501 ms |
+| xlsx_write_full/1k_cells | - | umya-spreadsheet | 2.466 ms |
+| csv_read/100_cells | - | duke-sheets | 32.37 µs |
+| csv_read/10k_cells | - | duke-sheets | 1.037 ms |
+| csv_read/1k_cells | - | duke-sheets | 134.2 µs |
+| csv_write/100_cells | - | duke-sheets | 9.576 µs |
+| csv_write/10k_cells | - | duke-sheets | 1.069 ms |
+| csv_write/1k_cells | - | duke-sheets | 94.54 µs |
+| formula_parse/complex | - | - | 15.13 µs |
+| formula_parse/medium | - | - | 7.619 µs |
+| formula_parse/simple | - | - | 2.115 µs |
+| formula_parse/throughput_1000 | - | - | 809.2 µs |
+| calculation/linear_chain | 100 | - | 78.3 µs |
+| calculation/linear_chain | 500 | - | 391.6 µs |
+| calculation/linear_chain | 1000 | - | 786.7 µs |
+| calculation/fan_out | 26 | - | 71.53 µs |
+| calculation/fan_out | 52 | - | 156.1 µs |
+| calculation/fan_out | 100 | - | 342.4 µs |
+| calculation/fan_out | 200 | - | 859.3 µs |
+| calculation/cross_sheet | 100 | - | 109.2 µs |
+| calculation/cross_sheet | 500 | - | 497.4 µs |
+| calculation/cross_sheet | 1000 | - | 992.4 µs |
+| calculation/cross_sheet | 5000 | - | 4.458 ms |
+| calculation/mixed | 100 | - | 163.1 µs |
+| calculation/mixed | 500 | - | 711.7 µs |
+| calculation/mixed | 1000 | - | 1.406 ms |
+| calculation/repeated_lookups | - | repeated_lookups | 267.9 ms |
 <!-- BENCHMARKS:END -->
 
 ## License
