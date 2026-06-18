@@ -24,17 +24,59 @@ Classes:
 """
 
 from duke_sheets._native import (
+    Alignment,
+    BorderEdge,
+    BorderStyle,
+    CalculationStats,
+    CellProtection,
+    CellValue,
+    Color,
+    FillStyle,
+    FontStyle,
+    GradientStop,
+    NumberFormat,
+    Style,
     Workbook,
     Worksheet,
-    CellValue,
-    CalculationStats,
+)
+from duke_sheets.types import (
+    AlignmentInput,
+    BorderEdgeInput,
+    BorderStyleInput,
+    CellProtectionInput,
+    ColorInput,
+    FillStyleInput,
+    FontStyleInput,
+    GradientStopInput,
+    NumberFormatInput,
+    StyleInput,
 )
 
 __all__ = [
+    "Alignment",
+    "AlignmentInput",
+    "BorderEdge",
+    "BorderEdgeInput",
+    "BorderStyle",
+    "BorderStyleInput",
+    "CalculationStats",
+    "CellProtection",
+    "CellProtectionInput",
+    "CellValue",
+    "Color",
+    "ColorInput",
+    "FillStyle",
+    "FillStyleInput",
+    "FontStyle",
+    "FontStyleInput",
+    "GradientStop",
+    "GradientStopInput",
+    "NumberFormat",
+    "NumberFormatInput",
+    "Style",
+    "StyleInput",
     "Workbook",
     "Worksheet",
-    "CellValue",
-    "CalculationStats",
 ]
 
 __version__ = "0.1.0"

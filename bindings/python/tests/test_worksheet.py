@@ -2,7 +2,16 @@
 Tests for Worksheet class.
 """
 
+import os
+
+import duke_sheets
 import pytest
+
+
+def assert_same_rgb(hex_value, rgb_hex):
+    """Accept RGB or opaque ARGB representations of the same color."""
+    normalized = hex_value[2:] if len(hex_value) == 8 and hex_value.startswith("FF") else hex_value
+    assert normalized == rgb_hex
 
 
 class TestCellOperations:
@@ -168,6 +177,92 @@ class TestMergeCells:
         sheet.merge_cells("A1:C3")
         sheet.unmerge_cells("A1:C3")
         # No error means success
+
+
+class TestStyleSetters:
+    """Test cell style setters."""
+
+    def test_set_cell_style_font_and_fill(self, workbook):
+        """Should set font and fill style from a dict patch."""
+        sheet = workbook.get_sheet(0)
+        style_patch: duke_sheets.StyleInput = {
+            "font": {
+                "name": "Aptos Display",
+                "size": 14,
+                "bold": True,
+                "color": {"color_type": "rgb", "hex": "FFFFFF"},
+            },
+            "fill": {
+                "fill_type": "solid",
+                "color": {"hex": "1F4E79"},
+            },
+        }
+
+        sheet.set_cell_style("A1", style_patch)
+
+        style = sheet.get_cell_style("A1")
+        assert style is not None
+        assert style.font.name == "Aptos Display"
+        assert style.font.size == 14
+        assert style.font.bold is True
+        assert style.font.color.hex == "FFFFFF"
+        assert style.fill.fill_type == "solid"
+        assert style.fill.color.hex == "1F4E79"
+
+    def test_copy_style_object(self, workbook):
+        """A Style object returned by get_cell_style should be valid input."""
+        sheet = workbook.get_sheet(0)
+        sheet.set_cell_style(
+            "A1",
+            {
+                "font": {"bold": True, "italic": True},
+                "fill": {"fill_type": "solid", "color": {"hex": "D9EAF7"}},
+            },
+        )
+        sheet.set_cell_style("B1", {"fill": {"fill_type": "solid", "color": {"hex": "00FF00"}}})
+
+        source = sheet.get_cell_style("A1")
+        assert source is not None
+        sheet.set_cell_style("B1", source)
+
+        copied = sheet.get_cell_style("B1")
+        assert copied.font.bold is True
+        assert copied.font.italic is True
+        assert copied.fill.color.hex == "D9EAF7"
+
+    def test_set_range_style(self, workbook):
+        """Should apply a style patch to every cell in a range."""
+        sheet = workbook.get_sheet(0)
+        sheet.set_range_style("C1:D2", {"font": {"italic": True}})
+
+        for address in ["C1", "D1", "C2", "D2"]:
+            assert sheet.get_cell_style(address).font.italic is True
+
+    def test_style_only_cell_roundtrip(self, workbook, temp_dir):
+        """Should preserve a style-only cell through XLSX save/open."""
+        sheet = workbook.get_sheet(0)
+        sheet.set_cell_style(
+            "B2",
+            {
+                "fill": {"fill_type": "solid", "color": {"hex": "FFF2CC"}},
+                "font": {"color": {"hex": "9C5700"}},
+            },
+        )
+        file_path = os.path.join(temp_dir, "styles.xlsx")
+        workbook.save(file_path)
+
+        reopened = duke_sheets.Workbook.open(file_path)
+        style = reopened.get_sheet(0).get_cell_style("B2")
+        assert style is not None
+        assert_same_rgb(style.fill.color.hex, "FFF2CC")
+        assert_same_rgb(style.font.color.hex, "9C5700")
+
+    def test_invalid_style_value(self, workbook):
+        """Should raise ValueError for invalid style enum strings."""
+        sheet = workbook.get_sheet(0)
+
+        with pytest.raises(ValueError, match="unknown fill_type"):
+            sheet.set_cell_style("A1", {"fill": {"fill_type": "not_a_type"}})
 
 
 class TestWorksheetRepr:

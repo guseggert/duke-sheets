@@ -352,6 +352,66 @@ impl PyWorksheet {
         ws.set_cell_formula(address, formula).map_err(to_py_err)
     }
 
+    /// Set or update a cell style by address.
+    ///
+    /// Accepts either a Style object returned by get_cell_style() or a dict patch.
+    #[pyo3(signature = (address, style))]
+    fn set_cell_style(&self, address: &str, style: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut wb = self.workbook.write().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+
+        let addr = duke_sheets_core::CellAddress::parse(address)
+            .map_err(|e| PyValueError::new_err(format!("Invalid cell address: {}", e)))?;
+        let mut core_style = ws
+            .cell_style_at(addr.row, addr.col)
+            .cloned()
+            .unwrap_or_default();
+        types::apply_style_input_to_core(style, &mut core_style)?;
+        ws.set_cell_style_at(addr.row, addr.col, &core_style)
+            .map_err(to_py_err)
+    }
+
+    /// Set or update a cell style by row/col (0-based).
+    #[pyo3(signature = (row, col, style))]
+    fn set_cell_style_at(&self, row: u32, col: u32, style: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut wb = self.workbook.write().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+
+        let mut core_style = ws
+            .cell_style_at(row, col as u16)
+            .cloned()
+            .unwrap_or_default();
+        types::apply_style_input_to_core(style, &mut core_style)?;
+        ws.set_cell_style_at(row, col as u16, &core_style)
+            .map_err(to_py_err)
+    }
+
+    /// Set or update the style for all cells in a range (e.g. "A1:C3").
+    #[pyo3(signature = (range_str, style))]
+    fn set_range_style(&self, range_str: &str, style: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut wb = self.workbook.write().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+
+        let range = duke_sheets_core::CellRange::parse(range_str)
+            .map_err(|e| PyValueError::new_err(format!("Invalid range: {}", e)))?;
+        for addr in range.cells() {
+            let mut core_style = ws
+                .cell_style_at(addr.row, addr.col)
+                .cloned()
+                .unwrap_or_default();
+            types::apply_style_input_to_core(style, &mut core_style)?;
+            ws.set_cell_style_at(addr.row, addr.col, &core_style)
+                .map_err(to_py_err)?;
+        }
+        Ok(())
+    }
+
     /// Get the raw cell value (not calculated)
     #[pyo3(signature = (address))]
     fn get_cell(&self, address: &str) -> PyResult<PyCellValue> {

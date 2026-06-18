@@ -44,6 +44,10 @@ const sheet = wb.getSheet(0);
 sheet.setCell('A1', 10);
 sheet.setCell('A2', 20);
 sheet.setFormula('A3', '=A1+A2');
+sheet.setCellStyle('A1', {
+  font: { bold: true, color: { hex: 'FFFFFF' } },
+  fill: { fillType: 'solid', color: { hex: '1F4E79' } },
+});
 
 wb.calculate();
 console.log(sheet.getCalculatedValue('A3').asNumber()); // 30
@@ -69,7 +73,7 @@ await wb.calculateAsync();
 await wb.saveAsync('output.xlsx');
 ```
 
-50+ read-only accessors for styles, comments, hyperlinks, tables,
+50+ accessors for styles, comments, hyperlinks, tables,
 conditional formatting, data validations, merged regions, page setup, and more.
 
 ## Python
@@ -87,6 +91,10 @@ sheet = wb.get_sheet(0)
 sheet.set_cell("A1", 10)
 sheet.set_cell("A2", 20)
 sheet.set_formula("A3", "=A1+A2")
+sheet.set_cell_style("A1", {
+    "font": {"bold": True, "color": {"hex": "FFFFFF"}},
+    "fill": {"fill_type": "solid", "color": {"hex": "1F4E79"}},
+})
 
 wb.calculate()
 print(sheet.get_calculated_value("A3").as_number())  # 30.0
@@ -102,8 +110,8 @@ wb = duke_sheets.Workbook.from_bytes(data)
 wb = duke_sheets.Workbook.from_csv_string("a,b,c\n1,2,3")
 ```
 
-Same 50+ read-only accessors as the Node.js API: cell styles, formatted
-values, comments, hyperlinks, tables, freeze panes, page setup, etc.
+Same 50+ accessors as the Node.js API: cell styles, formatted values,
+comments, hyperlinks, tables, freeze panes, page setup, etc.
 
 ## WebAssembly
 
