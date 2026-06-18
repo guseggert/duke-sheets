@@ -38,4 +38,4 @@ opt-level = "s"
 lto = true
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Os"]
+wasm-opt = ["-Os", "--enable-reference-types"]
