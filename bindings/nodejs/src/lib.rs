@@ -406,6 +406,74 @@ impl Worksheet {
         })
     }
 
+    /// Set or update a cell style by address.
+    ///
+    /// A full style object returned by `getCellStyle()` can be used to copy a
+    /// style. Partial objects update only the provided top-level components.
+    #[napi]
+    pub fn set_cell_style(&self, address: String, style: JsStylePatch) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+
+            let addr = CellAddress::parse(&address)
+                .map_err(|e| napi::Error::from_reason(format!("Invalid cell address: {}", e)))?;
+
+            let mut core_style = ws
+                .cell_style_at(addr.row, addr.col)
+                .cloned()
+                .unwrap_or_default();
+            style.apply_to_core_style(&mut core_style)?;
+            ws.set_cell_style_at(addr.row, addr.col, &core_style)
+                .map_err(to_napi_err)
+        })
+    }
+
+    /// Set or update a cell style by row/col (0-based).
+    #[napi]
+    pub fn set_cell_style_at(&self, row: u32, col: u32, style: JsStylePatch) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+
+            let mut core_style = ws
+                .cell_style_at(row, col as u16)
+                .cloned()
+                .unwrap_or_default();
+            style.apply_to_core_style(&mut core_style)?;
+            ws.set_cell_style_at(row, col as u16, &core_style)
+                .map_err(to_napi_err)
+        })
+    }
+
+    /// Set or update the style for all cells in a range (e.g. "A1:C3").
+    #[napi]
+    pub fn set_range_style(&self, range_str: String, style: JsStylePatch) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+
+            let range = CellRange::parse(&range_str)
+                .map_err(|e| napi::Error::from_reason(format!("Invalid range: {}", e)))?;
+            for addr in range.cells() {
+                let mut core_style = ws
+                    .cell_style_at(addr.row, addr.col)
+                    .cloned()
+                    .unwrap_or_default();
+                style.apply_to_core_style(&mut core_style)?;
+                ws.set_cell_style_at(addr.row, addr.col, &core_style)
+                    .map_err(to_napi_err)?;
+            }
+            Ok(())
+        })
+    }
+
     /// Get the raw cell value (not calculated)
     #[napi]
     pub fn get_cell(&self, address: String) -> Result<CellValue> {

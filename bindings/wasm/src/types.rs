@@ -508,6 +508,598 @@ impl From<&CoreStyle> for WasmStyle {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmColorInput {
+    pub color_type: Option<String>,
+    pub hex: Option<String>,
+    pub r: Option<u32>,
+    pub g: Option<u32>,
+    pub b: Option<u32>,
+    pub a: Option<u32>,
+    pub theme_index: Option<u32>,
+    pub tint: Option<i32>,
+    pub palette_index: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmFontStylePatch {
+    pub name: Option<String>,
+    pub size: Option<f64>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<String>,
+    pub strikethrough: Option<bool>,
+    pub color: Option<WasmColorInput>,
+    pub vertical_align: Option<String>,
+    pub family: Option<u32>,
+    pub charset: Option<u32>,
+    pub scheme: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmGradientStopInput {
+    pub position: f64,
+    pub color: WasmColorInput,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmFillStylePatch {
+    pub fill_type: Option<String>,
+    pub color: Option<WasmColorInput>,
+    pub pattern: Option<String>,
+    pub foreground: Option<WasmColorInput>,
+    pub background: Option<WasmColorInput>,
+    pub gradient_type: Option<String>,
+    pub angle: Option<f64>,
+    pub stops: Option<Vec<WasmGradientStopInput>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmBorderEdgePatch {
+    pub style: Option<String>,
+    pub color: Option<WasmColorInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmBorderStylePatch {
+    pub left: Option<WasmBorderEdgePatch>,
+    pub right: Option<WasmBorderEdgePatch>,
+    pub top: Option<WasmBorderEdgePatch>,
+    pub bottom: Option<WasmBorderEdgePatch>,
+    pub diagonal: Option<WasmBorderEdgePatch>,
+    pub diagonal_direction: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmAlignmentPatch {
+    pub horizontal: Option<String>,
+    pub vertical: Option<String>,
+    pub wrap_text: Option<bool>,
+    pub shrink_to_fit: Option<bool>,
+    pub indent: Option<u32>,
+    pub rotation: Option<i32>,
+    pub reading_order: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmNumberFormatPatch {
+    pub format_type: Option<String>,
+    pub id: Option<u32>,
+    pub format_string: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmCellProtectionPatch {
+    pub locked: Option<bool>,
+    pub hidden: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmStylePatch {
+    pub font: Option<WasmFontStylePatch>,
+    pub fill: Option<WasmFillStylePatch>,
+    pub border: Option<WasmBorderStylePatch>,
+    pub alignment: Option<WasmAlignmentPatch>,
+    pub number_format: Option<WasmNumberFormatPatch>,
+    pub protection: Option<WasmCellProtectionPatch>,
+}
+
+fn u32_to_u8(value: u32, field: &str) -> Result<u8, String> {
+    u8::try_from(value).map_err(|_| format!("{field} must be between 0 and 255"))
+}
+
+fn i32_to_i8(value: i32, field: &str) -> Result<i8, String> {
+    i8::try_from(value).map_err(|_| format!("{field} must be between -128 and 127"))
+}
+
+fn parse_color_hex(hex: &str) -> Result<CoreColor, String> {
+    CoreColor::from_hex(hex).ok_or_else(|| {
+        "color hex must be 6 or 8 hexadecimal characters, with optional # prefix".to_string()
+    })
+}
+
+fn parse_rgb_hex(hex: &str) -> Result<CoreColor, String> {
+    match parse_color_hex(hex)? {
+        CoreColor::Rgb { r, g, b } => Ok(CoreColor::Rgb { r, g, b }),
+        CoreColor::Argb { r, g, b, .. } => Ok(CoreColor::Rgb { r, g, b }),
+        other => Ok(other),
+    }
+}
+
+fn parse_argb_hex(hex: &str) -> Result<CoreColor, String> {
+    match parse_color_hex(hex)? {
+        CoreColor::Rgb { r, g, b } => Ok(CoreColor::Argb { a: 255, r, g, b }),
+        CoreColor::Argb { a, r, g, b } => Ok(CoreColor::Argb { a, r, g, b }),
+        other => Ok(other),
+    }
+}
+
+impl WasmColorInput {
+    fn to_core_color(&self) -> Result<CoreColor, String> {
+        match self.color_type.as_deref() {
+            Some("auto") => Ok(CoreColor::Auto),
+            Some("rgb") => {
+                if let Some(hex) = &self.hex {
+                    parse_rgb_hex(hex)
+                } else {
+                    Ok(CoreColor::Rgb {
+                        r: u32_to_u8(self.r.ok_or_else(|| "rgb color requires r".to_string())?, "r")?,
+                        g: u32_to_u8(self.g.ok_or_else(|| "rgb color requires g".to_string())?, "g")?,
+                        b: u32_to_u8(self.b.ok_or_else(|| "rgb color requires b".to_string())?, "b")?,
+                    })
+                }
+            }
+            Some("argb") => {
+                if let Some(hex) = &self.hex {
+                    parse_argb_hex(hex)
+                } else {
+                    Ok(CoreColor::Argb {
+                        a: u32_to_u8(self.a.unwrap_or(255), "a")?,
+                        r: u32_to_u8(self.r.ok_or_else(|| "argb color requires r".to_string())?, "r")?,
+                        g: u32_to_u8(self.g.ok_or_else(|| "argb color requires g".to_string())?, "g")?,
+                        b: u32_to_u8(self.b.ok_or_else(|| "argb color requires b".to_string())?, "b")?,
+                    })
+                }
+            }
+            Some("theme") => Ok(CoreColor::Theme {
+                index: u32_to_u8(
+                    self.theme_index
+                        .ok_or_else(|| "theme color requires themeIndex".to_string())?,
+                    "themeIndex",
+                )?,
+                tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
+            }),
+            Some("indexed") => Ok(CoreColor::Indexed(u32_to_u8(
+                self.palette_index
+                    .ok_or_else(|| "indexed color requires paletteIndex".to_string())?,
+                "paletteIndex",
+            )?)),
+            Some(other) => Err(format!("unknown colorType {other:?}")),
+            None => {
+                if let Some(hex) = &self.hex {
+                    parse_color_hex(hex)
+                } else if self.r.is_some() || self.g.is_some() || self.b.is_some() {
+                    Ok(CoreColor::Rgb {
+                        r: u32_to_u8(self.r.ok_or_else(|| "rgb color requires r".to_string())?, "r")?,
+                        g: u32_to_u8(self.g.ok_or_else(|| "rgb color requires g".to_string())?, "g")?,
+                        b: u32_to_u8(self.b.ok_or_else(|| "rgb color requires b".to_string())?, "b")?,
+                    })
+                } else if let Some(theme_index) = self.theme_index {
+                    Ok(CoreColor::Theme {
+                        index: u32_to_u8(theme_index, "themeIndex")?,
+                        tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
+                    })
+                } else if let Some(palette_index) = self.palette_index {
+                    Ok(CoreColor::Indexed(u32_to_u8(palette_index, "paletteIndex")?))
+                } else {
+                    Err("color requires colorType, hex, rgb, themeIndex, or paletteIndex".into())
+                }
+            }
+        }
+    }
+}
+
+fn parse_underline_input(value: &str) -> Result<Underline, String> {
+    match value {
+        "none" => Ok(Underline::None),
+        "single" => Ok(Underline::Single),
+        "double" => Ok(Underline::Double),
+        "singleAccounting" => Ok(Underline::SingleAccounting),
+        "doubleAccounting" => Ok(Underline::DoubleAccounting),
+        other => Err(format!("unknown underline {other:?}")),
+    }
+}
+
+fn parse_font_vertical_align_input(value: &str) -> Result<FontVerticalAlign, String> {
+    match value {
+        "baseline" => Ok(FontVerticalAlign::Baseline),
+        "superscript" => Ok(FontVerticalAlign::Superscript),
+        "subscript" => Ok(FontVerticalAlign::Subscript),
+        other => Err(format!("unknown verticalAlign {other:?}")),
+    }
+}
+
+impl WasmFontStylePatch {
+    fn is_full_font(&self) -> bool {
+        self.name.is_some()
+            && self.size.is_some()
+            && self.bold.is_some()
+            && self.italic.is_some()
+            && self.underline.is_some()
+            && self.strikethrough.is_some()
+            && self.color.is_some()
+            && self.vertical_align.is_some()
+    }
+
+    fn apply_to_core_font(&self, font: &mut CoreFontStyle) -> Result<(), String> {
+        if let Some(name) = &self.name {
+            font.name = name.clone();
+        }
+        if let Some(size) = self.size {
+            font.size = size;
+        }
+        if let Some(bold) = self.bold {
+            font.bold = bold;
+        }
+        if let Some(italic) = self.italic {
+            font.italic = italic;
+        }
+        if let Some(underline) = &self.underline {
+            font.underline = parse_underline_input(underline)?;
+        }
+        if let Some(strikethrough) = self.strikethrough {
+            font.strikethrough = strikethrough;
+        }
+        if let Some(color) = &self.color {
+            font.color = color.to_core_color()?;
+        }
+        if let Some(vertical_align) = &self.vertical_align {
+            font.vertical_align = parse_font_vertical_align_input(vertical_align)?;
+        }
+        if let Some(family) = self.family {
+            font.family = Some(u32_to_u8(family, "family")?);
+        }
+        if let Some(charset) = self.charset {
+            font.charset = Some(u32_to_u8(charset, "charset")?);
+        }
+        if let Some(scheme) = &self.scheme {
+            font.scheme = Some(scheme.clone());
+        }
+        Ok(())
+    }
+}
+
+fn parse_pattern_type_input(value: &str) -> Result<PatternType, String> {
+    match value {
+        "none" => Ok(PatternType::None),
+        "solid" => Ok(PatternType::Solid),
+        "mediumGray" => Ok(PatternType::MediumGray),
+        "darkGray" => Ok(PatternType::DarkGray),
+        "lightGray" => Ok(PatternType::LightGray),
+        "darkHorizontal" => Ok(PatternType::DarkHorizontal),
+        "darkVertical" => Ok(PatternType::DarkVertical),
+        "darkDown" => Ok(PatternType::DarkDown),
+        "darkUp" => Ok(PatternType::DarkUp),
+        "darkGrid" => Ok(PatternType::DarkGrid),
+        "darkTrellis" => Ok(PatternType::DarkTrellis),
+        "lightHorizontal" => Ok(PatternType::LightHorizontal),
+        "lightVertical" => Ok(PatternType::LightVertical),
+        "lightDown" => Ok(PatternType::LightDown),
+        "lightUp" => Ok(PatternType::LightUp),
+        "lightGrid" => Ok(PatternType::LightGrid),
+        "lightTrellis" => Ok(PatternType::LightTrellis),
+        "gray125" => Ok(PatternType::Gray125),
+        "gray0625" => Ok(PatternType::Gray0625),
+        other => Err(format!("unknown fill pattern {other:?}")),
+    }
+}
+
+fn parse_gradient_type_input(value: &str) -> Result<GradientType, String> {
+    match value {
+        "linear" => Ok(GradientType::Linear),
+        "path" => Ok(GradientType::Path),
+        other => Err(format!("unknown gradientType {other:?}")),
+    }
+}
+
+impl WasmFillStylePatch {
+    fn to_core_fill(&self) -> Result<CoreFillStyle, String> {
+        match self.fill_type.as_deref() {
+            Some("none") => Ok(CoreFillStyle::None),
+            Some("solid") | None if self.color.is_some() => Ok(CoreFillStyle::Solid {
+                color: self
+                    .color
+                    .as_ref()
+                    .ok_or_else(|| "solid fill requires color".to_string())?
+                    .to_core_color()?,
+            }),
+            Some("pattern") => Ok(CoreFillStyle::Pattern {
+                pattern: parse_pattern_type_input(
+                    self.pattern
+                        .as_deref()
+                        .ok_or_else(|| "pattern fill requires pattern".to_string())?,
+                )?,
+                foreground: self
+                    .foreground
+                    .as_ref()
+                    .ok_or_else(|| "pattern fill requires foreground".to_string())?
+                    .to_core_color()?,
+                background: self
+                    .background
+                    .as_ref()
+                    .ok_or_else(|| "pattern fill requires background".to_string())?
+                    .to_core_color()?,
+            }),
+            Some("gradient") => Ok(CoreFillStyle::Gradient {
+                gradient_type: parse_gradient_type_input(self.gradient_type.as_deref().unwrap_or("linear"))?,
+                angle: self.angle.unwrap_or(0.0),
+                stops: self
+                    .stops
+                    .as_ref()
+                    .ok_or_else(|| "gradient fill requires stops".to_string())?
+                    .iter()
+                    .map(|stop| {
+                        Ok(duke_sheets_core::style::GradientStop {
+                            position: stop.position,
+                            color: stop.color.to_core_color()?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+            }),
+            Some(other) => Err(format!("unknown fillType {other:?}")),
+            None => Err("fill patch requires fillType or color".into()),
+        }
+    }
+}
+
+fn parse_border_line_style_input(value: &str) -> Result<CoreBorderLineStyle, String> {
+    match value {
+        "none" => Ok(CoreBorderLineStyle::None),
+        "thin" => Ok(CoreBorderLineStyle::Thin),
+        "medium" => Ok(CoreBorderLineStyle::Medium),
+        "thick" => Ok(CoreBorderLineStyle::Thick),
+        "dashed" => Ok(CoreBorderLineStyle::Dashed),
+        "dotted" => Ok(CoreBorderLineStyle::Dotted),
+        "double" => Ok(CoreBorderLineStyle::Double),
+        "hair" => Ok(CoreBorderLineStyle::Hair),
+        "mediumDashed" => Ok(CoreBorderLineStyle::MediumDashed),
+        "dashDot" => Ok(CoreBorderLineStyle::DashDot),
+        "mediumDashDot" => Ok(CoreBorderLineStyle::MediumDashDot),
+        "dashDotDot" => Ok(CoreBorderLineStyle::DashDotDot),
+        "mediumDashDotDot" => Ok(CoreBorderLineStyle::MediumDashDotDot),
+        "slantDashDot" => Ok(CoreBorderLineStyle::SlantDashDot),
+        other => Err(format!("unknown border style {other:?}")),
+    }
+}
+
+fn parse_diagonal_direction_input(value: &str) -> Result<DiagonalDirection, String> {
+    match value {
+        "none" => Ok(DiagonalDirection::None),
+        "down" => Ok(DiagonalDirection::Down),
+        "up" => Ok(DiagonalDirection::Up),
+        "both" => Ok(DiagonalDirection::Both),
+        other => Err(format!("unknown diagonalDirection {other:?}")),
+    }
+}
+
+impl WasmBorderEdgePatch {
+    fn apply_to_edge(&self, existing: Option<&CoreBorderEdge>) -> Result<Option<CoreBorderEdge>, String> {
+        let parsed_style = self
+            .style
+            .as_deref()
+            .map(parse_border_line_style_input)
+            .transpose()?;
+        if parsed_style == Some(CoreBorderLineStyle::None) {
+            return Ok(None);
+        }
+
+        let mut edge = existing
+            .cloned()
+            .unwrap_or_else(|| CoreBorderEdge::new(CoreBorderLineStyle::Thin, CoreColor::BLACK));
+        if let Some(style) = parsed_style {
+            edge.style = style;
+        }
+        if let Some(color) = &self.color {
+            edge.color = color.to_core_color()?;
+        }
+        Ok(Some(edge))
+    }
+}
+
+impl WasmBorderStylePatch {
+    fn is_full_border(&self) -> bool {
+        self.diagonal_direction.is_some()
+    }
+
+    fn apply_to_core_border(&self, border: &mut CoreBorderStyle) -> Result<(), String> {
+        if let Some(edge) = &self.left {
+            border.left = edge.apply_to_edge(border.left.as_ref())?;
+        }
+        if let Some(edge) = &self.right {
+            border.right = edge.apply_to_edge(border.right.as_ref())?;
+        }
+        if let Some(edge) = &self.top {
+            border.top = edge.apply_to_edge(border.top.as_ref())?;
+        }
+        if let Some(edge) = &self.bottom {
+            border.bottom = edge.apply_to_edge(border.bottom.as_ref())?;
+        }
+        if let Some(edge) = &self.diagonal {
+            border.diagonal = edge.apply_to_edge(border.diagonal.as_ref())?;
+        }
+        if let Some(direction) = &self.diagonal_direction {
+            border.diagonal_direction = parse_diagonal_direction_input(direction)?;
+        }
+        Ok(())
+    }
+}
+
+fn parse_horizontal_alignment_input(value: &str) -> Result<HorizontalAlignment, String> {
+    match value {
+        "general" => Ok(HorizontalAlignment::General),
+        "left" => Ok(HorizontalAlignment::Left),
+        "center" => Ok(HorizontalAlignment::Center),
+        "right" => Ok(HorizontalAlignment::Right),
+        "fill" => Ok(HorizontalAlignment::Fill),
+        "justify" => Ok(HorizontalAlignment::Justify),
+        "centerContinuous" => Ok(HorizontalAlignment::CenterContinuous),
+        "distributed" => Ok(HorizontalAlignment::Distributed),
+        other => Err(format!("unknown horizontal alignment {other:?}")),
+    }
+}
+
+fn parse_vertical_alignment_input(value: &str) -> Result<VerticalAlignment, String> {
+    match value {
+        "top" => Ok(VerticalAlignment::Top),
+        "center" => Ok(VerticalAlignment::Center),
+        "bottom" => Ok(VerticalAlignment::Bottom),
+        "justify" => Ok(VerticalAlignment::Justify),
+        "distributed" => Ok(VerticalAlignment::Distributed),
+        other => Err(format!("unknown vertical alignment {other:?}")),
+    }
+}
+
+fn parse_reading_order_input(value: &str) -> Result<ReadingOrder, String> {
+    match value {
+        "contextDependent" => Ok(ReadingOrder::ContextDependent),
+        "leftToRight" => Ok(ReadingOrder::LeftToRight),
+        "rightToLeft" => Ok(ReadingOrder::RightToLeft),
+        other => Err(format!("unknown readingOrder {other:?}")),
+    }
+}
+
+impl WasmAlignmentPatch {
+    fn is_full_alignment(&self) -> bool {
+        self.horizontal.is_some()
+            && self.vertical.is_some()
+            && self.wrap_text.is_some()
+            && self.shrink_to_fit.is_some()
+            && self.indent.is_some()
+            && self.rotation.is_some()
+            && self.reading_order.is_some()
+    }
+
+    fn apply_to_core_alignment(&self, alignment: &mut CoreAlignment) -> Result<(), String> {
+        if let Some(horizontal) = &self.horizontal {
+            alignment.horizontal = parse_horizontal_alignment_input(horizontal)?;
+        }
+        if let Some(vertical) = &self.vertical {
+            alignment.vertical = parse_vertical_alignment_input(vertical)?;
+        }
+        if let Some(wrap_text) = self.wrap_text {
+            alignment.wrap_text = wrap_text;
+        }
+        if let Some(shrink_to_fit) = self.shrink_to_fit {
+            alignment.shrink_to_fit = shrink_to_fit;
+        }
+        if let Some(indent) = self.indent {
+            alignment.indent = u32_to_u8(indent, "indent")?;
+        }
+        if let Some(rotation) = self.rotation {
+            if !((-90..=90).contains(&rotation) || rotation == 255) {
+                return Err("rotation must be between -90 and 90, or 255".into());
+            }
+            alignment.rotation = rotation as i16;
+        }
+        if let Some(reading_order) = &self.reading_order {
+            alignment.reading_order = parse_reading_order_input(reading_order)?;
+        }
+        Ok(())
+    }
+}
+
+impl WasmNumberFormatPatch {
+    fn to_core_number_format(&self) -> Result<CoreNumberFormat, String> {
+        match self.format_type.as_deref() {
+            Some("general") => Ok(CoreNumberFormat::General),
+            Some("builtin") => Ok(CoreNumberFormat::BuiltIn(
+                self.id
+                    .ok_or_else(|| "builtin number format requires id".to_string())?,
+            )),
+            Some("custom") => Ok(CoreNumberFormat::Custom(
+                self.format_string
+                    .clone()
+                    .ok_or_else(|| "custom number format requires formatString".to_string())?,
+            )),
+            Some(other) => Err(format!("unknown formatType {other:?}")),
+            None if self.id.is_some() => Ok(CoreNumberFormat::BuiltIn(self.id.unwrap())),
+            None if self.format_string.is_some() => Ok(CoreNumberFormat::Custom(
+                self.format_string.clone().unwrap(),
+            )),
+            None => Err("numberFormat requires formatType, id, or formatString".into()),
+        }
+    }
+}
+
+impl WasmCellProtectionPatch {
+    fn apply_to_core_protection(&self, protection: &mut duke_sheets_core::style::Protection) {
+        if let Some(locked) = self.locked {
+            protection.locked = locked;
+        }
+        if let Some(hidden) = self.hidden {
+            protection.hidden = hidden;
+        }
+    }
+}
+
+impl WasmStylePatch {
+    pub fn apply_to_core_style(&self, style: &mut CoreStyle) -> Result<(), String> {
+        if let Some(font_patch) = &self.font {
+            if font_patch.is_full_font() {
+                let mut font = CoreFontStyle::default();
+                font_patch.apply_to_core_font(&mut font)?;
+                style.font = font;
+            } else {
+                font_patch.apply_to_core_font(&mut style.font)?;
+            }
+        }
+
+        if let Some(fill_patch) = &self.fill {
+            style.fill = fill_patch.to_core_fill()?;
+        }
+
+        if let Some(border_patch) = &self.border {
+            if border_patch.is_full_border() {
+                let mut border = CoreBorderStyle::default();
+                border_patch.apply_to_core_border(&mut border)?;
+                style.border = border;
+            } else {
+                border_patch.apply_to_core_border(&mut style.border)?;
+            }
+        }
+
+        if let Some(alignment_patch) = &self.alignment {
+            if alignment_patch.is_full_alignment() {
+                let mut alignment = CoreAlignment::default();
+                alignment_patch.apply_to_core_alignment(&mut alignment)?;
+                style.alignment = alignment;
+            } else {
+                alignment_patch.apply_to_core_alignment(&mut style.alignment)?;
+            }
+        }
+
+        if let Some(number_format_patch) = &self.number_format {
+            style.number_format = number_format_patch.to_core_number_format()?;
+        }
+
+        if let Some(protection_patch) = &self.protection {
+            protection_patch.apply_to_core_protection(&mut style.protection);
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmHyperlink {

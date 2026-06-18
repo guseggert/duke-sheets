@@ -396,6 +396,17 @@ export declare class Worksheet {
    * @param formula - Formula string (e.g., "=SUM(A1:A10)")
    */
   setFormula(address: string, formula: string): void
+  /**
+   * Set or update a cell style by address.
+   *
+   * A full style object returned by `getCellStyle()` can be used to copy a
+   * style. Partial objects update only the provided top-level components.
+   */
+  setCellStyle(address: string, style: JsStylePatch): void
+  /** Set or update a cell style by row/col (0-based). */
+  setCellStyleAt(row: number, col: number, style: JsStylePatch): void
+  /** Set or update the style for all cells in a range (e.g. "A1:C3"). */
+  setRangeStyle(rangeStr: string, style: JsStylePatch): void
   /** Get the raw cell value (not calculated) */
   getCell(address: string): CellValue
   /** Get the raw cell value by row/col (0-based). */
@@ -452,6 +463,17 @@ export interface JsAlignment {
   readingOrder: string
 }
 
+/** Alignment input for style setters. */
+export interface JsAlignmentPatch {
+  horizontal?: string
+  vertical?: string
+  wrapText?: boolean
+  shrinkToFit?: boolean
+  indent?: number
+  rotation?: number
+  readingOrder?: string
+}
+
 /** A standalone auto-filter on a worksheet. */
 export interface JsAutoFilter {
   /** Range string the filter covers (e.g., `"A1:D10"`). */
@@ -491,6 +513,12 @@ export interface JsBorderEdge {
   color: JsColor
 }
 
+/** Border edge input for style setters. */
+export interface JsBorderEdgePatch {
+  style?: string
+  color?: JsColorInput
+}
+
 /** Cell border style. */
 export interface JsBorderStyle {
   left?: JsBorderEdge
@@ -500,6 +528,16 @@ export interface JsBorderStyle {
   diagonal?: JsBorderEdge
   /** One of: `"none"`, `"down"`, `"up"`, `"both"`. */
   diagonalDirection: string
+}
+
+/** Border input for style setters. */
+export interface JsBorderStylePatch {
+  left?: JsBorderEdgePatch
+  right?: JsBorderEdgePatch
+  top?: JsBorderEdgePatch
+  bottom?: JsBorderEdgePatch
+  diagonal?: JsBorderEdgePatch
+  diagonalDirection?: string
 }
 
 /**
@@ -536,6 +574,12 @@ export interface JsCalculationOptions {
 export interface JsCellProtection {
   locked: boolean
   hidden: boolean
+}
+
+/** Cell protection input for style setters. */
+export interface JsCellProtectionPatch {
+  locked?: boolean
+  hidden?: boolean
 }
 
 /** A chart embedded in a worksheet. */
@@ -894,6 +938,22 @@ export interface JsColor {
   paletteIndex?: number
 }
 
+/**
+ * Color input for style setters. Mirrors `JsColor`, but all fields are optional
+ * so callers can pass either a returned color object or a compact patch.
+ */
+export interface JsColorInput {
+  colorType?: string
+  hex?: string
+  r?: number
+  g?: number
+  b?: number
+  a?: number
+  themeIndex?: number
+  tint?: number
+  paletteIndex?: number
+}
+
 /** A cell comment/note. */
 export interface JsComment {
   author: string
@@ -1078,6 +1138,18 @@ export interface JsFillStyle {
   stops?: Array<JsGradientStop>
 }
 
+/** Fill/background input for style setters. */
+export interface JsFillStylePatch {
+  fillType?: string
+  color?: JsColorInput
+  pattern?: string
+  foreground?: JsColorInput
+  background?: JsColorInput
+  gradientType?: string
+  angle?: number
+  stops?: Array<JsGradientStopInput>
+}
+
 /** A filter on a single column. */
 export interface JsFilterColumn {
   colId: number
@@ -1108,6 +1180,21 @@ export interface JsFontStyle {
   scheme?: string
 }
 
+/** Font input for style setters. Missing fields leave the existing font setting unchanged. */
+export interface JsFontStylePatch {
+  name?: string
+  size?: number
+  bold?: boolean
+  italic?: boolean
+  underline?: string
+  strikethrough?: boolean
+  color?: JsColorInput
+  verticalAlign?: string
+  family?: number
+  charset?: number
+  scheme?: string
+}
+
 /** A formula cell with address. */
 export interface JsFormulaCell {
   row: number
@@ -1127,6 +1214,12 @@ export interface JsFreezePanes {
 export interface JsGradientStop {
   position: number
   color: JsColor
+}
+
+/** Gradient color stop input for style setters. */
+export interface JsGradientStopInput {
+  position: number
+  color: JsColorInput
 }
 
 /** A hyperlink attached to a cell. */
@@ -1228,6 +1321,13 @@ export interface JsNumberFormat {
   formatString: string
   /** Whether this format represents a date/time. */
   isDateFormat: boolean
+}
+
+/** Number format input for style setters. */
+export interface JsNumberFormatPatch {
+  formatType?: string
+  id?: number
+  formatString?: string
 }
 
 /** A manual page break (row or column). */
@@ -1401,6 +1501,19 @@ export interface JsStyle {
   alignment: JsAlignment
   numberFormat: JsNumberFormat
   protection: JsCellProtection
+}
+
+/**
+ * Cell style input for style setters. A complete `JsStyle` returned from
+ * `getCellStyle()` is assignable to this type; partial objects act as patches.
+ */
+export interface JsStylePatch {
+  font?: JsFontStylePatch
+  fill?: JsFillStylePatch
+  border?: JsBorderStylePatch
+  alignment?: JsAlignmentPatch
+  numberFormat?: JsNumberFormatPatch
+  protection?: JsCellProtectionPatch
 }
 
 /** An Excel table (ListObject). */

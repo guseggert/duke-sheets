@@ -100,6 +100,92 @@ export interface JsRowsOptions {
   skipBlankValues?: boolean;
 }
 
+export interface ColorInput {
+  colorType?: "auto" | "rgb" | "argb" | "theme" | "indexed";
+  hex?: string;
+  r?: number;
+  g?: number;
+  b?: number;
+  a?: number;
+  themeIndex?: number;
+  tint?: number;
+  paletteIndex?: number;
+}
+
+export interface FontStyleInput {
+  name?: string;
+  size?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: "none" | "single" | "double" | "singleAccounting" | "doubleAccounting";
+  strikethrough?: boolean;
+  color?: ColorInput;
+  verticalAlign?: "baseline" | "superscript" | "subscript";
+  family?: number;
+  charset?: number;
+  scheme?: string;
+}
+
+export interface GradientStopInput {
+  position: number;
+  color: ColorInput;
+}
+
+export interface FillStyleInput {
+  fillType?: "none" | "solid" | "pattern" | "gradient";
+  color?: ColorInput;
+  pattern?: string;
+  foreground?: ColorInput;
+  background?: ColorInput;
+  gradientType?: "linear" | "path";
+  angle?: number;
+  stops?: GradientStopInput[];
+}
+
+export interface BorderEdgeInput {
+  style?: "none" | "thin" | "medium" | "thick" | "dashed" | "dotted" | "double" | "hair" | "mediumDashed" | "dashDot" | "mediumDashDot" | "dashDotDot" | "mediumDashDotDot" | "slantDashDot";
+  color?: ColorInput;
+}
+
+export interface BorderStyleInput {
+  left?: BorderEdgeInput;
+  right?: BorderEdgeInput;
+  top?: BorderEdgeInput;
+  bottom?: BorderEdgeInput;
+  diagonal?: BorderEdgeInput;
+  diagonalDirection?: "none" | "down" | "up" | "both";
+}
+
+export interface AlignmentInput {
+  horizontal?: "general" | "left" | "center" | "right" | "fill" | "justify" | "centerContinuous" | "distributed";
+  vertical?: "top" | "center" | "bottom" | "justify" | "distributed";
+  wrapText?: boolean;
+  shrinkToFit?: boolean;
+  indent?: number;
+  rotation?: number;
+  readingOrder?: "contextDependent" | "leftToRight" | "rightToLeft";
+}
+
+export interface NumberFormatInput {
+  formatType?: "general" | "builtin" | "custom";
+  id?: number;
+  formatString?: string;
+}
+
+export interface CellProtectionInput {
+  locked?: boolean;
+  hidden?: boolean;
+}
+
+export interface StyleInput {
+  font?: FontStyleInput;
+  fill?: FillStyleInput;
+  border?: BorderStyleInput;
+  alignment?: AlignmentInput;
+  numberFormat?: NumberFormatInput;
+  protection?: CellProtectionInput;
+}
+
 export class RowIterator implements IterableIterator<JsRow> {
   constructor(ws: Worksheet, opts?: JsRowsOptions, maxRow?: number);
   [Symbol.iterator](): RowIterator;
@@ -108,6 +194,9 @@ export class RowIterator implements IterableIterator<JsRow> {
 
 export interface Worksheet {
   iterateRows(opts?: JsRowsOptions): RowIterator;
+  setCellStyle(address: string, style: StyleInput): void;
+  setCellStyleAt(row: number, col: number, style: StyleInput): void;
+  setRangeStyle(range: string, style: StyleInput): void;
 }
 "#;
 
@@ -324,6 +413,61 @@ impl Worksheet {
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         ws.set_cell_formula(address, formula).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = setCellStyle)]
+    pub fn set_cell_style(&self, address: &str, style: JsValue) -> Result<(), JsError> {
+        let patch: WasmStylePatch = serde_wasm_bindgen::from_value(style).map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let addr = CellAddress::parse(address)
+            .map_err(|e| JsError::new(&format!("Invalid cell address: {}", e)))?;
+        let mut core_style = ws
+            .cell_style_at(addr.row, addr.col)
+            .cloned()
+            .unwrap_or_default();
+        patch.apply_to_core_style(&mut core_style).map_err(to_js_error)?;
+        ws.set_cell_style_at(addr.row, addr.col, &core_style)
+            .map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = setCellStyleAt)]
+    pub fn set_cell_style_at(&self, row: u32, col: u32, style: JsValue) -> Result<(), JsError> {
+        let patch: WasmStylePatch = serde_wasm_bindgen::from_value(style).map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let mut core_style = ws
+            .cell_style_at(row, col as u16)
+            .cloned()
+            .unwrap_or_default();
+        patch.apply_to_core_style(&mut core_style).map_err(to_js_error)?;
+        ws.set_cell_style_at(row, col as u16, &core_style)
+            .map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = setRangeStyle)]
+    pub fn set_range_style(&self, range_str: &str, style: JsValue) -> Result<(), JsError> {
+        let patch: WasmStylePatch = serde_wasm_bindgen::from_value(style).map_err(to_js_error)?;
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let range = CellRange::parse(range_str)
+            .map_err(|e| JsError::new(&format!("Invalid range: {}", e)))?;
+        for addr in range.cells() {
+            let mut core_style = ws
+                .cell_style_at(addr.row, addr.col)
+                .cloned()
+                .unwrap_or_default();
+            patch.apply_to_core_style(&mut core_style).map_err(to_js_error)?;
+            ws.set_cell_style_at(addr.row, addr.col, &core_style)
+                .map_err(to_js_error)?;
+        }
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = getCell)]

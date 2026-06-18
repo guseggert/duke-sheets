@@ -27,6 +27,13 @@ fn get_string_field(obj: &JsValue, key: &str) -> String {
         .unwrap()
 }
 
+fn get_bool_field(obj: &JsValue, key: &str) -> bool {
+    Reflect::get(obj, &JsValue::from_str(key))
+        .unwrap()
+        .as_bool()
+        .unwrap()
+}
+
 // Workbook Tests
 
 #[wasm_bindgen_test]
@@ -166,6 +173,57 @@ fn test_worksheet_used_range_with_data() {
 
     let range = sheet.used_range().unwrap();
     assert!(!range.is_null());
+}
+
+#[wasm_bindgen_test]
+fn test_worksheet_set_cell_style() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    let font_color = make_options(&[("hex", JsValue::from_str("FFFFFF"))]);
+    let font = make_options(&[
+        ("name", JsValue::from_str("Aptos Display")),
+        ("size", JsValue::from_f64(14.0)),
+        ("bold", JsValue::TRUE),
+        ("color", font_color),
+    ]);
+    let fill_color = make_options(&[("hex", JsValue::from_str("1F4E79"))]);
+    let fill = make_options(&[
+        ("fillType", JsValue::from_str("solid")),
+        ("color", fill_color),
+    ]);
+    let style = make_options(&[("font", font), ("fill", fill)]);
+
+    sheet.set_cell_style("A1", style).unwrap();
+
+    let style = sheet.get_cell_style("A1").unwrap();
+    let font = Reflect::get(&style, &JsValue::from_str("font")).unwrap();
+    let fill = Reflect::get(&style, &JsValue::from_str("fill")).unwrap();
+    let font_color = Reflect::get(&font, &JsValue::from_str("color")).unwrap();
+    let fill_color = Reflect::get(&fill, &JsValue::from_str("color")).unwrap();
+
+    assert_eq!(get_string_field(&font, "name"), "Aptos Display");
+    assert_eq!(get_f64_field(&font, "size"), 14.0);
+    assert!(get_bool_field(&font, "bold"));
+    assert_eq!(get_string_field(&font_color, "hex"), "FFFFFF");
+    assert_eq!(get_string_field(&fill, "fillType"), "solid");
+    assert_eq!(get_string_field(&fill_color, "hex"), "1F4E79");
+}
+
+#[wasm_bindgen_test]
+fn test_worksheet_set_range_style() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    let font = make_options(&[("italic", JsValue::TRUE)]);
+    let style = make_options(&[("font", font)]);
+    sheet.set_range_style("C1:D2", style).unwrap();
+
+    for address in ["C1", "D1", "C2", "D2"] {
+        let style = sheet.get_cell_style(address).unwrap();
+        let font = Reflect::get(&style, &JsValue::from_str("font")).unwrap();
+        assert!(get_bool_field(&font, "italic"));
+    }
 }
 
 // Formula Tests

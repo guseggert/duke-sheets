@@ -9,7 +9,9 @@ use duke_sheets_core::{
         PatternType, ReadingOrder, Style as CoreStyle, Underline, VerticalAlignment,
     },
 };
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 
 use crate::PyCalculationImage;
 
@@ -494,6 +496,810 @@ impl From<&CoreStyle> for PyStyle {
             },
         }
     }
+}
+
+fn style_input_error(message: impl Into<String>) -> PyErr {
+    PyValueError::new_err(message.into())
+}
+
+fn dict_get<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+    Ok(dict.get_item(key)?.filter(|value| !value.is_none()))
+}
+
+fn dict_has(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<bool> {
+    Ok(dict.get_item(key)?.is_some())
+}
+
+fn dict_get_string(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
+    dict_get(dict, key)?
+        .map(|value| value.extract::<String>())
+        .transpose()
+}
+
+fn dict_get_bool(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<bool>> {
+    dict_get(dict, key)?
+        .map(|value| value.extract::<bool>())
+        .transpose()
+}
+
+fn dict_get_f64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f64>> {
+    dict_get(dict, key)?
+        .map(|value| value.extract::<f64>())
+        .transpose()
+}
+
+fn dict_get_u32(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<u32>> {
+    dict_get(dict, key)?
+        .map(|value| value.extract::<u32>())
+        .transpose()
+}
+
+fn dict_get_i32(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<i32>> {
+    dict_get(dict, key)?
+        .map(|value| value.extract::<i32>())
+        .transpose()
+}
+
+fn u32_to_u8(value: u32, field: &str) -> PyResult<u8> {
+    u8::try_from(value).map_err(|_| style_input_error(format!("{field} must be between 0 and 255")))
+}
+
+fn i32_to_i8(value: i32, field: &str) -> PyResult<i8> {
+    i8::try_from(value).map_err(|_| style_input_error(format!("{field} must be between -128 and 127")))
+}
+
+fn parse_color_hex(hex: &str) -> PyResult<CoreColor> {
+    CoreColor::from_hex(hex).ok_or_else(|| {
+        style_input_error("color hex must be 6 or 8 hexadecimal characters, with optional # prefix")
+    })
+}
+
+fn parse_rgb_hex(hex: &str) -> PyResult<CoreColor> {
+    match parse_color_hex(hex)? {
+        CoreColor::Rgb { r, g, b } => Ok(CoreColor::Rgb { r, g, b }),
+        CoreColor::Argb { r, g, b, .. } => Ok(CoreColor::Rgb { r, g, b }),
+        other => Ok(other),
+    }
+}
+
+fn parse_argb_hex(hex: &str) -> PyResult<CoreColor> {
+    match parse_color_hex(hex)? {
+        CoreColor::Rgb { r, g, b } => Ok(CoreColor::Argb { a: 255, r, g, b }),
+        CoreColor::Argb { a, r, g, b } => Ok(CoreColor::Argb { a, r, g, b }),
+        other => Ok(other),
+    }
+}
+
+fn color_parts_to_core(
+    color_type: Option<&str>,
+    hex: Option<&str>,
+    r: Option<u32>,
+    g: Option<u32>,
+    b: Option<u32>,
+    a: Option<u32>,
+    theme_index: Option<u32>,
+    tint: Option<i32>,
+    palette_index: Option<u32>,
+) -> PyResult<CoreColor> {
+    match color_type {
+        Some("auto") => Ok(CoreColor::Auto),
+        Some("rgb") => {
+            if let Some(hex) = hex {
+                parse_rgb_hex(hex)
+            } else {
+                Ok(CoreColor::Rgb {
+                    r: u32_to_u8(r.ok_or_else(|| style_input_error("rgb color requires r"))?, "r")?,
+                    g: u32_to_u8(g.ok_or_else(|| style_input_error("rgb color requires g"))?, "g")?,
+                    b: u32_to_u8(b.ok_or_else(|| style_input_error("rgb color requires b"))?, "b")?,
+                })
+            }
+        }
+        Some("argb") => {
+            if let Some(hex) = hex {
+                parse_argb_hex(hex)
+            } else {
+                Ok(CoreColor::Argb {
+                    a: u32_to_u8(a.unwrap_or(255), "a")?,
+                    r: u32_to_u8(r.ok_or_else(|| style_input_error("argb color requires r"))?, "r")?,
+                    g: u32_to_u8(g.ok_or_else(|| style_input_error("argb color requires g"))?, "g")?,
+                    b: u32_to_u8(b.ok_or_else(|| style_input_error("argb color requires b"))?, "b")?,
+                })
+            }
+        }
+        Some("theme") => Ok(CoreColor::Theme {
+            index: u32_to_u8(
+                theme_index.ok_or_else(|| style_input_error("theme color requires theme_index"))?,
+                "theme_index",
+            )?,
+            tint: i32_to_i8(tint.unwrap_or(0), "tint")?,
+        }),
+        Some("indexed") => Ok(CoreColor::Indexed(u32_to_u8(
+            palette_index.ok_or_else(|| style_input_error("indexed color requires palette_index"))?,
+            "palette_index",
+        )?)),
+        Some(other) => Err(style_input_error(format!("unknown color_type {other:?}"))),
+        None => {
+            if let Some(hex) = hex {
+                parse_color_hex(hex)
+            } else if r.is_some() || g.is_some() || b.is_some() {
+                Ok(CoreColor::Rgb {
+                    r: u32_to_u8(r.ok_or_else(|| style_input_error("rgb color requires r"))?, "r")?,
+                    g: u32_to_u8(g.ok_or_else(|| style_input_error("rgb color requires g"))?, "g")?,
+                    b: u32_to_u8(b.ok_or_else(|| style_input_error("rgb color requires b"))?, "b")?,
+                })
+            } else if let Some(theme_index) = theme_index {
+                Ok(CoreColor::Theme {
+                    index: u32_to_u8(theme_index, "theme_index")?,
+                    tint: i32_to_i8(tint.unwrap_or(0), "tint")?,
+                })
+            } else if let Some(palette_index) = palette_index {
+                Ok(CoreColor::Indexed(u32_to_u8(palette_index, "palette_index")?))
+            } else {
+                Err(style_input_error("color requires color_type, hex, rgb, theme_index, or palette_index"))
+            }
+        }
+    }
+}
+
+fn py_color_to_core(color: &PyColor) -> PyResult<CoreColor> {
+    color_parts_to_core(
+        Some(color.color_type.as_str()),
+        Some(color.hex.as_str()),
+        color.r,
+        color.g,
+        color.b,
+        color.a,
+        color.theme_index,
+        color.tint,
+        color.palette_index,
+    )
+}
+
+fn color_input_to_core(input: &Bound<'_, PyAny>) -> PyResult<CoreColor> {
+    if let Ok(color) = input.extract::<PyRef<PyColor>>() {
+        return py_color_to_core(&color);
+    }
+
+    let dict = input
+        .downcast::<PyDict>()
+        .map_err(|_| style_input_error("color must be a Color or dict"))?;
+    let color_type = dict_get_string(dict, "color_type")?;
+    let hex = dict_get_string(dict, "hex")?;
+    color_parts_to_core(
+        color_type.as_deref(),
+        hex.as_deref(),
+        dict_get_u32(dict, "r")?,
+        dict_get_u32(dict, "g")?,
+        dict_get_u32(dict, "b")?,
+        dict_get_u32(dict, "a")?,
+        dict_get_u32(dict, "theme_index")?,
+        dict_get_i32(dict, "tint")?,
+        dict_get_u32(dict, "palette_index")?,
+    )
+}
+
+fn parse_underline_input(value: &str) -> PyResult<Underline> {
+    match value {
+        "none" => Ok(Underline::None),
+        "single" => Ok(Underline::Single),
+        "double" => Ok(Underline::Double),
+        "singleAccounting" => Ok(Underline::SingleAccounting),
+        "doubleAccounting" => Ok(Underline::DoubleAccounting),
+        other => Err(style_input_error(format!("unknown underline {other:?}"))),
+    }
+}
+
+fn parse_font_vertical_align_input(value: &str) -> PyResult<FontVerticalAlign> {
+    match value {
+        "baseline" => Ok(FontVerticalAlign::Baseline),
+        "superscript" => Ok(FontVerticalAlign::Superscript),
+        "subscript" => Ok(FontVerticalAlign::Subscript),
+        other => Err(style_input_error(format!("unknown vertical_align {other:?}"))),
+    }
+}
+
+fn py_font_to_core(font: &PyFontStyle) -> PyResult<CoreFontStyle> {
+    Ok(CoreFontStyle {
+        name: font.name.clone(),
+        size: font.size,
+        bold: font.bold,
+        italic: font.italic,
+        underline: parse_underline_input(&font.underline)?,
+        strikethrough: font.strikethrough,
+        color: py_color_to_core(&font.color)?,
+        vertical_align: parse_font_vertical_align_input(&font.vertical_align)?,
+        family: font.family.map(|v| u32_to_u8(v, "family")).transpose()?,
+        charset: font.charset.map(|v| u32_to_u8(v, "charset")).transpose()?,
+        scheme: font.scheme.clone(),
+    })
+}
+
+fn is_full_font_dict(dict: &Bound<'_, PyDict>) -> PyResult<bool> {
+    Ok(dict_has(dict, "name")?
+        && dict_has(dict, "size")?
+        && dict_has(dict, "bold")?
+        && dict_has(dict, "italic")?
+        && dict_has(dict, "underline")?
+        && dict_has(dict, "strikethrough")?
+        && dict_has(dict, "color")?
+        && dict_has(dict, "vertical_align")?)
+}
+
+fn apply_font_dict(dict: &Bound<'_, PyDict>, font: &mut CoreFontStyle) -> PyResult<()> {
+    if let Some(name) = dict_get_string(dict, "name")? {
+        font.name = name;
+    }
+    if let Some(size) = dict_get_f64(dict, "size")? {
+        font.size = size;
+    }
+    if let Some(bold) = dict_get_bool(dict, "bold")? {
+        font.bold = bold;
+    }
+    if let Some(italic) = dict_get_bool(dict, "italic")? {
+        font.italic = italic;
+    }
+    if let Some(underline) = dict_get_string(dict, "underline")? {
+        font.underline = parse_underline_input(&underline)?;
+    }
+    if let Some(strikethrough) = dict_get_bool(dict, "strikethrough")? {
+        font.strikethrough = strikethrough;
+    }
+    if let Some(color) = dict_get(dict, "color")? {
+        font.color = color_input_to_core(&color)?;
+    }
+    if let Some(vertical_align) = dict_get_string(dict, "vertical_align")? {
+        font.vertical_align = parse_font_vertical_align_input(&vertical_align)?;
+    }
+    if let Some(family) = dict_get_u32(dict, "family")? {
+        font.family = Some(u32_to_u8(family, "family")?);
+    }
+    if let Some(charset) = dict_get_u32(dict, "charset")? {
+        font.charset = Some(u32_to_u8(charset, "charset")?);
+    }
+    if let Some(scheme) = dict_get_string(dict, "scheme")? {
+        font.scheme = Some(scheme);
+    }
+    Ok(())
+}
+
+fn apply_font_input(input: &Bound<'_, PyAny>, font: &mut CoreFontStyle) -> PyResult<()> {
+    if let Ok(py_font) = input.extract::<PyRef<PyFontStyle>>() {
+        *font = py_font_to_core(&py_font)?;
+        return Ok(());
+    }
+
+    let dict = input
+        .downcast::<PyDict>()
+        .map_err(|_| style_input_error("font must be a FontStyle or dict"))?;
+    if is_full_font_dict(dict)? {
+        let mut next = CoreFontStyle::default();
+        apply_font_dict(dict, &mut next)?;
+        *font = next;
+    } else {
+        apply_font_dict(dict, font)?;
+    }
+    Ok(())
+}
+
+fn parse_pattern_type_input(value: &str) -> PyResult<PatternType> {
+    match value {
+        "none" => Ok(PatternType::None),
+        "solid" => Ok(PatternType::Solid),
+        "mediumGray" => Ok(PatternType::MediumGray),
+        "darkGray" => Ok(PatternType::DarkGray),
+        "lightGray" => Ok(PatternType::LightGray),
+        "darkHorizontal" => Ok(PatternType::DarkHorizontal),
+        "darkVertical" => Ok(PatternType::DarkVertical),
+        "darkDown" => Ok(PatternType::DarkDown),
+        "darkUp" => Ok(PatternType::DarkUp),
+        "darkGrid" => Ok(PatternType::DarkGrid),
+        "darkTrellis" => Ok(PatternType::DarkTrellis),
+        "lightHorizontal" => Ok(PatternType::LightHorizontal),
+        "lightVertical" => Ok(PatternType::LightVertical),
+        "lightDown" => Ok(PatternType::LightDown),
+        "lightUp" => Ok(PatternType::LightUp),
+        "lightGrid" => Ok(PatternType::LightGrid),
+        "lightTrellis" => Ok(PatternType::LightTrellis),
+        "gray125" => Ok(PatternType::Gray125),
+        "gray0625" => Ok(PatternType::Gray0625),
+        other => Err(style_input_error(format!("unknown fill pattern {other:?}"))),
+    }
+}
+
+fn parse_gradient_type_input(value: &str) -> PyResult<GradientType> {
+    match value {
+        "linear" => Ok(GradientType::Linear),
+        "path" => Ok(GradientType::Path),
+        other => Err(style_input_error(format!("unknown gradient_type {other:?}"))),
+    }
+}
+
+fn py_fill_to_core(fill: &PyFillStyle) -> PyResult<CoreFillStyle> {
+    match fill.fill_type.as_str() {
+        "none" => Ok(CoreFillStyle::None),
+        "solid" => Ok(CoreFillStyle::Solid {
+            color: py_color_to_core(
+                fill.color
+                    .as_ref()
+                    .ok_or_else(|| style_input_error("solid fill requires color"))?,
+            )?,
+        }),
+        "pattern" => Ok(CoreFillStyle::Pattern {
+            pattern: parse_pattern_type_input(
+                fill.pattern
+                    .as_deref()
+                    .ok_or_else(|| style_input_error("pattern fill requires pattern"))?,
+            )?,
+            foreground: py_color_to_core(
+                fill.foreground
+                    .as_ref()
+                    .ok_or_else(|| style_input_error("pattern fill requires foreground"))?,
+            )?,
+            background: py_color_to_core(
+                fill.background
+                    .as_ref()
+                    .ok_or_else(|| style_input_error("pattern fill requires background"))?,
+            )?,
+        }),
+        "gradient" => Ok(CoreFillStyle::Gradient {
+            gradient_type: parse_gradient_type_input(fill.gradient_type.as_deref().unwrap_or("linear"))?,
+            angle: fill.angle.unwrap_or(0.0),
+            stops: fill
+                .stops
+                .as_ref()
+                .ok_or_else(|| style_input_error("gradient fill requires stops"))?
+                .iter()
+                .map(|stop| {
+                    Ok(core::style::GradientStop {
+                        position: stop.position,
+                        color: py_color_to_core(&stop.color)?,
+                    })
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+        }),
+        other => Err(style_input_error(format!("unknown fill_type {other:?}"))),
+    }
+}
+
+fn fill_dict_to_core(dict: &Bound<'_, PyDict>) -> PyResult<CoreFillStyle> {
+    match dict_get_string(dict, "fill_type")?.as_deref() {
+        Some("none") => Ok(CoreFillStyle::None),
+        Some("solid") | None if dict_get(dict, "color")?.is_some() => Ok(CoreFillStyle::Solid {
+            color: color_input_to_core(
+                &dict_get(dict, "color")?
+                    .ok_or_else(|| style_input_error("solid fill requires color"))?,
+            )?,
+        }),
+        Some("pattern") => Ok(CoreFillStyle::Pattern {
+            pattern: parse_pattern_type_input(
+                dict_get_string(dict, "pattern")?
+                    .as_deref()
+                    .ok_or_else(|| style_input_error("pattern fill requires pattern"))?,
+            )?,
+            foreground: color_input_to_core(
+                &dict_get(dict, "foreground")?
+                    .ok_or_else(|| style_input_error("pattern fill requires foreground"))?,
+            )?,
+            background: color_input_to_core(
+                &dict_get(dict, "background")?
+                    .ok_or_else(|| style_input_error("pattern fill requires background"))?,
+            )?,
+        }),
+        Some("gradient") => {
+            let stops_any = dict_get(dict, "stops")?
+                .ok_or_else(|| style_input_error("gradient fill requires stops"))?
+                .downcast_into::<PyList>()
+                .map_err(|_| style_input_error("gradient fill stops must be a list"))?;
+            let stops = stops_any
+                .iter()
+                .map(|stop| {
+                    let stop = stop
+                        .downcast::<PyDict>()
+                        .map_err(|_| style_input_error("gradient stop must be a dict"))?;
+                    let position = dict_get_f64(&stop, "position")?
+                        .ok_or_else(|| style_input_error("gradient stop requires position"))?;
+                    let color = color_input_to_core(
+                        &dict_get(&stop, "color")?
+                            .ok_or_else(|| style_input_error("gradient stop requires color"))?,
+                    )?;
+                    Ok(core::style::GradientStop { position, color })
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(CoreFillStyle::Gradient {
+                gradient_type: parse_gradient_type_input(
+                    dict_get_string(dict, "gradient_type")?.as_deref().unwrap_or("linear"),
+                )?,
+                angle: dict_get_f64(dict, "angle")?.unwrap_or(0.0),
+                stops,
+            })
+        }
+        Some(other) => Err(style_input_error(format!("unknown fill_type {other:?}"))),
+        None => Err(style_input_error("fill patch requires fill_type or color")),
+    }
+}
+
+fn apply_fill_input(input: &Bound<'_, PyAny>, fill: &mut CoreFillStyle) -> PyResult<()> {
+    if let Ok(py_fill) = input.extract::<PyRef<PyFillStyle>>() {
+        *fill = py_fill_to_core(&py_fill)?;
+        return Ok(());
+    }
+
+    let dict = input
+        .downcast::<PyDict>()
+        .map_err(|_| style_input_error("fill must be a FillStyle or dict"))?;
+    *fill = fill_dict_to_core(dict)?;
+    Ok(())
+}
+
+fn parse_border_line_style_input(value: &str) -> PyResult<CoreBorderLineStyle> {
+    match value {
+        "none" => Ok(CoreBorderLineStyle::None),
+        "thin" => Ok(CoreBorderLineStyle::Thin),
+        "medium" => Ok(CoreBorderLineStyle::Medium),
+        "thick" => Ok(CoreBorderLineStyle::Thick),
+        "dashed" => Ok(CoreBorderLineStyle::Dashed),
+        "dotted" => Ok(CoreBorderLineStyle::Dotted),
+        "double" => Ok(CoreBorderLineStyle::Double),
+        "hair" => Ok(CoreBorderLineStyle::Hair),
+        "mediumDashed" => Ok(CoreBorderLineStyle::MediumDashed),
+        "dashDot" => Ok(CoreBorderLineStyle::DashDot),
+        "mediumDashDot" => Ok(CoreBorderLineStyle::MediumDashDot),
+        "dashDotDot" => Ok(CoreBorderLineStyle::DashDotDot),
+        "mediumDashDotDot" => Ok(CoreBorderLineStyle::MediumDashDotDot),
+        "slantDashDot" => Ok(CoreBorderLineStyle::SlantDashDot),
+        other => Err(style_input_error(format!("unknown border style {other:?}"))),
+    }
+}
+
+fn parse_diagonal_direction_input(value: &str) -> PyResult<DiagonalDirection> {
+    match value {
+        "none" => Ok(DiagonalDirection::None),
+        "down" => Ok(DiagonalDirection::Down),
+        "up" => Ok(DiagonalDirection::Up),
+        "both" => Ok(DiagonalDirection::Both),
+        other => Err(style_input_error(format!("unknown diagonal_direction {other:?}"))),
+    }
+}
+
+fn py_border_edge_to_core(edge: &PyBorderEdge) -> PyResult<Option<CoreBorderEdge>> {
+    let style = parse_border_line_style_input(&edge.style)?;
+    if style == CoreBorderLineStyle::None {
+        Ok(None)
+    } else {
+        Ok(Some(CoreBorderEdge::new(style, py_color_to_core(&edge.color)?)))
+    }
+}
+
+fn apply_border_edge_input(
+    input: &Bound<'_, PyAny>,
+    existing: Option<&CoreBorderEdge>,
+) -> PyResult<Option<CoreBorderEdge>> {
+    if let Ok(py_edge) = input.extract::<PyRef<PyBorderEdge>>() {
+        return py_border_edge_to_core(&py_edge);
+    }
+
+    let dict = input
+        .downcast::<PyDict>()
+        .map_err(|_| style_input_error("border edge must be a BorderEdge or dict"))?;
+    let parsed_style = dict_get_string(dict, "style")?
+        .as_deref()
+        .map(parse_border_line_style_input)
+        .transpose()?;
+    if parsed_style == Some(CoreBorderLineStyle::None) {
+        return Ok(None);
+    }
+
+    let mut edge = existing
+        .cloned()
+        .unwrap_or_else(|| CoreBorderEdge::new(CoreBorderLineStyle::Thin, CoreColor::BLACK));
+    if let Some(style) = parsed_style {
+        edge.style = style;
+    }
+    if let Some(color) = dict_get(dict, "color")? {
+        edge.color = color_input_to_core(&color)?;
+    }
+    Ok(Some(edge))
+}
+
+fn py_border_to_core(border: &PyBorderStyle) -> PyResult<CoreBorderStyle> {
+    Ok(CoreBorderStyle {
+        left: border
+            .left
+            .as_ref()
+            .map(py_border_edge_to_core)
+            .transpose()?
+            .flatten(),
+        right: border
+            .right
+            .as_ref()
+            .map(py_border_edge_to_core)
+            .transpose()?
+            .flatten(),
+        top: border
+            .top
+            .as_ref()
+            .map(py_border_edge_to_core)
+            .transpose()?
+            .flatten(),
+        bottom: border
+            .bottom
+            .as_ref()
+            .map(py_border_edge_to_core)
+            .transpose()?
+            .flatten(),
+        diagonal: border
+            .diagonal
+            .as_ref()
+            .map(py_border_edge_to_core)
+            .transpose()?
+            .flatten(),
+        diagonal_direction: parse_diagonal_direction_input(&border.diagonal_direction)?,
+    })
+}
+
+fn apply_border_dict(dict: &Bound<'_, PyDict>, border: &mut CoreBorderStyle) -> PyResult<()> {
+    if let Some(edge) = dict_get(dict, "left")? {
+        border.left = apply_border_edge_input(&edge, border.left.as_ref())?;
+    }
+    if let Some(edge) = dict_get(dict, "right")? {
+        border.right = apply_border_edge_input(&edge, border.right.as_ref())?;
+    }
+    if let Some(edge) = dict_get(dict, "top")? {
+        border.top = apply_border_edge_input(&edge, border.top.as_ref())?;
+    }
+    if let Some(edge) = dict_get(dict, "bottom")? {
+        border.bottom = apply_border_edge_input(&edge, border.bottom.as_ref())?;
+    }
+    if let Some(edge) = dict_get(dict, "diagonal")? {
+        border.diagonal = apply_border_edge_input(&edge, border.diagonal.as_ref())?;
+    }
+    if let Some(direction) = dict_get_string(dict, "diagonal_direction")? {
+        border.diagonal_direction = parse_diagonal_direction_input(&direction)?;
+    }
+    Ok(())
+}
+
+fn apply_border_input(input: &Bound<'_, PyAny>, border: &mut CoreBorderStyle) -> PyResult<()> {
+    if let Ok(py_border) = input.extract::<PyRef<PyBorderStyle>>() {
+        *border = py_border_to_core(&py_border)?;
+        return Ok(());
+    }
+
+    let dict = input
+        .downcast::<PyDict>()
+        .map_err(|_| style_input_error("border must be a BorderStyle or dict"))?;
+    if dict_has(dict, "diagonal_direction")? {
+        let mut next = CoreBorderStyle::default();
+        apply_border_dict(dict, &mut next)?;
+        *border = next;
+    } else {
+        apply_border_dict(dict, border)?;
+    }
+    Ok(())
+}
+
+fn parse_horizontal_alignment_input(value: &str) -> PyResult<HorizontalAlignment> {
+    match value {
+        "general" => Ok(HorizontalAlignment::General),
+        "left" => Ok(HorizontalAlignment::Left),
+        "center" => Ok(HorizontalAlignment::Center),
+        "right" => Ok(HorizontalAlignment::Right),
+        "fill" => Ok(HorizontalAlignment::Fill),
+        "justify" => Ok(HorizontalAlignment::Justify),
+        "centerContinuous" => Ok(HorizontalAlignment::CenterContinuous),
+        "distributed" => Ok(HorizontalAlignment::Distributed),
+        other => Err(style_input_error(format!("unknown horizontal alignment {other:?}"))),
+    }
+}
+
+fn parse_vertical_alignment_input(value: &str) -> PyResult<VerticalAlignment> {
+    match value {
+        "top" => Ok(VerticalAlignment::Top),
+        "center" => Ok(VerticalAlignment::Center),
+        "bottom" => Ok(VerticalAlignment::Bottom),
+        "justify" => Ok(VerticalAlignment::Justify),
+        "distributed" => Ok(VerticalAlignment::Distributed),
+        other => Err(style_input_error(format!("unknown vertical alignment {other:?}"))),
+    }
+}
+
+fn parse_reading_order_input(value: &str) -> PyResult<ReadingOrder> {
+    match value {
+        "contextDependent" => Ok(ReadingOrder::ContextDependent),
+        "leftToRight" => Ok(ReadingOrder::LeftToRight),
+        "rightToLeft" => Ok(ReadingOrder::RightToLeft),
+        other => Err(style_input_error(format!("unknown reading_order {other:?}"))),
+    }
+}
+
+fn py_alignment_to_core(alignment: &PyAlignment) -> PyResult<CoreAlignment> {
+    Ok(CoreAlignment {
+        horizontal: parse_horizontal_alignment_input(&alignment.horizontal)?,
+        vertical: parse_vertical_alignment_input(&alignment.vertical)?,
+        wrap_text: alignment.wrap_text,
+        shrink_to_fit: alignment.shrink_to_fit,
+        indent: u32_to_u8(alignment.indent, "indent")?,
+        rotation: alignment.rotation as i16,
+        reading_order: parse_reading_order_input(&alignment.reading_order)?,
+    })
+}
+
+fn is_full_alignment_dict(dict: &Bound<'_, PyDict>) -> PyResult<bool> {
+    Ok(dict_has(dict, "horizontal")?
+        && dict_has(dict, "vertical")?
+        && dict_has(dict, "wrap_text")?
+        && dict_has(dict, "shrink_to_fit")?
+        && dict_has(dict, "indent")?
+        && dict_has(dict, "rotation")?
+        && dict_has(dict, "reading_order")?)
+}
+
+fn apply_alignment_dict(dict: &Bound<'_, PyDict>, alignment: &mut CoreAlignment) -> PyResult<()> {
+    if let Some(horizontal) = dict_get_string(dict, "horizontal")? {
+        alignment.horizontal = parse_horizontal_alignment_input(&horizontal)?;
+    }
+    if let Some(vertical) = dict_get_string(dict, "vertical")? {
+        alignment.vertical = parse_vertical_alignment_input(&vertical)?;
+    }
+    if let Some(wrap_text) = dict_get_bool(dict, "wrap_text")? {
+        alignment.wrap_text = wrap_text;
+    }
+    if let Some(shrink_to_fit) = dict_get_bool(dict, "shrink_to_fit")? {
+        alignment.shrink_to_fit = shrink_to_fit;
+    }
+    if let Some(indent) = dict_get_u32(dict, "indent")? {
+        alignment.indent = u32_to_u8(indent, "indent")?;
+    }
+    if let Some(rotation) = dict_get_i32(dict, "rotation")? {
+        if !((-90..=90).contains(&rotation) || rotation == 255) {
+            return Err(style_input_error("rotation must be between -90 and 90, or 255"));
+        }
+        alignment.rotation = rotation as i16;
+    }
+    if let Some(reading_order) = dict_get_string(dict, "reading_order")? {
+        alignment.reading_order = parse_reading_order_input(&reading_order)?;
+    }
+    Ok(())
+}
+
+fn apply_alignment_input(input: &Bound<'_, PyAny>, alignment: &mut CoreAlignment) -> PyResult<()> {
+    if let Ok(py_alignment) = input.extract::<PyRef<PyAlignment>>() {
+        *alignment = py_alignment_to_core(&py_alignment)?;
+        return Ok(());
+    }
+
+    let dict = input
+        .downcast::<PyDict>()
+        .map_err(|_| style_input_error("alignment must be an Alignment or dict"))?;
+    if is_full_alignment_dict(dict)? {
+        let mut next = CoreAlignment::default();
+        apply_alignment_dict(dict, &mut next)?;
+        *alignment = next;
+    } else {
+        apply_alignment_dict(dict, alignment)?;
+    }
+    Ok(())
+}
+
+fn py_number_format_to_core(number_format: &PyNumberFormat) -> PyResult<CoreNumberFormat> {
+    match number_format.format_type.as_str() {
+        "general" => Ok(CoreNumberFormat::General),
+        "builtin" => Ok(CoreNumberFormat::BuiltIn(
+            number_format
+                .id
+                .ok_or_else(|| style_input_error("builtin number format requires id"))?,
+        )),
+        "custom" => Ok(CoreNumberFormat::Custom(number_format.format_string.clone())),
+        other => Err(style_input_error(format!("unknown format_type {other:?}"))),
+    }
+}
+
+fn number_format_dict_to_core(dict: &Bound<'_, PyDict>) -> PyResult<CoreNumberFormat> {
+    match dict_get_string(dict, "format_type")?.as_deref() {
+        Some("general") => Ok(CoreNumberFormat::General),
+        Some("builtin") => Ok(CoreNumberFormat::BuiltIn(
+            dict_get_u32(dict, "id")?
+                .ok_or_else(|| style_input_error("builtin number format requires id"))?,
+        )),
+        Some("custom") => Ok(CoreNumberFormat::Custom(
+            dict_get_string(dict, "format_string")?
+                .ok_or_else(|| style_input_error("custom number format requires format_string"))?,
+        )),
+        Some(other) => Err(style_input_error(format!("unknown format_type {other:?}"))),
+        None if dict_get_u32(dict, "id")?.is_some() => {
+            Ok(CoreNumberFormat::BuiltIn(dict_get_u32(dict, "id")?.unwrap()))
+        }
+        None if dict_get_string(dict, "format_string")?.is_some() => Ok(CoreNumberFormat::Custom(
+            dict_get_string(dict, "format_string")?.unwrap(),
+        )),
+        None => Err(style_input_error("number_format requires format_type, id, or format_string")),
+    }
+}
+
+fn apply_number_format_input(
+    input: &Bound<'_, PyAny>,
+    number_format: &mut CoreNumberFormat,
+) -> PyResult<()> {
+    if let Ok(py_number_format) = input.extract::<PyRef<PyNumberFormat>>() {
+        *number_format = py_number_format_to_core(&py_number_format)?;
+        return Ok(());
+    }
+
+    let dict = input
+        .downcast::<PyDict>()
+        .map_err(|_| style_input_error("number_format must be a NumberFormat or dict"))?;
+    *number_format = number_format_dict_to_core(dict)?;
+    Ok(())
+}
+
+fn py_style_to_core(style: &PyStyle) -> PyResult<CoreStyle> {
+    Ok(CoreStyle {
+        font: py_font_to_core(&style.font)?,
+        fill: py_fill_to_core(&style.fill)?,
+        border: py_border_to_core(&style.border)?,
+        alignment: py_alignment_to_core(&style.alignment)?,
+        number_format: py_number_format_to_core(&style.number_format)?,
+        protection: core::style::Protection {
+            locked: style.protection.locked,
+            hidden: style.protection.hidden,
+        },
+    })
+}
+
+fn apply_protection_input(
+    input: &Bound<'_, PyAny>,
+    protection: &mut core::style::Protection,
+) -> PyResult<()> {
+    if let Ok(py_protection) = input.extract::<PyRef<PyCellProtection>>() {
+        protection.locked = py_protection.locked;
+        protection.hidden = py_protection.hidden;
+        return Ok(());
+    }
+
+    let dict = input
+        .downcast::<PyDict>()
+        .map_err(|_| style_input_error("protection must be a CellProtection or dict"))?;
+    if let Some(locked) = dict_get_bool(dict, "locked")? {
+        protection.locked = locked;
+    }
+    if let Some(hidden) = dict_get_bool(dict, "hidden")? {
+        protection.hidden = hidden;
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_style_input_to_core(
+    input: &Bound<'_, PyAny>,
+    style: &mut CoreStyle,
+) -> PyResult<()> {
+    if let Ok(py_style) = input.extract::<PyRef<PyStyle>>() {
+        *style = py_style_to_core(&py_style)?;
+        return Ok(());
+    }
+
+    let dict = input
+        .downcast::<PyDict>()
+        .map_err(|_| style_input_error("style must be a Style or dict"))?;
+
+    if let Some(font) = dict_get(dict, "font")? {
+        apply_font_input(&font, &mut style.font)?;
+    }
+    if let Some(fill) = dict_get(dict, "fill")? {
+        apply_fill_input(&fill, &mut style.fill)?;
+    }
+    if let Some(border) = dict_get(dict, "border")? {
+        apply_border_input(&border, &mut style.border)?;
+    }
+    if let Some(alignment) = dict_get(dict, "alignment")? {
+        apply_alignment_input(&alignment, &mut style.alignment)?;
+    }
+    if let Some(number_format) = dict_get(dict, "number_format")? {
+        apply_number_format_input(&number_format, &mut style.number_format)?;
+    }
+    if let Some(protection) = dict_get(dict, "protection")? {
+        apply_protection_input(&protection, &mut style.protection)?;
+    }
+    Ok(())
 }
 
 #[pyclass(name = "Hyperlink")]
