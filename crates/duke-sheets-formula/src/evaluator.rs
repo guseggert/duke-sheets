@@ -188,6 +188,9 @@ pub struct EvaluationContext<'a> {
     pub web_service_fn: Option<&'a (dyn Fn(&str) -> Option<String> + Send + Sync)>,
     /// Optional RTD callback.
     pub rtd_fn: Option<&'a (dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync)>,
+    /// Optional external add-in function callback for `[N]!Name(args)` calls.
+    pub external_fn:
+        Option<&'a (dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync)>,
     /// Optional IMAGE metadata sink.
     pub image_sink: Option<&'a (dyn Fn(usize, u32, u16, ImageInfo) + Send + Sync)>,
     /// Shared evaluation cache (range materialization, lookup indexes, sheet names).
@@ -204,6 +207,7 @@ impl<'a> EvaluationContext<'a> {
             current_col: col,
             web_service_fn: None,
             rtd_fn: None,
+            external_fn: None,
             image_sink: None,
             eval_cache: None,
         }
@@ -218,6 +222,7 @@ impl<'a> EvaluationContext<'a> {
             current_col: 0,
             web_service_fn: None,
             rtd_fn: None,
+            external_fn: None,
             image_sink: None,
             eval_cache: None,
         }
@@ -795,6 +800,10 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
         FormulaExpr::UnaryOp { op, operand } => evaluate_unary_op(*op, operand, ctx),
 
         FormulaExpr::Function { name, args } => evaluate_function(name, args, ctx),
+
+        FormulaExpr::ExternalFunction { book, name, args } => {
+            evaluate_external_function(book, name, args, ctx)
+        }
 
         FormulaExpr::Array(rows) => {
             let mut result_rows = Vec::new();
@@ -2108,6 +2117,58 @@ fn evaluate_vlookup_fast(
 }
 
 /// Evaluate a function call
+/// Evaluate an external add-in function call (`[N]!Name(args)`) by delegating to the host's
+/// `external_fn` callback. Args are evaluated then stringified. Unresolved calls bubble up so
+/// workbook calculation can preserve the formula cell's cached value.
+fn evaluate_external_function(
+    book: &str,
+    name: &str,
+    args: &[FormulaExpr],
+    ctx: &EvaluationContext,
+) -> FormulaResult<FormulaValue> {
+    let mut arg_strings = Vec::with_capacity(args.len());
+    for arg in args {
+        let value = evaluate(arg, ctx)?;
+        if let FormulaValue::Error(e) = value {
+            return Ok(FormulaValue::Error(e));
+        }
+        arg_strings.push(external_arg_to_string(&value));
+    }
+
+    match ctx.external_fn {
+        Some(handler) => handler(book, name, &arg_strings).ok_or_else(|| {
+            FormulaError::ExternalFunctionUnresolved(format!("[{book}]!{name}"))
+        }),
+        None => Err(FormulaError::ExternalFunctionUnresolved(format!(
+            "[{book}]!{name}"
+        ))),
+    }
+}
+
+/// Render an evaluated argument as the string the host callback receives.
+fn external_arg_to_string(value: &FormulaValue) -> String {
+    match value {
+        FormulaValue::String(s) => s.clone(),
+        FormulaValue::Number(n) => {
+            if n.fract() == 0.0 && n.is_finite() {
+                format!("{}", *n as i64)
+            } else {
+                format!("{}", n)
+            }
+        }
+        FormulaValue::Boolean(b) => {
+            if *b {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        FormulaValue::Empty => String::new(),
+        // Errors are returned early above; arrays aren't expected as add-in args.
+        FormulaValue::Error(_) | FormulaValue::Array { .. } => String::new(),
+    }
+}
+
 fn evaluate_function(
     name: &str,
     args: &[FormulaExpr],

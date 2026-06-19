@@ -1072,6 +1072,32 @@ fn test_roundtrip_atp_addin_functions() {
     }
 }
 
+#[test]
+fn test_roundtrip_external_udf_formula_text() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet
+        .set_cell_formula("A1", r#"=[1]!TBLink("acct")"#)
+        .unwrap();
+    sheet
+        .set_formula_result(0, 0, CellValue::Number(42.0))
+        .unwrap();
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    let sheet2 = wb2.worksheet(0).unwrap();
+
+    assert_eq!(
+        formula_text_at(sheet2, "A1"),
+        Some(r#"=[1]!TBLink("acct")"#)
+    );
+    assert_eq!(
+        sheet2.get_calculated_value_at(0, 0),
+        Some(&CellValue::Number(42.0))
+    );
+}
+
 /// Test roundtrip of formula with string cached value
 #[test]
 fn test_roundtrip_formula_cached_string() {

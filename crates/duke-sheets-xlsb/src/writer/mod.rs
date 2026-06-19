@@ -9,7 +9,7 @@ mod vml;
 mod workbook;
 mod worksheet;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Seek, Write};
 use std::path::Path;
 
@@ -132,6 +132,13 @@ impl XlsbWriter {
         });
 
         let xlfn_names = collect_xlfn_names(workbook);
+        let external_name_list = collect_external_addin_names(workbook);
+        let external_names: HashMap<String, u32> = external_name_list
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| (name.to_ascii_uppercase(), (idx + 1) as u32))
+            .collect();
+        let external_ixti = (!external_names.is_empty()).then_some(0u16);
 
         // Names emitted to BrtName must be enumerable from the
         // CompileContext so PtgName can resolve text → ilbl. The list
@@ -143,6 +150,8 @@ impl XlsbWriter {
             xlfn_names: xlfn_names.clone(),
             defined_names: Vec::new(),
             defined_name_classes: Vec::new(),
+            external_names: external_names.clone(),
+            external_ixti,
         };
         let mut defined_names: Vec<String> = Vec::new();
         // Body class per name: range-bodied names must keep R-class
@@ -164,7 +173,14 @@ impl XlsbWriter {
         Self::write_root_rels(&mut zip, &options)?;
         Self::write_workbook_rels(&mut zip, &options, workbook, &sst)?;
         Self::write_doc_props(&mut zip, &options)?;
-        workbook::write_workbook(&mut zip, &options, workbook, has_formulas, &xlfn_names)?;
+        workbook::write_workbook(
+            &mut zip,
+            &options,
+            workbook,
+            has_formulas,
+            &xlfn_names,
+            &external_name_list,
+        )?;
         let (style_mapping, rich_font_ids, dxf_mapping) =
             styles::write_styles(&mut zip, &options, workbook, &sst.rich_fonts)?;
         shared_strings::write_sst(&mut zip, &options, &sst, &rich_font_ids)?;
@@ -193,6 +209,8 @@ impl XlsbWriter {
                 xlfn_names: xlfn_names.clone(),
                 defined_names: defined_names.clone(),
                 defined_name_classes: defined_name_classes.clone(),
+                external_names: external_names.clone(),
+                external_ixti,
             };
 
             let has_raw_drawing = !ws.raw_drawing_objects.is_empty();
@@ -580,6 +598,62 @@ fn collect_xlfn_from_expr(expr: &FormulaExpr, names: &mut BTreeSet<String>) {
             for row in rows {
                 for cell in row {
                     collect_xlfn_from_expr(cell, names);
+                }
+            }
+        }
+        FormulaExpr::ExternalFunction { args, .. } => {
+            for arg in args {
+                collect_xlfn_from_expr(arg, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_external_addin_names(workbook: &Workbook) -> Vec<String> {
+    let mut names = BTreeMap::new();
+    for i in 0..workbook.sheet_count() {
+        let ws = workbook.worksheet(i).unwrap();
+        for (r, c, _) in ws.iter_cells() {
+            if let Some(fd) = ws.formula_data_at(r, c) {
+                let text = if fd.text.starts_with('=') {
+                    fd.text.clone()
+                } else {
+                    format!("={}", fd.text)
+                };
+                if let Ok(expr) = parse_formula(&text) {
+                    collect_external_addin_names_expr(&expr, &mut names);
+                }
+            }
+        }
+    }
+    names.into_values().collect()
+}
+
+fn collect_external_addin_names_expr(expr: &FormulaExpr, names: &mut BTreeMap<String, String>) {
+    match expr {
+        FormulaExpr::ExternalFunction { name, args, .. } => {
+            names
+                .entry(name.to_ascii_uppercase())
+                .or_insert_with(|| name.clone());
+            for arg in args {
+                collect_external_addin_names_expr(arg, names);
+            }
+        }
+        FormulaExpr::Function { args, .. } => {
+            for arg in args {
+                collect_external_addin_names_expr(arg, names);
+            }
+        }
+        FormulaExpr::BinaryOp { left, right, .. } => {
+            collect_external_addin_names_expr(left, names);
+            collect_external_addin_names_expr(right, names);
+        }
+        FormulaExpr::UnaryOp { operand, .. } => collect_external_addin_names_expr(operand, names),
+        FormulaExpr::Array(rows) => {
+            for row in rows {
+                for cell in row {
+                    collect_external_addin_names_expr(cell, names);
                 }
             }
         }

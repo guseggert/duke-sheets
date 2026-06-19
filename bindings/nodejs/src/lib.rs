@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::{
-    CalculationOptions, CalculationStats as CoreCalculationStats, ImageSizing,
+    CalculationOptions, CalculationStats as CoreCalculationStats, FormulaValue, ImageSizing,
     WorkbookCalculationExt, WorkbookExt,
 };
 use duke_sheets_core::{
@@ -262,6 +262,7 @@ impl JsCalculationOptions {
             max_threads: self.max_threads.map(|n| n as usize),
             web_service_fn: None,
             rtd_fn: None,
+            external_fn: None,
         }
     }
 }
@@ -953,7 +954,7 @@ impl Workbook {
 
     /// Calculate all formulas in the workbook.
     ///
-    /// Optionally accepts calculation options. Callbacks (`webServiceFn`, `rtdFn`)
+    /// Optionally accepts calculation options. Callbacks (`webServiceFn`, `rtdFn`, `externalFn`)
     /// are only supported on the async path via `calculateAsync`.
     ///
     /// @param options - Optional calculation options
@@ -1144,7 +1145,7 @@ impl Workbook {
     /// @param options - Optional calculation options with optional callbacks
     /// @returns Promise<CalculationStats>
     #[napi(
-        ts_args_type = "options?: JsCalculationOptions & { webServiceFn?: (url: string) => Promise<string | null | undefined>; rtdFn?: (progId: string, server: string, topics: string[]) => Promise<string | null | undefined> }",
+        ts_args_type = "options?: JsCalculationOptions & { webServiceFn?: (url: string) => Promise<string | null | undefined>; rtdFn?: (progId: string, server: string, topics: string[]) => Promise<string | null | undefined>; externalFn?: (book: string, name: string, args: string[]) => Promise<string | null | undefined>; externalFnFn?: (book: string, name: string, args: string[]) => Promise<string | null | undefined> }",
         ts_return_type = "Promise<CalculationStats>"
     )]
     pub fn calculate_async<'env>(
@@ -1168,6 +1169,11 @@ impl Workbook {
                 try_get_property(&options, "webServiceFn")?;
             let rtd_js_fn: Option<Function<'env, (String, String, Vec<String>), Promise<Option<String>>>> =
                 try_get_property(&options, "rtdFn")?;
+            let external_js_fn: Option<Function<'env, (String, String, Vec<String>), Promise<Option<String>>>> =
+                match try_get_property(&options, "externalFn")? {
+                    Some(f) => Some(f),
+                    None => try_get_property(&options, "externalFnFn")?,
+                };
 
             let web_service_fn: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>> =
                 if let Some(js_fn) = web_service_js_fn {
@@ -1179,6 +1185,24 @@ impl Workbook {
                         napi::bindgen_prelude::block_on(async move {
                             let promise = tsfn.call_async(url).await.ok()?;
                             promise.await.ok().flatten()
+                        })
+                    }))
+                } else {
+                    None
+                };
+
+            let external_fn: Option<Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>> =
+                if let Some(js_fn) = external_js_fn {
+                    let tsfn = js_fn
+                        .build_threadsafe_function::<(String, String, Vec<String>)>()
+                        .build_callback(|ctx| Ok(FnArgs { data: ctx.value }))?;
+                    let tsfn = Arc::new(tsfn);
+                    Some(Arc::new(move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
+                        let args = (book.to_string(), name.to_string(), args.to_vec());
+                        let tsfn = Arc::clone(&tsfn);
+                        napi::bindgen_prelude::block_on(async move {
+                            let promise = tsfn.call_async(args).await.ok()?;
+                            promise.await.ok().flatten().map(FormulaValue::String)
                         })
                     }))
                 } else {
@@ -1217,6 +1241,7 @@ impl Workbook {
                 max_threads: max_threads.map(|n| n as usize),
                 web_service_fn,
                 rtd_fn,
+                external_fn,
             })
         } else {
             None

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use duke_sheets::{CalculationOptions, WorkbookCalculationExt};
+use duke_sheets::{CalculationOptions, FormulaValue, WorkbookCalculationExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
 };
@@ -221,6 +221,10 @@ unsafe impl Sync for SendSyncFunction {}
 impl SendSyncFunction {
     fn call1(&self, this: &JsValue, arg: &JsValue) -> Result<JsValue, JsValue> {
         self.0.call1(this, arg)
+    }
+
+    fn call2(&self, this: &JsValue, arg1: &JsValue, arg2: &JsValue) -> Result<JsValue, JsValue> {
+        self.0.call2(this, arg1, arg2)
     }
 
     fn call3(
@@ -814,6 +818,16 @@ impl Workbook {
             let rtd_js_fn = js_sys::Reflect::get(&options, &JsValue::from_str("rtdFn"))
                 .ok()
                 .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
+            let external_js_fn = js_sys::Reflect::get(&options, &JsValue::from_str("externalFn"))
+                .ok()
+                .and_then(|v| v.dyn_into::<js_sys::Function>().ok())
+                .map(|f| (f, false))
+                .or_else(|| {
+                    js_sys::Reflect::get(&options, &JsValue::from_str("externalFnFn"))
+                        .ok()
+                        .and_then(|v| v.dyn_into::<js_sys::Function>().ok())
+                        .map(|f| (f, true))
+                });
 
             let js_opts: JsCalculationOptions =
                 serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
@@ -852,6 +866,30 @@ impl Workbook {
                     as Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>
             });
 
+            // Build external_fn from callback: externalFn(book, name, args[]) -> number|string|bool|null
+            let external_fn = external_js_fn.map(|(js_fn, legacy_two_arg)| {
+                let wrapper = SendSyncFunction(js_fn);
+                Arc::new(move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
+                    let args_arr = js_sys::Array::new();
+                    for a in args {
+                        args_arr.push(&JsValue::from_str(a));
+                    }
+                    let result = if legacy_two_arg {
+                        wrapper.call2(&JsValue::NULL, &JsValue::from_str(name), &args_arr.into())
+                    } else {
+                        wrapper.call3(
+                            &JsValue::NULL,
+                            &JsValue::from_str(book),
+                            &JsValue::from_str(name),
+                            &args_arr.into(),
+                        )
+                    }
+                    .ok()?;
+                    js_value_to_formula_value(result)
+                })
+                    as Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>
+            });
+
             CalculationOptions {
                 iterative: js_opts.iterative.unwrap_or(false),
                 max_iterations: js_opts.max_iterations.unwrap_or(100),
@@ -862,6 +900,7 @@ impl Workbook {
                 max_threads: js_opts.max_threads,
                 web_service_fn,
                 rtd_fn,
+                external_fn,
             }
         } else {
             CalculationOptions::default()
@@ -886,6 +925,22 @@ impl Workbook {
 impl Default for Workbook {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Convert a JS value returned by an `externalFnFn` callback into a typed FormulaValue.
+/// `null`/`undefined` -> `None` (yields `#N/A`). Booleans take priority over numbers.
+fn js_value_to_formula_value(value: JsValue) -> Option<FormulaValue> {
+    if value.is_null() || value.is_undefined() {
+        None
+    } else if let Some(b) = value.as_bool() {
+        Some(FormulaValue::Boolean(b))
+    } else if let Some(n) = value.as_f64() {
+        Some(FormulaValue::Number(n))
+    } else if let Some(s) = value.as_string() {
+        Some(FormulaValue::String(s))
+    } else {
+        None
     }
 }
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{BufReader, Read, Seek};
 
 use duke_sheets_formula::decompile::{
-    ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES,
+    ExternName, ExternSheetEntry, FormulaContext, NameRecord, SupBook, BUILTIN_NAMES,
 };
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -113,8 +113,10 @@ pub(crate) fn read_workbook<R: Read + Seek>(
     let mut extern_sheet_entries = Vec::new();
     let mut names = Vec::new();
     let mut supbooks: Vec<SupBook> = Vec::new();
+    let mut extern_names: Vec<ExternName> = Vec::new();
     let mut in_sup_book = false;
-    let mut current_sup_book: Option<SupBook> = None;
+        let mut current_sup_book: Option<SupBook> = None;
+        let mut last_sup_book_idx: Option<u16> = None;
 
     let mut name_hidden_flags: Vec<bool> = Vec::new();
 
@@ -188,11 +190,32 @@ pub(crate) fn read_workbook<R: Read + Seek>(
             records::BRT_SUP_SELF => {
                 if in_sup_book {
                     current_sup_book = Some(SupBook::SelfRef { sheet_count: 0 });
+                } else {
+                    last_sup_book_idx = Some(supbooks.len() as u16);
+                    supbooks.push(SupBook::SelfRef { sheet_count: 0 });
                 }
             }
             records::BRT_SUP_ADDIN => {
                 if in_sup_book {
                     current_sup_book = Some(SupBook::AddIn);
+                } else {
+                    last_sup_book_idx = Some(supbooks.len() as u16);
+                    supbooks.push(SupBook::AddIn);
+                }
+            }
+            records::BRT_PLACEHOLDER_NAME => {
+                let supbook_idx = if in_sup_book && current_sup_book.is_some() {
+                    Some(supbooks.len() as u16)
+                } else {
+                    last_sup_book_idx
+                };
+                if let Some(supbook_idx) = supbook_idx {
+                    let name = parser::wide_str(&buf, 0)
+                        .map(|(s, _)| s)
+                        .unwrap_or_default();
+                    if !name.is_empty() {
+                        extern_names.push(ExternName { supbook_idx, name });
+                    }
                 }
             }
             records::BRT_SUP_BOOK_SRC => {
@@ -208,6 +231,7 @@ pub(crate) fn read_workbook<R: Read + Seek>(
             }
             records::BRT_END_SUP_BOOK => {
                 if let Some(sb) = current_sup_book.take() {
+                    last_sup_book_idx = Some(supbooks.len() as u16);
                     supbooks.push(sb);
                 }
                 in_sup_book = false;
@@ -234,8 +258,8 @@ pub(crate) fn read_workbook<R: Read + Seek>(
         extern_sheet: extern_sheet_entries,
         supbooks,
         names,
-        // XLSB add-in EXTERNNAME parsing (BrtExternName) is not yet wired up.
-        extern_names: Vec::new(),
+        extern_names,
+        extern_name_index_base: 0,
         base_cell: None,
     };
 

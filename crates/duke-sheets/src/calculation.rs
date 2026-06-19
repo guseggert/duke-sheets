@@ -79,6 +79,9 @@ pub struct CalculationOptions {
     ///
     /// Returning `None` produces `#N/A`.
     pub rtd_fn: Option<Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>>,
+    /// Optional callback for external add-in function calls, `[N]!Name(args)`.
+    pub external_fn:
+        Option<Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>>,
 }
 
 impl fmt::Debug for CalculationOptions {
@@ -96,6 +99,10 @@ impl fmt::Debug for CalculationOptions {
                 &self.web_service_fn.as_ref().map(|_| "<callback>"),
             )
             .field("rtd_fn", &self.rtd_fn.as_ref().map(|_| "<callback>"))
+            .field(
+                "external_fn",
+                &self.external_fn.as_ref().map(|_| "<callback>"),
+            )
             .finish()
     }
 }
@@ -112,6 +119,7 @@ impl Default for CalculationOptions {
             max_threads: None,
             web_service_fn: None,
             rtd_fn: None,
+            external_fn: None,
         }
     }
 }
@@ -386,6 +394,11 @@ fn shift_formula_rows(expr: &mut FormulaExpr, row_delta: i32) {
         }
         FormulaExpr::UnaryOp { operand, .. } => shift_formula_rows(operand, row_delta),
         FormulaExpr::Function { args, .. } => {
+            for arg in args {
+                shift_formula_rows(arg, row_delta);
+            }
+        }
+        FormulaExpr::ExternalFunction { args, .. } => {
             for arg in args {
                 shift_formula_rows(arg, row_delta);
             }
@@ -1222,11 +1235,6 @@ impl CalculationEngine {
         // read the cached value from the file (the "previous iteration" result).
         // This handles the common Excel pattern =IF(cond, val, SELF) correctly.
 
-        // Clear any existing spill targets before re-evaluating
-        if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
-            sheet.clear_spill(cell_key.row, cell_key.col);
-        }
-
         // Evaluate in a block so immutable borrows drop before we mutably store results.
         let result = {
             let wb_ref: &Workbook = workbook;
@@ -1239,17 +1247,27 @@ impl CalculationEngine {
                 EvaluationContext::new(Some(wb_ref), cell_key.sheet, cell_key.row, cell_key.col);
             ctx.web_service_fn = self.options.web_service_fn.as_deref();
             ctx.rtd_fn = self.options.rtd_fn.as_deref();
+            ctx.external_fn = self.options.external_fn.as_deref();
             ctx.image_sink = Some(&image_sink);
             ctx.eval_cache = Some(eval_cache);
 
             match evaluate(ast, &ctx) {
-                Ok(value) => value,
+                Ok(value) => Some(value),
+                Err(duke_sheets_formula::FormulaError::ExternalFunctionUnresolved(_)) => None,
                 Err(_e) => {
                     stats.errors += 1;
-                    FormulaValue::Error(duke_sheets_core::CellError::Value)
+                    Some(FormulaValue::Error(duke_sheets_core::CellError::Value))
                 }
             }
         };
+
+        let Some(result) = result else {
+            return false;
+        };
+
+        if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
+            sheet.clear_spill(cell_key.row, cell_key.col);
+        }
 
         // Store the result
         if let Some(sheet) = workbook.worksheet_mut(cell_key.sheet) {
@@ -1339,10 +1357,12 @@ impl CalculationEngine {
             EvaluationContext::new(Some(workbook), cell_key.sheet, cell_key.row, cell_key.col);
         ctx.web_service_fn = self.options.web_service_fn.as_deref();
         ctx.rtd_fn = self.options.rtd_fn.as_deref();
+        ctx.external_fn = self.options.external_fn.as_deref();
         ctx.image_sink = Some(&image_sink);
         ctx.eval_cache = Some(eval_cache);
         match evaluate(ast, &ctx) {
             Ok(value) => Some((value, false)),
+            Err(duke_sheets_formula::FormulaError::ExternalFunctionUnresolved(_)) => None,
             Err(_) => Some((
                 FormulaValue::Error(duke_sheets_core::CellError::Value),
                 true,
@@ -1574,6 +1594,9 @@ fn ast_touches_spill_range(
         FormulaExpr::Function { args, .. } => args
             .iter()
             .any(|a| ast_touches_spill_range(a, current_sheet, workbook, spill_ranges)),
+        FormulaExpr::ExternalFunction { args, .. } => args
+            .iter()
+            .any(|a| ast_touches_spill_range(a, current_sheet, workbook, spill_ranges)),
         FormulaExpr::Array(rows) => rows.iter().any(|row| {
             row.iter()
                 .any(|cell| ast_touches_spill_range(cell, current_sheet, workbook, spill_ranges))
@@ -1789,6 +1812,20 @@ fn extract_references_recursive(
                 );
             }
         }
+        FormulaExpr::ExternalFunction { args, .. } => {
+            for arg in args {
+                extract_references_recursive(
+                    arg,
+                    current_sheet,
+                    workbook,
+                    formula_cells,
+                    formula_cell_index,
+                    range_dep_cache,
+                    value_sensitive_ranges,
+                    refs,
+                );
+            }
+        }
         FormulaExpr::Array(rows) => {
             for row in rows {
                 for cell in row {
@@ -1884,9 +1921,10 @@ fn collect_value_sensitive_ranges(
         | FormulaExpr::Boolean(_)
         | FormulaExpr::Error(_)
         | FormulaExpr::Empty => true,
-        FormulaExpr::NameRef(_) | FormulaExpr::ExternalRef(_) | FormulaExpr::StructuredRef(_) => {
-            false
-        }
+        FormulaExpr::NameRef(_)
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::ExternalFunction { .. }
+        | FormulaExpr::StructuredRef(_) => false,
     }
 }
 
@@ -2007,6 +2045,11 @@ fn collect_input_ranges(
             collect_input_ranges(operand, current_sheet, workbook, formula_cells, ranges);
         }
         FormulaExpr::Function { args, .. } => {
+            for arg in args {
+                collect_input_ranges(arg, current_sheet, workbook, formula_cells, ranges);
+            }
+        }
+        FormulaExpr::ExternalFunction { args, .. } => {
             for arg in args {
                 collect_input_ranges(arg, current_sheet, workbook, formula_cells, ranges);
             }
@@ -2417,6 +2460,11 @@ fn extract_sheet_refs_recursive(
                 extract_sheet_refs_recursive(arg, workbook, sheets);
             }
         }
+        FormulaExpr::ExternalFunction { args, .. } => {
+            for arg in args {
+                extract_sheet_refs_recursive(arg, workbook, sheets);
+            }
+        }
         FormulaExpr::Array(rows) => {
             for row in rows {
                 for cell in row {
@@ -2583,6 +2631,9 @@ fn contains_volatile_function(expr: &FormulaExpr) -> bool {
             contains_volatile_function(left) || contains_volatile_function(right)
         }
         FormulaExpr::UnaryOp { operand, .. } => contains_volatile_function(operand),
+        // External add-in values (TBLink, etc.) are server-backed and can change between
+        // recalcs, so always treat them as volatile to keep them live.
+        FormulaExpr::ExternalFunction { .. } => true,
         FormulaExpr::Array(rows) => rows
             .iter()
             .any(|row| row.iter().any(contains_volatile_function)),
@@ -2764,6 +2815,52 @@ mod tests {
         assert_eq!(
             sheet.get_calculated_value_at(0, 0),
             Some(&CellValue::String("prog|srv|topic1|topic2".into()))
+        );
+    }
+
+    #[test]
+    fn test_external_function_callback_via_calculation_options() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", 7.0).unwrap();
+        sheet
+            .set_cell_formula("B1", r#"=[1]!TBLink("acct",A1,3)"#)
+            .unwrap();
+
+        let options = CalculationOptions {
+            external_fn: Some(Arc::new(|book, name, args| {
+                assert_eq!(book, "1");
+                assert_eq!(name, "TBLink");
+                assert_eq!(args, &["acct".to_string(), "7".to_string(), "3".to_string()]);
+                Some(FormulaValue::Number(99.0))
+            })),
+            ..Default::default()
+        };
+
+        let stats = workbook.calculate_with_options(&options).unwrap();
+        assert_eq!(stats.errors, 0);
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 1),
+            Some(&CellValue::Number(99.0))
+        );
+    }
+
+    #[test]
+    fn test_unresolved_external_function_preserves_cached_value() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_formula("A1", r#"=[1]!TBLink("acct")"#).unwrap();
+        sheet.set_formula_result(0, 0, CellValue::Number(42.0)).unwrap();
+
+        let stats = workbook.calculate().unwrap();
+        assert_eq!(stats.errors, 0);
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(
+            sheet.get_calculated_value_at(0, 0),
+            Some(&CellValue::Number(42.0))
         );
     }
 

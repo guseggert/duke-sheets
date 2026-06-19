@@ -782,6 +782,31 @@ fn test_calculation_with_rtd_fn() {
 }
 
 #[wasm_bindgen_test]
+fn test_calculation_with_external_fn() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from_f64(7.0)).unwrap();
+    sheet
+        .set_formula("B1", r#"=[1]!TBLink("acct",A1)"#)
+        .unwrap();
+
+    let js_fn = Function::new_with_args(
+        "book, name, args",
+        "return book + ':' + name + ':' + args.join(',')",
+    );
+
+    let opts = Object::new();
+    Reflect::set(&opts, &JsValue::from_str("externalFn"), &js_fn).unwrap();
+
+    wb.calculate(Some(opts.into())).unwrap();
+
+    assert_eq!(
+        sheet.get_calculated_value("B1").unwrap().as_text().unwrap(),
+        "1:TBLink:acct,7"
+    );
+}
+
+#[wasm_bindgen_test]
 fn test_web_service_fn_returning_null() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();

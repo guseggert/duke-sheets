@@ -42,6 +42,18 @@ pub enum FormulaExpr {
         args: Vec<FormulaExpr>,
     },
 
+    /// External add-in function call, e.g. `[1]!TBLink("Consolidated","CONSUL[3]",...)`.
+    /// `book` is the external-workbook index/name between the brackets (`"1"`); `name` keeps
+    /// the add-in function name verbatim (case preserved, e.g. `TBLink`, `cyedate`).
+    /// Evaluated via a host callback (`EvaluationContext::external_fn`) rather than the
+    /// built-in registry, so the host (browser) can resolve it against a server while the
+    /// formula text stays untouched (and still resolves via the add-in in Excel).
+    ExternalFunction {
+        book: String,
+        name: String,
+        args: Vec<FormulaExpr>,
+    },
+
     Array(Vec<Vec<FormulaExpr>>),
 
     /// Empty/omitted argument (e.g., the missing 4th arg in `XLOOKUP(x,a,b,,1)`)

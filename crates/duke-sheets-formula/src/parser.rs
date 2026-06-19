@@ -1003,11 +1003,20 @@ impl<'a> FormulaParser<'a> {
     }
 
     fn parse_function_call(&mut self, name: String) -> FormulaResult<FormulaExpr> {
+        let args = self.parse_call_args()?;
+        Ok(FormulaExpr::Function {
+            name: name.to_uppercase(),
+            args,
+        })
+    }
+
+    /// Parse a parenthesized, comma-separated argument list (supports empty/omitted args,
+    /// e.g. `XLOOKUP(x,a,b,,1)`). Assumes the next token is `(`.
+    fn parse_call_args(&mut self) -> FormulaResult<Vec<FormulaExpr>> {
         self.expect(&Token::LeftParen)?;
 
         let mut args = Vec::new();
 
-        // Parse arguments, supporting empty/omitted args (e.g., XLOOKUP(x,a,b,,1))
         if !matches!(self.current_token(), Token::RightParen) {
             // First argument: empty if immediately followed by comma
             if matches!(self.current_token(), Token::Comma) {
@@ -1028,11 +1037,7 @@ impl<'a> FormulaParser<'a> {
         }
 
         self.expect(&Token::RightParen)?;
-
-        Ok(FormulaExpr::Function {
-            name: name.to_uppercase(),
-            args,
-        })
+        Ok(args)
     }
 
     fn parse_sheet_reference(&mut self, sheet: String) -> FormulaResult<FormulaExpr> {
@@ -1105,6 +1110,32 @@ impl<'a> FormulaParser<'a> {
                 self.consume();
                 // Named range in external workbook
                 Ok(FormulaExpr::NameRef(format!("[{}]{}", content, name)))
+            }
+            // Book-scoped reference: `[book]!Name` or `[book]!Name(args)`. The lone `!`
+            // scans as Unknown('!'). This is how CCH add-in calls appear, e.g.
+            // `=[1]!TBLink("Consolidated","CONSUL[3]","1000-499-814","0","3")`.
+            Token::Unknown('!') => {
+                self.consume(); // consume '!'
+                match self.current_token().clone() {
+                    Token::Identifier(name) => {
+                        self.consume();
+                        if matches!(self.current_token(), Token::LeftParen) {
+                            // External add-in function call (name kept verbatim for the host callback).
+                            let args = self.parse_call_args()?;
+                            Ok(FormulaExpr::ExternalFunction {
+                                book: content,
+                                name,
+                                args,
+                            })
+                        } else {
+                            // Book-scoped defined name.
+                            Ok(FormulaExpr::NameRef(format!("[{}]!{}", content, name)))
+                        }
+                    }
+                    _ => Err(FormulaError::Parse(
+                        "Expected name after external workbook '!'".into(),
+                    )),
+                }
             }
             _ => {
                 // Not followed by a reference - unqualified structured ref
@@ -1766,6 +1797,21 @@ mod tests {
             assert_eq!(ext.address.col, 1);
         } else {
             panic!("Expected ExternalRef, got {:?}", ast);
+        }
+    }
+
+    #[test]
+    fn test_parse_external_function_call() {
+        let ast = parse_formula(r#"=[1]!TBLink("Consolidated",A1,3)"#).unwrap();
+        if let FormulaExpr::ExternalFunction { book, name, args } = ast {
+            assert_eq!(book, "1");
+            assert_eq!(name, "TBLink");
+            assert_eq!(args.len(), 3);
+            assert_eq!(args[0], FormulaExpr::String("Consolidated".into()));
+            assert!(matches!(args[1], FormulaExpr::CellRef(_)));
+            assert_eq!(args[2], FormulaExpr::Number(3.0));
+        } else {
+            panic!("Expected ExternalFunction, got {:?}", ast);
         }
     }
 

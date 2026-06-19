@@ -641,7 +641,12 @@ fn resolve_namex(ctx: &FormulaContext, extern_sheet_idx: u16, name_idx: u32) -> 
                     if let Some(name) =
                         nth_extern_name(ctx, entry.sup_book_idx, name_idx)
                     {
-                        return name;
+                        if function_table::function_index(&name)
+                            .is_some_and(function_table::function_is_biff8_addin)
+                        {
+                            return name;
+                        }
+                        return format!("[1]!{}", name);
                     }
                     return format!("_namex{}", name_idx);
                 }
@@ -667,14 +672,22 @@ fn resolve_namex(ctx: &FormulaContext, extern_sheet_idx: u16, name_idx: u32) -> 
 /// Resolve the `name_idx`-th (1-based) EXTERNNAME belonging to the given
 /// SUPBOOK index.
 fn nth_extern_name(ctx: &FormulaContext, supbook_idx: u16, name_idx: u32) -> Option<String> {
-    if name_idx == 0 {
-        return None;
-    }
-    ctx.extern_names
+    let names: Vec<&super::ExternName> = ctx
+        .extern_names
         .iter()
         .filter(|en| en.supbook_idx == supbook_idx)
-        .nth((name_idx - 1) as usize)
-        .map(|en| en.name.clone())
+        .collect();
+    if name_idx >= ctx.extern_name_index_base {
+        let zero_based = name_idx - ctx.extern_name_index_base;
+        if let Some(en) = names.get(zero_based as usize) {
+            return Some(en.name.clone());
+        }
+    }
+    if ctx.extern_name_index_base == 0 && name_idx > 0 {
+        names.get((name_idx - 1) as usize).map(|en| en.name.clone())
+    } else {
+        None
+    }
 }
 
 /// Resolve a tRefN/tAreaN signed offset to an absolute (row, col).
@@ -751,6 +764,7 @@ mod tests {
             supbooks,
             names: Vec::new(),
             extern_names: Vec::new(),
+            extern_name_index_base: 1,
             base_cell: None,
         }
     }
@@ -1174,6 +1188,7 @@ mod tests {
         // EXTERNSHEET entry with first_sheet=0, last_sheet=2 → Sheet1:Sheet3
         let ctx = FormulaContext {
             extern_names: Vec::new(),
+            extern_name_index_base: 1,
             sheet_names: vec![
                 "Sheet1".to_string(),
                 "Sheet2".to_string(),
@@ -1206,6 +1221,7 @@ mod tests {
     fn test_name_lookup() {
         let ctx = FormulaContext {
             extern_names: Vec::new(),
+            extern_name_index_base: 1,
             sheet_names: vec!["Sheet1".to_string()],
             supbooks: vec![],
             extern_sheet: vec![],
@@ -1287,6 +1303,7 @@ mod tests {
     fn test_namex_self_ref() {
         let ctx = FormulaContext {
             extern_names: Vec::new(),
+            extern_name_index_base: 1,
             sheet_names: vec!["Sheet1".to_string()],
             supbooks: vec![SupBook::SelfRef { sheet_count: 1 }],
             extern_sheet: vec![ExternSheetEntry {
@@ -1461,6 +1478,7 @@ mod tests {
         // without a leading '!'.
         let ctx = FormulaContext {
             extern_names: Vec::new(),
+            extern_name_index_base: 1,
             sheet_names: vec!["Sheet1".to_string()],
             supbooks: vec![SupBook::SelfRef { sheet_count: 1 }],
             extern_sheet: vec![ExternSheetEntry {
@@ -1492,6 +1510,7 @@ mod tests {
         // Same scenario for Area3d with workbook-level EXTERNSHEET entry.
         let ctx = FormulaContext {
             extern_names: Vec::new(),
+            extern_name_index_base: 1,
             sheet_names: vec!["Sheet1".to_string()],
             supbooks: vec![SupBook::SelfRef { sheet_count: 1 }],
             extern_sheet: vec![ExternSheetEntry {

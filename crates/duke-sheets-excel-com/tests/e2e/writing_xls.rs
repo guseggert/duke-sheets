@@ -2225,6 +2225,27 @@ fn excel_byte_parity_for_atp_functions_we_emit() {
     );
 }
 
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_external_udf_xls_we_emit() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 7.0).unwrap();
+    ws.set_cell_formula("B1", r#"=[1]!TBLink("acct",A1)"#)
+        .unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(42.0)).unwrap();
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let ws = result.worksheet(0).unwrap();
+    let formula = ws
+        .get_formula_at(0, 1)
+        .expect("external UDF formula must survive Excel re-save");
+    assert!(
+        formula.to_ascii_uppercase().contains("TBLINK"),
+        "external UDF formula lost through Excel: {formula:?}"
+    );
+}
+
 /// Comprehensive: every Analysis-ToolPak function (Ftab 384..=476) in one
 /// workbook, byte-compared against Excel's native XLS emission — the add-in
 /// form (PtgNameX + EXTERNNAME, R-class args, PtgFuncVar iftab=255). Emitted

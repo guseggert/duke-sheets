@@ -25,6 +25,10 @@ pub(crate) struct CompileContext {
     /// Range-bodied names must be emitted R-class even at value
     /// positions or Excel implicit-intersects the range.
     pub defined_name_classes: Vec<OperandClass>,
+    /// Add-in UDF placeholder names, keyed by uppercase function name.
+    pub external_names: HashMap<String, u32>,
+    /// Xti index for the add-in supporting link, when external_names is non-empty.
+    pub external_ixti: Option<u16>,
 }
 
 pub(crate) struct CompiledFormula {
@@ -172,7 +176,45 @@ fn emit_expr(
             log::warn!("external workbook reference compilation not supported, emitting #REF!");
             emit_error(&CellError::Ref, out)
         }
+        FormulaExpr::ExternalFunction { name, args, .. } => {
+            emit_external_function(name, args, ctx, out, extra)
+        }
     }
+}
+
+fn emit_external_function(
+    name: &str,
+    args: &[FormulaExpr],
+    ctx: &CompileContext,
+    out: &mut Vec<u8>,
+    extra: &mut Vec<u8>,
+) -> Result<(), String> {
+    if args.len() + 1 > u8::MAX as usize {
+        return Err(format!("function '{name}' has too many arguments"));
+    }
+    let name_idx = ctx
+        .external_names
+        .get(&name.to_ascii_uppercase())
+        .copied()
+        .ok_or_else(|| format!("external function '{name}' missing placeholder name"))?;
+    let ixti = ctx
+        .external_ixti
+        .ok_or_else(|| format!("external function '{name}' missing extern sheet"))?;
+
+    out.push(ptg::v_class(ptg::PTG_NAME_X));
+    out.extend_from_slice(&ixti.to_le_bytes());
+    out.extend_from_slice(&name_idx.to_le_bytes());
+    for arg in args {
+        if matches!(arg, FormulaExpr::Empty) {
+            emit_miss_arg(out)?;
+        } else {
+            emit_expr(arg, ctx, out, extra, OperandClass::R)?;
+        }
+    }
+    out.push(ptg::v_class(ptg::PTG_FUNC_VAR));
+    out.push((args.len() + 1) as u8);
+    out.extend_from_slice(&0x00FFu16.to_le_bytes());
+    Ok(())
 }
 
 /// Apply an [`OperandClass`] to an R-class base ptg byte. R keeps the stored
@@ -674,6 +716,8 @@ mod tests {
             xlfn_names: HashMap::new(),
             defined_names: Vec::new(),
             defined_name_classes: Vec::new(),
+            external_names: HashMap::new(),
+            external_ixti: None,
         }
     }
 
@@ -689,6 +733,8 @@ mod tests {
             xlfn_names: HashMap::new(),
             defined_names: vec!["MyRange".to_string(), "MyConst".to_string()],
             defined_name_classes: vec![OperandClass::R, OperandClass::V],
+            external_names: HashMap::new(),
+            external_ixti: None,
         };
         let c = compile_formula("=MyRange+1", &ctx).unwrap();
         assert_eq!(
