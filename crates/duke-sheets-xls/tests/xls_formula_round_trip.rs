@@ -1078,3 +1078,50 @@ fn atp_function_round_trips_text_via_externname() {
         "ATP function EDATE lost from formula: {f:?}"
     );
 }
+
+#[test]
+fn external_udf_emits_namex_funcvar_udf() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 7.0).unwrap();
+    ws.set_cell_formula("B1", r#"=[1]!TBLink("acct",A1)"#)
+        .unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(42.0)).unwrap();
+
+    let tokens = only_formula_tokens_at(&wb, 0, 1);
+    let base = if tokens.starts_with(&[0x19, 0x01, 0x00, 0x00]) {
+        4
+    } else {
+        0
+    };
+    assert_eq!(
+        &tokens[base..base + 7],
+        &[0x39, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
+        "expected external UDF PtgNameX; got {tokens:02X?}"
+    );
+    assert_eq!(tokens[base + 7], 0x17, "first arg should be string; got {tokens:02X?}");
+    assert_eq!(tokens[base + 14], 0x24, "A1 arg must be R-class PtgRef; got {tokens:02X?}");
+    assert_eq!(
+        &tokens[base + 19..base + 23],
+        &[0x42, 0x03, 0xFF, 0x00],
+        "expected UDF PtgFuncVar; got {tokens:02X?}"
+    );
+}
+
+#[test]
+fn external_udf_round_trips_text_via_externname() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_formula("A1", r#"=[1]!TBLink("acct")"#).unwrap();
+    ws.set_formula_result(0, 0, CellValue::Number(42.0)).unwrap();
+
+    let parsed = write_then_read(&wb);
+    let s = parsed.worksheet(0).unwrap();
+    let f = s
+        .get_formula_at(0, 0)
+        .expect("external UDF formula text must survive XLS round-trip");
+    assert!(
+        f.contains("[1]!TBLink") && f.contains("acct"),
+        "external UDF lost from formula: {f:?}"
+    );
+}

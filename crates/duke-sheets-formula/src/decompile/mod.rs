@@ -105,6 +105,8 @@ pub struct FormulaContext {
     /// External name records (EXTERNNAME), used to resolve PtgNameX tokens —
     /// notably Analysis-ToolPak add-in function calls.
     pub extern_names: Vec<ExternName>,
+    /// Base for PtgNameX indices into extern_names: XLS uses 1, XLSB add-ins use 0.
+    pub extern_name_index_base: u32,
     /// Base cell position for shared formula offset resolution.
     /// When set, tRefN/tAreaN offsets are adjusted relative to this cell.
     pub base_cell: Option<(u32, u16)>,
@@ -119,6 +121,7 @@ impl FormulaContext {
             supbooks: Vec::new(),
             names: Vec::new(),
             extern_names: Vec::new(),
+            extern_name_index_base: 1,
             base_cell: None,
         }
     }

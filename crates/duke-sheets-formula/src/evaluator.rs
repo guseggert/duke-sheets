@@ -188,11 +188,9 @@ pub struct EvaluationContext<'a> {
     pub web_service_fn: Option<&'a (dyn Fn(&str) -> Option<String> + Send + Sync)>,
     /// Optional RTD callback.
     pub rtd_fn: Option<&'a (dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync)>,
-    /// Optional external add-in function callback for `[N]!Name(args)` calls (e.g. CCH `TBLink`).
-    /// Receives the verbatim function name and stringified args; returns a typed value, or
-    /// `None` to yield `#N/A`. Lets a host (browser) resolve add-in functions against a server
-    /// while the formula text stays untouched (and still resolves via the add-in in Excel).
-    pub external_fn: Option<&'a (dyn Fn(&str, &[String]) -> Option<FormulaValue> + Send + Sync)>,
+    /// Optional external add-in function callback for `[N]!Name(args)` calls.
+    pub external_fn:
+        Option<&'a (dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync)>,
     /// Optional IMAGE metadata sink.
     pub image_sink: Option<&'a (dyn Fn(usize, u32, u16, ImageInfo) + Send + Sync)>,
     /// Shared evaluation cache (range materialization, lookup indexes, sheet names).
@@ -803,8 +801,8 @@ pub fn evaluate(expr: &FormulaExpr, ctx: &EvaluationContext) -> FormulaResult<Fo
 
         FormulaExpr::Function { name, args } => evaluate_function(name, args, ctx),
 
-        FormulaExpr::ExternalFunction { name, args, .. } => {
-            evaluate_external_function(name, args, ctx)
+        FormulaExpr::ExternalFunction { book, name, args } => {
+            evaluate_external_function(book, name, args, ctx)
         }
 
         FormulaExpr::Array(rows) => {
@@ -2120,10 +2118,10 @@ fn evaluate_vlookup_fast(
 
 /// Evaluate a function call
 /// Evaluate an external add-in function call (`[N]!Name(args)`) by delegating to the host's
-/// `external_fn` callback. Args are evaluated then stringified (CCH add-in args are string/number
-/// literals). Returns the callback's typed value, or `#N/A` when no callback is set / unresolved
-/// (matching WEBSERVICE's no-handler behavior).
+/// `external_fn` callback. Args are evaluated then stringified. Unresolved calls bubble up so
+/// workbook calculation can preserve the formula cell's cached value.
 fn evaluate_external_function(
+    book: &str,
     name: &str,
     args: &[FormulaExpr],
     ctx: &EvaluationContext,
@@ -2138,10 +2136,12 @@ fn evaluate_external_function(
     }
 
     match ctx.external_fn {
-        Some(handler) => {
-            Ok(handler(name, &arg_strings).unwrap_or(FormulaValue::Error(CellError::Na)))
-        }
-        None => Ok(FormulaValue::Error(CellError::Na)),
+        Some(handler) => handler(book, name, &arg_strings).ok_or_else(|| {
+            FormulaError::ExternalFunctionUnresolved(format!("[{book}]!{name}"))
+        }),
+        None => Err(FormulaError::ExternalFunctionUnresolved(format!(
+            "[{book}]!{name}"
+        ))),
     }
 }
 

@@ -24,6 +24,10 @@ pub enum FormulaError {
     #[error("Unknown function: {0}")]
     UnknownFunction(String),
 
+    /// External function was not resolved by the host callback.
+    #[error("External function unresolved: {0}")]
+    ExternalFunctionUnresolved(String),
+
     /// Wrong number of arguments
     #[error("Wrong number of arguments for {function}: expected {expected}, got {actual}")]
     ArgumentCount {

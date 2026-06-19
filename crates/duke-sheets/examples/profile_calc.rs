@@ -187,6 +187,11 @@ impl<'a> ParallelAnalyzer<'a> {
                     self.extract_refs_from_expr(arg, current_sheet, refs);
                 }
             }
+            FormulaExpr::ExternalFunction { args, .. } => {
+                for arg in args {
+                    self.extract_refs_from_expr(arg, current_sheet, refs);
+                }
+            }
             FormulaExpr::Array(rows) => {
                 for row in rows {
                     for cell in row {

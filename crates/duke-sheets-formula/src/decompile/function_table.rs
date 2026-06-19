@@ -208,6 +208,7 @@ pub fn expr_calls_volatile_function(expr: &crate::FormulaExpr) -> bool {
             expr_calls_volatile_function(left) || expr_calls_volatile_function(right)
         }
         FormulaExpr::UnaryOp { operand, .. } => expr_calls_volatile_function(operand),
+        FormulaExpr::ExternalFunction { .. } => true,
         FormulaExpr::Array(rows) => rows
             .iter()
             .any(|row| row.iter().any(expr_calls_volatile_function)),

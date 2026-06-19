@@ -363,6 +363,7 @@ impl XlsReader {
             supbooks,
             names,
             extern_names,
+            extern_name_index_base: 1,
             base_cell: None,
         };
 
@@ -1306,6 +1307,7 @@ impl XlsReader {
                                 supbooks: formula_ctx.supbooks.clone(),
                                 names: formula_ctx.names.clone(),
                                 extern_names: formula_ctx.extern_names.clone(),
+                                extern_name_index_base: formula_ctx.extern_name_index_base,
                                 base_cell: Some((row, col)),
                             };
                             let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
@@ -1579,6 +1581,7 @@ impl XlsReader {
             supbooks: formula_ctx.supbooks.clone(),
             names: formula_ctx.names.clone(),
             extern_names: formula_ctx.extern_names.clone(),
+            extern_name_index_base: formula_ctx.extern_name_index_base,
             base_cell: Some((cell_row, cell_col)),
         };
         let text = crate::biff::formula::decompile(shared_tokens, &shared_ctx);
@@ -4329,6 +4332,7 @@ mod tests {
             supbooks: vec![],
             names: vec![],
             extern_names: vec![],
+            extern_name_index_base: 1,
             base_cell: None,
         };
 

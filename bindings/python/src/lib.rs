@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::prelude::*;
-use duke_sheets::{CalculationOptions, ImageSizing, WorkbookCalculationExt};
+use duke_sheets::{CalculationOptions, FormulaValue, ImageSizing, WorkbookCalculationExt};
 use duke_sheets_core::{CellError, CellValue as CoreCellValue};
 
 mod types;
@@ -833,10 +833,11 @@ impl PyWorkbook {
     ///     max_threads: Maximum threads for parallel evaluation. None means all cores (default: None)
     ///     web_service_fn: Optional callable(url: str) -> Optional[str] for WEBSERVICE evaluation
     ///     rtd_fn: Optional callable(prog_id: str, server: str, topics: list[str]) -> Optional[str] for RTD evaluation
+    ///     external_fn: Optional callable(book: str, name: str, args: list[str]) -> Optional[str|float|bool]
     ///
     /// Returns:
     ///     CalculationStats with information about the calculation
-    #[pyo3(signature = (*, iterative=false, max_iterations=100, max_change=0.001, force_full_calculation=true, calculate_volatile=true, sheets=vec![], max_threads=None, web_service_fn=None, rtd_fn=None))]
+    #[pyo3(signature = (*, iterative=false, max_iterations=100, max_change=0.001, force_full_calculation=true, calculate_volatile=true, sheets=vec![], max_threads=None, web_service_fn=None, rtd_fn=None, external_fn=None))]
     fn calculate(
         &self,
         iterative: bool,
@@ -848,6 +849,7 @@ impl PyWorkbook {
         max_threads: Option<usize>,
         web_service_fn: Option<PyObject>,
         rtd_fn: Option<PyObject>,
+        external_fn: Option<PyObject>,
     ) -> PyResult<PyCalculationStats> {
         let mut wb = self.inner.write().map_err(to_py_err)?;
         let web_service_fn_arc = web_service_fn.map(|py_fn| {
@@ -875,6 +877,30 @@ impl PyWorkbook {
                 },
             ) as Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>
         });
+        let external_fn_arc = external_fn.map(|py_fn| {
+            Arc::new(
+                move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
+                    Python::with_gil(|py| {
+                        let args_vec: Vec<String> = args.to_vec();
+                        let result = py_fn.call1(py, (book, name, args_vec)).ok()?;
+                        if result.is_none(py) {
+                            return None;
+                        }
+                        if let Ok(b) = result.extract::<bool>(py) {
+                            return Some(FormulaValue::Boolean(b));
+                        }
+                        if let Ok(n) = result.extract::<f64>(py) {
+                            return Some(FormulaValue::Number(n));
+                        }
+                        if let Ok(s) = result.extract::<String>(py) {
+                            return Some(FormulaValue::String(s));
+                        }
+                        None
+                    })
+                },
+            )
+                as Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>
+        });
         let options = CalculationOptions {
             iterative,
             max_iterations,
@@ -885,6 +911,7 @@ impl PyWorkbook {
             max_threads,
             web_service_fn: web_service_fn_arc,
             rtd_fn: rtd_fn_arc,
+            external_fn: external_fn_arc,
         };
         let stats = wb.calculate_with_options(&options).map_err(to_py_err)?;
         Ok(stats.into())

@@ -818,9 +818,16 @@ impl Workbook {
             let rtd_js_fn = js_sys::Reflect::get(&options, &JsValue::from_str("rtdFn"))
                 .ok()
                 .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
-            let external_js_fn = js_sys::Reflect::get(&options, &JsValue::from_str("externalFnFn"))
+            let external_js_fn = js_sys::Reflect::get(&options, &JsValue::from_str("externalFn"))
                 .ok()
-                .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
+                .and_then(|v| v.dyn_into::<js_sys::Function>().ok())
+                .map(|f| (f, false))
+                .or_else(|| {
+                    js_sys::Reflect::get(&options, &JsValue::from_str("externalFnFn"))
+                        .ok()
+                        .and_then(|v| v.dyn_into::<js_sys::Function>().ok())
+                        .map(|f| (f, true))
+                });
 
             let js_opts: JsCalculationOptions =
                 serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
@@ -859,19 +866,28 @@ impl Workbook {
                     as Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>
             });
 
-            // Build external_fn from callback: externalFnFn(name, args[]) -> number|string|bool|null
-            let external_fn = external_js_fn.map(|js_fn| {
+            // Build external_fn from callback: externalFn(book, name, args[]) -> number|string|bool|null
+            let external_fn = external_js_fn.map(|(js_fn, legacy_two_arg)| {
                 let wrapper = SendSyncFunction(js_fn);
-                Arc::new(move |name: &str, args: &[String]| -> Option<FormulaValue> {
+                Arc::new(move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
                     let args_arr = js_sys::Array::new();
                     for a in args {
                         args_arr.push(&JsValue::from_str(a));
                     }
-                    let result = wrapper
-                        .call2(&JsValue::NULL, &JsValue::from_str(name), &args_arr.into())
-                        .ok()?;
+                    let result = if legacy_two_arg {
+                        wrapper.call2(&JsValue::NULL, &JsValue::from_str(name), &args_arr.into())
+                    } else {
+                        wrapper.call3(
+                            &JsValue::NULL,
+                            &JsValue::from_str(book),
+                            &JsValue::from_str(name),
+                            &args_arr.into(),
+                        )
+                    }
+                    .ok()?;
                     js_value_to_formula_value(result)
-                }) as Arc<dyn Fn(&str, &[String]) -> Option<FormulaValue> + Send + Sync>
+                })
+                    as Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>
             });
 
             CalculationOptions {

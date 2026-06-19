@@ -1801,6 +1801,21 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_external_function_call() {
+        let ast = parse_formula(r#"=[1]!TBLink("Consolidated",A1,3)"#).unwrap();
+        if let FormulaExpr::ExternalFunction { book, name, args } = ast {
+            assert_eq!(book, "1");
+            assert_eq!(name, "TBLink");
+            assert_eq!(args.len(), 3);
+            assert_eq!(args[0], FormulaExpr::String("Consolidated".into()));
+            assert!(matches!(args[1], FormulaExpr::CellRef(_)));
+            assert_eq!(args[2], FormulaExpr::Number(3.0));
+        } else {
+            panic!("Expected ExternalFunction, got {:?}", ast);
+        }
+    }
+
+    #[test]
     fn test_parse_empty_args_middle() {
         // XLOOKUP(x,a,b,,1) - 4th arg is empty
         let ast = parse_formula("=FUNC(1,2,,4)").unwrap();

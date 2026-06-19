@@ -925,6 +925,29 @@ mod tests {
     }
 
     #[test]
+    fn formula_text_roundtrip_external_udf() {
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_formula_with_cached_value_at(
+            0,
+            0,
+            r#"=[1]!TBLink("acct")"#,
+            CellValue::Number(42.0),
+        )
+        .unwrap();
+
+        let wb2 = round_trip(&wb);
+        let ws2 = wb2.worksheet(0).unwrap();
+        assert_eq!(ws2.get_value_at(0, 0), CellValue::Number(42.0));
+        let fd = ws2.formula_data_at(0, 0).expect("formula should exist");
+        assert!(
+            fd.text.contains("[1]!TBLink") && fd.text.contains("acct"),
+            "external UDF formula lost: {:?}",
+            fd.text
+        );
+    }
+
+    #[test]
     fn formula_text_roundtrip_string_result() {
         let mut wb = Workbook::new();
         let ws = wb.worksheet_mut(0).unwrap();

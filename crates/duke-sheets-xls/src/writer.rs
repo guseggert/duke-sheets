@@ -1958,7 +1958,7 @@ fn build_externsheet_table(workbook: &Workbook, addin_present: bool) -> ExternSh
     }
 }
 
-/// Table of Analysis-ToolPak add-in functions used anywhere in the workbook,
+/// Table of add-in functions used anywhere in the workbook,
 /// in the order Excel writes their EXTERNNAME records: distinct canonical
 /// names sorted alphabetically (ASCII), each assigned a 1-based `nameindex`.
 ///
@@ -1986,8 +1986,8 @@ impl AddinTable {
 }
 
 fn build_addin_table(workbook: &Workbook) -> AddinTable {
-    use std::collections::BTreeSet;
-    let mut set: BTreeSet<String> = BTreeSet::new();
+    use std::collections::BTreeMap;
+    let mut set: BTreeMap<String, String> = BTreeMap::new();
     for sheet in workbook.worksheets() {
         for (_, _, formula) in sheet.formula_cells() {
             collect_addin_function_names(formula, &mut set);
@@ -1996,16 +1996,19 @@ fn build_addin_table(workbook: &Workbook) -> AddinTable {
     for named_range in user_names_in_xls_emit_order(workbook) {
         collect_addin_function_names(&named_range.refers_to, &mut set);
     }
-    let names: Vec<String> = set.into_iter().collect();
+    let names: Vec<String> = set.into_values().collect();
     let by_name = names
         .iter()
         .enumerate()
-        .map(|(i, name)| (name.clone(), (i + 1) as u16))
+        .map(|(i, name)| (name.to_ascii_uppercase(), (i + 1) as u16))
         .collect();
     AddinTable { names, by_name }
 }
 
-fn collect_addin_function_names(formula: &str, out: &mut std::collections::BTreeSet<String>) {
+fn collect_addin_function_names(
+    formula: &str,
+    out: &mut std::collections::BTreeMap<String, String>,
+) {
     let formula = if formula.starts_with('=') {
         formula.to_string()
     } else {
@@ -2018,7 +2021,7 @@ fn collect_addin_function_names(formula: &str, out: &mut std::collections::BTree
 
 fn collect_addin_names_expr(
     expr: &duke_sheets_formula::FormulaExpr,
-    out: &mut std::collections::BTreeSet<String>,
+    out: &mut std::collections::BTreeMap<String, String>,
 ) {
     use duke_sheets_formula::decompile::{function_index, function_is_biff8_addin, function_name};
     use duke_sheets_formula::FormulaExpr;
@@ -2029,9 +2032,17 @@ fn collect_addin_names_expr(
                 if function_is_biff8_addin(idx) {
                     // Canonical (uppercase) name so EXTERNNAME spelling and
                     // sort order are independent of how the user typed it.
-                    out.insert(function_name(idx).to_string());
+                    let canonical = function_name(idx).to_string();
+                    out.entry(canonical.to_ascii_uppercase()).or_insert(canonical);
                 }
             }
+            for arg in args {
+                collect_addin_names_expr(arg, out);
+            }
+        }
+        FormulaExpr::ExternalFunction { name, args, .. } => {
+            out.entry(name.to_ascii_uppercase())
+                .or_insert_with(|| name.clone());
             for arg in args {
                 collect_addin_names_expr(arg, out);
             }
@@ -2108,6 +2119,11 @@ fn collect_formula_expr_sheet_names(
         }
         FormulaExpr::UnaryOp { operand, .. } => collect_formula_expr_sheet_names(operand, out),
         FormulaExpr::Function { args, .. } => {
+            for arg in args {
+                collect_formula_expr_sheet_names(arg, out);
+            }
+        }
+        FormulaExpr::ExternalFunction { args, .. } => {
             for arg in args {
                 collect_formula_expr_sheet_names(arg, out);
             }
@@ -3452,6 +3468,36 @@ fn compile_ptgs_with_context(
                 out.extend_from_slice(&idx.to_le_bytes());
             }
         }
+        FormulaExpr::ExternalFunction { name, args, .. } => {
+            if args.len() >= 0x7F {
+                return Err(UnsupportedToken);
+            }
+            let Some(nameindex) = addins.nameindex_for(name) else {
+                return Err(UnsupportedToken);
+            };
+            out.push(0x39); // PtgNameX
+            out.extend_from_slice(&0u16.to_le_bytes()); // ixti = 0 (AddIn XTI)
+            out.extend_from_slice(&nameindex.to_le_bytes()); // 1-based
+            out.extend_from_slice(&0u16.to_le_bytes()); // reserved
+            for arg in args {
+                if matches!(arg, FormulaExpr::Empty) {
+                    out.push(0x16); // PTG_MISS_ARG
+                } else {
+                    compile_ptgs_with_context(
+                        arg,
+                        out,
+                        extra,
+                        externsheet,
+                        names,
+                        addins,
+                        OperandClass::R,
+                    )?;
+                }
+            }
+            out.push(ptg_func_var_opcode(OperandClass::V));
+            out.push((args.len() + 1) as u8);
+            out.extend_from_slice(&0x00FFu16.to_le_bytes());
+        }
         FormulaExpr::NameRef(name) => {
             let idx = names.idx_for_name(name).ok_or(UnsupportedToken)?;
             let name_class = match operand_class {
@@ -3471,7 +3517,6 @@ fn compile_ptgs_with_context(
         }
         FormulaExpr::StructuredRef(_)
         | FormulaExpr::ExternalRef(_)
-        | FormulaExpr::ExternalFunction { .. }
         | FormulaExpr::Empty => {
             return Err(UnsupportedToken);
         }
