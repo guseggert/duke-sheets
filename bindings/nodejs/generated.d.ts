@@ -185,7 +185,7 @@ export declare class Workbook {
   /**
    * Calculate all formulas in the workbook.
    *
-   * Optionally accepts calculation options. Callbacks (`webServiceFn`, `rtdFn`)
+   * Optionally accepts calculation options. Callbacks (`webServiceFn`, `rtdFn`, `externalFn`)
    * are only supported on the async path via `calculateAsync`.
    *
    * @param options - Optional calculation options
@@ -226,7 +226,7 @@ export declare class Workbook {
    * @param options - Optional calculation options with optional callbacks
    * @returns Promise<CalculationStats>
    */
-  calculateAsync(options?: JsCalculationOptions & { webServiceFn?: (url: string) => Promise<string | null | undefined>; rtdFn?: (progId: string, server: string, topics: string[]) => Promise<string | null | undefined> }): Promise<CalculationStats>
+  calculateAsync(options?: JsCalculationOptions & { webServiceFn?: (url: string) => Promise<string | null | undefined>; rtdFn?: (progId: string, server: string, topics: string[]) => Promise<string | null | undefined>; externalFn?: (book: string, name: string, args: string[]) => Promise<string | null | undefined>; externalFnFn?: (book: string, name: string, args: string[]) => Promise<string | null | undefined> }): Promise<CalculationStats>
 }
 
 /**
