@@ -172,6 +172,10 @@ fn emit_expr(
             log::warn!("external workbook reference compilation not supported, emitting #REF!");
             emit_error(&CellError::Ref, out)
         }
+        FormulaExpr::ExternalFunction { .. } => {
+            log::warn!("external add-in function compilation not supported, emitting #NAME?");
+            emit_error(&CellError::Name, out)
+        }
     }
 }
 

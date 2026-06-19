@@ -3469,7 +3469,10 @@ fn compile_ptgs_with_context(
         FormulaExpr::Array(rows) => {
             emit_array_constant(rows, out, extra)?;
         }
-        FormulaExpr::StructuredRef(_) | FormulaExpr::ExternalRef(_) | FormulaExpr::Empty => {
+        FormulaExpr::StructuredRef(_)
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::ExternalFunction { .. }
+        | FormulaExpr::Empty => {
             return Err(UnsupportedToken);
         }
     }

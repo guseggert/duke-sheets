@@ -79,6 +79,11 @@ pub struct CalculationOptions {
     ///
     /// Returning `None` produces `#N/A`.
     pub rtd_fn: Option<Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>>,
+    /// Optional callback for external add-in function calls, `[N]!Name(args)` (e.g. CCH `TBLink`,
+    /// `CLIENTNAME`, `cyedate`). Receives the verbatim function name and stringified args; returns
+    /// a typed value, or `None` to produce `#N/A`. Lets a host resolve add-in functions while the
+    /// formula text stays untouched.
+    pub external_fn: Option<Arc<dyn Fn(&str, &[String]) -> Option<FormulaValue> + Send + Sync>>,
 }
 
 impl fmt::Debug for CalculationOptions {
@@ -96,6 +101,10 @@ impl fmt::Debug for CalculationOptions {
                 &self.web_service_fn.as_ref().map(|_| "<callback>"),
             )
             .field("rtd_fn", &self.rtd_fn.as_ref().map(|_| "<callback>"))
+            .field(
+                "external_fn",
+                &self.external_fn.as_ref().map(|_| "<callback>"),
+            )
             .finish()
     }
 }
@@ -112,6 +121,7 @@ impl Default for CalculationOptions {
             max_threads: None,
             web_service_fn: None,
             rtd_fn: None,
+            external_fn: None,
         }
     }
 }
@@ -386,6 +396,11 @@ fn shift_formula_rows(expr: &mut FormulaExpr, row_delta: i32) {
         }
         FormulaExpr::UnaryOp { operand, .. } => shift_formula_rows(operand, row_delta),
         FormulaExpr::Function { args, .. } => {
+            for arg in args {
+                shift_formula_rows(arg, row_delta);
+            }
+        }
+        FormulaExpr::ExternalFunction { args, .. } => {
             for arg in args {
                 shift_formula_rows(arg, row_delta);
             }
@@ -1239,6 +1254,7 @@ impl CalculationEngine {
                 EvaluationContext::new(Some(wb_ref), cell_key.sheet, cell_key.row, cell_key.col);
             ctx.web_service_fn = self.options.web_service_fn.as_deref();
             ctx.rtd_fn = self.options.rtd_fn.as_deref();
+            ctx.external_fn = self.options.external_fn.as_deref();
             ctx.image_sink = Some(&image_sink);
             ctx.eval_cache = Some(eval_cache);
 
@@ -1339,6 +1355,7 @@ impl CalculationEngine {
             EvaluationContext::new(Some(workbook), cell_key.sheet, cell_key.row, cell_key.col);
         ctx.web_service_fn = self.options.web_service_fn.as_deref();
         ctx.rtd_fn = self.options.rtd_fn.as_deref();
+        ctx.external_fn = self.options.external_fn.as_deref();
         ctx.image_sink = Some(&image_sink);
         ctx.eval_cache = Some(eval_cache);
         match evaluate(ast, &ctx) {
@@ -1789,6 +1806,20 @@ fn extract_references_recursive(
                 );
             }
         }
+        FormulaExpr::ExternalFunction { args, .. } => {
+            for arg in args {
+                extract_references_recursive(
+                    arg,
+                    current_sheet,
+                    workbook,
+                    formula_cells,
+                    formula_cell_index,
+                    range_dep_cache,
+                    value_sensitive_ranges,
+                    refs,
+                );
+            }
+        }
         FormulaExpr::Array(rows) => {
             for row in rows {
                 for cell in row {
@@ -1884,9 +1915,10 @@ fn collect_value_sensitive_ranges(
         | FormulaExpr::Boolean(_)
         | FormulaExpr::Error(_)
         | FormulaExpr::Empty => true,
-        FormulaExpr::NameRef(_) | FormulaExpr::ExternalRef(_) | FormulaExpr::StructuredRef(_) => {
-            false
-        }
+        FormulaExpr::NameRef(_)
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::ExternalFunction { .. }
+        | FormulaExpr::StructuredRef(_) => false,
     }
 }
 
@@ -2007,6 +2039,11 @@ fn collect_input_ranges(
             collect_input_ranges(operand, current_sheet, workbook, formula_cells, ranges);
         }
         FormulaExpr::Function { args, .. } => {
+            for arg in args {
+                collect_input_ranges(arg, current_sheet, workbook, formula_cells, ranges);
+            }
+        }
+        FormulaExpr::ExternalFunction { args, .. } => {
             for arg in args {
                 collect_input_ranges(arg, current_sheet, workbook, formula_cells, ranges);
             }
@@ -2583,6 +2620,9 @@ fn contains_volatile_function(expr: &FormulaExpr) -> bool {
             contains_volatile_function(left) || contains_volatile_function(right)
         }
         FormulaExpr::UnaryOp { operand, .. } => contains_volatile_function(operand),
+        // External add-in values (TBLink, etc.) are server-backed and can change between
+        // recalcs, so always treat them as volatile to keep them live.
+        FormulaExpr::ExternalFunction { .. } => true,
         FormulaExpr::Array(rows) => rows
             .iter()
             .any(|row| row.iter().any(contains_volatile_function)),
