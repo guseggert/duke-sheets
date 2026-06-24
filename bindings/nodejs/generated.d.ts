@@ -493,6 +493,8 @@ export interface JsAxis {
   numberFormat?: JsChartNumberFormat
   majorGridlines: boolean
   minorGridlines: boolean
+  majorGridlinesShapeProperties?: JsChartShapeProperties
+  minorGridlinesShapeProperties?: JsChartShapeProperties
   majorTickMark?: string
   minorTickMark?: string
   labelPosition?: string
@@ -598,6 +600,7 @@ export interface JsChart {
   displayBlanksAs?: string
   plotVisibleOnly?: boolean
   layout?: JsLayout
+  shapeProperties?: JsChartShapeProperties
   is3D: boolean
   varyColors?: boolean
   gapWidth?: number
@@ -1016,6 +1019,7 @@ export interface JsDataPoint {
   index: number
   marker?: JsMarker
   explosion?: number
+  shapeProperties?: JsChartShapeProperties
 }
 
 /** Reference to chart data. */

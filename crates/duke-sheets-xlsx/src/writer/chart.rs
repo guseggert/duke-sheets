@@ -56,8 +56,6 @@ fn write_chart_space(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
             .with_attribute(("val", "1"))
             .write_empty()?;
     }
-    write_bool_element(w, "c:showDLblsOverMax", chart.show_dlbls_over_max)?;
-
     if let Some(ref dba) = chart.display_blanks_as {
         let val = match dba {
             DisplayBlanksAs::Gap => "gap",
@@ -68,6 +66,7 @@ fn write_chart_space(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
             .with_attribute(("val", val))
             .write_empty()?;
     }
+    write_bool_element(w, "c:showDLblsOverMax", chart.show_dlbls_over_max)?;
 
     if let Some(raw) = chart.raw_extensions.get("chart") {
         w.get_mut().write_all(raw)?;
@@ -883,6 +882,10 @@ fn write_data_point(w: &mut XmlWriter, dp: &DataPoint) -> XlsxResult<()> {
             .write_empty()?;
     }
 
+    if let Some(ref sp) = dp.shape_properties {
+        write_shape_properties(w, sp)?;
+    }
+
     w.write_event(Event::End(BytesEnd::new("c:dPt")))?;
     Ok(())
 }
@@ -1247,11 +1250,11 @@ fn write_cat_ax(
         .write_empty()?;
 
     if let Some(ref ax) = axis {
-        if ax.major_gridlines {
-            w.write_event(Event::Empty(BytesStart::new("c:majorGridlines")))?;
+        if ax.major_gridlines || ax.major_gridlines_shape_properties.is_some() {
+            write_gridlines(w, "c:majorGridlines", &ax.major_gridlines_shape_properties)?;
         }
-        if ax.minor_gridlines {
-            w.write_event(Event::Empty(BytesStart::new("c:minorGridlines")))?;
+        if ax.minor_gridlines || ax.minor_gridlines_shape_properties.is_some() {
+            write_gridlines(w, "c:minorGridlines", &ax.minor_gridlines_shape_properties)?;
         }
     }
 
@@ -1279,6 +1282,12 @@ fn write_cat_ax(
             w.create_element("c:tickLblPos")
                 .with_attribute(("val", tick_label_position_val(lp)))
                 .write_empty()?;
+        }
+    }
+
+    if let Some(ref ax) = axis {
+        if let Some(ref sp) = ax.shape_properties {
+            write_shape_properties(w, sp)?;
         }
     }
 
@@ -1316,12 +1325,6 @@ fn write_cat_ax(
             w.create_element("c:minorUnit")
                 .with_attribute(("val", s.as_str()))
                 .write_empty()?;
-        }
-    }
-
-    if let Some(ref ax) = axis {
-        if let Some(ref sp) = ax.shape_properties {
-            write_shape_properties(w, sp)?;
         }
     }
 
@@ -1365,11 +1368,11 @@ fn write_val_ax(
         .write_empty()?;
 
     if let Some(ref ax) = axis {
-        if ax.major_gridlines {
-            w.write_event(Event::Empty(BytesStart::new("c:majorGridlines")))?;
+        if ax.major_gridlines || ax.major_gridlines_shape_properties.is_some() {
+            write_gridlines(w, "c:majorGridlines", &ax.major_gridlines_shape_properties)?;
         }
-        if ax.minor_gridlines {
-            w.write_event(Event::Empty(BytesStart::new("c:minorGridlines")))?;
+        if ax.minor_gridlines || ax.minor_gridlines_shape_properties.is_some() {
+            write_gridlines(w, "c:minorGridlines", &ax.minor_gridlines_shape_properties)?;
         }
     }
 
@@ -1397,6 +1400,12 @@ fn write_val_ax(
             w.create_element("c:tickLblPos")
                 .with_attribute(("val", tick_label_position_val(lp)))
                 .write_empty()?;
+        }
+    }
+
+    if let Some(ref ax) = axis {
+        if let Some(ref sp) = ax.shape_properties {
+            write_shape_properties(w, sp)?;
         }
     }
 
@@ -1435,12 +1444,6 @@ fn write_val_ax(
     }
 
     if let Some(ref ax) = axis {
-        if let Some(ref sp) = ax.shape_properties {
-            write_shape_properties(w, sp)?;
-        }
-    }
-
-    if let Some(ref ax) = axis {
         if let Some(ref raw) = ax.raw_ext {
             w.get_mut().write_all(raw)?;
         }
@@ -1473,6 +1476,21 @@ fn write_scaling(w: &mut XmlWriter, axis: &Option<Axis>) -> XlsxResult<()> {
     }
 
     w.write_event(Event::End(BytesEnd::new("c:scaling")))?;
+    Ok(())
+}
+
+fn write_gridlines(
+    w: &mut XmlWriter,
+    tag: &str,
+    shape_properties: &Option<ChartShapeProperties>,
+) -> XlsxResult<()> {
+    if let Some(ref sp) = shape_properties {
+        w.write_event(Event::Start(BytesStart::new(tag)))?;
+        write_shape_properties(w, sp)?;
+        w.write_event(Event::End(BytesEnd::new(tag)))?;
+    } else {
+        w.write_event(Event::Empty(BytesStart::new(tag)))?;
+    }
     Ok(())
 }
 
@@ -1609,7 +1627,7 @@ fn uses_two_value_axes(ct: &ChartType) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::io::Cursor;
+    use std::io::{Cursor, Read, Write};
 
     use duke_sheets_chart::{
         Axis, AxisType, Chart, ChartColor, ChartLine, ChartLines, ChartShapeProperties, ChartType,
@@ -1807,6 +1825,96 @@ mod tests {
         )
         .unwrap()
         .unwrap()
+    }
+
+    fn read_chart_from_xml(xml: &str) -> Chart {
+        let buf = Vec::new();
+        let cursor = Cursor::new(buf);
+        let mut zip_writer = zip::ZipWriter::new(cursor);
+        zip_writer
+            .start_file(
+                "xl/charts/chart1.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        zip_writer.write_all(xml.as_bytes()).unwrap();
+        let cursor = zip_writer.finish().unwrap();
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        read_chart(
+            &mut archive,
+            "xl/charts/chart1.xml",
+            DrawingAnchor::default(),
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    fn chart_xml_after_write(chart: &Chart) -> String {
+        let buf = Vec::new();
+        let cursor = Cursor::new(buf);
+        let mut zip_writer = zip::ZipWriter::new(cursor);
+        write_chart_part(&mut zip_writer, chart, 1).unwrap();
+        let cursor = zip_writer.finish().unwrap();
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let mut file = archive.by_name("xl/charts/chart1.xml").unwrap();
+        let mut xml = String::new();
+        file.read_to_string(&mut xml).unwrap();
+        xml
+    }
+
+    #[test]
+    fn test_imported_chart_colors_survive_write() {
+        let xml = r#"<?xml version="1.0"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <c:chart>
+    <c:plotArea>
+      <c:pieChart>
+        <c:varyColors val="1"/>
+        <c:ser>
+          <c:idx val="0"/>
+          <c:order val="0"/>
+          <c:spPr>
+            <a:solidFill><a:srgbClr val="4F81BD"/></a:solidFill>
+            <a:ln w="0"><a:noFill/></a:ln>
+          </c:spPr>
+          <c:dPt>
+            <c:idx val="0"/>
+            <c:spPr><a:solidFill><a:srgbClr val="4F81BD"/></a:solidFill></c:spPr>
+          </c:dPt>
+          <c:dPt>
+            <c:idx val="1"/>
+            <c:spPr><a:solidFill><a:srgbClr val="C0504D"/></a:solidFill></c:spPr>
+          </c:dPt>
+          <c:dPt>
+            <c:idx val="2"/>
+            <c:spPr><a:solidFill><a:srgbClr val="9BBB59"/></a:solidFill></c:spPr>
+          </c:dPt>
+          <c:dPt>
+            <c:idx val="3"/>
+            <c:spPr><a:solidFill><a:srgbClr val="8064A2"/></a:solidFill></c:spPr>
+          </c:dPt>
+          <c:cat><c:strRef><c:f>Sheet1!$A$1:$A$4</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$B$1:$B$4</c:f></c:numRef></c:val>
+        </c:ser>
+      </c:pieChart>
+    </c:plotArea>
+  </c:chart>
+  <c:spPr>
+    <a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>
+    <a:ln w="9360"><a:solidFill><a:srgbClr val="D9D9D9"/></a:solidFill></a:ln>
+  </c:spPr>
+</c:chartSpace>"#;
+
+        let chart = read_chart_from_xml(xml);
+        let written = chart_xml_after_write(&chart);
+
+        for expected in ["4F81BD", "C0504D", "9BBB59", "8064A2", "FFFFFF", "D9D9D9"] {
+            assert!(
+                written.contains(&format!("srgbClr val=\"{expected}\"")),
+                "missing {expected} in {written}"
+            );
+        }
     }
 
     #[test]

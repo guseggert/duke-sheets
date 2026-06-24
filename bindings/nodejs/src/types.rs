@@ -2165,6 +2165,7 @@ pub struct JsDataPoint {
     pub index: u32,
     pub marker: Option<JsMarker>,
     pub explosion: Option<u32>,
+    pub shape_properties: Option<JsChartShapeProperties>,
 }
 
 impl From<&duke_sheets_chart::DataPoint> for JsDataPoint {
@@ -2173,6 +2174,7 @@ impl From<&duke_sheets_chart::DataPoint> for JsDataPoint {
             index: p.index,
             marker: p.marker.as_ref().map(JsMarker::from),
             explosion: p.explosion,
+            shape_properties: p.shape_properties.as_ref().map(JsChartShapeProperties::from),
         }
     }
 }
@@ -2226,6 +2228,8 @@ pub struct JsAxis {
     pub number_format: Option<JsChartNumberFormat>,
     pub major_gridlines: bool,
     pub minor_gridlines: bool,
+    pub major_gridlines_shape_properties: Option<JsChartShapeProperties>,
+    pub minor_gridlines_shape_properties: Option<JsChartShapeProperties>,
     pub major_tick_mark: Option<String>,
     pub minor_tick_mark: Option<String>,
     pub label_position: Option<String>,
@@ -2247,6 +2251,8 @@ impl From<&duke_sheets_chart::Axis> for JsAxis {
             number_format: a.number_format.as_ref().map(JsChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,
+            major_gridlines_shape_properties: a.major_gridlines_shape_properties.as_ref().map(JsChartShapeProperties::from),
+            minor_gridlines_shape_properties: a.minor_gridlines_shape_properties.as_ref().map(JsChartShapeProperties::from),
             major_tick_mark: a.major_tick_mark.as_ref().map(|t| format!("{:?}", t)),
             minor_tick_mark: a.minor_tick_mark.as_ref().map(|t| format!("{:?}", t)),
             label_position: a.label_position.as_ref().map(|p| format!("{:?}", p)),
@@ -2434,6 +2440,7 @@ pub struct JsChart {
     pub display_blanks_as: Option<String>,
     pub plot_visible_only: Option<bool>,
     pub layout: Option<JsLayout>,
+    pub shape_properties: Option<JsChartShapeProperties>,
     pub is_3d: bool,
     pub vary_colors: Option<bool>,
     pub gap_width: Option<u32>,
@@ -2475,6 +2482,7 @@ impl From<&duke_sheets_chart::Chart> for JsChart {
             display_blanks_as: c.display_blanks_as.as_ref().map(|d| format!("{:?}", d)),
             plot_visible_only: c.plot_visible_only,
             layout: c.layout.as_ref().map(JsLayout::from),
+            shape_properties: c.shape_properties.as_ref().map(JsChartShapeProperties::from),
             is_3d: c.is_3d,
             vary_colors: c.vary_colors,
             gap_width: c.gap_width,

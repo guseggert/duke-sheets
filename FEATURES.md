@@ -421,7 +421,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | First slice angle / hole size | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_first_slice_angle_hole_size` | §21.2.2.41 |
 | Chart layout (manual positioning) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_layout` | §21.2.2.55 |
 | Chart styles (built-in style ID) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_style_color_passthrough` | §21.2.2.84 |
-| Shape properties (fill, line) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_shape_properties` | §21.2.2.72 |
+| Shape properties (fill, line) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_shape_properties`, `xlsx_roundtrip::test_roundtrip_chart_data_points`, `xlsx_roundtrip::test_roundtrip_chart_axis_enhancements`, `excel_com_e2e::chart_parity::chart_roundtrip_through_excel` | §21.2.2.72 |
 | Invert-if-negative | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_invert_if_negative` | §21.2.2.45 |
 | Data table displayed below chart | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_chart_data_table` | §21.2.2.33 |
 | Display blanks as (gap/zero/span) | R✔ W✔ | R✔ W✔ | R- W- | R- W- | `xlsx_roundtrip::test_roundtrip_display_blanks_as_span` | §21.2.2.39 |

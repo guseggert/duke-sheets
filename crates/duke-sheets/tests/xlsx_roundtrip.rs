@@ -2766,7 +2766,9 @@ fn test_roundtrip_chart_markers() {
 
 #[test]
 fn test_roundtrip_chart_data_points() {
-    use duke_sheets_chart::{Chart, ChartType, DataPoint, DataReference, DataSeries};
+    use duke_sheets_chart::{
+        Chart, ChartColor, ChartShapeProperties, ChartType, DataPoint, DataReference, DataSeries,
+    };
 
     let mut wb = Workbook::new();
     let sheet = wb.worksheet_mut(0).unwrap();
@@ -2777,6 +2779,13 @@ fn test_roundtrip_chart_data_points() {
         index: 1,
         explosion: Some(25),
         marker: None,
+        shape_properties: Some(ChartShapeProperties {
+            solid_fill: Some(ChartColor {
+                hex: "C0504D".into(),
+            }),
+            no_fill: false,
+            line: None,
+        }),
     }];
     chart.add_series(s);
     sheet.add_chart(chart);
@@ -2791,6 +2800,13 @@ fn test_roundtrip_chart_data_points() {
     assert_eq!(dp.index, 1);
     assert_eq!(dp.explosion, Some(25));
     assert!(dp.marker.is_none());
+    assert_eq!(
+        dp.shape_properties
+            .as_ref()
+            .and_then(|sp| sp.solid_fill.as_ref())
+            .map(|c| c.hex.as_str()),
+        Some("C0504D")
+    );
 }
 
 #[test]
@@ -2817,8 +2833,8 @@ fn test_roundtrip_chart_series_smooth() {
 #[test]
 fn test_roundtrip_chart_axis_enhancements() {
     use duke_sheets_chart::{
-        Axis, AxisCrosses, Chart, ChartType, DataReference, DataSeries, NumberFormat,
-        TickLabelPosition, TickMark,
+        Axis, AxisCrosses, Chart, ChartColor, ChartLine, ChartShapeProperties, ChartType,
+        DataReference, DataSeries, NumberFormat, TickLabelPosition, TickMark,
     };
 
     let mut wb = Workbook::new();
@@ -2829,6 +2845,30 @@ fn test_roundtrip_chart_axis_enhancements() {
     let mut cat_axis = Axis::new();
     cat_axis.major_gridlines = true;
     cat_axis.minor_gridlines = true;
+    cat_axis.major_gridlines_shape_properties = Some(ChartShapeProperties {
+        solid_fill: None,
+        no_fill: false,
+        line: Some(ChartLine {
+            width: Some(9360),
+            solid_fill: Some(ChartColor {
+                hex: "D9D9D9".into(),
+            }),
+            no_fill: false,
+            dash_style: None,
+        }),
+    });
+    cat_axis.minor_gridlines_shape_properties = Some(ChartShapeProperties {
+        solid_fill: None,
+        no_fill: false,
+        line: Some(ChartLine {
+            width: Some(6350),
+            solid_fill: Some(ChartColor {
+                hex: "EEEEEE".into(),
+            }),
+            no_fill: false,
+            dash_style: Some("dash".into()),
+        }),
+    });
     cat_axis.major_tick_mark = Some(TickMark::Outside);
     cat_axis.minor_tick_mark = Some(TickMark::Inside);
     cat_axis.label_position = Some(TickLabelPosition::NextTo);
@@ -2852,6 +2892,21 @@ fn test_roundtrip_chart_axis_enhancements() {
         .expect("category_axis should survive");
     assert!(ax.major_gridlines);
     assert!(ax.minor_gridlines);
+    let major_line = ax
+        .major_gridlines_shape_properties
+        .as_ref()
+        .and_then(|sp| sp.line.as_ref())
+        .expect("major gridline shape properties should survive");
+    assert_eq!(major_line.width, Some(9360));
+    assert_eq!(major_line.solid_fill.as_ref().unwrap().hex, "D9D9D9");
+    let minor_line = ax
+        .minor_gridlines_shape_properties
+        .as_ref()
+        .and_then(|sp| sp.line.as_ref())
+        .expect("minor gridline shape properties should survive");
+    assert_eq!(minor_line.width, Some(6350));
+    assert_eq!(minor_line.solid_fill.as_ref().unwrap().hex, "EEEEEE");
+    assert_eq!(minor_line.dash_style.as_deref(), Some("dash"));
     assert_eq!(ax.major_tick_mark, Some(TickMark::Outside));
     assert_eq!(ax.minor_tick_mark, Some(TickMark::Inside));
     assert_eq!(ax.label_position, Some(TickLabelPosition::NextTo));
@@ -3759,8 +3814,11 @@ fn test_roundtrip_kitchen_sink() {
     assert_eq!(c.auto_title_deleted, Some(false));
     assert_eq!(c.show_dlbls_over_max, Some(true));
 
-    // Chart-level shape_properties at c:chartSpace scope don't survive roundtrip
-    // (reader context tracking limitation), but series-level ones do.
+    let chart_sp = c.shape_properties.as_ref().unwrap();
+    assert_eq!(chart_sp.solid_fill.as_ref().unwrap().hex, "EEEEEE");
+    let chart_line = chart_sp.line.as_ref().unwrap();
+    assert_eq!(chart_line.width, Some(12700));
+    assert_eq!(chart_line.solid_fill.as_ref().unwrap().hex, "333333");
 
     let vax = c.value_axis.as_ref().unwrap();
     assert_eq!(vax.title.as_deref(), Some("Values"));
