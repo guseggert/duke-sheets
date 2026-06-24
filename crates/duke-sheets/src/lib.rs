@@ -154,7 +154,7 @@ pub use duke_sheets_xls::{XlsError, XlsReader, XlsWriter};
 pub use duke_sheets_xlsb::{XlsbError, XlsbReader, XlsbWriter};
 pub use duke_sheets_xlsx::{XlsxError, XlsxReader, XlsxWriter};
 
-use std::io::Cursor;
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// Detected file format from magic bytes.
@@ -190,6 +190,60 @@ pub fn detect_format(bytes: &[u8]) -> FileFormat {
     } else {
         FileFormat::Unknown
     }
+}
+
+fn detect_format_from_path(path: &Path) -> Result<FileFormat> {
+    let mut file = std::fs::File::open(path).map_err(|e| Error::other(e.to_string()))?;
+    let mut magic = [0u8; 8];
+    let n = file
+        .read(&mut magic)
+        .map_err(|e| Error::other(e.to_string()))?;
+
+    if n >= 4 && magic[0..4] == [0x50, 0x4B, 0x03, 0x04] {
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| Error::other(e.to_string()))?;
+        if let Ok(archive) = zip::ZipArchive::new(file) {
+            if archive.index_for_name("xl/workbook.bin").is_some() {
+                return Ok(FileFormat::Xlsb);
+            }
+        }
+        Ok(FileFormat::Xlsx)
+    } else if is_cfb_magic(&magic[..n]) {
+        Ok(FileFormat::Xls)
+    } else {
+        Ok(FileFormat::Unknown)
+    }
+}
+
+fn path_has_extension(path: &Path, ext: &str) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+}
+
+fn path_has_any_extension(path: &Path, extensions: &[&str]) -> bool {
+    extensions.iter().any(|ext| path_has_extension(path, ext))
+}
+
+fn path_has_xlsx_family_extension(path: &Path) -> bool {
+    path_has_any_extension(path, &["xlsx", "xlsm", "xltx", "xltm"])
+}
+
+fn read_csv_workbook(path: &Path) -> Result<Workbook> {
+    let worksheet = CsvReader::read_file(path, &CsvReadOptions::default())
+        .map_err(|e| Error::other(e.to_string()))?;
+
+    let mut workbook = Workbook::empty();
+    workbook.add_existing_worksheet(worksheet)?;
+    Ok(workbook)
+}
+
+fn unsupported_file_format(path: &Path) -> Error {
+    Error::other(format!("Unsupported file format: {}", path.display()))
+}
+
+fn is_ooxml_envelope_probe_miss(msg: &str) -> bool {
+    msg.starts_with("CFB envelope open failed:") || msg.starts_with("not an OOXML envelope")
 }
 
 /// Options controlling how a workbook is opened.
@@ -337,14 +391,15 @@ pub enum EncryptionProfile {
 
 /// Extension trait for Workbook to add file I/O
 pub trait WorkbookExt {
-    /// Open a workbook from a file
+    /// Open a workbook from a file, auto-detecting workbook formats from content.
+    /// CSV files use the `.csv` extension as a fallback because they have no magic bytes.
     fn open<P: AsRef<Path>>(path: P) -> Result<Workbook>;
 
     /// Open a workbook from a file with explicit options
     /// (for password-protected files, etc.).
     fn open_with<P: AsRef<Path>>(path: P, opts: &WorkbookOpenOptions) -> Result<Workbook>;
 
-    /// Open a workbook from bytes, auto-detecting the format (XLSX or XLS)
+    /// Open a workbook from bytes, auto-detecting the format (XLSX, XLSB, or XLS)
     fn from_bytes(bytes: &[u8]) -> Result<Workbook>;
 
     /// Open a workbook from bytes with explicit options.
@@ -361,24 +416,61 @@ pub trait WorkbookExt {
 impl WorkbookExt for Workbook {
     fn open_with<P: AsRef<Path>>(path: P, opts: &WorkbookOpenOptions) -> Result<Workbook> {
         let path = path.as_ref();
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase());
-
         let pw = opts.password.as_deref();
         let vs = opts.try_velvet_sweatshop;
         let skip_ic = opts.skip_integrity_check;
 
-        match extension.as_deref() {
-            Some("xlsx") | Some("xlsm") | Some("xltx") | Some("xltm") => {
+        let format = detect_format_from_path(path)?;
+
+        if (pw.is_some() || vs) && format == FileFormat::Xls {
+            match XlsxReader::read_file_with_options(path, pw, vs, skip_ic) {
+                Ok(wb) => return Ok(wb),
+                Err(XlsxError::InvalidFormat(msg)) if is_ooxml_envelope_probe_miss(&msg) => {}
+                Err(e) => return Err(Error::other(e.to_string())),
+            }
+        }
+
+        match format {
+            FileFormat::Xlsx => XlsxReader::read_file_with_options(path, pw, vs, skip_ic)
+                .map_err(|e| Error::other(e.to_string())),
+            #[cfg(feature = "xls")]
+            FileFormat::Xls => XlsReader::read_file_with_password(path, pw, vs)
+                .map_err(|e| Error::other(e.to_string())),
+            #[cfg(not(feature = "xls"))]
+            FileFormat::Xls => Err(Error::other(
+                "XLS format detected but the 'xls' feature is not enabled",
+            )),
+            #[cfg(feature = "xlsb")]
+            FileFormat::Xlsb => {
+                XlsbReader::read_file(path).map_err(|e| Error::other(e.to_string()))
+            }
+            #[cfg(not(feature = "xlsb"))]
+            FileFormat::Xlsb => Err(Error::other(
+                "XLSB format detected but the 'xlsb' feature is not enabled",
+            )),
+            FileFormat::Unknown if path_has_xlsx_family_extension(path) => {
                 XlsxReader::read_file_with_options(path, pw, vs, skip_ic)
                     .map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
-            Some("xls") => XlsReader::read_file_with_password(path, pw, vs)
-                .map_err(|e| Error::other(e.to_string())),
-            _ => Self::open(path),
+            FileFormat::Unknown if path_has_extension(path, "xls") => {
+                XlsReader::read_file_with_password(path, pw, vs)
+                    .map_err(|e| Error::other(e.to_string()))
+            }
+            #[cfg(not(feature = "xls"))]
+            FileFormat::Unknown if path_has_extension(path, "xls") => Err(Error::other(
+                "XLS format detected but the 'xls' feature is not enabled",
+            )),
+            #[cfg(feature = "xlsb")]
+            FileFormat::Unknown if path_has_extension(path, "xlsb") => {
+                XlsbReader::read_file(path).map_err(|e| Error::other(e.to_string()))
+            }
+            #[cfg(not(feature = "xlsb"))]
+            FileFormat::Unknown if path_has_extension(path, "xlsb") => Err(Error::other(
+                "XLSB format detected but the 'xlsb' feature is not enabled",
+            )),
+            FileFormat::Unknown if path_has_extension(path, "csv") => read_csv_workbook(path),
+            FileFormat::Unknown => Err(unsupported_file_format(path)),
         }
     }
 
@@ -400,9 +492,7 @@ impl WorkbookExt for Workbook {
         if (pw.is_some() || vs) && is_cfb_magic(bytes) {
             match XlsxReader::read_bytes_with_options(bytes, pw, vs, skip_ic) {
                 Ok(wb) => return Ok(wb),
-                Err(XlsxError::InvalidFormat(msg))
-                    if msg.starts_with("CFB envelope open failed:")
-                        || msg.starts_with("not an OOXML envelope") => {}
+                Err(XlsxError::InvalidFormat(msg)) if is_ooxml_envelope_probe_miss(&msg) => {}
                 Err(e) => return Err(Error::other(e.to_string())),
             }
         }
@@ -492,35 +582,45 @@ impl WorkbookExt for Workbook {
 
     fn open<P: AsRef<Path>>(path: P) -> Result<Workbook> {
         let path = path.as_ref();
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase());
-
-        match extension.as_deref() {
-            Some("xlsx") | Some("xlsm") | Some("xltx") | Some("xltm") => {
+        match detect_format_from_path(path)? {
+            FileFormat::Xlsx => {
                 XlsxReader::read_file(path).map_err(|e| Error::other(e.to_string()))
             }
             #[cfg(feature = "xls")]
-            Some("xls") => XlsReader::read_file(path).map_err(|e| Error::other(e.to_string())),
-            Some("csv") => {
-                let worksheet = CsvReader::read_file(path, &CsvReadOptions::default())
-                    .map_err(|e| Error::other(e.to_string()))?;
-
-                let mut workbook = Workbook::empty();
-                workbook.add_existing_worksheet(worksheet)?;
-                Ok(workbook)
-            }
+            FileFormat::Xls => XlsReader::read_file(path).map_err(|e| Error::other(e.to_string())),
+            #[cfg(not(feature = "xls"))]
+            FileFormat::Xls => Err(Error::other(
+                "XLS format detected but the 'xls' feature is not enabled",
+            )),
             #[cfg(feature = "xlsb")]
-            Some("xlsb") => XlsbReader::read_file(path).map_err(|e| Error::other(e.to_string())),
+            FileFormat::Xlsb => {
+                XlsbReader::read_file(path).map_err(|e| Error::other(e.to_string()))
+            }
             #[cfg(not(feature = "xlsb"))]
-            Some("xlsb") => Err(Error::other(
+            FileFormat::Xlsb => Err(Error::other(
                 "XLSB format detected but the 'xlsb' feature is not enabled",
             )),
-            _ => Err(Error::other(format!(
-                "Unsupported file format: {}",
-                path.display()
-            ))),
+            FileFormat::Unknown if path_has_xlsx_family_extension(path) => {
+                XlsxReader::read_file(path).map_err(|e| Error::other(e.to_string()))
+            }
+            #[cfg(feature = "xls")]
+            FileFormat::Unknown if path_has_extension(path, "xls") => {
+                XlsReader::read_file(path).map_err(|e| Error::other(e.to_string()))
+            }
+            #[cfg(not(feature = "xls"))]
+            FileFormat::Unknown if path_has_extension(path, "xls") => Err(Error::other(
+                "XLS format detected but the 'xls' feature is not enabled",
+            )),
+            #[cfg(feature = "xlsb")]
+            FileFormat::Unknown if path_has_extension(path, "xlsb") => {
+                XlsbReader::read_file(path).map_err(|e| Error::other(e.to_string()))
+            }
+            #[cfg(not(feature = "xlsb"))]
+            FileFormat::Unknown if path_has_extension(path, "xlsb") => Err(Error::other(
+                "XLSB format detected but the 'xlsb' feature is not enabled",
+            )),
+            FileFormat::Unknown if path_has_extension(path, "csv") => read_csv_workbook(path),
+            FileFormat::Unknown => Err(unsupported_file_format(path)),
         }
     }
 
@@ -549,7 +649,7 @@ impl WorkbookExt for Workbook {
                 "XLSB format detected but the 'xlsb' feature is not enabled",
             )),
             FileFormat::Unknown => Err(Error::other(
-                "Unable to detect file format from bytes (expected XLSX or XLS magic bytes)",
+                "Unable to detect file format from bytes (expected XLSX, XLSB, or XLS magic bytes)",
             )),
         }
     }
@@ -608,6 +708,22 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    fn make_sample_workbook() -> Workbook {
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "hello").unwrap();
+        ws.set_cell_value("B1", 42.0).unwrap();
+        ws.set_cell_value("C1", true).unwrap();
+        wb
+    }
+
+    fn assert_sample_workbook(wb: &Workbook) {
+        let ws = wb.worksheet(0).unwrap();
+        assert_eq!(ws.get_value_at(0, 0), CellValue::string("hello"));
+        assert_eq!(ws.get_value_at(0, 1), CellValue::Number(42.0));
+        assert_eq!(ws.get_value_at(0, 2), CellValue::Boolean(true));
     }
 
     #[test]
@@ -686,23 +802,80 @@ mod tests {
     }
 
     #[test]
+    fn open_detects_xlsx_content_with_xlsb_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.xlsx");
+        let mismatched = dir.path().join("mismatched.xlsb");
+        make_sample_workbook().save(&source).unwrap();
+        std::fs::copy(&source, &mismatched).unwrap();
+
+        let opened = Workbook::open(&mismatched).expect("open xlsx content from .xlsb path");
+        assert_sample_workbook(&opened);
+    }
+
+    #[test]
+    #[cfg(feature = "xls")]
+    fn open_detects_xls_content_with_xlsx_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.xls");
+        let mismatched = dir.path().join("mismatched.xlsx");
+        make_sample_workbook().save(&source).unwrap();
+        std::fs::copy(&source, &mismatched).unwrap();
+
+        let opened = Workbook::open(&mismatched).expect("open xls content from .xlsx path");
+        assert_sample_workbook(&opened);
+    }
+
+    #[test]
+    #[cfg(feature = "xlsb")]
+    fn open_detects_xlsb_content_with_xlsx_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.xlsb");
+        let mismatched = dir.path().join("mismatched.xlsx");
+        make_sample_workbook().save(&source).unwrap();
+        std::fs::copy(&source, &mismatched).unwrap();
+
+        let opened = Workbook::open(&mismatched).expect("open xlsb content from .xlsx path");
+        assert_sample_workbook(&opened);
+    }
+
+    #[test]
+    #[cfg(feature = "xlsb")]
+    fn open_with_detects_xlsb_content_with_xlsx_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.xlsb");
+        let mismatched = dir.path().join("mismatched.xlsx");
+        make_sample_workbook().save(&source).unwrap();
+        std::fs::copy(&source, &mismatched).unwrap();
+
+        let opened = Workbook::open_with(&mismatched, &WorkbookOpenOptions::default())
+            .expect("open_with xlsb content from .xlsx path");
+        assert_sample_workbook(&opened);
+    }
+
+    #[test]
+    fn open_keeps_csv_extension_fallback_for_unknown_magic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sample.csv");
+        std::fs::write(&path, "name,value\nhello,42\n").unwrap();
+
+        let opened = Workbook::open(&path).expect("open csv fallback");
+        let ws = opened.worksheet(0).unwrap();
+        assert_eq!(ws.get_value_at(0, 0), CellValue::string("name"));
+        assert_eq!(ws.get_value_at(1, 1), CellValue::Number(42.0));
+    }
+
+    #[test]
     #[cfg(feature = "xlsb")]
     fn save_xlsb_roundtrip() {
-        let mut wb = Workbook::new();
-        let ws = wb.worksheet_mut(0).unwrap();
-        ws.set_cell_value("A1", "hello").unwrap();
-        ws.set_cell_value("B1", 42.0).unwrap();
-        ws.set_cell_value("C1", true).unwrap();
+        let wb = make_sample_workbook();
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("roundtrip.xlsb");
         wb.save(&path).unwrap();
 
         let wb2 = Workbook::open(&path).unwrap();
-        let ws2 = wb2.worksheet(0).unwrap();
-        assert_eq!(ws2.get_value_at(0, 0), CellValue::string("hello"));
-        assert_eq!(ws2.get_value_at(0, 1), CellValue::Number(42.0));
-        assert_eq!(ws2.get_value_at(0, 2), CellValue::Boolean(true));
+        assert_sample_workbook(&wb2);
     }
 
     #[test]

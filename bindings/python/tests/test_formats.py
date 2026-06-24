@@ -6,6 +6,7 @@ and named-range survival exercises the compilers end to end.
 """
 
 import os
+import shutil
 
 import pytest
 
@@ -41,6 +42,10 @@ def _round_trip(temp_dir, ext):
     assert os.path.getsize(path) > 0
 
     opened = duke_sheets.Workbook.open(path)
+    _assert_sample(opened)
+
+
+def _assert_sample(opened):
     sheet = opened.get_sheet(0)
     assert sheet.get_cell("A1").as_number() == 1.0
     assert sheet.get_cell("B1").as_text() == "label"
@@ -49,6 +54,17 @@ def _round_trip(temp_dir, ext):
     assert sheet.get_formula_at(1, 2) == "=IF(A1>0,A2,A3)"
     assert sheet.get_formula_at(2, 2) == "=SUM(MyRange)"
     assert sheet.get_cell("C1").as_number() == 6.0
+
+
+def _open_with_mismatched_extension(temp_dir, saved_ext, opened_ext):
+    import duke_sheets
+
+    source = os.path.join(temp_dir, f"source{saved_ext}")
+    mismatched = os.path.join(temp_dir, f"mismatched{opened_ext}")
+    _build_sample().save(source)
+    shutil.copyfile(source, mismatched)
+
+    _assert_sample(duke_sheets.Workbook.open(mismatched))
 
 
 class TestFormatRoundTrips:
@@ -60,3 +76,12 @@ class TestFormatRoundTrips:
 
     def test_xlsx_round_trip(self, temp_dir):
         _round_trip(temp_dir, ".xlsx")
+
+    def test_opens_xlsb_content_with_xlsx_extension(self, temp_dir):
+        _open_with_mismatched_extension(temp_dir, ".xlsb", ".xlsx")
+
+    def test_opens_xlsx_content_with_xlsb_extension(self, temp_dir):
+        _open_with_mismatched_extension(temp_dir, ".xlsx", ".xlsb")
+
+    def test_opens_xls_content_with_xlsx_extension(self, temp_dir):
+        _open_with_mismatched_extension(temp_dir, ".xls", ".xlsx")

@@ -33,24 +33,44 @@ function buildSample(): Workbook {
   return wb;
 }
 
+function assertSample(opened: Workbook) {
+  const sheet = opened.getSheet(0);
+  if (!sheet) throw new Error("opened workbook has no sheet 0");
+  expect(sheet.getCell("A1").asNumber()).toBe(1);
+  expect(sheet.getCell("B1").asText()).toBe("label");
+  expect(sheet.getCell("B2").asBoolean()).toBe(true);
+  expect(sheet.getFormulaAt(0, 2)).toBe("=SUM(A1:A3)");
+  expect(sheet.getFormulaAt(1, 2)).toBe("=IF(A1>0,A2,A3)");
+  expect(sheet.getFormulaAt(2, 2)).toBe("=SUM(MyRange)");
+  expect(sheet.getCell("C1").asNumber()).toBe(6);
+}
+
 function roundTrip(ext: string) {
   const file = tempPath(ext);
   try {
     buildSample().save(file);
     const opened = Workbook.open(file);
-    const sheet = opened.getSheet(0);
-    if (!sheet) throw new Error("opened workbook has no sheet 0");
-    expect(sheet.getCell("A1").asNumber()).toBe(1);
-    expect(sheet.getCell("B1").asText()).toBe("label");
-    expect(sheet.getCell("B2").asBoolean()).toBe(true);
-    expect(sheet.getFormulaAt(0, 2)).toBe("=SUM(A1:A3)");
-    expect(sheet.getFormulaAt(1, 2)).toBe("=IF(A1>0,A2,A3)");
-    expect(sheet.getFormulaAt(2, 2)).toBe("=SUM(MyRange)");
-    expect(sheet.getCell("C1").asNumber()).toBe(6);
+    assertSample(opened);
   } finally {
     try {
       fs.unlinkSync(file);
     } catch {}
+  }
+}
+
+function openWithMismatchedExtension(savedExt: string, openedExt: string) {
+  const source = tempPath(savedExt);
+  const mismatched = tempPath(openedExt);
+  try {
+    buildSample().save(source);
+    fs.copyFileSync(source, mismatched);
+    assertSample(Workbook.open(mismatched));
+  } finally {
+    for (const file of [source, mismatched]) {
+      try {
+        fs.unlinkSync(file);
+      } catch {}
+    }
   }
 }
 
@@ -65,5 +85,17 @@ describe("plain format save/open round-trips", () => {
 
   it("xlsx round-trips values, formulas, and named ranges", () => {
     roundTrip(".xlsx");
+  });
+
+  it("opens xlsb content even with an xlsx extension", () => {
+    openWithMismatchedExtension(".xlsb", ".xlsx");
+  });
+
+  it("opens xlsx content even with an xlsb extension", () => {
+    openWithMismatchedExtension(".xlsx", ".xlsb");
+  });
+
+  it("opens xls content even with an xlsx extension", () => {
+    openWithMismatchedExtension(".xls", ".xlsx");
   });
 });

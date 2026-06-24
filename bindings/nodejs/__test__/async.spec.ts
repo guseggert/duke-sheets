@@ -38,6 +38,28 @@ describe("Async open", () => {
   it("openAsync rejects for non-existent file", async () => {
     await expect(openAsync("/no/such/file.xlsx")).rejects.toThrow();
   });
+
+  it("openAsync detects xlsb content even with an xlsx extension", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-async-"));
+    const sourcePath = path.join(tmpDir, "source.xlsb");
+    const mismatchedPath = path.join(tmpDir, "mismatched.xlsx");
+
+    try {
+      const wb = new Workbook();
+      const sheet = wb.getSheet(0);
+      sheet.setCell("A1", 42);
+      sheet.setCell("B1", "xlsb");
+      wb.save(sourcePath);
+      fs.copyFileSync(sourcePath, mismatchedPath);
+
+      const wb2 = await openAsync(mismatchedPath);
+      const sheet2 = wb2.getSheet(0);
+      expect(sheet2.getCell("A1").asNumber()).toBe(42);
+      expect(sheet2.getCell("B1").asText()).toBe("xlsb");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Async fromBytes", () => {
