@@ -14,8 +14,9 @@ use crate::{
     roundtrip_through_excel, temp_fixture,
 };
 use duke_sheets_chart::{
-    Axis, CellMarker, Chart, ChartType, DataLabels, DataReference, DataSeries, DrawingAnchor,
-    Legend, LegendPosition, Marker, MarkerSymbol, Trendline, TrendlineType,
+    Axis, CellMarker, Chart, ChartColor, ChartLine, ChartShapeProperties, ChartType, DataLabels,
+    DataPoint, DataReference, DataSeries, DrawingAnchor, Legend, LegendPosition, Marker,
+    MarkerSymbol, Trendline, TrendlineType,
 };
 use duke_sheets_core::{ChartSheet, SheetVisibility, Workbook};
 use duke_sheets_xlsx::XlsxWriter;
@@ -44,6 +45,44 @@ fn sample_series(sheet: &str, col: &str) -> DataSeries {
     DataSeries::new(DataReference::formula(format!("{sheet}!${col}$2:${col}$7")))
         .with_name(format!("{sheet}!${col}$1"))
         .with_categories(DataReference::formula(format!("{sheet}!$A$2:$A$7")))
+}
+
+fn chart_color(hex: &str) -> ChartColor {
+    ChartColor { hex: hex.into() }
+}
+
+fn solid_fill(hex: &str) -> ChartShapeProperties {
+    ChartShapeProperties {
+        solid_fill: Some(chart_color(hex)),
+        no_fill: false,
+        line: None,
+    }
+}
+
+fn line_fill(hex: &str) -> ChartShapeProperties {
+    ChartShapeProperties {
+        solid_fill: None,
+        no_fill: false,
+        line: Some(ChartLine {
+            width: Some(9360),
+            solid_fill: Some(chart_color(hex)),
+            no_fill: false,
+            dash_style: None,
+        }),
+    }
+}
+
+fn fill_and_line(fill_hex: &str, line_hex: &str) -> ChartShapeProperties {
+    ChartShapeProperties {
+        solid_fill: Some(chart_color(fill_hex)),
+        no_fill: false,
+        line: Some(ChartLine {
+            width: Some(9360),
+            solid_fill: Some(chart_color(line_hex)),
+            no_fill: false,
+            dash_style: None,
+        }),
+    }
 }
 
 fn build_chart_parity_workbook() -> Workbook {
@@ -121,10 +160,21 @@ fn build_chart_parity_workbook() -> Workbook {
     let mut c = Chart::new(ChartType::ColumnClustered);
     c.title = Some("ColumnClustered".into());
     c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
-    c.add_series(sample_series("Data", "B"));
-    c.add_series(sample_series("Data", "C"));
-    c.category_axis = Some(Axis::new().with_title("Month"));
-    c.value_axis = Some(Axis::new().with_title("Value"));
+    c.shape_properties = Some(fill_and_line("FAFBFC", "D9D9D9"));
+    let mut revenue = sample_series("Data", "B");
+    revenue.shape_properties = Some(solid_fill("112233"));
+    c.add_series(revenue);
+    let mut profit = sample_series("Data", "C");
+    profit.shape_properties = Some(solid_fill("445566"));
+    c.add_series(profit);
+    let mut cat_axis = Axis::new().with_title("Month");
+    cat_axis.shape_properties = Some(line_fill("878787"));
+    c.category_axis = Some(cat_axis);
+    let mut val_axis = Axis::new().with_title("Value");
+    val_axis.major_gridlines = true;
+    val_axis.major_gridlines_shape_properties = Some(line_fill("D9D9D9"));
+    val_axis.shape_properties = Some(line_fill("878787"));
+    c.value_axis = Some(val_axis);
     c.legend = Some(Legend::new(LegendPosition::Bottom));
     sheet.add_chart(c);
     row_cursor += row_step;
@@ -200,7 +250,29 @@ fn build_chart_parity_workbook() -> Workbook {
     let mut c = Chart::new(ChartType::Pie);
     c.title = Some("Pie".into());
     c.anchor = default_anchor(row_cursor, row_cursor + row_step - 1);
-    c.add_series(sample_series("Data", "B"));
+    let mut s = sample_series("Data", "B");
+    s.shape_properties = Some(solid_fill("112233"));
+    s.data_points = vec![
+        DataPoint {
+            index: 1,
+            marker: None,
+            explosion: None,
+            shape_properties: Some(solid_fill("445566")),
+        },
+        DataPoint {
+            index: 2,
+            marker: None,
+            explosion: None,
+            shape_properties: Some(solid_fill("778899")),
+        },
+        DataPoint {
+            index: 3,
+            marker: None,
+            explosion: None,
+            shape_properties: Some(solid_fill("ABCDEF")),
+        },
+    ];
+    c.add_series(s);
     c.legend = Some(Legend::new(LegendPosition::Right));
     sheet.add_chart(c);
     row_cursor += row_step;
@@ -435,6 +507,40 @@ fn chart_roundtrip_through_excel() {
         );
     }
 
+    fn assert_solid_fill(sp: &Option<ChartShapeProperties>, expected: &str, ctx: &str) {
+        let actual = sp
+            .as_ref()
+            .and_then(|sp| sp.solid_fill.as_ref())
+            .map(|color| color.hex.as_str())
+            .unwrap_or_else(|| panic!("{ctx}: missing solid fill"));
+        assert!(
+            actual.eq_ignore_ascii_case(expected),
+            "{ctx}: expected solid fill {expected}, got {actual}"
+        );
+    }
+
+    fn assert_line_fill(sp: &Option<ChartShapeProperties>, expected: &str, ctx: &str) {
+        let actual = sp
+            .as_ref()
+            .and_then(|sp| sp.line.as_ref())
+            .and_then(|line| line.solid_fill.as_ref())
+            .map(|color| color.hex.as_str())
+            .unwrap_or_else(|| panic!("{ctx}: missing line fill"));
+        assert!(
+            actual.eq_ignore_ascii_case(expected),
+            "{ctx}: expected line fill {expected}, got {actual}"
+        );
+    }
+
+    fn assert_data_point_fill(series: &DataSeries, idx: u32, expected: &str, ctx: &str) {
+        let point = series
+            .data_points
+            .iter()
+            .find(|point| point.index == idx)
+            .unwrap_or_else(|| panic!("{ctx}: missing data point {idx}"));
+        assert_solid_fill(&point.shape_properties, expected, ctx);
+    }
+
     let charts = ws2.charts();
     let orig_charts = wb.worksheet(0).unwrap().charts();
 
@@ -535,6 +641,34 @@ fn chart_roundtrip_through_excel() {
             "chart 0 valAx title"
         );
         assert_legend_pos(c, LegendPosition::Bottom, "chart 0 (ColumnClustered)");
+        assert_solid_fill(&c.shape_properties, "FAFBFC", "chart 0 chartSpace fill");
+        assert_line_fill(&c.shape_properties, "D9D9D9", "chart 0 chartSpace line");
+        assert_solid_fill(
+            &c.series[0].shape_properties,
+            "112233",
+            "chart 0 series 0 fill",
+        );
+        assert_solid_fill(
+            &c.series[1].shape_properties,
+            "445566",
+            "chart 0 series 1 fill",
+        );
+        assert_line_fill(
+            &cat_ax.shape_properties,
+            "878787",
+            "chart 0 category axis line",
+        );
+        assert_line_fill(
+            &val_ax.shape_properties,
+            "878787",
+            "chart 0 value axis line",
+        );
+        assert!(val_ax.major_gridlines, "chart 0 missing major gridlines");
+        assert_line_fill(
+            &val_ax.major_gridlines_shape_properties,
+            "D9D9D9",
+            "chart 0 major gridlines line",
+        );
     }
 
     // 3: BarClustered - legend position
@@ -562,6 +696,14 @@ fn chart_roundtrip_through_excel() {
             c.value_axis.is_none(),
             "chart 8 (Pie) should have no value_axis"
         );
+        assert_solid_fill(
+            &c.series[0].shape_properties,
+            "112233",
+            "chart 8 series fill",
+        );
+        assert_data_point_fill(&c.series[0], 1, "445566", "chart 8 point 1 fill");
+        assert_data_point_fill(&c.series[0], 2, "778899", "chart 8 point 2 fill");
+        assert_data_point_fill(&c.series[0], 3, "ABCDEF", "chart 8 point 3 fill");
     }
 
     // 9: PieExploded - explosion=25

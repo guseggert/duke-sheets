@@ -104,8 +104,11 @@ pub fn parse_chart_xml<R: Read>(reader: R) -> ChartParseResult<Chart> {
 enum SpPrContext {
     None,
     Series,
+    DataPoint,
     CatAxis,
     ValAxis,
+    MajorGridlines,
+    MinorGridlines,
     ChartSpace,
     Legend,
     DropLines,
@@ -256,6 +259,7 @@ fn parse_chart_xml_inner<R: Read>(
     let mut dpt_index: u32 = 0;
     let mut dpt_explosion: Option<u32> = None;
     let mut dpt_marker: Option<Marker> = None;
+    let mut dpt_shape_properties: Option<ChartShapeProperties> = None;
     let mut ser_data_points: Vec<DataPoint> = Vec::new();
 
     // Marker state
@@ -302,6 +306,10 @@ fn parse_chart_xml_inner<R: Read>(
     let mut ax_number_format: Option<NumberFormat> = None;
     let mut ax_major_gridlines = false;
     let mut ax_minor_gridlines = false;
+    let mut in_ax_major_gridlines = false;
+    let mut in_ax_minor_gridlines = false;
+    let mut ax_major_gridlines_shape_properties: Option<ChartShapeProperties> = None;
+    let mut ax_minor_gridlines_shape_properties: Option<ChartShapeProperties> = None;
     let mut ax_major_tick_mark: Option<TickMark> = None;
     let mut ax_minor_tick_mark: Option<TickMark> = None;
     let mut ax_label_position: Option<TickLabelPosition> = None;
@@ -478,6 +486,7 @@ fn parse_chart_xml_inner<R: Read>(
                         dpt_index = 0;
                         dpt_explosion = None;
                         dpt_marker = None;
+                        dpt_shape_properties = None;
                     }
                     // Trendline
                     b"trendline" if in_ser => {
@@ -535,6 +544,10 @@ fn parse_chart_xml_inner<R: Read>(
                         ax_number_format = None;
                         ax_major_gridlines = false;
                         ax_minor_gridlines = false;
+                        in_ax_major_gridlines = false;
+                        in_ax_minor_gridlines = false;
+                        ax_major_gridlines_shape_properties = None;
+                        ax_minor_gridlines_shape_properties = None;
                         ax_major_tick_mark = None;
                         ax_minor_tick_mark = None;
                         ax_label_position = None;
@@ -557,6 +570,10 @@ fn parse_chart_xml_inner<R: Read>(
                         ax_number_format = None;
                         ax_major_gridlines = false;
                         ax_minor_gridlines = false;
+                        in_ax_major_gridlines = false;
+                        in_ax_minor_gridlines = false;
+                        ax_major_gridlines_shape_properties = None;
+                        ax_minor_gridlines_shape_properties = None;
                         ax_major_tick_mark = None;
                         ax_minor_tick_mark = None;
                         ax_label_position = None;
@@ -579,6 +596,10 @@ fn parse_chart_xml_inner<R: Read>(
                         ax_number_format = None;
                         ax_major_gridlines = false;
                         ax_minor_gridlines = false;
+                        in_ax_major_gridlines = false;
+                        in_ax_minor_gridlines = false;
+                        ax_major_gridlines_shape_properties = None;
+                        ax_minor_gridlines_shape_properties = None;
                         ax_major_tick_mark = None;
                         ax_minor_tick_mark = None;
                         ax_label_position = None;
@@ -604,9 +625,11 @@ fn parse_chart_xml_inner<R: Read>(
                     }
                     b"majorGridlines" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
                         ax_major_gridlines = true;
+                        in_ax_major_gridlines = true;
                     }
                     b"minorGridlines" if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title => {
                         ax_minor_gridlines = true;
+                        in_ax_minor_gridlines = true;
                     }
                     b"numFmt"
                         if (in_cat_ax || in_val_ax || in_ser_ax) && !in_ax_title && !in_dlbls =>
@@ -641,6 +664,8 @@ fn parse_chart_xml_inner<R: Read>(
                             sp_pr_context = SpPrContext::DownBars;
                         } else if in_leader_lines {
                             sp_pr_context = SpPrContext::LeaderLines;
+                        } else if in_dpt && !in_marker && !in_dlbls {
+                            sp_pr_context = SpPrContext::DataPoint;
                         } else if in_ser
                             && !in_dpt
                             && !in_trendline
@@ -649,13 +674,17 @@ fn parse_chart_xml_inner<R: Read>(
                             && !in_dlbls
                         {
                             sp_pr_context = SpPrContext::Series;
+                        } else if in_ax_major_gridlines {
+                            sp_pr_context = SpPrContext::MajorGridlines;
+                        } else if in_ax_minor_gridlines {
+                            sp_pr_context = SpPrContext::MinorGridlines;
                         } else if in_cat_ax || in_ser_ax {
                             sp_pr_context = SpPrContext::CatAxis;
                         } else if in_val_ax {
                             sp_pr_context = SpPrContext::ValAxis;
                         } else if in_legend {
                             sp_pr_context = SpPrContext::Legend;
-                        } else if in_chart && !in_plot_area && !in_chart_title {
+                        } else if in_chart_space && !in_chart && !in_plot_area {
                             sp_pr_context = SpPrContext::ChartSpace;
                         } else {
                             sp_pr_context = SpPrContext::None;
@@ -1225,6 +1254,7 @@ fn parse_chart_xml_inner<R: Read>(
                             index: dpt_index,
                             marker: dpt_marker.take(),
                             explosion: dpt_explosion.take(),
+                            shape_properties: dpt_shape_properties.take(),
                         });
                         in_dpt = false;
                     }
@@ -1335,6 +1365,10 @@ fn parse_chart_xml_inner<R: Read>(
                         axis.number_format = ax_number_format.take();
                         axis.major_gridlines = ax_major_gridlines;
                         axis.minor_gridlines = ax_minor_gridlines;
+                        axis.major_gridlines_shape_properties =
+                            ax_major_gridlines_shape_properties.take();
+                        axis.minor_gridlines_shape_properties =
+                            ax_minor_gridlines_shape_properties.take();
                         axis.major_tick_mark = ax_major_tick_mark.take();
                         axis.minor_tick_mark = ax_minor_tick_mark.take();
                         axis.label_position = ax_label_position.take();
@@ -1376,6 +1410,10 @@ fn parse_chart_xml_inner<R: Read>(
                         axis.number_format = ax_number_format.take();
                         axis.major_gridlines = ax_major_gridlines;
                         axis.minor_gridlines = ax_minor_gridlines;
+                        axis.major_gridlines_shape_properties =
+                            ax_major_gridlines_shape_properties.take();
+                        axis.minor_gridlines_shape_properties =
+                            ax_minor_gridlines_shape_properties.take();
                         axis.major_tick_mark = ax_major_tick_mark.take();
                         axis.minor_tick_mark = ax_minor_tick_mark.take();
                         axis.label_position = ax_label_position.take();
@@ -1416,6 +1454,10 @@ fn parse_chart_xml_inner<R: Read>(
                         axis.number_format = ax_number_format.take();
                         axis.major_gridlines = ax_major_gridlines;
                         axis.minor_gridlines = ax_minor_gridlines;
+                        axis.major_gridlines_shape_properties =
+                            ax_major_gridlines_shape_properties.take();
+                        axis.minor_gridlines_shape_properties =
+                            ax_minor_gridlines_shape_properties.take();
                         axis.major_tick_mark = ax_major_tick_mark.take();
                         axis.minor_tick_mark = ax_minor_tick_mark.take();
                         axis.label_position = ax_label_position.take();
@@ -1446,6 +1488,8 @@ fn parse_chart_xml_inner<R: Read>(
                     b"r" if in_ax_title_r => in_ax_title_r = false,
                     b"t" if in_ax_title_t => in_ax_title_t = false,
                     b"scaling" if in_ax_scaling => in_ax_scaling = false,
+                    b"majorGridlines" if in_ax_major_gridlines => in_ax_major_gridlines = false,
+                    b"minorGridlines" if in_ax_minor_gridlines => in_ax_minor_gridlines = false,
                     b"legend" if in_legend => {
                         let mut leg = Legend::new(legend_pos.unwrap_or(LegendPosition::Right));
                         if let Some(true) = legend_overlay {
@@ -1481,11 +1525,22 @@ fn parse_chart_xml_inner<R: Read>(
                                     SpPrContext::Series => {
                                         ser_shape_properties = Some(props);
                                     }
+                                    SpPrContext::DataPoint => {
+                                        dpt_shape_properties = Some(props);
+                                    }
                                     SpPrContext::CatAxis => {
                                         ax_shape_properties = Some(props);
                                     }
                                     SpPrContext::ValAxis => {
                                         ax_shape_properties = Some(props);
+                                    }
+                                    SpPrContext::MajorGridlines => {
+                                        ax_major_gridlines = true;
+                                        ax_major_gridlines_shape_properties = Some(props);
+                                    }
+                                    SpPrContext::MinorGridlines => {
+                                        ax_minor_gridlines = true;
+                                        ax_minor_gridlines_shape_properties = Some(props);
                                     }
                                     SpPrContext::ChartSpace => {
                                         result.shape_properties = Some(props);

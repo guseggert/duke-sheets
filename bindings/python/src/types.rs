@@ -2426,6 +2426,10 @@ pub struct PyAxis {
     #[pyo3(get)]
     pub minor_gridlines: bool,
     #[pyo3(get)]
+    pub major_gridlines_shape_properties: Option<PyChartShapeProperties>,
+    #[pyo3(get)]
+    pub minor_gridlines_shape_properties: Option<PyChartShapeProperties>,
+    #[pyo3(get)]
     pub major_tick_mark: Option<String>,
     #[pyo3(get)]
     pub minor_tick_mark: Option<String>,
@@ -2459,6 +2463,8 @@ impl From<&duke_sheets::Axis> for PyAxis {
             number_format: a.number_format.as_ref().map(PyChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,
+            major_gridlines_shape_properties: a.major_gridlines_shape_properties.as_ref().map(PyChartShapeProperties::from),
+            minor_gridlines_shape_properties: a.minor_gridlines_shape_properties.as_ref().map(PyChartShapeProperties::from),
             major_tick_mark: a.major_tick_mark.as_ref().map(|t| match t {
                 chart::TickMark::Cross => "cross",
                 chart::TickMark::Inside => "inside",
@@ -2637,6 +2643,8 @@ pub struct PyChart {
     #[pyo3(get)]
     pub layout: Option<PyLayout>,
     #[pyo3(get)]
+    pub shape_properties: Option<PyChartShapeProperties>,
+    #[pyo3(get)]
     pub is_3d: bool,
     #[pyo3(get)]
     pub vary_colors: Option<bool>,
@@ -2700,6 +2708,7 @@ impl From<&duke_sheets::Chart> for PyChart {
             }.into()),
             plot_visible_only: c.plot_visible_only,
             layout: c.layout.as_ref().map(PyLayout::from),
+            shape_properties: c.shape_properties.as_ref().map(PyChartShapeProperties::from),
             is_3d: c.is_3d,
             vary_colors: c.vary_colors,
             gap_width: c.gap_width,
@@ -2919,6 +2928,8 @@ pub struct PyDataPoint {
     pub marker: Option<PyMarker>,
     #[pyo3(get)]
     pub explosion: Option<u32>,
+    #[pyo3(get)]
+    pub shape_properties: Option<PyChartShapeProperties>,
 }
 
 impl From<&chart::DataPoint> for PyDataPoint {
@@ -2927,6 +2938,7 @@ impl From<&chart::DataPoint> for PyDataPoint {
             index: p.index,
             marker: p.marker.as_ref().map(PyMarker::from),
             explosion: p.explosion,
+            shape_properties: p.shape_properties.as_ref().map(PyChartShapeProperties::from),
         }
     }
 }

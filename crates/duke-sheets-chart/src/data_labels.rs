@@ -45,6 +45,7 @@ pub struct DataPoint {
     pub marker: Option<Marker>,
     /// Pie explosion percent
     pub explosion: Option<u32>,
+    pub shape_properties: Option<ChartShapeProperties>,
 }
 
 /// Per-point data label override

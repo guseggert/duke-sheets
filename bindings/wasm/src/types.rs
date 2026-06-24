@@ -2165,6 +2165,7 @@ pub struct WasmDataPoint {
     pub index: u32,
     pub marker: Option<WasmMarker>,
     pub explosion: Option<u32>,
+    pub shape_properties: Option<WasmChartShapeProperties>,
 }
 
 impl From<&duke_sheets_chart::DataPoint> for WasmDataPoint {
@@ -2173,6 +2174,7 @@ impl From<&duke_sheets_chart::DataPoint> for WasmDataPoint {
             index: dp.index,
             marker: dp.marker.as_ref().map(WasmMarker::from),
             explosion: dp.explosion,
+            shape_properties: dp.shape_properties.as_ref().map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2306,6 +2308,8 @@ pub struct WasmAxis {
     pub number_format: Option<WasmChartNumberFormat>,
     pub major_gridlines: bool,
     pub minor_gridlines: bool,
+    pub major_gridlines_shape_properties: Option<WasmChartShapeProperties>,
+    pub minor_gridlines_shape_properties: Option<WasmChartShapeProperties>,
     pub major_tick_mark: Option<String>,
     pub minor_tick_mark: Option<String>,
     pub label_position: Option<String>,
@@ -2334,6 +2338,8 @@ impl From<&duke_sheets_chart::Axis> for WasmAxis {
             number_format: a.number_format.as_ref().map(WasmChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,
+            major_gridlines_shape_properties: a.major_gridlines_shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            minor_gridlines_shape_properties: a.minor_gridlines_shape_properties.as_ref().map(WasmChartShapeProperties::from),
             major_tick_mark: a.major_tick_mark.as_ref().map(|t| {
                 match t {
                     TickMark::Cross => "cross",
@@ -2490,6 +2496,7 @@ pub struct WasmChart {
     pub display_blanks_as: Option<String>,
     pub plot_visible_only: Option<bool>,
     pub layout: Option<WasmLayout>,
+    pub shape_properties: Option<WasmChartShapeProperties>,
     pub is_3d: bool,
     pub vary_colors: Option<bool>,
     pub gap_width: Option<u32>,
@@ -2539,6 +2546,7 @@ impl From<&duke_sheets_chart::Chart> for WasmChart {
             }),
             plot_visible_only: c.plot_visible_only,
             layout: c.layout.as_ref().map(WasmLayout::from),
+            shape_properties: c.shape_properties.as_ref().map(WasmChartShapeProperties::from),
             is_3d: c.is_3d,
             vary_colors: c.vary_colors,
             gap_width: c.gap_width,
