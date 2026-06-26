@@ -115,6 +115,8 @@ impl XlsbWriter {
     }
 
     pub fn write<W: Write + Seek>(workbook: &Workbook, writer: W) -> XlsbResult<()> {
+        reject_unsupported_pivot_tables(workbook)?;
+
         let mut zip = ZipWriter::new(writer);
         let options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -547,6 +549,20 @@ impl XlsbWriter {
         zip.write_all(DEFAULT_THEME_XML.as_bytes())?;
         Ok(())
     }
+}
+
+fn reject_unsupported_pivot_tables(workbook: &Workbook) -> XlsbResult<()> {
+    let has_pivot_tables = (0..workbook.sheet_count()).any(|i| {
+        workbook
+            .worksheet(i)
+            .is_some_and(|worksheet| !worksheet.pivot_tables().is_empty())
+    });
+    if has_pivot_tables {
+        return Err(crate::error::XlsbError::InvalidFormat(
+            "XLSB pivot table writing is not implemented; write XLSX or refresh/export the pivot range before saving as XLSB".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn collect_xlfn_names(workbook: &Workbook) -> HashMap<String, u32> {

@@ -148,6 +148,7 @@ impl XlsWriter {
     /// Serialize a workbook to BIFF8 bytes (CFB envelope with a single
     /// `/Workbook` stream).
     pub fn write_to_bytes(workbook: &Workbook) -> XlsResult<Vec<u8>> {
+        reject_unsupported_pivot_tables(workbook)?;
         let stream = build_workbook_stream(workbook)?;
         wrap_workbook_stream_in_cfb(stream)
     }
@@ -170,6 +171,7 @@ impl XlsWriter {
         password: &str,
         variant: duke_sheets_crypto::xls::XlsEncryptionVariant,
     ) -> XlsResult<Vec<u8>> {
+        reject_unsupported_pivot_tables(workbook)?;
         let plain = build_workbook_stream(workbook)?;
         let encrypted = duke_sheets_crypto::xls::encrypt_workbook_stream(&plain, password, variant)
             .map_err(XlsError::from)?;
@@ -188,6 +190,20 @@ impl XlsWriter {
         f.write_all(&bytes)?;
         Ok(())
     }
+}
+
+fn reject_unsupported_pivot_tables(workbook: &Workbook) -> XlsResult<()> {
+    let has_pivot_tables = (0..workbook.sheet_count()).any(|i| {
+        workbook
+            .worksheet(i)
+            .is_some_and(|worksheet| !worksheet.pivot_tables().is_empty())
+    });
+    if has_pivot_tables {
+        return Err(XlsError::InvalidFormat(
+            "XLS pivot table writing is not implemented; write XLSX or refresh/export the pivot range before saving as XLS".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn wrap_workbook_stream_in_cfb(stream: Vec<u8>) -> XlsResult<Vec<u8>> {

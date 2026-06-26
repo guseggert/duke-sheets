@@ -8,8 +8,20 @@
 
 use std::io::Cursor;
 
-use duke_sheets_core::Workbook;
+use duke_sheets_core::{CellRange, PivotAggregate, PivotTable, Workbook};
 use duke_sheets_xls::{XlsReader, XlsWriter};
+
+fn add_test_pivot(wb: &mut Workbook) {
+    let pivot = PivotTable::builder("SalesPivot")
+        .source_range(CellRange::parse("A1:B2").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .named_measure("Sales", PivotAggregate::Sum, "Total Sales")
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
 
 #[test]
 fn empty_default_workbook_round_trips_via_reader() {
@@ -22,6 +34,19 @@ fn empty_default_workbook_round_trips_via_reader() {
 
     assert_eq!(parsed.sheet_count(), original_count);
     assert_eq!(parsed.worksheet(0).unwrap().name(), original_name);
+}
+
+#[test]
+fn semantic_pivot_tables_are_rejected_instead_of_dropped() {
+    let mut wb = Workbook::new();
+    add_test_pivot(&mut wb);
+
+    let err = XlsWriter::write_to_bytes(&wb).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("XLS pivot table writing is not implemented"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

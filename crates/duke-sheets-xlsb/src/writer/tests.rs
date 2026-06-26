@@ -5,7 +5,7 @@ mod tests {
     use duke_sheets_core::style::{
         BorderEdge, BorderLineStyle, Color, FillStyle, NumberFormat, Style,
     };
-    use duke_sheets_core::{CellValue, Workbook};
+    use duke_sheets_core::{CellRange, CellValue, PivotAggregate, PivotTable, Workbook};
 
     use crate::reader::XlsbReader;
     use crate::writer::XlsbWriter;
@@ -16,11 +16,37 @@ mod tests {
         XlsbReader::read(Cursor::new(&buf)).unwrap()
     }
 
+    fn add_test_pivot(wb: &mut Workbook) {
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B2").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Sales", PivotAggregate::Sum, "Total Sales")
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
     #[test]
     fn empty_workbook() {
         let wb = Workbook::new();
         let wb2 = round_trip(&wb);
         assert_eq!(wb2.sheet_count(), 1);
+    }
+
+    #[test]
+    fn semantic_pivot_tables_are_rejected_instead_of_dropped() {
+        let mut wb = Workbook::new();
+        add_test_pivot(&mut wb);
+
+        let mut buf = Vec::new();
+        let err = XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("XLSB pivot table writing is not implemented"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
