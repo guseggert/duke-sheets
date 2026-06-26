@@ -2603,6 +2603,22 @@ impl From<&duke_sheets_chart::ChartAxis> for WasmChartAxis {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmPivotChartSource {
+    pub name: String,
+    pub format_id: u32,
+}
+
+impl From<&duke_sheets_chart::PivotChartSource> for WasmPivotChartSource {
+    fn from(s: &duke_sheets_chart::PivotChartSource) -> Self {
+        Self {
+            name: s.name.clone(),
+            format_id: s.format_id,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmChart {
     pub chart_type: String,
     pub title: Option<String>,
@@ -2628,6 +2644,7 @@ pub struct WasmChart {
     pub show_negative_bubbles: Option<bool>,
     pub auto_title_deleted: Option<bool>,
     pub rounded_corners: Option<bool>,
+    pub pivot_source: Option<WasmPivotChartSource>,
     pub show_dlbls_over_max: Option<bool>,
     pub wireframe: Option<bool>,
     pub radar_style: Option<String>,
@@ -2681,6 +2698,7 @@ impl From<&duke_sheets_chart::Chart> for WasmChart {
             show_negative_bubbles: c.show_negative_bubbles,
             auto_title_deleted: c.auto_title_deleted,
             rounded_corners: c.rounded_corners,
+            pivot_source: c.pivot_source.as_ref().map(WasmPivotChartSource::from),
             show_dlbls_over_max: c.show_dlbls_over_max,
             wireframe: c.wireframe,
             radar_style: c.radar_style.clone(),

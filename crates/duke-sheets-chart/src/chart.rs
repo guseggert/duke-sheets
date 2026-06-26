@@ -109,6 +109,29 @@ pub struct ChartAxis {
     pub axis: Axis,
 }
 
+/// Pivot table source for a PivotChart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PivotChartSource {
+    /// Pivot table name referenced by the chart.
+    pub name: String,
+    /// Pivot format identifier used by chart-level pivot formatting.
+    pub format_id: u32,
+}
+
+impl PivotChartSource {
+    pub fn new<S: Into<String>>(name: S) -> Self {
+        Self {
+            name: name.into(),
+            format_id: 0,
+        }
+    }
+
+    pub fn with_format_id(mut self, format_id: u32) -> Self {
+        self.format_id = format_id;
+        self
+    }
+}
+
 /// Chart definition
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chart {
@@ -144,6 +167,8 @@ pub struct Chart {
     pub radar_style: Option<String>,
     pub auto_title_deleted: Option<bool>,
     pub rounded_corners: Option<bool>,
+    /// Pivot table backing this chart, when the chart is a PivotChart.
+    pub pivot_source: Option<PivotChartSource>,
     pub show_dlbls_over_max: Option<bool>,
     pub wireframe: Option<bool>,
     pub drop_lines: Option<ChartLines>,
@@ -209,6 +234,7 @@ impl Chart {
             radar_style: None,
             auto_title_deleted: None,
             rounded_corners: None,
+            pivot_source: None,
             show_dlbls_over_max: None,
             wireframe: None,
             drop_lines: None,

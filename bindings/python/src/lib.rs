@@ -1348,6 +1348,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMergedRegion>()?;
     m.add_class::<PyMergeSpan>()?;
     m.add_class::<PyChart>()?;
+    m.add_class::<PyPivotChartSource>()?;
     m.add_class::<PyDrawingAnchor>()?;
     m.add_class::<PyDataSeries>()?;
     m.add_class::<PyDataReference>()?;

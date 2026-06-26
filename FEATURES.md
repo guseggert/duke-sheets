@@ -460,7 +460,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Grouping (dates, numbers) | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::tests::test_writer_round_trips_pivot_grouping` | §18.10.1 CT_FieldGroup/CT_RangePr | Basic numeric `rangePr` bins and single-unit date grouping round-trip; grouped-field hierarchies, discrete groups, `groupItems`, and multi-unit date grouping are not complete yet |
 | Slicers | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.3.16 |
 | Timelines | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.3.20 |
-| PivotChart | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §21.3 |
+| PivotChart | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::chart::tests::test_pivot_source_roundtrip` | §21.3 CT_PivotSource | Basic chart-level `c:pivotSource` name/fmtId round-trips; generated PivotChart series, pivot formats, slicer/timeline chart state, and Excel UI parity are not complete yet |
 
 ## External workbook links
 

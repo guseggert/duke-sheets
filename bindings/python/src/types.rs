@@ -2613,6 +2613,24 @@ impl From<&chart::ChartAxis> for PyChartAxis {
     }
 }
 
+#[pyclass(name = "PivotChartSource")]
+#[derive(Clone)]
+pub struct PyPivotChartSource {
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub format_id: u32,
+}
+
+impl From<&chart::PivotChartSource> for PyPivotChartSource {
+    fn from(s: &chart::PivotChartSource) -> Self {
+        Self {
+            name: s.name.clone(),
+            format_id: s.format_id,
+        }
+    }
+}
+
 #[pyclass(name = "Chart")]
 #[derive(Clone)]
 pub struct PyChart {
@@ -2664,6 +2682,8 @@ pub struct PyChart {
     pub auto_title_deleted: Option<bool>,
     #[pyo3(get)]
     pub rounded_corners: Option<bool>,
+    #[pyo3(get)]
+    pub pivot_source: Option<PyPivotChartSource>,
     #[pyo3(get)]
     pub show_dlbls_over_max: Option<bool>,
     #[pyo3(get)]
@@ -2719,6 +2739,7 @@ impl From<&duke_sheets::Chart> for PyChart {
             show_negative_bubbles: c.show_negative_bubbles,
             auto_title_deleted: c.auto_title_deleted,
             rounded_corners: c.rounded_corners,
+            pivot_source: c.pivot_source.as_ref().map(PyPivotChartSource::from),
             show_dlbls_over_max: c.show_dlbls_over_max,
             wireframe: c.wireframe,
             radar_style: c.radar_style.clone(),

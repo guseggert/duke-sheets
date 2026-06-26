@@ -7,8 +7,8 @@ use duke_sheets_chart::{
     ChartLine, ChartLines, ChartShapeProperties, ChartType, ChartTypeGroup, CrossBetween,
     DataLabelPosition, DataLabels, DataPoint, DataReference, DataSeries, DisplayBlanksAs,
     ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType, Layout, Legend, LegendPosition,
-    Marker, MarkerSymbol, NumberFormat, TickLabelPosition, TickMark, Trendline, TrendlineType,
-    UpDownBars, View3D,
+    Marker, MarkerSymbol, NumberFormat, PivotChartSource, TickLabelPosition, TickMark, Trendline,
+    TrendlineType, UpDownBars, View3D,
 };
 
 use super::{write_xml_part, XlsxResult, XmlWriter, NS_DOC_RELS};
@@ -33,6 +33,9 @@ fn write_chart_space(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
     w.write_event(Event::Start(tag))?;
 
     write_bool_element(w, "c:roundedCorners", chart.rounded_corners)?;
+    if let Some(source) = &chart.pivot_source {
+        write_pivot_source(w, source)?;
+    }
 
     w.write_event(Event::Start(BytesStart::new("c:chart")))?;
 
@@ -80,6 +83,17 @@ fn write_chart_space(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
         w.get_mut().write_all(raw)?;
     }
     w.write_event(Event::End(BytesEnd::new("c:chartSpace")))?;
+    Ok(())
+}
+
+fn write_pivot_source(w: &mut XmlWriter, source: &PivotChartSource) -> XlsxResult<()> {
+    w.write_event(Event::Start(BytesStart::new("c:pivotSource")))?;
+    w.create_element("c:name")
+        .write_text_content(BytesText::new(&source.name))?;
+    w.create_element("c:fmtId")
+        .with_attribute(("val", source.format_id.to_string().as_str()))
+        .write_empty()?;
+    w.write_event(Event::End(BytesEnd::new("c:pivotSource")))?;
     Ok(())
 }
 
@@ -140,6 +154,7 @@ fn write_plot_area(w: &mut XmlWriter, chart: &Chart) -> XlsxResult<()> {
             radar_style: group.radar_style.clone(),
             auto_title_deleted: chart.auto_title_deleted,
             rounded_corners: chart.rounded_corners,
+            pivot_source: chart.pivot_source.clone(),
             show_dlbls_over_max: chart.show_dlbls_over_max,
             wireframe: group.wireframe,
             drop_lines: group.drop_lines.clone(),
@@ -1631,7 +1646,7 @@ mod tests {
 
     use duke_sheets_chart::{
         Axis, AxisType, Chart, ChartColor, ChartLine, ChartLines, ChartShapeProperties, ChartType,
-        DataLabels, DataReference, DataSeries, DrawingAnchor, UpDownBars,
+        DataLabels, DataReference, DataSeries, DrawingAnchor, PivotChartSource, UpDownBars,
     };
 
     use super::write_chart_part;
@@ -1718,6 +1733,26 @@ mod tests {
             .get("chartSpace")
             .expect("chartSpace extLst lost");
         assert!(std::str::from_utf8(cs).unwrap().contains("cs-ext"));
+    }
+
+    #[test]
+    fn test_pivot_source_roundtrip() {
+        let mut chart = Chart::new(ChartType::ColumnClustered);
+        chart.pivot_source = Some(PivotChartSource::new("SalesPivot").with_format_id(4));
+        chart
+            .series
+            .push(DataSeries::new(DataReference::formula("Sheet1!$A$1:$A$3")));
+
+        let written = chart_xml_after_write(&chart);
+        assert!(written.contains(
+            "<c:pivotSource><c:name>SalesPivot</c:name><c:fmtId val=\"4\"/></c:pivotSource>"
+        ));
+        let pivot_pos = written.find("<c:pivotSource>").unwrap();
+        let chart_pos = written.find("<c:chart>").unwrap();
+        assert!(pivot_pos < chart_pos);
+
+        let reparsed = roundtrip_chart(&chart);
+        assert_eq!(reparsed.pivot_source, chart.pivot_source);
     }
 
     #[test]

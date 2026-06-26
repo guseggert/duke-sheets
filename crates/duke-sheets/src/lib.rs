@@ -179,7 +179,7 @@ pub use duke_sheets_formula::{
 // Re-export chart types
 pub use duke_sheets_chart::{
     Axis, AxisPosition, CellMarker, Chart, ChartType, DataReference, DataSeries, DrawingAnchor,
-    EditAs, EmbeddedImage, ImageFormat, Legend,
+    EditAs, EmbeddedImage, ImageFormat, Legend, PivotChartSource,
 };
 
 // Re-export I/O types

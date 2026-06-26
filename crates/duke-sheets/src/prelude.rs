@@ -53,6 +53,7 @@ pub use crate::{
     ImageSizing,
     NumberFormat,
     PivotAggregate,
+    PivotChartSource,
     PivotField,
     PivotFieldRef,
     PivotFilter,

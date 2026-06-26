@@ -11,8 +11,8 @@ use crate::{
     ChartLine, ChartLines, ChartShapeProperties, ChartType, ChartTypeGroup, CrossBetween,
     DataLabelPosition, DataLabels, DataPoint, DataReference, DataSeries, DisplayBlanksAs,
     ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType, Layout, Legend, LegendPosition,
-    ManualLayout, Marker, MarkerSymbol, NumberFormat, TickLabelPosition, TickMark, Trendline,
-    TrendlineType, UpDownBars, View3D,
+    ManualLayout, Marker, MarkerSymbol, NumberFormat, PivotChartSource, TickLabelPosition,
+    TickMark, Trendline, TrendlineType, UpDownBars, View3D,
 };
 
 /// Parsed chart data before anchor assignment.
@@ -43,6 +43,7 @@ struct ParsedChart {
     radar_style: Option<String>,
     auto_title_deleted: Option<bool>,
     rounded_corners: Option<bool>,
+    pivot_source: Option<PivotChartSource>,
     show_dlbls_over_max: Option<bool>,
     wireframe: Option<bool>,
     drop_lines: Option<ChartLines>,
@@ -88,6 +89,7 @@ pub fn parse_chart_xml<R: Read>(reader: R) -> ChartParseResult<Chart> {
     chart.radar_style = parsed.radar_style;
     chart.auto_title_deleted = parsed.auto_title_deleted;
     chart.rounded_corners = parsed.rounded_corners;
+    chart.pivot_source = parsed.pivot_source;
     chart.show_dlbls_over_max = parsed.show_dlbls_over_max;
     chart.wireframe = parsed.wireframe;
     chart.drop_lines = parsed.drop_lines;
@@ -150,6 +152,7 @@ fn parse_chart_xml_inner<R: Read>(
         radar_style: None,
         auto_title_deleted: None,
         rounded_corners: None,
+        pivot_source: None,
         show_dlbls_over_max: None,
         wireframe: None,
         drop_lines: None,
@@ -178,6 +181,10 @@ fn parse_chart_xml_inner<R: Read>(
     let mut radar_style: Option<String> = None;
     let mut wireframe: Option<bool> = None;
     let mut in_chart_space = false;
+    let mut in_pivot_source = false;
+    let mut in_pivot_source_name = false;
+    let mut pivot_source_name = String::new();
+    let mut pivot_source_format_id: Option<u32> = None;
 
     // Per-group accumulators for combo chart support
     let mut group_series: Vec<DataSeries> = Vec::new();
@@ -364,6 +371,12 @@ fn parse_chart_xml_inner<R: Read>(
                 let tag = local.as_ref();
                 match tag {
                     b"chartSpace" => in_chart_space = true,
+                    b"pivotSource" if in_chart_space && !in_chart => {
+                        in_pivot_source = true;
+                        pivot_source_name.clear();
+                        pivot_source_format_id = None;
+                    }
+                    b"name" if in_pivot_source => in_pivot_source_name = true,
                     b"chart" if !in_chart => in_chart = true,
                     b"plotArea" if in_chart => in_plot_area = true,
                     b"title"
@@ -710,7 +723,9 @@ fn parse_chart_xml_inner<R: Read>(
                     b"solidFill" if in_sp_ln => sp_pr_depth += 1,
                     b"extLst" => {
                         if let Some(raw) = capture_extlst(xml_reader, &e)? {
-                            if in_ser {
+                            if in_pivot_source {
+                                // PivotSource extensions are not modeled yet.
+                            } else if in_ser {
                                 ser_raw_ext = Some(raw);
                             } else if in_cat_ax || in_val_ax || in_ser_ax {
                                 ax_raw_ext = Some(raw);
@@ -958,6 +973,9 @@ fn parse_chart_xml_inner<R: Read>(
                     b"roundedCorners" if in_chart_space && !in_chart => {
                         result.rounded_corners = get_val_bool(&e);
                     }
+                    b"fmtId" if in_pivot_source => {
+                        pivot_source_format_id = get_val_u32(&e);
+                    }
                     b"dispBlanksAs" if in_chart && !in_plot_area => {
                         result.display_blanks_as =
                             get_val_attr(&e).and_then(|s| match s.as_str() {
@@ -1077,6 +1095,8 @@ fn parse_chart_xml_inner<R: Read>(
                         trendline_name = Some(text_str.to_string());
                     } else if in_dlbls_separator {
                         dlbls.separator = Some(text_str.to_string());
+                    } else if in_pivot_source_name {
+                        pivot_source_name.push_str(text_str);
                     }
                 }
             }
@@ -1085,6 +1105,16 @@ fn parse_chart_xml_inner<R: Read>(
                 let tag = local.as_ref();
                 match tag {
                     b"chart" => in_chart = false,
+                    b"name" if in_pivot_source_name => in_pivot_source_name = false,
+                    b"pivotSource" if in_pivot_source => {
+                        if !pivot_source_name.is_empty() {
+                            result.pivot_source = Some(PivotChartSource {
+                                name: pivot_source_name.clone(),
+                                format_id: pivot_source_format_id.unwrap_or(0),
+                            });
+                        }
+                        in_pivot_source = false;
+                    }
                     b"plotArea" => in_plot_area = false,
                     b"view3D" if in_view_3d => {
                         result.view_3d = Some(view_3d.clone());
@@ -1895,6 +1925,35 @@ mod tests {
 
     fn parse_chart_xml_str(xml: &str) -> Chart {
         parse_chart_xml(Cursor::new(xml.as_bytes())).unwrap()
+    }
+
+    #[test]
+    fn test_parse_pivot_source() {
+        let xml = r#"<?xml version="1.0"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <c:pivotSource>
+    <c:name>SalesPivot</c:name>
+    <c:fmtId val="4"/>
+  </c:pivotSource>
+  <c:chart>
+    <c:plotArea>
+      <c:barChart>
+        <c:barDir val="col"/>
+        <c:grouping val="clustered"/>
+      </c:barChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>"#;
+
+        let chart = parse_chart_xml_str(xml);
+        assert_eq!(
+            chart.pivot_source,
+            Some(PivotChartSource {
+                name: "SalesPivot".into(),
+                format_id: 4,
+            })
+        );
     }
 
     #[test]
