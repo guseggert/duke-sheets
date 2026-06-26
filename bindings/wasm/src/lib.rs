@@ -10,8 +10,8 @@ use wasm_bindgen::JsCast;
 use duke_sheets::{CalculationOptions, FormulaValue, WorkbookCalculationExt, WorkbookPivotExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
-    PivotDateGroupUnit, PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
-    PivotTable, PivotValue, Workbook as CoreWorkbook,
+    PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshPolicy,
+    PivotShowAs, PivotSort, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -221,6 +221,13 @@ export interface PivotGroupingOptions {
   units?: Array<"seconds" | "minutes" | "hours" | "days" | "months" | "quarters" | "years">;
 }
 
+export interface PivotFieldOptions {
+  field: string;
+  sort?: "none" | "manual" | "ascending" | "asc" | "descending" | "desc";
+  subtotal?: "automatic" | "auto" | "none" | "sum" | "count" | "average" | "avg" | "min" | "max";
+  showEmptyItems?: boolean;
+}
+
 export interface PivotRefreshPolicyOptions {
   refreshOnOpen?: boolean;
   preserveFormatting?: boolean;
@@ -237,6 +244,9 @@ export interface PivotTableOptions {
   rows?: string[];
   columns?: string[];
   pages?: string[];
+  rowFields?: PivotFieldOptions[];
+  columnFields?: PivotFieldOptions[];
+  pageFields?: PivotFieldOptions[];
   measures: PivotMeasureOptions[];
   filters?: PivotItemFilterOptions[];
   calculatedFields?: PivotCalculatedFieldOptions[];
@@ -353,6 +363,15 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
     for field in options.pages.unwrap_or_default() {
         builder = builder.page(field);
     }
+    for field in options.row_fields.unwrap_or_default() {
+        builder = builder.row(build_pivot_field_from_wasm(field)?);
+    }
+    for field in options.column_fields.unwrap_or_default() {
+        builder = builder.column(build_pivot_field_from_wasm(field)?);
+    }
+    for field in options.page_fields.unwrap_or_default() {
+        builder = builder.page(build_pivot_field_from_wasm(field)?);
+    }
     for measure in options.measures {
         builder = builder.pivot_measure(build_pivot_measure_from_wasm(measure)?);
     }
@@ -379,6 +398,20 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
     builder.build().map_err(to_js_error)
 }
 
+fn build_pivot_field_from_wasm(options: WasmPivotFieldOptions) -> Result<PivotField, JsError> {
+    let mut field = PivotField::new(options.field);
+    if let Some(sort) = options.sort {
+        field.sort = parse_pivot_sort(&sort)?;
+    }
+    if let Some(subtotal) = options.subtotal {
+        field.subtotal = parse_pivot_subtotal(&subtotal)?;
+    }
+    if let Some(show_empty_items) = options.show_empty_items {
+        field.show_empty_items = show_empty_items;
+    }
+    Ok(field)
+}
+
 fn build_pivot_refresh_policy_from_wasm(
     options: WasmPivotRefreshPolicyOptions,
 ) -> PivotRefreshPolicy {
@@ -394,6 +427,32 @@ fn build_pivot_refresh_policy_from_wasm(
     }
     policy.missing_items_limit = options.missing_items_limit;
     policy
+}
+
+fn parse_pivot_sort(value: &str) -> Result<PivotSort, JsError> {
+    Ok(match value {
+        "none" | "manual" => PivotSort::None,
+        "ascending" | "asc" => PivotSort::Ascending,
+        "descending" | "desc" => PivotSort::Descending,
+        other => return Err(JsError::new(&format!("Unsupported pivot sort: {other}"))),
+    })
+}
+
+fn parse_pivot_subtotal(value: &str) -> Result<PivotSubtotal, JsError> {
+    Ok(match value {
+        "automatic" | "auto" => PivotSubtotal::Automatic,
+        "none" => PivotSubtotal::None,
+        "sum" => PivotSubtotal::Sum,
+        "count" => PivotSubtotal::Count,
+        "average" | "avg" => PivotSubtotal::Average,
+        "min" => PivotSubtotal::Min,
+        "max" => PivotSubtotal::Max,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot subtotal: {other}"
+            )));
+        }
+    })
 }
 
 fn build_pivot_measure_from_wasm(

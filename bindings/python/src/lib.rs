@@ -15,8 +15,9 @@ use duke_sheets::{
     CalculationOptions, FormulaValue, ImageSizing, WorkbookCalculationExt, WorkbookPivotExt,
 };
 use duke_sheets_core::{
-    CellError, CellValue as CoreCellValue, PivotAggregate, PivotDateGroupUnit, PivotFilter,
-    PivotGrouping, PivotMeasure, PivotRefreshPolicy, PivotShowAs, PivotTable, PivotValue,
+    CellError, CellValue as CoreCellValue, PivotAggregate, PivotDateGroupUnit, PivotField,
+    PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshPolicy, PivotShowAs, PivotSort,
+    PivotSubtotal, PivotTable, PivotValue,
 };
 
 mod types;
@@ -77,6 +78,30 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
     for field in optional_string_vec(dict, &["pages"])?.unwrap_or_default() {
         builder = builder.page(field);
     }
+    if let Some(row_fields) = optional_any(dict, &["row_fields", "rowFields"])? {
+        let row_fields = row_fields
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("pivot row_fields must be a list"))?;
+        for field in row_fields.iter() {
+            builder = builder.row(build_pivot_field_from_py(&field)?);
+        }
+    }
+    if let Some(column_fields) = optional_any(dict, &["column_fields", "columnFields"])? {
+        let column_fields = column_fields
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("pivot column_fields must be a list"))?;
+        for field in column_fields.iter() {
+            builder = builder.column(build_pivot_field_from_py(&field)?);
+        }
+    }
+    if let Some(page_fields) = optional_any(dict, &["page_fields", "pageFields"])? {
+        let page_fields = page_fields
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("pivot page_fields must be a list"))?;
+        for field in page_fields.iter() {
+            builder = builder.page(build_pivot_field_from_py(&field)?);
+        }
+    }
 
     let measures_value = dict
         .get_item("measures")?
@@ -125,6 +150,23 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
     }
 
     builder.build().map_err(to_py_err)
+}
+
+fn build_pivot_field_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotField> {
+    let dict = options
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("pivot field options must be a dict"))?;
+    let mut field = PivotField::new(required_string(dict, &["field"])?);
+    if let Some(sort) = optional_string(dict, &["sort"])? {
+        field.sort = parse_pivot_sort(&sort)?;
+    }
+    if let Some(subtotal) = optional_string(dict, &["subtotal"])? {
+        field.subtotal = parse_pivot_subtotal(&subtotal)?;
+    }
+    if let Some(show_empty_items) = optional_bool(dict, &["show_empty_items", "showEmptyItems"])? {
+        field.show_empty_items = show_empty_items;
+    }
+    Ok(field)
 }
 
 fn build_pivot_refresh_policy_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotRefreshPolicy> {
@@ -274,6 +316,36 @@ fn parse_pivot_aggregate(value: Option<&str>) -> PyResult<PivotAggregate> {
             return Err(PyValueError::new_err(format!(
                 "Unsupported pivot aggregate: {other}"
             )))
+        }
+    })
+}
+
+fn parse_pivot_sort(value: &str) -> PyResult<PivotSort> {
+    Ok(match value {
+        "none" | "manual" => PivotSort::None,
+        "ascending" | "asc" => PivotSort::Ascending,
+        "descending" | "desc" => PivotSort::Descending,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported pivot sort: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_subtotal(value: &str) -> PyResult<PivotSubtotal> {
+    Ok(match value {
+        "automatic" | "auto" => PivotSubtotal::Automatic,
+        "none" => PivotSubtotal::None,
+        "sum" => PivotSubtotal::Sum,
+        "count" => PivotSubtotal::Count,
+        "average" | "avg" => PivotSubtotal::Average,
+        "min" => PivotSubtotal::Min,
+        "max" => PivotSubtotal::Max,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported pivot subtotal: {other}"
+            )));
         }
     })
 }

@@ -92,6 +92,15 @@ pub struct WasmPivotGroupingOptions {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmPivotFieldOptions {
+    pub field: String,
+    pub sort: Option<String>,
+    pub subtotal: Option<String>,
+    pub show_empty_items: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmPivotRefreshPolicyOptions {
     pub refresh_on_open: Option<bool>,
     pub preserve_formatting: Option<bool>,
@@ -110,6 +119,9 @@ pub struct WasmPivotTableOptions {
     pub rows: Option<Vec<String>>,
     pub columns: Option<Vec<String>>,
     pub pages: Option<Vec<String>>,
+    pub row_fields: Option<Vec<WasmPivotFieldOptions>>,
+    pub column_fields: Option<Vec<WasmPivotFieldOptions>>,
+    pub page_fields: Option<Vec<WasmPivotFieldOptions>>,
     pub measures: Vec<WasmPivotMeasureOptions>,
     pub filters: Option<Vec<WasmPivotItemFilterOptions>>,
     pub calculated_fields: Option<Vec<WasmPivotCalculatedFieldOptions>>,

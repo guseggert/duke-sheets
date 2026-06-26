@@ -17,8 +17,8 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
-    PivotDateGroupUnit, PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
-    PivotTable, PivotValue, Workbook as CoreWorkbook,
+    PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshPolicy,
+    PivotShowAs, PivotSort, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -361,6 +361,14 @@ pub struct JsPivotGroupingOptions {
 }
 
 #[napi(object)]
+pub struct JsPivotFieldOptions {
+    pub field: String,
+    pub sort: Option<String>,
+    pub subtotal: Option<String>,
+    pub show_empty_items: Option<bool>,
+}
+
+#[napi(object)]
 pub struct JsPivotRefreshPolicyOptions {
     pub refresh_on_open: Option<bool>,
     pub preserve_formatting: Option<bool>,
@@ -378,6 +386,9 @@ pub struct JsPivotTableOptions {
     pub rows: Option<Vec<String>>,
     pub columns: Option<Vec<String>>,
     pub pages: Option<Vec<String>>,
+    pub row_fields: Option<Vec<JsPivotFieldOptions>>,
+    pub column_fields: Option<Vec<JsPivotFieldOptions>>,
+    pub page_fields: Option<Vec<JsPivotFieldOptions>>,
     pub measures: Vec<JsPivotMeasureOptions>,
     pub filters: Option<Vec<JsPivotItemFilterOptions>>,
     pub calculated_fields: Option<Vec<JsPivotCalculatedFieldOptions>>,
@@ -450,6 +461,15 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
     for field in options.pages.unwrap_or_default() {
         builder = builder.page(field);
     }
+    for field in options.row_fields.unwrap_or_default() {
+        builder = builder.row(build_pivot_field_from_js(field)?);
+    }
+    for field in options.column_fields.unwrap_or_default() {
+        builder = builder.column(build_pivot_field_from_js(field)?);
+    }
+    for field in options.page_fields.unwrap_or_default() {
+        builder = builder.page(build_pivot_field_from_js(field)?);
+    }
     for measure in options.measures {
         builder = builder.pivot_measure(build_pivot_measure_from_js(measure)?);
     }
@@ -476,6 +496,20 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
     builder.build().map_err(to_napi_err)
 }
 
+fn build_pivot_field_from_js(options: JsPivotFieldOptions) -> Result<PivotField> {
+    let mut field = PivotField::new(options.field);
+    if let Some(sort) = options.sort {
+        field.sort = parse_pivot_sort(&sort)?;
+    }
+    if let Some(subtotal) = options.subtotal {
+        field.subtotal = parse_pivot_subtotal(&subtotal)?;
+    }
+    if let Some(show_empty_items) = options.show_empty_items {
+        field.show_empty_items = show_empty_items;
+    }
+    Ok(field)
+}
+
 fn build_pivot_refresh_policy_from_js(options: JsPivotRefreshPolicyOptions) -> PivotRefreshPolicy {
     let mut policy = PivotRefreshPolicy::default();
     if let Some(value) = options.refresh_on_open {
@@ -489,6 +523,36 @@ fn build_pivot_refresh_policy_from_js(options: JsPivotRefreshPolicyOptions) -> P
     }
     policy.missing_items_limit = options.missing_items_limit;
     policy
+}
+
+fn parse_pivot_sort(value: &str) -> Result<PivotSort> {
+    Ok(match value {
+        "none" | "manual" => PivotSort::None,
+        "ascending" | "asc" => PivotSort::Ascending,
+        "descending" | "desc" => PivotSort::Descending,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot sort: {other}"
+            )))
+        }
+    })
+}
+
+fn parse_pivot_subtotal(value: &str) -> Result<PivotSubtotal> {
+    Ok(match value {
+        "automatic" | "auto" => PivotSubtotal::Automatic,
+        "none" => PivotSubtotal::None,
+        "sum" => PivotSubtotal::Sum,
+        "count" => PivotSubtotal::Count,
+        "average" | "avg" => PivotSubtotal::Average,
+        "min" => PivotSubtotal::Min,
+        "max" => PivotSubtotal::Max,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot subtotal: {other}"
+            )));
+        }
+    })
 }
 
 fn build_pivot_measure_from_js(options: JsPivotMeasureOptions) -> Result<PivotMeasure> {

@@ -41,6 +41,13 @@ export interface JsPivotGroupingOptions {
   units?: Array<'seconds' | 'minutes' | 'hours' | 'days' | 'months' | 'quarters' | 'years'>
 }
 
+export interface JsPivotFieldOptions {
+  field: string
+  sort?: 'none' | 'manual' | 'ascending' | 'asc' | 'descending' | 'desc'
+  subtotal?: 'automatic' | 'auto' | 'none' | 'sum' | 'count' | 'average' | 'avg' | 'min' | 'max'
+  showEmptyItems?: boolean
+}
+
 export interface JsPivotRefreshPolicyOptions {
   refreshOnOpen?: boolean
   preserveFormatting?: boolean
@@ -57,6 +64,9 @@ export interface JsPivotTableOptions {
   rows?: string[]
   columns?: string[]
   pages?: string[]
+  rowFields?: JsPivotFieldOptions[]
+  columnFields?: JsPivotFieldOptions[]
+  pageFields?: JsPivotFieldOptions[]
   measures: JsPivotMeasureOptions[]
   filters?: JsPivotItemFilterOptions[]
   calculatedFields?: JsPivotCalculatedFieldOptions[]
