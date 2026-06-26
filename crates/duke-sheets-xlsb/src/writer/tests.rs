@@ -36,6 +36,33 @@ mod tests {
         wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
     }
 
+    fn add_column_test_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Region").unwrap();
+        ws.set_cell_value("B1", "Quarter").unwrap();
+        ws.set_cell_value("C1", "Revenue").unwrap();
+        ws.set_cell_value("A2", "East").unwrap();
+        ws.set_cell_value("B2", "Q1").unwrap();
+        ws.set_cell_value("C2", 10.0).unwrap();
+        ws.set_cell_value("A3", "East").unwrap();
+        ws.set_cell_value("B3", "Q2").unwrap();
+        ws.set_cell_value("C3", 20.0).unwrap();
+        ws.set_cell_value("A4", "West").unwrap();
+        ws.set_cell_value("B4", "Q1").unwrap();
+        ws.set_cell_value("C4", 30.0).unwrap();
+
+        let pivot = PivotTable::builder("RevenueByQuarter")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
     #[test]
     fn empty_workbook() {
         let wb = Workbook::new();
@@ -73,14 +100,18 @@ mod tests {
         assert!(workbook_records.contains(&crate::biff12::records::BRT_BEGIN_PIVOT_CACHE_IDS));
         assert!(workbook_records.contains(&crate::biff12::records::BRT_PIVOT_CACHE_ID));
 
-        let cache_def_records =
-            record_types(read_zip_entry_bytes(&bytes, "xl/pivotCache/pivotCacheDefinition1.bin"));
+        let cache_def_records = record_types(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotCache/pivotCacheDefinition1.bin",
+        ));
         assert!(cache_def_records.contains(&crate::biff12::records::BRT_BEGIN_PIVOT_CACHE_DEF));
         assert!(cache_def_records.contains(&crate::biff12::records::BRT_BEGIN_PCD_FIELDS));
         assert!(cache_def_records.contains(&crate::biff12::records::BRT_PCDI_STRING));
 
-        let cache_records =
-            record_types(read_zip_entry_bytes(&bytes, "xl/pivotCache/pivotCacheRecords1.bin"));
+        let cache_records = record_types(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotCache/pivotCacheRecords1.bin",
+        ));
         assert!(cache_records.contains(&crate::biff12::records::BRT_BEGIN_PCD_RECORDS));
         assert_eq!(
             cache_records
@@ -90,12 +121,56 @@ mod tests {
             2
         );
 
-        let pivot_records =
-            record_types(read_zip_entry_bytes(&bytes, "xl/pivotTables/pivotTable1.bin"));
+        let pivot_records = record_types(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotTables/pivotTable1.bin",
+        ));
         assert!(pivot_records.contains(&crate::biff12::records::BRT_BEGIN_SXVIEW));
         assert!(pivot_records.contains(&crate::biff12::records::BRT_BEGIN_SXVDS));
         assert!(pivot_records.contains(&crate::biff12::records::BRT_BEGIN_SX_ROW_ITEMS));
         assert!(pivot_records.contains(&crate::biff12::records::BRT_BEGIN_SXDIS));
+    }
+
+    #[test]
+    fn semantic_pivot_tables_emit_xlsb_column_axis_records() {
+        let mut wb = Workbook::new();
+        add_column_test_pivot(&mut wb);
+
+        let bytes = write_xlsb_bytes(&wb);
+        let pivot_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotTables/pivotTable1.bin",
+        ));
+        let record_types = pivot_records
+            .iter()
+            .map(|(record_type, _)| *record_type)
+            .collect::<Vec<_>>();
+
+        assert!(record_types.contains(&crate::biff12::records::BRT_BEGIN_ISXVD_RWS));
+        assert!(record_types.contains(&crate::biff12::records::BRT_END_ISXVD_RWS));
+        assert!(record_types.contains(&crate::biff12::records::BRT_BEGIN_ISXVD_COLS));
+        assert!(record_types.contains(&crate::biff12::records::BRT_END_ISXVD_COLS));
+        assert!(record_types.contains(&crate::biff12::records::BRT_BEGIN_SX_COL_ITEMS));
+
+        let col_fields_payload = pivot_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_ISXVD_COLS).then_some(payload)
+            })
+            .expect("column axis field declaration");
+        assert_eq!(
+            col_fields_payload,
+            &vec![1, 0, 0, 0, 1, 0, 0, 0],
+            "one column field, cache field index 1 (Quarter)"
+        );
+
+        let sxvd_axes = pivot_records
+            .iter()
+            .filter_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_SXVD).then(|| payload[0])
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sxvd_axes, vec![0x01, 0x02, 0x08]);
     }
 
     #[test]
@@ -2471,6 +2546,7 @@ mod tests {
         let mut buf = Vec::new();
         while let Ok((typ, len)) = iter.next_record(&mut buf) {
             out.push((typ, buf[..len].to_vec()));
+            buf.truncate(len);
         }
         out
     }
@@ -2490,6 +2566,17 @@ mod tests {
         let mut buf = Vec::new();
         while let Ok((typ, len)) = iter.next_record(&mut buf) {
             out.push(typ);
+            buf.truncate(len);
+        }
+        out
+    }
+
+    fn records_with_payload(data: Vec<u8>) -> Vec<(u16, Vec<u8>)> {
+        let mut iter = crate::biff12::RecordIter::new(Cursor::new(data));
+        let mut out = Vec::new();
+        let mut buf = Vec::new();
+        while let Ok((typ, len)) = iter.next_record(&mut buf) {
+            out.push((typ, buf[..len].to_vec()));
             buf.truncate(len);
         }
         out

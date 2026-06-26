@@ -7,12 +7,10 @@ use zip::ZipWriter;
 use crate::biff12::{encode_wide_str, records, RecordWriter};
 use crate::error::{XlsbError, XlsbResult};
 use duke_sheets_core::{
-    CellError, CellRange, PivotAggregate, PivotField, PivotFilter, PivotTable, PivotValue,
-    Workbook,
+    CellError, CellRange, PivotAggregate, PivotField, PivotFilter, PivotTable, PivotValue, Workbook,
 };
 use duke_sheets_pivot::{
-    FormatPivotCache, FormatPivotCacheField, FormatPivotPlan, FormatPivotSource,
-    FormatPivotTable,
+    FormatPivotCache, FormatPivotCacheField, FormatPivotPlan, FormatPivotSource, FormatPivotTable,
 };
 
 pub(crate) const RT_PIVOT_TABLE: &str =
@@ -25,8 +23,7 @@ pub(crate) const RT_BINARY_INDEX: &str =
     "http://schemas.microsoft.com/office/2006/relationships/xlBinaryIndex";
 
 pub(crate) const CT_PIVOT_TABLE: &str = "application/vnd.ms-excel.pivotTable";
-pub(crate) const CT_PIVOT_CACHE_DEFINITION: &str =
-    "application/vnd.ms-excel.pivotCacheDefinition";
+pub(crate) const CT_PIVOT_CACHE_DEFINITION: &str = "application/vnd.ms-excel.pivotCacheDefinition";
 pub(crate) const CT_PIVOT_CACHE_RECORDS: &str = "application/vnd.ms-excel.pivotCacheRecords";
 pub(crate) const CT_BINARY_INDEX: &str = "application/vnd.ms-excel.binIndexWs";
 
@@ -179,9 +176,34 @@ fn write_pivot_table_part<W: Write + Seek>(
     write_sx_location(&mut rw, pivot, cache)?;
     rw.write_record(records::BRT_END_SX_LOCATION, &[])?;
     write_sx_fields(&mut rw, pivot, cache, &usage)?;
-    write_axis_fields(&mut rw, cache, &pivot.rows)?;
-    write_axis_items(&mut rw, records::BRT_BEGIN_SX_ROW_ITEMS, records::BRT_END_SX_ROW_ITEMS, cache, &pivot.rows)?;
-    write_axis_items(&mut rw, records::BRT_BEGIN_SX_COL_ITEMS, records::BRT_END_SX_COL_ITEMS, cache, &pivot.columns)?;
+    write_axis_fields(
+        &mut rw,
+        records::BRT_BEGIN_ISXVD_RWS,
+        records::BRT_END_ISXVD_RWS,
+        cache,
+        &pivot.rows,
+    )?;
+    write_axis_items(
+        &mut rw,
+        records::BRT_BEGIN_SX_ROW_ITEMS,
+        records::BRT_END_SX_ROW_ITEMS,
+        cache,
+        &pivot.rows,
+    )?;
+    write_axis_fields(
+        &mut rw,
+        records::BRT_BEGIN_ISXVD_COLS,
+        records::BRT_END_ISXVD_COLS,
+        cache,
+        &pivot.columns,
+    )?;
+    write_axis_items(
+        &mut rw,
+        records::BRT_BEGIN_SX_COL_ITEMS,
+        records::BRT_END_SX_COL_ITEMS,
+        cache,
+        &pivot.columns,
+    )?;
     write_data_fields(&mut rw, pivot, cache)?;
     write_sx_style(&mut rw, pivot)?;
     rw.write_record(records::BRT_END_SXVIEW, &[])?;
@@ -196,10 +218,7 @@ fn write_pivot_table_rels<W: Write + Seek>(
     options: &SimpleFileOptions,
     part: &FormatPivotTable,
 ) -> XlsbResult<()> {
-    let path = format!(
-        "xl/pivotTables/_rels/pivotTable{}.bin.rels",
-        part.table_num
-    );
+    let path = format!("xl/pivotTables/_rels/pivotTable{}.bin.rels", part.table_num);
     zip.start_file(path, *options)?;
     let target = format!("../pivotCache/pivotCacheDefinition{}.bin", part.cache_num);
     let xml = format!(
@@ -248,16 +267,16 @@ fn write_binary_index_part<W: Write + Seek>(
     rw.write_record(
         0x002A,
         &[
-            0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x1A, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x1A, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ],
     )?;
     rw.write_record(
         0x0028,
         &[
-            0x07, 0x00, 0x00, 0x00, 0x9F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-            0x00, 0x01, 0x00, 0x01, 0x00, 0x2D, 0x00, 0x00, 0x00, 0x73, 0x00, 0x00, 0x00,
-            0xB9, 0x00, 0x00, 0x00,
+            0x07, 0x00, 0x00, 0x00, 0x9F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+            0x01, 0x00, 0x01, 0x00, 0x2D, 0x00, 0x00, 0x00, 0x73, 0x00, 0x00, 0x00, 0xB9, 0x00,
+            0x00, 0x00,
         ],
     )?;
     rw.write_record(0x0115, &[])?;
@@ -390,8 +409,12 @@ fn write_pcdi_item<W: Write>(rw: &mut RecordWriter<W>, value: &PivotValue) -> st
         PivotValue::Boolean(value) => {
             rw.write_record(records::BRT_PCDI_BOOLEAN, &[if *value { 1 } else { 0 }])
         }
-        PivotValue::Number(value) => rw.write_record(records::BRT_PCDI_NUMBER, &value.to_le_bytes()),
-        PivotValue::String(value) => rw.write_record(records::BRT_PCDI_STRING, &encode_wide_str(value)),
+        PivotValue::Number(value) => {
+            rw.write_record(records::BRT_PCDI_NUMBER, &value.to_le_bytes())
+        }
+        PivotValue::String(value) => {
+            rw.write_record(records::BRT_PCDI_STRING, &encode_wide_str(value))
+        }
         PivotValue::Error(value) => rw.write_record(records::BRT_PCDI_ERROR, &[error_code(*value)]),
     }
 }
@@ -419,9 +442,9 @@ fn write_begin_sx_view<W: Write>(
 ) -> std::io::Result<()> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&[
-        0x00, 0x41, 0x40, 0x01, 0xF0, 0x64, 0x09, 0x00, 0xD9, 0x00, 0x00, 0x00, 0x02,
-        0x00, 0x08, 0x03, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x41, 0x40, 0x01, 0xF0, 0x64, 0x09, 0x00, 0xD9, 0x00, 0x00, 0x00, 0x02, 0x00, 0x08,
+        0x03, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
     ]);
     payload.extend_from_slice(&encode_wide_str(&pivot.name));
     let data_caption = if pivot.layout.data_caption.trim().is_empty() {
@@ -466,8 +489,7 @@ fn write_sx_fields<W: Write>(
         &(cache.fields.len() as u32).to_le_bytes(),
     )?;
     for (index, field) in cache.fields.iter().enumerate() {
-        let axis_field = pivot_field_is_axis_or_filter(pivot, &field.name);
-        write_sx_field(rw, axis_field)?;
+        write_sx_field(rw, pivot_field_axis(pivot, &field.name))?;
         if usage.store_items[index] {
             write_sx_field_items(rw, field)?;
         }
@@ -477,18 +499,19 @@ fn write_sx_fields<W: Write>(
     Ok(())
 }
 
-fn write_sx_field<W: Write>(rw: &mut RecordWriter<W>, axis_field: bool) -> std::io::Result<()> {
-    let payload: [u8; 20] = if axis_field {
+fn write_sx_field<W: Write>(rw: &mut RecordWriter<W>, axis: u8) -> std::io::Result<()> {
+    let mut payload: [u8; 20] = if axis & 0x07 != 0 {
         [
-            0x01, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x5F, 0xB1, 0x04, 0x00, 0x0A,
-            0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
+            0x00, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x5F, 0xB1, 0x04, 0x00, 0x0A, 0x00,
+            0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
         ]
     } else {
         [
-            0x08, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x7F, 0x81, 0x04, 0x00, 0x0A,
-            0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
+            0x00, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x7F, 0x81, 0x04, 0x00, 0x0A, 0x00,
+            0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
         ]
     };
+    payload[0] = axis & 0x0F;
     rw.write_record(records::BRT_BEGIN_SXVD, &payload)
 }
 
@@ -515,6 +538,8 @@ fn write_sx_field_items<W: Write>(
 
 fn write_axis_fields<W: Write>(
     rw: &mut RecordWriter<W>,
+    begin_record: u16,
+    end_record: u16,
     cache: &FormatPivotCache,
     fields: &[PivotField],
 ) -> XlsbResult<()> {
@@ -533,8 +558,8 @@ fn write_axis_fields<W: Write>(
         })?;
         payload.extend_from_slice(&(index as u32).to_le_bytes());
     }
-    rw.write_record(records::BRT_BEGIN_SX_ROW_FIELDS, &payload)?;
-    rw.write_record(records::BRT_END_SX_ROW_FIELDS, &[])?;
+    rw.write_record(begin_record, &payload)?;
+    rw.write_record(end_record, &[])?;
     Ok(())
 }
 
@@ -610,10 +635,7 @@ fn write_data_fields<W: Write>(
     Ok(())
 }
 
-fn write_sx_style<W: Write>(
-    rw: &mut RecordWriter<W>,
-    pivot: &PivotTable,
-) -> std::io::Result<()> {
+fn write_sx_style<W: Write>(rw: &mut RecordWriter<W>, pivot: &PivotTable) -> std::io::Result<()> {
     let style_name = pivot
         .style
         .name
@@ -627,20 +649,29 @@ fn write_sx_style<W: Write>(
 }
 
 fn estimated_pivot_range(pivot: &PivotTable, cache: &FormatPivotCache) -> CellRange {
-    let row_item_count = pivot
-        .rows
-        .first()
-        .and_then(|field| cache.field_index(&field.field.name))
-        .map(|index| cache.fields[index].shared_items.len())
-        .unwrap_or(1);
-    let row_count = 1 + row_item_count as u32 + 1;
-    let col_count = pivot.rows.len().max(1) as u16 + pivot.measures.len().max(1) as u16;
+    let row_item_count = axis_item_count(cache, &pivot.rows).max(1);
+    let row_header_count = pivot.columns.len() as u32 + 1;
+    let row_count = row_header_count + row_item_count as u32 + 1;
+
+    let col_item_count = axis_item_count(cache, &pivot.columns).max(1);
+    let measure_count = pivot.measures.len().max(1);
+    let value_col_count = col_item_count * measure_count;
+    let col_count = pivot.rows.len().max(1) as u16 + value_col_count as u16;
     CellRange::from_indices(
         pivot.target.row,
         pivot.target.col,
         pivot.target.row + row_count.saturating_sub(1),
         pivot.target.col + col_count.saturating_sub(1),
     )
+}
+
+fn axis_item_count(cache: &FormatPivotCache, fields: &[PivotField]) -> usize {
+    if fields.is_empty() {
+        return 1;
+    }
+    axis_item_tuples(cache, fields)
+        .map(|tuples| tuples.len())
+        .unwrap_or(1)
 }
 
 fn axis_item_tuples(cache: &FormatPivotCache, fields: &[PivotField]) -> XlsbResult<Vec<Vec<u32>>> {
@@ -694,7 +725,11 @@ fn cache_field_usage(
     cache: &FormatPivotCache,
 ) -> XlsbResult<CacheFieldUsage> {
     let mut axis_names = HashSet::new();
-    for part in plan.tables.iter().filter(|part| part.cache_num == cache.cache_num) {
+    for part in plan
+        .tables
+        .iter()
+        .filter(|part| part.cache_num == cache.cache_num)
+    {
         let worksheet = workbook
             .worksheet(part.sheet_index)
             .ok_or_else(|| XlsbError::InvalidFormat("pivot table sheet not found".into()))?;
@@ -732,16 +767,43 @@ fn cache_field_usage(
     Ok(CacheFieldUsage { store_items })
 }
 
-fn pivot_field_is_axis_or_filter(pivot: &PivotTable, field_name: &str) -> bool {
-    pivot
+fn pivot_field_axis(pivot: &PivotTable, field_name: &str) -> u8 {
+    const SX_AXIS_ROW: u8 = 0x01;
+    const SX_AXIS_COL: u8 = 0x02;
+    const SX_AXIS_PAGE: u8 = 0x04;
+    const SX_AXIS_DATA: u8 = 0x08;
+
+    let mut axis = if pivot
         .rows
         .iter()
-        .chain(pivot.columns.iter())
-        .chain(pivot.page_fields.iter())
         .any(|field| field.field.name.eq_ignore_ascii_case(field_name))
-        || pivot.filters.iter().any(|filter| {
-            filter_field_name(filter).is_some_and(|name| name.eq_ignore_ascii_case(field_name))
-        })
+    {
+        SX_AXIS_ROW
+    } else if pivot
+        .columns
+        .iter()
+        .any(|field| field.field.name.eq_ignore_ascii_case(field_name))
+    {
+        SX_AXIS_COL
+    } else if pivot
+        .page_fields
+        .iter()
+        .any(|field| field.field.name.eq_ignore_ascii_case(field_name))
+    {
+        SX_AXIS_PAGE
+    } else {
+        0
+    };
+
+    if pivot
+        .measures
+        .iter()
+        .any(|measure| measure.field.name.eq_ignore_ascii_case(field_name))
+    {
+        axis |= SX_AXIS_DATA;
+    }
+
+    axis
 }
 
 fn filter_field_name(filter: &PivotFilter) -> Option<&str> {

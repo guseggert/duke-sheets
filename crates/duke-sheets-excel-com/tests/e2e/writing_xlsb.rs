@@ -196,6 +196,35 @@ fn xlsb_basic_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xlsb_column_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Quarter").unwrap();
+    ws.set_cell_value("C1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", "Q1").unwrap();
+    ws.set_cell_value("C2", 10.0).unwrap();
+    ws.set_cell_value("A3", "East").unwrap();
+    ws.set_cell_value("B3", "Q2").unwrap();
+    ws.set_cell_value("C3", 20.0).unwrap();
+    ws.set_cell_value("A4", "West").unwrap();
+    ws.set_cell_value("B4", "Q1").unwrap();
+    ws.set_cell_value("C4", 30.0).unwrap();
+
+    let pivot = PivotTable::builder("RevenueByQuarter")
+        .source_range(CellRange::parse("A1:C4").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Region")
+        .column("Quarter")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xlsb_with_native_pivot_table() {
@@ -213,6 +242,21 @@ fn excel_opens_xlsb_with_native_pivot_table() {
     ));
 }
 
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_pivot_column_axis() {
+    let (_result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xlsb_bytes(&xlsb_column_pivot_workbook());
+
+    let pivot_records = xlsb_record_types(&zip_entry_bytes(
+        &excel_bytes,
+        "xl/pivotTables/pivotTable1.bin",
+    ));
+    assert!(pivot_records.contains(&duke_sheets_xlsb::biff12::records::BRT_BEGIN_ISXVD_COLS));
+    assert!(pivot_records.contains(&duke_sheets_xlsb::biff12::records::BRT_END_ISXVD_COLS));
+    assert!(pivot_records.contains(&duke_sheets_xlsb::biff12::records::BRT_BEGIN_SX_COL_ITEMS));
+}
+
 fn zip_has_entry(bytes: &[u8], name: &str) -> bool {
     let reader = std::io::Cursor::new(bytes);
     let Ok(mut archive) = zip::ZipArchive::new(reader) else {
@@ -220,6 +264,30 @@ fn zip_has_entry(bytes: &[u8], name: &str) -> bool {
     };
     let found = archive.by_name(name).is_ok();
     found
+}
+
+fn zip_entry_bytes(bytes: &[u8], name: &str) -> Vec<u8> {
+    use std::io::Read;
+
+    let reader = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(reader).expect("open xlsb zip");
+    let mut file = archive
+        .by_name(name)
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let mut out = Vec::new();
+    file.read_to_end(&mut out).unwrap();
+    out
+}
+
+fn xlsb_record_types(data: &[u8]) -> Vec<u16> {
+    let mut iter = duke_sheets_xlsb::biff12::RecordIter::new(std::io::Cursor::new(data));
+    let mut out = Vec::new();
+    let mut buf = Vec::new();
+    while let Ok((record_type, len)) = iter.next_record(&mut buf) {
+        out.push(record_type);
+        buf.truncate(len);
+    }
+    out
 }
 
 #[test]
