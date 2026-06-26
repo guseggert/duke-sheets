@@ -501,6 +501,7 @@ fn write_rendered_pivot(
             worksheet.clear_range(&range);
         }
     }
+    clear_pivot_merged_ranges(worksheet, job.pivot.rendered_range);
 
     for (row_offset, row) in rendered.cells.iter().enumerate() {
         for (col_offset, value) in row.iter().enumerate() {
@@ -522,6 +523,7 @@ fn write_rendered_pivot(
             }
         }
     }
+    write_pivot_merged_ranges(worksheet, &rendered)?;
     write_pivot_row_page_breaks(worksheet, &job.pivot, &rendered);
 
     if let Some(pivot) = worksheet.pivot_tables_mut().get_mut(job.pivot_index) {
@@ -531,6 +533,36 @@ fn write_rendered_pivot(
     }
 
     Ok(())
+}
+
+fn clear_pivot_merged_ranges(worksheet: &mut Worksheet, previous_range: Option<CellRange>) {
+    let Some(previous_range) = previous_range else {
+        return;
+    };
+
+    let ranges = worksheet
+        .merged_regions()
+        .iter()
+        .copied()
+        .filter(|range| range_contains_range(previous_range, *range))
+        .collect::<Vec<_>>();
+    for range in ranges {
+        worksheet.unmerge_cells(&range);
+    }
+}
+
+fn write_pivot_merged_ranges(worksheet: &mut Worksheet, rendered: &RenderedPivot) -> Result<()> {
+    for range in &rendered.merged_ranges {
+        worksheet.merge_cells(range)?;
+    }
+    Ok(())
+}
+
+fn range_contains_range(outer: CellRange, inner: CellRange) -> bool {
+    inner.start.row >= outer.start.row
+        && inner.end.row <= outer.end.row
+        && inner.start.col >= outer.start.col
+        && inner.end.col <= outer.end.col
 }
 
 fn write_pivot_row_page_breaks(
@@ -4968,6 +5000,7 @@ struct RenderedPivot {
     column_number_formats: Vec<Option<String>>,
     data_start_row: usize,
     row_page_break_offsets: Vec<u32>,
+    merged_ranges: Vec<CellRange>,
 }
 
 impl RenderedPivot {
@@ -5012,6 +5045,7 @@ fn render_pivot(
     let data_start_row = pivot_data_start_row(pivot, plan);
 
     let range = output_range(pivot.target, cells.len(), width)?;
+    let merged_ranges = pivot_item_label_merged_ranges(pivot, plan, &cells);
     Ok(RenderedPivot {
         cells,
         range,
@@ -5019,11 +5053,70 @@ fn render_pivot(
         column_number_formats,
         data_start_row,
         row_page_break_offsets,
+        merged_ranges,
     })
 }
 
 fn compact_row_layout(pivot: &PivotTable, plan: &CompiledPivotPlan) -> bool {
     matches!(pivot.layout.kind, PivotLayoutKind::Compact) && plan.row_indexes.len() > 1
+}
+
+fn pivot_item_label_merged_ranges(
+    pivot: &PivotTable,
+    plan: &CompiledPivotPlan,
+    cells: &[Vec<CellValue>],
+) -> Vec<CellRange> {
+    if !pivot.layout.merge_item_labels || compact_row_layout(pivot, plan) {
+        return Vec::new();
+    }
+
+    let label_width = plan.row_indexes.len();
+    if label_width < 2 {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::new();
+    let mut row = pivot_data_start_row(pivot, plan);
+    while row < cells.len() {
+        for col in 0..(label_width - 1) {
+            if !cells[row][col].is_empty() {
+                let end_row = merged_item_label_end_row(cells, row, col, label_width);
+                if end_row > row {
+                    ranges.push(CellRange::from_indices(
+                        pivot.target.row + row as u32,
+                        pivot.target.col + col as u16,
+                        pivot.target.row + end_row as u32,
+                        pivot.target.col + col as u16,
+                    ));
+                }
+            }
+        }
+        row += 1;
+    }
+    ranges
+}
+
+fn merged_item_label_end_row(
+    cells: &[Vec<CellValue>],
+    start_row: usize,
+    col: usize,
+    label_width: usize,
+) -> usize {
+    let mut row = start_row + 1;
+    while row < cells.len()
+        && cells[row][col].is_empty()
+        && row_has_deeper_item_label(&cells[row], col + 1, label_width)
+    {
+        row += 1;
+    }
+    row - 1
+}
+
+fn row_has_deeper_item_label(row: &[CellValue], start_col: usize, label_width: usize) -> bool {
+    row.iter()
+        .take(label_width)
+        .skip(start_col)
+        .any(|cell| !cell.is_empty())
 }
 
 fn pivot_data_start_row(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usize {
@@ -7528,6 +7621,63 @@ mod tests {
         assert_eq!(text(&workbook, "E3"), "East");
         assert_eq!(text(&workbook, "F3"), "Retail");
         assert_eq!(text(&workbook, "E4"), "East Total");
+    }
+
+    #[test]
+    fn refresh_merges_and_clears_tabular_item_labels() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Tabular;
+        layout.merge_item_labels = true;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        let merged_label = CellRange::parse("E2:E3").unwrap();
+        assert!(workbook
+            .worksheet(0)
+            .unwrap()
+            .merged_regions()
+            .contains(&merged_label));
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(text(&workbook, "E3"), "");
+        assert_eq!(text(&workbook, "E4"), "East Total");
+
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.pivot_tables_mut()[0].layout.merge_item_labels = false;
+        workbook.refresh_pivots().unwrap();
+
+        assert!(!workbook
+            .worksheet(0)
+            .unwrap()
+            .merged_regions()
+            .contains(&merged_label));
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(text(&workbook, "E3"), "");
     }
 
     #[test]
