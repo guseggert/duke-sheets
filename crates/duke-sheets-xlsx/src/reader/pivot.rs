@@ -921,7 +921,10 @@ fn pivot_filter_from_context(
         });
     }
 
-    None
+    Some(PivotFilter::Unsupported {
+        kind: filter.filter_type,
+        detail: Some(format!("field={}", field.name)),
+    })
 }
 
 fn measure_for_pivot_filter(
@@ -1079,6 +1082,26 @@ mod tests {
         element
     }
 
+    fn minimal_cache_with_field(field_name: &str) -> PivotCacheDefinition {
+        PivotCacheDefinition {
+            source: PivotSource::range(CellRange::parse("A1:A2").unwrap()),
+            source_kind: PivotCacheSourceKind::Worksheet,
+            fields: vec![PivotCacheField {
+                name: field_name.to_string(),
+                formula: None,
+                shared_items: Vec::new(),
+                grouping: None,
+            }],
+            calculated_fields: Vec::new(),
+            groupings: Vec::new(),
+            record_count: None,
+            refreshed_version: None,
+            refresh_on_load: false,
+            background_query: false,
+            missing_items_limit: None,
+        }
+    }
+
     #[test]
     fn parses_cache_source_type_for_diagnostics() {
         assert_eq!(
@@ -1127,5 +1150,29 @@ mod tests {
             placeholder_source_for_kind(PivotCacheSourceKind::Olap, Some("3".to_string())),
             PivotSource::Olap { .. }
         ));
+    }
+
+    #[test]
+    fn unsupported_pivot_filter_types_are_preserved() {
+        let cache = minimal_cache_with_field("Region");
+        let filter = CurrentPivotFilter {
+            field_index: 0,
+            filter_type: "dateBetween".to_string(),
+            measure_index: None,
+            string_value1: Some("2024-01-01".to_string()),
+            custom_value: None,
+            top: None,
+            percent: None,
+            top_n: None,
+        };
+
+        let parsed = pivot_filter_from_context(filter, &cache, &[]).expect("preserved filter");
+        match parsed {
+            PivotFilter::Unsupported { kind, detail } => {
+                assert_eq!(kind, "dateBetween");
+                assert_eq!(detail.as_deref(), Some("field=Region"));
+            }
+            other => panic!("unexpected filter: {other:?}"),
+        }
     }
 }
