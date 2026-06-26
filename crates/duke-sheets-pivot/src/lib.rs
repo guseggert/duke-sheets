@@ -109,6 +109,10 @@ fn refresh_pivots_inner(
 
     let mut prepared = Vec::with_capacity(jobs.len());
     for job in jobs {
+        if source_requires_external_refresh(&job.pivot.source) {
+            mark_pivot_external(workbook, job.sheet_index, job.pivot_index);
+            continue;
+        }
         let raw_snapshot = match snapshot_for_source(
             workbook,
             job.sheet_index,
@@ -220,6 +224,11 @@ fn refresh_pivot_inner(
         ..PivotRefreshStats::default()
     };
 
+    if source_requires_external_refresh(&pivot.source) {
+        mark_pivot_external(workbook, sheet_index, pivot_index);
+        return Ok(stats);
+    }
+
     let output = match build_rendered_pivot(workbook, sheet_index, &pivot, cache, &mut stats) {
         Ok(output) => output,
         Err(error) => {
@@ -275,6 +284,16 @@ fn collect_pivot_jobs(workbook: &Workbook) -> Vec<PivotJob> {
                 })
         })
         .collect()
+}
+
+fn source_requires_external_refresh(source: &PivotSource) -> bool {
+    matches!(
+        source,
+        PivotSource::External { .. }
+            | PivotSource::Consolidation { .. }
+            | PivotSource::Scenario { .. }
+            | PivotSource::Olap { .. }
+    )
 }
 
 fn build_rendered_pivot(
@@ -388,6 +407,15 @@ fn mark_pivot_failed(
             let status = PivotRefreshStatus::Failed { message };
             pivot.refresh_status = status.clone();
             pivot.set_cache_refresh_status(status);
+        }
+    }
+}
+
+fn mark_pivot_external(workbook: &mut Workbook, sheet_index: usize, pivot_index: usize) {
+    if let Some(worksheet) = workbook.worksheet_mut(sheet_index) {
+        if let Some(pivot) = worksheet.pivot_tables_mut().get_mut(pivot_index) {
+            pivot.refresh_status = PivotRefreshStatus::External;
+            pivot.set_cache_refresh_status(PivotRefreshStatus::External);
         }
     }
 }
@@ -4601,8 +4629,8 @@ mod tests {
     use duke_sheets_core::{
         CellRange, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter,
         PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup,
-        PivotMeasure, PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue,
-        Table, TableColumn, Workbook,
+        PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSubtotal,
+        PivotTable, PivotValue, Table, TableColumn, Workbook,
     };
     use pretty_assertions::assert_eq;
     use ssfmt::{date_serial::date_to_serial, DateSystem};
@@ -6403,6 +6431,75 @@ mod tests {
         assert_eq!(stats.cache_hits, 1);
         assert_eq!(number(&workbook, "E2"), 10.0);
         assert_eq!(number(&workbook, "H2"), 10.0);
+    }
+
+    #[test]
+    fn external_sources_are_marked_external_without_failing_refresh() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        let pivot = PivotTable::builder("ExternalSales")
+            .source(PivotSource::External {
+                connection_name: "SalesConnection".to_string(),
+                command_text: Some("select Region, Revenue from Sales".to_string()),
+            })
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let stats = workbook.refresh_pivots().unwrap();
+
+        assert_eq!(stats.pivot_count, 1);
+        assert_eq!(stats.pivots_refreshed, 0);
+        assert_eq!(
+            workbook.worksheet(0).unwrap().pivot_tables()[0].refresh_status,
+            PivotRefreshStatus::External
+        );
+    }
+
+    #[test]
+    fn external_sources_do_not_block_local_pivot_refresh() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+
+        let local = PivotTable::builder("LocalSales")
+            .source_range(CellRange::parse("A1:B2").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        let external = PivotTable::builder("ExternalSales")
+            .source(PivotSource::External {
+                connection_name: "SalesConnection".to_string(),
+                command_text: Some("select Region, Revenue from Sales".to_string()),
+            })
+            .target_address("G1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(local).unwrap();
+        sheet.add_pivot_table(external).unwrap();
+
+        let stats = workbook.refresh_pivots().unwrap();
+
+        assert_eq!(stats.pivot_count, 2);
+        assert_eq!(stats.pivots_refreshed, 1);
+        assert_eq!(text(&workbook, "D2"), "East");
+        assert_eq!(number(&workbook, "E2"), 10.0);
+        let pivots = workbook.worksheet(0).unwrap().pivot_tables();
+        assert_eq!(pivots[0].refresh_status, PivotRefreshStatus::Succeeded);
+        assert_eq!(pivots[1].refresh_status, PivotRefreshStatus::External);
     }
 
     #[test]
