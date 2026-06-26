@@ -766,6 +766,9 @@ pub struct PivotExtension {
     /// Namespace or extension URI.
     pub uri: String,
     /// Raw payload bytes in the source format.
+    ///
+    /// For XLSX pivot tables this is the complete `<ext>` element so namespace
+    /// declarations and unknown extension content can be preserved losslessly.
     pub payload: Vec<u8>,
 }
 

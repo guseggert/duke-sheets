@@ -1093,6 +1093,7 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         write_data_fields(w, pivot, &cache_part.fields, style_table)?;
         write_pivot_style(w, pivot)?;
         write_pivot_filters(w, pivot, &cache_part.fields)?;
+        write_pivot_extensions(w, pivot)?;
 
         w.write_event(Event::End(BytesEnd::new("pivotTableDefinition")))?;
         Ok(())
@@ -1798,6 +1799,25 @@ fn write_data_field_ext(w: &mut XmlWriter, pivot_show_as: &str) -> XlsxResult<()
     w.write_event(Event::Empty(data_field))?;
 
     w.write_event(Event::End(BytesEnd::new("ext")))?;
+    w.write_event(Event::End(BytesEnd::new("extLst")))?;
+    Ok(())
+}
+
+fn write_pivot_extensions(w: &mut XmlWriter, pivot: &PivotTable) -> XlsxResult<()> {
+    if pivot
+        .extensions
+        .iter()
+        .all(|extension| extension.payload.is_empty())
+    {
+        return Ok(());
+    }
+
+    w.write_event(Event::Start(BytesStart::new("extLst")))?;
+    for extension in &pivot.extensions {
+        if !extension.payload.is_empty() {
+            w.get_mut().write_all(&extension.payload)?;
+        }
+    }
     w.write_event(Event::End(BytesEnd::new("extLst")))?;
     Ok(())
 }

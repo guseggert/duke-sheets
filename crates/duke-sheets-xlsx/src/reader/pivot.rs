@@ -1,17 +1,18 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
+use quick_xml::Writer;
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::style::NumberFormat;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
-    PivotCalculatedField, PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator,
-    PivotGrouping, PivotLayoutKind, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort,
-    PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    PivotCalculatedField, PivotDateGroupUnit, PivotExtension, PivotField, PivotFilter,
+    PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotMeasure, PivotRefreshStatus,
+    PivotShowAs, PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
 };
 
 #[derive(Debug, Clone)]
@@ -380,249 +381,290 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut subtotal_by_field: HashMap<usize, PivotSubtotal> = HashMap::new();
     let mut show_empty_by_field: HashMap<usize, bool> = HashMap::new();
     let mut hidden_items_by_field: HashMap<usize, Vec<u32>> = HashMap::new();
+    let mut element_stack = Vec::new();
+    let mut extensions = Vec::new();
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
-                b"pivotTableDefinition" => {
-                    parse_pivot_table_attrs(
-                        &e,
-                        &mut name,
-                        &mut cache_id,
-                        &mut row_grand_totals,
-                        &mut col_grand_totals,
-                        &mut preserve_formatting,
-                        &mut show_headers,
-                        &mut show_expand_collapse,
-                        &mut print_drill_indicators,
-                        &mut item_print_titles,
-                        &mut field_print_titles,
-                        &mut layout_kind,
-                    );
+            Ok(Event::Start(e)) => {
+                let local_name = e.name().local_name();
+                let local = local_name.as_ref();
+                if local == b"ext" && is_pivot_table_extension_parent(&element_stack) {
+                    let extension =
+                        read_pivot_extension(&mut xml_reader, e.into_owned(), &mut buf)?;
+                    extensions.push(extension);
+                    buf.clear();
+                    continue;
                 }
-                b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
-                b"pivotField" => {
-                    sort_by_field.insert(pivot_field_index, parse_pivot_sort(&e));
-                    subtotal_by_field.insert(pivot_field_index, parse_pivot_subtotal(&e));
-                    show_empty_by_field.insert(
-                        pivot_field_index,
-                        attr_bool(&e, b"showAll").unwrap_or(false),
-                    );
-                    current_pivot_field = Some((pivot_field_index, Vec::new()));
-                    pivot_field_index += 1;
-                }
-                b"dataField" if attr_u32(&e, b"fld").is_some() => {
-                    let Some(cache) = caches.get(&cache_id) else {
-                        buf.clear();
-                        continue;
-                    };
-                    if let Some(measure) = parse_data_field(&e, cache, num_fmts) {
-                        let base_field_index = attr_i32(&e, b"baseField")
-                            .and_then(|value| usize::try_from(value).ok());
-                        measures.push(measure);
-                        current_data_field = Some(CurrentDataField {
-                            measure_index: measures.len() - 1,
-                            base_field_index,
-                        });
+
+                element_stack.push(pivot_xml_element(local));
+                match local {
+                    b"pivotTableDefinition" => {
+                        parse_pivot_table_attrs(
+                            &e,
+                            &mut name,
+                            &mut cache_id,
+                            &mut row_grand_totals,
+                            &mut col_grand_totals,
+                            &mut preserve_formatting,
+                            &mut show_headers,
+                            &mut show_expand_collapse,
+                            &mut print_drill_indicators,
+                            &mut item_print_titles,
+                            &mut field_print_titles,
+                            &mut layout_kind,
+                        );
                     }
-                }
-                b"rowFields" => axis_context = Some(AxisContext::Rows),
-                b"colFields" => axis_context = Some(AxisContext::Columns),
-                b"pageFields" => axis_context = Some(AxisContext::Page),
-                b"dataFields" => axis_context = Some(AxisContext::Data),
-                b"filters" if current_pivot_filter.is_none() => in_pivot_filters = true,
-                b"filter" if in_pivot_filters && current_pivot_filter.is_none() => {
-                    current_pivot_filter = parse_current_pivot_filter(&e);
-                    current_pivot_filter_depth = usize::from(current_pivot_filter.is_some());
-                }
-                b"customFilter" => {
-                    if let Some(filter) = &mut current_pivot_filter {
+                    b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
+                    b"pivotField" => {
+                        sort_by_field.insert(pivot_field_index, parse_pivot_sort(&e));
+                        subtotal_by_field.insert(pivot_field_index, parse_pivot_subtotal(&e));
+                        show_empty_by_field.insert(
+                            pivot_field_index,
+                            attr_bool(&e, b"showAll").unwrap_or(false),
+                        );
+                        current_pivot_field = Some((pivot_field_index, Vec::new()));
+                        pivot_field_index += 1;
+                    }
+                    b"dataField" if attr_u32(&e, b"fld").is_some() => {
+                        let Some(cache) = caches.get(&cache_id) else {
+                            buf.clear();
+                            continue;
+                        };
+                        if let Some(measure) = parse_data_field(&e, cache, num_fmts) {
+                            let base_field_index = attr_i32(&e, b"baseField")
+                                .and_then(|value| usize::try_from(value).ok());
+                            measures.push(measure);
+                            current_data_field = Some(CurrentDataField {
+                                measure_index: measures.len() - 1,
+                                base_field_index,
+                            });
+                        }
+                    }
+                    b"rowFields" => axis_context = Some(AxisContext::Rows),
+                    b"colFields" => axis_context = Some(AxisContext::Columns),
+                    b"pageFields" => axis_context = Some(AxisContext::Page),
+                    b"dataFields" => axis_context = Some(AxisContext::Data),
+                    b"filters" if current_pivot_filter.is_none() => in_pivot_filters = true,
+                    b"filter" if in_pivot_filters && current_pivot_filter.is_none() => {
+                        current_pivot_filter = parse_current_pivot_filter(&e);
+                        current_pivot_filter_depth = usize::from(current_pivot_filter.is_some());
+                    }
+                    b"customFilter" => {
+                        if let Some(filter) = &mut current_pivot_filter {
+                            current_pivot_filter_depth += 1;
+                            parse_pivot_custom_filter_attrs(filter, &e);
+                        }
+                    }
+                    b"top10" => {
+                        if let Some(filter) = &mut current_pivot_filter {
+                            current_pivot_filter_depth += 1;
+                            parse_pivot_top_filter_attrs(filter, &e);
+                        }
+                    }
+                    _ if current_pivot_filter.is_some() => {
                         current_pivot_filter_depth += 1;
-                        parse_pivot_custom_filter_attrs(filter, &e);
                     }
+                    _ => {}
                 }
-                b"top10" => {
-                    if let Some(filter) = &mut current_pivot_filter {
-                        current_pivot_filter_depth += 1;
-                        parse_pivot_top_filter_attrs(filter, &e);
+            }
+            Ok(Event::Empty(e)) => {
+                let local_name = e.name().local_name();
+                let local = local_name.as_ref();
+                if local == b"ext" && is_pivot_table_extension_parent(&element_stack) {
+                    extensions.push(empty_pivot_extension(&e)?);
+                    buf.clear();
+                    continue;
+                }
+
+                match local {
+                    b"pivotTableDefinition" => {
+                        parse_pivot_table_attrs(
+                            &e,
+                            &mut name,
+                            &mut cache_id,
+                            &mut row_grand_totals,
+                            &mut col_grand_totals,
+                            &mut preserve_formatting,
+                            &mut show_headers,
+                            &mut show_expand_collapse,
+                            &mut print_drill_indicators,
+                            &mut item_print_titles,
+                            &mut field_print_titles,
+                            &mut layout_kind,
+                        );
                     }
-                }
-                _ if current_pivot_filter.is_some() => {
-                    current_pivot_filter_depth += 1;
-                }
-                _ => {}
-            },
-            Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
-                b"pivotTableDefinition" => {
-                    parse_pivot_table_attrs(
-                        &e,
-                        &mut name,
-                        &mut cache_id,
-                        &mut row_grand_totals,
-                        &mut col_grand_totals,
-                        &mut preserve_formatting,
-                        &mut show_headers,
-                        &mut show_expand_collapse,
-                        &mut print_drill_indicators,
-                        &mut item_print_titles,
-                        &mut field_print_titles,
-                        &mut layout_kind,
-                    );
-                }
-                b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
-                b"pivotField" => {
-                    sort_by_field.insert(pivot_field_index, parse_pivot_sort(&e));
-                    subtotal_by_field.insert(pivot_field_index, parse_pivot_subtotal(&e));
-                    show_empty_by_field.insert(
-                        pivot_field_index,
-                        attr_bool(&e, b"showAll").unwrap_or(false),
-                    );
-                    pivot_field_index += 1;
-                }
-                b"item" => {
-                    if let Some((_, hidden)) = &mut current_pivot_field {
-                        if attr_bool(&e, b"h").unwrap_or(false) {
-                            if let Some(index) = attr_u32(&e, b"x") {
-                                hidden.push(index);
+                    b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
+                    b"pivotField" => {
+                        sort_by_field.insert(pivot_field_index, parse_pivot_sort(&e));
+                        subtotal_by_field.insert(pivot_field_index, parse_pivot_subtotal(&e));
+                        show_empty_by_field.insert(
+                            pivot_field_index,
+                            attr_bool(&e, b"showAll").unwrap_or(false),
+                        );
+                        pivot_field_index += 1;
+                    }
+                    b"item" => {
+                        if let Some((_, hidden)) = &mut current_pivot_field {
+                            if attr_bool(&e, b"h").unwrap_or(false) {
+                                if let Some(index) = attr_u32(&e, b"x") {
+                                    hidden.push(index);
+                                }
                             }
                         }
                     }
-                }
-                b"field" => {
-                    let Some(cache) = caches.get(&cache_id) else {
-                        buf.clear();
-                        continue;
-                    };
-                    if let Some(field_index) =
-                        attr_i32(&e, b"x").and_then(|v| usize::try_from(v).ok())
-                    {
-                        if let Some(field) = pivot_axis_field(
-                            cache,
-                            field_index,
-                            sort_by_field.get(&field_index).copied(),
-                            subtotal_by_field.get(&field_index).copied(),
-                            show_empty_by_field.get(&field_index).copied(),
-                        ) {
-                            match axis_context {
-                                Some(AxisContext::Rows) => push_axis_field(&mut rows, field),
-                                Some(AxisContext::Columns) => push_axis_field(&mut columns, field),
-                                _ => {}
+                    b"field" => {
+                        let Some(cache) = caches.get(&cache_id) else {
+                            buf.clear();
+                            continue;
+                        };
+                        if let Some(field_index) =
+                            attr_i32(&e, b"x").and_then(|v| usize::try_from(v).ok())
+                        {
+                            if let Some(field) = pivot_axis_field(
+                                cache,
+                                field_index,
+                                sort_by_field.get(&field_index).copied(),
+                                subtotal_by_field.get(&field_index).copied(),
+                                show_empty_by_field.get(&field_index).copied(),
+                            ) {
+                                match axis_context {
+                                    Some(AxisContext::Rows) => push_axis_field(&mut rows, field),
+                                    Some(AxisContext::Columns) => {
+                                        push_axis_field(&mut columns, field)
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                     }
-                }
-                b"pageField" => {
-                    let Some(cache) = caches.get(&cache_id) else {
-                        buf.clear();
-                        continue;
-                    };
-                    if let Some(field_index) =
-                        attr_i32(&e, b"fld").and_then(|v| usize::try_from(v).ok())
-                    {
-                        if let Some(field) = pivot_axis_field(
-                            cache,
-                            field_index,
-                            sort_by_field.get(&field_index).copied(),
-                            subtotal_by_field.get(&field_index).copied(),
-                            show_empty_by_field.get(&field_index).copied(),
-                        ) {
-                            push_axis_field(&mut page_fields, field);
-                            if let Some(item_index) = attr_u32(&e, b"item") {
-                                if let Some(cache_field) = cache.fields.get(field_index) {
-                                    if let Some(item) =
-                                        cache_field.shared_items.get(item_index as usize)
-                                    {
-                                        page_filters.push(PivotFilter::FieldItems {
-                                            field: duke_sheets_core::PivotFieldRef::new(
-                                                semantic_cache_field_name(cache, field_index)
-                                                    .unwrap_or_else(|| cache_field.name.clone()),
-                                            ),
-                                            allowed_items: vec![item.clone()],
-                                        });
+                    b"pageField" => {
+                        let Some(cache) = caches.get(&cache_id) else {
+                            buf.clear();
+                            continue;
+                        };
+                        if let Some(field_index) =
+                            attr_i32(&e, b"fld").and_then(|v| usize::try_from(v).ok())
+                        {
+                            if let Some(field) = pivot_axis_field(
+                                cache,
+                                field_index,
+                                sort_by_field.get(&field_index).copied(),
+                                subtotal_by_field.get(&field_index).copied(),
+                                show_empty_by_field.get(&field_index).copied(),
+                            ) {
+                                push_axis_field(&mut page_fields, field);
+                                if let Some(item_index) = attr_u32(&e, b"item") {
+                                    if let Some(cache_field) = cache.fields.get(field_index) {
+                                        if let Some(item) =
+                                            cache_field.shared_items.get(item_index as usize)
+                                        {
+                                            page_filters.push(PivotFilter::FieldItems {
+                                                field: duke_sheets_core::PivotFieldRef::new(
+                                                    semantic_cache_field_name(cache, field_index)
+                                                        .unwrap_or_else(|| {
+                                                            cache_field.name.clone()
+                                                        }),
+                                                ),
+                                                allowed_items: vec![item.clone()],
+                                            });
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                b"dataField" => {
-                    let Some(cache) = caches.get(&cache_id) else {
-                        buf.clear();
-                        continue;
-                    };
-                    if let Some(pivot_show_as) = attr_string(&e, b"pivotShowAs") {
-                        if let Some(current) = current_data_field {
-                            if let Some(show_as) =
-                                parse_x14_show_as(&pivot_show_as, cache, current.base_field_index)
-                            {
-                                if let Some(measure) = measures.get_mut(current.measure_index) {
-                                    measure.show_as = show_as;
+                    b"dataField" => {
+                        let Some(cache) = caches.get(&cache_id) else {
+                            buf.clear();
+                            continue;
+                        };
+                        if let Some(pivot_show_as) = attr_string(&e, b"pivotShowAs") {
+                            if let Some(current) = current_data_field {
+                                if let Some(show_as) = parse_x14_show_as(
+                                    &pivot_show_as,
+                                    cache,
+                                    current.base_field_index,
+                                ) {
+                                    if let Some(measure) = measures.get_mut(current.measure_index) {
+                                        measure.show_as = show_as;
+                                    }
                                 }
                             }
+                        } else if let Some(measure) = parse_data_field(&e, cache, num_fmts) {
+                            measures.push(measure);
                         }
-                    } else if let Some(measure) = parse_data_field(&e, cache, num_fmts) {
-                        measures.push(measure);
                     }
+                    b"filter" if in_pivot_filters && current_pivot_filter.is_none() => {
+                        let Some(cache) = caches.get(&cache_id) else {
+                            buf.clear();
+                            continue;
+                        };
+                        if let Some(filter) = parse_current_pivot_filter(&e)
+                            .and_then(|filter| pivot_filter_from_context(filter, cache, &measures))
+                        {
+                            advanced_filters.push(filter);
+                        }
+                    }
+                    b"customFilter" => {
+                        if let Some(filter) = &mut current_pivot_filter {
+                            parse_pivot_custom_filter_attrs(filter, &e);
+                        }
+                    }
+                    b"top10" => {
+                        if let Some(filter) = &mut current_pivot_filter {
+                            parse_pivot_top_filter_attrs(filter, &e);
+                        }
+                    }
+                    b"pivotTableStyleInfo" => style = parse_pivot_style(&e),
+                    _ => {}
                 }
-                b"filter" if in_pivot_filters && current_pivot_filter.is_none() => {
-                    let Some(cache) = caches.get(&cache_id) else {
-                        buf.clear();
-                        continue;
-                    };
-                    if let Some(filter) = parse_current_pivot_filter(&e)
-                        .and_then(|filter| pivot_filter_from_context(filter, cache, &measures))
+            }
+            Ok(Event::End(e)) => {
+                let local_name = e.name().local_name();
+                let local = local_name.as_ref();
+                match local {
+                    b"pivotField" => {
+                        if let Some((field_index, hidden_items)) = current_pivot_field.take() {
+                            if !hidden_items.is_empty() {
+                                hidden_items_by_field.insert(field_index, hidden_items);
+                            }
+                        }
+                    }
+                    b"rowFields" | b"colFields" | b"pageFields" | b"dataFields" => {
+                        axis_context = None
+                    }
+                    b"dataField" => {
+                        if e.name().as_ref() == b"dataField" {
+                            current_data_field = None;
+                        }
+                    }
+                    b"filter"
+                        if current_pivot_filter.is_some() && current_pivot_filter_depth == 1 =>
                     {
-                        advanced_filters.push(filter);
-                    }
-                }
-                b"customFilter" => {
-                    if let Some(filter) = &mut current_pivot_filter {
-                        parse_pivot_custom_filter_attrs(filter, &e);
-                    }
-                }
-                b"top10" => {
-                    if let Some(filter) = &mut current_pivot_filter {
-                        parse_pivot_top_filter_attrs(filter, &e);
-                    }
-                }
-                b"pivotTableStyleInfo" => style = parse_pivot_style(&e),
-                _ => {}
-            },
-            Ok(Event::End(e)) => match e.name().local_name().as_ref() {
-                b"pivotField" => {
-                    if let Some((field_index, hidden_items)) = current_pivot_field.take() {
-                        if !hidden_items.is_empty() {
-                            hidden_items_by_field.insert(field_index, hidden_items);
+                        let Some(cache) = caches.get(&cache_id) else {
+                            current_pivot_filter = None;
+                            current_pivot_filter_depth = 0;
+                            element_stack.pop();
+                            buf.clear();
+                            continue;
+                        };
+                        if let Some(filter) = current_pivot_filter
+                            .take()
+                            .and_then(|filter| pivot_filter_from_context(filter, cache, &measures))
+                        {
+                            advanced_filters.push(filter);
                         }
-                    }
-                }
-                b"rowFields" | b"colFields" | b"pageFields" | b"dataFields" => axis_context = None,
-                b"dataField" => {
-                    if e.name().as_ref() == b"dataField" {
-                        current_data_field = None;
-                    }
-                }
-                b"filter" if current_pivot_filter.is_some() && current_pivot_filter_depth == 1 => {
-                    let Some(cache) = caches.get(&cache_id) else {
-                        current_pivot_filter = None;
                         current_pivot_filter_depth = 0;
-                        buf.clear();
-                        continue;
-                    };
-                    if let Some(filter) = current_pivot_filter
-                        .take()
-                        .and_then(|filter| pivot_filter_from_context(filter, cache, &measures))
-                    {
-                        advanced_filters.push(filter);
                     }
-                    current_pivot_filter_depth = 0;
+                    b"filters" if current_pivot_filter.is_none() => in_pivot_filters = false,
+                    _ if current_pivot_filter.is_some() => {
+                        current_pivot_filter_depth = current_pivot_filter_depth.saturating_sub(1);
+                    }
+                    _ => {}
                 }
-                b"filters" if current_pivot_filter.is_none() => in_pivot_filters = false,
-                _ if current_pivot_filter.is_some() => {
-                    current_pivot_filter_depth = current_pivot_filter_depth.saturating_sub(1);
-                }
-                _ => {}
-            },
+                element_stack.pop();
+            }
             Ok(Event::Eof) => break,
             Err(e) => return Err(XlsxError::Xml(e)),
             _ => {}
@@ -655,6 +697,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.style = style;
     pivot.rendered_range = rendered_range;
     pivot.groupings = cache.groupings.clone();
+    pivot.extensions = extensions;
     pivot.cache_info = Some(PivotCacheInfo {
         cache_id,
         source_kind: cache.source_kind,
@@ -722,6 +765,87 @@ struct CurrentPivotFilter {
     top: Option<bool>,
     percent: Option<bool>,
     top_n: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PivotXmlElement {
+    PivotTableDefinition,
+    ExtList,
+    Other,
+}
+
+fn pivot_xml_element(local_name: &[u8]) -> PivotXmlElement {
+    match local_name {
+        b"pivotTableDefinition" => PivotXmlElement::PivotTableDefinition,
+        b"extLst" => PivotXmlElement::ExtList,
+        _ => PivotXmlElement::Other,
+    }
+}
+
+fn is_pivot_table_extension_parent(stack: &[PivotXmlElement]) -> bool {
+    matches!(
+        stack,
+        [
+            PivotXmlElement::PivotTableDefinition,
+            PivotXmlElement::ExtList
+        ]
+    )
+}
+
+fn read_pivot_extension<B: BufRead>(
+    xml_reader: &mut Reader<B>,
+    start: BytesStart<'static>,
+    buf: &mut Vec<u8>,
+) -> XlsxResult<PivotExtension> {
+    let uri = attr_string(&start, b"uri").unwrap_or_default();
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    writer.write_event(Event::Start(start))?;
+
+    let mut depth = 1usize;
+    loop {
+        buf.clear();
+        let event = xml_reader.read_event_into(buf)?;
+        match event {
+            Event::Start(e) => {
+                depth += 1;
+                writer.write_event(Event::Start(e.into_owned()))?;
+            }
+            Event::End(e) => {
+                writer.write_event(Event::End(e.into_owned()))?;
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    break;
+                }
+            }
+            Event::Empty(e) => writer.write_event(Event::Empty(e.into_owned()))?,
+            Event::Text(e) => writer.write_event(Event::Text(e.into_owned()))?,
+            Event::CData(e) => writer.write_event(Event::CData(e.into_owned()))?,
+            Event::Comment(e) => writer.write_event(Event::Comment(e.into_owned()))?,
+            Event::Decl(e) => writer.write_event(Event::Decl(e.into_owned()))?,
+            Event::PI(e) => writer.write_event(Event::PI(e.into_owned()))?,
+            Event::DocType(e) => writer.write_event(Event::DocType(e.into_owned()))?,
+            Event::Eof => {
+                return Err(XlsxError::InvalidFormat(
+                    "unexpected EOF while reading pivot extension".into(),
+                ))
+            }
+        }
+    }
+
+    Ok(PivotExtension {
+        uri,
+        payload: writer.into_inner().into_inner(),
+    })
+}
+
+fn empty_pivot_extension(ext: &BytesStart<'_>) -> XlsxResult<PivotExtension> {
+    let uri = attr_string(ext, b"uri").unwrap_or_default();
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    writer.write_event(Event::Empty(ext.clone().into_owned()))?;
+    Ok(PivotExtension {
+        uri,
+        payload: writer.into_inner().into_inner(),
+    })
 }
 
 fn parse_pivot_table_attrs(
