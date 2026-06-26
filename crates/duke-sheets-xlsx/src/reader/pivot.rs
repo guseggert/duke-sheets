@@ -249,6 +249,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut row_grand_totals = true;
     let mut col_grand_totals = true;
     let mut show_headers = true;
+    let mut show_expand_collapse = true;
     let mut layout_kind = PivotLayoutKind::Compact;
     let mut axis_context: Option<AxisContext> = None;
     let mut pivot_field_index = 0usize;
@@ -268,6 +269,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         &mut row_grand_totals,
                         &mut col_grand_totals,
                         &mut show_headers,
+                        &mut show_expand_collapse,
                         &mut layout_kind,
                     );
                 }
@@ -307,6 +309,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         &mut row_grand_totals,
                         &mut col_grand_totals,
                         &mut show_headers,
+                        &mut show_expand_collapse,
                         &mut layout_kind,
                     );
                 }
@@ -427,6 +430,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.layout.show_row_grand_totals = row_grand_totals;
     pivot.layout.show_column_grand_totals = col_grand_totals;
     pivot.layout.show_field_headers = show_headers;
+    pivot.layout.show_expand_collapse = show_expand_collapse;
     pivot.layout.kind = layout_kind;
     pivot.style = style;
     pivot.rendered_range = rendered_range;
@@ -494,6 +498,7 @@ fn parse_pivot_table_attrs(
     row_grand_totals: &mut bool,
     col_grand_totals: &mut bool,
     show_headers: &mut bool,
+    show_expand_collapse: &mut bool,
     layout_kind: &mut PivotLayoutKind,
 ) {
     if let Some(value) = attr_string(e, b"name") {
@@ -510,6 +515,9 @@ fn parse_pivot_table_attrs(
     }
     if let Some(value) = attr_bool(e, b"showHeaders") {
         *show_headers = value;
+    }
+    if let Some(value) = attr_bool(e, b"showDrill") {
+        *show_expand_collapse = value;
     }
 
     let compact = attr_bool(e, b"compact").unwrap_or(true);

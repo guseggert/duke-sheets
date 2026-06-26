@@ -3213,8 +3213,8 @@ mod tests {
     use crate::reader::XlsxReader;
     use duke_sheets_core::{
         CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotDateGroupUnit,
-        PivotField, PivotFilter, PivotGrouping, PivotMeasure, PivotShowAs, PivotSort, PivotSource,
-        PivotTable, PivotValue, SplitPanes,
+        PivotField, PivotFilter, PivotGrouping, PivotLayout, PivotLayoutKind, PivotMeasure,
+        PivotShowAs, PivotSort, PivotSource, PivotTable, PivotValue, SplitPanes,
     };
     use std::io::Read;
 
@@ -3877,6 +3877,59 @@ mod tests {
             .unwrap();
         assert_eq!(pivot.rows[0].sort, PivotSort::Descending);
         assert_eq!(pivot.columns[0].sort, PivotSort::None);
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_layout_flags() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Tabular;
+        layout.show_row_grand_totals = false;
+        layout.show_column_grand_totals = false;
+        layout.show_field_headers = false;
+        layout.show_expand_collapse = false;
+        let pivot = PivotTable::builder("LayoutPivot")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"rowGrandTotals="0""#));
+        assert!(pivot_xml.contains(r#"colGrandTotals="0""#));
+        assert!(pivot_xml.contains(r#"showHeaders="0""#));
+        assert!(pivot_xml.contains(r#"showDrill="0""#));
+        assert!(pivot_xml.contains(r#"compact="0""#));
+        assert!(pivot_xml.contains(r#"outline="0""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("LayoutPivot")
+            .unwrap();
+        assert_eq!(pivot.layout.kind, PivotLayoutKind::Tabular);
+        assert!(!pivot.layout.show_row_grand_totals);
+        assert!(!pivot.layout.show_column_grand_totals);
+        assert!(!pivot.layout.show_field_headers);
+        assert!(!pivot.layout.show_expand_collapse);
     }
 
     #[test]
