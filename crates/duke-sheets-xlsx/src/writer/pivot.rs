@@ -7,8 +7,8 @@ use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit,
     PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind,
-    PivotManualGroup, PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue,
-    Table, Workbook, Worksheet,
+    PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
+    PivotSubtotal, PivotTable, PivotValue, Table, Workbook, Worksheet,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -45,6 +45,7 @@ pub(super) struct PivotCachePart {
     fields: Vec<CacheField>,
     rows: Vec<Vec<Option<u32>>>,
     record_count: usize,
+    save_data: bool,
     refresh_on_load: bool,
     background_query: bool,
     missing_items_limit: Option<u32>,
@@ -66,6 +67,7 @@ struct ResolvedPivotSource {
     fields: Vec<CacheField>,
     rows: Vec<Vec<Option<u32>>>,
     record_count: usize,
+    save_data: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -147,7 +149,7 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
         for (pivot_index, pivot) in sheet.pivot_tables().iter().enumerate() {
             validate_writable_pivot(pivot)?;
 
-            let mut resolved = resolve_pivot_source(workbook, sheet_index, &pivot.source)?;
+            let mut resolved = resolve_pivot_source(workbook, sheet_index, pivot)?;
             apply_calculated_cache_fields(&pivot.name, &mut resolved, &pivot.calculated_fields)?;
             validate_pivot_fields(pivot, &resolved.fields)?;
             validate_pivot_groupings(pivot, &resolved.fields)?;
@@ -185,6 +187,7 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
                     fields: resolved.fields,
                     rows: resolved.rows,
                     record_count: resolved.record_count,
+                    save_data: resolved.save_data,
                     refresh_on_load: pivot.refresh_policy.refresh_on_open,
                     background_query: pivot.refresh_policy.background_query,
                     missing_items_limit: pivot.refresh_policy.missing_items_limit,
@@ -809,12 +812,27 @@ fn filter_measure_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
     }
 }
 
+fn show_as_base_field_ref(measure: &PivotMeasure) -> Option<&PivotFieldRef> {
+    match &measure.show_as {
+        PivotShowAs::RunningTotal { base_field }
+        | PivotShowAs::DifferenceFrom { base_field, .. }
+        | PivotShowAs::PercentDifferenceFrom { base_field, .. }
+        | PivotShowAs::RankAscending { base_field }
+        | PivotShowAs::RankDescending { base_field } => Some(base_field),
+        PivotShowAs::Normal
+        | PivotShowAs::PercentOfGrandTotal
+        | PivotShowAs::PercentOfRowTotal
+        | PivotShowAs::PercentOfColumnTotal
+        | PivotShowAs::Index => None,
+    }
+}
+
 fn resolve_pivot_source(
     workbook: &Workbook,
     pivot_sheet_index: usize,
-    source: &PivotSource,
+    pivot: &PivotTable,
 ) -> XlsxResult<ResolvedPivotSource> {
-    match source {
+    match &pivot.source {
         PivotSource::WorksheetRange { sheet, range } => {
             let source_sheet_index = match sheet {
                 Some(sheet_name) => workbook.sheet_index(sheet_name).ok_or_else(|| {
@@ -845,6 +863,7 @@ fn resolve_pivot_source(
                 fields,
                 rows,
                 record_count,
+                save_data: true,
             })
         }
         PivotSource::Table { name } => {
@@ -876,14 +895,130 @@ fn resolve_pivot_source(
                 fields,
                 rows,
                 record_count,
+                save_data: true,
             })
         }
+        PivotSource::External {
+            command_text: Some(_),
+            ..
+        } => Err(XlsxError::InvalidFormat(
+            "XLSX pivot external source command text requires workbook connection parts".into(),
+        )),
+        PivotSource::Olap { .. } => Err(XlsxError::InvalidFormat(
+            "XLSX OLAP pivot source writing is not supported yet".into(),
+        )),
         PivotSource::External { .. }
         | PivotSource::Consolidation { .. }
-        | PivotSource::Scenario { .. }
-        | PivotSource::Olap { .. } => Err(XlsxError::InvalidFormat(
-            "this XLSX writer currently supports worksheet and table pivot sources".into(),
-        )),
+        | PivotSource::Scenario { .. } => {
+            resolve_non_refreshable_pivot_source(pivot_sheet_index, &pivot.source, pivot)
+        }
+    }
+}
+
+fn resolve_non_refreshable_pivot_source(
+    pivot_sheet_index: usize,
+    source: &PivotSource,
+    pivot: &PivotTable,
+) -> XlsxResult<ResolvedPivotSource> {
+    let fields = non_refreshable_source_fields(pivot)?;
+    Ok(ResolvedPivotSource {
+        key: non_refreshable_source_key(source),
+        source: source.clone(),
+        source_sheet_index: pivot_sheet_index,
+        fields,
+        rows: Vec::new(),
+        record_count: 0,
+        save_data: false,
+    })
+}
+
+fn non_refreshable_source_key(source: &PivotSource) -> String {
+    match source {
+        PivotSource::External {
+            connection_name,
+            command_text,
+        } => format!(
+            "external:{connection_name}:{}",
+            command_text.as_deref().unwrap_or("")
+        ),
+        PivotSource::Consolidation { ranges } => {
+            let ranges = ranges
+                .iter()
+                .map(|range| format!("{}!{}", range.sheet, range.range.to_a1_string()))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("consolidation:{ranges}")
+        }
+        PivotSource::Scenario { name } => format!("scenario:{name}"),
+        PivotSource::Olap {
+            connection_name,
+            cube,
+            command_text,
+        } => format!(
+            "olap:{connection_name}:{}:{}",
+            cube.as_deref().unwrap_or(""),
+            command_text.as_deref().unwrap_or("")
+        ),
+        PivotSource::WorksheetRange { .. } | PivotSource::Table { .. } => unreachable!(),
+    }
+}
+
+fn non_refreshable_source_fields(pivot: &PivotTable) -> XlsxResult<Vec<CacheField>> {
+    let calculated_names = pivot
+        .calculated_fields
+        .iter()
+        .map(|field| field.name.to_lowercase())
+        .collect::<HashSet<_>>();
+    let mut fields = Vec::new();
+    let mut seen = HashSet::new();
+
+    for field in pivot
+        .rows
+        .iter()
+        .map(|field| &field.field)
+        .chain(pivot.columns.iter().map(|field| &field.field))
+        .chain(pivot.page_fields.iter().map(|field| &field.field))
+        .chain(pivot.measures.iter().map(|measure| &measure.field))
+        .chain(pivot.filters.iter().filter_map(filter_field_ref))
+        .chain(pivot.filters.iter().filter_map(filter_measure_field_ref))
+        .chain(pivot.groupings.iter().map(grouping_field_ref))
+        .chain(pivot.measures.iter().filter_map(show_as_base_field_ref))
+    {
+        if calculated_names.contains(&field.name.to_lowercase()) {
+            continue;
+        }
+        push_non_refreshable_field(&mut fields, &mut seen, &field.name);
+    }
+
+    for field in &pivot.calculated_fields {
+        if field.name.trim().is_empty() {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {} has a calculated field with a blank name",
+                pivot.name
+            )));
+        }
+        if !seen.insert(field.name.to_lowercase()) {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {} calculated field duplicates source field: {}",
+                pivot.name, field.name
+            )));
+        }
+        fields.push(CacheField::calculated(
+            field.name.clone(),
+            formula_for_cache_attr(&field.formula),
+        ));
+    }
+
+    Ok(fields)
+}
+
+fn push_non_refreshable_field(
+    fields: &mut Vec<CacheField>,
+    seen: &mut HashSet<String>,
+    name: &str,
+) {
+    if seen.insert(name.to_lowercase()) {
+        fields.push(CacheField::new(name.to_string()));
     }
 }
 
@@ -2430,12 +2565,13 @@ pub(super) fn write_pivot_cache_definition_part<W: Write + Seek>(
         let record_count = part.record_count.to_string();
         let refresh_on_load = bool_attr(part.refresh_on_load);
         let background_query = bool_attr(part.background_query);
+        let save_data = bool_attr(part.save_data);
         let mut tag = BytesStart::new("pivotCacheDefinition");
         tag.push_attribute(("xmlns", NS_SPREADSHEET));
         tag.push_attribute(("xmlns:r", NS_DOC_RELS));
         tag.push_attribute(("r:id", "rId1"));
         tag.push_attribute(("recordCount", record_count.as_str()));
-        tag.push_attribute(("saveData", "1"));
+        tag.push_attribute(("saveData", save_data));
         tag.push_attribute(("refreshOnLoad", refresh_on_load));
         tag.push_attribute(("backgroundQuery", background_query));
         let missing_items_limit = part.missing_items_limit.map(|limit| limit.to_string());
@@ -2447,9 +2583,7 @@ pub(super) fn write_pivot_cache_definition_part<W: Write + Seek>(
         tag.push_attribute(("minRefreshableVersion", "3"));
         w.write_event(Event::Start(tag))?;
 
-        w.write_event(Event::Start(cache_source_tag()))?;
-        write_worksheet_source(w, workbook, part)?;
-        w.write_event(Event::End(BytesEnd::new("cacheSource")))?;
+        write_cache_source(w, workbook, part)?;
 
         let count = part.fields.len().to_string();
         let mut cache_fields = BytesStart::new("cacheFields");
@@ -2465,10 +2599,87 @@ pub(super) fn write_pivot_cache_definition_part<W: Write + Seek>(
     })
 }
 
-fn cache_source_tag() -> BytesStart<'static> {
+fn cache_source_tag(source_type: &'static str) -> BytesStart<'static> {
     let mut cache_source = BytesStart::new("cacheSource");
-    cache_source.push_attribute(("type", "worksheet"));
+    cache_source.push_attribute(("type", source_type));
     cache_source
+}
+
+fn write_cache_source(
+    w: &mut XmlWriter,
+    workbook: &Workbook,
+    part: &PivotCachePart,
+) -> XlsxResult<()> {
+    match &part.source {
+        PivotSource::WorksheetRange { .. } | PivotSource::Table { .. } => {
+            w.write_event(Event::Start(cache_source_tag("worksheet")))?;
+            write_worksheet_source(w, workbook, part)?;
+            w.write_event(Event::End(BytesEnd::new("cacheSource")))?;
+        }
+        PivotSource::External {
+            connection_name, ..
+        } => {
+            let mut cache_source = cache_source_tag("external");
+            if let Some(connection_id) = connection_id_attr(connection_name)? {
+                cache_source.push_attribute(("connectionId", connection_id.as_str()));
+            }
+            w.write_event(Event::Empty(cache_source))?;
+        }
+        PivotSource::Consolidation { ranges } => {
+            w.write_event(Event::Start(cache_source_tag("consolidation")))?;
+            write_consolidation_source(w, ranges)?;
+            w.write_event(Event::End(BytesEnd::new("cacheSource")))?;
+        }
+        PivotSource::Scenario { .. } => {
+            w.write_event(Event::Empty(cache_source_tag("scenario")))?;
+        }
+        PivotSource::Olap { .. } => {
+            return Err(XlsxError::InvalidFormat(
+                "XLSX OLAP pivot source writing is not supported yet".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn connection_id_attr(connection_name: &str) -> XlsxResult<Option<String>> {
+    if connection_name.is_empty() {
+        return Ok(None);
+    }
+    let connection_id = connection_name.parse::<u32>().map_err(|_| {
+        XlsxError::InvalidFormat(format!(
+            "XLSX pivot external source connectionId must be numeric: {connection_name}"
+        ))
+    })?;
+    Ok(Some(connection_id.to_string()))
+}
+
+fn write_consolidation_source(w: &mut XmlWriter, ranges: &[PivotSourceRange]) -> XlsxResult<()> {
+    if ranges.is_empty() {
+        return Err(XlsxError::InvalidFormat(
+            "XLSX consolidation pivot sources require at least one range".into(),
+        ));
+    }
+
+    let mut consolidation = BytesStart::new("consolidation");
+    consolidation.push_attribute(("autoPage", "0"));
+    w.write_event(Event::Start(consolidation))?;
+
+    let count = ranges.len().to_string();
+    let mut range_sets = BytesStart::new("rangeSets");
+    range_sets.push_attribute(("count", count.as_str()));
+    w.write_event(Event::Start(range_sets))?;
+    for range in ranges {
+        let ref_str = range.range.to_a1_string();
+        let mut range_set = BytesStart::new("rangeSet");
+        range_set.push_attribute(("ref", ref_str.as_str()));
+        range_set.push_attribute(("sheet", range.sheet.as_str()));
+        w.write_event(Event::Empty(range_set))?;
+    }
+    w.write_event(Event::End(BytesEnd::new("rangeSets")))?;
+
+    w.write_event(Event::End(BytesEnd::new("consolidation")))?;
+    Ok(())
 }
 
 fn write_worksheet_source(

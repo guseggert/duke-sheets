@@ -12,8 +12,8 @@ use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
     PivotCalculatedField, PivotDateGroupUnit, PivotExtension, PivotField, PivotFilter,
     PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure,
-    PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable,
-    PivotValue,
+    PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
+    PivotSubtotal, PivotTable, PivotValue,
 };
 
 #[derive(Debug, Clone)]
@@ -66,10 +66,12 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     let mut refresh_on_load = false;
     let mut background_query = false;
     let mut missing_items_limit = None;
+    let mut consolidation_ranges = Vec::new();
     let mut current_field: Option<PivotCacheField> = None;
     let mut in_shared_items = false;
     let mut in_discrete_pr = false;
     let mut in_group_items = false;
+    let mut in_consolidation = false;
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
@@ -88,6 +90,12 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"worksheetSource" => {
                     source = parse_worksheet_source(&e)?;
                     source_kind = PivotCacheSourceKind::Worksheet;
+                }
+                b"consolidation" => in_consolidation = true,
+                b"rangeSet" if in_consolidation => {
+                    if let Some(range) = parse_consolidation_range_set(&e)? {
+                        consolidation_ranges.push(range);
+                    }
                 }
                 b"cacheField" => {
                     current_field = Some(PivotCacheField {
@@ -131,6 +139,11 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"worksheetSource" => {
                     source = parse_worksheet_source(&e)?;
                     source_kind = PivotCacheSourceKind::Worksheet;
+                }
+                b"rangeSet" if in_consolidation => {
+                    if let Some(range) = parse_consolidation_range_set(&e)? {
+                        consolidation_ranges.push(range);
+                    }
                 }
                 b"cacheField" => fields.push(PivotCacheField {
                     name: attr_string(&e, b"name").unwrap_or_default(),
@@ -177,6 +190,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                         fields.push(field);
                     }
                 }
+                b"consolidation" => in_consolidation = false,
                 b"sharedItems" => in_shared_items = false,
                 b"discretePr" => in_discrete_pr = false,
                 b"groupItems" => in_group_items = false,
@@ -189,6 +203,14 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
         buf.clear();
     }
 
+    if source.is_none()
+        && matches!(source_kind, PivotCacheSourceKind::Consolidation)
+        && !consolidation_ranges.is_empty()
+    {
+        source = Some(PivotSource::Consolidation {
+            ranges: consolidation_ranges,
+        });
+    }
     let source =
         source.unwrap_or_else(|| placeholder_source_for_kind(source_kind, connection_name));
     let groupings = semantic_groupings_from_cache_fields(&fields);
@@ -347,6 +369,19 @@ fn parse_worksheet_source(e: &BytesStart<'_>) -> XlsxResult<Option<PivotSource>>
         Some(sheet) => PivotSource::range_on_sheet(sheet, range),
         None => PivotSource::range(range),
     }))
+}
+
+fn parse_consolidation_range_set(e: &BytesStart<'_>) -> XlsxResult<Option<PivotSourceRange>> {
+    let Some(range_ref) = attr_string(e, b"ref") else {
+        return Ok(None);
+    };
+    let range = CellRange::parse(&range_ref).map_err(|_| {
+        XlsxError::InvalidFormat(format!("bad pivot consolidation rangeSet ref: {range_ref}"))
+    })?;
+    Ok(Some(PivotSourceRange::new(
+        attr_string(e, b"sheet").unwrap_or_default(),
+        range,
+    )))
 }
 
 fn parse_shared_item(e: &BytesStart<'_>) -> XlsxResult<PivotValue> {

@@ -3221,7 +3221,8 @@ mod tests {
         CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotDateGroupUnit,
         PivotExtension, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
         PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
-        PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue, SplitPanes,
+        PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
+        PivotValue, SplitPanes,
     };
     use std::io::Read;
 
@@ -3842,6 +3843,151 @@ mod tests {
         ));
         assert_eq!(pivot.rows[0].field.name, "Region");
         assert_eq!(pivot.measures[0].field.name, "Revenue");
+    }
+
+    #[test]
+    fn test_writer_round_trips_external_pivot_source_definition() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        let pivot = PivotTable::builder("ExternalSales")
+            .source(PivotSource::External {
+                connection_name: "7".to_string(),
+                command_text: None,
+            })
+            .target_address("A1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"<cacheSource type="external" connectionId="7"/>"#));
+        assert!(cache_def.contains(r#"saveData="0""#));
+        assert!(cache_def.contains(r#"recordCount="0""#));
+        assert!(cache_def.contains(r#"<cacheField name="Region">"#));
+        assert!(cache_def.contains(r#"<cacheField name="Revenue">"#));
+
+        let cache_records = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheRecords1.xml");
+        assert!(cache_records.contains(r#"<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="0">"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("ExternalSales")
+            .unwrap();
+        assert!(matches!(
+            &pivot.source,
+            PivotSource::External {
+                connection_name,
+                command_text: None
+            } if connection_name == "7"
+        ));
+        assert_eq!(pivot.rows[0].field.name, "Region");
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+        assert!(matches!(
+            pivot.cache_info().map(|info| info.source_kind),
+            Some(duke_sheets_core::PivotCacheSourceKind::External)
+        ));
+    }
+
+    #[test]
+    fn test_writer_round_trips_scenario_pivot_source_definition() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        let pivot = PivotTable::builder("ScenarioSales")
+            .source(PivotSource::Scenario {
+                name: "BestCase".to_string(),
+            })
+            .target_address("A1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"<cacheSource type="scenario"/>"#));
+        assert!(cache_def.contains(r#"saveData="0""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("ScenarioSales")
+            .unwrap();
+        assert!(matches!(&pivot.source, PivotSource::Scenario { .. }));
+        assert_eq!(pivot.rows[0].field.name, "Region");
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+        assert!(matches!(
+            pivot.cache_info().map(|info| info.source_kind),
+            Some(duke_sheets_core::PivotCacheSourceKind::Scenario)
+        ));
+    }
+
+    #[test]
+    fn test_writer_round_trips_consolidation_pivot_source_ranges() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        let pivot = PivotTable::builder("ConsolidatedSales")
+            .source(PivotSource::Consolidation {
+                ranges: vec![
+                    PivotSourceRange::new("North", CellRange::parse("A1:B4").unwrap()),
+                    PivotSourceRange::new("South", CellRange::parse("C1:D4").unwrap()),
+                ],
+            })
+            .target_address("A1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"<cacheSource type="consolidation">"#));
+        assert!(cache_def.contains(r#"<rangeSets count="2">"#));
+        assert!(cache_def.contains(r#"<rangeSet ref="A1:B4" sheet="North"/>"#));
+        assert!(cache_def.contains(r#"<rangeSet ref="C1:D4" sheet="South"/>"#));
+        assert!(cache_def.contains(r#"saveData="0""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("ConsolidatedSales")
+            .unwrap();
+        match &pivot.source {
+            PivotSource::Consolidation { ranges } => {
+                assert_eq!(ranges.len(), 2);
+                assert_eq!(ranges[0].sheet, "North");
+                assert_eq!(ranges[0].range.to_a1_string(), "A1:B4");
+                assert_eq!(ranges[1].sheet, "South");
+                assert_eq!(ranges[1].range.to_a1_string(), "C1:D4");
+            }
+            other => panic!("unexpected pivot source: {other:?}"),
+        }
+        assert_eq!(pivot.rows[0].field.name, "Region");
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+        assert!(matches!(
+            pivot.cache_info().map(|info| info.source_kind),
+            Some(duke_sheets_core::PivotCacheSourceKind::Consolidation)
+        ));
     }
 
     #[test]
