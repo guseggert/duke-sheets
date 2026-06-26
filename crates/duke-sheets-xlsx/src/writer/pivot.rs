@@ -1894,12 +1894,13 @@ fn write_pivot_fields(
         };
 
         let hidden_items = hidden_item_indexes(pivot, fields, index)?;
+        let collapsed_items = collapsed_item_indexes(pivot, fields, index)?;
         let include_default = should_write_pivot_field_items(pivot, fields, index);
-        if hidden_items.is_empty() && !include_default {
+        if hidden_items.is_empty() && collapsed_items.is_empty() && !include_default {
             w.write_event(Event::Empty(pivot_field))?;
         } else {
             w.write_event(Event::Start(pivot_field))?;
-            write_pivot_field_items(w, field, &hidden_items, include_default)?;
+            write_pivot_field_items(w, field, &hidden_items, &collapsed_items, include_default)?;
             w.write_event(Event::End(BytesEnd::new("pivotField")))?;
         }
     }
@@ -1933,6 +1934,7 @@ fn write_pivot_field_items(
     w: &mut XmlWriter,
     field: &CacheField,
     hidden_items: &[u32],
+    collapsed_items: &[u32],
     include_default: bool,
 ) -> XlsxResult<()> {
     let item_count = pivot_field_item_count(field);
@@ -1946,6 +1948,9 @@ fn write_pivot_field_items(
         item.push_attribute(("x", x.as_str()));
         if hidden_items.contains(&(item_index as u32)) {
             item.push_attribute(("h", "1"));
+        }
+        if collapsed_items.contains(&(item_index as u32)) {
+            item.push_attribute(("sd", "0"));
         }
         w.write_event(Event::Empty(item))?;
     }
@@ -2192,6 +2197,39 @@ fn hidden_item_indexes(
     Ok((0..field.shared_items.len() as u32)
         .filter(|index| !allowed.contains(index))
         .collect())
+}
+
+fn collapsed_item_indexes(
+    pivot: &PivotTable,
+    fields: &[CacheField],
+    field_index: usize,
+) -> XlsxResult<Vec<u32>> {
+    let Some(axis_field) = pivot_axis_field(pivot, fields, field_index) else {
+        return Ok(Vec::new());
+    };
+    let field = &fields[field_index];
+    axis_field
+        .collapsed_items
+        .iter()
+        .map(|item| {
+            pivot_field_item_index(field, item).ok_or_else(|| {
+                XlsxError::InvalidFormat(format!(
+                    "pivot field {} collapsed item was not found in the pivot cache: {}",
+                    field.name, item
+                ))
+            })
+        })
+        .collect()
+}
+
+fn pivot_field_item_index(field: &CacheField, item: &PivotValue) -> Option<u32> {
+    match &field.group {
+        Some(CacheFieldGroup::Manual { group_items, .. }) => group_items
+            .iter()
+            .position(|value| value == item)
+            .map(|index| index as u32),
+        _ => field.item_lookup.get(item).copied(),
+    }
 }
 
 fn write_axis_fields(

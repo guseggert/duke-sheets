@@ -209,6 +209,7 @@ export interface JsPivotFieldOptions {
     | 'variance_p'
     | 'varianceP'
   subtotals?: string[]
+  collapsedItems?: JsPivotValueInput[]
   showEmptyItems?: boolean
   showDropDowns?: boolean
   subtotalTop?: boolean

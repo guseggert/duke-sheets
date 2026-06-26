@@ -54,6 +54,13 @@ struct CurrentCalculatedItem {
     reference_field_index: Option<usize>,
 }
 
+#[derive(Debug, Clone)]
+struct CurrentPivotFieldItems {
+    field_index: usize,
+    hidden_items: Vec<u32>,
+    collapsed_items: Vec<u32>,
+}
+
 pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     _cache_id: u32,
@@ -617,7 +624,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut preserve_formatting = true;
     let mut axis_context: Option<AxisContext> = None;
     let mut pivot_field_index = 0usize;
-    let mut current_pivot_field: Option<(usize, Vec<u32>)> = None;
+    let mut current_pivot_field: Option<CurrentPivotFieldItems> = None;
     let mut current_data_field: Option<CurrentDataField> = None;
     let mut current_pivot_filter: Option<CurrentPivotFilter> = None;
     let mut current_pivot_filter_depth = 0usize;
@@ -654,7 +661,11 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                     b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
                     b"pivotField" => {
                         options_by_field.insert(pivot_field_index, parse_pivot_field_options(&e));
-                        current_pivot_field = Some((pivot_field_index, Vec::new()));
+                        current_pivot_field = Some(CurrentPivotFieldItems {
+                            field_index: pivot_field_index,
+                            hidden_items: Vec::new(),
+                            collapsed_items: Vec::new(),
+                        });
                         pivot_field_index += 1;
                     }
                     b"dataField" if attr_u32(&e, b"fld").is_some() => {
@@ -724,10 +735,13 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         pivot_field_index += 1;
                     }
                     b"item" => {
-                        if let Some((_, hidden)) = &mut current_pivot_field {
-                            if attr_bool(&e, b"h").unwrap_or(false) {
-                                if let Some(index) = attr_u32(&e, b"x") {
-                                    hidden.push(index);
+                        if let Some(field_items) = &mut current_pivot_field {
+                            if let Some(index) = attr_u32(&e, b"x") {
+                                if attr_bool(&e, b"h").unwrap_or(false) {
+                                    field_items.hidden_items.push(index);
+                                }
+                                if !attr_bool(&e, b"sd").unwrap_or(true) {
+                                    field_items.collapsed_items.push(index);
                                 }
                             }
                         }
@@ -854,9 +868,16 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                 let local = local_name.as_ref();
                 match local {
                     b"pivotField" => {
-                        if let Some((field_index, hidden_items)) = current_pivot_field.take() {
-                            if !hidden_items.is_empty() {
-                                hidden_items_by_field.insert(field_index, hidden_items);
+                        if let Some(field_items) = current_pivot_field.take() {
+                            if !field_items.hidden_items.is_empty() {
+                                hidden_items_by_field
+                                    .insert(field_items.field_index, field_items.hidden_items);
+                            }
+                            if !field_items.collapsed_items.is_empty() {
+                                options_by_field
+                                    .entry(field_items.field_index)
+                                    .or_default()
+                                    .collapsed_item_indexes = field_items.collapsed_items;
                             }
                         }
                     }
@@ -1281,6 +1302,7 @@ struct PivotFieldOptions {
     sort: PivotSort,
     subtotal: PivotSubtotal,
     subtotals: Vec<PivotSubtotal>,
+    collapsed_item_indexes: Vec<u32>,
     show_empty_items: bool,
     show_drop_downs: bool,
     subtotal_top: bool,
@@ -1296,6 +1318,7 @@ impl Default for PivotFieldOptions {
             sort: PivotSort::None,
             subtotal: PivotSubtotal::Automatic,
             subtotals: Vec::new(),
+            collapsed_item_indexes: Vec::new(),
             show_empty_items: false,
             show_drop_downs: true,
             subtotal_top: true,
@@ -1312,6 +1335,7 @@ fn parse_pivot_field_options(e: &BytesStart<'_>) -> PivotFieldOptions {
         sort: parse_pivot_sort(e),
         subtotal: parse_pivot_subtotal(e),
         subtotals: parse_pivot_subtotals(e),
+        collapsed_item_indexes: Vec::new(),
         show_empty_items: attr_bool(e, b"showAll").unwrap_or(false),
         show_drop_downs: attr_bool(e, b"showDropDowns").unwrap_or(true),
         subtotal_top: attr_bool(e, b"subtotalTop").unwrap_or(true),
@@ -1390,7 +1414,31 @@ fn pivot_axis_field(
     pivot_field.insert_page_break = options.insert_page_break;
     pivot_field.include_new_items_in_filter = options.include_new_items_in_filter;
     pivot_field.item_page_count = options.item_page_count;
+    pivot_field.collapsed_items =
+        pivot_field_item_values(cache, field_index, &options.collapsed_item_indexes);
     Some(pivot_field)
+}
+
+fn pivot_field_item_values(
+    cache: &PivotCacheDefinition,
+    field_index: usize,
+    item_indexes: &[u32],
+) -> Vec<PivotValue> {
+    let Some(field) = cache.fields.get(field_index) else {
+        return Vec::new();
+    };
+    item_indexes
+        .iter()
+        .filter_map(|index| pivot_field_item_value(field, *index).cloned())
+        .collect()
+}
+
+fn pivot_field_item_value(field: &PivotCacheField, index: u32) -> Option<&PivotValue> {
+    if field.group_base.is_some() {
+        field.group_items.get(index as usize)
+    } else {
+        field.shared_items.get(index as usize)
+    }
 }
 
 fn semantic_cache_field_name(cache: &PivotCacheDefinition, field_index: usize) -> Option<String> {

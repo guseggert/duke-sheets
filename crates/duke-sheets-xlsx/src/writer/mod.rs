@@ -4865,6 +4865,7 @@ mod tests {
         region.insert_page_break = true;
         region.include_new_items_in_filter = true;
         region.item_page_count = 25;
+        region = region.with_collapsed_items(["East"]);
         let mut quarter = PivotField::new("Quarter");
         quarter.subtotal = PivotSubtotal::None;
         let pivot = PivotTable::builder("AxisFieldOptions")
@@ -4893,6 +4894,7 @@ mod tests {
         assert!(pivot_xml.contains(r#"insertPageBreak="1""#));
         assert!(pivot_xml.contains(r#"includeNewItemsInFilter="1""#));
         assert!(pivot_xml.contains(r#"itemPageCount="25""#));
+        assert!(pivot_xml.contains(r#"sd="0""#));
 
         let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let pivot = roundtrip
@@ -4908,6 +4910,10 @@ mod tests {
         assert!(pivot.rows[0].insert_page_break);
         assert!(pivot.rows[0].include_new_items_in_filter);
         assert_eq!(pivot.rows[0].item_page_count, 25);
+        assert_eq!(
+            pivot.rows[0].collapsed_items,
+            vec![PivotValue::String("East".into())]
+        );
         assert_eq!(pivot.columns[0].subtotal, PivotSubtotal::None);
         assert!(!pivot.columns[0].show_empty_items);
         assert!(pivot.columns[0].show_drop_downs);

@@ -281,6 +281,9 @@ fn build_pivot_field_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotField>
             .collect::<PyResult<Vec<_>>>()?;
         field = field.with_subtotals(subtotals);
     }
+    if let Some(values) = optional_pivot_values(dict, &["collapsed_items", "collapsedItems"])? {
+        field.collapsed_items = values;
+    }
     if let Some(show_empty_items) = optional_bool(dict, &["show_empty_items", "showEmptyItems"])? {
         field.show_empty_items = show_empty_items;
     }
@@ -822,6 +825,23 @@ fn optional_pivot_value(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Opt
         .transpose()
 }
 
+fn optional_pivot_values(
+    dict: &Bound<'_, PyDict>,
+    keys: &[&str],
+) -> PyResult<Option<Vec<PivotValue>>> {
+    optional_any(dict, keys)?
+        .map(|value| {
+            let values = value
+                .downcast::<PyList>()
+                .map_err(|_| PyValueError::new_err("pivot value list must be a list"))?;
+            values
+                .iter()
+                .map(|item| pivot_value_from_py(&item))
+                .collect()
+        })
+        .transpose()
+}
+
 fn pivot_value_from_py(value: &Bound<'_, PyAny>) -> PyResult<PivotValue> {
     if let Ok(value) = value.extract::<bool>() {
         return Ok(PivotValue::Boolean(value));
@@ -1168,6 +1188,11 @@ fn pivot_field_to_py(py: Python<'_>, field: &PivotField) -> PyResult<PyObject> {
         .map(|subtotal| pivot_subtotal_to_python(*subtotal))
         .collect::<Vec<_>>();
     dict.set_item("subtotals", subtotals)?;
+    let collapsed_items = PyList::empty_bound(py);
+    for item in &field.collapsed_items {
+        collapsed_items.append(pivot_value_to_py(py, item)?)?;
+    }
+    dict.set_item("collapsed_items", collapsed_items)?;
     dict.set_item("show_empty_items", field.show_empty_items)?;
     dict.set_item("show_drop_downs", field.show_drop_downs)?;
     dict.set_item("subtotal_top", field.subtotal_top)?;

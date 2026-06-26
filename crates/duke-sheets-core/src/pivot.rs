@@ -277,6 +277,12 @@ pub struct PivotField {
     /// When empty, [`PivotField::subtotal`] is used for compatibility with the
     /// simple single-subtotal API.
     pub subtotals: Vec<PivotSubtotal>,
+    /// Items whose details are collapsed for this axis field.
+    ///
+    /// SpreadsheetML stores this as `CT_Item@sd="0"` on item records; the
+    /// semantic model keeps the item values here so callers do not need to
+    /// manage file-format cache indexes.
+    pub collapsed_items: Vec<PivotValue>,
     /// Whether items with no data should be shown.
     pub show_empty_items: bool,
     /// Show the field dropdown/filter control where supported.
@@ -301,6 +307,7 @@ impl PivotField {
             sort: PivotSort::Ascending,
             subtotal: PivotSubtotal::Automatic,
             subtotals: Vec::new(),
+            collapsed_items: Vec::new(),
             show_empty_items: false,
             show_drop_downs: true,
             subtotal_top: true,
@@ -331,6 +338,16 @@ impl PivotField {
         {
             self.subtotal = PivotSubtotal::None;
         }
+        self
+    }
+
+    /// Set items whose details are collapsed for this axis field.
+    pub fn with_collapsed_items<I, V>(mut self, items: I) -> Self
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<PivotValue>,
+    {
+        self.collapsed_items = items.into_iter().map(Into::into).collect();
         self
     }
 
