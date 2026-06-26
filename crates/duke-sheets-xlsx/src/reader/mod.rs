@@ -330,6 +330,7 @@ impl XlsxReader {
                 resolve_style_theme_colors(style, &theme);
             }
         }
+        let pivot_num_fmts = parsed_styles.num_fmts.clone();
         let cell_styles = parsed_styles.cell_styles;
         let dxf_styles = parsed_styles.dxf_styles;
 
@@ -435,9 +436,12 @@ impl XlsxReader {
                     .collect();
                 pivot_rels.sort();
                 for pivot_path in &pivot_rels {
-                    if let Some(pivot) =
-                        pivot::read_pivot_table(&mut archive, pivot_path, &pivot_caches)?
-                    {
+                    if let Some(pivot) = pivot::read_pivot_table(
+                        &mut archive,
+                        pivot_path,
+                        &pivot_caches,
+                        &pivot_num_fmts,
+                    )? {
                         workbook
                             .worksheet_mut(sheet_idx)
                             .unwrap()
@@ -610,6 +614,7 @@ impl XlsxReader {
                     named_styles: Vec::new(),
                     cell_xf_xf_ids: vec![0],
                     dxf_styles: Vec::new(),
+                    num_fmts: HashMap::new(),
                 })
             }
         };

@@ -807,7 +807,7 @@ impl XlsxWriter {
                 tables::write_table_part(&mut zip, sheet, local_idx, global_num)?;
             }
             for part in &sheet_pivot_parts {
-                pivot::write_pivot_table_part(&mut zip, workbook, part)?;
+                pivot::write_pivot_table_part(&mut zip, workbook, part, &style_table)?;
             }
 
             // Write drawing and chart XML files for this sheet
@@ -4426,6 +4426,49 @@ mod tests {
             .unwrap();
         assert_eq!(pivot.measures.len(), 1);
         assert_eq!(pivot.measures[0].show_as, PivotShowAs::PercentOfRowTotal);
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_measure_number_format() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Rate").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 0.25).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 0.125).unwrap();
+
+        let pivot = PivotTable::builder("RatePivot")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .pivot_measure(
+                PivotMeasure::new("Rate", PivotAggregate::Sum).with_number_format("0.0%"),
+            )
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let styles_xml = read_zip_entry(bytes.clone(), "xl/styles.xml");
+        assert!(styles_xml.contains(r#"numFmtId="164""#));
+        assert!(styles_xml.contains(r#"formatCode="0.0%""#));
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"numFmtId="164""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("RatePivot")
+            .unwrap();
+        assert_eq!(pivot.measures.len(), 1);
+        assert_eq!(pivot.measures[0].number_format.as_deref(), Some("0.0%"));
     }
 
     #[test]

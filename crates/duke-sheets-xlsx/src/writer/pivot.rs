@@ -3,6 +3,7 @@ use std::io::{Seek, Write};
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 
+use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{
     CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit, PivotFieldRef,
     PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotShowAs, PivotSort,
@@ -839,6 +840,7 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     workbook: &Workbook,
     part: &PivotTablePart,
+    style_table: &XlsxStyleTable,
 ) -> XlsxResult<()> {
     let sheet = workbook
         .worksheet(part.sheet_index)
@@ -881,7 +883,7 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         write_axis_fields(w, "rowFields", &pivot.rows, &cache_part.fields)?;
         write_axis_fields(w, "colFields", &pivot.columns, &cache_part.fields)?;
         write_page_fields(w, pivot, &cache_part.fields)?;
-        write_data_fields(w, pivot, &cache_part.fields)?;
+        write_data_fields(w, pivot, &cache_part.fields, style_table)?;
         write_pivot_style(w, pivot)?;
         write_pivot_filters(w, pivot, &cache_part.fields)?;
 
@@ -1192,6 +1194,7 @@ fn write_data_fields(
     w: &mut XmlWriter,
     pivot: &PivotTable,
     fields: &[CacheField],
+    style_table: &XlsxStyleTable,
 ) -> XlsxResult<()> {
     let count = pivot.measures.len().to_string();
     let mut data_fields = BytesStart::new("dataFields");
@@ -1207,6 +1210,23 @@ fn write_data_fields(
         data_field.push_attribute(("name", name.as_str()));
         data_field.push_attribute(("fld", fld.as_str()));
         data_field.push_attribute(("subtotal", aggregate_name(measure.aggregate)));
+        let num_fmt_id = if let Some(number_format) = &measure.number_format {
+            Some(
+                style_table
+                    .custom_num_fmt_id(number_format)
+                    .ok_or_else(|| {
+                        XlsxError::InvalidFormat(format!(
+                            "pivot measure number format was not registered: {number_format}"
+                        ))
+                    })?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        if let Some(num_fmt_id) = num_fmt_id.as_deref() {
+            data_field.push_attribute(("numFmtId", num_fmt_id));
+        }
         if let Some(show_data_as) = show_data_as_name(&measure.show_as) {
             data_field.push_attribute(("showDataAs", show_data_as));
         }

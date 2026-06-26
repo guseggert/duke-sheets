@@ -6,6 +6,7 @@ use quick_xml::reader::Reader;
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
+use duke_sheets_core::style::NumberFormat;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
     PivotCalculatedField, PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator,
@@ -240,6 +241,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     path: &str,
     caches: &HashMap<u32, PivotCacheDefinition>,
+    num_fmts: &HashMap<u32, String>,
 ) -> XlsxResult<Option<PivotTable>> {
     let file = match archive_by_name(archive, path) {
         Ok(file) => file,
@@ -312,7 +314,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         buf.clear();
                         continue;
                     };
-                    if let Some(measure) = parse_data_field(&e, cache) {
+                    if let Some(measure) = parse_data_field(&e, cache, num_fmts) {
                         let base_field_index = attr_i32(&e, b"baseField")
                             .and_then(|value| usize::try_from(value).ok());
                         measures.push(measure);
@@ -447,7 +449,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                                 }
                             }
                         }
-                    } else if let Some(measure) = parse_data_field(&e, cache) {
+                    } else if let Some(measure) = parse_data_field(&e, cache, num_fmts) {
                         measures.push(measure);
                     }
                 }
@@ -754,7 +756,11 @@ fn parse_aggregate(value: &str) -> Option<PivotAggregate> {
     })
 }
 
-fn parse_data_field(e: &BytesStart<'_>, cache: &PivotCacheDefinition) -> Option<PivotMeasure> {
+fn parse_data_field(
+    e: &BytesStart<'_>,
+    cache: &PivotCacheDefinition,
+    num_fmts: &HashMap<u32, String>,
+) -> Option<PivotMeasure> {
     let field_index = attr_u32(e, b"fld").map(|value| value as usize)?;
     let field = cache.fields.get(field_index)?;
     let aggregate = attr_string(e, b"subtotal")
@@ -774,7 +780,21 @@ fn parse_data_field(e: &BytesStart<'_>, cache: &PivotCacheDefinition) -> Option<
             )
         })
         .unwrap_or(PivotShowAs::Normal);
+    measure.number_format = attr_u32(e, b"numFmtId")
+        .and_then(|num_fmt_id| pivot_number_format_code(num_fmt_id, num_fmts));
     Some(measure)
+}
+
+fn pivot_number_format_code(num_fmt_id: u32, num_fmts: &HashMap<u32, String>) -> Option<String> {
+    if num_fmt_id == NumberFormat::ID_GENERAL {
+        return None;
+    }
+
+    num_fmts.get(&num_fmt_id).cloned().or_else(|| {
+        let format = NumberFormat::BuiltIn(num_fmt_id);
+        let code = format.format_string();
+        (code != "General").then(|| code.to_string())
+    })
 }
 
 fn parse_current_pivot_filter(e: &BytesStart<'_>) -> Option<CurrentPivotFilter> {
