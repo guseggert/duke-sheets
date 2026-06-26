@@ -1399,6 +1399,13 @@ export interface JsPivotChartSource {
   formatId: number
 }
 
+export interface JsPivotConsolidationRangeOptions {
+  sheet: string
+  range: string
+  name?: string
+  pageItems?: Array<string>
+}
+
 export interface JsPivotFieldOptions {
   field: string
   sort?: string
@@ -1488,6 +1495,7 @@ export interface JsPivotTableOptions {
   tableName?: string
   externalConnectionName?: string
   externalCommandText?: string
+  consolidationRanges?: Array<JsPivotConsolidationRangeOptions>
   target: string
   rows?: Array<string>
   columns?: Array<string>

@@ -12,8 +12,8 @@ use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
     PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
     PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
-    PivotShowAs, PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
-    Workbook as CoreWorkbook, WorkbookConnection,
+    PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
+    PivotValue, Workbook as CoreWorkbook, WorkbookConnection,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -353,6 +353,13 @@ export interface PivotStyleOptions {
   showLastColumn?: boolean;
 }
 
+export interface PivotConsolidationRangeOptions {
+  sheet: string;
+  range: string;
+  name?: string;
+  pageItems?: string[];
+}
+
 export interface PivotTableOptions {
   name: string;
   sourceRange?: string;
@@ -360,6 +367,7 @@ export interface PivotTableOptions {
   tableName?: string;
   externalConnectionName?: string;
   externalCommandText?: string;
+  consolidationRanges?: PivotConsolidationRangeOptions[];
   target: string;
   rows?: string[];
   columns?: string[];
@@ -470,10 +478,11 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
     }
     let source_count = usize::from(options.table_name.is_some())
         + usize::from(options.source_range.is_some())
-        + usize::from(options.external_connection_name.is_some());
+        + usize::from(options.external_connection_name.is_some())
+        + usize::from(options.consolidation_ranges.is_some());
     if source_count != 1 {
         return Err(JsError::new(
-            "Pivot options require exactly one of tableName, sourceRange, or externalConnectionName",
+            "Pivot options require exactly one of tableName, sourceRange, externalConnectionName, or consolidationRanges",
         ));
     }
 
@@ -481,11 +490,12 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
         options.table_name,
         options.source_range,
         options.external_connection_name,
+        options.consolidation_ranges,
     ) {
-        (Some(table_name), None, None) => {
+        (Some(table_name), None, None, None) => {
             builder = builder.table_source(table_name);
         }
-        (None, Some(source_range), None) => {
+        (None, Some(source_range), None, None) => {
             let range = CellRange::parse(&source_range)
                 .map_err(|e| JsError::new(&format!("Invalid pivot source range: {e}")))?;
             builder = if let Some(sheet) = options.source_sheet {
@@ -494,10 +504,15 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
                 builder.source_range(range)
             };
         }
-        (None, None, Some(connection_name)) => {
+        (None, None, Some(connection_name), None) => {
             builder = builder.source(PivotSource::External {
                 connection_name,
                 command_text: options.external_command_text,
+            });
+        }
+        (None, None, None, Some(ranges)) => {
+            builder = builder.source(PivotSource::Consolidation {
+                ranges: build_pivot_consolidation_ranges_from_wasm(ranges)?,
             });
         }
         _ => unreachable!("source_count validation accepts exactly one source"),
@@ -550,6 +565,31 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
     }
 
     builder.build().map_err(to_js_error)
+}
+
+fn build_pivot_consolidation_ranges_from_wasm(
+    ranges: Vec<WasmPivotConsolidationRangeOptions>,
+) -> Result<Vec<PivotSourceRange>, JsError> {
+    if ranges.is_empty() {
+        return Err(JsError::new(
+            "Pivot consolidationRanges must contain at least one range",
+        ));
+    }
+    ranges
+        .into_iter()
+        .map(|range| {
+            let parsed = CellRange::parse(&range.range)
+                .map_err(|e| JsError::new(&format!("Invalid pivot consolidation range: {e}")))?;
+            let mut source_range = PivotSourceRange::new(range.sheet, parsed);
+            if let Some(name) = range.name {
+                source_range = source_range.with_name(name);
+            }
+            if let Some(page_items) = range.page_items {
+                source_range = source_range.with_page_items(page_items);
+            }
+            Ok(source_range)
+        })
+        .collect()
 }
 
 fn build_workbook_connection_from_wasm(

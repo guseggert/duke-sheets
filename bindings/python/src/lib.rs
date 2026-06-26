@@ -18,7 +18,8 @@ use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotDateGroupUnit, PivotField,
     PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
     PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs,
-    PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue, WorkbookConnection,
+    PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    WorkbookConnection,
 };
 
 mod types;
@@ -47,6 +48,8 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
     )?;
     let external_command_text =
         optional_string(dict, &["external_command_text", "externalCommandText"])?;
+    let consolidation_ranges_value =
+        optional_any(dict, &["consolidation_ranges", "consolidationRanges"])?;
     if external_command_text.is_some() && external_connection_name.is_none() {
         return Err(PyValueError::new_err(
             "Pivot options require external_connection_name/externalConnectionName when external_command_text/externalCommandText is set",
@@ -54,18 +57,24 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
     }
     let source_count = usize::from(table_name.is_some())
         + usize::from(source_range.is_some())
-        + usize::from(external_connection_name.is_some());
+        + usize::from(external_connection_name.is_some())
+        + usize::from(consolidation_ranges_value.is_some());
     if source_count != 1 {
         return Err(PyValueError::new_err(
-            "Pivot options require exactly one of table_name/tableName, source_range/sourceRange, or external_connection_name/externalConnectionName",
+            "Pivot options require exactly one of table_name/tableName, source_range/sourceRange, external_connection_name/externalConnectionName, or consolidation_ranges/consolidationRanges",
         ));
     }
 
-    match (table_name, source_range, external_connection_name) {
-        (Some(table_name), None, None) => {
+    match (
+        table_name,
+        source_range,
+        external_connection_name,
+        consolidation_ranges_value,
+    ) {
+        (Some(table_name), None, None, None) => {
             builder = builder.table_source(table_name);
         }
-        (None, Some(source_range), None) => {
+        (None, Some(source_range), None, None) => {
             let range = CellRange::parse(&source_range)
                 .map_err(|e| PyValueError::new_err(format!("Invalid pivot source range: {e}")))?;
             builder = if let Some(sheet) = optional_string(dict, &["source_sheet", "sourceSheet"])?
@@ -75,10 +84,15 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
                 builder.source_range(range)
             };
         }
-        (None, None, Some(connection_name)) => {
+        (None, None, Some(connection_name), None) => {
             builder = builder.source(PivotSource::External {
                 connection_name,
                 command_text: external_command_text,
+            });
+        }
+        (None, None, None, Some(consolidation_ranges)) => {
+            builder = builder.source(PivotSource::Consolidation {
+                ranges: build_pivot_consolidation_ranges_from_py(&consolidation_ranges)?,
             });
         }
         _ => unreachable!("source_count validation accepts exactly one source"),
@@ -178,6 +192,41 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
     }
 
     builder.build().map_err(to_py_err)
+}
+
+fn build_pivot_consolidation_ranges_from_py(
+    ranges_value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<PivotSourceRange>> {
+    let ranges = ranges_value
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("pivot consolidation_ranges must be a list"))?;
+    if ranges.is_empty() {
+        return Err(PyValueError::new_err(
+            "pivot consolidation_ranges must contain at least one range",
+        ));
+    }
+
+    ranges
+        .iter()
+        .map(|range| {
+            let dict = range
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("pivot consolidation range must be a dict"))?;
+            let range_ref = required_string(dict, &["range"])?;
+            let parsed = CellRange::parse(&range_ref).map_err(|e| {
+                PyValueError::new_err(format!("Invalid pivot consolidation range: {e}"))
+            })?;
+            let mut source_range =
+                PivotSourceRange::new(required_string(dict, &["sheet"])?, parsed);
+            if let Some(name) = optional_string(dict, &["name"])? {
+                source_range = source_range.with_name(name);
+            }
+            if let Some(page_items) = optional_string_vec(dict, &["page_items", "pageItems"])? {
+                source_range = source_range.with_page_items(page_items);
+            }
+            Ok(source_range)
+        })
+        .collect()
 }
 
 fn build_pivot_field_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotField> {

@@ -161,6 +161,15 @@ pub struct WasmPivotStyleOptions {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmPivotConsolidationRangeOptions {
+    pub sheet: String,
+    pub range: String,
+    pub name: Option<String>,
+    pub page_items: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmPivotTableOptions {
     pub name: String,
     pub source_range: Option<String>,
@@ -168,6 +177,7 @@ pub struct WasmPivotTableOptions {
     pub table_name: Option<String>,
     pub external_connection_name: Option<String>,
     pub external_command_text: Option<String>,
+    pub consolidation_ranges: Option<Vec<WasmPivotConsolidationRangeOptions>>,
     pub target: String,
     pub rows: Option<Vec<String>>,
     pub columns: Option<Vec<String>>,

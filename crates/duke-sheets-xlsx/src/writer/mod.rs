@@ -4102,8 +4102,12 @@ mod tests {
         let pivot = PivotTable::builder("ConsolidatedSales")
             .source(PivotSource::Consolidation {
                 ranges: vec![
-                    PivotSourceRange::new("North", CellRange::parse("A1:B4").unwrap()),
-                    PivotSourceRange::new("South", CellRange::parse("C1:D4").unwrap()),
+                    PivotSourceRange::new("North", CellRange::parse("A1:B4").unwrap())
+                        .with_name("NorthPlan")
+                        .with_page_items(["FY2025", "Plan"]),
+                    PivotSourceRange::new("South", CellRange::parse("C1:D4").unwrap())
+                        .with_name("SouthActual")
+                        .with_page_items(["FY2025", "Actual"]),
                 ],
             })
             .target_address("A1")
@@ -4120,9 +4124,16 @@ mod tests {
 
         let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
         assert!(cache_def.contains(r#"<cacheSource type="consolidation">"#));
+        assert!(cache_def.contains(r#"<pages count="2">"#));
+        assert!(cache_def.contains(r#"<page count="1"><pageItem name="FY2025"/></page>"#));
+        assert!(cache_def.contains(
+            r#"<page count="2"><pageItem name="Plan"/><pageItem name="Actual"/></page>"#
+        ));
         assert!(cache_def.contains(r#"<rangeSets count="2">"#));
-        assert!(cache_def.contains(r#"<rangeSet ref="A1:B4" sheet="North"/>"#));
-        assert!(cache_def.contains(r#"<rangeSet ref="C1:D4" sheet="South"/>"#));
+        assert!(cache_def
+            .contains(r#"<rangeSet ref="A1:B4" sheet="North" name="NorthPlan" i1="0" i2="0"/>"#));
+        assert!(cache_def
+            .contains(r#"<rangeSet ref="C1:D4" sheet="South" name="SouthActual" i1="0" i2="1"/>"#));
         assert!(cache_def.contains(r#"saveData="0""#));
 
         let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
@@ -4136,8 +4147,12 @@ mod tests {
                 assert_eq!(ranges.len(), 2);
                 assert_eq!(ranges[0].sheet, "North");
                 assert_eq!(ranges[0].range.to_a1_string(), "A1:B4");
+                assert_eq!(ranges[0].name.as_deref(), Some("NorthPlan"));
+                assert_eq!(ranges[0].page_items, ["FY2025", "Plan"]);
                 assert_eq!(ranges[1].sheet, "South");
                 assert_eq!(ranges[1].range.to_a1_string(), "C1:D4");
+                assert_eq!(ranges[1].name.as_deref(), Some("SouthActual"));
+                assert_eq!(ranges[1].page_items, ["FY2025", "Actual"]);
             }
             other => panic!("unexpected pivot source: {other:?}"),
         }

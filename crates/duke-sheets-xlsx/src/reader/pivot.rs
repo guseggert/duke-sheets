@@ -69,6 +69,8 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     let mut background_query = false;
     let mut missing_items_limit = None;
     let mut consolidation_ranges = Vec::new();
+    let mut consolidation_pages = Vec::new();
+    let mut current_consolidation_page: Option<Vec<String>> = None;
     let mut current_field: Option<PivotCacheField> = None;
     let mut in_shared_items = false;
     let mut in_discrete_pr = false;
@@ -95,8 +97,11 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     source_kind = PivotCacheSourceKind::Worksheet;
                 }
                 b"consolidation" => in_consolidation = true,
+                b"page" if in_consolidation => {
+                    current_consolidation_page = Some(Vec::new());
+                }
                 b"rangeSet" if in_consolidation => {
-                    if let Some(range) = parse_consolidation_range_set(&e)? {
+                    if let Some(range) = parse_consolidation_range_set(&e, &consolidation_pages)? {
                         consolidation_ranges.push(range);
                     }
                 }
@@ -145,8 +150,15 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     source_kind = PivotCacheSourceKind::Worksheet;
                 }
                 b"rangeSet" if in_consolidation => {
-                    if let Some(range) = parse_consolidation_range_set(&e)? {
+                    if let Some(range) = parse_consolidation_range_set(&e, &consolidation_pages)? {
                         consolidation_ranges.push(range);
+                    }
+                }
+                b"pageItem" if in_consolidation => {
+                    if let Some(page) = &mut current_consolidation_page {
+                        if let Some(name) = attr_string(&e, b"name") {
+                            page.push(name);
+                        }
                     }
                 }
                 b"cacheField" => fields.push(PivotCacheField {
@@ -193,6 +205,9 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     if let Some(field) = current_field.take() {
                         fields.push(field);
                     }
+                }
+                b"page" if in_consolidation => {
+                    consolidation_pages.push(current_consolidation_page.take().unwrap_or_default());
                 }
                 b"consolidation" => in_consolidation = false,
                 b"sharedItems" => in_shared_items = false,
@@ -389,17 +404,40 @@ fn parse_worksheet_source(e: &BytesStart<'_>) -> XlsxResult<Option<PivotSource>>
     }))
 }
 
-fn parse_consolidation_range_set(e: &BytesStart<'_>) -> XlsxResult<Option<PivotSourceRange>> {
+fn parse_consolidation_range_set(
+    e: &BytesStart<'_>,
+    pages: &[Vec<String>],
+) -> XlsxResult<Option<PivotSourceRange>> {
     let Some(range_ref) = attr_string(e, b"ref") else {
         return Ok(None);
     };
     let range = CellRange::parse(&range_ref).map_err(|_| {
         XlsxError::InvalidFormat(format!("bad pivot consolidation rangeSet ref: {range_ref}"))
     })?;
-    Ok(Some(PivotSourceRange::new(
-        attr_string(e, b"sheet").unwrap_or_default(),
-        range,
-    )))
+    let mut source_range =
+        PivotSourceRange::new(attr_string(e, b"sheet").unwrap_or_default(), range);
+    source_range.name = attr_string(e, b"name");
+    source_range.page_items = consolidation_range_page_items(e, pages);
+    Ok(Some(source_range))
+}
+
+fn consolidation_range_page_items(e: &BytesStart<'_>, pages: &[Vec<String>]) -> Vec<String> {
+    [
+        b"i1".as_slice(),
+        b"i2".as_slice(),
+        b"i3".as_slice(),
+        b"i4".as_slice(),
+    ]
+    .iter()
+    .enumerate()
+    .filter_map(|(page_index, attr)| {
+        let item_index = attr_u32(e, attr)? as usize;
+        pages
+            .get(page_index)
+            .and_then(|page| page.get(item_index))
+            .cloned()
+    })
+    .collect()
 }
 
 fn parse_shared_item(e: &BytesStart<'_>) -> XlsxResult<PivotValue> {

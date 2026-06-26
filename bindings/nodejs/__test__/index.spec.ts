@@ -226,6 +226,46 @@ describe("PivotTables", () => {
     }
   });
 
+  it("adds a consolidation pivot with page labels", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
+    const filePath = path.join(tmpDir, "consolidation-pivot.xlsx");
+
+    try {
+      const wb = new Workbook();
+      wb.addSheet("North");
+      wb.addSheet("South");
+      const sheet = wb.getSheet(0);
+      sheet.addPivotTable({
+        name: "ConsolidatedSales",
+        consolidationRanges: [
+          {
+            sheet: "North",
+            range: "A1:B4",
+            name: "NorthPlan",
+            pageItems: ["FY2025", "Plan"],
+          },
+          {
+            sheet: "South",
+            range: "A1:B4",
+            name: "SouthActual",
+            pageItems: ["FY2025", "Actual"],
+          },
+        ],
+        target: "A1",
+        rows: ["Region"],
+        measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+      });
+
+      expect(sheet.pivotCount).toBe(1);
+      wb.save(filePath);
+
+      const roundtrip = Workbook.open(filePath);
+      expect(roundtrip.getSheet(0).pivotTableNames).toEqual(["ConsolidatedSales"]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes a manually grouped pivot from semantic options", () => {
     const wb = new Workbook();
     const sheet = wb.getSheet(0);

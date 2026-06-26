@@ -977,7 +977,15 @@ fn non_refreshable_source_key(source: &PivotSource) -> String {
         PivotSource::Consolidation { ranges } => {
             let ranges = ranges
                 .iter()
-                .map(|range| format!("{}!{}", range.sheet, range.range.to_a1_string()))
+                .map(|range| {
+                    format!(
+                        "{}!{}:{}:{}",
+                        range.sheet,
+                        range.range.to_a1_string(),
+                        range.name.as_deref().unwrap_or(""),
+                        range.page_items.join("/")
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(",");
             format!("consolidation:{ranges}")
@@ -2696,10 +2704,31 @@ fn write_consolidation_source(w: &mut XmlWriter, ranges: &[PivotSourceRange]) ->
             "XLSX consolidation pivot sources require at least one range".into(),
         ));
     }
+    let pages = consolidation_pages(ranges)?;
 
     let mut consolidation = BytesStart::new("consolidation");
     consolidation.push_attribute(("autoPage", "0"));
     w.write_event(Event::Start(consolidation))?;
+
+    if !pages.is_empty() {
+        let count = pages.len().to_string();
+        let mut pages_el = BytesStart::new("pages");
+        pages_el.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(pages_el))?;
+        for page in &pages {
+            let count = page.len().to_string();
+            let mut page_el = BytesStart::new("page");
+            page_el.push_attribute(("count", count.as_str()));
+            w.write_event(Event::Start(page_el))?;
+            for item in page {
+                let mut page_item = BytesStart::new("pageItem");
+                page_item.push_attribute(("name", item.as_str()));
+                w.write_event(Event::Empty(page_item))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("page")))?;
+        }
+        w.write_event(Event::End(BytesEnd::new("pages")))?;
+    }
 
     let count = ranges.len().to_string();
     let mut range_sets = BytesStart::new("rangeSets");
@@ -2710,12 +2739,64 @@ fn write_consolidation_source(w: &mut XmlWriter, ranges: &[PivotSourceRange]) ->
         let mut range_set = BytesStart::new("rangeSet");
         range_set.push_attribute(("ref", ref_str.as_str()));
         range_set.push_attribute(("sheet", range.sheet.as_str()));
+        if let Some(name) = &range.name {
+            range_set.push_attribute(("name", name.as_str()));
+        }
+        for (index, item) in range.page_items.iter().enumerate() {
+            let page = pages.get(index).ok_or_else(|| {
+                XlsxError::InvalidFormat(
+                    "XLSX consolidation page item has no matching page field".into(),
+                )
+            })?;
+            let Some(item_index) = page.iter().position(|candidate| candidate == item) else {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "XLSX consolidation page item is not declared: {item}"
+                )));
+            };
+            let attr_name = match index {
+                0 => "i1",
+                1 => "i2",
+                2 => "i3",
+                3 => "i4",
+                _ => unreachable!("consolidation_pages rejects more than four page fields"),
+            };
+            let item_index = item_index.to_string();
+            range_set.push_attribute((attr_name, item_index.as_str()));
+        }
         w.write_event(Event::Empty(range_set))?;
     }
     w.write_event(Event::End(BytesEnd::new("rangeSets")))?;
 
     w.write_event(Event::End(BytesEnd::new("consolidation")))?;
     Ok(())
+}
+
+fn consolidation_pages(ranges: &[PivotSourceRange]) -> XlsxResult<Vec<Vec<String>>> {
+    let page_count = ranges
+        .iter()
+        .map(|range| range.page_items.len())
+        .max()
+        .unwrap_or(0);
+    if page_count > 4 {
+        return Err(XlsxError::InvalidFormat(
+            "XLSX consolidation pivot sources support at most four page fields".into(),
+        ));
+    }
+
+    let mut pages = vec![Vec::<String>::new(); page_count];
+    for range in ranges {
+        for (index, item) in range.page_items.iter().enumerate() {
+            if item.trim().is_empty() {
+                return Err(XlsxError::InvalidFormat(
+                    "XLSX consolidation page item names cannot be blank".into(),
+                ));
+            }
+            if !pages[index].iter().any(|candidate| candidate == item) {
+                pages[index].push(item.clone());
+            }
+        }
+    }
+    Ok(pages)
 }
 
 fn write_worksheet_source(

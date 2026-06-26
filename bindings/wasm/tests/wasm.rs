@@ -395,6 +395,58 @@ fn test_pivot_external_connection_roundtrips_from_options() {
 }
 
 #[wasm_bindgen_test]
+fn test_pivot_consolidation_roundtrips_from_options() {
+    let wb = Workbook::new();
+    wb.add_sheet("North").unwrap();
+    wb.add_sheet("South").unwrap();
+
+    let sheet = wb.get_sheet(0).unwrap();
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let north_range = make_options(&[
+        ("sheet", JsValue::from_str("North")),
+        ("range", JsValue::from_str("A1:B4")),
+        ("name", JsValue::from_str("NorthPlan")),
+        (
+            "pageItems",
+            make_array(&[JsValue::from_str("FY2025"), JsValue::from_str("Plan")]),
+        ),
+    ]);
+    let south_range = make_options(&[
+        ("sheet", JsValue::from_str("South")),
+        ("range", JsValue::from_str("A1:B4")),
+        ("name", JsValue::from_str("SouthActual")),
+        (
+            "pageItems",
+            make_array(&[JsValue::from_str("FY2025"), JsValue::from_str("Actual")]),
+        ),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("ConsolidatedSales")),
+        (
+            "consolidationRanges",
+            make_array(&[north_range, south_range]),
+        ),
+        ("target", JsValue::from_str("A1")),
+        ("rows", make_array(&[JsValue::from_str("Region")])),
+        ("measures", make_array(&[measure])),
+    ]);
+
+    sheet.add_pivot_table(pivot).unwrap();
+    assert_eq!(sheet.pivot_count().unwrap(), 1);
+
+    let bytes = wb.save_xlsx_bytes().unwrap();
+    let roundtrip = Workbook::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        roundtrip.get_sheet(0).unwrap().pivot_table_names().unwrap(),
+        vec!["ConsolidatedSales".to_string()]
+    );
+}
+
+#[wasm_bindgen_test]
 fn test_pivot_manual_grouping_refreshes_from_options() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();

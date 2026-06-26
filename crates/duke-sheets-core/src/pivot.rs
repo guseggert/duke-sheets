@@ -203,6 +203,10 @@ pub struct PivotSourceRange {
     pub sheet: String,
     /// Source range.
     pub range: CellRange,
+    /// Optional display name for the source range.
+    pub name: Option<String>,
+    /// Consolidation page-item labels for this range, ordered by page field.
+    pub page_items: Vec<String>,
 }
 
 impl PivotSourceRange {
@@ -211,7 +215,25 @@ impl PivotSourceRange {
         Self {
             sheet: sheet.into(),
             range,
+            name: None,
+            page_items: Vec::new(),
         }
+    }
+
+    /// Set the display name for this source range.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Set consolidation page-item labels for this source range.
+    pub fn with_page_items<I, S>(mut self, page_items: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.page_items = page_items.into_iter().map(Into::into).collect();
+        self
     }
 }
 

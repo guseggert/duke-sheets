@@ -243,6 +243,48 @@ class TestPivotTables:
         assert roundtrip.data_connection_names == ["SalesConnection"]
         assert roundtrip.get_sheet(0).pivot_table_names == ["ExternalSales"]
 
+    def test_consolidation_pivot_roundtrip(self, temp_dir):
+        """Should save and read consolidation pivot source metadata."""
+        import os
+
+        import duke_sheets
+
+        path = os.path.join(temp_dir, "consolidation_pivot.xlsx")
+        wb = duke_sheets.Workbook()
+        wb.add_sheet("North")
+        wb.add_sheet("South")
+
+        sheet = wb.get_sheet(0)
+        sheet.add_pivot_table(
+            {
+                "name": "ConsolidatedSales",
+                "consolidation_ranges": [
+                    {
+                        "sheet": "North",
+                        "range": "A1:B4",
+                        "name": "NorthPlan",
+                        "page_items": ["FY2025", "Plan"],
+                    },
+                    {
+                        "sheet": "South",
+                        "range": "A1:B4",
+                        "name": "SouthActual",
+                        "page_items": ["FY2025", "Actual"],
+                    },
+                ],
+                "target": "A1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+            }
+        )
+        assert sheet.pivot_count == 1
+
+        wb.save(path)
+        roundtrip = duke_sheets.Workbook.open(path)
+        assert roundtrip.get_sheet(0).pivot_table_names == ["ConsolidatedSales"]
+
     def test_refresh_manual_grouping_from_options(self):
         """Should refresh a manually grouped pivot from semantic options."""
         import duke_sheets

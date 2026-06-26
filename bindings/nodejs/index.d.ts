@@ -184,6 +184,13 @@ export interface JsPivotStyleOptions {
   showLastColumn?: boolean
 }
 
+export interface JsPivotConsolidationRangeOptions {
+  sheet: string
+  range: string
+  name?: string
+  pageItems?: string[]
+}
+
 export interface JsPivotTableOptions {
   name: string
   sourceRange?: string
@@ -191,6 +198,7 @@ export interface JsPivotTableOptions {
   tableName?: string
   externalConnectionName?: string
   externalCommandText?: string
+  consolidationRanges?: JsPivotConsolidationRangeOptions[]
   target: string
   rows?: string[]
   columns?: string[]
