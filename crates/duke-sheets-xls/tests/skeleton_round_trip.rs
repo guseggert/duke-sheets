@@ -570,7 +570,7 @@ fn semantic_pivot_tables_emit_xls_numeric_grouping_records() {
         .expect("SXRng record");
     assert_eq!(
         u16::from_le_bytes(sxrng[0..2].try_into().unwrap()),
-        0,
+        0x0040,
         "SXRng should use explicit numeric start/end and range grouping"
     );
 
