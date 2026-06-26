@@ -319,6 +319,9 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut preserve_formatting = true;
     let mut show_headers = true;
     let mut show_expand_collapse = true;
+    let mut print_drill_indicators = false;
+    let mut item_print_titles = false;
+    let mut field_print_titles = false;
     let mut layout_kind = PivotLayoutKind::Compact;
     let mut axis_context: Option<AxisContext> = None;
     let mut pivot_field_index = 0usize;
@@ -345,6 +348,9 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         &mut preserve_formatting,
                         &mut show_headers,
                         &mut show_expand_collapse,
+                        &mut print_drill_indicators,
+                        &mut item_print_titles,
+                        &mut field_print_titles,
                         &mut layout_kind,
                     );
                 }
@@ -411,6 +417,9 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         &mut preserve_formatting,
                         &mut show_headers,
                         &mut show_expand_collapse,
+                        &mut print_drill_indicators,
+                        &mut item_print_titles,
+                        &mut field_print_titles,
                         &mut layout_kind,
                     );
                 }
@@ -583,6 +592,9 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.layout.show_column_grand_totals = col_grand_totals;
     pivot.layout.show_field_headers = show_headers;
     pivot.layout.show_expand_collapse = show_expand_collapse;
+    pivot.layout.print_drill_indicators = print_drill_indicators;
+    pivot.layout.item_print_titles = item_print_titles;
+    pivot.layout.field_print_titles = field_print_titles;
     pivot.layout.kind = layout_kind;
     pivot.refresh_policy.refresh_on_open = cache.refresh_on_load;
     pivot.refresh_policy.preserve_formatting = preserve_formatting;
@@ -669,6 +681,9 @@ fn parse_pivot_table_attrs(
     preserve_formatting: &mut bool,
     show_headers: &mut bool,
     show_expand_collapse: &mut bool,
+    print_drill_indicators: &mut bool,
+    item_print_titles: &mut bool,
+    field_print_titles: &mut bool,
     layout_kind: &mut PivotLayoutKind,
 ) {
     if let Some(value) = attr_string(e, b"name") {
@@ -691,6 +706,15 @@ fn parse_pivot_table_attrs(
     }
     if let Some(value) = attr_bool(e, b"showDrill") {
         *show_expand_collapse = value;
+    }
+    if let Some(value) = attr_bool(e, b"printDrill") {
+        *print_drill_indicators = value;
+    }
+    if let Some(value) = attr_bool(e, b"itemPrintTitles") {
+        *item_print_titles = value;
+    }
+    if let Some(value) = attr_bool(e, b"fieldPrintTitles") {
+        *field_print_titles = value;
     }
 
     let compact = attr_bool(e, b"compact").unwrap_or(true);

@@ -330,6 +330,9 @@ export interface PivotLayoutOptions {
   showFieldHeaders?: boolean;
   repeatItemLabels?: boolean;
   showExpandCollapse?: boolean;
+  printDrillIndicators?: boolean;
+  itemPrintTitles?: boolean;
+  fieldPrintTitles?: boolean;
 }
 
 export interface PivotStyleOptions {
@@ -558,6 +561,15 @@ fn build_pivot_layout_from_wasm(options: WasmPivotLayoutOptions) -> Result<Pivot
     }
     if let Some(value) = options.show_expand_collapse {
         layout.show_expand_collapse = value;
+    }
+    if let Some(value) = options.print_drill_indicators {
+        layout.print_drill_indicators = value;
+    }
+    if let Some(value) = options.item_print_titles {
+        layout.item_print_titles = value;
+    }
+    if let Some(value) = options.field_print_titles {
+        layout.field_print_titles = value;
     }
     Ok(layout)
 }

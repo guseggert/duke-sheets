@@ -653,6 +653,12 @@ pub struct PivotLayout {
     pub repeat_item_labels: bool,
     /// Show expand/collapse buttons.
     pub show_expand_collapse: bool,
+    /// Print expand/collapse buttons.
+    pub print_drill_indicators: bool,
+    /// Repeat pivot item labels as print titles.
+    pub item_print_titles: bool,
+    /// Repeat pivot field labels as print titles.
+    pub field_print_titles: bool,
 }
 
 impl Default for PivotLayout {
@@ -664,6 +670,9 @@ impl Default for PivotLayout {
             show_field_headers: true,
             repeat_item_labels: false,
             show_expand_collapse: true,
+            print_drill_indicators: false,
+            item_print_titles: false,
+            field_print_titles: false,
         }
     }
 }

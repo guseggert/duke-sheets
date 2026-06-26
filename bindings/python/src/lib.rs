@@ -223,6 +223,15 @@ fn build_pivot_layout_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotLayou
     if let Some(value) = optional_bool(dict, &["show_expand_collapse", "showExpandCollapse"])? {
         layout.show_expand_collapse = value;
     }
+    if let Some(value) = optional_bool(dict, &["print_drill_indicators", "printDrillIndicators"])? {
+        layout.print_drill_indicators = value;
+    }
+    if let Some(value) = optional_bool(dict, &["item_print_titles", "itemPrintTitles"])? {
+        layout.item_print_titles = value;
+    }
+    if let Some(value) = optional_bool(dict, &["field_print_titles", "fieldPrintTitles"])? {
+        layout.field_print_titles = value;
+    }
     Ok(layout)
 }
 

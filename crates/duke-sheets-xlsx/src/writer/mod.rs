@@ -4014,6 +4014,9 @@ mod tests {
         layout.show_column_grand_totals = false;
         layout.show_field_headers = false;
         layout.show_expand_collapse = false;
+        layout.print_drill_indicators = true;
+        layout.item_print_titles = true;
+        layout.field_print_titles = true;
         let pivot = PivotTable::builder("LayoutPivot")
             .source_range(CellRange::parse("A1:B3").unwrap())
             .target_address("D1")
@@ -4034,6 +4037,9 @@ mod tests {
         assert!(pivot_xml.contains(r#"colGrandTotals="0""#));
         assert!(pivot_xml.contains(r#"showHeaders="0""#));
         assert!(pivot_xml.contains(r#"showDrill="0""#));
+        assert!(pivot_xml.contains(r#"printDrill="1""#));
+        assert!(pivot_xml.contains(r#"itemPrintTitles="1""#));
+        assert!(pivot_xml.contains(r#"fieldPrintTitles="1""#));
         assert!(pivot_xml.contains(r#"compact="0""#));
         assert!(pivot_xml.contains(r#"outline="0""#));
 
@@ -4048,6 +4054,9 @@ mod tests {
         assert!(!pivot.layout.show_column_grand_totals);
         assert!(!pivot.layout.show_field_headers);
         assert!(!pivot.layout.show_expand_collapse);
+        assert!(pivot.layout.print_drill_indicators);
+        assert!(pivot.layout.item_print_titles);
+        assert!(pivot.layout.field_print_titles);
     }
 
     #[test]

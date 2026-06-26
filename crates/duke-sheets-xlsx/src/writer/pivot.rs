@@ -859,6 +859,9 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         let preserve_formatting = bool_attr(pivot.refresh_policy.preserve_formatting);
         let show_headers = bool_attr(pivot.layout.show_field_headers);
         let show_drill = bool_attr(pivot.layout.show_expand_collapse);
+        let print_drill = bool_attr(pivot.layout.print_drill_indicators);
+        let item_print_titles = bool_attr(pivot.layout.item_print_titles);
+        let field_print_titles = bool_attr(pivot.layout.field_print_titles);
         let compact = bool_attr(matches!(pivot.layout.kind, PivotLayoutKind::Compact));
         let outline = bool_attr(matches!(pivot.layout.kind, PivotLayoutKind::Outline));
 
@@ -874,6 +877,9 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         tag.push_attribute(("preserveFormatting", preserve_formatting));
         tag.push_attribute(("showHeaders", show_headers));
         tag.push_attribute(("showDrill", show_drill));
+        tag.push_attribute(("printDrill", print_drill));
+        tag.push_attribute(("itemPrintTitles", item_print_titles));
+        tag.push_attribute(("fieldPrintTitles", field_print_titles));
         tag.push_attribute(("compact", compact));
         tag.push_attribute(("outline", outline));
         w.write_event(Event::Start(tag))?;

@@ -395,6 +395,9 @@ pub struct JsPivotLayoutOptions {
     pub show_field_headers: Option<bool>,
     pub repeat_item_labels: Option<bool>,
     pub show_expand_collapse: Option<bool>,
+    pub print_drill_indicators: Option<bool>,
+    pub item_print_titles: Option<bool>,
+    pub field_print_titles: Option<bool>,
 }
 
 #[napi(object)]
@@ -579,6 +582,15 @@ fn build_pivot_layout_from_js(options: JsPivotLayoutOptions) -> Result<PivotLayo
     }
     if let Some(value) = options.show_expand_collapse {
         layout.show_expand_collapse = value;
+    }
+    if let Some(value) = options.print_drill_indicators {
+        layout.print_drill_indicators = value;
+    }
+    if let Some(value) = options.item_print_titles {
+        layout.item_print_titles = value;
+    }
+    if let Some(value) = options.field_print_titles {
+        layout.field_print_titles = value;
     }
     Ok(layout)
 }

@@ -162,6 +162,9 @@ export interface JsPivotLayoutOptions {
   showFieldHeaders?: boolean
   repeatItemLabels?: boolean
   showExpandCollapse?: boolean
+  printDrillIndicators?: boolean
+  itemPrintTitles?: boolean
+  fieldPrintTitles?: boolean
 }
 
 export interface JsPivotStyleOptions {

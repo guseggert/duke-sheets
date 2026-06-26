@@ -135,6 +135,9 @@ pub struct WasmPivotLayoutOptions {
     pub show_field_headers: Option<bool>,
     pub repeat_item_labels: Option<bool>,
     pub show_expand_collapse: Option<bool>,
+    pub print_drill_indicators: Option<bool>,
+    pub item_print_titles: Option<bool>,
+    pub field_print_titles: Option<bool>,
 }
 
 #[derive(Deserialize)]
