@@ -363,6 +363,12 @@ fn test_pivot_table_definitions_from_options() {
         ("operator", JsValue::from_str("beginsWith")),
         ("text", JsValue::from_str("E")),
     ]);
+    let date_filter = make_options(&[
+        ("kind", JsValue::from_str("dateBetween")),
+        ("field", JsValue::from_str("Date")),
+        ("start", JsValue::from_f64(45292.0)),
+        ("end", JsValue::from_f64(45322.0)),
+    ]);
     let calculated = make_options(&[
         ("name", JsValue::from_str("Margin")),
         ("formula", JsValue::from_str("=Revenue*0.2")),
@@ -409,12 +415,12 @@ fn test_pivot_table_definitions_from_options() {
     ]);
     let pivot = make_options(&[
         ("name", JsValue::from_str("SalesPivot")),
-        ("sourceRange", JsValue::from_str("A1:C4")),
+        ("sourceRange", JsValue::from_str("A1:D4")),
         ("target", JsValue::from_str("E1")),
         ("rowFields", make_array(&[row_field])),
         ("columns", make_array(&[JsValue::from_str("Quarter")])),
         ("measures", make_array(&[measure])),
-        ("filters", make_array(&[filter])),
+        ("filters", make_array(&[filter, date_filter])),
         ("calculatedFields", make_array(&[calculated])),
         ("calculatedItems", make_array(&[calculated_item])),
         ("refreshPolicy", refresh_policy),
@@ -432,7 +438,7 @@ fn test_pivot_table_definitions_from_options() {
 
     let source = Reflect::get(&pivot, &JsValue::from_str("source")).unwrap();
     assert_eq!(get_string_field(&source, "kind"), "worksheetRange");
-    assert_eq!(get_string_field(&source, "range"), "A1:C4");
+    assert_eq!(get_string_field(&source, "range"), "A1:D4");
     assert_eq!(get_string_field(&pivot, "target"), "E1");
 
     let rows = Array::from(&Reflect::get(&pivot, &JsValue::from_str("rows")).unwrap());
@@ -463,6 +469,11 @@ fn test_pivot_table_definitions_from_options() {
     let filter = filters.get(0);
     assert_eq!(get_string_field(&filter, "kind"), "label");
     assert_eq!(get_string_field(&filter, "operator"), "beginsWith");
+    let date_filter = filters.get(1);
+    assert_eq!(get_string_field(&date_filter, "kind"), "dateBetween");
+    assert_eq!(get_string_field(&date_filter, "field"), "Date");
+    assert_eq!(get_f64_field(&date_filter, "start"), 45292.0);
+    assert_eq!(get_f64_field(&date_filter, "end"), 45322.0);
 
     let calculated =
         Array::from(&Reflect::get(&pivot, &JsValue::from_str("calculatedFields")).unwrap());
@@ -814,7 +825,7 @@ fn test_pivot_manual_grouping_refreshes_from_options() {
         vec!["ManualGroupedRegions".to_string()]
     );
 
-    let stats = wb.refresh_pivots().unwrap();
+    let stats = wb.refresh_pivots(None).unwrap();
 
     assert_eq!(get_f64_field(&stats, "pivotCount"), 1.0);
     assert_eq!(get_f64_field(&stats, "pivotsRefreshed"), 1.0);
@@ -855,7 +866,7 @@ fn test_pivot_chart_from_refreshed_pivot() {
         ("measures", make_array(&[measure])),
     ]);
     sheet.add_pivot_table(pivot).unwrap();
-    wb.refresh_pivots().unwrap();
+    wb.refresh_pivots(None).unwrap();
 
     let options = make_options(&[
         ("pivotName", JsValue::from_str("SalesPivot")),

@@ -2094,7 +2094,10 @@ impl CompiledPivotPlan {
         let mut aggregate_filters = Vec::new();
         for filter in &pivot.filters {
             match filter {
-                PivotFilter::FieldItems { .. } | PivotFilter::Label { .. } => {
+                PivotFilter::FieldItems { .. }
+                | PivotFilter::Label { .. }
+                | PivotFilter::Date { .. }
+                | PivotFilter::DateBetween { .. } => {
                     filters.push(CompiledFilter::compile(filter, snapshot, &pivot.name)?);
                 }
                 PivotFilter::Value { .. } | PivotFilter::TopN { .. } => {
@@ -2610,6 +2613,17 @@ enum CompiledFilter {
         operator: PivotFilterOperator,
         value: String,
     },
+    Date {
+        field_index: usize,
+        operator: PivotFilterOperator,
+        value: f64,
+    },
+    DateBetween {
+        field_index: usize,
+        start: f64,
+        end: f64,
+        not_between: bool,
+    },
 }
 
 impl CompiledFilter {
@@ -2638,6 +2652,26 @@ impl CompiledFilter {
                 operator: *operator,
                 value: value.clone(),
             }),
+            PivotFilter::Date {
+                field,
+                operator,
+                value,
+            } => Ok(Self::Date {
+                field_index: field_index(snapshot, &field.name, pivot_name)?,
+                operator: *operator,
+                value: *value,
+            }),
+            PivotFilter::DateBetween {
+                field,
+                start,
+                end,
+                not_between,
+            } => Ok(Self::DateBetween {
+                field_index: field_index(snapshot, &field.name, pivot_name)?,
+                start: *start,
+                end: *end,
+                not_between: *not_between,
+            }),
             PivotFilter::Value { .. } | PivotFilter::TopN { .. } => Err(Error::other(format!(
                 "pivot table {pivot_name} tried to compile an aggregate filter as a row filter"
             ))),
@@ -2661,6 +2695,20 @@ impl CompiledFilter {
                 let actual = snapshot.value(row, *field_index).to_string();
                 label_filter_matches(&actual, *operator, value)
             }
+            Self::Date {
+                field_index,
+                operator,
+                value,
+            } => pivot_number(snapshot.value(row, *field_index))
+                .is_some_and(|actual| date_filter_matches(actual, *operator, *value)),
+            Self::DateBetween {
+                field_index,
+                start,
+                end,
+                not_between,
+            } => pivot_number(snapshot.value(row, *field_index)).is_some_and(|actual| {
+                date_between_filter_matches(actual, *start, *end, *not_between)
+            }),
         }
     }
 
@@ -2677,6 +2725,24 @@ impl CompiledFilter {
             } if *filter_index == field_index => {
                 let actual = snapshot.value_by_id(field_index, item_id).to_string();
                 label_filter_matches(&actual, *operator, value)
+            }
+            Self::Date {
+                field_index: filter_index,
+                operator,
+                value,
+            } if *filter_index == field_index => {
+                pivot_number(snapshot.value_by_id(field_index, item_id))
+                    .is_some_and(|actual| date_filter_matches(actual, *operator, *value))
+            }
+            Self::DateBetween {
+                field_index: filter_index,
+                start,
+                end,
+                not_between,
+            } if *filter_index == field_index => {
+                pivot_number(snapshot.value_by_id(field_index, item_id)).is_some_and(|actual| {
+                    date_between_filter_matches(actual, *start, *end, *not_between)
+                })
             }
             _ => true,
         }
@@ -2945,6 +3011,27 @@ fn numeric_filter_matches(actual: f64, operator: PivotFilterOperator, expected: 
         | PivotFilterOperator::DoesNotEndWith
         | PivotFilterOperator::Contains
         | PivotFilterOperator::DoesNotContain => false,
+    }
+}
+
+fn date_filter_matches(actual: f64, operator: PivotFilterOperator, expected: f64) -> bool {
+    if !actual.is_finite() || !expected.is_finite() {
+        return false;
+    }
+    numeric_filter_matches(actual, operator, expected)
+}
+
+fn date_between_filter_matches(actual: f64, start: f64, end: f64, not_between: bool) -> bool {
+    if !actual.is_finite() || !start.is_finite() || !end.is_finite() {
+        return false;
+    }
+    let lower = start.min(end);
+    let upper = start.max(end);
+    let between = actual >= lower && actual <= upper;
+    if not_between {
+        !between
+    } else {
+        between
     }
 }
 
@@ -7766,6 +7853,87 @@ mod tests {
         assert_eq!(text(&workbook, "D3"), "Grand Total");
         assert_eq!(number(&workbook, "E3"), 10.0);
         assert_eq!(text(&workbook, "D4"), "");
+    }
+
+    #[test]
+    fn refresh_applies_date_filters() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Date").unwrap();
+        sheet.set_cell_value("B1", "Region").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet
+            .set_cell_value("A2", date_to_serial(2024, 1, 1, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B2", "East").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet
+            .set_cell_value("A3", date_to_serial(2024, 1, 15, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B3", "East").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+        sheet
+            .set_cell_value("A4", date_to_serial(2024, 1, 20, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B4", "West").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+        sheet
+            .set_cell_value("A5", date_to_serial(2024, 2, 1, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B5", "North").unwrap();
+        sheet.set_cell_value("C5", 30.0).unwrap();
+        sheet
+            .set_cell_value("A6", date_to_serial(2024, 2, 15, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B6", "West").unwrap();
+        sheet.set_cell_value("C6", 40.0).unwrap();
+
+        let after_february = PivotTable::builder("AfterFebruary")
+            .source_range(CellRange::parse("A1:C6").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .filter(PivotFilter::Date {
+                field: "Date".into(),
+                operator: PivotFilterOperator::GreaterThanOrEqual,
+                value: date_to_serial(2024, 2, 1, DateSystem::Date1900),
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(after_february).unwrap();
+
+        let january_window = PivotTable::builder("JanuaryWindow")
+            .source_range(CellRange::parse("A1:C6").unwrap())
+            .target_address("H1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .filter(PivotFilter::DateBetween {
+                field: "Date".into(),
+                start: date_to_serial(2024, 1, 10, DateSystem::Date1900),
+                end: date_to_serial(2024, 1, 31, DateSystem::Date1900),
+                not_between: false,
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(january_window).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E2"), "North");
+        assert_eq!(number(&workbook, "F2"), 30.0);
+        assert_eq!(text(&workbook, "E3"), "West");
+        assert_eq!(number(&workbook, "F3"), 40.0);
+        assert_eq!(text(&workbook, "E4"), "Grand Total");
+        assert_eq!(number(&workbook, "F4"), 70.0);
+
+        assert_eq!(text(&workbook, "H2"), "East");
+        assert_eq!(number(&workbook, "I2"), 20.0);
+        assert_eq!(text(&workbook, "H3"), "West");
+        assert_eq!(number(&workbook, "I3"), 7.0);
+        assert_eq!(text(&workbook, "H4"), "Grand Total");
+        assert_eq!(number(&workbook, "I4"), 27.0);
     }
 
     #[test]

@@ -211,7 +211,7 @@ class TestPivotTables:
         sheet.add_pivot_table(
             {
                 "name": "SalesPivot",
-                "source_range": "A1:C4",
+                "source_range": "A1:D4",
                 "target": "E1",
                 "row_fields": [
                     {
@@ -242,7 +242,13 @@ class TestPivotTables:
                         "field": "Region",
                         "operator": "beginsWith",
                         "text": "E",
-                    }
+                    },
+                    {
+                        "kind": "date_between",
+                        "field": "Date",
+                        "start": 45292,
+                        "end": 45322,
+                    },
                 ],
                 "calculated_fields": [{"name": "Margin", "formula": "=Revenue*0.2"}],
                 "calculated_items": [
@@ -288,7 +294,7 @@ class TestPivotTables:
         assert pivot is not None
         assert sheet.pivot_tables == [pivot]
         assert pivot["source"]["kind"] == "worksheet_range"
-        assert pivot["source"]["range"] == "A1:C4"
+        assert pivot["source"]["range"] == "A1:D4"
         assert pivot["target"] == "E1"
         assert pivot["rows"][0]["field"] == "Region"
         assert pivot["rows"][0]["sort"] == "descending"
@@ -307,6 +313,12 @@ class TestPivotTables:
         assert pivot["measures"][0]["show_as"]["kind"] == "percent_of_grand_total"
         assert pivot["filters"][0]["kind"] == "label"
         assert pivot["filters"][0]["operator"] == "begins_with"
+        assert pivot["filters"][1] == {
+            "kind": "date_between",
+            "field": "Date",
+            "start": 45292.0,
+            "end": 45322.0,
+        }
         assert pivot["calculated_fields"][0] == {
             "name": "Margin",
             "formula": "=Revenue*0.2",

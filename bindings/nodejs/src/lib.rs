@@ -352,6 +352,8 @@ pub struct JsPivotFilterOptions {
     pub text: Option<String>,
     pub measure: Option<JsPivotMeasureOptions>,
     pub value: Option<f64>,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
     pub n: Option<u32>,
     pub top: Option<bool>,
     pub percent: Option<bool>,
@@ -1268,6 +1270,38 @@ fn build_pivot_filter_from_js(options: JsPivotFilterOptions) -> Result<PivotFilt
                 value: options
                     .value
                     .ok_or_else(|| napi::Error::from_reason("Pivot value filter requires value"))?,
+            })
+        }
+        "date" => Ok(PivotFilter::Date {
+            field: options.field.into(),
+            operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+            value: options
+                .value
+                .or(options.start)
+                .ok_or_else(|| napi::Error::from_reason("Pivot date filter requires value"))?,
+        }),
+        "dateBetween" | "date_between" | "dateRange" | "date_range" => {
+            Ok(PivotFilter::DateBetween {
+                field: options.field.into(),
+                start: options.start.or(options.value).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot date-between filter requires start")
+                })?,
+                end: options.end.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot date-between filter requires end")
+                })?,
+                not_between: false,
+            })
+        }
+        "dateNotBetween" | "date_not_between" | "dateNotRange" | "date_not_range" => {
+            Ok(PivotFilter::DateBetween {
+                field: options.field.into(),
+                start: options.start.or(options.value).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot date-not-between filter requires start")
+                })?,
+                end: options.end.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot date-not-between filter requires end")
+                })?,
+                not_between: true,
             })
         }
         "topN" | "top_n" | "top" => {

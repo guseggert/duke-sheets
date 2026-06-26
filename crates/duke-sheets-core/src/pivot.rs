@@ -586,6 +586,26 @@ pub enum PivotFilter {
         /// String operand.
         value: String,
     },
+    /// Date/serial-date filter.
+    Date {
+        /// Field to filter.
+        field: PivotFieldRef,
+        /// Operator.
+        operator: PivotFilterOperator,
+        /// Date operand as an Excel serial number.
+        value: f64,
+    },
+    /// Date/serial-date range filter.
+    DateBetween {
+        /// Field to filter.
+        field: PivotFieldRef,
+        /// Lower bound as an Excel serial number.
+        start: f64,
+        /// Upper bound as an Excel serial number.
+        end: f64,
+        /// Invert the range.
+        not_between: bool,
+    },
     /// Value filter against an aggregate measure.
     Value {
         /// Field to filter.

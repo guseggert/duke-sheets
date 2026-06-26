@@ -1486,6 +1486,8 @@ export interface JsPivotFilterDefinition {
   text?: string
   measure?: JsPivotMeasureDefinition
   value?: number
+  start?: number
+  end?: number
   n?: number
   top?: boolean
   percent?: boolean
@@ -1500,6 +1502,8 @@ export interface JsPivotFilterOptions {
   text?: string
   measure?: JsPivotMeasureOptions
   value?: number
+  start?: number
+  end?: number
   n?: number
   top?: boolean
   percent?: boolean

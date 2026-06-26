@@ -255,6 +255,20 @@ export interface PivotValueFilterOptions {
   value: number;
 }
 
+export interface PivotDateFilterOptions {
+  kind: "date";
+  field: string;
+  operator: PivotFilterOperator;
+  value: number;
+}
+
+export interface PivotDateBetweenFilterOptions {
+  kind: "dateBetween" | "date_between" | "dateRange" | "date_range" | "dateNotBetween" | "date_not_between" | "dateNotRange" | "date_not_range";
+  field: string;
+  start: number;
+  end: number;
+}
+
 export interface PivotTopNFilterOptions {
   kind: "topN" | "top_n" | "top";
   field: string;
@@ -268,6 +282,8 @@ export type PivotFilterOptions =
   | PivotItemFilterOptions
   | PivotLabelFilterOptions
   | PivotValueFilterOptions
+  | PivotDateFilterOptions
+  | PivotDateBetweenFilterOptions
   | PivotTopNFilterOptions;
 
 export interface PivotCalculatedFieldOptions {
@@ -497,6 +513,8 @@ export interface PivotFilterDefinition {
   text?: string;
   measure?: PivotMeasureDefinition;
   value?: number;
+  start?: number;
+  end?: number;
   n?: number;
   top?: boolean;
   percent?: boolean;
@@ -1308,6 +1326,40 @@ fn build_pivot_filter_from_wasm(options: WasmPivotFilterOptions) -> Result<Pivot
                 .value
                 .ok_or_else(|| JsError::new("Pivot value filter requires value"))?,
         }),
+        "date" => Ok(PivotFilter::Date {
+            field: options.field.into(),
+            operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+            value: options
+                .value
+                .or(options.start)
+                .ok_or_else(|| JsError::new("Pivot date filter requires value"))?,
+        }),
+        "dateBetween" | "date_between" | "dateRange" | "date_range" => {
+            Ok(PivotFilter::DateBetween {
+                field: options.field.into(),
+                start: options
+                    .start
+                    .or(options.value)
+                    .ok_or_else(|| JsError::new("Pivot date-between filter requires start"))?,
+                end: options
+                    .end
+                    .ok_or_else(|| JsError::new("Pivot date-between filter requires end"))?,
+                not_between: false,
+            })
+        }
+        "dateNotBetween" | "date_not_between" | "dateNotRange" | "date_not_range" => {
+            Ok(PivotFilter::DateBetween {
+                field: options.field.into(),
+                start: options
+                    .start
+                    .or(options.value)
+                    .ok_or_else(|| JsError::new("Pivot date-not-between filter requires start"))?,
+                end: options
+                    .end
+                    .ok_or_else(|| JsError::new("Pivot date-not-between filter requires end"))?,
+                not_between: true,
+            })
+        }
         "topN" | "top_n" | "top" => Ok(PivotFilter::TopN {
             field: options.field.into(),
             measure: build_pivot_measure_from_wasm(

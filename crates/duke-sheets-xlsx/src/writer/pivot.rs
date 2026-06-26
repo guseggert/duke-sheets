@@ -252,6 +252,20 @@ fn validate_writable_pivot(pivot: &PivotTable) -> XlsxResult<()> {
                     pivot.name
                 )));
             }
+            PivotFilter::Date { value, .. } if !value.is_finite() => {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "pivot table {} uses a non-finite date filter operand",
+                    pivot.name
+                )));
+            }
+            PivotFilter::DateBetween { start, end, .. }
+                if !start.is_finite() || !end.is_finite() =>
+            {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "pivot table {} uses a non-finite date range filter operand",
+                    pivot.name
+                )));
+            }
             PivotFilter::TopN { n, .. } if *n == 0 => {
                 return Err(XlsxError::InvalidFormat(format!(
                     "pivot table {} uses a top-N filter with a zero threshold",
@@ -267,9 +281,11 @@ fn validate_writable_pivot(pivot: &PivotTable) -> XlsxResult<()> {
 
 fn is_writable_filter(filter: &PivotFilter) -> bool {
     match filter {
-        PivotFilter::FieldItems { .. } | PivotFilter::Label { .. } | PivotFilter::TopN { .. } => {
-            true
-        }
+        PivotFilter::FieldItems { .. }
+        | PivotFilter::Label { .. }
+        | PivotFilter::DateBetween { .. }
+        | PivotFilter::TopN { .. } => true,
+        PivotFilter::Date { operator, .. } => date_filter_type_name(*operator).is_some(),
         PivotFilter::Value { operator, .. } => value_filter_type_name(*operator).is_some(),
         PivotFilter::Unsupported { .. } => false,
     }
@@ -826,6 +842,8 @@ fn filter_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
     match filter {
         PivotFilter::FieldItems { field, .. }
         | PivotFilter::Label { field, .. }
+        | PivotFilter::Date { field, .. }
+        | PivotFilter::DateBetween { field, .. }
         | PivotFilter::Value { field, .. }
         | PivotFilter::TopN { field, .. } => Some(field),
         PivotFilter::Unsupported { .. } => None,
@@ -839,6 +857,8 @@ fn filter_measure_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
         }
         PivotFilter::FieldItems { .. }
         | PivotFilter::Label { .. }
+        | PivotFilter::Date { .. }
+        | PivotFilter::DateBetween { .. }
         | PivotFilter::Unsupported { .. } => None,
     }
 }
@@ -2483,6 +2503,56 @@ fn write_pivot_filter(
             write_pivot_custom_filter(w, custom_filter_operator(*operator), &value)?;
             w.write_event(Event::End(BytesEnd::new("filter")))?;
         }
+        PivotFilter::Date {
+            operator, value, ..
+        } => {
+            let filter_type = date_filter_type_name(*operator).ok_or_else(|| {
+                XlsxError::InvalidFormat("unsupported pivot date filter operator".into())
+            })?;
+            let value = value.to_string();
+            filter_el.push_attribute(("type", filter_type));
+            filter_el.push_attribute(("stringValue1", value.as_str()));
+            w.write_event(Event::Start(filter_el))?;
+            write_pivot_custom_filter(w, custom_filter_operator(*operator), &value)?;
+            w.write_event(Event::End(BytesEnd::new("filter")))?;
+        }
+        PivotFilter::DateBetween {
+            start,
+            end,
+            not_between,
+            ..
+        } => {
+            let start = start.to_string();
+            let end = end.to_string();
+            filter_el.push_attribute((
+                "type",
+                if *not_between {
+                    "dateNotBetween"
+                } else {
+                    "dateBetween"
+                },
+            ));
+            filter_el.push_attribute(("stringValue1", start.as_str()));
+            filter_el.push_attribute(("stringValue2", end.as_str()));
+            w.write_event(Event::Start(filter_el))?;
+            if *not_between {
+                write_pivot_custom_filters(
+                    w,
+                    false,
+                    &[("lessThan", start.clone()), ("greaterThan", end.clone())],
+                )?;
+            } else {
+                write_pivot_custom_filters(
+                    w,
+                    true,
+                    &[
+                        ("greaterThanOrEqual", start.clone()),
+                        ("lessThanOrEqual", end.clone()),
+                    ],
+                )?;
+            }
+            w.write_event(Event::End(BytesEnd::new("filter")))?;
+        }
         PivotFilter::TopN {
             measure,
             n,
@@ -2514,13 +2584,27 @@ fn write_pivot_custom_filter(
     operator: &'static str,
     value: &str,
 ) -> XlsxResult<()> {
+    write_pivot_custom_filters(w, true, &[(operator, value.to_string())])
+}
+
+fn write_pivot_custom_filters(
+    w: &mut XmlWriter,
+    and: bool,
+    filters: &[(&'static str, String)],
+) -> XlsxResult<()> {
     write_pivot_auto_filter_start(w)?;
 
-    w.write_event(Event::Start(BytesStart::new("customFilters")))?;
-    let mut custom_filter = BytesStart::new("customFilter");
-    custom_filter.push_attribute(("operator", operator));
-    custom_filter.push_attribute(("val", value));
-    w.write_event(Event::Empty(custom_filter))?;
+    let mut custom_filters = BytesStart::new("customFilters");
+    if filters.len() > 1 {
+        custom_filters.push_attribute(("and", bool_attr(and)));
+    }
+    w.write_event(Event::Start(custom_filters))?;
+    for (operator, value) in filters {
+        let mut custom_filter = BytesStart::new("customFilter");
+        custom_filter.push_attribute(("operator", *operator));
+        custom_filter.push_attribute(("val", value.as_str()));
+        w.write_event(Event::Empty(custom_filter))?;
+    }
     w.write_event(Event::End(BytesEnd::new("customFilters")))?;
 
     write_pivot_auto_filter_end(w)?;
@@ -2613,6 +2697,23 @@ fn value_filter_type_name(operator: PivotFilterOperator) -> Option<&'static str>
         PivotFilterOperator::LessThanOrEqual => "valueLessThanOrEqual",
         PivotFilterOperator::GreaterThan => "valueGreaterThan",
         PivotFilterOperator::GreaterThanOrEqual => "valueGreaterThanOrEqual",
+        PivotFilterOperator::BeginsWith
+        | PivotFilterOperator::DoesNotBeginWith
+        | PivotFilterOperator::EndsWith
+        | PivotFilterOperator::DoesNotEndWith
+        | PivotFilterOperator::Contains
+        | PivotFilterOperator::DoesNotContain => return None,
+    })
+}
+
+fn date_filter_type_name(operator: PivotFilterOperator) -> Option<&'static str> {
+    Some(match operator {
+        PivotFilterOperator::Equals => "dateEqual",
+        PivotFilterOperator::NotEquals => "dateNotEqual",
+        PivotFilterOperator::LessThan => "dateOlderThan",
+        PivotFilterOperator::LessThanOrEqual => "dateOlderThanOrEqual",
+        PivotFilterOperator::GreaterThan => "dateNewerThan",
+        PivotFilterOperator::GreaterThanOrEqual => "dateNewerThanOrEqual",
         PivotFilterOperator::BeginsWith
         | PivotFilterOperator::DoesNotBeginWith
         | PivotFilterOperator::EndsWith

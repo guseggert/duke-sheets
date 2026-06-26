@@ -530,6 +530,38 @@ fn build_pivot_filter_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotFilte
                     .ok_or_else(|| PyValueError::new_err("pivot value filter requires value"))?,
             })
         }
+        "date" => Ok(PivotFilter::Date {
+            field: field.into(),
+            operator: parse_pivot_filter_operator(
+                optional_string(dict, &["operator"])?.as_deref(),
+            )?,
+            value: optional_f64(dict, &["value", "start"])?
+                .ok_or_else(|| PyValueError::new_err("pivot date filter requires value"))?,
+        }),
+        "dateBetween" | "date_between" | "dateRange" | "date_range" => {
+            Ok(PivotFilter::DateBetween {
+                field: field.into(),
+                start: optional_f64(dict, &["start", "value"])?.ok_or_else(|| {
+                    PyValueError::new_err("pivot date-between filter requires start")
+                })?,
+                end: optional_f64(dict, &["end"])?.ok_or_else(|| {
+                    PyValueError::new_err("pivot date-between filter requires end")
+                })?,
+                not_between: false,
+            })
+        }
+        "dateNotBetween" | "date_not_between" | "dateNotRange" | "date_not_range" => {
+            Ok(PivotFilter::DateBetween {
+                field: field.into(),
+                start: optional_f64(dict, &["start", "value"])?.ok_or_else(|| {
+                    PyValueError::new_err("pivot date-not-between filter requires start")
+                })?,
+                end: optional_f64(dict, &["end"])?.ok_or_else(|| {
+                    PyValueError::new_err("pivot date-not-between filter requires end")
+                })?,
+                not_between: true,
+            })
+        }
         "topN" | "top_n" | "top" => {
             let measure = optional_any(dict, &["measure"])?
                 .ok_or_else(|| PyValueError::new_err("pivot top-N filter requires measure"))?;
@@ -1147,6 +1179,34 @@ fn pivot_filter_to_py(py: Python<'_>, filter: &PivotFilter) -> PyResult<PyObject
             dict.set_item("measure", pivot_measure_to_py(py, measure)?)?;
             dict.set_item("operator", pivot_filter_operator_to_python(*operator))?;
             dict.set_item("value", value)?;
+        }
+        PivotFilter::Date {
+            field,
+            operator,
+            value,
+        } => {
+            dict.set_item("kind", "date")?;
+            dict.set_item("field", &field.name)?;
+            dict.set_item("operator", pivot_filter_operator_to_python(*operator))?;
+            dict.set_item("value", value)?;
+        }
+        PivotFilter::DateBetween {
+            field,
+            start,
+            end,
+            not_between,
+        } => {
+            dict.set_item(
+                "kind",
+                if *not_between {
+                    "date_not_between"
+                } else {
+                    "date_between"
+                },
+            )?;
+            dict.set_item("field", &field.name)?;
+            dict.set_item("start", start)?;
+            dict.set_item("end", end)?;
         }
         PivotFilter::TopN {
             field,

@@ -3463,6 +3463,7 @@ mod tests {
         PivotValue, SplitPanes, WorkbookConnection, WorkbookConnectionKind, WorkbookExtension,
         WorkbookExtensionPart,
     };
+    use ssfmt::{date_serial::date_to_serial, DateSystem};
     use std::io::Read;
 
     fn read_zip_entry(bytes: Vec<u8>, path: &str) -> String {
@@ -5229,18 +5230,30 @@ mod tests {
     fn test_writer_round_trips_pivot_advanced_filters() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
-        sheet.set_cell_value("A1", "Region").unwrap();
-        sheet.set_cell_value("B1", "Revenue").unwrap();
-        sheet.set_cell_value("A2", "East").unwrap();
-        sheet.set_cell_value("B2", 10.0).unwrap();
-        sheet.set_cell_value("A3", "West").unwrap();
-        sheet.set_cell_value("B3", 20.0).unwrap();
-        sheet.set_cell_value("A4", "North").unwrap();
-        sheet.set_cell_value("B4", 30.0).unwrap();
+        sheet.set_cell_value("A1", "Date").unwrap();
+        sheet.set_cell_value("B1", "Region").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet
+            .set_cell_value("A2", date_to_serial(2024, 1, 1, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B2", "East").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet
+            .set_cell_value("A3", date_to_serial(2024, 1, 15, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B3", "West").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+        sheet
+            .set_cell_value("A4", date_to_serial(2024, 2, 1, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B4", "North").unwrap();
+        sheet.set_cell_value("C4", 30.0).unwrap();
 
         let measure = PivotMeasure::new("Revenue", PivotAggregate::Sum).with_name("Revenue");
+        let date_start = date_to_serial(2024, 1, 1, DateSystem::Date1900);
+        let date_end = date_to_serial(2024, 1, 31, DateSystem::Date1900);
         let pivot = PivotTable::builder("FilteredPivot")
-            .source_range(CellRange::parse("A1:B4").unwrap())
+            .source_range(CellRange::parse("A1:C4").unwrap())
             .target_address("D1")
             .unwrap()
             .row("Region")
@@ -5255,6 +5268,12 @@ mod tests {
                 measure: measure.clone(),
                 operator: PivotFilterOperator::GreaterThanOrEqual,
                 value: 20.0,
+            })
+            .filter(PivotFilter::DateBetween {
+                field: "Date".into(),
+                start: date_start,
+                end: date_end,
+                not_between: false,
             })
             .filter(PivotFilter::TopN {
                 field: "Region".into(),
@@ -5272,12 +5291,22 @@ mod tests {
         let bytes = out.into_inner();
 
         let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
-        assert!(pivot_xml.contains(r#"<filters count="3">"#));
+        assert!(pivot_xml.contains(r#"<filters count="4">"#));
         assert!(pivot_xml.contains(r#"type="captionContains""#));
         assert!(pivot_xml.contains(r#"stringValue1="e""#));
         assert!(pivot_xml.contains(r#"type="valueGreaterThanOrEqual""#));
         assert!(pivot_xml.contains(r#"iMeasureFld="0""#));
         assert!(pivot_xml.contains(r#"<customFilter operator="greaterThanOrEqual" val="20"/>"#));
+        assert!(pivot_xml.contains(r#"type="dateBetween""#));
+        assert!(pivot_xml.contains(&format!(r#"stringValue1="{date_start}""#)));
+        assert!(pivot_xml.contains(&format!(r#"stringValue2="{date_end}""#)));
+        assert!(pivot_xml.contains(r#"<customFilters and="1">"#));
+        assert!(pivot_xml.contains(&format!(
+            r#"<customFilter operator="greaterThanOrEqual" val="{date_start}"/>"#
+        )));
+        assert!(pivot_xml.contains(&format!(
+            r#"<customFilter operator="lessThanOrEqual" val="{date_end}"/>"#
+        )));
         assert!(pivot_xml.contains(r#"type="topCount""#));
         assert!(pivot_xml.contains(r#"<top10 top="1" percent="0" val="2"/>"#));
 
@@ -5287,7 +5316,7 @@ mod tests {
             .unwrap()
             .pivot_table_by_name("FilteredPivot")
             .unwrap();
-        assert_eq!(pivot.filters.len(), 3);
+        assert_eq!(pivot.filters.len(), 4);
         match &pivot.filters[0] {
             PivotFilter::Label {
                 field,
@@ -5317,6 +5346,20 @@ mod tests {
             other => panic!("unexpected pivot filter: {other:?}"),
         }
         match &pivot.filters[2] {
+            PivotFilter::DateBetween {
+                field,
+                start,
+                end,
+                not_between,
+            } => {
+                assert_eq!(field.name, "Date");
+                assert_eq!(*start, date_start);
+                assert_eq!(*end, date_end);
+                assert!(!*not_between);
+            }
+            other => panic!("unexpected pivot filter: {other:?}"),
+        }
+        match &pivot.filters[3] {
             PivotFilter::TopN {
                 field,
                 measure,

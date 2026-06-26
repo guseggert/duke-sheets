@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 
+use chrono::{Datelike, NaiveDate};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::Writer;
+use ssfmt::{date_serial::date_to_serial, DateSystem};
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
@@ -951,10 +953,17 @@ struct CurrentPivotFilter {
     filter_type: String,
     measure_index: Option<usize>,
     string_value1: Option<String>,
-    custom_value: Option<String>,
+    string_value2: Option<String>,
+    custom_values: Vec<String>,
     top: Option<bool>,
     percent: Option<bool>,
     top_n: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DatePivotFilterType {
+    Comparison(PivotFilterOperator),
+    Between { not_between: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1389,7 +1398,8 @@ fn parse_current_pivot_filter(e: &BytesStart<'_>) -> Option<CurrentPivotFilter> 
         filter_type: attr_string(e, b"type")?,
         measure_index: attr_u32(e, b"iMeasureFld").map(|value| value as usize),
         string_value1: attr_string(e, b"stringValue1"),
-        custom_value: None,
+        string_value2: attr_string(e, b"stringValue2"),
+        custom_values: Vec::new(),
         top: None,
         percent: None,
         top_n: None,
@@ -1398,7 +1408,7 @@ fn parse_current_pivot_filter(e: &BytesStart<'_>) -> Option<CurrentPivotFilter> 
 
 fn parse_pivot_custom_filter_attrs(filter: &mut CurrentPivotFilter, e: &BytesStart<'_>) {
     if let Some(value) = attr_string(e, b"val") {
-        filter.custom_value = Some(value);
+        filter.custom_values.push(value);
     }
 }
 
@@ -1421,10 +1431,7 @@ fn pivot_filter_from_context(
 ) -> Option<PivotFilter> {
     let field = cache.fields.get(filter.field_index)?;
     if let Some(operator) = parse_label_filter_type(&filter.filter_type) {
-        let value = filter
-            .string_value1
-            .or(filter.custom_value)
-            .unwrap_or_default();
+        let value = pivot_filter_operand1(&filter).unwrap_or_default();
         return Some(PivotFilter::Label {
             field: duke_sheets_core::PivotFieldRef::new(field.name.clone()),
             operator,
@@ -1433,10 +1440,7 @@ fn pivot_filter_from_context(
     }
 
     if let Some(operator) = parse_value_filter_type(&filter.filter_type) {
-        let value = filter
-            .string_value1
-            .or(filter.custom_value)
-            .and_then(|value| value.parse::<f64>().ok())?;
+        let value = pivot_filter_operand1(&filter).and_then(|value| value.parse::<f64>().ok())?;
         let measure = measure_for_pivot_filter(filter.measure_index, measures)?.clone();
         return Some(PivotFilter::Value {
             field: duke_sheets_core::PivotFieldRef::new(field.name.clone()),
@@ -1444,6 +1448,33 @@ fn pivot_filter_from_context(
             operator,
             value,
         });
+    }
+
+    if let Some(filter_type) = parse_date_filter_type(&filter.filter_type) {
+        let field = duke_sheets_core::PivotFieldRef::new(field.name.clone());
+        return match filter_type {
+            DatePivotFilterType::Comparison(operator) => {
+                let value = pivot_filter_operand1(&filter)
+                    .and_then(|value| parse_pivot_filter_date_value(&value))?;
+                Some(PivotFilter::Date {
+                    field,
+                    operator,
+                    value,
+                })
+            }
+            DatePivotFilterType::Between { not_between } => {
+                let start = pivot_filter_operand1(&filter)
+                    .and_then(|value| parse_pivot_filter_date_value(&value))?;
+                let end = pivot_filter_operand2(&filter)
+                    .and_then(|value| parse_pivot_filter_date_value(&value))?;
+                Some(PivotFilter::DateBetween {
+                    field,
+                    start,
+                    end,
+                    not_between,
+                })
+            }
+        };
     }
 
     if let Some((type_top, type_percent)) = parse_top_n_filter_type(&filter.filter_type) {
@@ -1461,6 +1492,20 @@ fn pivot_filter_from_context(
         kind: filter.filter_type,
         detail: Some(format!("field={}", field.name)),
     })
+}
+
+fn pivot_filter_operand1(filter: &CurrentPivotFilter) -> Option<String> {
+    filter
+        .string_value1
+        .clone()
+        .or_else(|| filter.custom_values.first().cloned())
+}
+
+fn pivot_filter_operand2(filter: &CurrentPivotFilter) -> Option<String> {
+    filter
+        .string_value2
+        .clone()
+        .or_else(|| filter.custom_values.get(1).cloned())
 }
 
 fn measure_for_pivot_filter(
@@ -1502,6 +1547,39 @@ fn parse_value_filter_type(value: &str) -> Option<PivotFilterOperator> {
         "valueGreaterThanOrEqual" => PivotFilterOperator::GreaterThanOrEqual,
         _ => return None,
     })
+}
+
+fn parse_date_filter_type(value: &str) -> Option<DatePivotFilterType> {
+    Some(match value {
+        "dateEqual" => DatePivotFilterType::Comparison(PivotFilterOperator::Equals),
+        "dateNotEqual" => DatePivotFilterType::Comparison(PivotFilterOperator::NotEquals),
+        "dateOlderThan" => DatePivotFilterType::Comparison(PivotFilterOperator::LessThan),
+        "dateOlderThanOrEqual" => {
+            DatePivotFilterType::Comparison(PivotFilterOperator::LessThanOrEqual)
+        }
+        "dateNewerThan" => DatePivotFilterType::Comparison(PivotFilterOperator::GreaterThan),
+        "dateNewerThanOrEqual" => {
+            DatePivotFilterType::Comparison(PivotFilterOperator::GreaterThanOrEqual)
+        }
+        "dateBetween" => DatePivotFilterType::Between { not_between: false },
+        "dateNotBetween" => DatePivotFilterType::Between { not_between: true },
+        _ => return None,
+    })
+}
+
+fn parse_pivot_filter_date_value(value: &str) -> Option<f64> {
+    if let Ok(serial) = value.parse::<f64>() {
+        return serial.is_finite().then_some(serial);
+    }
+
+    let date_part = value.get(..10).unwrap_or(value);
+    let date = NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()?;
+    Some(date_to_serial(
+        date.year(),
+        date.month(),
+        date.day(),
+        DateSystem::Date1900,
+    ))
 }
 
 fn parse_top_n_filter_type(value: &str) -> Option<(bool, bool)> {
@@ -1738,14 +1816,74 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_pivot_filter_types_are_preserved() {
-        let cache = minimal_cache_with_field("Region");
+    fn date_pivot_filter_types_are_parsed() {
+        let cache = minimal_cache_with_field("Order Date");
         let filter = CurrentPivotFilter {
             field_index: 0,
             filter_type: "dateBetween".to_string(),
             measure_index: None,
             string_value1: Some("2024-01-01".to_string()),
-            custom_value: None,
+            string_value2: Some("2024-01-31T00:00:00".to_string()),
+            custom_values: Vec::new(),
+            top: None,
+            percent: None,
+            top_n: None,
+        };
+
+        let parsed = pivot_filter_from_context(filter, &cache, &[]).expect("date filter");
+        match parsed {
+            PivotFilter::DateBetween {
+                field,
+                start,
+                end,
+                not_between,
+            } => {
+                assert_eq!(field.name, "Order Date");
+                assert_eq!(start, date_to_serial(2024, 1, 1, DateSystem::Date1900));
+                assert_eq!(end, date_to_serial(2024, 1, 31, DateSystem::Date1900));
+                assert!(!not_between);
+            }
+            other => panic!("unexpected filter: {other:?}"),
+        }
+
+        let serial = date_to_serial(2024, 2, 1, DateSystem::Date1900);
+        let filter = CurrentPivotFilter {
+            field_index: 0,
+            filter_type: "dateNewerThanOrEqual".to_string(),
+            measure_index: None,
+            string_value1: None,
+            string_value2: None,
+            custom_values: vec![serial.to_string()],
+            top: None,
+            percent: None,
+            top_n: None,
+        };
+
+        let parsed = pivot_filter_from_context(filter, &cache, &[]).expect("date filter");
+        match parsed {
+            PivotFilter::Date {
+                field,
+                operator,
+                value,
+            } => {
+                assert_eq!(field.name, "Order Date");
+                assert_eq!(operator, PivotFilterOperator::GreaterThanOrEqual);
+                assert_eq!(value, serial);
+            }
+            other => panic!("unexpected filter: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unsupported_pivot_filter_types_are_preserved() {
+        let cache = minimal_cache_with_field("Region");
+        let filter = CurrentPivotFilter {
+            field_index: 0,
+            filter_type: "thisWeek".to_string(),
+            measure_index: None,
+            string_value1: None,
+            string_value2: None,
+            custom_values: Vec::new(),
             top: None,
             percent: None,
             top_n: None,
@@ -1754,7 +1892,7 @@ mod tests {
         let parsed = pivot_filter_from_context(filter, &cache, &[]).expect("preserved filter");
         match parsed {
             PivotFilter::Unsupported { kind, detail } => {
-                assert_eq!(kind, "dateBetween");
+                assert_eq!(kind, "thisWeek");
                 assert_eq!(detail.as_deref(), Some("field=Region"));
             }
             other => panic!("unexpected filter: {other:?}"),

@@ -195,7 +195,7 @@ describe("PivotTables", () => {
 
     sheet.addPivotTable({
       name: "SalesPivot",
-      sourceRange: "A1:C4",
+      sourceRange: "A1:D4",
       target: "E1",
       rowFields: [
         {
@@ -220,7 +220,10 @@ describe("PivotTables", () => {
           numberFormat: "0.0%",
         },
       ],
-      filters: [{ kind: "label", field: "Region", operator: "beginsWith", text: "E" }],
+      filters: [
+        { kind: "label", field: "Region", operator: "beginsWith", text: "E" },
+        { kind: "dateBetween", field: "Date", start: 45292, end: 45322 },
+      ],
       calculatedFields: [{ name: "Margin", formula: "=Revenue*0.2" }],
       calculatedItems: [{ field: "Region", item: "Combined", formula: "East+West" }],
       refreshPolicy: { refreshOnOpen: true, missingItemsLimit: 25 },
@@ -261,7 +264,7 @@ describe("PivotTables", () => {
     const pivot = sheet.getPivotTable("SalesPivot");
     expect(pivot).not.toBeNull();
     expect(sheet.pivotTables).toEqual([pivot]);
-    expect(pivot?.source).toMatchObject({ kind: "worksheetRange", range: "A1:C4" });
+    expect(pivot?.source).toMatchObject({ kind: "worksheetRange", range: "A1:D4" });
     expect(pivot?.target).toBe("E1");
     expect(pivot?.rows[0]).toMatchObject({
       field: "Region",
@@ -287,6 +290,12 @@ describe("PivotTables", () => {
       field: "Region",
       operator: "beginsWith",
       text: "E",
+    });
+    expect(pivot?.filters[1]).toMatchObject({
+      kind: "dateBetween",
+      field: "Date",
+      start: 45292,
+      end: 45322,
     });
     expect(pivot?.calculatedFields[0]).toEqual({ name: "Margin", formula: "=Revenue*0.2" });
     expect(pivot?.calculatedItems[0]).toMatchObject({

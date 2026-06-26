@@ -92,6 +92,20 @@ export interface JsPivotValueFilterOptions {
   value: number
 }
 
+export interface JsPivotDateFilterOptions {
+  kind: 'date'
+  field: string
+  operator: JsPivotFilterOperator
+  value: number
+}
+
+export interface JsPivotDateBetweenFilterOptions {
+  kind: 'dateBetween' | 'date_between' | 'dateRange' | 'date_range' | 'dateNotBetween' | 'date_not_between' | 'dateNotRange' | 'date_not_range'
+  field: string
+  start: number
+  end: number
+}
+
 export interface JsPivotTopNFilterOptions {
   kind: 'topN' | 'top_n' | 'top'
   field: string
@@ -105,6 +119,8 @@ export type JsPivotFilterOptions =
   | JsPivotItemFilterOptions
   | JsPivotLabelFilterOptions
   | JsPivotValueFilterOptions
+  | JsPivotDateFilterOptions
+  | JsPivotDateBetweenFilterOptions
   | JsPivotTopNFilterOptions
 
 export interface JsPivotCalculatedFieldOptions {
