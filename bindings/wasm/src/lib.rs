@@ -202,6 +202,7 @@ export interface PivotMeasureOptions {
   showAs?: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "index" | "runningTotal" | "runTotal" | "differenceFrom" | "difference" | "percentDifferenceFrom" | "percentDiff" | "rankAscending" | "rankDescending";
   baseField?: string;
   baseItem?: string | number | boolean;
+  numberFormat?: string;
 }
 
 export interface PivotItemFilterOptions {
@@ -654,6 +655,9 @@ fn build_pivot_measure_from_wasm(
             options.base_field,
             options.base_item,
         )?);
+    }
+    if let Some(number_format) = options.number_format {
+        measure = measure.with_number_format(number_format);
     }
     Ok(measure)
 }

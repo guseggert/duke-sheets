@@ -424,6 +424,12 @@ impl PivotMeasure {
         self
     }
 
+    /// Set the display number format for rendered aggregate values.
+    pub fn with_number_format(mut self, number_format: impl Into<String>) -> Self {
+        self.number_format = Some(number_format.into());
+        self
+    }
+
     /// The display caption for this measure.
     pub fn caption(&self) -> String {
         self.name

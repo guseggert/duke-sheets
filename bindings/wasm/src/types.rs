@@ -72,6 +72,7 @@ pub struct WasmPivotMeasureOptions {
     pub show_as: Option<String>,
     pub base_field: Option<String>,
     pub base_item: Option<WasmPivotValueInput>,
+    pub number_format: Option<String>,
 }
 
 #[derive(Deserialize)]

@@ -338,6 +338,7 @@ pub struct JsPivotMeasureOptions {
     pub show_as: Option<String>,
     pub base_field: Option<String>,
     pub base_item: Option<Either3<f64, String, bool>>,
+    pub number_format: Option<String>,
 }
 
 #[napi(object)]
@@ -677,6 +678,9 @@ fn build_pivot_measure_from_js(options: JsPivotMeasureOptions) -> Result<PivotMe
             options.base_field,
             options.base_item,
         )?);
+    }
+    if let Some(number_format) = options.number_format {
+        measure = measure.with_number_format(number_format);
     }
     Ok(measure)
 }

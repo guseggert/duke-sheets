@@ -12,10 +12,11 @@ use std::sync::Arc;
 
 use ahash::{AHashMap, AHashSet};
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue, Error, PivotAggregate, PivotCalculatedField,
-    PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotMeasure,
-    PivotOverwritePolicy, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSubtotal,
-    PivotTable, PivotValue, Result, Table, Workbook, Worksheet, MAX_COLS, MAX_ROWS,
+    CellAddress, CellError, CellRange, CellValue, Error, NumberFormat, PivotAggregate,
+    PivotCalculatedField, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping,
+    PivotLayoutKind, PivotMeasure, PivotOverwritePolicy, PivotRefreshStatus, PivotShowAs,
+    PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue, Result, Table, Workbook,
+    Worksheet, MAX_COLS, MAX_ROWS,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -263,6 +264,15 @@ fn write_rendered_pivot(
                 worksheet.clear_cell_at(row, col);
             } else {
                 worksheet.set_cell_value_at(row, col, value.clone())?;
+                if row_offset >= rendered.data_start_row {
+                    if let Some(format) = rendered
+                        .column_number_formats
+                        .get(col_offset)
+                        .and_then(Option::as_deref)
+                    {
+                        apply_number_format(worksheet, row, col, format)?;
+                    }
+                }
             }
         }
     }
@@ -276,6 +286,15 @@ fn write_rendered_pivot(
     }
 
     Ok(())
+}
+
+fn apply_number_format(worksheet: &mut Worksheet, row: u32, col: u16, format: &str) -> Result<()> {
+    let mut style = worksheet
+        .cell_style_at(row, col)
+        .cloned()
+        .unwrap_or_default();
+    style.number_format = NumberFormat::Custom(format.to_string());
+    worksheet.set_cell_style_at(row, col, &style)
 }
 
 fn mark_pivot_failed(
@@ -2702,6 +2721,8 @@ struct RenderedPivot {
     cells: Vec<Vec<CellValue>>,
     range: CellRange,
     source_rows: usize,
+    column_number_formats: Vec<Option<String>>,
+    data_start_row: usize,
 }
 
 impl RenderedPivot {
@@ -2734,17 +2755,57 @@ fn render_pivot(
     if cells.is_empty() {
         cells.push(vec![CellValue::Empty; width]);
     }
+    let mut column_number_formats = pivot_column_number_formats(pivot, plan, aggregation);
+    column_number_formats.resize(width, None);
+    let data_start_row = pivot_data_start_row(plan);
 
     let range = output_range(pivot.target, cells.len(), width)?;
     Ok(RenderedPivot {
         cells,
         range,
         source_rows: snapshot.row_count,
+        column_number_formats,
+        data_start_row,
     })
 }
 
 fn compact_row_layout(pivot: &PivotTable, plan: &CompiledPivotPlan) -> bool {
     matches!(pivot.layout.kind, PivotLayoutKind::Compact) && plan.row_indexes.len() > 1
+}
+
+fn pivot_data_start_row(plan: &CompiledPivotPlan) -> usize {
+    if plan.page_fields.is_empty() {
+        1
+    } else {
+        plan.page_fields.len() + 2
+    }
+}
+
+fn pivot_column_number_formats(
+    pivot: &PivotTable,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+) -> Vec<Option<String>> {
+    let label_width = if compact_row_layout(pivot, plan) {
+        1
+    } else {
+        plan.row_indexes.len()
+    };
+    let mut formats = vec![None; label_width];
+    let measure_formats = plan
+        .measures
+        .iter()
+        .map(|measure| measure.number_format.clone())
+        .collect::<Vec<_>>();
+    let repetitions = if plan.column_indexes.is_empty() {
+        1
+    } else {
+        column_render_slots(pivot, plan, aggregation).len()
+    };
+    for _ in 0..repetitions {
+        formats.extend(measure_formats.iter().cloned());
+    }
+    formats
 }
 
 fn render_without_column_fields(
@@ -5269,6 +5330,37 @@ mod tests {
         assert_close(number(&workbook, "G2"), 30.0 * 100.0 / (40.0 * 70.0));
         assert_close(number(&workbook, "F3"), 20.0 * 100.0 / (60.0 * 30.0));
         assert_close(number(&workbook, "G3"), 40.0 * 100.0 / (60.0 * 70.0));
+    }
+
+    #[test]
+    fn refresh_applies_measure_number_format() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Rate").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 0.25).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 0.5).unwrap();
+
+        let pivot = PivotTable::builder("RatePivot")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .pivot_measure(
+                PivotMeasure::new("Rate", PivotAggregate::Sum).with_number_format("0.0%"),
+            )
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(sheet.formatted_value("E2").unwrap(), "25.0%");
+        assert_eq!(sheet.formatted_value("E3").unwrap(), "50.0%");
+        assert_eq!(sheet.formatted_value("E4").unwrap(), "75.0%");
     }
 
     #[test]

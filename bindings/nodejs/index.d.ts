@@ -34,6 +34,7 @@ export interface JsPivotMeasureOptions {
     | 'rankDescending'
   baseField?: string
   baseItem?: string | number | boolean
+  numberFormat?: string
 }
 
 export interface JsPivotItemFilterOptions {

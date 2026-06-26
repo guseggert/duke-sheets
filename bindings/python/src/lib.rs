@@ -265,6 +265,9 @@ fn build_pivot_measure_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotMeas
             optional_pivot_value(dict, &["base_item", "baseItem"])?,
         )?);
     }
+    if let Some(number_format) = optional_string(dict, &["number_format", "numberFormat"])? {
+        measure = measure.with_number_format(number_format);
+    }
     Ok(measure)
 }
 
