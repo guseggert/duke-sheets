@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use ahash::{AHashMap, AHashSet};
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue, Error, NumberFormat, PivotAggregate,
+    CellAddress, CellError, CellRange, CellValue, Error, NumberFormat, PageBreak, PivotAggregate,
     PivotCalculatedField, PivotCalculatedItem, PivotDatePeriod, PivotField, PivotFilter,
     PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure,
     PivotOverwritePolicy, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSubtotal,
@@ -521,6 +521,7 @@ fn write_rendered_pivot(
             }
         }
     }
+    write_pivot_row_page_breaks(worksheet, &job.pivot, &rendered);
 
     if let Some(pivot) = worksheet.pivot_tables_mut().get_mut(job.pivot_index) {
         pivot.rendered_range = Some(rendered.range);
@@ -529,6 +530,44 @@ fn write_rendered_pivot(
     }
 
     Ok(())
+}
+
+fn write_pivot_row_page_breaks(
+    worksheet: &mut Worksheet,
+    pivot: &PivotTable,
+    rendered: &RenderedPivot,
+) {
+    let mut row_breaks = worksheet.row_breaks().to_vec();
+    row_breaks.retain(|break_| {
+        !break_.pt
+            || (!row_break_is_in_range(break_.id, pivot.rendered_range)
+                && !row_break_is_in_range(break_.id, Some(rendered.range)))
+    });
+
+    let mut existing_break_rows = row_breaks
+        .iter()
+        .map(|break_| break_.id)
+        .collect::<AHashSet<_>>();
+    for offset in &rendered.row_page_break_offsets {
+        let row = pivot.target.row + *offset;
+        if existing_break_rows.insert(row) {
+            row_breaks.push(PageBreak {
+                id: row,
+                min: 0,
+                max: 16383,
+                man: true,
+                pt: true,
+            });
+        }
+    }
+
+    worksheet.set_row_breaks(row_breaks);
+}
+
+fn row_break_is_in_range(row: u32, range: Option<CellRange>) -> bool {
+    range
+        .map(|range| row >= range.start.row && row <= range.end.row)
+        .unwrap_or(false)
 }
 
 fn apply_number_format(worksheet: &mut Worksheet, row: u32, col: u16, format: &str) -> Result<()> {
@@ -4915,6 +4954,7 @@ struct RenderedPivot {
     source_rows: usize,
     column_number_formats: Vec<Option<String>>,
     data_start_row: usize,
+    row_page_break_offsets: Vec<u32>,
 }
 
 impl RenderedPivot {
@@ -4929,6 +4969,7 @@ fn render_pivot(
     plan: &CompiledPivotPlan,
     aggregation: &PivotAggregation,
 ) -> Result<RenderedPivot> {
+    let mut row_page_break_offsets = pivot_row_page_break_offsets(pivot, plan, aggregation);
     let mut cells = match (
         compact_row_layout(pivot, plan),
         plan.column_indexes.is_empty(),
@@ -4938,6 +4979,12 @@ fn render_pivot(
         (false, true) => render_without_column_fields(pivot, snapshot, plan, aggregation),
         (false, false) => render_with_column_fields(pivot, snapshot, plan, aggregation),
     };
+    let page_field_row_count = page_field_row_count(plan);
+    if page_field_row_count > 0 {
+        for offset in &mut row_page_break_offsets {
+            *offset += page_field_row_count;
+        }
+    }
     prepend_page_fields(&mut cells, pivot, snapshot, plan);
 
     let width = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
@@ -4958,6 +5005,7 @@ fn render_pivot(
         source_rows: snapshot.row_count,
         column_number_formats,
         data_start_row,
+        row_page_break_offsets,
     })
 }
 
@@ -4971,6 +5019,66 @@ fn pivot_data_start_row(plan: &CompiledPivotPlan) -> usize {
     } else {
         plan.page_fields.len() + 2
     }
+}
+
+fn page_field_row_count(plan: &CompiledPivotPlan) -> u32 {
+    pivot_data_start_row(plan).saturating_sub(1) as u32
+}
+
+fn pivot_row_page_break_offsets(
+    pivot: &PivotTable,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+) -> Vec<u32> {
+    if !plan.row_fields.iter().any(|field| field.insert_page_break) {
+        return Vec::new();
+    }
+
+    let compact = compact_row_layout(pivot, plan);
+    let mut offsets = Vec::new();
+    let mut row_offset = 1u32;
+    for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
+        let previous_row_key = row_index
+            .checked_sub(1)
+            .and_then(|index| aggregation.row_order.get(index));
+        if compact {
+            row_offset += compact_group_header_positions(row_key, previous_row_key).len() as u32;
+        }
+        row_offset += 1;
+
+        let next_row_key = aggregation.row_order.get(row_index + 1);
+        for position in row_group_end_positions(row_key, next_row_key) {
+            if row_subtotal_row_is_rendered(plan, aggregation, row_key, position) {
+                row_offset += 1;
+            }
+            if row_field_inserts_blank_row(plan, position) {
+                row_offset += 1;
+            }
+            if row_field_inserts_page_break(plan, position) {
+                offsets.push(row_offset - 1);
+            }
+        }
+    }
+
+    offsets
+}
+
+fn row_subtotal_row_is_rendered(
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+    row_key: &[u32],
+    position: usize,
+) -> bool {
+    if !is_row_subtotal_position(row_key, position) || !row_subtotal_enabled(plan, position) {
+        return false;
+    }
+    if !plan.column_indexes.is_empty() {
+        return true;
+    }
+
+    aggregation
+        .row_subtotals
+        .contains_key(&row_key[..=position].to_vec())
 }
 
 fn pivot_column_number_formats(
@@ -5770,6 +5878,13 @@ fn row_field_inserts_blank_row(plan: &CompiledPivotPlan, position: usize) -> boo
     plan.row_fields
         .get(position)
         .map(|field| field.insert_blank_row)
+        .unwrap_or(false)
+}
+
+fn row_field_inserts_page_break(plan: &CompiledPivotPlan, position: usize) -> bool {
+    plan.row_fields
+        .get(position)
+        .map(|field| field.insert_page_break)
         .unwrap_or(false)
 }
 
@@ -7453,6 +7568,66 @@ mod tests {
         assert_eq!(number(&workbook, "G9"), 7.0);
         assert_eq!(text(&workbook, "E10"), "Grand Total");
         assert_eq!(number(&workbook, "G10"), 22.0);
+    }
+
+    #[test]
+    fn refresh_inserts_page_breaks_after_row_field_items() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+        sheet.add_row_break(20);
+
+        let mut region = PivotField::new("Region");
+        region.insert_page_break = true;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row(region)
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(tabular_layout())
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+        workbook.refresh_pivots().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        let mut pivot_breaks = sheet
+            .row_breaks()
+            .iter()
+            .filter(|break_| break_.pt)
+            .map(|break_| {
+                assert!(break_.man);
+                assert_eq!(break_.min, 0);
+                assert_eq!(break_.max, 16383);
+                break_.id
+            })
+            .collect::<Vec<_>>();
+        pivot_breaks.sort_unstable();
+        assert_eq!(pivot_breaks, vec![3, 5]);
+
+        let mut user_breaks = sheet
+            .row_breaks()
+            .iter()
+            .filter(|break_| !break_.pt)
+            .map(|break_| break_.id)
+            .collect::<Vec<_>>();
+        user_breaks.sort_unstable();
+        assert_eq!(user_breaks, vec![20]);
     }
 
     #[test]
