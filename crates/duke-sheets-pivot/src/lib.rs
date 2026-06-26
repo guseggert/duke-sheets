@@ -5990,8 +5990,7 @@ fn render_values_on_rows_without_column_fields(
 
     if pivot.layout.show_row_grand_totals {
         for measure_index in 0..plan.measures.len() {
-            let mut row = grand_total_label_row(label_width, &grand_total_caption(pivot));
-            row[label_width - 1] = CellValue::string(plan.measures[measure_index].caption());
+            let mut row = values_on_rows_grand_total_label_row(pivot, plan, measure_index);
             let context = ShowAsContext {
                 snapshot,
                 plan,
@@ -6166,8 +6165,7 @@ fn render_values_on_rows_with_column_fields(
 
     if pivot.layout.show_row_grand_totals {
         for measure_index in 0..plan.measures.len() {
-            let mut row = grand_total_label_row(label_width, &grand_total_caption(pivot));
-            row[label_width - 1] = CellValue::string(plan.measures[measure_index].caption());
+            let mut row = values_on_rows_grand_total_label_row(pivot, plan, measure_index);
             for slot in &column_slots {
                 let context = ShowAsContext {
                     snapshot,
@@ -6305,7 +6303,10 @@ fn values_on_rows_header(
         .iter()
         .map(|index| CellValue::string(&snapshot.headers[*index]))
         .collect::<Vec<_>>();
-    header.push(CellValue::string(values_caption(pivot)));
+    header.insert(
+        values_axis_row_position(pivot, plan),
+        CellValue::string(values_caption(pivot)),
+    );
     header
 }
 
@@ -6318,8 +6319,38 @@ fn values_on_rows_label_cells(
     measure_index: usize,
 ) -> Vec<CellValue> {
     let mut row = row_label_cells(pivot, snapshot, plan, row_key, previous_row_key);
-    row.push(CellValue::string(plan.measures[measure_index].caption()));
+    row.insert(
+        values_axis_row_position(pivot, plan),
+        CellValue::string(plan.measures[measure_index].caption()),
+    );
     row
+}
+
+fn values_on_rows_grand_total_label_row(
+    pivot: &PivotTable,
+    plan: &CompiledPivotPlan,
+    measure_index: usize,
+) -> Vec<CellValue> {
+    let label_width = plan.row_indexes.len() + 1;
+    let mut row = vec![CellValue::Empty; label_width];
+    let values_position = values_axis_row_position(pivot, plan);
+    if let Some(cell) = row.get_mut(values_position) {
+        *cell = CellValue::string(plan.measures[measure_index].caption());
+    }
+    if label_width > 1 {
+        let total_position = if values_position == 0 { 1 } else { 0 };
+        row[total_position] = CellValue::string(grand_total_caption(pivot));
+    }
+    row
+}
+
+fn values_axis_row_position(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usize {
+    pivot
+        .layout
+        .values_axis_position
+        .map(|position| position as usize)
+        .unwrap_or(plan.row_indexes.len())
+        .min(plan.row_indexes.len())
 }
 
 fn append_blank_rows_for_values_axis(
@@ -8403,6 +8434,84 @@ mod tests {
         assert_eq!(number(&workbook, "H7"), 6.0);
         assert_eq!(number(&workbook, "I7"), 3.0);
         assert_eq!(number(&workbook, "J7"), 9.0);
+    }
+
+    #[test]
+    fn refreshes_values_axis_on_rows_at_position() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Product").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("D1", "Units").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "A").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("D2", 2.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "B").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("D3", 3.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "A").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+        sheet.set_cell_value("D4", 4.0).unwrap();
+
+        let mut layout = tabular_layout();
+        layout.data_caption = "Metric".to_string();
+        layout.values_axis = PivotValuesAxis::Rows;
+        layout.values_axis_position = Some(1);
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D4").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row("Region")
+            .row("Product")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .named_measure("Units", PivotAggregate::Sum, "Units")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F1"), "Region");
+        assert_eq!(text(&workbook, "G1"), "Metric");
+        assert_eq!(text(&workbook, "H1"), "Product");
+        assert_eq!(text(&workbook, "I1"), "Grand Total");
+        assert_eq!(text(&workbook, "F2"), "East");
+        assert_eq!(text(&workbook, "G2"), "Revenue");
+        assert_eq!(text(&workbook, "H2"), "A");
+        assert_eq!(number(&workbook, "I2"), 10.0);
+        assert_eq!(text(&workbook, "F3"), "East");
+        assert_eq!(text(&workbook, "G3"), "Units");
+        assert_eq!(text(&workbook, "H3"), "A");
+        assert_eq!(number(&workbook, "I3"), 2.0);
+        assert_eq!(text(&workbook, "F4"), "East");
+        assert_eq!(text(&workbook, "G4"), "Revenue");
+        assert_eq!(text(&workbook, "H4"), "B");
+        assert_eq!(number(&workbook, "I4"), 5.0);
+        assert_eq!(text(&workbook, "F5"), "East");
+        assert_eq!(text(&workbook, "G5"), "Units");
+        assert_eq!(text(&workbook, "H5"), "B");
+        assert_eq!(number(&workbook, "I5"), 3.0);
+        assert_eq!(text(&workbook, "F6"), "West");
+        assert_eq!(text(&workbook, "G6"), "Revenue");
+        assert_eq!(text(&workbook, "H6"), "A");
+        assert_eq!(number(&workbook, "I6"), 7.0);
+        assert_eq!(text(&workbook, "F7"), "West");
+        assert_eq!(text(&workbook, "G7"), "Units");
+        assert_eq!(text(&workbook, "H7"), "A");
+        assert_eq!(number(&workbook, "I7"), 4.0);
+        assert_eq!(text(&workbook, "F8"), "Grand Total");
+        assert_eq!(text(&workbook, "G8"), "Revenue");
+        assert_eq!(text(&workbook, "H8"), "");
+        assert_eq!(number(&workbook, "I8"), 22.0);
+        assert_eq!(text(&workbook, "F9"), "Grand Total");
+        assert_eq!(text(&workbook, "G9"), "Units");
+        assert_eq!(text(&workbook, "H9"), "");
+        assert_eq!(number(&workbook, "I9"), 9.0);
     }
 
     #[test]
