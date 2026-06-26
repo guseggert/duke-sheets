@@ -289,10 +289,7 @@ fn collect_pivot_jobs(workbook: &Workbook) -> Vec<PivotJob> {
 fn source_requires_external_refresh(source: &PivotSource) -> bool {
     matches!(
         source,
-        PivotSource::External { .. }
-            | PivotSource::Consolidation { .. }
-            | PivotSource::Scenario { .. }
-            | PivotSource::Olap { .. }
+        PivotSource::External { .. } | PivotSource::Scenario { .. } | PivotSource::Olap { .. }
     )
 }
 
@@ -467,18 +464,7 @@ impl PivotRuntimeCache {
     ) {
         let mut snapshots = AHashMap::with_capacity(self.snapshots.len());
         for (mut key, snapshot) in std::mem::take(&mut self.snapshots) {
-            let Some(worksheet) = workbook.worksheet(key.sheet_index) else {
-                continue;
-            };
-            let source_touched = touched_ranges.iter().any(|(sheet_index, range)| {
-                *sheet_index == key.sheet_index && range.overlaps(&key.range)
-            });
-            if !source_touched {
-                key.mutation_count = worksheet.mutation_count();
-                key.topology_generation = worksheet.topology_generation();
-            } else if worksheet.mutation_count() != key.mutation_count
-                || worksheet.topology_generation() != key.topology_generation
-            {
+            if !key.rebase_untouched(workbook, touched_ranges) {
                 continue;
             }
             snapshots.insert(key, snapshot);
@@ -509,7 +495,28 @@ fn take_runtime_cache(workbook: &mut Workbook) -> PivotRuntimeCache {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct SourceCacheKey {
+enum SourceCacheKey {
+    Single(SourceRangeCacheKey),
+    Consolidation(Vec<SourceRangeCacheKey>),
+}
+
+impl SourceCacheKey {
+    fn rebase_untouched(
+        &mut self,
+        workbook: &Workbook,
+        touched_ranges: &[(usize, CellRange)],
+    ) -> bool {
+        match self {
+            Self::Single(key) => key.rebase_untouched(workbook, touched_ranges),
+            Self::Consolidation(keys) => keys
+                .iter_mut()
+                .all(|key| key.rebase_untouched(workbook, touched_ranges)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SourceRangeCacheKey {
     kind: SourceCacheKind,
     sheet_index: usize,
     range: CellRange,
@@ -518,10 +525,34 @@ struct SourceCacheKey {
     topology_generation: u64,
 }
 
+impl SourceRangeCacheKey {
+    fn rebase_untouched(
+        &mut self,
+        workbook: &Workbook,
+        touched_ranges: &[(usize, CellRange)],
+    ) -> bool {
+        let Some(worksheet) = workbook.worksheet(self.sheet_index) else {
+            return false;
+        };
+        let source_touched = touched_ranges.iter().any(|(sheet_index, range)| {
+            *sheet_index == self.sheet_index && range.overlaps(&self.range)
+        });
+        if !source_touched {
+            self.mutation_count = worksheet.mutation_count();
+            self.topology_generation = worksheet.topology_generation();
+            true
+        } else {
+            worksheet.mutation_count() == self.mutation_count
+                && worksheet.topology_generation() == self.topology_generation
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum SourceCacheKind {
     WorksheetRange,
     Table,
+    ConsolidationRange,
 }
 
 #[derive(Debug, Clone)]
@@ -538,8 +569,8 @@ struct ResolvedSource {
 }
 
 impl ResolvedSource {
-    fn cache_key(&self) -> SourceCacheKey {
-        SourceCacheKey {
+    fn cache_key(&self) -> SourceRangeCacheKey {
+        SourceRangeCacheKey {
             kind: self.kind,
             sheet_index: self.sheet_index,
             range: self.range,
@@ -565,20 +596,34 @@ fn snapshot_for_source(
         return Ok(Arc::clone(snapshot));
     }
 
-    let worksheet = workbook
-        .worksheet(resolved.sheet_index)
-        .ok_or_else(|| Error::SheetOutOfBounds(resolved.sheet_index, workbook.sheet_count()))?;
-    let snapshot = Arc::new(SourceSnapshot::from_resolved(worksheet, &resolved)?);
+    let snapshot = Arc::new(SourceSnapshot::from_resolved(workbook, &resolved)?);
     cache.snapshots.insert(cache_key, Arc::clone(&snapshot));
     stats.cache_misses += 1;
     Ok(snapshot)
+}
+
+#[derive(Debug, Clone)]
+enum ResolvedPivotSource {
+    Single(ResolvedSource),
+    Consolidation(Vec<ResolvedSource>),
+}
+
+impl ResolvedPivotSource {
+    fn cache_key(&self) -> SourceCacheKey {
+        match self {
+            Self::Single(source) => SourceCacheKey::Single(source.cache_key()),
+            Self::Consolidation(sources) => SourceCacheKey::Consolidation(
+                sources.iter().map(ResolvedSource::cache_key).collect(),
+            ),
+        }
+    }
 }
 
 fn resolve_source(
     workbook: &Workbook,
     pivot_sheet_index: usize,
     source: &PivotSource,
-) -> Result<ResolvedSource> {
+) -> Result<ResolvedPivotSource> {
     match source {
         PivotSource::WorksheetRange { sheet, range } => {
             let sheet_index = match sheet {
@@ -594,7 +639,7 @@ fn resolve_source(
                 return Err(Error::other("pivot source range cannot be empty"));
             }
 
-            Ok(ResolvedSource {
+            Ok(ResolvedPivotSource::Single(ResolvedSource {
                 kind: SourceCacheKind::WorksheetRange,
                 sheet_index,
                 range: *range,
@@ -608,7 +653,7 @@ fn resolve_source(
                 },
                 mutation_count: worksheet.mutation_count(),
                 topology_generation: worksheet.topology_generation(),
-            })
+            }))
         }
         PivotSource::Table { name } => {
             let (sheet_index, worksheet, table) = find_table(workbook, name)
@@ -621,7 +666,7 @@ fn resolve_source(
                 .saturating_add(table.header_row_count);
             let data_end_row = table_data_end_row(table);
 
-            Ok(ResolvedSource {
+            Ok(ResolvedPivotSource::Single(ResolvedSource {
                 kind: SourceCacheKind::Table,
                 sheet_index,
                 range: table.reference,
@@ -631,14 +676,12 @@ fn resolve_source(
                 data_end_row,
                 mutation_count: worksheet.mutation_count(),
                 topology_generation: worksheet.topology_generation(),
-            })
+            }))
         }
         PivotSource::External { .. } => Err(Error::other(
             "external pivot sources are preserved but cannot be refreshed by the local engine yet",
         )),
-        PivotSource::Consolidation { .. } => Err(Error::other(
-            "consolidation pivot sources are preserved but cannot be refreshed by the local engine yet",
-        )),
+        PivotSource::Consolidation { ranges } => resolve_consolidation_source(workbook, ranges),
         PivotSource::Scenario { .. } => Err(Error::other(
             "scenario pivot sources are preserved but cannot be refreshed by the local engine yet",
         )),
@@ -646,6 +689,62 @@ fn resolve_source(
             "OLAP pivot sources are preserved but cannot be refreshed by the local engine yet",
         )),
     }
+}
+
+fn resolve_consolidation_source(
+    workbook: &Workbook,
+    ranges: &[duke_sheets_core::PivotSourceRange],
+) -> Result<ResolvedPivotSource> {
+    if ranges.is_empty() {
+        return Err(Error::other(
+            "consolidation pivot sources must contain at least one range",
+        ));
+    }
+
+    let mut resolved = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if range.range.row_count() == 0 || range.range.col_count() == 0 {
+            return Err(Error::other(
+                "consolidation pivot source range cannot be empty",
+            ));
+        }
+        let sheet_index = workbook
+            .sheet_index(&range.sheet)
+            .ok_or_else(|| Error::SheetNotFound(range.sheet.clone()))?;
+        let worksheet = workbook
+            .worksheet(sheet_index)
+            .ok_or_else(|| Error::SheetOutOfBounds(sheet_index, workbook.sheet_count()))?;
+        resolved.push(ResolvedSource {
+            kind: SourceCacheKind::ConsolidationRange,
+            sheet_index,
+            range: range.range,
+            source_name: Some(consolidation_range_cache_name(range)),
+            headers: None,
+            data_start_row: range.range.start.row.saturating_add(1),
+            data_end_row: if range.range.end.row > range.range.start.row {
+                Some(range.range.end.row)
+            } else {
+                None
+            },
+            mutation_count: worksheet.mutation_count(),
+            topology_generation: worksheet.topology_generation(),
+        });
+    }
+
+    Ok(ResolvedPivotSource::Consolidation(resolved))
+}
+
+fn consolidation_range_cache_name(range: &duke_sheets_core::PivotSourceRange) -> String {
+    let mut name = range.sheet.clone();
+    if let Some(display_name) = &range.name {
+        name.push('\u{1f}');
+        name.push_str(display_name);
+    }
+    for page_item in &range.page_items {
+        name.push('\u{1f}');
+        name.push_str(page_item);
+    }
+    name
 }
 
 fn find_table<'a>(workbook: &'a Workbook, name: &str) -> Option<(usize, &'a Worksheet, &'a Table)> {
@@ -696,7 +795,21 @@ struct SourceSnapshot {
 }
 
 impl SourceSnapshot {
-    fn from_resolved(worksheet: &Worksheet, source: &ResolvedSource) -> Result<Self> {
+    fn from_resolved(workbook: &Workbook, source: &ResolvedPivotSource) -> Result<Self> {
+        match source {
+            ResolvedPivotSource::Single(source) => {
+                let worksheet = workbook.worksheet(source.sheet_index).ok_or_else(|| {
+                    Error::SheetOutOfBounds(source.sheet_index, workbook.sheet_count())
+                })?;
+                Self::from_single_source(worksheet, source)
+            }
+            ResolvedPivotSource::Consolidation(sources) => {
+                Self::from_consolidation(workbook, sources)
+            }
+        }
+    }
+
+    fn from_single_source(worksheet: &Worksheet, source: &ResolvedSource) -> Result<Self> {
         let col_count = source.range.col_count() as usize;
         let headers = match &source.headers {
             Some(headers) => normalize_supplied_headers(headers, col_count),
@@ -710,6 +823,39 @@ impl SourceSnapshot {
             .unwrap_or(0);
         let columns = source_snapshot_columns(worksheet, source, col_count, row_count);
 
+        Ok(Self {
+            headers,
+            columns,
+            row_count,
+        })
+    }
+
+    fn from_consolidation(workbook: &Workbook, sources: &[ResolvedSource]) -> Result<Self> {
+        if sources.is_empty() {
+            return Err(Error::other(
+                "consolidation pivot sources must contain at least one range",
+            ));
+        }
+
+        let first = worksheet_for_source(workbook, &sources[0])?;
+        let headers = read_headers_from_sheet(first, sources[0].range)?;
+        validate_headers(&headers)?;
+
+        let col_count = headers.len();
+        let mut row_count = 0usize;
+        for source in sources {
+            let worksheet = worksheet_for_source(workbook, source)?;
+            let source_headers = read_headers_from_sheet(worksheet, source.range)?;
+            validate_headers(&source_headers)?;
+            if !same_headers(&headers, &source_headers) {
+                return Err(Error::other(
+                    "consolidation pivot source ranges must have matching headers",
+                ));
+            }
+            row_count += source_data_row_count(source);
+        }
+
+        let columns = consolidation_snapshot_columns(workbook, sources, col_count, row_count)?;
         Ok(Self {
             headers,
             columns,
@@ -821,6 +967,73 @@ impl SourceSnapshot {
             row_count: self.row_count,
         })
     }
+}
+
+fn worksheet_for_source<'a>(
+    workbook: &'a Workbook,
+    source: &ResolvedSource,
+) -> Result<&'a Worksheet> {
+    workbook
+        .worksheet(source.sheet_index)
+        .ok_or_else(|| Error::SheetOutOfBounds(source.sheet_index, workbook.sheet_count()))
+}
+
+fn same_headers(left: &[String], right: &[String]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.eq_ignore_ascii_case(right))
+}
+
+fn source_data_row_count(source: &ResolvedSource) -> usize {
+    source
+        .data_end_row
+        .map(|end_row| (end_row - source.data_start_row + 1) as usize)
+        .unwrap_or(0)
+}
+
+fn consolidation_snapshot_columns(
+    workbook: &Workbook,
+    sources: &[ResolvedSource],
+    col_count: usize,
+    row_count: usize,
+) -> Result<Vec<EncodedColumn>> {
+    #[cfg(feature = "parallel")]
+    {
+        if row_count >= PARALLEL_ROW_THRESHOLD {
+            return (0..col_count)
+                .into_par_iter()
+                .map(|col_offset| {
+                    consolidation_snapshot_column(workbook, sources, row_count, col_offset)
+                })
+                .collect();
+        }
+    }
+
+    (0..col_count)
+        .map(|col_offset| consolidation_snapshot_column(workbook, sources, row_count, col_offset))
+        .collect()
+}
+
+fn consolidation_snapshot_column(
+    workbook: &Workbook,
+    sources: &[ResolvedSource],
+    row_count: usize,
+    col_offset: usize,
+) -> Result<EncodedColumn> {
+    let mut column = EncodedColumn::with_capacity(row_count);
+    for source in sources {
+        let Some(data_end_row) = source.data_end_row else {
+            continue;
+        };
+        let worksheet = worksheet_for_source(workbook, source)?;
+        let source_col = source.range.start.col + col_offset as u16;
+        for row in source.data_start_row..=data_end_row {
+            column.push(effective_pivot_value(worksheet, row, source_col));
+        }
+    }
+    Ok(column)
 }
 
 fn source_snapshot_columns(
@@ -4629,8 +4842,8 @@ mod tests {
     use duke_sheets_core::{
         CellRange, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter,
         PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup,
-        PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSubtotal,
-        PivotTable, PivotValue, Table, TableColumn, Workbook,
+        PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
+        PivotSubtotal, PivotTable, PivotValue, Table, TableColumn, Workbook,
     };
     use pretty_assertions::assert_eq;
     use ssfmt::{date_serial::date_to_serial, DateSystem};
@@ -6500,6 +6713,124 @@ mod tests {
         let pivots = workbook.worksheet(0).unwrap().pivot_tables();
         assert_eq!(pivots[0].refresh_status, PivotRefreshStatus::Succeeded);
         assert_eq!(pivots[1].refresh_status, PivotRefreshStatus::External);
+    }
+
+    #[test]
+    fn refreshes_consolidation_source_ranges() {
+        let mut workbook = Workbook::new();
+        workbook.add_worksheet_with_name("WestData").unwrap();
+
+        {
+            let sheet = workbook.worksheet_mut(0).unwrap();
+            sheet.set_cell_value("A1", "Region").unwrap();
+            sheet.set_cell_value("B1", "Revenue").unwrap();
+            sheet.set_cell_value("A2", "East").unwrap();
+            sheet.set_cell_value("B2", 10.0).unwrap();
+            sheet.set_cell_value("A3", "East").unwrap();
+            sheet.set_cell_value("B3", 15.0).unwrap();
+        }
+        {
+            let sheet = workbook.worksheet_mut(1).unwrap();
+            sheet.set_cell_value("A1", "Region").unwrap();
+            sheet.set_cell_value("B1", "Revenue").unwrap();
+            sheet.set_cell_value("A2", "West").unwrap();
+            sheet.set_cell_value("B2", 20.0).unwrap();
+        }
+
+        let pivot = PivotTable::builder("ConsolidatedSales")
+            .source(PivotSource::Consolidation {
+                ranges: vec![
+                    PivotSourceRange::new("Sheet1", CellRange::parse("A1:B3").unwrap())
+                        .with_page_items(["Retail"]),
+                    PivotSourceRange::new("WestData", CellRange::parse("A1:B2").unwrap())
+                        .with_name("West sales"),
+                ],
+            })
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        workbook
+            .worksheet_mut(0)
+            .unwrap()
+            .add_pivot_table(pivot)
+            .unwrap();
+
+        let stats = workbook.refresh_pivots().unwrap();
+
+        assert_eq!(stats.pivot_count, 1);
+        assert_eq!(stats.pivots_refreshed, 1);
+        assert_eq!(stats.source_rows, 3);
+        assert_eq!(stats.cache_misses, 1);
+        assert_eq!(stats.cache_hits, 0);
+        assert_eq!(text(&workbook, "D1"), "Region");
+        assert_eq!(text(&workbook, "E1"), "Revenue");
+        assert_eq!(text(&workbook, "D2"), "East");
+        assert_eq!(number(&workbook, "E2"), 25.0);
+        assert_eq!(text(&workbook, "D3"), "West");
+        assert_eq!(number(&workbook, "E3"), 20.0);
+        assert_eq!(text(&workbook, "D4"), "Grand Total");
+        assert_eq!(number(&workbook, "E4"), 45.0);
+        assert_eq!(
+            workbook.worksheet(0).unwrap().pivot_tables()[0].refresh_status,
+            PivotRefreshStatus::Succeeded
+        );
+    }
+
+    #[test]
+    fn shared_consolidation_sources_hit_the_internal_snapshot_cache() {
+        let mut workbook = Workbook::new();
+        workbook.add_worksheet_with_name("WestData").unwrap();
+
+        {
+            let sheet = workbook.worksheet_mut(0).unwrap();
+            sheet.set_cell_value("A1", "Region").unwrap();
+            sheet.set_cell_value("B1", "Revenue").unwrap();
+            sheet.set_cell_value("A2", "East").unwrap();
+            sheet.set_cell_value("B2", 10.0).unwrap();
+        }
+        {
+            let sheet = workbook.worksheet_mut(1).unwrap();
+            sheet.set_cell_value("A1", "Region").unwrap();
+            sheet.set_cell_value("B1", "Revenue").unwrap();
+            sheet.set_cell_value("A2", "West").unwrap();
+            sheet.set_cell_value("B2", 20.0).unwrap();
+        }
+
+        let source = PivotSource::Consolidation {
+            ranges: vec![
+                PivotSourceRange::new("Sheet1", CellRange::parse("A1:B2").unwrap()),
+                PivotSourceRange::new("WestData", CellRange::parse("A1:B2").unwrap()),
+            ],
+        };
+        let pivot_a = PivotTable::builder("PivotA")
+            .source(source.clone())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        let pivot_b = PivotTable::builder("PivotB")
+            .source(source)
+            .target_address("G1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.add_pivot_table(pivot_a).unwrap();
+        sheet.add_pivot_table(pivot_b).unwrap();
+
+        let stats = workbook.refresh_pivots().unwrap();
+
+        assert_eq!(stats.cache_misses, 1);
+        assert_eq!(stats.cache_hits, 1);
+        assert_eq!(number(&workbook, "E2"), 10.0);
+        assert_eq!(number(&workbook, "H2"), 10.0);
     }
 
     #[test]
