@@ -3996,6 +3996,72 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_pivot_page_field_multi_select() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Enterprise").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "North").unwrap();
+        sheet.set_cell_value("B4", "Public").unwrap();
+        sheet.set_cell_value("C4", 15.0).unwrap();
+
+        let pivot = PivotTable::builder("SalesBySegments")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .page("Segment")
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .filter(PivotFilter::field_items("Segment", ["Retail", "Public"]))
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"axis="axisPage""#));
+        assert!(pivot_xml.contains(r#"multipleItemSelectionAllowed="1""#));
+        assert!(pivot_xml.contains(r#"<pageFields count="1"><pageField fld="1"/>"#));
+        assert!(pivot_xml.contains(r#"<item x="1" h="1"/>"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("SalesBySegments")
+            .unwrap();
+        assert_eq!(pivot.page_fields.len(), 1);
+        assert_eq!(pivot.page_fields[0].field.name, "Segment");
+        assert_eq!(pivot.filters.len(), 1);
+        match &pivot.filters[0] {
+            PivotFilter::FieldItems {
+                field,
+                allowed_items,
+            } => {
+                assert_eq!(field.name, "Segment");
+                assert_eq!(
+                    allowed_items
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                    vec!["Retail".to_string(), "Public".to_string()]
+                );
+            }
+            other => panic!("unexpected pivot filter: {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_writer_round_trips_pivot_show_as_percentages() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
