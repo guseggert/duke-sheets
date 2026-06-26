@@ -11,8 +11,8 @@ use crate::biff12::RecordIter;
 use crate::error::{XlsbError, XlsbResult};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
-    PivotCalculatedField, PivotField, PivotFilter, PivotMeasure, PivotRefreshStatus, PivotSource,
-    PivotStyle, PivotTable, PivotValue, PivotValuesAxis,
+    PivotCalculatedField, PivotField, PivotFieldRef, PivotFilter, PivotGrouping, PivotMeasure,
+    PivotRefreshStatus, PivotSource, PivotStyle, PivotTable, PivotValue, PivotValuesAxis,
 };
 
 #[derive(Debug, Clone)]
@@ -31,6 +31,7 @@ struct PivotCacheField {
     formula: Option<String>,
     formula_tokens: Option<Vec<u8>>,
     pname_field_indexes: Vec<usize>,
+    grouping: Option<PivotGrouping>,
     shared_items: Vec<PivotValue>,
 }
 
@@ -168,6 +169,11 @@ fn read_pivot_table<R: Read + Seek>(
             ))
         })
         .collect();
+    pivot.groupings = cache
+        .fields
+        .iter()
+        .filter_map(|field| field.grouping.clone())
+        .collect();
     pivot.filters = filters;
     pivot.layout = layout;
     pivot.style = style;
@@ -201,6 +207,7 @@ fn read_pivot_cache_definition<R: Read + Seek>(
     let mut current_field: Option<PivotCacheField> = None;
     let mut record_count = None;
     let mut refresh_on_load = false;
+    let mut in_shared_items = false;
 
     loop {
         let record = iter.next_record(&mut buf);
@@ -226,13 +233,26 @@ fn read_pivot_cache_definition<R: Read + Seek>(
             records::BRT_BEGIN_PCD_FIELD => {
                 current_field = Some(parse_cache_field(payload)?);
             }
+            records::BRT_BEGIN_PCD_SHARED_ITEMS => {
+                in_shared_items = true;
+            }
+            records::BRT_END_PCD_SHARED_ITEMS => {
+                in_shared_items = false;
+            }
             records::BRT_PCDI_MISSING
             | records::BRT_PCDI_BOOLEAN
             | records::BRT_PCDI_ERROR
             | records::BRT_PCDI_NUMBER
             | records::BRT_PCDI_STRING => {
+                if in_shared_items {
+                    if let Some(field) = &mut current_field {
+                        field.shared_items.push(parse_shared_item(typ, payload)?);
+                    }
+                }
+            }
+            records::BRT_BEGIN_PCDFG_RANGE => {
                 if let Some(field) = &mut current_field {
-                    field.shared_items.push(parse_shared_item(typ, payload)?);
+                    field.grouping = parse_pivot_group_range(&field.name, payload);
                 }
             }
             records::BRT_BEGIN_PNAME => {
@@ -448,6 +468,7 @@ fn parse_cache_field(payload: &[u8]) -> XlsbResult<PivotCacheField> {
             formula: None,
             formula_tokens: None,
             pname_field_indexes: Vec::new(),
+            grouping: None,
             shared_items: Vec::new(),
         });
     }
@@ -464,7 +485,41 @@ fn parse_cache_field(payload: &[u8]) -> XlsbResult<PivotCacheField> {
         formula: None,
         formula_tokens,
         pname_field_indexes: Vec::new(),
+        grouping: None,
         shared_items: Vec::new(),
+    })
+}
+
+fn parse_pivot_group_range(field_name: &str, payload: &[u8]) -> Option<PivotGrouping> {
+    if payload.len() < 26 {
+        return None;
+    }
+    let group_by = payload[0];
+    let flags = payload[1];
+    if group_by != 0x00 || flags & 0x04 != 0 {
+        return None;
+    }
+    let start_value = parser::read_f64(payload, 2);
+    let end_value = parser::read_f64(payload, 10);
+    let interval = parser::read_f64(payload, 18);
+    if !interval.is_finite() || interval <= 0.0 {
+        return None;
+    }
+    let start = if flags & 0x01 != 0 {
+        None
+    } else {
+        start_value.is_finite().then_some(start_value)
+    };
+    let end = if flags & 0x02 != 0 {
+        None
+    } else {
+        end_value.is_finite().then_some(end_value)
+    };
+    Some(PivotGrouping::Number {
+        field: PivotFieldRef::new(field_name.to_string()),
+        start,
+        end,
+        interval,
     })
 }
 

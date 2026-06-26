@@ -6,8 +6,8 @@ mod tests {
         BorderEdge, BorderLineStyle, Color, FillStyle, NumberFormat, Style,
     };
     use duke_sheets_core::{
-        CellRange, CellValue, PivotAggregate, PivotFilter, PivotStyle, PivotTable, PivotValuesAxis,
-        Workbook,
+        CellRange, CellValue, PivotAggregate, PivotFieldRef, PivotFilter, PivotGrouping,
+        PivotStyle, PivotTable, PivotValuesAxis, Workbook,
     };
 
     use crate::reader::XlsbReader;
@@ -168,6 +168,36 @@ mod tests {
             .row("Region")
             .calculated_field("Revenue", "=Units*Price")
             .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
+    fn add_numeric_grouped_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Age").unwrap();
+        ws.set_cell_value("B1", "Revenue").unwrap();
+        ws.set_cell_value("A2", 5.0).unwrap();
+        ws.set_cell_value("B2", 10.0).unwrap();
+        ws.set_cell_value("A3", 12.0).unwrap();
+        ws.set_cell_value("B3", 20.0).unwrap();
+        ws.set_cell_value("A4", 23.0).unwrap();
+        ws.set_cell_value("B4", 30.0).unwrap();
+        ws.set_cell_value("A5", 41.0).unwrap();
+        ws.set_cell_value("B5", 40.0).unwrap();
+
+        let pivot = PivotTable::builder("GroupedAges")
+            .source_range(CellRange::parse("A1:B5").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Age")
+            .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .grouping(PivotGrouping::Number {
+                field: PivotFieldRef::new("Age"),
+                start: Some(0.0),
+                end: Some(60.0),
+                interval: 10.0,
+            })
             .build()
             .unwrap();
         wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
@@ -533,6 +563,103 @@ mod tests {
         assert_eq!(pivot.measures.len(), 1);
         assert_eq!(pivot.measures[0].field.name, "Revenue");
         assert_eq!(pivot.measures[0].aggregate, PivotAggregate::Sum);
+    }
+
+    #[test]
+    fn semantic_pivot_tables_emit_xlsb_numeric_grouping_records() {
+        let mut wb = Workbook::new();
+        add_numeric_grouped_pivot(&mut wb);
+
+        let bytes = write_xlsb_bytes(&wb);
+        let cache_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotCache/pivotCacheDefinition1.bin",
+        ));
+        let record_types = cache_records
+            .iter()
+            .map(|(record_type, _)| *record_type)
+            .collect::<Vec<_>>();
+
+        assert!(record_types.contains(&crate::biff12::records::BRT_BEGIN_PCDF_GROUP));
+        assert!(record_types.contains(&crate::biff12::records::BRT_BEGIN_PCDFG_RANGE));
+        assert!(record_types.contains(&crate::biff12::records::BRT_BEGIN_PCDFG_ITEMS));
+        assert!(record_types.contains(&crate::biff12::records::BRT_END_PCDF_GROUP));
+
+        let group_payload = cache_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCDF_GROUP).then_some(payload)
+            })
+            .expect("BrtBeginPCDFGroup payload");
+        assert_eq!(
+            i32::from_le_bytes(group_payload[0..4].try_into().unwrap()),
+            -1,
+            "numeric grouping has no parent grouped field"
+        );
+        assert_eq!(
+            i32::from_le_bytes(group_payload[4..8].try_into().unwrap()),
+            0,
+            "numeric grouping base field is Age at cache field index 0"
+        );
+
+        let range_payload = cache_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCDFG_RANGE).then_some(payload)
+            })
+            .expect("BrtBeginPCDFGRange payload");
+        assert_eq!(range_payload[0], 0, "range grouping type");
+        assert_eq!(range_payload[1], 0, "explicit numeric start/end flags");
+        assert_eq!(
+            f64::from_le_bytes(range_payload[2..10].try_into().unwrap()),
+            0.0
+        );
+        assert_eq!(
+            f64::from_le_bytes(range_payload[10..18].try_into().unwrap()),
+            60.0
+        );
+        assert_eq!(
+            f64::from_le_bytes(range_payload[18..26].try_into().unwrap()),
+            10.0
+        );
+
+        let items_payload = cache_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCDFG_ITEMS).then_some(payload)
+            })
+            .expect("BrtBeginPCDFGItems payload");
+        assert_eq!(
+            u32::from_le_bytes(items_payload[0..4].try_into().unwrap()),
+            4,
+            "grouping item collection mirrors the Age cache dictionary"
+        );
+    }
+
+    #[test]
+    fn semantic_pivot_tables_round_trip_xlsb_numeric_grouping() {
+        let mut wb = Workbook::new();
+        add_numeric_grouped_pivot(&mut wb);
+
+        let wb2 = round_trip(&wb);
+        let pivot = &wb2.worksheet(0).unwrap().pivot_tables()[0];
+
+        assert_eq!(pivot.name, "GroupedAges");
+        assert_eq!(pivot.groupings.len(), 1);
+        match &pivot.groupings[0] {
+            PivotGrouping::Number {
+                field,
+                start,
+                end,
+                interval,
+            } => {
+                assert_eq!(field.name, "Age");
+                assert_eq!(*start, Some(0.0));
+                assert_eq!(*end, Some(60.0));
+                assert_eq!(*interval, 10.0);
+            }
+            other => panic!("unexpected grouping: {other:?}"),
+        }
     }
 
     #[test]
