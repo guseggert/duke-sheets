@@ -4238,6 +4238,59 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_olap_pivot_source_definition() {
+        let mut wb = Workbook::new();
+        wb.add_data_connection(WorkbookConnection::olap(10, "CubeSales"))
+            .unwrap();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        let pivot = PivotTable::builder("OlapSales")
+            .source(PivotSource::Olap {
+                connection_name: "CubeSales".to_string(),
+                cube: None,
+                command_text: None,
+            })
+            .target_address("A1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"<cacheSource type="olap" connectionId="10"/>"#));
+        assert!(cache_def.contains(r#"saveData="0""#));
+        assert!(cache_def.contains(r#"recordCount="0""#));
+        assert!(cache_def.contains(r#"<cacheField name="Region">"#));
+        assert!(cache_def.contains(r#"<cacheField name="Revenue">"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("OlapSales")
+            .unwrap();
+        assert!(matches!(
+            &pivot.source,
+            PivotSource::Olap {
+                connection_name,
+                cube: None,
+                command_text: None
+            } if connection_name == "CubeSales"
+        ));
+        assert_eq!(pivot.rows[0].field.name, "Region");
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+        assert!(matches!(
+            pivot.cache_info().map(|info| info.source_kind),
+            Some(duke_sheets_core::PivotCacheSourceKind::Olap)
+        ));
+    }
+
+    #[test]
     fn test_writer_round_trips_scenario_pivot_source_definition() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();

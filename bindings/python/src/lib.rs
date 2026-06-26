@@ -48,6 +48,8 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
     )?;
     let external_command_text =
         optional_string(dict, &["external_command_text", "externalCommandText"])?;
+    let olap_connection_name =
+        optional_string(dict, &["olap_connection_name", "olapConnectionName"])?;
     let consolidation_ranges_value =
         optional_any(dict, &["consolidation_ranges", "consolidationRanges"])?;
     if external_command_text.is_some() && external_connection_name.is_none() {
@@ -58,10 +60,11 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
     let source_count = usize::from(table_name.is_some())
         + usize::from(source_range.is_some())
         + usize::from(external_connection_name.is_some())
+        + usize::from(olap_connection_name.is_some())
         + usize::from(consolidation_ranges_value.is_some());
     if source_count != 1 {
         return Err(PyValueError::new_err(
-            "Pivot options require exactly one of table_name/tableName, source_range/sourceRange, external_connection_name/externalConnectionName, or consolidation_ranges/consolidationRanges",
+            "Pivot options require exactly one of table_name/tableName, source_range/sourceRange, external_connection_name/externalConnectionName, olap_connection_name/olapConnectionName, or consolidation_ranges/consolidationRanges",
         ));
     }
 
@@ -69,12 +72,13 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
         table_name,
         source_range,
         external_connection_name,
+        olap_connection_name,
         consolidation_ranges_value,
     ) {
-        (Some(table_name), None, None, None) => {
+        (Some(table_name), None, None, None, None) => {
             builder = builder.table_source(table_name);
         }
-        (None, Some(source_range), None, None) => {
+        (None, Some(source_range), None, None, None) => {
             let range = CellRange::parse(&source_range)
                 .map_err(|e| PyValueError::new_err(format!("Invalid pivot source range: {e}")))?;
             builder = if let Some(sheet) = optional_string(dict, &["source_sheet", "sourceSheet"])?
@@ -84,13 +88,20 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
                 builder.source_range(range)
             };
         }
-        (None, None, Some(connection_name), None) => {
+        (None, None, Some(connection_name), None, None) => {
             builder = builder.source(PivotSource::External {
                 connection_name,
                 command_text: external_command_text,
             });
         }
-        (None, None, None, Some(consolidation_ranges)) => {
+        (None, None, None, Some(connection_name), None) => {
+            builder = builder.source(PivotSource::Olap {
+                connection_name,
+                cube: None,
+                command_text: None,
+            });
+        }
+        (None, None, None, None, Some(consolidation_ranges)) => {
             builder = builder.source(PivotSource::Consolidation {
                 ranges: build_pivot_consolidation_ranges_from_py(&consolidation_ranges)?,
             });

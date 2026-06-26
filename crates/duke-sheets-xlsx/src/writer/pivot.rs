@@ -899,9 +899,6 @@ fn resolve_pivot_source(
                 save_data: true,
             })
         }
-        PivotSource::Olap { .. } => Err(XlsxError::InvalidFormat(
-            "XLSX OLAP pivot source writing is not supported yet".into(),
-        )),
         PivotSource::External {
             connection_name,
             command_text,
@@ -909,7 +906,9 @@ fn resolve_pivot_source(
             validate_external_pivot_connection(workbook, connection_name, command_text.as_deref())?;
             resolve_non_refreshable_pivot_source(pivot_sheet_index, &pivot.source, pivot)
         }
-        PivotSource::Consolidation { .. } | PivotSource::Scenario { .. } => {
+        PivotSource::Consolidation { .. }
+        | PivotSource::Scenario { .. }
+        | PivotSource::Olap { .. } => {
             resolve_non_refreshable_pivot_source(pivot_sheet_index, &pivot.source, pivot)
         }
     }
@@ -2678,10 +2677,14 @@ fn write_cache_source(
         PivotSource::Scenario { .. } => {
             w.write_event(Event::Empty(cache_source_tag("scenario")))?;
         }
-        PivotSource::Olap { .. } => {
-            return Err(XlsxError::InvalidFormat(
-                "XLSX OLAP pivot source writing is not supported yet".into(),
-            ));
+        PivotSource::Olap {
+            connection_name, ..
+        } => {
+            let mut cache_source = cache_source_tag("olap");
+            if let Some(connection_id) = connection_id_attr(workbook, connection_name)? {
+                cache_source.push_attribute(("connectionId", connection_id.as_str()));
+            }
+            w.write_event(Event::Empty(cache_source))?;
         }
     }
     Ok(())

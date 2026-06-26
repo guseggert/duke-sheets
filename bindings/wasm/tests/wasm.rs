@@ -448,6 +448,47 @@ fn test_non_database_connections_roundtrip_from_options() {
 }
 
 #[wasm_bindgen_test]
+fn test_pivot_olap_connection_roundtrips_from_options() {
+    let wb = Workbook::new();
+    let connection = make_options(&[
+        ("id", JsValue::from_f64(10.0)),
+        ("name", JsValue::from_str("CubeSales")),
+        ("kind", JsValue::from_str("olap")),
+        ("local", JsValue::TRUE),
+        ("localConnection", JsValue::from_str("CubeFile=cube.cub")),
+    ]);
+    wb.add_data_connection(connection).unwrap();
+
+    let sheet = wb.get_sheet(0).unwrap();
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("OlapSales")),
+        ("olapConnectionName", JsValue::from_str("CubeSales")),
+        ("target", JsValue::from_str("A1")),
+        ("rows", make_array(&[JsValue::from_str("Region")])),
+        ("measures", make_array(&[measure])),
+    ]);
+
+    sheet.add_pivot_table(pivot).unwrap();
+    assert_eq!(sheet.pivot_count().unwrap(), 1);
+
+    let bytes = wb.save_xlsx_bytes().unwrap();
+    let roundtrip = Workbook::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        roundtrip.data_connection_names(),
+        vec!["CubeSales".to_string()]
+    );
+    assert_eq!(
+        roundtrip.get_sheet(0).unwrap().pivot_table_names().unwrap(),
+        vec!["OlapSales".to_string()]
+    );
+}
+
+#[wasm_bindgen_test]
 fn test_pivot_consolidation_roundtrips_from_options() {
     let wb = Workbook::new();
     wb.add_sheet("North").unwrap();

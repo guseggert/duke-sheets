@@ -177,6 +177,7 @@ pub struct WasmPivotTableOptions {
     pub table_name: Option<String>,
     pub external_connection_name: Option<String>,
     pub external_command_text: Option<String>,
+    pub olap_connection_name: Option<String>,
     pub consolidation_ranges: Option<Vec<WasmPivotConsolidationRangeOptions>>,
     pub target: String,
     pub rows: Option<Vec<String>>,

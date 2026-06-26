@@ -288,6 +288,43 @@ class TestPivotTables:
         assert roundtrip.data_connection_count == 3
         assert roundtrip.data_connection_names == ["WebSales", "CsvSales", "CubeSales"]
 
+    def test_olap_pivot_roundtrip(self, temp_dir):
+        """Should save and read OLAP pivot source metadata."""
+        import os
+
+        import duke_sheets
+
+        path = os.path.join(temp_dir, "olap_pivot.xlsx")
+        wb = duke_sheets.Workbook()
+        wb.add_data_connection(
+            {
+                "id": 10,
+                "name": "CubeSales",
+                "kind": "olap",
+                "local": True,
+                "local_connection": "CubeFile=cube.cub",
+            }
+        )
+
+        sheet = wb.get_sheet(0)
+        sheet.add_pivot_table(
+            {
+                "name": "OlapSales",
+                "olap_connection_name": "CubeSales",
+                "target": "A1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+            }
+        )
+        assert sheet.pivot_count == 1
+
+        wb.save(path)
+        roundtrip = duke_sheets.Workbook.open(path)
+        assert roundtrip.data_connection_names == ["CubeSales"]
+        assert roundtrip.get_sheet(0).pivot_table_names == ["OlapSales"]
+
     def test_consolidation_pivot_roundtrip(self, temp_dir):
         """Should save and read consolidation pivot source metadata."""
         import os

@@ -1495,6 +1495,7 @@ export interface JsPivotTableOptions {
   tableName?: string
   externalConnectionName?: string
   externalCommandText?: string
+  olapConnectionName?: string
   consolidationRanges?: Array<JsPivotConsolidationRangeOptions>
   target: string
   rows?: Array<string>

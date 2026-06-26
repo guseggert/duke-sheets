@@ -434,6 +434,7 @@ pub struct JsPivotTableOptions {
     pub table_name: Option<String>,
     pub external_connection_name: Option<String>,
     pub external_command_text: Option<String>,
+    pub olap_connection_name: Option<String>,
     pub consolidation_ranges: Option<Vec<JsPivotConsolidationRangeOptions>>,
     pub target: String,
     pub rows: Option<Vec<String>>,
@@ -518,10 +519,11 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
     let source_count = usize::from(options.table_name.is_some())
         + usize::from(options.source_range.is_some())
         + usize::from(options.external_connection_name.is_some())
+        + usize::from(options.olap_connection_name.is_some())
         + usize::from(options.consolidation_ranges.is_some());
     if source_count != 1 {
         return Err(napi::Error::from_reason(
-            "Pivot options require exactly one of tableName, sourceRange, externalConnectionName, or consolidationRanges",
+            "Pivot options require exactly one of tableName, sourceRange, externalConnectionName, olapConnectionName, or consolidationRanges",
         ));
     }
 
@@ -529,12 +531,13 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
         options.table_name,
         options.source_range,
         options.external_connection_name,
+        options.olap_connection_name,
         options.consolidation_ranges,
     ) {
-        (Some(table_name), None, None, None) => {
+        (Some(table_name), None, None, None, None) => {
             builder = builder.table_source(table_name);
         }
-        (None, Some(source_range), None, None) => {
+        (None, Some(source_range), None, None, None) => {
             let range = CellRange::parse(&source_range).map_err(|e| {
                 napi::Error::from_reason(format!("Invalid pivot source range: {e}"))
             })?;
@@ -544,13 +547,20 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
                 builder.source_range(range)
             };
         }
-        (None, None, Some(connection_name), None) => {
+        (None, None, Some(connection_name), None, None) => {
             builder = builder.source(PivotSource::External {
                 connection_name,
                 command_text: options.external_command_text,
             });
         }
-        (None, None, None, Some(ranges)) => {
+        (None, None, None, Some(connection_name), None) => {
+            builder = builder.source(PivotSource::Olap {
+                connection_name,
+                cube: None,
+                command_text: None,
+            });
+        }
+        (None, None, None, None, Some(ranges)) => {
             builder = builder.source(PivotSource::Consolidation {
                 ranges: build_pivot_consolidation_ranges_from_js(ranges)?,
             });

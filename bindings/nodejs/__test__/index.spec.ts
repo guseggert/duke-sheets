@@ -268,6 +268,40 @@ describe("PivotTables", () => {
     }
   });
 
+  it("adds an OLAP pivot backed by an OLAP connection", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
+    const filePath = path.join(tmpDir, "olap-pivot.xlsx");
+
+    try {
+      const wb = new Workbook();
+      wb.addDataConnection({
+        id: 10,
+        name: "CubeSales",
+        kind: "olap",
+        local: true,
+        localConnection: "CubeFile=cube.cub",
+      });
+
+      const sheet = wb.getSheet(0);
+      sheet.addPivotTable({
+        name: "OlapSales",
+        olapConnectionName: "CubeSales",
+        target: "A1",
+        rows: ["Region"],
+        measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+      });
+
+      expect(sheet.pivotCount).toBe(1);
+      wb.save(filePath);
+
+      const roundtrip = Workbook.open(filePath);
+      expect(roundtrip.dataConnectionNames).toEqual(["CubeSales"]);
+      expect(roundtrip.getSheet(0).pivotTableNames).toEqual(["OlapSales"]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("adds a consolidation pivot with page labels", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
     const filePath = path.join(tmpDir, "consolidation-pivot.xlsx");
