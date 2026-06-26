@@ -18,7 +18,7 @@ use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotDateGroupUnit, PivotField,
     PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
     PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs,
-    PivotSort, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue, WorkbookConnection,
 };
 
 mod types;
@@ -41,11 +41,31 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
 
     let table_name = optional_string(dict, &["table_name", "tableName"])?;
     let source_range = optional_string(dict, &["source_range", "sourceRange"])?;
-    match (table_name, source_range) {
-        (Some(table_name), None) => {
+    let external_connection_name = optional_string(
+        dict,
+        &["external_connection_name", "externalConnectionName"],
+    )?;
+    let external_command_text =
+        optional_string(dict, &["external_command_text", "externalCommandText"])?;
+    if external_command_text.is_some() && external_connection_name.is_none() {
+        return Err(PyValueError::new_err(
+            "Pivot options require external_connection_name/externalConnectionName when external_command_text/externalCommandText is set",
+        ));
+    }
+    let source_count = usize::from(table_name.is_some())
+        + usize::from(source_range.is_some())
+        + usize::from(external_connection_name.is_some());
+    if source_count != 1 {
+        return Err(PyValueError::new_err(
+            "Pivot options require exactly one of table_name/tableName, source_range/sourceRange, or external_connection_name/externalConnectionName",
+        ));
+    }
+
+    match (table_name, source_range, external_connection_name) {
+        (Some(table_name), None, None) => {
             builder = builder.table_source(table_name);
         }
-        (None, Some(source_range)) => {
+        (None, Some(source_range), None) => {
             let range = CellRange::parse(&source_range)
                 .map_err(|e| PyValueError::new_err(format!("Invalid pivot source range: {e}")))?;
             builder = if let Some(sheet) = optional_string(dict, &["source_sheet", "sourceSheet"])?
@@ -55,16 +75,13 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
                 builder.source_range(range)
             };
         }
-        (Some(_), Some(_)) => {
-            return Err(PyValueError::new_err(
-                "Pivot options must use either table_name/sourceRange or source_range/sourceRange, not both",
-            ));
+        (None, None, Some(connection_name)) => {
+            builder = builder.source(PivotSource::External {
+                connection_name,
+                command_text: external_command_text,
+            });
         }
-        (None, None) => {
-            return Err(PyValueError::new_err(
-                "Pivot options require table_name/tableName or source_range/sourceRange",
-            ));
-        }
+        _ => unreachable!("source_count validation accepts exactly one source"),
     }
 
     builder = builder
@@ -669,6 +686,34 @@ fn pivot_refresh_stats_to_py(
     dict.set_item("cache_hits", stats.cache_hits)?;
     dict.set_item("cache_misses", stats.cache_misses)?;
     Ok(dict.into_any().unbind())
+}
+
+fn build_workbook_connection_from_py(options: &Bound<'_, PyAny>) -> PyResult<WorkbookConnection> {
+    let dict = options
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("data connection options must be a dict"))?;
+    let mut connection = WorkbookConnection::database(
+        optional_u32(dict, &["id"])?
+            .ok_or_else(|| PyValueError::new_err("data connection options require id"))?,
+        required_string(dict, &["name"])?,
+        required_string(dict, &["connection"])?,
+    );
+    if let Some(command) = optional_string(dict, &["command"])? {
+        connection = connection.with_command(command);
+    }
+    if let Some(command_type) = optional_u32(dict, &["command_type", "commandType"])? {
+        connection = connection.with_command_type(command_type);
+    }
+    if let Some(refresh_on_load) = optional_bool(dict, &["refresh_on_load", "refreshOnLoad"])? {
+        connection = connection.with_refresh_on_load(refresh_on_load);
+    }
+    if let Some(background) = optional_bool(dict, &["background"])? {
+        connection = connection.with_background(background);
+    }
+    if let Some(save_data) = optional_bool(dict, &["save_data", "saveData"])? {
+        connection = connection.with_save_data(save_data);
+    }
+    Ok(connection)
 }
 
 fn parse_encryption_profile(
@@ -1602,6 +1647,31 @@ impl PyWorkbook {
         let mut wb = self.inner.write().map_err(to_py_err)?;
         let stats = wb.refresh_pivots().map_err(to_py_err)?;
         pivot_refresh_stats_to_py(py, stats)
+    }
+
+    /// Add a workbook-level database connection.
+    fn add_data_connection(&self, options: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut wb = self.inner.write().map_err(to_py_err)?;
+        wb.add_data_connection(build_workbook_connection_from_py(options)?)
+            .map_err(to_py_err)
+    }
+
+    /// Number of workbook-level data connections.
+    #[getter]
+    fn data_connection_count(&self) -> PyResult<usize> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb.data_connections().len())
+    }
+
+    /// Workbook-level data connection names.
+    #[getter]
+    fn data_connection_names(&self) -> PyResult<Vec<String>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb
+            .data_connections()
+            .iter()
+            .map(|connection| connection.name.clone())
+            .collect())
     }
 
     /// Define a named range

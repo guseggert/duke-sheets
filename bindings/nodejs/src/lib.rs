@@ -19,8 +19,8 @@ use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
     PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
     PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
-    PivotShowAs, PivotSort, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
-    Workbook as CoreWorkbook,
+    PivotShowAs, PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    Workbook as CoreWorkbook, WorkbookConnection,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -424,6 +424,8 @@ pub struct JsPivotTableOptions {
     pub source_range: Option<String>,
     pub source_sheet: Option<String>,
     pub table_name: Option<String>,
+    pub external_connection_name: Option<String>,
+    pub external_command_text: Option<String>,
     pub target: String,
     pub rows: Option<Vec<String>>,
     pub columns: Option<Vec<String>>,
@@ -439,6 +441,18 @@ pub struct JsPivotTableOptions {
     pub layout: Option<JsPivotLayoutOptions>,
     pub style: Option<JsPivotStyleOptions>,
     pub overwrite_policy: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsWorkbookConnectionOptions {
+    pub id: u32,
+    pub name: String,
+    pub connection: String,
+    pub command: Option<String>,
+    pub command_type: Option<u32>,
+    pub refresh_on_load: Option<bool>,
+    pub background: Option<bool>,
+    pub save_data: Option<bool>,
 }
 
 #[napi(object)]
@@ -468,11 +482,29 @@ impl TryFrom<duke_sheets::PivotRefreshStats> for JsPivotRefreshStats {
 
 fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable> {
     let mut builder = PivotTable::builder(options.name);
-    match (options.table_name, options.source_range) {
-        (Some(table_name), None) => {
+    if options.external_command_text.is_some() && options.external_connection_name.is_none() {
+        return Err(napi::Error::from_reason(
+            "Pivot options require externalConnectionName when externalCommandText is set",
+        ));
+    }
+    let source_count = usize::from(options.table_name.is_some())
+        + usize::from(options.source_range.is_some())
+        + usize::from(options.external_connection_name.is_some());
+    if source_count != 1 {
+        return Err(napi::Error::from_reason(
+            "Pivot options require exactly one of tableName, sourceRange, or externalConnectionName",
+        ));
+    }
+
+    match (
+        options.table_name,
+        options.source_range,
+        options.external_connection_name,
+    ) {
+        (Some(table_name), None, None) => {
             builder = builder.table_source(table_name);
         }
-        (None, Some(source_range)) => {
+        (None, Some(source_range), None) => {
             let range = CellRange::parse(&source_range).map_err(|e| {
                 napi::Error::from_reason(format!("Invalid pivot source range: {e}"))
             })?;
@@ -482,16 +514,13 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
                 builder.source_range(range)
             };
         }
-        (Some(_), Some(_)) => {
-            return Err(napi::Error::from_reason(
-                "Pivot options must use either tableName or sourceRange, not both",
-            ));
+        (None, None, Some(connection_name)) => {
+            builder = builder.source(PivotSource::External {
+                connection_name,
+                command_text: options.external_command_text,
+            });
         }
-        (None, None) => {
-            return Err(napi::Error::from_reason(
-                "Pivot options require tableName or sourceRange",
-            ));
-        }
+        _ => unreachable!("source_count validation accepts exactly one source"),
     }
 
     builder = builder
@@ -541,6 +570,26 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
     }
 
     builder.build().map_err(to_napi_err)
+}
+
+fn build_workbook_connection_from_js(options: JsWorkbookConnectionOptions) -> WorkbookConnection {
+    let mut connection = WorkbookConnection::database(options.id, options.name, options.connection);
+    if let Some(command) = options.command {
+        connection = connection.with_command(command);
+    }
+    if let Some(command_type) = options.command_type {
+        connection = connection.with_command_type(command_type);
+    }
+    if let Some(refresh_on_load) = options.refresh_on_load {
+        connection = connection.with_refresh_on_load(refresh_on_load);
+    }
+    if let Some(background) = options.background {
+        connection = connection.with_background(background);
+    }
+    if let Some(save_data) = options.save_data {
+        connection = connection.with_save_data(save_data);
+    }
+    connection
 }
 
 fn build_pivot_field_from_js(options: JsPivotFieldOptions) -> Result<PivotField> {
@@ -1619,6 +1668,38 @@ impl Workbook {
             wb.refresh_pivots()
                 .map_err(to_napi_err)
                 .and_then(JsPivotRefreshStats::try_from)
+        })
+    }
+
+    /// Add a workbook-level database connection.
+    #[napi]
+    pub fn add_data_connection(&self, options: JsWorkbookConnectionOptions) -> Result<()> {
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            wb.add_data_connection(build_workbook_connection_from_js(options))
+                .map_err(to_napi_err)
+        })
+    }
+
+    /// Number of workbook-level data connections.
+    #[napi(getter)]
+    pub fn data_connection_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            u32::try_from(wb.data_connections().len()).map_err(to_napi_err)
+        })
+    }
+
+    /// Workbook-level data connection names.
+    #[napi(getter)]
+    pub fn data_connection_names(&self) -> Result<Vec<String>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .data_connections()
+                .iter()
+                .map(|connection| connection.name.clone())
+                .collect())
         })
     }
 

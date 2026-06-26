@@ -189,6 +189,8 @@ export interface JsPivotTableOptions {
   sourceRange?: string
   sourceSheet?: string
   tableName?: string
+  externalConnectionName?: string
+  externalCommandText?: string
   target: string
   rows?: string[]
   columns?: string[]
@@ -206,6 +208,17 @@ export interface JsPivotTableOptions {
   overwritePolicy?: 'clearOwnedRange' | 'clear_owned_range' | 'clear' | 'overwrite' | 'failOnOccupied' | 'fail_on_occupied'
 }
 
+export interface JsWorkbookConnectionOptions {
+  id: number
+  name: string
+  connection: string
+  command?: string
+  commandType?: number
+  refreshOnLoad?: boolean
+  background?: boolean
+  saveData?: boolean
+}
+
 export interface JsPivotRefreshStats {
   pivotCount: number
   pivotsRefreshed: number
@@ -218,6 +231,15 @@ export interface JsPivotRefreshStats {
 // Augment the generated Worksheet class with JS-side methods
 declare module './generated' {
   interface Workbook {
+    /** Number of workbook-level data connections. */
+    readonly dataConnectionCount: number
+
+    /** Workbook-level data connection names. */
+    readonly dataConnectionNames: string[]
+
+    /** Add a workbook-level database connection. */
+    addDataConnection(options: JsWorkbookConnectionOptions): void
+
     /** Refresh all pivot tables in the workbook. */
     refreshPivots(): JsPivotRefreshStats
   }

@@ -202,6 +202,47 @@ class TestNamedRanges:
 class TestPivotTables:
     """Test pivot table authoring through the Python binding."""
 
+    def test_external_pivot_database_connection_roundtrip(self, temp_dir):
+        """Should save and read external pivot database connection metadata."""
+        import os
+
+        import duke_sheets
+
+        path = os.path.join(temp_dir, "external_pivot.xlsx")
+        wb = duke_sheets.Workbook()
+        wb.add_data_connection(
+            {
+                "id": 7,
+                "name": "SalesConnection",
+                "connection": "Provider=MSDASQL;DSN=Sales;",
+                "command": "select Region, Revenue from Sales",
+                "refresh_on_load": True,
+            }
+        )
+        assert wb.data_connection_count == 1
+        assert wb.data_connection_names == ["SalesConnection"]
+
+        sheet = wb.get_sheet(0)
+        sheet.add_pivot_table(
+            {
+                "name": "ExternalSales",
+                "external_connection_name": "SalesConnection",
+                "external_command_text": "select Region, Revenue from Sales",
+                "target": "A1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+            }
+        )
+        assert sheet.pivot_count == 1
+
+        wb.save(path)
+        roundtrip = duke_sheets.Workbook.open(path)
+        assert roundtrip.data_connection_count == 1
+        assert roundtrip.data_connection_names == ["SalesConnection"]
+        assert roundtrip.get_sheet(0).pivot_table_names == ["ExternalSales"]
+
     def test_refresh_manual_grouping_from_options(self):
         """Should refresh a manually grouped pivot from semantic options."""
         import duke_sheets

@@ -194,6 +194,12 @@ export declare class Workbook {
   calculate(options?: JsCalculationOptions | undefined | null): CalculationStats
   /** Refresh all pivot tables in the workbook. */
   refreshPivots(): JsPivotRefreshStats
+  /** Add a workbook-level database connection. */
+  addDataConnection(options: JsWorkbookConnectionOptions): void
+  /** Number of workbook-level data connections. */
+  get dataConnectionCount(): number
+  /** Workbook-level data connection names. */
+  get dataConnectionNames(): Array<string>
   /**
    * Define a named range
    *
@@ -1480,6 +1486,8 @@ export interface JsPivotTableOptions {
   sourceRange?: string
   sourceSheet?: string
   tableName?: string
+  externalConnectionName?: string
+  externalCommandText?: string
   target: string
   rows?: Array<string>
   columns?: Array<string>
@@ -1708,6 +1716,17 @@ export interface JsView3D {
   heightPercent?: number
   perspective?: number
   rightAngleAxes?: boolean
+}
+
+export interface JsWorkbookConnectionOptions {
+  id: number
+  name: string
+  connection: string
+  command?: string
+  commandType?: number
+  refreshOnLoad?: boolean
+  background?: boolean
+  saveData?: boolean
 }
 
 /** Workbook-level settings. */

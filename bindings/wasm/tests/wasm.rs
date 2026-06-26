@@ -335,6 +335,66 @@ fn make_array(values: &[JsValue]) -> JsValue {
 }
 
 #[wasm_bindgen_test]
+fn test_pivot_external_connection_roundtrips_from_options() {
+    let wb = Workbook::new();
+    let connection = make_options(&[
+        ("id", JsValue::from_f64(7.0)),
+        ("name", JsValue::from_str("SalesConnection")),
+        (
+            "connection",
+            JsValue::from_str("Provider=MSDASQL;DSN=Sales;"),
+        ),
+        (
+            "command",
+            JsValue::from_str("select Region, Revenue from Sales"),
+        ),
+        ("refreshOnLoad", JsValue::TRUE),
+    ]);
+    wb.add_data_connection(connection).unwrap();
+    assert_eq!(wb.data_connection_count(), 1);
+    assert_eq!(
+        wb.data_connection_names(),
+        vec!["SalesConnection".to_string()]
+    );
+
+    let sheet = wb.get_sheet(0).unwrap();
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("ExternalSales")),
+        (
+            "externalConnectionName",
+            JsValue::from_str("SalesConnection"),
+        ),
+        (
+            "externalCommandText",
+            JsValue::from_str("select Region, Revenue from Sales"),
+        ),
+        ("target", JsValue::from_str("A1")),
+        ("rows", make_array(&[JsValue::from_str("Region")])),
+        ("measures", make_array(&[measure])),
+    ]);
+
+    sheet.add_pivot_table(pivot).unwrap();
+    assert_eq!(sheet.pivot_count().unwrap(), 1);
+
+    let bytes = wb.save_xlsx_bytes().unwrap();
+    let roundtrip = Workbook::from_bytes(&bytes).unwrap();
+    assert_eq!(roundtrip.data_connection_count(), 1);
+    assert_eq!(
+        roundtrip.data_connection_names(),
+        vec!["SalesConnection".to_string()]
+    );
+    assert_eq!(
+        roundtrip.get_sheet(0).unwrap().pivot_table_names().unwrap(),
+        vec!["ExternalSales".to_string()]
+    );
+}
+
+#[wasm_bindgen_test]
 fn test_pivot_manual_grouping_refreshes_from_options() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();

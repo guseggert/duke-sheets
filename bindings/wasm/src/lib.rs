@@ -12,8 +12,8 @@ use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
     PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
     PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
-    PivotShowAs, PivotSort, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
-    Workbook as CoreWorkbook,
+    PivotShowAs, PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    Workbook as CoreWorkbook, WorkbookConnection,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -358,6 +358,8 @@ export interface PivotTableOptions {
   sourceRange?: string;
   sourceSheet?: string;
   tableName?: string;
+  externalConnectionName?: string;
+  externalCommandText?: string;
   target: string;
   rows?: string[];
   columns?: string[];
@@ -375,6 +377,17 @@ export interface PivotTableOptions {
   overwritePolicy?: "clearOwnedRange" | "clear_owned_range" | "clear" | "overwrite" | "failOnOccupied" | "fail_on_occupied";
 }
 
+export interface DataConnectionOptions {
+  id: number;
+  name: string;
+  connection: string;
+  command?: string;
+  commandType?: number;
+  refreshOnLoad?: boolean;
+  background?: boolean;
+  saveData?: boolean;
+}
+
 export interface PivotRefreshStats {
   pivotCount: number;
   pivotsRefreshed: number;
@@ -385,6 +398,9 @@ export interface PivotRefreshStats {
 }
 
 export interface Workbook {
+  readonly dataConnectionCount: number;
+  readonly dataConnectionNames: string[];
+  addDataConnection(options: DataConnectionOptions): void;
   refreshPivots(): PivotRefreshStats;
 }
 
@@ -447,11 +463,29 @@ pub(crate) fn to_js_value<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
 
 fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTable, JsError> {
     let mut builder = PivotTable::builder(options.name);
-    match (options.table_name, options.source_range) {
-        (Some(table_name), None) => {
+    if options.external_command_text.is_some() && options.external_connection_name.is_none() {
+        return Err(JsError::new(
+            "Pivot options require externalConnectionName when externalCommandText is set",
+        ));
+    }
+    let source_count = usize::from(options.table_name.is_some())
+        + usize::from(options.source_range.is_some())
+        + usize::from(options.external_connection_name.is_some());
+    if source_count != 1 {
+        return Err(JsError::new(
+            "Pivot options require exactly one of tableName, sourceRange, or externalConnectionName",
+        ));
+    }
+
+    match (
+        options.table_name,
+        options.source_range,
+        options.external_connection_name,
+    ) {
+        (Some(table_name), None, None) => {
             builder = builder.table_source(table_name);
         }
-        (None, Some(source_range)) => {
+        (None, Some(source_range), None) => {
             let range = CellRange::parse(&source_range)
                 .map_err(|e| JsError::new(&format!("Invalid pivot source range: {e}")))?;
             builder = if let Some(sheet) = options.source_sheet {
@@ -460,16 +494,13 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
                 builder.source_range(range)
             };
         }
-        (Some(_), Some(_)) => {
-            return Err(JsError::new(
-                "Pivot options must use either tableName or sourceRange, not both",
-            ));
+        (None, None, Some(connection_name)) => {
+            builder = builder.source(PivotSource::External {
+                connection_name,
+                command_text: options.external_command_text,
+            });
         }
-        (None, None) => {
-            return Err(JsError::new(
-                "Pivot options require tableName or sourceRange",
-            ));
-        }
+        _ => unreachable!("source_count validation accepts exactly one source"),
     }
 
     builder = builder
@@ -519,6 +550,28 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
     }
 
     builder.build().map_err(to_js_error)
+}
+
+fn build_workbook_connection_from_wasm(
+    options: WasmWorkbookConnectionOptions,
+) -> WorkbookConnection {
+    let mut connection = WorkbookConnection::database(options.id, options.name, options.connection);
+    if let Some(command) = options.command {
+        connection = connection.with_command(command);
+    }
+    if let Some(command_type) = options.command_type {
+        connection = connection.with_command_type(command_type);
+    }
+    if let Some(refresh_on_load) = options.refresh_on_load {
+        connection = connection.with_refresh_on_load(refresh_on_load);
+    }
+    if let Some(background) = options.background {
+        connection = connection.with_background(background);
+    }
+    if let Some(save_data) = options.save_data {
+        connection = connection.with_save_data(save_data);
+    }
+    connection
 }
 
 fn build_pivot_field_from_wasm(options: WasmPivotFieldOptions) -> Result<PivotField, JsError> {
@@ -1624,6 +1677,30 @@ impl Workbook {
         let mut wb = self.inner.borrow_mut();
         let stats = wb.refresh_pivots().map_err(to_js_error)?;
         to_js_value(&WasmPivotRefreshStats::from(stats))
+    }
+
+    #[wasm_bindgen(js_name = addDataConnection)]
+    pub fn add_data_connection(&self, options: JsValue) -> Result<(), JsError> {
+        let options: WasmWorkbookConnectionOptions =
+            serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
+        let mut wb = self.inner.borrow_mut();
+        wb.add_data_connection(build_workbook_connection_from_wasm(options))
+            .map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(getter, js_name = dataConnectionCount)]
+    pub fn data_connection_count(&self) -> usize {
+        let wb = self.inner.borrow();
+        wb.data_connections().len()
+    }
+
+    #[wasm_bindgen(getter, js_name = dataConnectionNames)]
+    pub fn data_connection_names(&self) -> Vec<String> {
+        let wb = self.inner.borrow();
+        wb.data_connections()
+            .iter()
+            .map(|connection| connection.name.clone())
+            .collect()
     }
 
     #[wasm_bindgen(js_name = defineName)]

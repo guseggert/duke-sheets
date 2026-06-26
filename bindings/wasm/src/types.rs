@@ -166,6 +166,8 @@ pub struct WasmPivotTableOptions {
     pub source_range: Option<String>,
     pub source_sheet: Option<String>,
     pub table_name: Option<String>,
+    pub external_connection_name: Option<String>,
+    pub external_command_text: Option<String>,
     pub target: String,
     pub rows: Option<Vec<String>>,
     pub columns: Option<Vec<String>>,
@@ -181,6 +183,19 @@ pub struct WasmPivotTableOptions {
     pub layout: Option<WasmPivotLayoutOptions>,
     pub style: Option<WasmPivotStyleOptions>,
     pub overwrite_policy: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookConnectionOptions {
+    pub id: u32,
+    pub name: String,
+    pub connection: String,
+    pub command: Option<String>,
+    pub command_type: Option<u32>,
+    pub refresh_on_load: Option<bool>,
+    pub background: Option<bool>,
+    pub save_data: Option<bool>,
 }
 
 #[derive(Serialize)]

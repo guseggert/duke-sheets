@@ -189,6 +189,43 @@ describe("Workbook", () => {
 });
 
 describe("PivotTables", () => {
+  it("adds an external pivot backed by a database connection", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
+    const filePath = path.join(tmpDir, "external-pivot.xlsx");
+
+    try {
+      const wb = new Workbook();
+      wb.addDataConnection({
+        id: 7,
+        name: "SalesConnection",
+        connection: "Provider=MSDASQL;DSN=Sales;",
+        command: "select Region, Revenue from Sales",
+        refreshOnLoad: true,
+      });
+      expect(wb.dataConnectionCount).toBe(1);
+      expect(wb.dataConnectionNames).toEqual(["SalesConnection"]);
+
+      const sheet = wb.getSheet(0);
+      sheet.addPivotTable({
+        name: "ExternalSales",
+        externalConnectionName: "SalesConnection",
+        externalCommandText: "select Region, Revenue from Sales",
+        target: "A1",
+        rows: ["Region"],
+        measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+      });
+      expect(sheet.pivotCount).toBe(1);
+
+      wb.save(filePath);
+      const roundtrip = Workbook.open(filePath);
+      expect(roundtrip.dataConnectionCount).toBe(1);
+      expect(roundtrip.dataConnectionNames).toEqual(["SalesConnection"]);
+      expect(roundtrip.getSheet(0).pivotTableNames).toEqual(["ExternalSales"]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes a manually grouped pivot from semantic options", () => {
     const wb = new Workbook();
     const sheet = wb.getSheet(0);
