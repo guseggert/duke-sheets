@@ -60,6 +60,9 @@ pub struct Request {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", content = "params")]
 pub enum Command {
+    /// Cheap health check that does not create or touch Excel.Application.
+    Ping,
+
     /// Initialize COM and create the Excel.Application instance.
     /// The Application is stored as handle 0.
     Init,
@@ -335,6 +338,19 @@ impl std::fmt::Display for CellValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ping_serialization() {
+        let req = Request {
+            id: 1,
+            command: Command::Ping,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, r#"{"id":1,"cmd":"Ping"}"#);
+
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, 1);
+    }
 
     #[test]
     fn test_get_serialization() {
