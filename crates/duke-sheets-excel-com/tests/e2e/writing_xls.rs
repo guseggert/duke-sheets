@@ -80,6 +80,35 @@ fn xls_average_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xls_column_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Quarter").unwrap();
+    ws.set_cell_value("C1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", "Q1").unwrap();
+    ws.set_cell_value("C2", 10.0).unwrap();
+    ws.set_cell_value("A3", "East").unwrap();
+    ws.set_cell_value("B3", "Q2").unwrap();
+    ws.set_cell_value("C3", 20.0).unwrap();
+    ws.set_cell_value("A4", "West").unwrap();
+    ws.set_cell_value("B4", "Q1").unwrap();
+    ws.set_cell_value("C4", 30.0).unwrap();
+
+    let pivot = PivotTable::builder("RevenueByQuarter")
+        .source_range(CellRange::parse("A1:C4").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Region")
+        .column("Quarter")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xls_with_native_pivot_table() {
@@ -107,6 +136,30 @@ fn excel_preserves_xls_average_pivot_data_field() {
     assert!(
         String::from_utf8_lossy(&sxdi).contains("Average Revenue"),
         "Excel should preserve the data-field caption"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_pivot_column_axis() {
+    let (_result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_column_pivot_workbook());
+    let workbook = xls_cfb_stream(&excel_bytes, "/Workbook");
+    let records = xls_record_payloads(&workbook);
+    let sxvd_axes = records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00B1).then(|| u16::from_le_bytes(payload[0..2].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sxvd_axes, vec![0x0001, 0x0002, 0x0008]);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|(record_type, _)| *record_type == 0x00B4)
+            .count(),
+        2,
+        "Excel should preserve row and column axis declarations"
     );
 }
 
@@ -339,32 +392,32 @@ const FUNCTION_ARITY_FORMULAS: &[(&str, &str, f64)] = &[
     // Additional verified fixed-arity functions (see commit "Expand XLS
     // fixed-arity coverage" for the Excel-COM probe that confirmed each
     // one emits PtgFunc rather than PtgFuncVar).
-    ("B21", "=POWER(A1,2)", 16.0),    // iftab=337
-    ("B22", "=CHAR(65)", 0.0),        // iftab=111, cached not asserted exactly
-    ("B23", "=YEAR(A5)", 2020.0),     // iftab=69
-    ("B24", "=MONTH(A5)", 1.0),       // iftab=68
-    ("B25", "=DAY(A5)", 1.0),         // iftab=67
-    ("B26", "=DATE(2020,1,1)", 0.0),  // iftab=65
-    ("B27", "=DEGREES(A1)", 0.0),     // iftab=343
-    ("B28", "=RADIANS(A1)", 0.0),     // iftab=342
-    ("B29", "=ISBLANK(A1)", 0.0),     // iftab=129
-    ("B30", "=ISTEXT(A3)", 1.0),      // iftab=127
-    ("B31", "=ISNUMBER(A1)", 1.0),    // iftab=128
-    ("B32", "=ISLOGICAL(A4)", 1.0),   // iftab=198
-    ("B33", "=ISNONTEXT(A1)", 1.0),   // iftab=190
-    ("B34", "=ISREF(A1)", 1.0),       // iftab=105 (R-class arg 0)
-    ("B35", "=ISERR(A1)", 0.0),       // iftab=126
-    ("B36", "=T(A3)", 0.0),           // iftab=130 (R-class arg 0)
-    ("B37", "=N(A1)", 4.0),           // iftab=131 (R-class arg 0)
-    ("B38", "=TYPE(A1)", 1.0),        // iftab=86
-    ("B39", "=ERROR.TYPE(A1)", 0.0),  // iftab=261
-    ("B40", "=COUNTBLANK(A1)", 0.0),  // iftab=347 (R-class arg 0)
-    ("B41", "=FACT(5)", 120.0),       // iftab=184
-    ("B42", "=CODE(A3)", 104.0),      // iftab=121
-    ("B43", "=HOUR(A5)", 0.0),        // iftab=71
-    ("B44", "=MINUTE(A5)", 0.0),      // iftab=72
-    ("B45", "=SECOND(A5)", 0.0),      // iftab=73
-    ("B46", "=TIME(1,2,3)", 0.0),     // iftab=66 (fixed 3-arg → PtgFunc)
+    ("B21", "=POWER(A1,2)", 16.0),   // iftab=337
+    ("B22", "=CHAR(65)", 0.0),       // iftab=111, cached not asserted exactly
+    ("B23", "=YEAR(A5)", 2020.0),    // iftab=69
+    ("B24", "=MONTH(A5)", 1.0),      // iftab=68
+    ("B25", "=DAY(A5)", 1.0),        // iftab=67
+    ("B26", "=DATE(2020,1,1)", 0.0), // iftab=65
+    ("B27", "=DEGREES(A1)", 0.0),    // iftab=343
+    ("B28", "=RADIANS(A1)", 0.0),    // iftab=342
+    ("B29", "=ISBLANK(A1)", 0.0),    // iftab=129
+    ("B30", "=ISTEXT(A3)", 1.0),     // iftab=127
+    ("B31", "=ISNUMBER(A1)", 1.0),   // iftab=128
+    ("B32", "=ISLOGICAL(A4)", 1.0),  // iftab=198
+    ("B33", "=ISNONTEXT(A1)", 1.0),  // iftab=190
+    ("B34", "=ISREF(A1)", 1.0),      // iftab=105 (R-class arg 0)
+    ("B35", "=ISERR(A1)", 0.0),      // iftab=126
+    ("B36", "=T(A3)", 0.0),          // iftab=130 (R-class arg 0)
+    ("B37", "=N(A1)", 4.0),          // iftab=131 (R-class arg 0)
+    ("B38", "=TYPE(A1)", 1.0),       // iftab=86
+    ("B39", "=ERROR.TYPE(A1)", 0.0), // iftab=261
+    ("B40", "=COUNTBLANK(A1)", 0.0), // iftab=347 (R-class arg 0)
+    ("B41", "=FACT(5)", 120.0),      // iftab=184
+    ("B42", "=CODE(A3)", 104.0),     // iftab=121
+    ("B43", "=HOUR(A5)", 0.0),       // iftab=71
+    ("B44", "=MINUTE(A5)", 0.0),     // iftab=72
+    ("B45", "=SECOND(A5)", 0.0),     // iftab=73
+    ("B46", "=TIME(1,2,3)", 0.0),    // iftab=66 (fixed 3-arg → PtgFunc)
     // Variable-arity → PtgFuncVar
     ("B6", "=ROW(A1)", 1.0),         // iftab=8 (var, ref arg)
     ("B17", "=SUM(A1:A2)", 1.0),     // iftab=4 (PtgAttrSum form, R-class operand)
@@ -431,14 +484,14 @@ const VOLATILE_FORMULAS: &[(&str, &str, f64)] = &[
     ("B4", "=OFFSET(A1,0,0)", 4.0), // iftab=78, variable args, ref-class arg 0
     // INDIRECT is volatile.
     ("B5", "=INDIRECT(\"A1\")", 4.0), // iftab=148, variable args
-    //
-    // RANDBETWEEN (iftab=464) and INFO (iftab=244) — both fixed for runtime/
-    // writer volatile-flag drift in the FunctionDef unification — are NOT in
-    // this batch because Excel re-save behaviour is environment-dependent
-    // (RANDBETWEEN was Analysis ToolPak before Excel 2010 and depending on
-    // the bridge's Excel version may resolve to #N/A on recalc; INFO returns
-    // host-OS-specific strings). Regression coverage for those bugs lives in
-    // duke-sheets-xls's xls_formula_round_trip.rs as token-level unit tests.
+                                      //
+                                      // RANDBETWEEN (iftab=464) and INFO (iftab=244) — both fixed for runtime/
+                                      // writer volatile-flag drift in the FunctionDef unification — are NOT in
+                                      // this batch because Excel re-save behaviour is environment-dependent
+                                      // (RANDBETWEEN was Analysis ToolPak before Excel 2010 and depending on
+                                      // the bridge's Excel version may resolve to #N/A on recalc; INFO returns
+                                      // host-OS-specific strings). Regression coverage for those bugs lives in
+                                      // duke-sheets-xls's xls_formula_round_trip.rs as token-level unit tests.
 ];
 
 fn volatile_function_workbook() -> Workbook {
@@ -2338,7 +2391,8 @@ fn excel_preserves_external_udf_xls_we_emit() {
     ws.set_cell_value("A1", 7.0).unwrap();
     ws.set_cell_formula("B1", r#"=[1]!TBLink("acct",A1)"#)
         .unwrap();
-    ws.set_formula_result(0, 1, CellValue::Number(42.0)).unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(42.0))
+        .unwrap();
 
     let result = roundtrip_through_excel_xls(&wb);
     let ws = result.worksheet(0).unwrap();
@@ -2427,7 +2481,11 @@ fn excel_byte_parity_for_all_xls_atp_functions_we_emit() {
         rejected.len(),
         rejected
     );
-    assert_eq!(accepted.len(), formulas.len(), "all ATP formulas should be authored");
+    assert_eq!(
+        accepted.len(),
+        formulas.len(),
+        "all ATP formulas should be authored"
+    );
 
     // Formula token streams: PtgNameX(nameindex) + R-class args + PtgFuncVar.
     let mut ours = xls_formula_ptg_streams_for_compare(&our_bytes);

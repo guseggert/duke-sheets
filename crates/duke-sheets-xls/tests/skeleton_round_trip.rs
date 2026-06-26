@@ -9,7 +9,7 @@
 use std::io::Cursor;
 
 use duke_sheets_core::{CellRange, PivotAggregate, PivotTable, Workbook};
-use duke_sheets_xls::{XlsReader, XlsWriter, cfb::CompoundFile};
+use duke_sheets_xls::{cfb::CompoundFile, XlsReader, XlsWriter};
 
 fn add_test_pivot(wb: &mut Workbook) {
     let ws = wb.worksheet_mut(0).unwrap();
@@ -46,6 +46,33 @@ fn add_average_pivot(wb: &mut Workbook) {
         .unwrap()
         .row("Region")
         .named_measure("Revenue", PivotAggregate::Average, "Average Revenue")
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
+fn add_column_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Quarter").unwrap();
+    ws.set_cell_value("C1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", "Q1").unwrap();
+    ws.set_cell_value("C2", 10.0).unwrap();
+    ws.set_cell_value("A3", "East").unwrap();
+    ws.set_cell_value("B3", "Q2").unwrap();
+    ws.set_cell_value("C3", 20.0).unwrap();
+    ws.set_cell_value("A4", "West").unwrap();
+    ws.set_cell_value("B4", "Q1").unwrap();
+    ws.set_cell_value("C4", 30.0).unwrap();
+
+    let pivot = PivotTable::builder("RevenueByQuarter")
+        .source_range(CellRange::parse("A1:C4").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Region")
+        .column("Quarter")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
         .build()
         .unwrap();
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
@@ -123,6 +150,50 @@ fn semantic_pivot_tables_emit_xls_average_data_field() {
         String::from_utf8_lossy(sxdi).contains("Average Revenue"),
         "SXDI caption should come from the semantic pivot measure"
     );
+}
+
+#[test]
+fn semantic_pivot_tables_emit_xls_column_axis_records() {
+    let mut wb = Workbook::new();
+    add_column_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let workbook_records = records_with_payload(&workbook);
+
+    let sxview = workbook_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00B0).then_some(payload))
+        .expect("SXVIEW record");
+    assert_eq!(u16::from_le_bytes(sxview[22..24].try_into().unwrap()), 3);
+    assert_eq!(u16::from_le_bytes(sxview[24..26].try_into().unwrap()), 1);
+    assert_eq!(u16::from_le_bytes(sxview[26..28].try_into().unwrap()), 1);
+    assert_eq!(u16::from_le_bytes(sxview[34..36].try_into().unwrap()), 3);
+
+    let sxvd_axes = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00B1).then(|| u16::from_le_bytes(payload[0..2].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sxvd_axes, vec![0x0001, 0x0002, 0x0008]);
+
+    let axis_declarations = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00B4).then_some(payload.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        axis_declarations,
+        vec![vec![0, 0], vec![1, 0]],
+        "row and column axes should declare Region then Quarter"
+    );
+
+    let sxli_lengths = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00B5).then_some(payload.len()))
+        .collect::<Vec<_>>();
+    assert_eq!(sxli_lengths, vec![30, 30]);
 }
 
 fn record_types(stream: &[u8]) -> Vec<u16> {
