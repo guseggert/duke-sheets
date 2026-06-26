@@ -679,10 +679,15 @@ fn write_pivot_row_outline_levels(
     clear_pivot_row_outline_levels(worksheet, Some(rendered.range));
 
     for (offset, level) in rendered.row_outline_levels.iter().copied().enumerate() {
-        if level == 0 {
-            continue;
+        if level != 0 {
+            worksheet.set_row_outline_level(pivot.target.row + offset as u32, level);
         }
-        worksheet.set_row_outline_level(pivot.target.row + offset as u32, level);
+        if rendered.row_hidden.get(offset).copied().unwrap_or(false) {
+            worksheet.set_row_hidden(pivot.target.row + offset as u32, true);
+        }
+        if rendered.row_collapsed.get(offset).copied().unwrap_or(false) {
+            worksheet.set_row_collapsed(pivot.target.row + offset as u32, true);
+        }
     }
 }
 
@@ -693,6 +698,7 @@ fn clear_pivot_row_outline_levels(worksheet: &mut Worksheet, range: Option<CellR
     for row in range.start.row..=range.end.row {
         worksheet.set_row_outline_level(row, 0);
         worksheet.set_row_collapsed(row, false);
+        worksheet.set_row_hidden(row, false);
     }
 }
 
@@ -705,10 +711,20 @@ fn write_pivot_column_outline_levels(
     clear_pivot_column_outline_levels(worksheet, Some(rendered.range));
 
     for (offset, level) in rendered.column_outline_levels.iter().copied().enumerate() {
-        if level == 0 {
-            continue;
+        if level != 0 {
+            worksheet.set_column_outline_level(pivot.target.col + offset as u16, level);
         }
-        worksheet.set_column_outline_level(pivot.target.col + offset as u16, level);
+        if rendered.column_hidden.get(offset).copied().unwrap_or(false) {
+            worksheet.set_column_hidden(pivot.target.col + offset as u16, true);
+        }
+        if rendered
+            .column_collapsed
+            .get(offset)
+            .copied()
+            .unwrap_or(false)
+        {
+            worksheet.set_column_collapsed(pivot.target.col + offset as u16, true);
+        }
     }
 }
 
@@ -719,6 +735,7 @@ fn clear_pivot_column_outline_levels(worksheet: &mut Worksheet, range: Option<Ce
     for col in range.start.col..=range.end.col {
         worksheet.set_column_outline_level(col, 0);
         worksheet.set_column_collapsed(col, false);
+        worksheet.set_column_hidden(col, false);
     }
 }
 
@@ -2505,6 +2522,8 @@ struct CompiledPivotPlan {
     row_fields: Vec<PivotField>,
     column_fields: Vec<PivotField>,
     page_fields: Vec<PivotField>,
+    row_collapsed_item_ids: Vec<AHashSet<u32>>,
+    column_collapsed_item_ids: Vec<AHashSet<u32>>,
     measure_indexes: Vec<usize>,
     measures: Vec<PivotMeasure>,
     filters: Vec<CompiledFilter>,
@@ -2546,6 +2565,15 @@ impl CompiledPivotPlan {
             &pivot.page_fields,
             snapshot,
             &pivot.groupings,
+        )?;
+        let row_collapsed_item_ids =
+            compile_collapsed_item_ids("row", &pivot.name, snapshot, &row_indexes, &row_fields)?;
+        let column_collapsed_item_ids = compile_collapsed_item_ids(
+            "column",
+            &pivot.name,
+            snapshot,
+            &column_indexes,
+            &column_fields,
         )?;
 
         let mut measure_indexes = Vec::with_capacity(pivot.measures.len());
@@ -2624,6 +2652,8 @@ impl CompiledPivotPlan {
             row_fields,
             column_fields,
             page_fields,
+            row_collapsed_item_ids,
+            column_collapsed_item_ids,
             measure_indexes,
             measures: pivot.measures.clone(),
             filters,
@@ -2644,6 +2674,33 @@ impl CompiledPivotPlan {
             asterisk_totals: pivot.layout.asterisk_totals,
         })
     }
+}
+
+fn compile_collapsed_item_ids(
+    axis_name: &str,
+    pivot_name: &str,
+    snapshot: &SourceSnapshot,
+    indexes: &[usize],
+    fields: &[PivotField],
+) -> Result<Vec<AHashSet<u32>>> {
+    indexes
+        .iter()
+        .zip(fields.iter())
+        .map(|(field_index, field)| {
+            field
+                .collapsed_items
+                .iter()
+                .map(|item| {
+                    snapshot.columns[*field_index].id_for_value(item).ok_or_else(|| {
+                        Error::other(format!(
+                            "pivot table {pivot_name} {axis_name} field {} collapsed item was not found in the source data: {item}",
+                            field.field.name
+                        ))
+                    })
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn compile_axis_fields(
@@ -5523,6 +5580,10 @@ struct RenderedPivot {
     data_start_row: usize,
     row_outline_levels: Vec<u8>,
     column_outline_levels: Vec<u8>,
+    row_hidden: Vec<bool>,
+    column_hidden: Vec<bool>,
+    row_collapsed: Vec<bool>,
+    column_collapsed: Vec<bool>,
     row_page_break_offsets: Vec<u32>,
     merged_ranges: Vec<CellRange>,
 }
@@ -5656,6 +5717,18 @@ fn render_pivot(
     let mut column_outline_levels = pivot_column_outline_levels(pivot, plan, aggregation);
     column_outline_levels.truncate(width);
     column_outline_levels.resize(width, 0);
+    let mut row_hidden = pivot_row_hidden_flags(pivot, plan, aggregation);
+    row_hidden.truncate(rendered_cells.cells.len());
+    row_hidden.resize(rendered_cells.cells.len(), false);
+    let mut column_hidden = pivot_column_hidden_flags(pivot, plan, aggregation);
+    column_hidden.truncate(width);
+    column_hidden.resize(width, false);
+    let mut row_collapsed = pivot_row_collapsed_flags(pivot, plan, aggregation);
+    row_collapsed.truncate(rendered_cells.cells.len());
+    row_collapsed.resize(rendered_cells.cells.len(), false);
+    let mut column_collapsed = pivot_column_collapsed_flags(pivot, plan, aggregation);
+    column_collapsed.truncate(width);
+    column_collapsed.resize(width, false);
     let data_start_row = pivot_data_start_row(pivot, plan);
 
     let range = output_range(pivot.target, rendered_cells.cells.len(), width)?;
@@ -5669,6 +5742,10 @@ fn render_pivot(
         data_start_row,
         row_outline_levels,
         column_outline_levels,
+        row_hidden,
+        column_hidden,
+        row_collapsed,
+        column_collapsed,
         row_page_break_offsets,
         merged_ranges,
     })
@@ -5829,6 +5906,170 @@ fn pivot_row_outline_levels(
     levels
 }
 
+fn pivot_row_collapsed_flags(
+    pivot: &PivotTable,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+) -> Vec<bool> {
+    let mut collapsed = Vec::new();
+    if pivot.layout.show_field_headers {
+        collapsed.push(false);
+    }
+
+    let compact = compact_row_layout(pivot, plan);
+    let rows_per_body_item = rows_per_pivot_body_item(pivot, plan);
+    let collapse_enabled = pivot.layout.show_expand_collapse && plan.row_indexes.len() > 1;
+
+    for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
+        let previous_row_key = row_index
+            .checked_sub(1)
+            .and_then(|index| aggregation.row_order.get(index));
+        if compact {
+            for position in compact_group_header_positions(row_key, previous_row_key) {
+                collapsed.push(row_item_collapsed(
+                    plan,
+                    row_key,
+                    position,
+                    collapse_enabled,
+                ));
+            }
+        } else {
+            for position in row_group_start_positions(row_key, previous_row_key) {
+                if row_subtotal_at_top(pivot, plan, position) {
+                    push_collapsed_flags(
+                        &mut collapsed,
+                        rows_per_body_item
+                            * row_subtotal_rendered_count(plan, aggregation, row_key, position),
+                        row_item_collapsed(plan, row_key, position, collapse_enabled),
+                    );
+                }
+            }
+        }
+
+        push_collapsed_flags(&mut collapsed, rows_per_body_item, false);
+
+        let next_row_key = aggregation.row_order.get(row_index + 1);
+        for position in row_group_end_positions(row_key, next_row_key) {
+            if compact {
+                if is_row_subtotal_position(row_key, position)
+                    && row_subtotal_enabled(plan, position)
+                {
+                    push_collapsed_flags(
+                        &mut collapsed,
+                        rows_per_body_item
+                            * row_subtotal_rendered_count(plan, aggregation, row_key, position),
+                        row_item_collapsed(plan, row_key, position, collapse_enabled),
+                    );
+                }
+            } else if !row_subtotal_at_top(pivot, plan, position) {
+                push_collapsed_flags(
+                    &mut collapsed,
+                    rows_per_body_item
+                        * row_subtotal_rendered_count(plan, aggregation, row_key, position),
+                    row_item_collapsed(plan, row_key, position, collapse_enabled),
+                );
+            }
+            if row_field_inserts_blank_row(plan, position) {
+                collapsed.push(false);
+            }
+        }
+    }
+
+    if pivot.layout.show_row_grand_totals {
+        push_collapsed_flags(&mut collapsed, rows_per_body_item, false);
+    }
+
+    let page_rows = page_field_row_count(pivot, plan) as usize;
+    if page_rows > 0 {
+        let mut prefixed = vec![false; page_rows];
+        prefixed.extend(collapsed);
+        collapsed = prefixed;
+    }
+    collapsed
+}
+
+fn pivot_row_hidden_flags(
+    pivot: &PivotTable,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+) -> Vec<bool> {
+    let mut hidden = Vec::new();
+    if pivot.layout.show_field_headers {
+        hidden.push(false);
+    }
+
+    let compact = compact_row_layout(pivot, plan);
+    let rows_per_body_item = rows_per_pivot_body_item(pivot, plan);
+    let collapse_enabled = pivot.layout.show_expand_collapse && plan.row_indexes.len() > 1;
+
+    for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
+        let collapsed_position = first_row_collapsed_position(plan, row_key, collapse_enabled);
+        let previous_row_key = row_index
+            .checked_sub(1)
+            .and_then(|index| aggregation.row_order.get(index));
+        if compact {
+            for position in compact_group_header_positions(row_key, previous_row_key) {
+                hidden.push(position_hidden_by_collapsed(collapsed_position, position));
+            }
+        } else {
+            for position in row_group_start_positions(row_key, previous_row_key) {
+                if row_subtotal_at_top(pivot, plan, position) {
+                    push_hidden_flags(
+                        &mut hidden,
+                        rows_per_body_item
+                            * row_subtotal_rendered_count(plan, aggregation, row_key, position),
+                        position_hidden_by_collapsed(collapsed_position, position),
+                    );
+                }
+            }
+        }
+
+        push_hidden_flags(
+            &mut hidden,
+            rows_per_body_item,
+            collapsed_position.is_some(),
+        );
+
+        let next_row_key = aggregation.row_order.get(row_index + 1);
+        for position in row_group_end_positions(row_key, next_row_key) {
+            if compact {
+                if is_row_subtotal_position(row_key, position)
+                    && row_subtotal_enabled(plan, position)
+                {
+                    push_hidden_flags(
+                        &mut hidden,
+                        rows_per_body_item
+                            * row_subtotal_rendered_count(plan, aggregation, row_key, position),
+                        position_hidden_by_collapsed(collapsed_position, position),
+                    );
+                }
+            } else if !row_subtotal_at_top(pivot, plan, position) {
+                push_hidden_flags(
+                    &mut hidden,
+                    rows_per_body_item
+                        * row_subtotal_rendered_count(plan, aggregation, row_key, position),
+                    position_hidden_by_collapsed(collapsed_position, position),
+                );
+            }
+            if row_field_inserts_blank_row(plan, position) {
+                hidden.push(position_hidden_by_collapsed(collapsed_position, position));
+            }
+        }
+    }
+
+    if pivot.layout.show_row_grand_totals {
+        push_hidden_flags(&mut hidden, rows_per_body_item, false);
+    }
+
+    let page_rows = page_field_row_count(pivot, plan) as usize;
+    if page_rows > 0 {
+        let mut prefixed = vec![false; page_rows];
+        prefixed.extend(hidden);
+        hidden = prefixed;
+    }
+    hidden
+}
+
 fn rows_per_pivot_body_item(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usize {
     if values_on_rows(pivot, plan) {
         plan.measures.len()
@@ -5839,6 +6080,14 @@ fn rows_per_pivot_body_item(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usi
 
 fn push_outline_levels(levels: &mut Vec<u8>, count: usize, level: u8) {
     levels.extend(std::iter::repeat(level).take(count));
+}
+
+fn push_collapsed_flags(flags: &mut Vec<bool>, count: usize, collapsed: bool) {
+    flags.extend(std::iter::repeat(collapsed).take(count));
+}
+
+fn push_hidden_flags(flags: &mut Vec<bool>, count: usize, hidden: bool) {
+    flags.extend(std::iter::repeat(hidden).take(count));
 }
 
 fn pivot_outline_level(enabled: bool, depth: usize) -> u8 {
@@ -5879,6 +6128,74 @@ fn pivot_column_outline_levels(
         push_outline_levels(&mut levels, repetitions, level);
     }
     levels
+}
+
+fn pivot_column_collapsed_flags(
+    pivot: &PivotTable,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+) -> Vec<bool> {
+    let label_width = pivot_label_column_width(pivot, plan);
+    let mut collapsed = vec![false; label_width];
+    if plan.column_indexes.len() < 2 {
+        return collapsed;
+    }
+
+    let collapse_enabled = pivot.layout.show_expand_collapse;
+    let repetitions = if values_on_rows(pivot, plan) {
+        1
+    } else {
+        plan.measures.len()
+    };
+    for slot in column_render_slots(pivot, plan, aggregation) {
+        let flag = match &slot {
+            ColumnRenderSlot::Leaf(_) | ColumnRenderSlot::GrandTotal => false,
+            ColumnRenderSlot::Subtotal { prefix, .. } => column_prefix_collapsed(
+                plan,
+                prefix,
+                prefix.len().saturating_sub(1),
+                collapse_enabled,
+            ),
+        };
+        push_collapsed_flags(&mut collapsed, repetitions, flag);
+    }
+    collapsed
+}
+
+fn pivot_column_hidden_flags(
+    pivot: &PivotTable,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+) -> Vec<bool> {
+    let label_width = pivot_label_column_width(pivot, plan);
+    let mut hidden = vec![false; label_width];
+    if plan.column_indexes.len() < 2 {
+        return hidden;
+    }
+
+    let collapse_enabled = pivot.layout.show_expand_collapse;
+    let repetitions = if values_on_rows(pivot, plan) {
+        1
+    } else {
+        plan.measures.len()
+    };
+    for slot in column_render_slots(pivot, plan, aggregation) {
+        let flag = match &slot {
+            ColumnRenderSlot::Leaf(column_key) => {
+                first_column_collapsed_position(plan, column_key, collapse_enabled).is_some()
+            }
+            ColumnRenderSlot::Subtotal { prefix, .. } => {
+                let position = prefix.len().saturating_sub(1);
+                position_hidden_by_collapsed(
+                    first_column_prefix_collapsed_position(plan, prefix, collapse_enabled),
+                    position,
+                )
+            }
+            ColumnRenderSlot::GrandTotal => false,
+        };
+        push_hidden_flags(&mut hidden, repetitions, flag);
+    }
+    hidden
 }
 
 fn pivot_label_column_width(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usize {
@@ -7808,6 +8125,96 @@ fn enabled_subtotals_for_field(field: &PivotField) -> Vec<PivotSubtotal> {
             .filter(|subtotal| !matches!(subtotal, PivotSubtotal::None))
             .collect()
     }
+}
+
+fn row_item_collapsed(
+    plan: &CompiledPivotPlan,
+    row_key: &[u32],
+    position: usize,
+    enabled: bool,
+) -> bool {
+    axis_item_collapsed(&plan.row_collapsed_item_ids, row_key, position, enabled)
+}
+
+fn column_prefix_collapsed(
+    plan: &CompiledPivotPlan,
+    column_key: &[u32],
+    position: usize,
+    enabled: bool,
+) -> bool {
+    enabled
+        && plan
+            .column_collapsed_item_ids
+            .get(position)
+            .zip(column_key.get(position))
+            .map(|(ids, id)| ids.contains(id))
+            .unwrap_or(false)
+}
+
+fn axis_item_collapsed(
+    collapsed_item_ids: &[AHashSet<u32>],
+    key: &[u32],
+    position: usize,
+    enabled: bool,
+) -> bool {
+    enabled
+        && position < key.len().saturating_sub(1)
+        && collapsed_item_ids
+            .get(position)
+            .map(|ids| ids.contains(&key[position]))
+            .unwrap_or(false)
+}
+
+fn first_row_collapsed_position(
+    plan: &CompiledPivotPlan,
+    row_key: &[u32],
+    enabled: bool,
+) -> Option<usize> {
+    first_axis_collapsed_position(&plan.row_collapsed_item_ids, row_key, enabled, false)
+}
+
+fn first_column_collapsed_position(
+    plan: &CompiledPivotPlan,
+    column_key: &[u32],
+    enabled: bool,
+) -> Option<usize> {
+    first_axis_collapsed_position(&plan.column_collapsed_item_ids, column_key, enabled, false)
+}
+
+fn first_column_prefix_collapsed_position(
+    plan: &CompiledPivotPlan,
+    column_key: &[u32],
+    enabled: bool,
+) -> Option<usize> {
+    first_axis_collapsed_position(&plan.column_collapsed_item_ids, column_key, enabled, true)
+}
+
+fn first_axis_collapsed_position(
+    collapsed_item_ids: &[AHashSet<u32>],
+    key: &[u32],
+    enabled: bool,
+    include_last_position: bool,
+) -> Option<usize> {
+    if !enabled {
+        return None;
+    }
+    let end = if include_last_position {
+        key.len()
+    } else {
+        key.len().saturating_sub(1)
+    };
+    (0..end).find(|position| {
+        collapsed_item_ids
+            .get(*position)
+            .map(|ids| ids.contains(&key[*position]))
+            .unwrap_or(false)
+    })
+}
+
+fn position_hidden_by_collapsed(collapsed_position: Option<usize>, position: usize) -> bool {
+    collapsed_position
+        .map(|collapsed_position| collapsed_position < position)
+        .unwrap_or(false)
 }
 
 fn row_subtotal_at_top(pivot: &PivotTable, plan: &CompiledPivotPlan, position: usize) -> bool {
@@ -10311,6 +10718,50 @@ mod tests {
     }
 
     #[test]
+    fn refresh_writes_row_collapsed_flags_for_collapsed_items() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Outline;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row(PivotField::new("Region").with_collapsed_items(["East"]))
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert!(sheet.is_row_collapsed(1));
+        assert!(!sheet.is_row_hidden(1));
+        assert!(sheet.is_row_hidden(2));
+        assert!(sheet.is_row_hidden(3));
+        assert!(!sheet.is_row_hidden(4));
+        assert!(!sheet.is_row_collapsed(2));
+        assert!(!sheet.is_row_collapsed(3));
+        assert!(!sheet.is_row_collapsed(4));
+    }
+
+    #[test]
     fn refresh_clears_stale_pivot_row_outline_levels() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
@@ -11295,6 +11746,52 @@ mod tests {
         assert_eq!(sheet.column_outline_level(9), 1);
         assert_eq!(sheet.column_outline_level(10), 0);
         assert_eq!(sheet.column_outline_level(11), 0);
+    }
+
+    #[test]
+    fn refresh_writes_column_collapsed_flags_for_collapsed_items() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Year").unwrap();
+        sheet.set_cell_value("C1", "Quarter").unwrap();
+        sheet.set_cell_value("D1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "2024").unwrap();
+        sheet.set_cell_value("C2", "Q1").unwrap();
+        sheet.set_cell_value("D2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "2024").unwrap();
+        sheet.set_cell_value("C3", "Q2").unwrap();
+        sheet.set_cell_value("D3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "East").unwrap();
+        sheet.set_cell_value("B4", "2025").unwrap();
+        sheet.set_cell_value("C4", "Q1").unwrap();
+        sheet.set_cell_value("D4", 7.0).unwrap();
+
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D4").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row("Region")
+            .column(PivotField::new("Year").with_collapsed_items(["2024"]))
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert!(sheet.is_column_collapsed(8));
+        assert!(sheet.is_column_hidden(6));
+        assert!(sheet.is_column_hidden(7));
+        assert!(!sheet.is_column_hidden(8));
+        assert!(!sheet.is_column_hidden(10));
+        assert!(!sheet.is_column_collapsed(6));
+        assert!(!sheet.is_column_collapsed(7));
+        assert!(!sheet.is_column_collapsed(10));
     }
 
     #[test]
