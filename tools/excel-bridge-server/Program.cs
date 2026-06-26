@@ -87,7 +87,7 @@ class Program
     }
 
     // -----------------------------------------------------------------------
-    // Command dispatch - just 6 cases, all generic
+    // Command dispatch - small generic COM protocol
     // -----------------------------------------------------------------------
 
     static (Response resp, bool shutdown) Dispatch(ComObjectStore store, Request req)
@@ -99,6 +99,9 @@ class Program
         {
             switch (req.Cmd)
             {
+                case "Ping":
+                    return (Response.Ok(id, new ValueData("pong")), false);
+
                 case "Init":
                     store.InitExcel();
                     return (Response.Ok(id), false);

@@ -3,7 +3,7 @@
 //! `ensure_excel_bridge()` is the single entry point. It is idempotent
 //! and process-singleton: if the Windows VM bridge isn't responsive on
 //! localhost:9876 it spawns `tools/vm/qemu-start.sh` in the background
-//! and polls until the bridge answers an Init ping.
+//! and polls until the bridge answers a cheap Ping command.
 //!
 //! On failure the function **panics** with a message describing what to
 //! check. Tests must not silently skip when the VM is unavailable; if
@@ -59,9 +59,10 @@ pub fn ensure_excel_bridge() {
     }
 }
 
-/// Send `{"id":1,"cmd":"Init","params":{}}` to the bridge and check
-/// that the response contains `"ok"`. Matches the same readiness check
-/// used by the mise tasks.
+/// Send `{"id":1,"cmd":"Ping"}` to the bridge and check that the
+/// response contains `"ok"`. This deliberately avoids initializing Excel:
+/// readiness probes should verify the bridge process, not create and quit a
+/// COM automation session on every poll.
 fn bridge_responsive() -> bool {
     let addr = format!("127.0.0.1:{BRIDGE_PORT}").parse().unwrap();
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) else {
@@ -69,7 +70,7 @@ fn bridge_responsive() -> bool {
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-    if writeln!(stream, "{{\"id\":1,\"cmd\":\"Init\",\"params\":{{}}}}").is_err() {
+    if writeln!(stream, "{{\"id\":1,\"cmd\":\"Ping\"}}").is_err() {
         return false;
     }
     let mut buf = String::new();

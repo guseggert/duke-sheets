@@ -2,7 +2,8 @@
 //
 // Wire format: newline-delimited JSON (NDJSON), one object per line.
 //
-// The protocol has only 6 commands: Init, Get, Set, Invoke, Navigate, Release, Shutdown.
+// The protocol has only a small set of commands: Ping, Init, Get, Set,
+// Invoke, Navigate, Release, Shutdown.
 // All Excel-specific knowledge lives in the client - the server is a thin
 // COM object navigator.
 
