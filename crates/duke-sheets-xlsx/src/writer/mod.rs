@@ -52,6 +52,8 @@ const RT_PIVOT_CACHE_RECORDS: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords";
 const RT_SHEET_METADATA: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata";
+const RT_CONNECTIONS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections";
 const RT_DRAWING: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
 const RT_CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
@@ -79,6 +81,8 @@ const CT_PIVOT_CACHE_RECORDS: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml";
 const CT_METADATA: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.metadata+xml";
+const CT_CONNECTIONS: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml";
 const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 const CT_CHARTSHEET: &str =
@@ -375,6 +379,14 @@ const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 
 /// Alias for the XML writer backed by an in-memory buffer.
 pub(super) type XmlWriter = Writer<Cursor<Vec<u8>>>;
+
+fn bool_xml(value: bool) -> &'static str {
+    if value {
+        "1"
+    } else {
+        "0"
+    }
+}
 
 /// Shared string table - maps string content to SST index.
 pub(super) struct SharedStringTable {
@@ -746,6 +758,10 @@ impl XlsxWriter {
             needs_metadata,
             &pivot_numbering.cache_parts,
         )?;
+
+        if !workbook.data_connections().is_empty() {
+            Self::write_connections_xml(&mut zip, workbook)?;
+        }
 
         // Write xl/styles.xml
         Self::write_styles_xml(&mut zip, &style_table)?;
@@ -1188,6 +1204,13 @@ impl XlsxWriter {
                     .write_empty()?;
             }
 
+            if !workbook.data_connections().is_empty() {
+                w.create_element("Override")
+                    .with_attribute(("PartName", "/xl/connections.xml"))
+                    .with_attribute(("ContentType", CT_CONNECTIONS))
+                    .write_empty()?;
+            }
+
             w.write_event(Event::End(BytesEnd::new("Types")))?;
             Ok(())
         })
@@ -1432,6 +1455,14 @@ impl XlsxWriter {
                     .write_empty()?;
             }
 
+            if !workbook.data_connections().is_empty() {
+                w.create_element("Relationship")
+                    .with_attribute(("Id", "rIdConnections"))
+                    .with_attribute(("Type", RT_CONNECTIONS))
+                    .with_attribute(("Target", "connections.xml"))
+                    .write_empty()?;
+            }
+
             for cache_part in pivot_cache_parts {
                 let rid = pivot::workbook_cache_rid(workbook, cache_part.cache_num);
                 let target = format!(
@@ -1446,6 +1477,59 @@ impl XlsxWriter {
             }
 
             w.write_event(Event::End(BytesEnd::new("Relationships")))?;
+            Ok(())
+        })
+    }
+
+    fn write_connections_xml<W: Write + Seek>(
+        zip: &mut zip::ZipWriter<W>,
+        workbook: &Workbook,
+    ) -> XlsxResult<()> {
+        use duke_sheets_core::WorkbookConnectionKind;
+
+        write_xml_part(zip, "xl/connections.xml", |w| {
+            let mut root = BytesStart::new("connections");
+            root.push_attribute(("xmlns", NS_SPREADSHEET));
+            w.write_event(Event::Start(root))?;
+
+            for connection in workbook.data_connections() {
+                let id = connection.id.to_string();
+                let refreshed_version = connection.refreshed_version.to_string();
+                let refresh_on_load = bool_xml(connection.refresh_on_load);
+                let background = bool_xml(connection.background);
+                let save_data = bool_xml(connection.save_data);
+                let mut tag = BytesStart::new("connection");
+                tag.push_attribute(("id", id.as_str()));
+                tag.push_attribute(("name", connection.name.as_str()));
+                tag.push_attribute(("refreshedVersion", refreshed_version.as_str()));
+                tag.push_attribute(("refreshOnLoad", refresh_on_load));
+                tag.push_attribute(("background", background));
+                tag.push_attribute(("saveData", save_data));
+                w.write_event(Event::Start(tag))?;
+
+                match &connection.kind {
+                    WorkbookConnectionKind::Database {
+                        connection,
+                        command,
+                        command_type,
+                    } => {
+                        let command_type = command_type.map(|value| value.to_string());
+                        let mut db_pr = BytesStart::new("dbPr");
+                        db_pr.push_attribute(("connection", connection.as_str()));
+                        if let Some(command) = command {
+                            db_pr.push_attribute(("command", command.as_str()));
+                        }
+                        if let Some(command_type) = command_type.as_deref() {
+                            db_pr.push_attribute(("commandType", command_type));
+                        }
+                        w.write_event(Event::Empty(db_pr))?;
+                    }
+                }
+
+                w.write_event(Event::End(BytesEnd::new("connection")))?;
+            }
+
+            w.write_event(Event::End(BytesEnd::new("connections")))?;
             Ok(())
         })
     }
@@ -3222,7 +3306,7 @@ mod tests {
         PivotExtension, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
         PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
         PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
-        PivotValue, SplitPanes,
+        PivotValue, SplitPanes, WorkbookConnection, WorkbookConnectionKind,
     };
     use std::io::Read;
 
@@ -3894,6 +3978,81 @@ mod tests {
         assert!(matches!(
             pivot.cache_info().map(|info| info.source_kind),
             Some(duke_sheets_core::PivotCacheSourceKind::External)
+        ));
+    }
+
+    #[test]
+    fn test_writer_round_trips_external_pivot_database_connection() {
+        let command = "select Region, Revenue from Sales";
+        let mut wb = Workbook::new();
+        wb.add_data_connection(
+            WorkbookConnection::database(7, "SalesConnection", "Provider=MSDASQL;DSN=Sales;")
+                .with_command(command)
+                .with_refresh_on_load(true),
+        )
+        .unwrap();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        let pivot = PivotTable::builder("ExternalSales")
+            .source(PivotSource::External {
+                connection_name: "SalesConnection".to_string(),
+                command_text: Some(command.to_string()),
+            })
+            .target_address("A1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let content_types = read_zip_entry(bytes.clone(), "[Content_Types].xml");
+        assert!(content_types.contains("/xl/connections.xml"));
+        assert!(content_types.contains(CT_CONNECTIONS));
+
+        let workbook_rels = read_zip_entry(bytes.clone(), "xl/_rels/workbook.xml.rels");
+        assert!(workbook_rels.contains(RT_CONNECTIONS));
+        assert!(workbook_rels.contains("connections.xml"));
+
+        let connections = read_zip_entry(bytes.clone(), "xl/connections.xml");
+        assert!(connections.contains(r#"<connection id="7" name="SalesConnection""#));
+        assert!(connections.contains(r#"refreshOnLoad="1""#));
+        assert!(connections.contains(r#"<dbPr connection="Provider=MSDASQL;DSN=Sales;" command="select Region, Revenue from Sales" commandType="2"/>"#));
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"<cacheSource type="external" connectionId="7"/>"#));
+        assert!(cache_def.contains(r#"saveData="0""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let connection = &roundtrip.data_connections()[0];
+        assert_eq!(connection.id, 7);
+        assert_eq!(connection.name, "SalesConnection");
+        match &connection.kind {
+            WorkbookConnectionKind::Database {
+                connection,
+                command: roundtrip_command,
+                command_type,
+            } => {
+                assert_eq!(connection, "Provider=MSDASQL;DSN=Sales;");
+                assert_eq!(roundtrip_command.as_deref(), Some(command));
+                assert_eq!(*command_type, Some(2));
+            }
+        }
+
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("ExternalSales")
+            .unwrap();
+        assert!(matches!(
+            &pivot.source,
+            PivotSource::External {
+                connection_name,
+                command_text: Some(roundtrip_command)
+            } if connection_name == "SalesConnection" && roundtrip_command == command
         ));
     }
 

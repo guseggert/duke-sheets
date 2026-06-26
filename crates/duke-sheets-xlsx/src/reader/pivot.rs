@@ -13,7 +13,7 @@ use duke_sheets_core::{
     PivotCalculatedField, PivotDateGroupUnit, PivotExtension, PivotField, PivotFilter,
     PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure,
     PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
-    PivotSubtotal, PivotTable, PivotValue,
+    PivotSubtotal, PivotTable, PivotValue, WorkbookConnection, WorkbookConnectionKind,
 };
 
 #[derive(Debug, Clone)]
@@ -46,6 +46,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     _cache_id: u32,
     path: &str,
+    connections: &HashMap<u32, WorkbookConnection>,
 ) -> XlsxResult<Option<PivotCacheDefinition>> {
     let file = match archive_by_name(archive, path) {
         Ok(file) => file,
@@ -60,6 +61,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     let mut source: Option<PivotSource> = None;
     let mut source_kind = PivotCacheSourceKind::Unknown;
     let mut connection_name = None;
+    let mut connection_id = None;
     let mut fields = Vec::new();
     let mut record_count = None;
     let mut refreshed_version = None;
@@ -86,6 +88,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"cacheSource" => {
                     source_kind = parse_cache_source_kind(&e);
                     connection_name = attr_string(&e, b"connectionId");
+                    connection_id = attr_u32(&e, b"connectionId");
                 }
                 b"worksheetSource" => {
                     source = parse_worksheet_source(&e)?;
@@ -135,6 +138,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"cacheSource" => {
                     source_kind = parse_cache_source_kind(&e);
                     connection_name = attr_string(&e, b"connectionId");
+                    connection_id = attr_u32(&e, b"connectionId");
                 }
                 b"worksheetSource" => {
                     source = parse_worksheet_source(&e)?;
@@ -211,8 +215,9 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
             ranges: consolidation_ranges,
         });
     }
-    let source =
-        source.unwrap_or_else(|| placeholder_source_for_kind(source_kind, connection_name));
+    let source = source.unwrap_or_else(|| {
+        placeholder_source_for_kind(source_kind, connection_id, connection_name, connections)
+    });
     let groupings = semantic_groupings_from_cache_fields(&fields);
     let calculated_fields = fields
         .iter()
@@ -332,25 +337,38 @@ fn parse_cache_source_kind(e: &BytesStart<'_>) -> PivotCacheSourceKind {
 
 fn placeholder_source_for_kind(
     kind: PivotCacheSourceKind,
+    connection_id: Option<u32>,
     connection_name: Option<String>,
+    connections: &HashMap<u32, WorkbookConnection>,
 ) -> PivotSource {
+    let connection = connection_id.and_then(|id| connections.get(&id));
+    let external_name = connection
+        .map(|connection| connection.name.clone())
+        .or(connection_name.clone())
+        .unwrap_or_default();
+    let command_text = connection.and_then(database_connection_command);
     match kind {
         PivotCacheSourceKind::Consolidation => PivotSource::Consolidation { ranges: Vec::new() },
         PivotCacheSourceKind::Scenario => PivotSource::Scenario {
             name: String::new(),
         },
         PivotCacheSourceKind::Olap => PivotSource::Olap {
-            connection_name: connection_name.unwrap_or_default(),
+            connection_name: external_name,
             cube: None,
-            command_text: None,
+            command_text,
         },
         PivotCacheSourceKind::External
         | PivotCacheSourceKind::Worksheet
         | PivotCacheSourceKind::Unknown => PivotSource::External {
-            connection_name: connection_name.unwrap_or_default(),
-            command_text: None,
+            connection_name: external_name,
+            command_text,
         },
     }
+}
+
+fn database_connection_command(connection: &WorkbookConnection) -> Option<String> {
+    let WorkbookConnectionKind::Database { command, .. } = &connection.kind;
+    command.clone()
 }
 
 fn parse_worksheet_source(e: &BytesStart<'_>) -> XlsxResult<Option<PivotSource>> {
@@ -1468,22 +1486,66 @@ mod tests {
 
     #[test]
     fn placeholder_sources_keep_non_refreshable_kind_shape() {
-        match placeholder_source_for_kind(PivotCacheSourceKind::External, Some("7".to_string())) {
+        let empty_connections = HashMap::new();
+        match placeholder_source_for_kind(
+            PivotCacheSourceKind::External,
+            Some(7),
+            Some("7".to_string()),
+            &empty_connections,
+        ) {
             PivotSource::External {
                 connection_name, ..
             } => assert_eq!(connection_name, "7"),
             other => panic!("unexpected source: {other:?}"),
         }
+        let connections = HashMap::from([(
+            7,
+            WorkbookConnection::database(7, "SalesConnection", "Provider=Test;")
+                .with_command("select Region, Revenue from Sales"),
+        )]);
+        match placeholder_source_for_kind(
+            PivotCacheSourceKind::External,
+            Some(7),
+            Some("7".to_string()),
+            &connections,
+        ) {
+            PivotSource::External {
+                connection_name,
+                command_text,
+            } => {
+                assert_eq!(connection_name, "SalesConnection");
+                assert_eq!(
+                    command_text.as_deref(),
+                    Some("select Region, Revenue from Sales")
+                );
+            }
+            other => panic!("unexpected source: {other:?}"),
+        }
         assert!(matches!(
-            placeholder_source_for_kind(PivotCacheSourceKind::Consolidation, None),
+            placeholder_source_for_kind(
+                PivotCacheSourceKind::Consolidation,
+                None,
+                None,
+                &empty_connections
+            ),
             PivotSource::Consolidation { .. }
         ));
         assert!(matches!(
-            placeholder_source_for_kind(PivotCacheSourceKind::Scenario, None),
+            placeholder_source_for_kind(
+                PivotCacheSourceKind::Scenario,
+                None,
+                None,
+                &empty_connections
+            ),
             PivotSource::Scenario { .. }
         ));
         assert!(matches!(
-            placeholder_source_for_kind(PivotCacheSourceKind::Olap, Some("3".to_string())),
+            placeholder_source_for_kind(
+                PivotCacheSourceKind::Olap,
+                Some(3),
+                Some("3".to_string()),
+                &empty_connections
+            ),
             PivotSource::Olap { .. }
         ));
     }

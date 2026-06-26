@@ -8,7 +8,7 @@ use quick_xml::reader::Reader;
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
-use duke_sheets_core::SheetVisibility;
+use duke_sheets_core::{SheetVisibility, WorkbookConnection, WorkbookConnectionKind};
 
 /// Parsed workbook properties from workbook.xml
 pub(super) struct WorkbookProps {
@@ -23,6 +23,7 @@ pub(super) struct WorkbookRels {
     pub(super) chartsheet_paths: HashMap<String, String>,
     pub(super) theme_path: Option<String>,
     pub(super) pivot_cache_paths: HashMap<String, String>,
+    pub(super) connections_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +219,7 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
     let mut chartsheet_rels = HashMap::new();
     let mut theme_path: Option<String> = None;
     let mut pivot_cache_paths = HashMap::new();
+    let mut connections_path = None;
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Empty(e)) | Ok(Event::Start(e))
@@ -271,6 +273,13 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
                             format!("xl/{}", target)
                         };
                         pivot_cache_paths.insert(id, full_path);
+                    } else if rel_type.ends_with("/connections") {
+                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
+                            stripped.to_string()
+                        } else {
+                            format!("xl/{}", target)
+                        };
+                        connections_path = Some(full_path);
                     }
                 }
             }
@@ -286,7 +295,131 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
         chartsheet_paths: chartsheet_rels,
         theme_path,
         pivot_cache_paths,
+        connections_path,
     })
+}
+
+pub(super) fn read_workbook_connections<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    path: Option<&str>,
+) -> XlsxResult<Vec<WorkbookConnection>> {
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    let file = match archive_by_name(archive, path) {
+        Ok(file) => file,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let reader = BufReader::new(file);
+    let mut xml_reader = Reader::from_reader(reader);
+    xml_reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut connections = Vec::new();
+    let mut current: Option<ParsedConnection> = None;
+
+    loop {
+        match xml_reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => match e.name().local_name().as_ref() {
+                b"connection" => current = parse_connection_attrs(&e),
+                b"dbPr" => {
+                    if let Some(connection) = &mut current {
+                        connection.kind = parse_db_pr(&e);
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
+                b"connection" => {
+                    if let Some(connection) = parse_connection_attrs(&e).and_then(|c| c.build()) {
+                        connections.push(connection);
+                    }
+                }
+                b"dbPr" => {
+                    if let Some(connection) = &mut current {
+                        connection.kind = parse_db_pr(&e);
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::End(e)) => {
+                if e.name().local_name().as_ref() == b"connection" {
+                    if let Some(connection) = current.take().and_then(|c| c.build()) {
+                        connections.push(connection);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(XlsxError::Xml(e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(connections)
+}
+
+struct ParsedConnection {
+    id: u32,
+    name: String,
+    refreshed_version: u8,
+    refresh_on_load: bool,
+    background: bool,
+    save_data: bool,
+    kind: Option<WorkbookConnectionKind>,
+}
+
+impl ParsedConnection {
+    fn build(self) -> Option<WorkbookConnection> {
+        Some(WorkbookConnection {
+            id: self.id,
+            name: self.name,
+            kind: self.kind?,
+            refreshed_version: self.refreshed_version,
+            refresh_on_load: self.refresh_on_load,
+            background: self.background,
+            save_data: self.save_data,
+        })
+    }
+}
+
+fn parse_connection_attrs(e: &quick_xml::events::BytesStart<'_>) -> Option<ParsedConnection> {
+    Some(ParsedConnection {
+        id: attr_u32(e, b"id")?,
+        name: attr_string(e, b"name").unwrap_or_default(),
+        refreshed_version: attr_u32(e, b"refreshedVersion")
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or(0),
+        refresh_on_load: attr_bool(e, b"refreshOnLoad").unwrap_or(false),
+        background: attr_bool(e, b"background").unwrap_or(false),
+        save_data: attr_bool(e, b"saveData").unwrap_or(false),
+        kind: None,
+    })
+}
+
+fn parse_db_pr(e: &quick_xml::events::BytesStart<'_>) -> Option<WorkbookConnectionKind> {
+    Some(WorkbookConnectionKind::Database {
+        connection: attr_string(e, b"connection")?,
+        command: attr_string(e, b"command"),
+        command_type: attr_u32(e, b"commandType"),
+    })
+}
+
+fn attr_string(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
+    e.attributes().flatten().find_map(|attr| {
+        (attr.key.local_name().as_ref() == key)
+            .then(|| attr.unescape_value().ok().map(|s| s.to_string()))
+            .flatten()
+    })
+}
+
+fn attr_u32(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<u32> {
+    attr_string(e, key).and_then(|value| value.parse().ok())
+}
+
+fn attr_bool(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<bool> {
+    attr_string(e, key).map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
 /// Read per-sheet .rels to get hyperlinks, comments, tables, etc.

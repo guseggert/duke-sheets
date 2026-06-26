@@ -36,6 +36,8 @@ pub struct Workbook {
     active_sheet: usize,
     /// Named ranges (defined names)
     named_ranges: NamedRangeCollection,
+    /// Workbook-level data connections.
+    data_connections: Vec<WorkbookConnection>,
     /// Opaque calculation cache, populated and consumed by the calculation engine.
     /// Stored as type-erased `Box<dyn Any>` so the core crate needs no dependency
     /// on `duke-sheets-formula`.
@@ -61,6 +63,7 @@ impl Workbook {
             settings: WorkbookSettings::default(),
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
+            data_connections: Vec::new(),
             calc_cache: None,
             pivot_runtime_cache: None,
             structural_generation: 0,
@@ -79,6 +82,7 @@ impl Workbook {
             settings: WorkbookSettings::default(),
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
+            data_connections: Vec::new(),
             calc_cache: None,
             pivot_runtime_cache: None,
             structural_generation: 0,
@@ -445,6 +449,71 @@ impl Workbook {
         &mut self.named_ranges
     }
 
+    /// Get workbook-level data connections.
+    pub fn data_connections(&self) -> &[WorkbookConnection] {
+        &self.data_connections
+    }
+
+    /// Get workbook-level data connections mutably.
+    ///
+    /// Prefer [`Workbook::add_data_connection`] when adding a new connection so
+    /// duplicate ids and names are rejected.
+    pub fn data_connections_mut(&mut self) -> &mut Vec<WorkbookConnection> {
+        &mut self.data_connections
+    }
+
+    /// Add a workbook-level data connection.
+    pub fn add_data_connection(&mut self, connection: WorkbookConnection) -> Result<()> {
+        self.validate_data_connection(&connection)?;
+        self.data_connections.push(connection);
+        self.structural_generation += 1;
+        Ok(())
+    }
+
+    /// Get a data connection by OOXML connection id.
+    pub fn data_connection_by_id(&self, id: u32) -> Option<&WorkbookConnection> {
+        self.data_connections
+            .iter()
+            .find(|connection| connection.id == id)
+    }
+
+    /// Get a data connection by display name, case-insensitively.
+    pub fn data_connection_by_name(&self, name: &str) -> Option<&WorkbookConnection> {
+        self.data_connections
+            .iter()
+            .find(|connection| connection.name.eq_ignore_ascii_case(name))
+    }
+
+    fn validate_data_connection(&self, connection: &WorkbookConnection) -> Result<()> {
+        if connection.id == 0 {
+            return Err(Error::other("data connection id must be greater than zero"));
+        }
+        if connection.name.trim().is_empty() {
+            return Err(Error::other("data connection name cannot be empty"));
+        }
+        if self
+            .data_connections
+            .iter()
+            .any(|existing| existing.id == connection.id)
+        {
+            return Err(Error::other(format!(
+                "data connection id already exists: {}",
+                connection.id
+            )));
+        }
+        if self
+            .data_connections
+            .iter()
+            .any(|existing| existing.name.eq_ignore_ascii_case(&connection.name))
+        {
+            return Err(Error::other(format!(
+                "data connection name already exists: {}",
+                connection.name
+            )));
+        }
+        Ok(())
+    }
+
     /// Validate a sheet name
     fn validate_sheet_name(&self, name: &str) -> Result<()> {
         self.validate_sheet_name_excluding(name, None)
@@ -571,6 +640,95 @@ pub struct WorkbookSettings {
     pub theme: Option<String>,
 }
 
+/// A workbook-level external data connection.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkbookConnection {
+    /// Stable workbook connection id.
+    pub id: u32,
+    /// User-visible connection name.
+    pub name: String,
+    /// Connection payload.
+    pub kind: WorkbookConnectionKind,
+    /// Application version that last refreshed the connection.
+    pub refreshed_version: u8,
+    /// Whether the host application should refresh on open.
+    pub refresh_on_load: bool,
+    /// Whether refresh should run in the background.
+    pub background: bool,
+    /// Whether refreshed data should be saved in the workbook package.
+    pub save_data: bool,
+}
+
+impl WorkbookConnection {
+    /// Create a database connection.
+    pub fn database(id: u32, name: impl Into<String>, connection: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            kind: WorkbookConnectionKind::Database {
+                connection: connection.into(),
+                command: None,
+                command_type: Some(2),
+            },
+            refreshed_version: 7,
+            refresh_on_load: false,
+            background: false,
+            save_data: false,
+        }
+    }
+
+    /// Set the database command text.
+    pub fn with_command(mut self, command: impl Into<String>) -> Self {
+        let WorkbookConnectionKind::Database {
+            command: existing, ..
+        } = &mut self.kind;
+        *existing = Some(command.into());
+        self
+    }
+
+    /// Set the database command type.
+    pub fn with_command_type(mut self, command_type: u32) -> Self {
+        let WorkbookConnectionKind::Database {
+            command_type: existing,
+            ..
+        } = &mut self.kind;
+        *existing = Some(command_type);
+        self
+    }
+
+    /// Set refresh-on-open behavior.
+    pub fn with_refresh_on_load(mut self, refresh_on_load: bool) -> Self {
+        self.refresh_on_load = refresh_on_load;
+        self
+    }
+
+    /// Set background refresh behavior.
+    pub fn with_background(mut self, background: bool) -> Self {
+        self.background = background;
+        self
+    }
+
+    /// Set whether refreshed data should be saved in the workbook package.
+    pub fn with_save_data(mut self, save_data: bool) -> Self {
+        self.save_data = save_data;
+        self
+    }
+}
+
+/// Workbook data connection payload.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum WorkbookConnectionKind {
+    /// Database connection represented by SpreadsheetML `dbPr`.
+    Database {
+        /// Provider-specific connection string.
+        connection: String,
+        /// Optional command or query text.
+        command: Option<String>,
+        /// SpreadsheetML command type. Excel uses `2` for SQL text.
+        command_type: Option<u32>,
+    },
+}
+
 impl Default for WorkbookSettings {
     fn default() -> Self {
         Self {
@@ -619,6 +777,32 @@ mod tests {
         let idx = wb.add_worksheet_with_name("Data").unwrap();
         assert_eq!(idx, 2);
         assert_eq!(wb.worksheet(2).unwrap().name(), "Data");
+    }
+
+    #[test]
+    fn test_add_data_connection_rejects_duplicate_ids_and_names() {
+        let mut wb = Workbook::new();
+        wb.add_data_connection(WorkbookConnection::database(
+            1,
+            "SalesConnection",
+            "Provider=Test;",
+        ))
+        .unwrap();
+
+        assert!(wb
+            .add_data_connection(WorkbookConnection::database(
+                1,
+                "OtherConnection",
+                "Provider=Test;"
+            ))
+            .is_err());
+        assert!(wb
+            .add_data_connection(WorkbookConnection::database(
+                2,
+                "salesconnection",
+                "Provider=Test;"
+            ))
+            .is_err());
     }
 
     #[test]

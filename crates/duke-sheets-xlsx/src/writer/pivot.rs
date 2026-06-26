@@ -8,7 +8,8 @@ use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit,
     PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind,
     PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
-    PivotSubtotal, PivotTable, PivotValue, Table, Workbook, Worksheet,
+    PivotSubtotal, PivotTable, PivotValue, Table, Workbook, WorkbookConnection,
+    WorkbookConnectionKind, Worksheet,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -898,21 +899,53 @@ fn resolve_pivot_source(
                 save_data: true,
             })
         }
-        PivotSource::External {
-            command_text: Some(_),
-            ..
-        } => Err(XlsxError::InvalidFormat(
-            "XLSX pivot external source command text requires workbook connection parts".into(),
-        )),
         PivotSource::Olap { .. } => Err(XlsxError::InvalidFormat(
             "XLSX OLAP pivot source writing is not supported yet".into(),
         )),
-        PivotSource::External { .. }
-        | PivotSource::Consolidation { .. }
-        | PivotSource::Scenario { .. } => {
+        PivotSource::External {
+            connection_name,
+            command_text,
+        } => {
+            validate_external_pivot_connection(workbook, connection_name, command_text.as_deref())?;
+            resolve_non_refreshable_pivot_source(pivot_sheet_index, &pivot.source, pivot)
+        }
+        PivotSource::Consolidation { .. } | PivotSource::Scenario { .. } => {
             resolve_non_refreshable_pivot_source(pivot_sheet_index, &pivot.source, pivot)
         }
     }
+}
+
+fn validate_external_pivot_connection(
+    workbook: &Workbook,
+    connection_name: &str,
+    command_text: Option<&str>,
+) -> XlsxResult<()> {
+    let Some(command_text) = command_text else {
+        return Ok(());
+    };
+    let Some(connection) = find_workbook_connection(workbook, connection_name) else {
+        return Err(XlsxError::InvalidFormat(format!(
+            "XLSX pivot external source command text requires a matching workbook data connection: {connection_name}"
+        )));
+    };
+    let WorkbookConnectionKind::Database { command, .. } = &connection.kind;
+    if command.as_deref() != Some(command_text) {
+        return Err(XlsxError::InvalidFormat(format!(
+            "XLSX pivot external source command text does not match workbook data connection: {connection_name}"
+        )));
+    }
+    Ok(())
+}
+
+fn find_workbook_connection<'a>(
+    workbook: &'a Workbook,
+    connection_name: &str,
+) -> Option<&'a WorkbookConnection> {
+    connection_name
+        .parse::<u32>()
+        .ok()
+        .and_then(|id| workbook.data_connection_by_id(id))
+        .or_else(|| workbook.data_connection_by_name(connection_name))
 }
 
 fn resolve_non_refreshable_pivot_source(
@@ -2620,7 +2653,7 @@ fn write_cache_source(
             connection_name, ..
         } => {
             let mut cache_source = cache_source_tag("external");
-            if let Some(connection_id) = connection_id_attr(connection_name)? {
+            if let Some(connection_id) = connection_id_attr(workbook, connection_name)? {
                 cache_source.push_attribute(("connectionId", connection_id.as_str()));
             }
             w.write_event(Event::Empty(cache_source))?;
@@ -2642,13 +2675,16 @@ fn write_cache_source(
     Ok(())
 }
 
-fn connection_id_attr(connection_name: &str) -> XlsxResult<Option<String>> {
+fn connection_id_attr(workbook: &Workbook, connection_name: &str) -> XlsxResult<Option<String>> {
     if connection_name.is_empty() {
         return Ok(None);
     }
+    if let Some(connection) = find_workbook_connection(workbook, connection_name) {
+        return Ok(Some(connection.id.to_string()));
+    }
     let connection_id = connection_name.parse::<u32>().map_err(|_| {
         XlsxError::InvalidFormat(format!(
-            "XLSX pivot external source connectionId must be numeric: {connection_name}"
+            "XLSX pivot external source connectionId must be numeric or match a workbook data connection: {connection_name}"
         ))
     })?;
     Ok(Some(connection_id.to_string()))

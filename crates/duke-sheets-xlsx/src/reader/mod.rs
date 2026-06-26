@@ -50,7 +50,10 @@ pub(crate) use archive::archive_by_name;
 pub(crate) use formulas::CellFormulaState;
 use shared_strings::SharedStringEntry;
 pub(crate) use theme::ThemePalette;
-use workbook::{read_sheet_rels, read_workbook_rels, read_workbook_xml, SheetRelationship};
+use workbook::{
+    read_sheet_rels, read_workbook_connections, read_workbook_rels, read_workbook_xml,
+    SheetRelationship,
+};
 
 /// Resolve a relative path from a drawing's .rels against the drawing's own path.
 
@@ -319,6 +322,12 @@ impl XlsxReader {
         let roundtrip_style_data = parsed_styles.roundtrip_data();
         // Read workbook.xml.rels to get sheet/theme paths
         let workbook_rels = read_workbook_rels(&mut archive)?;
+        let data_connections =
+            read_workbook_connections(&mut archive, workbook_rels.connections_path.as_deref())?;
+        let data_connections_by_id = data_connections
+            .iter()
+            .map(|connection| (connection.id, connection.clone()))
+            .collect::<HashMap<_, _>>();
         // Read workbook theme (if present) and resolve theme colors in styles
         let (theme_palette, raw_theme_xml) =
             read_theme_palette(&mut archive, workbook_rels.theme_path.as_deref())?;
@@ -340,9 +349,12 @@ impl XlsxReader {
         let mut pivot_caches = HashMap::new();
         for cache_entry in &wb_props.pivot_caches {
             if let Some(path) = workbook_rels.pivot_cache_paths.get(&cache_entry.r_id) {
-                if let Some(cache) =
-                    pivot::read_pivot_cache_definition(&mut archive, cache_entry.cache_id, path)?
-                {
+                if let Some(cache) = pivot::read_pivot_cache_definition(
+                    &mut archive,
+                    cache_entry.cache_id,
+                    path,
+                    &data_connections_by_id,
+                )? {
                     pivot_caches.insert(cache_entry.cache_id, cache);
                 }
             }
@@ -354,6 +366,9 @@ impl XlsxReader {
         // Create workbook
         let mut workbook = Workbook::empty();
         workbook.settings_mut().date_1904 = wb_props.date_1904;
+        for connection in data_connections {
+            workbook.add_data_connection(connection)?;
+        }
 
         // Add named ranges
         for nr in wb_props.named_ranges {
