@@ -238,6 +238,8 @@ export interface JsPivotLayoutOptions {
   pageOverThenDown?: boolean
   mergeItemLabels?: boolean
   dataCaption?: string
+  valuesAxis?: 'columns' | 'rows'
+  valuesAxisPosition?: number
   grandTotalCaption?: string
   errorCaption?: string
   showError?: boolean

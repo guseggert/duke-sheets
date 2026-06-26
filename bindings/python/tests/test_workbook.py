@@ -284,6 +284,8 @@ class TestPivotTables:
                     "page_over_then_down": True,
                     "merge_item_labels": True,
                     "data_caption": "Metrics",
+                    "values_axis": "rows",
+                    "values_axis_position": 1,
                     "grand_total_caption": "Overall",
                     "error_caption": "ERR",
                     "show_error": True,
@@ -372,6 +374,8 @@ class TestPivotTables:
         assert pivot["layout"]["page_over_then_down"] is True
         assert pivot["layout"]["merge_item_labels"] is True
         assert pivot["layout"]["data_caption"] == "Metrics"
+        assert pivot["layout"]["values_axis"] == "rows"
+        assert pivot["layout"]["values_axis_position"] == 1
         assert pivot["layout"]["grand_total_caption"] == "Overall"
         assert pivot["layout"]["error_caption"] == "ERR"
         assert pivot["layout"]["show_error"] is True

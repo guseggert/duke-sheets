@@ -21,7 +21,8 @@ use duke_sheets_core::{
     PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup,
     PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotRefreshStatus, PivotShowAs,
     PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
-    WorkbookConnection, WorkbookConnectionKind, WorkbookExtension, WorkbookExtensionPart,
+    PivotValuesAxis, WorkbookConnection, WorkbookConnectionKind, WorkbookExtension,
+    WorkbookExtensionPart,
 };
 
 mod types;
@@ -364,6 +365,11 @@ fn build_pivot_layout_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotLayou
     if let Some(value) = optional_string(dict, &["data_caption", "dataCaption"])? {
         layout.data_caption = value;
     }
+    if let Some(value) = optional_string(dict, &["values_axis", "valuesAxis"])? {
+        layout.values_axis = parse_pivot_values_axis(&value)?;
+    }
+    layout.values_axis_position =
+        optional_u32(dict, &["values_axis_position", "valuesAxisPosition"])?;
     if let Some(value) = optional_string(dict, &["grand_total_caption", "grandTotalCaption"])? {
         layout.grand_total_caption = Some(value);
     }
@@ -832,6 +838,18 @@ fn parse_pivot_layout_kind(value: &str) -> PyResult<PivotLayoutKind> {
         other => {
             return Err(PyValueError::new_err(format!(
                 "Unsupported pivot layout kind: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_values_axis(value: &str) -> PyResult<PivotValuesAxis> {
+    Ok(match value {
+        "columns" | "column" | "cols" => PivotValuesAxis::Columns,
+        "rows" | "row" => PivotValuesAxis::Rows,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported pivot values axis: {other}"
             )));
         }
     })
@@ -1521,6 +1539,11 @@ fn pivot_layout_to_py(py: Python<'_>, layout: &PivotLayout) -> PyResult<PyObject
     dict.set_item("page_over_then_down", layout.page_over_then_down)?;
     dict.set_item("merge_item_labels", layout.merge_item_labels)?;
     dict.set_item("data_caption", &layout.data_caption)?;
+    dict.set_item(
+        "values_axis",
+        pivot_values_axis_to_python(layout.values_axis),
+    )?;
+    dict.set_item("values_axis_position", layout.values_axis_position)?;
     dict.set_item("grand_total_caption", &layout.grand_total_caption)?;
     dict.set_item("error_caption", &layout.error_caption)?;
     dict.set_item("show_error", layout.show_error)?;
@@ -1666,6 +1689,13 @@ fn pivot_layout_kind_to_python(kind: PivotLayoutKind) -> &'static str {
         PivotLayoutKind::Compact => "compact",
         PivotLayoutKind::Outline => "outline",
         PivotLayoutKind::Tabular => "tabular",
+    }
+}
+
+fn pivot_values_axis_to_python(axis: PivotValuesAxis) -> &'static str {
+    match axis {
+        PivotValuesAxis::Columns => "columns",
+        PivotValuesAxis::Rows => "rows",
     }
 }
 

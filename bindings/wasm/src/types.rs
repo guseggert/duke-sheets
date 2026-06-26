@@ -169,6 +169,8 @@ pub struct WasmPivotLayoutOptions {
     pub page_over_then_down: Option<bool>,
     pub merge_item_labels: Option<bool>,
     pub data_caption: Option<String>,
+    pub values_axis: Option<String>,
+    pub values_axis_position: Option<u32>,
     pub grand_total_caption: Option<String>,
     pub error_caption: Option<String>,
     pub show_error: Option<bool>,
@@ -960,6 +962,9 @@ pub struct WasmPivotLayoutDefinition {
     pub page_over_then_down: bool,
     pub merge_item_labels: bool,
     pub data_caption: String,
+    pub values_axis: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values_axis_position: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grand_total_caption: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1004,6 +1009,8 @@ impl From<&core::PivotLayout> for WasmPivotLayoutDefinition {
             page_over_then_down: layout.page_over_then_down,
             merge_item_labels: layout.merge_item_labels,
             data_caption: layout.data_caption.clone(),
+            values_axis: pivot_values_axis_to_string(layout.values_axis).into(),
+            values_axis_position: layout.values_axis_position,
             grand_total_caption: layout.grand_total_caption.clone(),
             error_caption: layout.error_caption.clone(),
             show_error: layout.show_error,
@@ -1273,6 +1280,13 @@ fn pivot_layout_kind_to_string(kind: core::PivotLayoutKind) -> &'static str {
         core::PivotLayoutKind::Compact => "compact",
         core::PivotLayoutKind::Outline => "outline",
         core::PivotLayoutKind::Tabular => "tabular",
+    }
+}
+
+fn pivot_values_axis_to_string(axis: core::PivotValuesAxis) -> &'static str {
+    match axis {
+        core::PivotValuesAxis::Columns => "columns",
+        core::PivotValuesAxis::Rows => "rows",
     }
 }
 

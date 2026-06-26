@@ -16,8 +16,8 @@ use duke_sheets_core::{
     PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFilter, PivotFilterOperator,
     PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
     PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource,
-    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
-    WorkbookConnection, WorkbookConnectionKind,
+    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis,
+    Workbook as CoreWorkbook, WorkbookConnection, WorkbookConnectionKind,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -402,6 +402,8 @@ export interface PivotLayoutOptions {
   pageOverThenDown?: boolean;
   mergeItemLabels?: boolean;
   dataCaption?: string;
+  valuesAxis?: "columns" | "rows";
+  valuesAxisPosition?: number;
   grandTotalCaption?: string;
   errorCaption?: string;
   showError?: boolean;
@@ -587,6 +589,8 @@ export interface PivotLayoutDefinition {
   pageOverThenDown: boolean;
   mergeItemLabels: boolean;
   dataCaption: string;
+  valuesAxis: "columns" | "rows";
+  valuesAxisPosition?: number;
   grandTotalCaption?: string;
   errorCaption?: string;
   showError: boolean;
@@ -1134,6 +1138,10 @@ fn build_pivot_layout_from_wasm(options: WasmPivotLayoutOptions) -> Result<Pivot
     if let Some(value) = options.data_caption {
         layout.data_caption = value;
     }
+    if let Some(value) = options.values_axis {
+        layout.values_axis = parse_pivot_values_axis(&value)?;
+    }
+    layout.values_axis_position = options.values_axis_position;
     if let Some(value) = options.grand_total_caption {
         layout.grand_total_caption = Some(value);
     }
@@ -1248,6 +1256,18 @@ fn parse_chart_type(value: Option<&str>) -> Result<ChartType, JsError> {
             .ok_or_else(|| JsError::new(&format!("Unsupported chart type: {value}"))),
         None => Ok(ChartType::ColumnClustered),
     }
+}
+
+fn parse_pivot_values_axis(value: &str) -> Result<PivotValuesAxis, JsError> {
+    Ok(match value {
+        "columns" | "column" | "cols" => PivotValuesAxis::Columns,
+        "rows" | "row" => PivotValuesAxis::Rows,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot values axis: {other}"
+            )));
+        }
+    })
 }
 
 fn parse_pivot_overwrite_policy(value: &str) -> Result<PivotOverwritePolicy, JsError> {

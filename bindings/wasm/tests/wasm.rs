@@ -412,6 +412,8 @@ fn test_pivot_table_definitions_from_options() {
         ("pageOverThenDown", JsValue::TRUE),
         ("mergeItemLabels", JsValue::TRUE),
         ("dataCaption", JsValue::from_str("Metrics")),
+        ("valuesAxis", JsValue::from_str("rows")),
+        ("valuesAxisPosition", JsValue::from_f64(1.0)),
         ("grandTotalCaption", JsValue::from_str("Overall")),
         ("errorCaption", JsValue::from_str("ERR")),
         ("showError", JsValue::TRUE),
@@ -545,6 +547,8 @@ fn test_pivot_table_definitions_from_options() {
     assert!(get_bool_field(&pivot_layout, "pageOverThenDown"));
     assert!(get_bool_field(&pivot_layout, "mergeItemLabels"));
     assert_eq!(get_string_field(&pivot_layout, "dataCaption"), "Metrics");
+    assert_eq!(get_string_field(&pivot_layout, "valuesAxis"), "rows");
+    assert_eq!(get_f64_field(&pivot_layout, "valuesAxisPosition"), 1.0);
     assert_eq!(
         get_string_field(&pivot_layout, "grandTotalCaption"),
         "Overall"

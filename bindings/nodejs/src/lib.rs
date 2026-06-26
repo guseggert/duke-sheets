@@ -20,8 +20,9 @@ use duke_sheets_core::{
     PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFilter, PivotFilterOperator,
     PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
     PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource,
-    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
-    WorkbookConnection, WorkbookConnectionKind, WorkbookExtension, WorkbookExtensionPart,
+    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis,
+    Workbook as CoreWorkbook, WorkbookConnection, WorkbookConnectionKind, WorkbookExtension,
+    WorkbookExtensionPart,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -429,6 +430,8 @@ pub struct JsPivotLayoutOptions {
     pub page_over_then_down: Option<bool>,
     pub merge_item_labels: Option<bool>,
     pub data_caption: Option<String>,
+    pub values_axis: Option<String>,
+    pub values_axis_position: Option<u32>,
     pub grand_total_caption: Option<String>,
     pub error_caption: Option<String>,
     pub show_error: Option<bool>,
@@ -1055,6 +1058,10 @@ fn build_pivot_layout_from_js(options: JsPivotLayoutOptions) -> Result<PivotLayo
     if let Some(value) = options.data_caption {
         layout.data_caption = value;
     }
+    if let Some(value) = options.values_axis {
+        layout.values_axis = parse_pivot_values_axis(&value)?;
+    }
+    layout.values_axis_position = options.values_axis_position;
     if let Some(value) = options.grand_total_caption {
         layout.grand_total_caption = Some(value);
     }
@@ -1158,6 +1165,18 @@ fn parse_pivot_layout_kind(value: &str) -> Result<PivotLayoutKind> {
         other => {
             return Err(napi::Error::from_reason(format!(
                 "Unsupported pivot layout kind: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_values_axis(value: &str) -> Result<PivotValuesAxis> {
+    Ok(match value {
+        "columns" | "column" | "cols" => PivotValuesAxis::Columns,
+        "rows" | "row" => PivotValuesAxis::Rows,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot values axis: {other}"
             )));
         }
     })
