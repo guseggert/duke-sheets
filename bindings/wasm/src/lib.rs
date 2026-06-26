@@ -342,6 +342,7 @@ export interface PivotGroupingOptions {
 export interface PivotFieldOptions {
   field: string;
   sort?: "none" | "manual" | "ascending" | "asc" | "descending" | "desc";
+  subtotalCaption?: string;
   subtotal?:
     | "automatic"
     | "auto"
@@ -510,6 +511,7 @@ export interface PivotFieldDefinition {
   field: string;
   sort: "none" | "ascending" | "descending";
   subtotal: "automatic" | "none" | "sum" | "count" | "countNumbers" | "average" | "min" | "max" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
+  subtotalCaption?: string;
   subtotals: string[];
   collapsedItems: PivotValue[];
   showEmptyItems: boolean;
@@ -1060,6 +1062,7 @@ fn build_pivot_field_from_wasm(options: WasmPivotFieldOptions) -> Result<PivotFi
     if let Some(subtotal) = options.subtotal {
         field.subtotal = parse_pivot_subtotal(&subtotal)?;
     }
+    field.subtotal_caption = options.subtotal_caption;
     if let Some(subtotals) = options.subtotals {
         let subtotals = subtotals
             .into_iter()

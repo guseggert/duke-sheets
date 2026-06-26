@@ -1940,6 +1940,9 @@ fn write_pivot_fields(
         let _item_page_count_attr = if let Some(axis_field) = pivot_axis_field(pivot, fields, index)
         {
             pivot_field.push_attribute(("showAll", bool_attr(axis_field.show_empty_items)));
+            if let Some(caption) = &axis_field.subtotal_caption {
+                pivot_field.push_attribute(("subtotalCaption", caption.as_str()));
+            }
             push_pivot_field_option_attrs(&mut pivot_field, axis_field);
             let item_page_count_attr =
                 (axis_field.item_page_count != 10).then(|| axis_field.item_page_count.to_string());

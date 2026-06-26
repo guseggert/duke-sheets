@@ -184,6 +184,7 @@ export interface JsPivotGroupingOptions {
 export interface JsPivotFieldOptions {
   field: string
   sort?: 'none' | 'manual' | 'ascending' | 'asc' | 'descending' | 'desc'
+  subtotalCaption?: string
   subtotal?:
     | 'automatic'
     | 'auto'

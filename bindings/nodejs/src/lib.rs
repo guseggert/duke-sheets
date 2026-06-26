@@ -398,6 +398,7 @@ pub struct JsPivotFieldOptions {
     pub field: String,
     pub sort: Option<String>,
     pub subtotal: Option<String>,
+    pub subtotal_caption: Option<String>,
     pub subtotals: Option<Vec<String>>,
     pub collapsed_items: Option<Vec<Either3<f64, String, bool>>>,
     pub show_empty_items: Option<bool>,
@@ -980,6 +981,7 @@ fn build_pivot_field_from_js(options: JsPivotFieldOptions) -> Result<PivotField>
     if let Some(subtotal) = options.subtotal {
         field.subtotal = parse_pivot_subtotal(&subtotal)?;
     }
+    field.subtotal_caption = options.subtotal_caption;
     if let Some(subtotals) = options.subtotals {
         let subtotals = subtotals
             .into_iter()

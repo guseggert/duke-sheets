@@ -1304,6 +1304,7 @@ fn parse_pivot_sort(e: &BytesStart<'_>) -> PivotSort {
 struct PivotFieldOptions {
     sort: PivotSort,
     subtotal: PivotSubtotal,
+    subtotal_caption: Option<String>,
     subtotals: Vec<PivotSubtotal>,
     collapsed_item_indexes: Vec<u32>,
     show_empty_items: bool,
@@ -1320,6 +1321,7 @@ impl Default for PivotFieldOptions {
         Self {
             sort: PivotSort::None,
             subtotal: PivotSubtotal::Automatic,
+            subtotal_caption: None,
             subtotals: Vec::new(),
             collapsed_item_indexes: Vec::new(),
             show_empty_items: false,
@@ -1337,6 +1339,7 @@ fn parse_pivot_field_options(e: &BytesStart<'_>) -> PivotFieldOptions {
     PivotFieldOptions {
         sort: parse_pivot_sort(e),
         subtotal: parse_pivot_subtotal(e),
+        subtotal_caption: attr_string(e, b"subtotalCaption"),
         subtotals: parse_pivot_subtotals(e),
         collapsed_item_indexes: Vec::new(),
         show_empty_items: attr_bool(e, b"showAll").unwrap_or(false),
@@ -1409,6 +1412,7 @@ fn pivot_axis_field(
     let mut pivot_field = PivotField::new(field_name);
     pivot_field.sort = options.sort;
     pivot_field.subtotal = options.subtotal;
+    pivot_field.subtotal_caption = options.subtotal_caption;
     pivot_field.subtotals = options.subtotals;
     pivot_field.show_empty_items = options.show_empty_items;
     pivot_field.show_drop_downs = options.show_drop_downs;

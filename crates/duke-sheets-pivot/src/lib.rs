@@ -8565,7 +8565,9 @@ fn subtotal_label(
             .map(|aggregate| aggregate.caption())
             .unwrap_or("Total")
     } else {
-        "Total"
+        field
+            .and_then(|field| field.subtotal_caption.as_deref())
+            .unwrap_or("Total")
     };
     total_caption(plan, &format!("{value} {suffix}"))
 }
@@ -10757,6 +10759,46 @@ mod tests {
         assert_eq!(text(&workbook, "H1"), "Overall");
         assert_eq!(text(&workbook, "E4"), "Overall");
         assert_eq!(number(&workbook, "H4"), 35.0);
+    }
+
+    #[test]
+    fn refresh_applies_axis_subtotal_caption() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Tabular;
+        let region = PivotField::new("Region").with_subtotal_caption("Subtotal");
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row(region)
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E4"), "East Subtotal");
+        assert_eq!(number(&workbook, "G4"), 15.0);
+        assert_eq!(text(&workbook, "E6"), "West Subtotal");
+        assert_eq!(number(&workbook, "G6"), 7.0);
     }
 
     #[test]

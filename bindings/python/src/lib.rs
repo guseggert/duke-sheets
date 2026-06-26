@@ -274,6 +274,8 @@ fn build_pivot_field_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotField>
     if let Some(subtotal) = optional_string(dict, &["subtotal"])? {
         field.subtotal = parse_pivot_subtotal(&subtotal)?;
     }
+    field.subtotal_caption =
+        optional_string(dict, &["subtotal_caption", "subtotalCaption"])?;
     if let Some(subtotals) = optional_string_vec(dict, &["subtotals"])? {
         let subtotals = subtotals
             .into_iter()
@@ -1192,6 +1194,7 @@ fn pivot_field_to_py(py: Python<'_>, field: &PivotField) -> PyResult<PyObject> {
     dict.set_item("field", &field.field.name)?;
     dict.set_item("sort", pivot_sort_to_python(field.sort))?;
     dict.set_item("subtotal", pivot_subtotal_to_python(field.subtotal))?;
+    dict.set_item("subtotal_caption", &field.subtotal_caption)?;
     let subtotals = field
         .subtotals
         .iter()

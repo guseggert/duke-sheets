@@ -272,6 +272,8 @@ pub struct PivotField {
     pub sort: PivotSort,
     /// Subtotal behavior for this field.
     pub subtotal: PivotSubtotal,
+    /// Optional subtotal label suffix for rendered subtotal captions.
+    pub subtotal_caption: Option<String>,
     /// Explicit subtotal functions for formats that support multiple subtotals.
     ///
     /// When empty, [`PivotField::subtotal`] is used for compatibility with the
@@ -306,6 +308,7 @@ impl PivotField {
             field: field.into(),
             sort: PivotSort::Ascending,
             subtotal: PivotSubtotal::Automatic,
+            subtotal_caption: None,
             subtotals: Vec::new(),
             collapsed_items: Vec::new(),
             show_empty_items: false,
@@ -316,6 +319,12 @@ impl PivotField {
             include_new_items_in_filter: false,
             item_page_count: 10,
         }
+    }
+
+    /// Set the subtotal label suffix for this axis field.
+    pub fn with_subtotal_caption(mut self, caption: impl Into<String>) -> Self {
+        self.subtotal_caption = Some(caption.into());
+        self
     }
 
     /// Set explicit subtotal functions for this axis field.

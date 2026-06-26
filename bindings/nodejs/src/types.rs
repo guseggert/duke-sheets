@@ -243,6 +243,7 @@ pub struct JsPivotFieldDefinition {
     pub field: String,
     pub sort: String,
     pub subtotal: String,
+    pub subtotal_caption: Option<String>,
     pub subtotals: Vec<String>,
     pub collapsed_items: Vec<JsPivotValue>,
     pub show_empty_items: bool,
@@ -260,6 +261,7 @@ impl From<&core::PivotField> for JsPivotFieldDefinition {
             field: field.field.name.clone(),
             sort: pivot_sort_to_string(field.sort).into(),
             subtotal: pivot_subtotal_to_string(field.subtotal).into(),
+            subtotal_caption: field.subtotal_caption.clone(),
             subtotals: field
                 .subtotals
                 .iter()

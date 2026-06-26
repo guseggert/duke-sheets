@@ -4858,6 +4858,7 @@ mod tests {
 
         let mut region = PivotField::new("Region");
         region.subtotal = PivotSubtotal::Sum;
+        region.subtotal_caption = Some("Subtotal".to_string());
         region.show_empty_items = true;
         region.show_drop_downs = false;
         region.subtotal_top = false;
@@ -4887,6 +4888,7 @@ mod tests {
         assert!(pivot_xml.contains(r#"showAll="1""#));
         assert!(pivot_xml.contains(r#"showAll="0""#));
         assert!(pivot_xml.contains(r#"sumSubtotal="1""#));
+        assert!(pivot_xml.contains(r#"subtotalCaption="Subtotal""#));
         assert!(pivot_xml.contains(r#"defaultSubtotal="0""#));
         assert!(pivot_xml.contains(r#"showDropDowns="0""#));
         assert!(pivot_xml.contains(r#"subtotalTop="0""#));
@@ -4903,6 +4905,7 @@ mod tests {
             .pivot_table_by_name("AxisFieldOptions")
             .unwrap();
         assert_eq!(pivot.rows[0].subtotal, PivotSubtotal::Sum);
+        assert_eq!(pivot.rows[0].subtotal_caption.as_deref(), Some("Subtotal"));
         assert!(pivot.rows[0].show_empty_items);
         assert!(!pivot.rows[0].show_drop_downs);
         assert!(!pivot.rows[0].subtotal_top);
@@ -4915,6 +4918,7 @@ mod tests {
             vec![PivotValue::String("East".into())]
         );
         assert_eq!(pivot.columns[0].subtotal, PivotSubtotal::None);
+        assert_eq!(pivot.columns[0].subtotal_caption, None);
         assert!(!pivot.columns[0].show_empty_items);
         assert!(pivot.columns[0].show_drop_downs);
         assert!(pivot.columns[0].subtotal_top);
