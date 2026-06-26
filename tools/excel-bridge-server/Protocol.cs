@@ -82,6 +82,9 @@ public static class ProtocolHelpers
             // reject otherwise.
             JsonValueKind.Number => NumberToComValue(el),
             JsonValueKind.String => el.GetString(),
+            JsonValueKind.Array => el.EnumerateArray()
+                .Select(JsonToComValue)
+                .ToArray(),
             _ => null,
         };
     }
