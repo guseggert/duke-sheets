@@ -580,6 +580,8 @@ dependencies = [
  "duke-sheets-xls",
  "log",
  "quick-xml",
+ "rayon",
+ "ssfmt",
  "thiserror 1.0.69",
  "zip",
 ]
