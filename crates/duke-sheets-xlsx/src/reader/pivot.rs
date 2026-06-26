@@ -21,6 +21,9 @@ pub(super) struct PivotCacheDefinition {
     pub(super) groupings: Vec<PivotGrouping>,
     pub(super) record_count: Option<u64>,
     pub(super) refreshed_version: Option<String>,
+    pub(super) refresh_on_load: bool,
+    pub(super) background_query: bool,
+    pub(super) missing_items_limit: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +53,9 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     let mut fields = Vec::new();
     let mut record_count = None;
     let mut refreshed_version = None;
+    let mut refresh_on_load = false;
+    let mut background_query = false;
+    let mut missing_items_limit = None;
     let mut current_field: Option<PivotCacheField> = None;
     let mut in_shared_items = false;
 
@@ -59,6 +65,9 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"pivotCacheDefinition" => {
                     record_count = attr_u64(&e, b"recordCount");
                     refreshed_version = attr_string(&e, b"refreshedVersion");
+                    refresh_on_load = attr_bool(&e, b"refreshOnLoad").unwrap_or(false);
+                    background_query = attr_bool(&e, b"backgroundQuery").unwrap_or(false);
+                    missing_items_limit = attr_u32(&e, b"missingItemsLimit");
                 }
                 b"worksheetSource" => source = parse_worksheet_source(&e)?,
                 b"cacheField" => {
@@ -81,6 +90,9 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"pivotCacheDefinition" => {
                     record_count = attr_u64(&e, b"recordCount");
                     refreshed_version = attr_string(&e, b"refreshedVersion");
+                    refresh_on_load = attr_bool(&e, b"refreshOnLoad").unwrap_or(false);
+                    background_query = attr_bool(&e, b"backgroundQuery").unwrap_or(false);
+                    missing_items_limit = attr_u32(&e, b"missingItemsLimit");
                 }
                 b"worksheetSource" => source = parse_worksheet_source(&e)?,
                 b"cacheField" => fields.push(PivotCacheField {
@@ -142,6 +154,9 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
         groupings,
         record_count,
         refreshed_version,
+        refresh_on_load,
+        background_query,
+        missing_items_limit,
     }))
 }
 
@@ -248,6 +263,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut style = PivotStyle::default();
     let mut row_grand_totals = true;
     let mut col_grand_totals = true;
+    let mut preserve_formatting = true;
     let mut show_headers = true;
     let mut show_expand_collapse = true;
     let mut layout_kind = PivotLayoutKind::Compact;
@@ -268,6 +284,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         &mut cache_id,
                         &mut row_grand_totals,
                         &mut col_grand_totals,
+                        &mut preserve_formatting,
                         &mut show_headers,
                         &mut show_expand_collapse,
                         &mut layout_kind,
@@ -308,6 +325,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         &mut cache_id,
                         &mut row_grand_totals,
                         &mut col_grand_totals,
+                        &mut preserve_formatting,
                         &mut show_headers,
                         &mut show_expand_collapse,
                         &mut layout_kind,
@@ -432,6 +450,10 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.layout.show_field_headers = show_headers;
     pivot.layout.show_expand_collapse = show_expand_collapse;
     pivot.layout.kind = layout_kind;
+    pivot.refresh_policy.refresh_on_open = cache.refresh_on_load;
+    pivot.refresh_policy.preserve_formatting = preserve_formatting;
+    pivot.refresh_policy.background_query = cache.background_query;
+    pivot.refresh_policy.missing_items_limit = cache.missing_items_limit;
     pivot.style = style;
     pivot.rendered_range = rendered_range;
     pivot.groupings = cache.groupings.clone();
@@ -497,6 +519,7 @@ fn parse_pivot_table_attrs(
     cache_id: &mut u32,
     row_grand_totals: &mut bool,
     col_grand_totals: &mut bool,
+    preserve_formatting: &mut bool,
     show_headers: &mut bool,
     show_expand_collapse: &mut bool,
     layout_kind: &mut PivotLayoutKind,
@@ -512,6 +535,9 @@ fn parse_pivot_table_attrs(
     }
     if let Some(value) = attr_bool(e, b"colGrandTotals") {
         *col_grand_totals = value;
+    }
+    if let Some(value) = attr_bool(e, b"preserveFormatting") {
+        *preserve_formatting = value;
     }
     if let Some(value) = attr_bool(e, b"showHeaders") {
         *show_headers = value;

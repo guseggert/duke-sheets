@@ -92,6 +92,15 @@ pub struct WasmPivotGroupingOptions {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmPivotRefreshPolicyOptions {
+    pub refresh_on_open: Option<bool>,
+    pub preserve_formatting: Option<bool>,
+    pub background_query: Option<bool>,
+    pub missing_items_limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmPivotTableOptions {
     pub name: String,
     pub source_range: Option<String>,
@@ -105,6 +114,7 @@ pub struct WasmPivotTableOptions {
     pub filters: Option<Vec<WasmPivotItemFilterOptions>>,
     pub calculated_fields: Option<Vec<WasmPivotCalculatedFieldOptions>>,
     pub groupings: Option<Vec<WasmPivotGroupingOptions>>,
+    pub refresh_policy: Option<WasmPivotRefreshPolicyOptions>,
 }
 
 #[derive(Serialize)]

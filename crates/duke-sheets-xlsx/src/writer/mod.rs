@@ -3214,7 +3214,8 @@ mod tests {
     use duke_sheets_core::{
         CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotDateGroupUnit,
         PivotField, PivotFilter, PivotGrouping, PivotLayout, PivotLayoutKind, PivotMeasure,
-        PivotShowAs, PivotSort, PivotSource, PivotTable, PivotValue, SplitPanes,
+        PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource, PivotTable, PivotValue,
+        SplitPanes,
     };
     use std::io::Read;
 
@@ -3930,6 +3931,98 @@ mod tests {
         assert!(!pivot.layout.show_column_grand_totals);
         assert!(!pivot.layout.show_field_headers);
         assert!(!pivot.layout.show_expand_collapse);
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_refresh_policy() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let refresh_policy = PivotRefreshPolicy {
+            refresh_on_open: true,
+            preserve_formatting: false,
+            background_query: true,
+            missing_items_limit: Some(5),
+        };
+        let pivot = PivotTable::builder("RefreshPolicyPivot")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .refresh_policy(refresh_policy.clone())
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"preserveFormatting="0""#));
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"refreshOnLoad="1""#));
+        assert!(cache_def.contains(r#"backgroundQuery="1""#));
+        assert!(cache_def.contains(r#"missingItemsLimit="5""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("RefreshPolicyPivot")
+            .unwrap();
+        assert_eq!(pivot.refresh_policy, refresh_policy);
+    }
+
+    #[test]
+    fn test_writer_separates_pivot_caches_for_refresh_policy() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let source = CellRange::parse("A1:B3").unwrap();
+        let default_policy = PivotTable::builder("DefaultPolicyPivot")
+            .source_range(source)
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        let mut refresh_policy = PivotRefreshPolicy::default();
+        refresh_policy.missing_items_limit = Some(2);
+        let custom_policy = PivotTable::builder("CustomPolicyPivot")
+            .source_range(source)
+            .target_address("G1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .refresh_policy(refresh_policy)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(default_policy).unwrap();
+        sheet.add_pivot_table(custom_policy).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let first_cache = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        let second_cache = read_zip_entry(bytes, "xl/pivotCache/pivotCacheDefinition2.xml");
+        assert!(!first_cache.contains("missingItemsLimit"));
+        assert!(second_cache.contains(r#"missingItemsLimit="2""#));
     }
 
     #[test]

@@ -16,7 +16,7 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotDateGroupUnit, PivotFilter,
-    PivotGrouping, PivotMeasure, PivotShowAs, PivotTable, PivotValue,
+    PivotGrouping, PivotMeasure, PivotRefreshPolicy, PivotShowAs, PivotTable, PivotValue,
 };
 
 mod types;
@@ -120,8 +120,29 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
             builder = builder.grouping(build_pivot_grouping_from_py(&grouping)?);
         }
     }
+    if let Some(refresh_policy) = optional_any(dict, &["refresh_policy", "refreshPolicy"])? {
+        builder = builder.refresh_policy(build_pivot_refresh_policy_from_py(&refresh_policy)?);
+    }
 
     builder.build().map_err(to_py_err)
+}
+
+fn build_pivot_refresh_policy_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotRefreshPolicy> {
+    let dict = options
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("pivot refresh_policy must be a dict"))?;
+    let mut policy = PivotRefreshPolicy::default();
+    if let Some(value) = optional_bool(dict, &["refresh_on_open", "refreshOnOpen"])? {
+        policy.refresh_on_open = value;
+    }
+    if let Some(value) = optional_bool(dict, &["preserve_formatting", "preserveFormatting"])? {
+        policy.preserve_formatting = value;
+    }
+    if let Some(value) = optional_bool(dict, &["background_query", "backgroundQuery"])? {
+        policy.background_query = value;
+    }
+    policy.missing_items_limit = optional_u32(dict, &["missing_items_limit", "missingItemsLimit"])?;
+    Ok(policy)
 }
 
 fn build_pivot_measure_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotMeasure> {
@@ -218,6 +239,18 @@ fn required_string_vec(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Vec<
 fn optional_f64(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Option<f64>> {
     optional_any(dict, keys)?
         .map(|value| value.extract::<f64>())
+        .transpose()
+}
+
+fn optional_bool(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Option<bool>> {
+    optional_any(dict, keys)?
+        .map(|value| value.extract::<bool>())
+        .transpose()
+}
+
+fn optional_u32(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Option<u32>> {
+    optional_any(dict, keys)?
+        .map(|value| value.extract::<u32>())
         .transpose()
 }
 

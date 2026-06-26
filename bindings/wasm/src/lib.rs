@@ -10,8 +10,8 @@ use wasm_bindgen::JsCast;
 use duke_sheets::{CalculationOptions, FormulaValue, WorkbookCalculationExt, WorkbookPivotExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
-    PivotDateGroupUnit, PivotFilter, PivotGrouping, PivotMeasure, PivotShowAs, PivotTable,
-    PivotValue, Workbook as CoreWorkbook,
+    PivotDateGroupUnit, PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
+    PivotTable, PivotValue, Workbook as CoreWorkbook,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -221,6 +221,13 @@ export interface PivotGroupingOptions {
   units?: Array<"seconds" | "minutes" | "hours" | "days" | "months" | "quarters" | "years">;
 }
 
+export interface PivotRefreshPolicyOptions {
+  refreshOnOpen?: boolean;
+  preserveFormatting?: boolean;
+  backgroundQuery?: boolean;
+  missingItemsLimit?: number;
+}
+
 export interface PivotTableOptions {
   name: string;
   sourceRange?: string;
@@ -234,6 +241,7 @@ export interface PivotTableOptions {
   filters?: PivotItemFilterOptions[];
   calculatedFields?: PivotCalculatedFieldOptions[];
   groupings?: PivotGroupingOptions[];
+  refreshPolicy?: PivotRefreshPolicyOptions;
 }
 
 export interface PivotRefreshStats {
@@ -364,8 +372,28 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
     for grouping in options.groupings.unwrap_or_default() {
         builder = builder.grouping(build_pivot_grouping_from_wasm(grouping)?);
     }
+    if let Some(refresh_policy) = options.refresh_policy {
+        builder = builder.refresh_policy(build_pivot_refresh_policy_from_wasm(refresh_policy));
+    }
 
     builder.build().map_err(to_js_error)
+}
+
+fn build_pivot_refresh_policy_from_wasm(
+    options: WasmPivotRefreshPolicyOptions,
+) -> PivotRefreshPolicy {
+    let mut policy = PivotRefreshPolicy::default();
+    if let Some(value) = options.refresh_on_open {
+        policy.refresh_on_open = value;
+    }
+    if let Some(value) = options.preserve_formatting {
+        policy.preserve_formatting = value;
+    }
+    if let Some(value) = options.background_query {
+        policy.background_query = value;
+    }
+    policy.missing_items_limit = options.missing_items_limit;
+    policy
 }
 
 fn build_pivot_measure_from_wasm(

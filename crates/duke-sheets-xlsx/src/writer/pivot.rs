@@ -37,6 +37,8 @@ pub(super) struct PivotCachePart {
     rows: Vec<Vec<Option<u32>>>,
     record_count: usize,
     refresh_on_load: bool,
+    background_query: bool,
+    missing_items_limit: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +126,11 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
                         cache_part.refresh_on_load = true;
                     }
                 }
+                if pivot.refresh_policy.background_query {
+                    if let Some(cache_part) = cache_parts.get_mut(*cache_num - 1) {
+                        cache_part.background_query = true;
+                    }
+                }
                 *cache_num
             } else {
                 let cache_num = cache_parts.len() + 1;
@@ -137,6 +144,8 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
                     rows: resolved.rows,
                     record_count: resolved.record_count,
                     refresh_on_load: pivot.refresh_policy.refresh_on_open,
+                    background_query: pivot.refresh_policy.background_query,
+                    missing_items_limit: pivot.refresh_policy.missing_items_limit,
                 });
                 cache_num
             };
@@ -275,7 +284,12 @@ fn grouping_field_ref(grouping: &PivotGrouping) -> &PivotFieldRef {
 }
 
 fn cache_key_for_pivot(source_key: &str, pivot: &PivotTable) -> String {
-    if pivot.groupings.is_empty() && pivot.calculated_fields.is_empty() {
+    if pivot.groupings.is_empty()
+        && pivot.calculated_fields.is_empty()
+        && !pivot.refresh_policy.refresh_on_open
+        && !pivot.refresh_policy.background_query
+        && pivot.refresh_policy.missing_items_limit.is_none()
+    {
         return source_key.to_string();
     }
 
@@ -292,8 +306,15 @@ fn cache_key_for_pivot(source_key: &str, pivot: &PivotTable) -> String {
         .collect::<Vec<_>>()
         .join(";");
     format!(
-        "{source_key}|calculated:{calculated_signatures}|groupings:{}",
-        grouping_signatures.join(";")
+        "{source_key}|calculated:{calculated_signatures}|groupings:{}|refreshOnLoad:{}|backgroundQuery:{}|missingItemsLimit:{}",
+        grouping_signatures.join(";"),
+        pivot.refresh_policy.refresh_on_open,
+        pivot.refresh_policy.background_query,
+        pivot
+            .refresh_policy
+            .missing_items_limit
+            .map(|limit| limit.to_string())
+            .unwrap_or_else(|| "none".to_string())
     )
 }
 
@@ -1246,6 +1267,7 @@ pub(super) fn write_pivot_cache_definition_part<W: Write + Seek>(
     write_xml_part(zip, &path, |w| {
         let record_count = part.record_count.to_string();
         let refresh_on_load = bool_attr(part.refresh_on_load);
+        let background_query = bool_attr(part.background_query);
         let mut tag = BytesStart::new("pivotCacheDefinition");
         tag.push_attribute(("xmlns", NS_SPREADSHEET));
         tag.push_attribute(("xmlns:r", NS_DOC_RELS));
@@ -1253,6 +1275,11 @@ pub(super) fn write_pivot_cache_definition_part<W: Write + Seek>(
         tag.push_attribute(("recordCount", record_count.as_str()));
         tag.push_attribute(("saveData", "1"));
         tag.push_attribute(("refreshOnLoad", refresh_on_load));
+        tag.push_attribute(("backgroundQuery", background_query));
+        let missing_items_limit = part.missing_items_limit.map(|limit| limit.to_string());
+        if let Some(missing_items_limit) = missing_items_limit.as_deref() {
+            tag.push_attribute(("missingItemsLimit", missing_items_limit));
+        }
         tag.push_attribute(("createdVersion", "8"));
         tag.push_attribute(("refreshedVersion", "8"));
         tag.push_attribute(("minRefreshableVersion", "3"));

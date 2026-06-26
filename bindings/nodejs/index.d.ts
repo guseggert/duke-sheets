@@ -41,6 +41,13 @@ export interface JsPivotGroupingOptions {
   units?: Array<'seconds' | 'minutes' | 'hours' | 'days' | 'months' | 'quarters' | 'years'>
 }
 
+export interface JsPivotRefreshPolicyOptions {
+  refreshOnOpen?: boolean
+  preserveFormatting?: boolean
+  backgroundQuery?: boolean
+  missingItemsLimit?: number
+}
+
 export interface JsPivotTableOptions {
   name: string
   sourceRange?: string
@@ -54,6 +61,7 @@ export interface JsPivotTableOptions {
   filters?: JsPivotItemFilterOptions[]
   calculatedFields?: JsPivotCalculatedFieldOptions[]
   groupings?: JsPivotGroupingOptions[]
+  refreshPolicy?: JsPivotRefreshPolicyOptions
 }
 
 export interface JsPivotRefreshStats {

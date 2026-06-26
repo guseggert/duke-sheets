@@ -17,8 +17,8 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
-    PivotDateGroupUnit, PivotFilter, PivotGrouping, PivotMeasure, PivotShowAs, PivotTable,
-    PivotValue, Workbook as CoreWorkbook,
+    PivotDateGroupUnit, PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
+    PivotTable, PivotValue, Workbook as CoreWorkbook,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -361,6 +361,14 @@ pub struct JsPivotGroupingOptions {
 }
 
 #[napi(object)]
+pub struct JsPivotRefreshPolicyOptions {
+    pub refresh_on_open: Option<bool>,
+    pub preserve_formatting: Option<bool>,
+    pub background_query: Option<bool>,
+    pub missing_items_limit: Option<u32>,
+}
+
+#[napi(object)]
 pub struct JsPivotTableOptions {
     pub name: String,
     pub source_range: Option<String>,
@@ -374,6 +382,7 @@ pub struct JsPivotTableOptions {
     pub filters: Option<Vec<JsPivotItemFilterOptions>>,
     pub calculated_fields: Option<Vec<JsPivotCalculatedFieldOptions>>,
     pub groupings: Option<Vec<JsPivotGroupingOptions>>,
+    pub refresh_policy: Option<JsPivotRefreshPolicyOptions>,
 }
 
 #[napi(object)]
@@ -460,8 +469,26 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
     for grouping in options.groupings.unwrap_or_default() {
         builder = builder.grouping(build_pivot_grouping_from_js(grouping)?);
     }
+    if let Some(refresh_policy) = options.refresh_policy {
+        builder = builder.refresh_policy(build_pivot_refresh_policy_from_js(refresh_policy));
+    }
 
     builder.build().map_err(to_napi_err)
+}
+
+fn build_pivot_refresh_policy_from_js(options: JsPivotRefreshPolicyOptions) -> PivotRefreshPolicy {
+    let mut policy = PivotRefreshPolicy::default();
+    if let Some(value) = options.refresh_on_open {
+        policy.refresh_on_open = value;
+    }
+    if let Some(value) = options.preserve_formatting {
+        policy.preserve_formatting = value;
+    }
+    if let Some(value) = options.background_query {
+        policy.background_query = value;
+    }
+    policy.missing_items_limit = options.missing_items_limit;
+    policy
 }
 
 fn build_pivot_measure_from_js(options: JsPivotMeasureOptions) -> Result<PivotMeasure> {
