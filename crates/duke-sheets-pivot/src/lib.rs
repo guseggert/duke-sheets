@@ -471,7 +471,7 @@ fn build_rendered_pivot_from_snapshot(
     let mut aggregation = PivotAggregation::aggregate(&snapshot, &plan);
     let aggregate_restrictions = aggregation.apply_aggregate_filters(&plan);
     aggregation.apply_calculated_items(&pivot.name, &snapshot, &plan)?;
-    aggregation.expand_show_empty_items(&pivot.name, &snapshot, &plan, &aggregate_restrictions)?;
+    aggregation.expand_show_empty_items(pivot, &snapshot, &plan, &aggregate_restrictions)?;
     aggregation.sort_orders(&snapshot, &plan);
     render_pivot(pivot, &snapshot, &plan, &aggregation)
 }
@@ -3979,16 +3979,17 @@ impl PivotAggregation {
 
     fn expand_show_empty_items(
         &mut self,
-        pivot_name: &str,
+        pivot: &PivotTable,
         snapshot: &SourceSnapshot,
         plan: &CompiledPivotPlan,
         aggregate_restrictions: &AxisItemRestrictions,
     ) -> Result<()> {
         expand_axis_show_empty_items(
-            pivot_name,
+            &pivot.name,
             snapshot,
             plan,
             AggregateFilterAxis::Row,
+            pivot.layout.show_empty_rows,
             &plan.row_indexes,
             &plan.row_fields,
             &plan.filters,
@@ -3996,10 +3997,11 @@ impl PivotAggregation {
             &mut self.row_order,
         )?;
         expand_axis_show_empty_items(
-            pivot_name,
+            &pivot.name,
             snapshot,
             plan,
             AggregateFilterAxis::Column,
+            pivot.layout.show_empty_columns,
             &plan.column_indexes,
             &plan.column_fields,
             &plan.filters,
@@ -4430,19 +4432,23 @@ fn expand_axis_show_empty_items(
     snapshot: &SourceSnapshot,
     plan: &CompiledPivotPlan,
     axis: AggregateFilterAxis,
+    show_empty_axis: bool,
     field_indexes: &[usize],
     fields: &[PivotField],
     filters: &[CompiledFilter],
     aggregate_restrictions: &AxisItemRestrictions,
     order: &mut Vec<Vec<u32>>,
 ) -> Result<()> {
-    if field_indexes.is_empty() || fields.iter().all(|field| !field.show_empty_items) {
+    if field_indexes.is_empty()
+        || (!show_empty_axis && fields.iter().all(|field| !field.show_empty_items))
+    {
         return Ok(());
     }
 
     let item_ids = axis_item_ids(
         snapshot,
         axis,
+        show_empty_axis,
         field_indexes,
         fields,
         filters,
@@ -4471,6 +4477,7 @@ fn expand_axis_show_empty_items(
 fn axis_item_ids(
     snapshot: &SourceSnapshot,
     axis: AggregateFilterAxis,
+    show_empty_axis: bool,
     field_indexes: &[usize],
     fields: &[PivotField],
     filters: &[CompiledFilter],
@@ -4481,10 +4488,11 @@ fn axis_item_ids(
         .iter()
         .enumerate()
         .map(|(position, field_index)| {
-            let mut ids = if fields
-                .get(position)
-                .map(|field| field.show_empty_items)
-                .unwrap_or(false)
+            let mut ids = if show_empty_axis
+                || fields
+                    .get(position)
+                    .map(|field| field.show_empty_items)
+                    .unwrap_or(false)
             {
                 visible_dictionary_item_ids(snapshot, *field_index, filters)
             } else {
@@ -7892,6 +7900,106 @@ mod tests {
         assert_eq!(number(&workbook, "G3"), 10.0);
         assert_eq!(text(&workbook, "H3"), "");
         assert_eq!(number(&workbook, "I3"), 10.0);
+    }
+
+    #[test]
+    fn refreshes_layout_show_empty_rows() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 7.0).unwrap();
+        sheet.set_cell_value("A4", "North").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 3.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.show_empty_rows = true;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .filter(PivotFilter::field_items("Segment", ["Retail"]))
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E1"), "Region");
+        assert_eq!(text(&workbook, "F1"), "Revenue");
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(number(&workbook, "F2"), 10.0);
+        assert_eq!(text(&workbook, "E3"), "North");
+        assert_eq!(number(&workbook, "F3"), 3.0);
+        assert_eq!(text(&workbook, "E4"), "West");
+        assert_eq!(text(&workbook, "F4"), "");
+        assert_eq!(text(&workbook, "E5"), "Grand Total");
+        assert_eq!(number(&workbook, "F5"), 13.0);
+    }
+
+    #[test]
+    fn refreshes_layout_show_empty_columns() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Segment").unwrap();
+        sheet.set_cell_value("D1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", "Retail").unwrap();
+        sheet.set_cell_value("D2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", "Online").unwrap();
+        sheet.set_cell_value("D3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "East").unwrap();
+        sheet.set_cell_value("B4", "Q3").unwrap();
+        sheet.set_cell_value("C4", "Retail").unwrap();
+        sheet.set_cell_value("D4", 7.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.show_empty_columns = true;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D4").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .filter(PivotFilter::field_items("Segment", ["Retail"]))
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F1"), "Region");
+        assert_eq!(text(&workbook, "G1"), "Q1");
+        assert_eq!(text(&workbook, "H1"), "Q2");
+        assert_eq!(text(&workbook, "I1"), "Q3");
+        assert_eq!(text(&workbook, "J1"), "Grand Total");
+        assert_eq!(text(&workbook, "F2"), "East");
+        assert_eq!(number(&workbook, "G2"), 10.0);
+        assert_eq!(text(&workbook, "H2"), "");
+        assert_eq!(number(&workbook, "I2"), 7.0);
+        assert_eq!(number(&workbook, "J2"), 17.0);
+        assert_eq!(text(&workbook, "F3"), "Grand Total");
+        assert_eq!(number(&workbook, "G3"), 10.0);
+        assert_eq!(text(&workbook, "H3"), "");
+        assert_eq!(number(&workbook, "I3"), 7.0);
+        assert_eq!(number(&workbook, "J3"), 17.0);
     }
 
     #[test]
