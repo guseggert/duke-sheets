@@ -8,14 +8,15 @@ use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
-    PivotField, PivotFilter, PivotLayoutKind, PivotMeasure, PivotRefreshStatus, PivotShowAs,
-    PivotSource, PivotStyle, PivotTable, PivotValue,
+    PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping, PivotLayoutKind, PivotMeasure,
+    PivotRefreshStatus, PivotShowAs, PivotSource, PivotStyle, PivotTable, PivotValue,
 };
 
 #[derive(Debug, Clone)]
 pub(super) struct PivotCacheDefinition {
     pub(super) source: PivotSource,
     pub(super) fields: Vec<PivotCacheField>,
+    pub(super) groupings: Vec<PivotGrouping>,
     pub(super) record_count: Option<u64>,
     pub(super) refreshed_version: Option<String>,
 }
@@ -24,6 +25,7 @@ pub(super) struct PivotCacheDefinition {
 pub(super) struct PivotCacheField {
     pub(super) name: String,
     pub(super) shared_items: Vec<PivotValue>,
+    grouping: Option<PivotGrouping>,
 }
 
 pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
@@ -60,9 +62,15 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     current_field = Some(PivotCacheField {
                         name: attr_string(&e, b"name").unwrap_or_default(),
                         shared_items: Vec::new(),
+                        grouping: None,
                     });
                 }
                 b"sharedItems" => in_shared_items = true,
+                b"rangePr" => {
+                    if let Some(field) = &mut current_field {
+                        field.grouping = parse_range_grouping(&field.name, &e);
+                    }
+                }
                 _ => {}
             },
             Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
@@ -74,7 +82,13 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"cacheField" => fields.push(PivotCacheField {
                     name: attr_string(&e, b"name").unwrap_or_default(),
                     shared_items: Vec::new(),
+                    grouping: None,
                 }),
+                b"rangePr" => {
+                    if let Some(field) = &mut current_field {
+                        field.grouping = parse_range_grouping(&field.name, &e);
+                    }
+                }
                 b"m" | b"n" | b"b" | b"s" | b"e" if in_shared_items => {
                     if let Some(field) = &mut current_field {
                         field.shared_items.push(parse_shared_item(&e)?);
@@ -102,10 +116,15 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
         connection_name: String::new(),
         command_text: None,
     });
+    let groupings = fields
+        .iter()
+        .filter_map(|field| field.grouping.clone())
+        .collect();
 
     Ok(Some(PivotCacheDefinition {
         source,
         fields,
+        groupings,
         record_count,
         refreshed_version,
     }))
@@ -144,6 +163,46 @@ fn parse_shared_item(e: &BytesStart<'_>) -> XlsxResult<PivotValue> {
             PivotValue::Error(CellError::parse(&value).unwrap_or(CellError::Na))
         }
         _ => PivotValue::Blank,
+    })
+}
+
+fn parse_range_grouping(field_name: &str, e: &BytesStart<'_>) -> Option<PivotGrouping> {
+    let group_by = attr_string(e, b"groupBy").unwrap_or_else(|| "range".to_string());
+    if group_by.eq_ignore_ascii_case("range") {
+        let start = match attr_bool(e, b"autoStart") {
+            Some(true) => None,
+            Some(false) | None => attr_f64(e, b"startNum"),
+        };
+        let end = match attr_bool(e, b"autoEnd") {
+            Some(true) => None,
+            Some(false) | None => attr_f64(e, b"endNum"),
+        };
+        let interval = attr_f64(e, b"groupInterval").unwrap_or(1.0);
+        return Some(PivotGrouping::Number {
+            field: field_name.to_string().into(),
+            start,
+            end,
+            interval,
+        });
+    }
+
+    let unit = parse_date_group_by(&group_by)?;
+    Some(PivotGrouping::Date {
+        field: field_name.to_string().into(),
+        units: vec![unit],
+    })
+}
+
+fn parse_date_group_by(value: &str) -> Option<PivotDateGroupUnit> {
+    Some(match value {
+        "seconds" => PivotDateGroupUnit::Seconds,
+        "minutes" => PivotDateGroupUnit::Minutes,
+        "hours" => PivotDateGroupUnit::Hours,
+        "days" => PivotDateGroupUnit::Days,
+        "months" => PivotDateGroupUnit::Months,
+        "quarters" => PivotDateGroupUnit::Quarters,
+        "years" => PivotDateGroupUnit::Years,
+        _ => return None,
     })
 }
 
@@ -340,6 +399,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.layout.kind = layout_kind;
     pivot.style = style;
     pivot.rendered_range = rendered_range;
+    pivot.groupings = cache.groupings.clone();
     pivot.cache_info = Some(PivotCacheInfo {
         cache_id,
         source_kind: cache_source_kind(&cache.source),
@@ -553,5 +613,9 @@ fn attr_i32(e: &BytesStart<'_>, name: &[u8]) -> Option<i32> {
 }
 
 fn attr_u64(e: &BytesStart<'_>, name: &[u8]) -> Option<u64> {
+    attr_string(e, name).and_then(|value| value.parse().ok())
+}
+
+fn attr_f64(e: &BytesStart<'_>, name: &[u8]) -> Option<f64> {
     attr_string(e, name).and_then(|value| value.parse().ok())
 }

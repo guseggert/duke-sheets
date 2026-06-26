@@ -1,11 +1,12 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Seek, Write};
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 
 use duke_sheets_core::{
-    CellRange, PivotAggregate, PivotFieldRef, PivotFilter, PivotLayoutKind, PivotShowAs, PivotSort,
-    PivotSource, PivotTable, PivotValue, Table, Workbook, Worksheet,
+    CellRange, PivotAggregate, PivotDateGroupUnit, PivotFieldRef, PivotFilter, PivotGrouping,
+    PivotLayoutKind, PivotShowAs, PivotSort, PivotSource, PivotTable, PivotValue, Table, Workbook,
+    Worksheet,
 };
 
 use super::{
@@ -25,6 +26,7 @@ pub(super) struct PivotCachePart {
     source: PivotSource,
     source_sheet_index: usize,
     fields: Vec<CacheField>,
+    groupings: Vec<PivotGrouping>,
     rows: Vec<Vec<Option<u32>>>,
     record_count: usize,
     refresh_on_load: bool,
@@ -91,8 +93,10 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
 
             let resolved = resolve_pivot_source(workbook, sheet_index, &pivot.source)?;
             validate_pivot_fields(pivot, &resolved.fields)?;
+            validate_pivot_groupings(pivot, &resolved.fields)?;
+            let cache_key = cache_key_with_groupings(&resolved.key, pivot);
 
-            let cache_num = if let Some(cache_num) = cache_by_source.get(&resolved.key) {
+            let cache_num = if let Some(cache_num) = cache_by_source.get(&cache_key) {
                 if pivot.refresh_policy.refresh_on_open {
                     if let Some(cache_part) = cache_parts.get_mut(*cache_num - 1) {
                         cache_part.refresh_on_load = true;
@@ -101,12 +105,13 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
                 *cache_num
             } else {
                 let cache_num = cache_parts.len() + 1;
-                cache_by_source.insert(resolved.key, cache_num);
+                cache_by_source.insert(cache_key, cache_num);
                 cache_parts.push(PivotCachePart {
                     cache_num,
                     source: resolved.source,
                     source_sheet_index: resolved.source_sheet_index,
                     fields: resolved.fields,
+                    groupings: pivot.groupings.clone(),
                     rows: resolved.rows,
                     record_count: resolved.record_count,
                     refresh_on_load: pivot.refresh_policy.refresh_on_open,
@@ -175,6 +180,7 @@ fn validate_pivot_fields(pivot: &PivotTable, fields: &[CacheField]) -> XlsxResul
         .chain(pivot.page_fields.iter().map(|field| &field.field))
         .chain(pivot.measures.iter().map(|measure| &measure.field))
         .chain(pivot.filters.iter().filter_map(filter_field_ref))
+        .chain(pivot.groupings.iter().map(grouping_field_ref))
     {
         if field_index(fields, &field.name).is_none() {
             return Err(XlsxError::InvalidFormat(format!(
@@ -185,6 +191,114 @@ fn validate_pivot_fields(pivot: &PivotTable, fields: &[CacheField]) -> XlsxResul
     }
 
     Ok(())
+}
+
+fn validate_pivot_groupings(pivot: &PivotTable, fields: &[CacheField]) -> XlsxResult<()> {
+    let mut grouped_fields = HashSet::new();
+    for grouping in &pivot.groupings {
+        let field = grouping_field_ref(grouping);
+        if field_index(fields, &field.name).is_none() {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {} references unknown grouped source field: {}",
+                pivot.name, field.name
+            )));
+        }
+        if !grouped_fields.insert(field.name.to_lowercase()) {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {} has more than one grouping for field {}",
+                pivot.name, field.name
+            )));
+        }
+
+        match grouping {
+            PivotGrouping::Number {
+                start,
+                end,
+                interval,
+                ..
+            } => {
+                if !interval.is_finite() || *interval <= 0.0 {
+                    return Err(XlsxError::InvalidFormat(format!(
+                        "pivot table {} has an invalid numeric grouping interval for field {}",
+                        pivot.name, field.name
+                    )));
+                }
+                if start.is_some_and(|value| !value.is_finite())
+                    || end.is_some_and(|value| !value.is_finite())
+                {
+                    return Err(XlsxError::InvalidFormat(format!(
+                        "pivot table {} has a non-finite numeric grouping bound for field {}",
+                        pivot.name, field.name
+                    )));
+                }
+            }
+            PivotGrouping::Date { units, .. } => {
+                if units.len() != 1 {
+                    return Err(XlsxError::InvalidFormat(format!(
+                        "pivot table {} uses multi-unit date grouping for field {}, which this XLSX writer does not emit yet",
+                        pivot.name, field.name
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn grouping_field_ref(grouping: &PivotGrouping) -> &PivotFieldRef {
+    match grouping {
+        PivotGrouping::Number { field, .. } | PivotGrouping::Date { field, .. } => field,
+    }
+}
+
+fn cache_key_with_groupings(source_key: &str, pivot: &PivotTable) -> String {
+    if pivot.groupings.is_empty() {
+        return source_key.to_string();
+    }
+
+    let mut signatures = pivot
+        .groupings
+        .iter()
+        .map(grouping_signature)
+        .collect::<Vec<_>>();
+    signatures.sort();
+    format!("{source_key}|groupings:{}", signatures.join(";"))
+}
+
+fn grouping_signature(grouping: &PivotGrouping) -> String {
+    match grouping {
+        PivotGrouping::Number {
+            field,
+            start,
+            end,
+            interval,
+        } => format!(
+            "n:{}:{}:{}:{}",
+            field.name.to_lowercase(),
+            f64_option_signature(*start),
+            f64_option_signature(*end),
+            f64_signature(*interval)
+        ),
+        PivotGrouping::Date { field, units } => {
+            let units = units
+                .iter()
+                .map(|unit| date_group_by_name(*unit))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("d:{}:{units}", field.name.to_lowercase())
+        }
+    }
+}
+
+fn f64_option_signature(value: Option<f64>) -> String {
+    value
+        .map(f64_signature)
+        .unwrap_or_else(|| "auto".to_string())
+}
+
+fn f64_signature(value: f64) -> String {
+    format!("{:016x}", value.to_bits())
 }
 
 fn filter_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
@@ -833,7 +947,7 @@ pub(super) fn write_pivot_cache_definition_part<W: Write + Seek>(
         cache_fields.push_attribute(("count", count.as_str()));
         w.write_event(Event::Start(cache_fields))?;
         for field in &part.fields {
-            write_cache_field(w, field)?;
+            write_cache_field(w, field, grouping_for_field(&part.groupings, &field.name))?;
         }
         w.write_event(Event::End(BytesEnd::new("cacheFields")))?;
 
@@ -877,7 +991,11 @@ fn write_worksheet_source(
     Ok(())
 }
 
-fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
+fn write_cache_field(
+    w: &mut XmlWriter,
+    field: &CacheField,
+    grouping: Option<&PivotGrouping>,
+) -> XlsxResult<()> {
     let mut cache_field = BytesStart::new("cacheField");
     cache_field.push_attribute(("name", field.name.as_str()));
     w.write_event(Event::Start(cache_field))?;
@@ -895,8 +1013,73 @@ fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
     }
     w.write_event(Event::End(BytesEnd::new("sharedItems")))?;
 
+    if let Some(grouping) = grouping {
+        write_field_group(w, grouping)?;
+    }
+
     w.write_event(Event::End(BytesEnd::new("cacheField")))?;
     Ok(())
+}
+
+fn grouping_for_field<'a>(
+    groupings: &'a [PivotGrouping],
+    field_name: &str,
+) -> Option<&'a PivotGrouping> {
+    groupings.iter().find(|grouping| {
+        grouping_field_ref(grouping)
+            .name
+            .eq_ignore_ascii_case(field_name)
+    })
+}
+
+fn write_field_group(w: &mut XmlWriter, grouping: &PivotGrouping) -> XlsxResult<()> {
+    w.write_event(Event::Start(BytesStart::new("fieldGroup")))?;
+
+    let mut range_pr = BytesStart::new("rangePr");
+    match grouping {
+        PivotGrouping::Number {
+            start,
+            end,
+            interval,
+            ..
+        } => {
+            let auto_start = bool_attr(start.is_none());
+            let auto_end = bool_attr(end.is_none());
+            let start_num = start.map(|value| value.to_string());
+            let end_num = end.map(|value| value.to_string());
+            let group_interval = interval.to_string();
+
+            range_pr.push_attribute(("autoStart", auto_start));
+            range_pr.push_attribute(("autoEnd", auto_end));
+            range_pr.push_attribute(("groupBy", "range"));
+            if let Some(start_num) = &start_num {
+                range_pr.push_attribute(("startNum", start_num.as_str()));
+            }
+            if let Some(end_num) = &end_num {
+                range_pr.push_attribute(("endNum", end_num.as_str()));
+            }
+            range_pr.push_attribute(("groupInterval", group_interval.as_str()));
+        }
+        PivotGrouping::Date { units, .. } => {
+            range_pr.push_attribute(("groupBy", date_group_by_name(units[0])));
+        }
+    }
+    w.write_event(Event::Empty(range_pr))?;
+
+    w.write_event(Event::End(BytesEnd::new("fieldGroup")))?;
+    Ok(())
+}
+
+fn date_group_by_name(unit: PivotDateGroupUnit) -> &'static str {
+    match unit {
+        PivotDateGroupUnit::Seconds => "seconds",
+        PivotDateGroupUnit::Minutes => "minutes",
+        PivotDateGroupUnit::Hours => "hours",
+        PivotDateGroupUnit::Days => "days",
+        PivotDateGroupUnit::Months => "months",
+        PivotDateGroupUnit::Quarters => "quarters",
+        PivotDateGroupUnit::Years => "years",
+    }
 }
 
 pub(super) fn write_pivot_cache_records_part<W: Write + Seek>(

@@ -3212,8 +3212,9 @@ mod tests {
     use super::*;
     use crate::reader::XlsxReader;
     use duke_sheets_core::{
-        CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotFilter, PivotMeasure,
-        PivotShowAs, PivotSource, PivotTable, PivotValue, SplitPanes,
+        CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotDateGroupUnit,
+        PivotFilter, PivotGrouping, PivotMeasure, PivotShowAs, PivotSource, PivotTable, PivotValue,
+        SplitPanes,
     };
     use std::io::Read;
 
@@ -3994,6 +3995,104 @@ mod tests {
                 assert_eq!(*base_item, PivotValue::Number(1.0));
             }
             other => panic!("unexpected show-as mode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_grouping() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Amount").unwrap();
+        sheet.set_cell_value("B1", "SaleDate").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", 2.0).unwrap();
+        sheet.set_cell_value("B2", 45292.0).unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", 12.0).unwrap();
+        sheet.set_cell_value("B3", 45323.0).unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+        sheet.set_cell_value("A4", 22.0).unwrap();
+        sheet.set_cell_value("B4", 45352.0).unwrap();
+        sheet.set_cell_value("C4", 30.0).unwrap();
+
+        let pivot = PivotTable::builder("GroupedSales")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Amount")
+            .column("SaleDate")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .grouping(PivotGrouping::Number {
+                field: "Amount".into(),
+                start: Some(0.0),
+                end: Some(30.0),
+                interval: 10.0,
+            })
+            .grouping(PivotGrouping::Date {
+                field: "SaleDate".into(),
+                units: vec![PivotDateGroupUnit::Months],
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(
+            r#"<fieldGroup><rangePr autoStart="0" autoEnd="0" groupBy="range" startNum="0" endNum="30" groupInterval="10"/></fieldGroup>"#
+        ));
+        assert!(cache_def.contains(r#"<fieldGroup><rangePr groupBy="months"/></fieldGroup>"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("GroupedSales")
+            .unwrap();
+        assert_eq!(pivot.groupings.len(), 2);
+
+        let amount_grouping = pivot
+            .groupings
+            .iter()
+            .find(|grouping| {
+                matches!(
+                    grouping,
+                    PivotGrouping::Number { field, .. } if field.name == "Amount"
+                )
+            })
+            .expect("amount grouping");
+        match amount_grouping {
+            PivotGrouping::Number {
+                start,
+                end,
+                interval,
+                ..
+            } => {
+                assert_eq!(*start, Some(0.0));
+                assert_eq!(*end, Some(30.0));
+                assert_eq!(*interval, 10.0);
+            }
+            other => panic!("unexpected grouping: {other:?}"),
+        }
+
+        let date_grouping = pivot
+            .groupings
+            .iter()
+            .find(|grouping| {
+                matches!(
+                    grouping,
+                    PivotGrouping::Date { field, .. } if field.name == "SaleDate"
+                )
+            })
+            .expect("date grouping");
+        match date_grouping {
+            PivotGrouping::Date { units, .. } => {
+                assert_eq!(*units, vec![PivotDateGroupUnit::Months]);
+            }
+            other => panic!("unexpected grouping: {other:?}"),
         }
     }
 

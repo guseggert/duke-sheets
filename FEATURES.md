@@ -457,7 +457,7 @@ One row per category, backed by the formula engine test suite. Individual functi
 | Aggregate functions (Sum/Count/Avg/...) | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::tests::test_writer_emits_pivot_table_and_cache_parts`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_table_source_pivot`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_pivot_show_as_percentages`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_pivot_show_as_base_field` | §18.10.1 | Data-field subtotal functions, percent-of-row/column/grand-total, and ECMA base-field difference/percent-difference/running-total show-as calculations round-trip; rank/index extension modes are not written yet |
 | Pivot table styles | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::tests::test_writer_emits_pivot_table_and_cache_parts`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_table_source_pivot` | §18.10.1 | Basic `pivotTableStyleInfo` name/header/stripe flags only |
 | Calculated fields | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
-| Grouping (dates, numbers) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
+| Grouping (dates, numbers) | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::tests::test_writer_round_trips_pivot_grouping` | §18.10.1 CT_FieldGroup/CT_RangePr | Basic numeric `rangePr` bins and single-unit date grouping round-trip; grouped-field hierarchies, discrete groups, `groupItems`, and multi-unit date grouping are not complete yet |
 | Slicers | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.3.16 |
 | Timelines | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.3.20 |
 | PivotChart | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §21.3 |
