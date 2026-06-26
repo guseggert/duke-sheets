@@ -58,6 +58,28 @@ fn xls_basic_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xls_average_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+
+    let pivot = PivotTable::builder("AveragePivot")
+        .source_range(CellRange::parse("A1:B3").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .named_measure("Revenue", PivotAggregate::Average, "Average Revenue")
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xls_with_native_pivot_table() {
@@ -66,12 +88,55 @@ fn excel_opens_xls_with_native_pivot_table() {
     assert!(xls_cfb_has_stream(&excel_bytes, "/_SX_DB_CUR/0001"));
 }
 
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_average_pivot_data_field() {
+    let (_result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_average_pivot_workbook());
+    let workbook = xls_cfb_stream(&excel_bytes, "/Workbook");
+    let sxdi = xls_record_payloads(&workbook)
+        .into_iter()
+        .find_map(|(record_type, payload)| (record_type == 0x00C5).then_some(payload))
+        .expect("SXDI data field record");
+
+    assert_eq!(
+        u16::from_le_bytes(sxdi[2..4].try_into().unwrap()),
+        2,
+        "Excel should preserve Average as the data-field function"
+    );
+    assert!(
+        String::from_utf8_lossy(&sxdi).contains("Average Revenue"),
+        "Excel should preserve the data-field caption"
+    );
+}
+
 fn xls_cfb_has_stream(bytes: &[u8], path: &str) -> bool {
     let reader = std::io::Cursor::new(bytes);
     let Ok(cfb) = duke_sheets_xls::cfb::CompoundFile::open(reader) else {
         return false;
     };
     cfb.exists(path)
+}
+
+fn xls_cfb_stream(bytes: &[u8], path: &str) -> Vec<u8> {
+    let reader = std::io::Cursor::new(bytes);
+    let cfb = duke_sheets_xls::cfb::CompoundFile::open(reader).expect("open xls cfb");
+    cfb.read_stream(path)
+        .unwrap_or_else(|e| panic!("read {path}: {e}"))
+}
+
+fn xls_record_payloads(stream: &[u8]) -> Vec<(u16, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while pos + 4 <= stream.len() {
+        let typ = u16::from_le_bytes([stream[pos], stream[pos + 1]]);
+        let len = u16::from_le_bytes([stream[pos + 2], stream[pos + 3]]) as usize;
+        let start = pos + 4;
+        let end = start + len;
+        out.push((typ, stream[start..end].to_vec()));
+        pos = end;
+    }
+    out
 }
 
 fn named_formula_workbook() -> Workbook {

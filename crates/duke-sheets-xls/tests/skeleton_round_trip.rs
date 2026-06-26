@@ -9,7 +9,7 @@
 use std::io::Cursor;
 
 use duke_sheets_core::{CellRange, PivotAggregate, PivotTable, Workbook};
-use duke_sheets_xls::{cfb::CompoundFile, XlsReader, XlsWriter};
+use duke_sheets_xls::{XlsReader, XlsWriter, cfb::CompoundFile};
 
 fn add_test_pivot(wb: &mut Workbook) {
     let ws = wb.worksheet_mut(0).unwrap();
@@ -26,6 +26,26 @@ fn add_test_pivot(wb: &mut Workbook) {
         .unwrap()
         .row("Region")
         .measure("Revenue", PivotAggregate::Sum)
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
+fn add_average_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+
+    let pivot = PivotTable::builder("AveragePivot")
+        .source_range(CellRange::parse("A1:B3").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .named_measure("Revenue", PivotAggregate::Average, "Average Revenue")
         .build()
         .unwrap();
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
@@ -80,6 +100,31 @@ fn semantic_pivot_tables_emit_native_biff8_streams() {
     assert!(cache_records.contains(&0x00C9));
 }
 
+#[test]
+fn semantic_pivot_tables_emit_xls_average_data_field() {
+    let mut wb = Workbook::new();
+    add_average_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let workbook_records = records_with_payload(&workbook);
+    let sxdi = workbook_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00C5).then_some(payload))
+        .expect("SXDI data field record");
+
+    assert_eq!(
+        u16::from_le_bytes(sxdi[2..4].try_into().unwrap()),
+        2,
+        "BIFF8 data function 2 is Average"
+    );
+    assert!(
+        String::from_utf8_lossy(sxdi).contains("Average Revenue"),
+        "SXDI caption should come from the semantic pivot measure"
+    );
+}
+
 fn record_types(stream: &[u8]) -> Vec<u16> {
     let mut out = Vec::new();
     let mut pos = 0usize;
@@ -88,6 +133,20 @@ fn record_types(stream: &[u8]) -> Vec<u16> {
         let len = u16::from_le_bytes([stream[pos + 2], stream[pos + 3]]) as usize;
         out.push(typ);
         pos += 4 + len;
+    }
+    out
+}
+
+fn records_with_payload(stream: &[u8]) -> Vec<(u16, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while pos + 4 <= stream.len() {
+        let typ = u16::from_le_bytes([stream[pos], stream[pos + 1]]);
+        let len = u16::from_le_bytes([stream[pos + 2], stream[pos + 3]]) as usize;
+        let start = pos + 4;
+        let end = start + len;
+        out.push((typ, stream[start..end].to_vec()));
+        pos = end;
     }
     out
 }
