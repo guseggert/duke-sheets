@@ -3999,6 +3999,59 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_pivot_rank_show_as() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Period").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", 1.0).unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", 2.0).unwrap();
+        sheet.set_cell_value("B3", 15.0).unwrap();
+        sheet.set_cell_value("A4", 3.0).unwrap();
+        sheet.set_cell_value("B4", 20.0).unwrap();
+
+        let pivot = PivotTable::builder("SalesRank")
+            .source_range(CellRange::parse("A1:B4").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Period")
+            .pivot_measure(
+                PivotMeasure::new("Revenue", PivotAggregate::Sum).with_show_as(
+                    PivotShowAs::RankDescending {
+                        base_field: "Period".into(),
+                    },
+                ),
+            )
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"baseField="0""#));
+        assert!(pivot_xml.contains(r#"<x14:dataField "#));
+        assert!(pivot_xml.contains(r#"pivotShowAs="rankDescending""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("SalesRank")
+            .unwrap();
+        assert_eq!(pivot.measures.len(), 1);
+        match &pivot.measures[0].show_as {
+            PivotShowAs::RankDescending { base_field } => {
+                assert_eq!(base_field.name, "Period");
+            }
+            other => panic!("unexpected show-as mode: {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_writer_round_trips_pivot_calculated_fields() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();

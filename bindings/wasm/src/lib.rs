@@ -198,7 +198,8 @@ export interface PivotMeasureOptions {
   field: string;
   aggregate?: "sum" | "count" | "countNumbers" | "average" | "max" | "min" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
   name?: string;
-  showAs?: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal";
+  showAs?: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "rankAscending" | "rankDescending";
+  baseField?: string;
 }
 
 export interface PivotItemFilterOptions {
@@ -376,7 +377,7 @@ fn build_pivot_measure_from_wasm(
         measure = measure.with_name(name);
     }
     if let Some(show_as) = options.show_as {
-        measure = measure.with_show_as(parse_pivot_show_as(&show_as)?);
+        measure = measure.with_show_as(parse_pivot_show_as(&show_as, options.base_field)?);
     }
     Ok(measure)
 }
@@ -452,18 +453,28 @@ fn parse_pivot_date_group_unit(value: &str) -> Result<PivotDateGroupUnit, JsErro
     })
 }
 
-fn parse_pivot_show_as(value: &str) -> Result<PivotShowAs, JsError> {
+fn parse_pivot_show_as(value: &str, base_field: Option<String>) -> Result<PivotShowAs, JsError> {
     Ok(match value {
         "normal" => PivotShowAs::Normal,
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        "rankAscending" => PivotShowAs::RankAscending {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "rankDescending" => PivotShowAs::RankDescending {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
         other => {
             return Err(JsError::new(&format!(
                 "Unsupported pivot showAs mode: {other}"
             )))
         }
     })
+}
+
+fn require_pivot_base_field(value: &str, base_field: Option<String>) -> Result<String, JsError> {
+    base_field.ok_or_else(|| JsError::new(&format!("pivot showAs mode {value} requires baseField")))
 }
 
 fn cell_error_to_string(e: &CellError) -> &'static str {

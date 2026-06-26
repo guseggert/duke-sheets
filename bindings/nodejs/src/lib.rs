@@ -335,6 +335,7 @@ pub struct JsPivotMeasureOptions {
     pub aggregate: Option<String>,
     pub name: Option<String>,
     pub show_as: Option<String>,
+    pub base_field: Option<String>,
 }
 
 #[napi(object)]
@@ -470,7 +471,7 @@ fn build_pivot_measure_from_js(options: JsPivotMeasureOptions) -> Result<PivotMe
         measure = measure.with_name(name);
     }
     if let Some(show_as) = options.show_as {
-        measure = measure.with_show_as(parse_pivot_show_as(&show_as)?);
+        measure = measure.with_show_as(parse_pivot_show_as(&show_as, options.base_field)?);
     }
     Ok(measure)
 }
@@ -544,17 +545,29 @@ fn parse_pivot_date_group_unit(value: &str) -> Result<PivotDateGroupUnit> {
     })
 }
 
-fn parse_pivot_show_as(value: &str) -> Result<PivotShowAs> {
+fn parse_pivot_show_as(value: &str, base_field: Option<String>) -> Result<PivotShowAs> {
     Ok(match value {
         "normal" => PivotShowAs::Normal,
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        "rankAscending" => PivotShowAs::RankAscending {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "rankDescending" => PivotShowAs::RankDescending {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
         other => {
             return Err(napi::Error::from_reason(format!(
                 "Unsupported pivot showAs mode: {other}"
             )));
         }
+    })
+}
+
+fn require_pivot_base_field(value: &str, base_field: Option<String>) -> Result<String> {
+    base_field.ok_or_else(|| {
+        napi::Error::from_reason(format!("pivot showAs mode {value} requires baseField"))
     })
 }
 

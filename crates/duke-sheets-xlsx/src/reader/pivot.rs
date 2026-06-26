@@ -253,6 +253,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut axis_context: Option<AxisContext> = None;
     let mut pivot_field_index = 0usize;
     let mut current_pivot_field: Option<(usize, Vec<u32>)> = None;
+    let mut current_data_field: Option<CurrentDataField> = None;
     let mut hidden_items_by_field: HashMap<usize, Vec<u32>> = HashMap::new();
 
     loop {
@@ -273,6 +274,21 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                 b"pivotField" => {
                     current_pivot_field = Some((pivot_field_index, Vec::new()));
                     pivot_field_index += 1;
+                }
+                b"dataField" if attr_u32(&e, b"fld").is_some() => {
+                    let Some(cache) = caches.get(&cache_id) else {
+                        buf.clear();
+                        continue;
+                    };
+                    if let Some(measure) = parse_data_field(&e, cache) {
+                        let base_field_index = attr_i32(&e, b"baseField")
+                            .and_then(|value| usize::try_from(value).ok());
+                        measures.push(measure);
+                        current_data_field = Some(CurrentDataField {
+                            measure_index: measures.len() - 1,
+                            base_field_index,
+                        });
+                    }
                 }
                 b"rowFields" => axis_context = Some(AxisContext::Rows),
                 b"colFields" => axis_context = Some(AxisContext::Columns),
@@ -354,28 +370,18 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         buf.clear();
                         continue;
                     };
-                    if let Some(field_index) = attr_u32(&e, b"fld").map(|value| value as usize) {
-                        if let Some(field) = cache.fields.get(field_index) {
-                            let aggregate = attr_string(&e, b"subtotal")
-                                .as_deref()
-                                .and_then(parse_aggregate)
-                                .unwrap_or(PivotAggregate::Sum);
-                            let mut measure = PivotMeasure::new(field.name.clone(), aggregate);
-                            measure.name = attr_string(&e, b"name");
-                            measure.show_as = attr_string(&e, b"showDataAs")
-                                .as_deref()
-                                .and_then(|value| {
-                                    parse_show_as(
-                                        value,
-                                        cache,
-                                        attr_i32(&e, b"baseField")
-                                            .and_then(|value| usize::try_from(value).ok()),
-                                        attr_u32(&e, b"baseItem"),
-                                    )
-                                })
-                                .unwrap_or(PivotShowAs::Normal);
-                            measures.push(measure);
+                    if let Some(pivot_show_as) = attr_string(&e, b"pivotShowAs") {
+                        if let Some(current) = current_data_field {
+                            if let Some(show_as) =
+                                parse_x14_show_as(&pivot_show_as, cache, current.base_field_index)
+                            {
+                                if let Some(measure) = measures.get_mut(current.measure_index) {
+                                    measure.show_as = show_as;
+                                }
+                            }
                         }
+                    } else if let Some(measure) = parse_data_field(&e, cache) {
+                        measures.push(measure);
                     }
                 }
                 b"pivotTableStyleInfo" => style = parse_pivot_style(&e),
@@ -390,6 +396,11 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                     }
                 }
                 b"rowFields" | b"colFields" | b"pageFields" | b"dataFields" => axis_context = None,
+                b"dataField" => {
+                    if e.name().as_ref() == b"dataField" {
+                        current_data_field = None;
+                    }
+                }
                 _ => {}
             },
             Ok(Event::Eof) => break,
@@ -464,6 +475,12 @@ enum AxisContext {
     Columns,
     Page,
     Data,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CurrentDataField {
+    measure_index: usize,
+    base_field_index: Option<usize>,
 }
 
 fn parse_pivot_table_attrs(
@@ -552,6 +569,29 @@ fn parse_aggregate(value: &str) -> Option<PivotAggregate> {
     })
 }
 
+fn parse_data_field(e: &BytesStart<'_>, cache: &PivotCacheDefinition) -> Option<PivotMeasure> {
+    let field_index = attr_u32(e, b"fld").map(|value| value as usize)?;
+    let field = cache.fields.get(field_index)?;
+    let aggregate = attr_string(e, b"subtotal")
+        .as_deref()
+        .and_then(parse_aggregate)
+        .unwrap_or(PivotAggregate::Sum);
+    let mut measure = PivotMeasure::new(field.name.clone(), aggregate);
+    measure.name = attr_string(e, b"name");
+    measure.show_as = attr_string(e, b"showDataAs")
+        .as_deref()
+        .and_then(|value| {
+            parse_show_as(
+                value,
+                cache,
+                attr_i32(e, b"baseField").and_then(|value| usize::try_from(value).ok()),
+                attr_u32(e, b"baseItem"),
+            )
+        })
+        .unwrap_or(PivotShowAs::Normal);
+    Some(measure)
+}
+
 fn parse_show_as(
     value: &str,
     cache: &PivotCacheDefinition,
@@ -590,8 +630,29 @@ fn parse_show_as(
                 .get(base_item_index? as usize)?
                 .clone(),
         },
+        "rankAscending" => PivotShowAs::RankAscending {
+            base_field: duke_sheets_core::PivotFieldRef::new(
+                cache.fields.get(base_field_index?)?.name.clone(),
+            ),
+        },
+        "rankDescending" => PivotShowAs::RankDescending {
+            base_field: duke_sheets_core::PivotFieldRef::new(
+                cache.fields.get(base_field_index?)?.name.clone(),
+            ),
+        },
         _ => return None,
     })
+}
+
+fn parse_x14_show_as(
+    value: &str,
+    cache: &PivotCacheDefinition,
+    base_field_index: Option<usize>,
+) -> Option<PivotShowAs> {
+    match value {
+        "rankAscending" | "rankDescending" => parse_show_as(value, cache, base_field_index, None),
+        _ => None,
+    }
 }
 
 fn cache_source_kind(source: &PivotSource) -> PivotCacheSourceKind {

@@ -134,7 +134,10 @@ fn build_pivot_measure_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotMeas
         measure = measure.with_name(name);
     }
     if let Some(show_as) = optional_string(dict, &["show_as", "showAs"])? {
-        measure = measure.with_show_as(parse_pivot_show_as(&show_as)?);
+        measure = measure.with_show_as(parse_pivot_show_as(
+            &show_as,
+            optional_string(dict, &["base_field", "baseField"])?,
+        )?);
     }
     Ok(measure)
 }
@@ -259,17 +262,29 @@ fn parse_pivot_date_group_unit(value: &str) -> PyResult<PivotDateGroupUnit> {
     })
 }
 
-fn parse_pivot_show_as(value: &str) -> PyResult<PivotShowAs> {
+fn parse_pivot_show_as(value: &str, base_field: Option<String>) -> PyResult<PivotShowAs> {
     Ok(match value {
         "normal" => PivotShowAs::Normal,
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        "rankAscending" => PivotShowAs::RankAscending {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "rankDescending" => PivotShowAs::RankDescending {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
         other => {
             return Err(PyValueError::new_err(format!(
                 "Unsupported pivot show_as mode: {other}"
             )))
         }
+    })
+}
+
+fn require_pivot_base_field(value: &str, base_field: Option<String>) -> PyResult<String> {
+    base_field.ok_or_else(|| {
+        PyValueError::new_err(format!("pivot show_as mode {value} requires base_field"))
     })
 }
 

@@ -62,6 +62,7 @@ pub struct WasmPivotMeasureOptions {
     pub aggregate: Option<String>,
     pub name: Option<String>,
     pub show_as: Option<String>,
+    pub base_field: Option<String>,
 }
 
 #[derive(Deserialize)]

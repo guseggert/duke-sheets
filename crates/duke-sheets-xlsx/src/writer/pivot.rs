@@ -18,6 +18,9 @@ use super::{
     NS_SPREADSHEET, RT_PIVOT_CACHE_RECORDS,
 };
 
+const NS_SPREADSHEET_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+const EXT_URI_X14_DATA_FIELD: &str = "{2946ED86-A175-432a-8AC1-64E0C546D7DE}";
+
 #[derive(Debug, Clone)]
 pub(super) struct PivotNumbering {
     pub(super) cache_parts: Vec<PivotCachePart>,
@@ -1105,9 +1108,32 @@ fn write_data_fields(
             let base_item = base_item.to_string();
             data_field.push_attribute(("baseItem", base_item.as_str()));
         }
-        w.write_event(Event::Empty(data_field))?;
+        if let Some(rank_show_as) = rank_show_as_name(&measure.show_as) {
+            w.write_event(Event::Start(data_field))?;
+            write_data_field_ext(w, rank_show_as)?;
+            w.write_event(Event::End(BytesEnd::new("dataField")))?;
+        } else {
+            w.write_event(Event::Empty(data_field))?;
+        }
     }
     w.write_event(Event::End(BytesEnd::new("dataFields")))?;
+    Ok(())
+}
+
+fn write_data_field_ext(w: &mut XmlWriter, pivot_show_as: &str) -> XlsxResult<()> {
+    w.write_event(Event::Start(BytesStart::new("extLst")))?;
+
+    let mut ext = BytesStart::new("ext");
+    ext.push_attribute(("uri", EXT_URI_X14_DATA_FIELD));
+    w.write_event(Event::Start(ext))?;
+
+    let mut data_field = BytesStart::new("x14:dataField");
+    data_field.push_attribute(("xmlns:x14", NS_SPREADSHEET_X14));
+    data_field.push_attribute(("pivotShowAs", pivot_show_as));
+    w.write_event(Event::Empty(data_field))?;
+
+    w.write_event(Event::End(BytesEnd::new("ext")))?;
+    w.write_event(Event::End(BytesEnd::new("extLst")))?;
     Ok(())
 }
 
@@ -1121,6 +1147,8 @@ fn is_writable_show_as(show_as: &PivotShowAs) -> bool {
             | PivotShowAs::RunningTotal { .. }
             | PivotShowAs::DifferenceFrom { .. }
             | PivotShowAs::PercentDifferenceFrom { .. }
+            | PivotShowAs::RankAscending { .. }
+            | PivotShowAs::RankDescending { .. }
     )
 }
 
@@ -1137,12 +1165,22 @@ fn show_data_as_name(show_as: &PivotShowAs) -> Option<&'static str> {
     }
 }
 
+fn rank_show_as_name(show_as: &PivotShowAs) -> Option<&'static str> {
+    match show_as {
+        PivotShowAs::RankAscending { .. } => Some("rankAscending"),
+        PivotShowAs::RankDescending { .. } => Some("rankDescending"),
+        _ => None,
+    }
+}
+
 fn show_as_base_field_index(
     show_as: &PivotShowAs,
     fields: &[CacheField],
 ) -> XlsxResult<Option<usize>> {
     let base_field = match show_as {
         PivotShowAs::RunningTotal { base_field }
+        | PivotShowAs::RankAscending { base_field }
+        | PivotShowAs::RankDescending { base_field }
         | PivotShowAs::DifferenceFrom { base_field, .. }
         | PivotShowAs::PercentDifferenceFrom { base_field, .. } => &base_field.name,
         _ => return Ok(None),
