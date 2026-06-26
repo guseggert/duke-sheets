@@ -7,7 +7,8 @@ use zip::ZipWriter;
 use crate::biff12::{encode_wide_str, records, RecordWriter};
 use crate::error::{XlsbError, XlsbResult};
 use duke_sheets_core::{
-    CellError, CellRange, PivotAggregate, PivotField, PivotFilter, PivotTable, PivotValue, Workbook,
+    CellError, CellRange, PivotAggregate, PivotField, PivotFilter, PivotTable, PivotValue,
+    PivotValuesAxis, Workbook,
 };
 use duke_sheets_pivot::{
     FormatPivotCache, FormatPivotCacheField, FormatPivotPlan, FormatPivotSource, FormatPivotTable,
@@ -176,12 +177,16 @@ fn write_pivot_table_part<W: Write + Seek>(
     write_sx_location(&mut rw, pivot, cache)?;
     rw.write_record(records::BRT_END_SX_LOCATION, &[])?;
     write_sx_fields(&mut rw, pivot, cache, &usage)?;
+    let values_on_rows = values_field_on_axis(pivot, PivotValuesAxis::Rows);
+    let values_on_columns = values_field_on_axis(pivot, PivotValuesAxis::Columns);
     write_axis_fields(
         &mut rw,
         records::BRT_BEGIN_ISXVD_RWS,
         records::BRT_END_ISXVD_RWS,
         cache,
         &pivot.rows,
+        values_on_rows,
+        pivot.layout.values_axis_position,
     )?;
     write_axis_items(
         &mut rw,
@@ -189,6 +194,9 @@ fn write_pivot_table_part<W: Write + Seek>(
         records::BRT_END_SX_ROW_ITEMS,
         cache,
         &pivot.rows,
+        values_on_rows,
+        pivot.layout.values_axis_position,
+        pivot.measures.len(),
     )?;
     write_axis_fields(
         &mut rw,
@@ -196,6 +204,8 @@ fn write_pivot_table_part<W: Write + Seek>(
         records::BRT_END_ISXVD_COLS,
         cache,
         &pivot.columns,
+        values_on_columns,
+        pivot.layout.values_axis_position,
     )?;
     write_axis_items(
         &mut rw,
@@ -203,6 +213,9 @@ fn write_pivot_table_part<W: Write + Seek>(
         records::BRT_END_SX_COL_ITEMS,
         cache,
         &pivot.columns,
+        values_on_columns,
+        pivot.layout.values_axis_position,
+        pivot.measures.len(),
     )?;
     write_page_fields(&mut rw, pivot, cache)?;
     write_data_fields(&mut rw, pivot, cache)?;
@@ -442,11 +455,19 @@ fn write_begin_sx_view<W: Write>(
     pivot: &PivotTable,
 ) -> std::io::Result<()> {
     let mut payload = Vec::new();
-    payload.extend_from_slice(&[
+    let mut header = [
         0x00, 0x41, 0x40, 0x01, 0xF0, 0x64, 0x09, 0x00, 0xD9, 0x00, 0x00, 0x00, 0x02, 0x00, 0x08,
         0x03, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00,
-    ]);
+    ];
+    header[12] = values_axis_code(pivot.layout.values_axis);
+    let values_position = pivot
+        .layout
+        .values_axis_position
+        .map(|position| position.min(i32::MAX as u32) as i32)
+        .unwrap_or(-1);
+    header[16..20].copy_from_slice(&values_position.to_le_bytes());
+    payload.extend_from_slice(&header);
     payload.extend_from_slice(&encode_wide_str(&pivot.name));
     let data_caption = if pivot.layout.data_caption.trim().is_empty() {
         "Values"
@@ -544,13 +565,14 @@ fn write_axis_fields<W: Write>(
     end_record: u16,
     cache: &FormatPivotCache,
     fields: &[PivotField],
+    include_values_field: bool,
+    values_position: Option<u32>,
 ) -> XlsbResult<()> {
-    if fields.is_empty() {
+    if fields.is_empty() && !include_values_field {
         return Ok(());
     }
 
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&(fields.len() as u32).to_le_bytes());
+    let mut indexes = Vec::new();
     for field in fields {
         let index = cache.field_index(&field.field.name).ok_or_else(|| {
             XlsbError::InvalidFormat(format!(
@@ -558,7 +580,20 @@ fn write_axis_fields<W: Write>(
                 field.field.name
             ))
         })?;
-        payload.extend_from_slice(&(index as u32).to_le_bytes());
+        indexes.push(index as i32);
+    }
+    if include_values_field {
+        let position = values_position
+            .map(|position| position as usize)
+            .unwrap_or(indexes.len())
+            .min(indexes.len());
+        indexes.insert(position, -2);
+    }
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&(indexes.len() as u32).to_le_bytes());
+    for index in indexes {
+        payload.extend_from_slice(&index.to_le_bytes());
     }
     rw.write_record(begin_record, &payload)?;
     rw.write_record(end_record, &[])?;
@@ -571,24 +606,102 @@ fn write_axis_items<W: Write>(
     end_record: u16,
     cache: &FormatPivotCache,
     fields: &[PivotField],
+    include_values_field: bool,
+    values_position: Option<u32>,
+    measure_count: usize,
 ) -> XlsbResult<()> {
-    let tuples = axis_item_tuples(cache, fields)?;
-    let count = if fields.is_empty() {
-        1
-    } else {
-        tuples.len() + 1
-    };
+    let line_tuples = axis_line_tuples(
+        cache,
+        fields,
+        include_values_field,
+        values_position,
+        measure_count,
+    )?;
+    let grand_tuples = axis_grand_total_tuples(
+        fields.len(),
+        include_values_field,
+        values_position,
+        measure_count,
+    );
+    let count = line_tuples.len() + grand_tuples.len();
     rw.write_record(begin_record, &(count as u32).to_le_bytes())?;
-    if fields.is_empty() {
-        write_sxli(rw, &[], false)?;
-    } else {
-        for tuple in &tuples {
-            write_sxli(rw, tuple, false)?;
-        }
-        write_sxli(rw, &[0], true)?;
+    for (tuple, data_item) in &line_tuples {
+        write_sxli(rw, tuple, false, *data_item)?;
+    }
+    for (tuple, data_item) in &grand_tuples {
+        write_sxli(rw, tuple, true, *data_item)?;
     }
     rw.write_record(end_record, &[])?;
     Ok(())
+}
+
+fn axis_line_tuples(
+    cache: &FormatPivotCache,
+    fields: &[PivotField],
+    include_values_field: bool,
+    values_position: Option<u32>,
+    measure_count: usize,
+) -> XlsbResult<Vec<(Vec<u32>, Option<u32>)>> {
+    if fields.is_empty() {
+        if include_values_field {
+            return Ok(tuples_with_data_items(
+                vec![Vec::new()],
+                values_position,
+                measure_count,
+            ));
+        }
+        return Ok(vec![(Vec::new(), None)]);
+    }
+
+    let tuples = axis_item_tuples(cache, fields)?;
+    if include_values_field {
+        Ok(tuples_with_data_items(
+            tuples,
+            values_position,
+            measure_count,
+        ))
+    } else {
+        Ok(tuples.into_iter().map(|tuple| (tuple, None)).collect())
+    }
+}
+
+fn axis_grand_total_tuples(
+    field_count: usize,
+    include_values_field: bool,
+    values_position: Option<u32>,
+    measure_count: usize,
+) -> Vec<(Vec<u32>, Option<u32>)> {
+    if field_count == 0 {
+        return Vec::new();
+    }
+
+    let grand_tuple = vec![0; field_count];
+    if include_values_field {
+        tuples_with_data_items(vec![grand_tuple], values_position, measure_count)
+    } else {
+        vec![(grand_tuple, None)]
+    }
+}
+
+fn tuples_with_data_items(
+    tuples: Vec<Vec<u32>>,
+    values_position: Option<u32>,
+    measure_count: usize,
+) -> Vec<(Vec<u32>, Option<u32>)> {
+    let measure_count = measure_count.max(1);
+    let mut expanded = Vec::with_capacity(tuples.len() * measure_count);
+    for tuple in tuples {
+        for data_item in 0..measure_count as u32 {
+            let mut tuple = tuple.clone();
+            let position = values_position
+                .map(|position| position as usize)
+                .unwrap_or(tuple.len())
+                .min(tuple.len());
+            tuple.insert(position, data_item);
+            expanded.push((tuple, Some(data_item)));
+        }
+    }
+    expanded
 }
 
 fn write_page_fields<W: Write>(
@@ -630,12 +743,13 @@ fn write_sxli<W: Write>(
     rw: &mut RecordWriter<W>,
     item_indexes: &[u32],
     grand_total: bool,
+    data_item: Option<u32>,
 ) -> std::io::Result<()> {
     let mut payload = Vec::new();
     payload.extend_from_slice(&0u16.to_le_bytes());
     payload.extend_from_slice(&(if grand_total { 13u16 } else { 0u16 }).to_le_bytes());
     payload.extend_from_slice(&(item_indexes.len() as u32).to_le_bytes());
-    payload.extend_from_slice(&0u32.to_le_bytes());
+    payload.extend_from_slice(&data_item.unwrap_or(0).to_le_bytes());
     rw.write_record(records::BRT_BEGIN_SXLI, &payload)?;
     for item_index in item_indexes {
         rw.write_record(records::BRT_SXLI_ITEM, &item_index.to_le_bytes())?;
@@ -900,6 +1014,19 @@ fn pivot_field_axis(pivot: &PivotTable, field_name: &str) -> u8 {
     }
 
     axis
+}
+
+fn values_field_on_axis(pivot: &PivotTable, axis: PivotValuesAxis) -> bool {
+    pivot.measures.len() > 1
+        && pivot.layout.values_axis == axis
+        && (matches!(axis, PivotValuesAxis::Rows) || pivot.layout.values_axis_position.is_some())
+}
+
+fn values_axis_code(axis: PivotValuesAxis) -> u8 {
+    match axis {
+        PivotValuesAxis::Rows => 0x01,
+        PivotValuesAxis::Columns => 0x02,
+    }
 }
 
 fn filter_field_name(filter: &PivotFilter) -> Option<&str> {

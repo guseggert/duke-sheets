@@ -6,7 +6,7 @@ mod tests {
         BorderEdge, BorderLineStyle, Color, FillStyle, NumberFormat, Style,
     };
     use duke_sheets_core::{
-        CellRange, CellValue, PivotAggregate, PivotFilter, PivotTable, Workbook,
+        CellRange, CellValue, PivotAggregate, PivotFilter, PivotTable, PivotValuesAxis, Workbook,
     };
 
     use crate::reader::XlsbReader;
@@ -87,6 +87,32 @@ mod tests {
             .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
             .build()
             .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
+    fn add_multi_measure_column_values_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Region").unwrap();
+        ws.set_cell_value("B1", "Revenue").unwrap();
+        ws.set_cell_value("C1", "Units").unwrap();
+        ws.set_cell_value("A2", "East").unwrap();
+        ws.set_cell_value("B2", 10.0).unwrap();
+        ws.set_cell_value("C2", 2.0).unwrap();
+        ws.set_cell_value("A3", "West").unwrap();
+        ws.set_cell_value("B3", 20.0).unwrap();
+        ws.set_cell_value("C3", 3.0).unwrap();
+
+        let mut pivot = PivotTable::builder("RevenueAndUnits")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .named_measure("Units", PivotAggregate::Average, "Average Units")
+            .build()
+            .unwrap();
+        pivot.layout.values_axis = PivotValuesAxis::Columns;
+        pivot.layout.values_axis_position = Some(0);
         wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
     }
 
@@ -251,6 +277,80 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(sxvd_axes, vec![0x01, 0x04, 0x08]);
+    }
+
+    #[test]
+    fn semantic_pivot_tables_emit_xlsb_multi_measure_values_axis_records() {
+        let mut wb = Workbook::new();
+        add_multi_measure_column_values_pivot(&mut wb);
+
+        let bytes = write_xlsb_bytes(&wb);
+        let pivot_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotTables/pivotTable1.bin",
+        ));
+
+        let col_fields_payload = pivot_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_ISXVD_COLS).then_some(payload)
+            })
+            .expect("column axis field declaration");
+        assert_eq!(
+            col_fields_payload,
+            &vec![1, 0, 0, 0, 0xFE, 0xFF, 0xFF, 0xFF],
+            "multiple measures are represented by the synthetic Values field (-2)"
+        );
+
+        let mut in_column_items = false;
+        let mut column_line_data_items = Vec::new();
+        let mut column_item_values = Vec::new();
+        for (record_type, payload) in &pivot_records {
+            match *record_type {
+                crate::biff12::records::BRT_BEGIN_SX_COL_ITEMS => {
+                    in_column_items = true;
+                    assert_eq!(payload, &vec![2, 0, 0, 0], "one line per data item");
+                }
+                crate::biff12::records::BRT_END_SX_COL_ITEMS => in_column_items = false,
+                crate::biff12::records::BRT_BEGIN_SXLI if in_column_items => {
+                    column_line_data_items
+                        .push(u32::from_le_bytes(payload[8..12].try_into().unwrap()));
+                }
+                crate::biff12::records::BRT_SXLI_ITEM if in_column_items => {
+                    column_item_values.push(u32::from_le_bytes(payload[..4].try_into().unwrap()));
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(column_line_data_items, vec![0, 1]);
+        assert_eq!(column_item_values, vec![0, 1]);
+
+        let sx_view_payload = pivot_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_SXVIEW).then_some(payload)
+            })
+            .expect("pivot view");
+        assert_eq!(sx_view_payload[12], 0x02, "Values field is on columns");
+        assert_eq!(
+            i32::from_le_bytes(sx_view_payload[16..20].try_into().unwrap()),
+            0,
+            "Values field is inserted at the requested axis position"
+        );
+
+        let data_field_count = pivot_records
+            .iter()
+            .filter(|(record_type, _)| *record_type == crate::biff12::records::BRT_BEGIN_SXDI)
+            .count();
+        assert_eq!(data_field_count, 2);
+
+        let data_field_aggregates = pivot_records
+            .iter()
+            .filter_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_SXDI).then(|| payload[24])
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(data_field_aggregates, vec![0x01, 0x04]);
     }
 
     #[test]

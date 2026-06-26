@@ -18,7 +18,8 @@ use duke_sheets_core::table::{Table, TableColumn, TableStyleInfo};
 use duke_sheets_core::validation::{DataValidation, ValidationOperator, ValidationType};
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
 use duke_sheets_core::{
-    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotFilter, PivotTable, Workbook,
+    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotFilter, PivotTable,
+    PivotValuesAxis, Workbook,
 };
 
 use crate::{
@@ -252,6 +253,34 @@ fn xlsb_page_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xlsb_multi_measure_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("C1", "Units").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("C2", 2.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("C3", 3.0).unwrap();
+
+    let mut pivot = PivotTable::builder("RevenueAndUnits")
+        .source_range(CellRange::parse("A1:C3").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Region")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .named_measure("Units", PivotAggregate::Average, "Average Units")
+        .build()
+        .unwrap();
+    pivot.layout.values_axis = PivotValuesAxis::Columns;
+    pivot.layout.values_axis_position = Some(0);
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xlsb_with_native_pivot_table() {
@@ -297,6 +326,27 @@ fn excel_preserves_xlsb_pivot_page_axis() {
     assert!(pivot_records.contains(&duke_sheets_xlsb::biff12::records::BRT_BEGIN_SXPIS));
     assert!(pivot_records.contains(&duke_sheets_xlsb::biff12::records::BRT_BEGIN_SXPI));
     assert!(pivot_records.contains(&duke_sheets_xlsb::biff12::records::BRT_END_SXPIS));
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_pivot_multi_measure_values_axis() {
+    let (_result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xlsb_bytes(&xlsb_multi_measure_pivot_workbook());
+
+    let pivot_records = xlsb_record_types(&zip_entry_bytes(
+        &excel_bytes,
+        "xl/pivotTables/pivotTable1.bin",
+    ));
+    assert!(pivot_records.contains(&duke_sheets_xlsb::biff12::records::BRT_BEGIN_ISXVD_COLS));
+    assert!(pivot_records.contains(&duke_sheets_xlsb::biff12::records::BRT_BEGIN_SXDIS));
+    assert_eq!(
+        pivot_records
+            .iter()
+            .filter(|&&record| record == duke_sheets_xlsb::biff12::records::BRT_BEGIN_SXDI)
+            .count(),
+        2
+    );
 }
 
 fn zip_has_entry(bytes: &[u8], name: &str) -> bool {
