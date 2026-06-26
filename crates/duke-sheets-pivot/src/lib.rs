@@ -684,18 +684,7 @@ impl SourceSnapshot {
             .data_end_row
             .map(|end_row| (end_row - source.data_start_row + 1) as usize)
             .unwrap_or(0);
-        let mut columns = (0..col_count)
-            .map(|_| EncodedColumn::with_capacity(row_count))
-            .collect::<Vec<_>>();
-
-        if let Some(data_end_row) = source.data_end_row {
-            for source_col in source.range.start.col..=source.range.end.col {
-                let col_index = (source_col - source.range.start.col) as usize;
-                for row in source.data_start_row..=data_end_row {
-                    columns[col_index].push(effective_pivot_value(worksheet, row, source_col));
-                }
-            }
-        }
+        let columns = source_snapshot_columns(worksheet, source, col_count, row_count);
 
         Ok(Self {
             headers,
@@ -808,6 +797,58 @@ impl SourceSnapshot {
             row_count: self.row_count,
         })
     }
+}
+
+fn source_snapshot_columns(
+    worksheet: &Worksheet,
+    source: &ResolvedSource,
+    col_count: usize,
+    row_count: usize,
+) -> Vec<EncodedColumn> {
+    let Some(data_end_row) = source.data_end_row else {
+        return (0..col_count)
+            .map(|_| EncodedColumn::with_capacity(row_count))
+            .collect();
+    };
+
+    let source_cols = (source.range.start.col..=source.range.end.col).collect::<Vec<_>>();
+    #[cfg(feature = "parallel")]
+    {
+        if row_count >= PARALLEL_ROW_THRESHOLD {
+            return source_cols
+                .into_par_iter()
+                .map(|source_col| {
+                    source_snapshot_column(
+                        worksheet,
+                        source.data_start_row,
+                        data_end_row,
+                        source_col,
+                    )
+                })
+                .collect();
+        }
+    }
+
+    source_cols
+        .into_iter()
+        .map(|source_col| {
+            source_snapshot_column(worksheet, source.data_start_row, data_end_row, source_col)
+        })
+        .collect()
+}
+
+fn source_snapshot_column(
+    worksheet: &Worksheet,
+    data_start_row: u32,
+    data_end_row: u32,
+    source_col: u16,
+) -> EncodedColumn {
+    let row_count = (data_end_row - data_start_row + 1) as usize;
+    let mut column = EncodedColumn::with_capacity(row_count);
+    for row in data_start_row..=data_end_row {
+        column.push(effective_pivot_value(worksheet, row, source_col));
+    }
+    column
 }
 
 fn unique_grouped_header(
@@ -4728,6 +4769,60 @@ mod tests {
         assert_eq!(number(&workbook, "F4"), 17.0);
         assert_eq!(number(&workbook, "G4"), 5.0);
         assert_eq!(number(&workbook, "H4"), 22.0);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn parallel_refreshes_large_source_snapshot_and_aggregation() {
+        let mut workbook = Workbook::new();
+        let data_rows = super::PARALLEL_ROW_THRESHOLD + 7;
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+
+        for index in 0..data_rows {
+            let row = (index + 2) as u32;
+            let region = match index % 3 {
+                0 => "East",
+                1 => "West",
+                _ => "North",
+            };
+            let quarter = if index % 2 == 0 { "Q1" } else { "Q2" };
+            sheet.set_cell_value_at(row - 1, 0, region).unwrap();
+            sheet.set_cell_value_at(row - 1, 1, quarter).unwrap();
+            sheet.set_cell_value_at(row - 1, 2, 1.0).unwrap();
+        }
+
+        let source = CellRange::parse(&format!("A1:C{}", data_rows + 1)).unwrap();
+        let pivot = PivotTable::builder("LargeSalesPivot")
+            .source_range(source)
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let stats = workbook.refresh_pivots().unwrap();
+
+        assert_eq!(stats.source_rows, data_rows);
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(number(&workbook, "F2"), 8335.0);
+        assert_eq!(number(&workbook, "G2"), 8334.0);
+        assert_eq!(number(&workbook, "H2"), 16669.0);
+        assert_eq!(text(&workbook, "E3"), "North");
+        assert_eq!(number(&workbook, "F3"), 8335.0);
+        assert_eq!(number(&workbook, "G3"), 8334.0);
+        assert_eq!(text(&workbook, "E4"), "West");
+        assert_eq!(number(&workbook, "F4"), 8334.0);
+        assert_eq!(number(&workbook, "G4"), 8335.0);
+        assert_eq!(text(&workbook, "E5"), "Grand Total");
+        assert_eq!(number(&workbook, "F5"), 25004.0);
+        assert_eq!(number(&workbook, "G5"), 25003.0);
+        assert_eq!(number(&workbook, "H5"), data_rows as f64);
     }
 
     #[test]
