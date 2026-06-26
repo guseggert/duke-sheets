@@ -6126,6 +6126,7 @@ fn prepend_page_fields(
         values[start_column + 1] = CellValue::string(page_field_caption(
             pivot,
             snapshot,
+            plan,
             *field_index,
             &field.field.name,
         ));
@@ -6154,6 +6155,7 @@ fn page_field_grid_position(
 fn page_field_caption(
     pivot: &PivotTable,
     snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
     field_index: usize,
     field_name: &str,
 ) -> String {
@@ -6169,7 +6171,7 @@ fn page_field_caption(
 
     match allowed_items.as_slice() {
         [] => "(All)".to_string(),
-        [item] => item.to_string(),
+        [item] => pivot_value_label(plan, item).into_owned(),
         _ => {
             let selected_count = allowed_items
                 .iter()
@@ -9534,6 +9536,51 @@ mod tests {
         hidden.refresh_pivots().unwrap();
         assert_eq!(text(&hidden, "F1"), "(All)");
         assert_eq!(number(&hidden, "F4"), 30.0);
+    }
+
+    #[test]
+    fn refresh_applies_error_caption_to_page_field_label() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet
+            .set_cell_value("B2", CellValue::Error(CellError::Div0))
+            .unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Retail").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.show_error = true;
+        layout.error_caption = Some("ERR".to_string());
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .page("Segment")
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .filter(PivotFilter::field_items(
+                "Segment",
+                [PivotValue::Error(CellError::Div0)],
+            ))
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E1"), "Segment");
+        assert_eq!(text(&workbook, "F1"), "ERR");
+        assert_eq!(text(&workbook, "E4"), "East");
+        assert_eq!(number(&workbook, "F4"), 10.0);
+        assert_eq!(text(&workbook, "E5"), "Grand Total");
+        assert_eq!(number(&workbook, "F5"), 10.0);
     }
 
     #[test]
