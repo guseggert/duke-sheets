@@ -38,6 +38,13 @@
 //! // workbook.Worksheets[1].Range["A1"].Font
 //! {"handle": 1, "chain": [["Worksheets", 1], ["Range", "A1"], "Font"]}
 //! ```
+//!
+//! ## Invoke arguments
+//!
+//! Invoke arguments are JSON values converted by the bridge into COM Variants.
+//! Whole JSON numbers are sent as integer Variants when possible, JSON arrays
+//! are sent as COM `object[]`, and a top-level object of the form
+//! `{"$ref": handle_id}` is resolved to a stored COM object reference.
 
 use serde::{Deserialize, Serialize};
 
