@@ -551,13 +551,19 @@ fn build_rendered_pivot_from_snapshot(
 ) -> Result<RenderedPivot> {
     let plan =
         CompiledPivotPlan::compile(pivot, &snapshot, filter_baselines, options, date_system)?;
-    let mut aggregation = PivotAggregation::aggregate_visible(&snapshot, &plan);
+    let needs_hidden_total_source = pivot_needs_hidden_total_source(pivot);
+    let (mut aggregation, hidden_total_source) = if needs_hidden_total_source {
+        let (visible, totals) =
+            PivotAggregation::aggregate_visible_with_totals_source(&snapshot, &plan);
+        (visible, Some(totals))
+    } else {
+        (PivotAggregation::aggregate_visible(&snapshot, &plan), None)
+    };
     let aggregate_restrictions = aggregation.apply_aggregate_filters(&plan);
     aggregation.apply_calculated_items(&pivot.name, &snapshot, &plan)?;
     aggregation.expand_show_empty_items(pivot, &snapshot, &plan, &aggregate_restrictions)?;
     aggregation.sort_orders(&snapshot, &plan);
-    if pivot_needs_hidden_total_source(pivot) {
-        let mut hidden_total_source = PivotAggregation::aggregate_totals_source(&snapshot, &plan);
+    if let Some(mut hidden_total_source) = hidden_total_source {
         hidden_total_source.apply_calculated_items(&pivot.name, &snapshot, &plan)?;
         hidden_total_source.sort_orders(&snapshot, &plan);
         aggregation.attach_hidden_total_source(
@@ -2503,6 +2509,7 @@ struct CompiledPivotPlan {
     measures: Vec<PivotMeasure>,
     filters: Vec<CompiledFilter>,
     totals_filters: Vec<CompiledFilter>,
+    axis_filters: Vec<CompiledFilter>,
     aggregate_filters: Vec<CompiledAggregateFilter>,
     calculated_items: Vec<CompiledCalculatedItem>,
     error_caption: Option<String>,
@@ -2597,6 +2604,11 @@ impl CompiledPivotPlan {
             .filter(|filter| !filter.targets_axis(&row_indexes, &column_indexes))
             .cloned()
             .collect();
+        let axis_filters = filters
+            .iter()
+            .filter(|filter| filter.targets_axis(&row_indexes, &column_indexes))
+            .cloned()
+            .collect();
         let calculated_items = compile_calculated_items(
             &pivot.name,
             &pivot.calculated_items,
@@ -2616,6 +2628,7 @@ impl CompiledPivotPlan {
             measures: pivot.measures.clone(),
             filters,
             totals_filters,
+            axis_filters,
             aggregate_filters,
             calculated_items,
             error_caption: pivot
@@ -3945,12 +3958,6 @@ struct GroupKey {
     columns: Vec<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PivotAggregationFilterMode {
-    Visible,
-    Totals,
-}
-
 #[derive(Debug, Clone)]
 struct PivotAggregation {
     groups: AHashMap<GroupKey, Vec<AggregateState>>,
@@ -3970,54 +3977,30 @@ struct PivotAggregation {
 
 impl PivotAggregation {
     fn aggregate_visible(snapshot: &SourceSnapshot, plan: &CompiledPivotPlan) -> Self {
-        Self::aggregate_with_filter_mode(snapshot, plan, PivotAggregationFilterMode::Visible)
-    }
-
-    fn aggregate_totals_source(snapshot: &SourceSnapshot, plan: &CompiledPivotPlan) -> Self {
-        Self::aggregate_with_filter_mode(snapshot, plan, PivotAggregationFilterMode::Totals)
-    }
-
-    fn aggregate_with_filter_mode(
-        snapshot: &SourceSnapshot,
-        plan: &CompiledPivotPlan,
-        filter_mode: PivotAggregationFilterMode,
-    ) -> Self {
         #[cfg(feature = "parallel")]
         {
             if snapshot.row_count >= PARALLEL_ROW_THRESHOLD {
-                return Self::aggregate_parallel(snapshot, plan, filter_mode);
+                return Self::aggregate_visible_parallel(snapshot, plan);
             }
         }
 
-        Self::aggregate_range(snapshot, plan, filter_mode, 0, snapshot.row_count)
+        Self::aggregate_visible_range(snapshot, plan, 0, snapshot.row_count)
     }
 
-    fn aggregate_range(
+    fn aggregate_visible_range(
         snapshot: &SourceSnapshot,
         plan: &CompiledPivotPlan,
-        filter_mode: PivotAggregationFilterMode,
         start: usize,
         end: usize,
     ) -> Self {
-        let mut aggregation = Self {
-            groups: AHashMap::new(),
-            group_order: Vec::new(),
-            row_totals: AHashMap::new(),
-            row_subtotals: AHashMap::new(),
-            row_order: Vec::new(),
-            column_totals: AHashMap::new(),
-            column_subtotals: AHashMap::new(),
-            subtotal_groups: AHashMap::new(),
-            column_order: Vec::new(),
-            grand_totals: default_states(&plan.measures),
-            matched_rows: 0,
-            total_source: None,
-            subtotal_source: None,
-        };
-        let filters = aggregation_filters_for_mode(plan, filter_mode);
+        let mut aggregation = Self::empty(plan);
 
         for row in start..end {
-            if !filters.iter().all(|filter| filter.matches(snapshot, row)) {
+            if !plan
+                .filters
+                .iter()
+                .all(|filter| filter.matches(snapshot, row))
+            {
                 continue;
             }
             aggregation.ingest_row(snapshot, plan, row);
@@ -4026,12 +4009,54 @@ impl PivotAggregation {
         aggregation
     }
 
-    #[cfg(feature = "parallel")]
-    fn aggregate_parallel(
+    fn aggregate_visible_with_totals_source(
         snapshot: &SourceSnapshot,
         plan: &CompiledPivotPlan,
-        filter_mode: PivotAggregationFilterMode,
-    ) -> Self {
+    ) -> (Self, Self) {
+        #[cfg(feature = "parallel")]
+        {
+            if snapshot.row_count >= PARALLEL_ROW_THRESHOLD {
+                return Self::aggregate_visible_with_totals_source_parallel(snapshot, plan);
+            }
+        }
+
+        Self::aggregate_visible_with_totals_source_range(snapshot, plan, 0, snapshot.row_count)
+    }
+
+    fn aggregate_visible_with_totals_source_range(
+        snapshot: &SourceSnapshot,
+        plan: &CompiledPivotPlan,
+        start: usize,
+        end: usize,
+    ) -> (Self, Self) {
+        let mut visible = Self::empty(plan);
+        let mut totals = Self::empty(plan);
+
+        for row in start..end {
+            if !plan
+                .totals_filters
+                .iter()
+                .all(|filter| filter.matches(snapshot, row))
+            {
+                continue;
+            }
+
+            totals.ingest_row(snapshot, plan, row);
+
+            if plan
+                .axis_filters
+                .iter()
+                .all(|filter| filter.matches(snapshot, row))
+            {
+                visible.ingest_row(snapshot, plan, row);
+            }
+        }
+
+        (visible, totals)
+    }
+
+    #[cfg(feature = "parallel")]
+    fn aggregate_visible_parallel(snapshot: &SourceSnapshot, plan: &CompiledPivotPlan) -> Self {
         let chunks = (0..snapshot.row_count)
             .step_by(PARALLEL_CHUNK_SIZE)
             .map(|start| (start, (start + PARALLEL_CHUNK_SIZE).min(snapshot.row_count)))
@@ -4039,10 +4064,46 @@ impl PivotAggregation {
 
         let partials = chunks
             .par_iter()
-            .map(|(start, end)| Self::aggregate_range(snapshot, plan, filter_mode, *start, *end))
+            .map(|(start, end)| Self::aggregate_visible_range(snapshot, plan, *start, *end))
             .collect::<Vec<_>>();
 
-        let mut merged = Self {
+        let mut merged = Self::empty(plan);
+
+        for partial in partials {
+            merged.merge_from(partial, plan);
+        }
+
+        merged
+    }
+
+    #[cfg(feature = "parallel")]
+    fn aggregate_visible_with_totals_source_parallel(
+        snapshot: &SourceSnapshot,
+        plan: &CompiledPivotPlan,
+    ) -> (Self, Self) {
+        let chunks = (0..snapshot.row_count)
+            .step_by(PARALLEL_CHUNK_SIZE)
+            .map(|start| (start, (start + PARALLEL_CHUNK_SIZE).min(snapshot.row_count)))
+            .collect::<Vec<_>>();
+
+        let partials = chunks
+            .par_iter()
+            .map(|(start, end)| {
+                Self::aggregate_visible_with_totals_source_range(snapshot, plan, *start, *end)
+            })
+            .collect::<Vec<_>>();
+
+        let mut visible = Self::empty(plan);
+        let mut totals = Self::empty(plan);
+        for (partial_visible, partial_totals) in partials {
+            visible.merge_from(partial_visible, plan);
+            totals.merge_from(partial_totals, plan);
+        }
+        (visible, totals)
+    }
+
+    fn empty(plan: &CompiledPivotPlan) -> Self {
+        Self {
             groups: AHashMap::new(),
             group_order: Vec::new(),
             row_totals: AHashMap::new(),
@@ -4056,13 +4117,7 @@ impl PivotAggregation {
             matched_rows: 0,
             total_source: None,
             subtotal_source: None,
-        };
-
-        for partial in partials {
-            merged.merge_from(partial, plan);
         }
-
-        merged
     }
 
     fn attach_hidden_total_source(
@@ -4545,16 +4600,6 @@ impl PivotAggregation {
         for (key, states) in other.subtotal_groups {
             merge_unordered_bucket(&mut self.subtotal_groups, key, states, &plan.measures);
         }
-    }
-}
-
-fn aggregation_filters_for_mode(
-    plan: &CompiledPivotPlan,
-    mode: PivotAggregationFilterMode,
-) -> &[CompiledFilter] {
-    match mode {
-        PivotAggregationFilterMode::Visible => &plan.filters,
-        PivotAggregationFilterMode::Totals => &plan.totals_filters,
     }
 }
 
