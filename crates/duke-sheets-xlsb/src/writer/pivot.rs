@@ -204,6 +204,7 @@ fn write_pivot_table_part<W: Write + Seek>(
         cache,
         &pivot.columns,
     )?;
+    write_page_fields(&mut rw, pivot, cache)?;
     write_data_fields(&mut rw, pivot, cache)?;
     write_sx_style(&mut rw, pivot)?;
     rw.write_record(records::BRT_END_SXVIEW, &[])?;
@@ -465,6 +466,7 @@ fn write_sx_location<W: Write>(
         .rendered_range
         .unwrap_or_else(|| estimated_pivot_range(pivot, cache));
     let first_data_col = pivot.rows.len().max(1) as u32;
+    let (page_rows, page_cols) = page_field_area_size(pivot);
     let mut payload = Vec::new();
     payload.extend_from_slice(&range.start.row.to_le_bytes());
     payload.extend_from_slice(&range.end.row.to_le_bytes());
@@ -473,8 +475,8 @@ fn write_sx_location<W: Write>(
     payload.extend_from_slice(&1u32.to_le_bytes());
     payload.extend_from_slice(&1u32.to_le_bytes());
     payload.extend_from_slice(&first_data_col.to_le_bytes());
-    payload.extend_from_slice(&0u32.to_le_bytes());
-    payload.extend_from_slice(&0u32.to_le_bytes());
+    payload.extend_from_slice(&page_rows.to_le_bytes());
+    payload.extend_from_slice(&page_cols.to_le_bytes());
     rw.write_record(records::BRT_SX_LOCATION, &payload)
 }
 
@@ -589,6 +591,41 @@ fn write_axis_items<W: Write>(
     Ok(())
 }
 
+fn write_page_fields<W: Write>(
+    rw: &mut RecordWriter<W>,
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+) -> XlsbResult<()> {
+    if pivot.page_fields.is_empty() {
+        return Ok(());
+    }
+
+    rw.write_record(
+        records::BRT_BEGIN_SXPIS,
+        &(pivot.page_fields.len() as u32).to_le_bytes(),
+    )?;
+    for field in &pivot.page_fields {
+        let index = cache.field_index(&field.field.name).ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "pivot references unknown page field {}",
+                field.field.name
+            ))
+        })?;
+        let selected_item =
+            selected_page_item_index(pivot, &field.field.name, &cache.fields[index])
+                .unwrap_or(0x0010_00FE);
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(index as u32).to_le_bytes());
+        payload.extend_from_slice(&selected_item.to_le_bytes());
+        payload.extend_from_slice(&(-1i32).to_le_bytes());
+        payload.push(0);
+        rw.write_record(records::BRT_BEGIN_SXPI, &payload)?;
+        rw.write_record(records::BRT_END_SXPI, &[])?;
+    }
+    rw.write_record(records::BRT_END_SXPIS, &[])?;
+    Ok(())
+}
+
 fn write_sxli<W: Write>(
     rw: &mut RecordWriter<W>,
     item_indexes: &[u32],
@@ -649,6 +686,13 @@ fn write_sx_style<W: Write>(rw: &mut RecordWriter<W>, pivot: &PivotTable) -> std
 }
 
 fn estimated_pivot_range(pivot: &PivotTable, cache: &FormatPivotCache) -> CellRange {
+    let (page_rows, _) = page_field_area_size(pivot);
+    let body_start_row = pivot.target.row
+        + if page_rows == 0 {
+            0
+        } else {
+            page_rows.saturating_add(1)
+        };
     let row_item_count = axis_item_count(cache, &pivot.rows).max(1);
     let row_header_count = pivot.columns.len() as u32 + 1;
     let row_count = row_header_count + row_item_count as u32 + 1;
@@ -658,11 +702,35 @@ fn estimated_pivot_range(pivot: &PivotTable, cache: &FormatPivotCache) -> CellRa
     let value_col_count = col_item_count * measure_count;
     let col_count = pivot.rows.len().max(1) as u16 + value_col_count as u16;
     CellRange::from_indices(
-        pivot.target.row,
+        body_start_row,
         pivot.target.col,
-        pivot.target.row + row_count.saturating_sub(1),
+        body_start_row + row_count.saturating_sub(1),
         pivot.target.col + col_count.saturating_sub(1),
     )
+}
+
+fn page_field_area_size(pivot: &PivotTable) -> (u32, u32) {
+    let count = pivot.page_fields.len();
+    if count == 0 {
+        return (0, 0);
+    }
+
+    let wrap = pivot.layout.page_wrap as usize;
+    let row_count = if wrap == 0 {
+        count
+    } else if pivot.layout.page_over_then_down {
+        (count + wrap - 1) / wrap
+    } else {
+        wrap.min(count)
+    };
+    let col_count = if wrap == 0 {
+        1
+    } else if pivot.layout.page_over_then_down {
+        wrap.min(count)
+    } else {
+        (count + row_count - 1) / row_count
+    };
+    (row_count as u32, col_count as u32)
 }
 
 fn axis_item_count(cache: &FormatPivotCache, fields: &[PivotField]) -> usize {
@@ -765,6 +833,34 @@ fn cache_field_usage(
         })
         .collect();
     Ok(CacheFieldUsage { store_items })
+}
+
+fn selected_page_item_index(
+    pivot: &PivotTable,
+    field_name: &str,
+    field: &FormatPivotCacheField,
+) -> Option<u32> {
+    let PivotFilter::FieldItems { allowed_items, .. } = pivot.filters.iter().find(|filter| {
+        matches!(
+            filter,
+            PivotFilter::FieldItems {
+                field: filter_field,
+                ..
+            } if filter_field.name.eq_ignore_ascii_case(field_name)
+        )
+    })?
+    else {
+        return None;
+    };
+
+    let [item] = allowed_items.as_slice() else {
+        return None;
+    };
+    field
+        .shared_items
+        .iter()
+        .position(|candidate| candidate == item)
+        .map(|index| index as u32)
 }
 
 fn pivot_field_axis(pivot: &PivotTable, field_name: &str) -> u8 {

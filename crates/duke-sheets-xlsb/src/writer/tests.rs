@@ -5,7 +5,9 @@ mod tests {
     use duke_sheets_core::style::{
         BorderEdge, BorderLineStyle, Color, FillStyle, NumberFormat, Style,
     };
-    use duke_sheets_core::{CellRange, CellValue, PivotAggregate, PivotTable, Workbook};
+    use duke_sheets_core::{
+        CellRange, CellValue, PivotAggregate, PivotFilter, PivotTable, Workbook,
+    };
 
     use crate::reader::XlsbReader;
     use crate::writer::XlsbWriter;
@@ -57,6 +59,31 @@ mod tests {
             .unwrap()
             .row("Region")
             .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
+    fn add_page_test_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Region").unwrap();
+        ws.set_cell_value("B1", "Salesperson").unwrap();
+        ws.set_cell_value("C1", "Revenue").unwrap();
+        ws.set_cell_value("A2", "East").unwrap();
+        ws.set_cell_value("B2", "Ada").unwrap();
+        ws.set_cell_value("C2", 10.0).unwrap();
+        ws.set_cell_value("A3", "West").unwrap();
+        ws.set_cell_value("B3", "Ben").unwrap();
+        ws.set_cell_value("C3", 20.0).unwrap();
+
+        let pivot = PivotTable::builder("RevenueByRep")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .page("Salesperson")
+            .filter(PivotFilter::field_items("Salesperson", ["Ada"]))
             .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
             .build()
             .unwrap();
@@ -171,6 +198,59 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(sxvd_axes, vec![0x01, 0x02, 0x08]);
+    }
+
+    #[test]
+    fn semantic_pivot_tables_emit_xlsb_page_axis_records() {
+        let mut wb = Workbook::new();
+        add_page_test_pivot(&mut wb);
+
+        let bytes = write_xlsb_bytes(&wb);
+        let pivot_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotTables/pivotTable1.bin",
+        ));
+        let record_types = pivot_records
+            .iter()
+            .map(|(record_type, _)| *record_type)
+            .collect::<Vec<_>>();
+
+        assert!(record_types.contains(&crate::biff12::records::BRT_BEGIN_SXPIS));
+        assert!(record_types.contains(&crate::biff12::records::BRT_BEGIN_SXPI));
+        assert!(record_types.contains(&crate::biff12::records::BRT_END_SXPI));
+        assert!(record_types.contains(&crate::biff12::records::BRT_END_SXPIS));
+
+        let page_fields_payload = pivot_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_SXPIS).then_some(payload)
+            })
+            .expect("page axis field collection");
+        assert_eq!(page_fields_payload, &vec![1, 0, 0, 0]);
+
+        let page_field_payload = pivot_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_SXPI).then_some(payload)
+            })
+            .expect("page axis field declaration");
+        assert_eq!(
+            page_field_payload,
+            &vec![
+                1, 0, 0, 0, // field index 1 (Salesperson)
+                0, 0, 0, 0, // selected item index 0 (Ada)
+                0xFF, 0xFF, 0xFF, 0xFF, // non-OLAP hierarchy sentinel
+                0,
+            ]
+        );
+
+        let sxvd_axes = pivot_records
+            .iter()
+            .filter_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_SXVD).then(|| payload[0])
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sxvd_axes, vec![0x01, 0x04, 0x08]);
     }
 
     #[test]
