@@ -7,7 +7,6 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::cmp::Ordering;
-#[cfg(feature = "parallel")]
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -4090,27 +4089,25 @@ impl PivotAggregation {
             columns: column_key.clone(),
         };
 
-        if !self.groups.contains_key(&group_key) {
-            self.group_order.push(group_key.clone());
-            self.groups
-                .insert(group_key.clone(), default_states(&plan.measures));
-        }
         update_states(
-            self.groups.get_mut(&group_key).expect("group was inserted"),
+            ordered_bucket_states_mut(
+                &mut self.groups,
+                &mut self.group_order,
+                group_key,
+                &plan.measures,
+            ),
             snapshot,
             plan,
             row,
         );
 
-        if !self.row_totals.contains_key(&row_key) {
-            self.row_order.push(row_key.clone());
-            self.row_totals
-                .insert(row_key.clone(), default_states(&plan.measures));
-        }
         update_states(
-            self.row_totals
-                .get_mut(&row_key)
-                .expect("row total was inserted"),
+            ordered_bucket_states_mut(
+                &mut self.row_totals,
+                &mut self.row_order,
+                row_key.clone(),
+                &plan.measures,
+            ),
             snapshot,
             plan,
             row,
@@ -4118,15 +4115,13 @@ impl PivotAggregation {
 
         self.ingest_subtotals(snapshot, plan, row, &row_key, &column_key);
 
-        if !self.column_totals.contains_key(&column_key) {
-            self.column_order.push(column_key.clone());
-            self.column_totals
-                .insert(column_key.clone(), default_states(&plan.measures));
-        }
         update_states(
-            self.column_totals
-                .get_mut(&column_key)
-                .expect("column total was inserted"),
+            ordered_bucket_states_mut(
+                &mut self.column_totals,
+                &mut self.column_order,
+                column_key.clone(),
+                &plan.measures,
+            ),
             snapshot,
             plan,
             row,
@@ -5046,6 +5041,24 @@ fn default_states(measures: &[PivotMeasure]) -> Vec<AggregateState> {
         .iter()
         .map(|measure| AggregateState::new(measure.aggregate))
         .collect()
+}
+
+fn ordered_bucket_states_mut<'a, K>(
+    map: &'a mut AHashMap<K, Vec<AggregateState>>,
+    order: &mut Vec<K>,
+    key: K,
+    measures: &[PivotMeasure],
+) -> &'a mut [AggregateState]
+where
+    K: Eq + Hash + Clone,
+{
+    match map.entry(key) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            order.push(entry.key().clone());
+            entry.insert(default_states(measures))
+        }
+    }
 }
 
 fn update_states(
