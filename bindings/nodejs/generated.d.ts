@@ -1525,6 +1525,24 @@ export interface JsPivotLayoutDefinition {
   showError: boolean
   missingCaption?: string
   showMissing: boolean
+  asteriskTotals: boolean
+  showItems: boolean
+  editData: boolean
+  disableFieldList: boolean
+  showCalculatedMembers: boolean
+  visualTotals: boolean
+  showMultipleLabel: boolean
+  showDataDropDown: boolean
+  showMemberPropertyTips: boolean
+  showDataTips: boolean
+  enableWizard: boolean
+  enableDrill: boolean
+  enableFieldProperties: boolean
+  subtotalHiddenItems: boolean
+  showDropZones: boolean
+  indent: number
+  showEmptyRows: boolean
+  showEmptyColumns: boolean
 }
 
 export interface JsPivotLayoutOptions {
@@ -1546,6 +1564,24 @@ export interface JsPivotLayoutOptions {
   showError?: boolean
   missingCaption?: string
   showMissing?: boolean
+  asteriskTotals?: boolean
+  showItems?: boolean
+  editData?: boolean
+  disableFieldList?: boolean
+  showCalculatedMembers?: boolean
+  visualTotals?: boolean
+  showMultipleLabel?: boolean
+  showDataDropDown?: boolean
+  showMemberPropertyTips?: boolean
+  showDataTips?: boolean
+  enableWizard?: boolean
+  enableDrill?: boolean
+  enableFieldProperties?: boolean
+  subtotalHiddenItems?: boolean
+  showDropZones?: boolean
+  indent?: number
+  showEmptyRows?: boolean
+  showEmptyColumns?: boolean
 }
 
 export interface JsPivotManualGroupDefinition {

@@ -16,11 +16,11 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotCalculatedField,
-    PivotCalculatedItem,
-    PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
-    PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
-    PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
-    PivotSubtotal, PivotTable, PivotValue, WorkbookConnection, WorkbookConnectionKind,
+    PivotCalculatedItem, PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator,
+    PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
+    PivotOverwritePolicy, PivotRefreshPolicy, PivotRefreshStatus, PivotShowAs, PivotSort,
+    PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    WorkbookConnection, WorkbookConnectionKind,
 };
 
 mod types;
@@ -377,6 +377,65 @@ fn build_pivot_layout_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotLayou
     }
     if let Some(value) = optional_bool(dict, &["show_missing", "showMissing"])? {
         layout.show_missing = value;
+    }
+    if let Some(value) = optional_bool(dict, &["asterisk_totals", "asteriskTotals"])? {
+        layout.asterisk_totals = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_items", "showItems"])? {
+        layout.show_items = value;
+    }
+    if let Some(value) = optional_bool(dict, &["edit_data", "editData"])? {
+        layout.edit_data = value;
+    }
+    if let Some(value) = optional_bool(dict, &["disable_field_list", "disableFieldList"])? {
+        layout.disable_field_list = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_calculated_members", "showCalculatedMembers"])?
+    {
+        layout.show_calculated_members = value;
+    }
+    if let Some(value) = optional_bool(dict, &["visual_totals", "visualTotals"])? {
+        layout.visual_totals = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_multiple_label", "showMultipleLabel"])? {
+        layout.show_multiple_label = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_data_drop_down", "showDataDropDown"])? {
+        layout.show_data_drop_down = value;
+    }
+    if let Some(value) = optional_bool(
+        dict,
+        &["show_member_property_tips", "showMemberPropertyTips"],
+    )? {
+        layout.show_member_property_tips = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_data_tips", "showDataTips"])? {
+        layout.show_data_tips = value;
+    }
+    if let Some(value) = optional_bool(dict, &["enable_wizard", "enableWizard"])? {
+        layout.enable_wizard = value;
+    }
+    if let Some(value) = optional_bool(dict, &["enable_drill", "enableDrill"])? {
+        layout.enable_drill = value;
+    }
+    if let Some(value) = optional_bool(dict, &["enable_field_properties", "enableFieldProperties"])?
+    {
+        layout.enable_field_properties = value;
+    }
+    if let Some(value) = optional_bool(dict, &["subtotal_hidden_items", "subtotalHiddenItems"])? {
+        layout.subtotal_hidden_items = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_drop_zones", "showDropZones"])? {
+        layout.show_drop_zones = value;
+    }
+    if let Some(value) = optional_u32(dict, &["indent"])? {
+        layout.indent = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_empty_rows", "showEmptyRows"])? {
+        layout.show_empty_rows = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_empty_columns", "showEmptyColumns"])? {
+        layout.show_empty_columns = value;
     }
     Ok(layout)
 }
@@ -1207,6 +1266,27 @@ fn pivot_layout_to_py(py: Python<'_>, layout: &PivotLayout) -> PyResult<PyObject
     dict.set_item("show_error", layout.show_error)?;
     dict.set_item("missing_caption", &layout.missing_caption)?;
     dict.set_item("show_missing", layout.show_missing)?;
+    dict.set_item("asterisk_totals", layout.asterisk_totals)?;
+    dict.set_item("show_items", layout.show_items)?;
+    dict.set_item("edit_data", layout.edit_data)?;
+    dict.set_item("disable_field_list", layout.disable_field_list)?;
+    dict.set_item("show_calculated_members", layout.show_calculated_members)?;
+    dict.set_item("visual_totals", layout.visual_totals)?;
+    dict.set_item("show_multiple_label", layout.show_multiple_label)?;
+    dict.set_item("show_data_drop_down", layout.show_data_drop_down)?;
+    dict.set_item(
+        "show_member_property_tips",
+        layout.show_member_property_tips,
+    )?;
+    dict.set_item("show_data_tips", layout.show_data_tips)?;
+    dict.set_item("enable_wizard", layout.enable_wizard)?;
+    dict.set_item("enable_drill", layout.enable_drill)?;
+    dict.set_item("enable_field_properties", layout.enable_field_properties)?;
+    dict.set_item("subtotal_hidden_items", layout.subtotal_hidden_items)?;
+    dict.set_item("show_drop_zones", layout.show_drop_zones)?;
+    dict.set_item("indent", layout.indent)?;
+    dict.set_item("show_empty_rows", layout.show_empty_rows)?;
+    dict.set_item("show_empty_columns", layout.show_empty_columns)?;
     Ok(dict.into_any().unbind())
 }
 

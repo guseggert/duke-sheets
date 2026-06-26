@@ -6,10 +6,9 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotCalculatedItem,
-    PivotDateGroupUnit, PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator,
-    PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort,
-    PivotSource, PivotSourceRange, PivotSubtotal, PivotTable, PivotValue, Table, Workbook,
-    WorkbookConnection,
+    PivotDateGroupUnit, PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping,
+    PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort, PivotSource,
+    PivotSourceRange, PivotSubtotal, PivotTable, PivotValue, Table, Workbook, WorkbookConnection,
     WorkbookConnectionKind, Worksheet,
 };
 use duke_sheets_formula::{
@@ -1576,17 +1575,93 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         }
         tag.push_attribute(("updatedVersion", "8"));
         tag.push_attribute(("minRefreshableVersion", "3"));
+        push_bool_attr_if(
+            &mut tag,
+            "asteriskTotals",
+            pivot.layout.asterisk_totals,
+            false,
+        );
+        push_bool_attr_if(&mut tag, "showItems", pivot.layout.show_items, true);
+        push_bool_attr_if(&mut tag, "editData", pivot.layout.edit_data, false);
+        push_bool_attr_if(
+            &mut tag,
+            "disableFieldList",
+            pivot.layout.disable_field_list,
+            false,
+        );
+        push_bool_attr_if(
+            &mut tag,
+            "showCalcMbrs",
+            pivot.layout.show_calculated_members,
+            true,
+        );
+        push_bool_attr_if(&mut tag, "visualTotals", pivot.layout.visual_totals, true);
+        push_bool_attr_if(
+            &mut tag,
+            "showMultipleLabel",
+            pivot.layout.show_multiple_label,
+            true,
+        );
+        push_bool_attr_if(
+            &mut tag,
+            "showDataDropDown",
+            pivot.layout.show_data_drop_down,
+            true,
+        );
         tag.push_attribute(("rowGrandTotals", row_grand));
         tag.push_attribute(("colGrandTotals", col_grand));
         tag.push_attribute(("preserveFormatting", preserve_formatting));
         tag.push_attribute(("showHeaders", show_headers));
         tag.push_attribute(("showDrill", show_drill));
         tag.push_attribute(("printDrill", print_drill));
+        push_bool_attr_if(
+            &mut tag,
+            "showMemberPropertyTips",
+            pivot.layout.show_member_property_tips,
+            true,
+        );
+        push_bool_attr_if(&mut tag, "showDataTips", pivot.layout.show_data_tips, true);
+        push_bool_attr_if(&mut tag, "enableWizard", pivot.layout.enable_wizard, true);
+        push_bool_attr_if(&mut tag, "enableDrill", pivot.layout.enable_drill, true);
+        push_bool_attr_if(
+            &mut tag,
+            "enableFieldProperties",
+            pivot.layout.enable_field_properties,
+            true,
+        );
         tag.push_attribute(("itemPrintTitles", item_print_titles));
         tag.push_attribute(("fieldPrintTitles", field_print_titles));
         tag.push_attribute(("pageWrap", page_wrap.as_str()));
         tag.push_attribute(("pageOverThenDown", page_over_then_down));
+        push_bool_attr_if(
+            &mut tag,
+            "subtotalHiddenItems",
+            pivot.layout.subtotal_hidden_items,
+            false,
+        );
         tag.push_attribute(("mergeItem", merge_item));
+        push_bool_attr_if(
+            &mut tag,
+            "showDropZones",
+            pivot.layout.show_drop_zones,
+            true,
+        );
+        let indent = pivot.layout.indent.to_string();
+        if pivot.layout.indent != 1 {
+            tag.push_attribute(("indent", indent.as_str()));
+        }
+        push_bool_attr_if(
+            &mut tag,
+            "showEmptyRow",
+            pivot.layout.show_empty_rows,
+            false,
+        );
+        push_bool_attr_if(
+            &mut tag,
+            "showEmptyCol",
+            pivot.layout.show_empty_columns,
+            false,
+        );
         tag.push_attribute(("compact", compact));
         tag.push_attribute(("outline", outline));
         w.write_event(Event::Start(tag))?;
@@ -3384,6 +3459,12 @@ fn bool_attr(value: bool) -> &'static str {
         "1"
     } else {
         "0"
+    }
+}
+
+fn push_bool_attr_if(tag: &mut BytesStart<'_>, name: &'static str, value: bool, default: bool) {
+    if value != default {
+        tag.push_attribute((name, bool_attr(value)));
     }
 }
 

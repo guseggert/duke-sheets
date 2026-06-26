@@ -428,6 +428,24 @@ pub struct JsPivotLayoutOptions {
     pub show_error: Option<bool>,
     pub missing_caption: Option<String>,
     pub show_missing: Option<bool>,
+    pub asterisk_totals: Option<bool>,
+    pub show_items: Option<bool>,
+    pub edit_data: Option<bool>,
+    pub disable_field_list: Option<bool>,
+    pub show_calculated_members: Option<bool>,
+    pub visual_totals: Option<bool>,
+    pub show_multiple_label: Option<bool>,
+    pub show_data_drop_down: Option<bool>,
+    pub show_member_property_tips: Option<bool>,
+    pub show_data_tips: Option<bool>,
+    pub enable_wizard: Option<bool>,
+    pub enable_drill: Option<bool>,
+    pub enable_field_properties: Option<bool>,
+    pub subtotal_hidden_items: Option<bool>,
+    pub show_drop_zones: Option<bool>,
+    pub indent: Option<u32>,
+    pub show_empty_rows: Option<bool>,
+    pub show_empty_columns: Option<bool>,
 }
 
 #[napi(object)]
@@ -988,6 +1006,60 @@ fn build_pivot_layout_from_js(options: JsPivotLayoutOptions) -> Result<PivotLayo
     }
     if let Some(value) = options.show_missing {
         layout.show_missing = value;
+    }
+    if let Some(value) = options.asterisk_totals {
+        layout.asterisk_totals = value;
+    }
+    if let Some(value) = options.show_items {
+        layout.show_items = value;
+    }
+    if let Some(value) = options.edit_data {
+        layout.edit_data = value;
+    }
+    if let Some(value) = options.disable_field_list {
+        layout.disable_field_list = value;
+    }
+    if let Some(value) = options.show_calculated_members {
+        layout.show_calculated_members = value;
+    }
+    if let Some(value) = options.visual_totals {
+        layout.visual_totals = value;
+    }
+    if let Some(value) = options.show_multiple_label {
+        layout.show_multiple_label = value;
+    }
+    if let Some(value) = options.show_data_drop_down {
+        layout.show_data_drop_down = value;
+    }
+    if let Some(value) = options.show_member_property_tips {
+        layout.show_member_property_tips = value;
+    }
+    if let Some(value) = options.show_data_tips {
+        layout.show_data_tips = value;
+    }
+    if let Some(value) = options.enable_wizard {
+        layout.enable_wizard = value;
+    }
+    if let Some(value) = options.enable_drill {
+        layout.enable_drill = value;
+    }
+    if let Some(value) = options.enable_field_properties {
+        layout.enable_field_properties = value;
+    }
+    if let Some(value) = options.subtotal_hidden_items {
+        layout.subtotal_hidden_items = value;
+    }
+    if let Some(value) = options.show_drop_zones {
+        layout.show_drop_zones = value;
+    }
+    if let Some(value) = options.indent {
+        layout.indent = value;
+    }
+    if let Some(value) = options.show_empty_rows {
+        layout.show_empty_rows = value;
+    }
+    if let Some(value) = options.show_empty_columns {
+        layout.show_empty_columns = value;
     }
     Ok(layout)
 }

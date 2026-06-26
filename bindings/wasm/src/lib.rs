@@ -363,6 +363,24 @@ export interface PivotLayoutOptions {
   showError?: boolean;
   missingCaption?: string;
   showMissing?: boolean;
+  asteriskTotals?: boolean;
+  showItems?: boolean;
+  editData?: boolean;
+  disableFieldList?: boolean;
+  showCalculatedMembers?: boolean;
+  visualTotals?: boolean;
+  showMultipleLabel?: boolean;
+  showDataDropDown?: boolean;
+  showMemberPropertyTips?: boolean;
+  showDataTips?: boolean;
+  enableWizard?: boolean;
+  enableDrill?: boolean;
+  enableFieldProperties?: boolean;
+  subtotalHiddenItems?: boolean;
+  showDropZones?: boolean;
+  indent?: number;
+  showEmptyRows?: boolean;
+  showEmptyColumns?: boolean;
 }
 
 export interface PivotStyleOptions {
@@ -522,6 +540,24 @@ export interface PivotLayoutDefinition {
   showError: boolean;
   missingCaption?: string;
   showMissing: boolean;
+  asteriskTotals: boolean;
+  showItems: boolean;
+  editData: boolean;
+  disableFieldList: boolean;
+  showCalculatedMembers: boolean;
+  visualTotals: boolean;
+  showMultipleLabel: boolean;
+  showDataDropDown: boolean;
+  showMemberPropertyTips: boolean;
+  showDataTips: boolean;
+  enableWizard: boolean;
+  enableDrill: boolean;
+  enableFieldProperties: boolean;
+  subtotalHiddenItems: boolean;
+  showDropZones: boolean;
+  indent: number;
+  showEmptyRows: boolean;
+  showEmptyColumns: boolean;
 }
 
 export interface PivotStyleDefinition {
@@ -1029,6 +1065,60 @@ fn build_pivot_layout_from_wasm(options: WasmPivotLayoutOptions) -> Result<Pivot
     }
     if let Some(value) = options.show_missing {
         layout.show_missing = value;
+    }
+    if let Some(value) = options.asterisk_totals {
+        layout.asterisk_totals = value;
+    }
+    if let Some(value) = options.show_items {
+        layout.show_items = value;
+    }
+    if let Some(value) = options.edit_data {
+        layout.edit_data = value;
+    }
+    if let Some(value) = options.disable_field_list {
+        layout.disable_field_list = value;
+    }
+    if let Some(value) = options.show_calculated_members {
+        layout.show_calculated_members = value;
+    }
+    if let Some(value) = options.visual_totals {
+        layout.visual_totals = value;
+    }
+    if let Some(value) = options.show_multiple_label {
+        layout.show_multiple_label = value;
+    }
+    if let Some(value) = options.show_data_drop_down {
+        layout.show_data_drop_down = value;
+    }
+    if let Some(value) = options.show_member_property_tips {
+        layout.show_member_property_tips = value;
+    }
+    if let Some(value) = options.show_data_tips {
+        layout.show_data_tips = value;
+    }
+    if let Some(value) = options.enable_wizard {
+        layout.enable_wizard = value;
+    }
+    if let Some(value) = options.enable_drill {
+        layout.enable_drill = value;
+    }
+    if let Some(value) = options.enable_field_properties {
+        layout.enable_field_properties = value;
+    }
+    if let Some(value) = options.subtotal_hidden_items {
+        layout.subtotal_hidden_items = value;
+    }
+    if let Some(value) = options.show_drop_zones {
+        layout.show_drop_zones = value;
+    }
+    if let Some(value) = options.indent {
+        layout.indent = value;
+    }
+    if let Some(value) = options.show_empty_rows {
+        layout.show_empty_rows = value;
+    }
+    if let Some(value) = options.show_empty_columns {
+        layout.show_empty_columns = value;
     }
     Ok(layout)
 }

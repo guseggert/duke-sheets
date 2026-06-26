@@ -261,6 +261,24 @@ class TestPivotTables:
                     "show_error": True,
                     "missing_caption": "N/A",
                     "show_missing": False,
+                    "asterisk_totals": True,
+                    "show_items": False,
+                    "edit_data": True,
+                    "disable_field_list": True,
+                    "show_calculated_members": False,
+                    "visual_totals": False,
+                    "show_multiple_label": False,
+                    "show_data_drop_down": False,
+                    "show_member_property_tips": False,
+                    "show_data_tips": False,
+                    "enable_wizard": False,
+                    "enable_drill": False,
+                    "enable_field_properties": False,
+                    "subtotal_hidden_items": True,
+                    "show_drop_zones": False,
+                    "indent": 3,
+                    "show_empty_rows": True,
+                    "show_empty_columns": True,
                 },
                 "overwrite_policy": "fail_on_occupied",
             }
@@ -309,6 +327,24 @@ class TestPivotTables:
         assert pivot["layout"]["show_error"] is True
         assert pivot["layout"]["missing_caption"] == "N/A"
         assert pivot["layout"]["show_missing"] is False
+        assert pivot["layout"]["asterisk_totals"] is True
+        assert pivot["layout"]["show_items"] is False
+        assert pivot["layout"]["edit_data"] is True
+        assert pivot["layout"]["disable_field_list"] is True
+        assert pivot["layout"]["show_calculated_members"] is False
+        assert pivot["layout"]["visual_totals"] is False
+        assert pivot["layout"]["show_multiple_label"] is False
+        assert pivot["layout"]["show_data_drop_down"] is False
+        assert pivot["layout"]["show_member_property_tips"] is False
+        assert pivot["layout"]["show_data_tips"] is False
+        assert pivot["layout"]["enable_wizard"] is False
+        assert pivot["layout"]["enable_drill"] is False
+        assert pivot["layout"]["enable_field_properties"] is False
+        assert pivot["layout"]["subtotal_hidden_items"] is True
+        assert pivot["layout"]["show_drop_zones"] is False
+        assert pivot["layout"]["indent"] == 3
+        assert pivot["layout"]["show_empty_rows"] is True
+        assert pivot["layout"]["show_empty_columns"] is True
         assert pivot["refresh_policy"]["refresh_on_open"] is True
         assert pivot["refresh_policy"]["missing_items_limit"] == 25
         assert pivot["overwrite_policy"] == "fail_on_occupied"

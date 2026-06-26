@@ -4614,6 +4614,24 @@ mod tests {
         layout.show_error = true;
         layout.missing_caption = Some("N/A".into());
         layout.show_missing = false;
+        layout.asterisk_totals = true;
+        layout.show_items = false;
+        layout.edit_data = true;
+        layout.disable_field_list = true;
+        layout.show_calculated_members = false;
+        layout.visual_totals = false;
+        layout.show_multiple_label = false;
+        layout.show_data_drop_down = false;
+        layout.show_member_property_tips = false;
+        layout.show_data_tips = false;
+        layout.enable_wizard = false;
+        layout.enable_drill = false;
+        layout.enable_field_properties = false;
+        layout.subtotal_hidden_items = true;
+        layout.show_drop_zones = false;
+        layout.indent = 3;
+        layout.show_empty_rows = true;
+        layout.show_empty_columns = true;
         let pivot = PivotTable::builder("LayoutPivot")
             .source_range(CellRange::parse("A1:B3").unwrap())
             .target_address("D1")
@@ -4646,6 +4664,24 @@ mod tests {
         assert!(pivot_xml.contains(r#"showError="1""#));
         assert!(pivot_xml.contains(r#"missingCaption="N/A""#));
         assert!(pivot_xml.contains(r#"showMissing="0""#));
+        assert!(pivot_xml.contains(r#"asteriskTotals="1""#));
+        assert!(pivot_xml.contains(r#"showItems="0""#));
+        assert!(pivot_xml.contains(r#"editData="1""#));
+        assert!(pivot_xml.contains(r#"disableFieldList="1""#));
+        assert!(pivot_xml.contains(r#"showCalcMbrs="0""#));
+        assert!(pivot_xml.contains(r#"visualTotals="0""#));
+        assert!(pivot_xml.contains(r#"showMultipleLabel="0""#));
+        assert!(pivot_xml.contains(r#"showDataDropDown="0""#));
+        assert!(pivot_xml.contains(r#"showMemberPropertyTips="0""#));
+        assert!(pivot_xml.contains(r#"showDataTips="0""#));
+        assert!(pivot_xml.contains(r#"enableWizard="0""#));
+        assert!(pivot_xml.contains(r#"enableDrill="0""#));
+        assert!(pivot_xml.contains(r#"enableFieldProperties="0""#));
+        assert!(pivot_xml.contains(r#"subtotalHiddenItems="1""#));
+        assert!(pivot_xml.contains(r#"showDropZones="0""#));
+        assert!(pivot_xml.contains(r#"indent="3""#));
+        assert!(pivot_xml.contains(r#"showEmptyRow="1""#));
+        assert!(pivot_xml.contains(r#"showEmptyCol="1""#));
         assert!(pivot_xml.contains(r#"compact="0""#));
         assert!(pivot_xml.contains(r#"outline="0""#));
 
@@ -4672,6 +4708,24 @@ mod tests {
         assert!(pivot.layout.show_error);
         assert_eq!(pivot.layout.missing_caption.as_deref(), Some("N/A"));
         assert!(!pivot.layout.show_missing);
+        assert!(pivot.layout.asterisk_totals);
+        assert!(!pivot.layout.show_items);
+        assert!(pivot.layout.edit_data);
+        assert!(pivot.layout.disable_field_list);
+        assert!(!pivot.layout.show_calculated_members);
+        assert!(!pivot.layout.visual_totals);
+        assert!(!pivot.layout.show_multiple_label);
+        assert!(!pivot.layout.show_data_drop_down);
+        assert!(!pivot.layout.show_member_property_tips);
+        assert!(!pivot.layout.show_data_tips);
+        assert!(!pivot.layout.enable_wizard);
+        assert!(!pivot.layout.enable_drill);
+        assert!(!pivot.layout.enable_field_properties);
+        assert!(pivot.layout.subtotal_hidden_items);
+        assert!(!pivot.layout.show_drop_zones);
+        assert_eq!(pivot.layout.indent, 3);
+        assert!(pivot.layout.show_empty_rows);
+        assert!(pivot.layout.show_empty_columns);
     }
 
     #[test]

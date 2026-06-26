@@ -388,6 +388,24 @@ fn test_pivot_table_definitions_from_options() {
         ("showError", JsValue::TRUE),
         ("missingCaption", JsValue::from_str("N/A")),
         ("showMissing", JsValue::FALSE),
+        ("asteriskTotals", JsValue::TRUE),
+        ("showItems", JsValue::FALSE),
+        ("editData", JsValue::TRUE),
+        ("disableFieldList", JsValue::TRUE),
+        ("showCalculatedMembers", JsValue::FALSE),
+        ("visualTotals", JsValue::FALSE),
+        ("showMultipleLabel", JsValue::FALSE),
+        ("showDataDropDown", JsValue::FALSE),
+        ("showMemberPropertyTips", JsValue::FALSE),
+        ("showDataTips", JsValue::FALSE),
+        ("enableWizard", JsValue::FALSE),
+        ("enableDrill", JsValue::FALSE),
+        ("enableFieldProperties", JsValue::FALSE),
+        ("subtotalHiddenItems", JsValue::TRUE),
+        ("showDropZones", JsValue::FALSE),
+        ("indent", JsValue::from_f64(3.0)),
+        ("showEmptyRows", JsValue::TRUE),
+        ("showEmptyColumns", JsValue::TRUE),
     ]);
     let pivot = make_options(&[
         ("name", JsValue::from_str("SalesPivot")),
@@ -478,6 +496,24 @@ fn test_pivot_table_definitions_from_options() {
     assert!(get_bool_field(&pivot_layout, "showError"));
     assert_eq!(get_string_field(&pivot_layout, "missingCaption"), "N/A");
     assert!(!get_bool_field(&pivot_layout, "showMissing"));
+    assert!(get_bool_field(&pivot_layout, "asteriskTotals"));
+    assert!(!get_bool_field(&pivot_layout, "showItems"));
+    assert!(get_bool_field(&pivot_layout, "editData"));
+    assert!(get_bool_field(&pivot_layout, "disableFieldList"));
+    assert!(!get_bool_field(&pivot_layout, "showCalculatedMembers"));
+    assert!(!get_bool_field(&pivot_layout, "visualTotals"));
+    assert!(!get_bool_field(&pivot_layout, "showMultipleLabel"));
+    assert!(!get_bool_field(&pivot_layout, "showDataDropDown"));
+    assert!(!get_bool_field(&pivot_layout, "showMemberPropertyTips"));
+    assert!(!get_bool_field(&pivot_layout, "showDataTips"));
+    assert!(!get_bool_field(&pivot_layout, "enableWizard"));
+    assert!(!get_bool_field(&pivot_layout, "enableDrill"));
+    assert!(!get_bool_field(&pivot_layout, "enableFieldProperties"));
+    assert!(get_bool_field(&pivot_layout, "subtotalHiddenItems"));
+    assert!(!get_bool_field(&pivot_layout, "showDropZones"));
+    assert_eq!(get_f64_field(&pivot_layout, "indent"), 3.0);
+    assert!(get_bool_field(&pivot_layout, "showEmptyRows"));
+    assert!(get_bool_field(&pivot_layout, "showEmptyColumns"));
     let policy = Reflect::get(&pivot, &JsValue::from_str("refreshPolicy")).unwrap();
     assert!(get_bool_field(&policy, "refreshOnOpen"));
     assert_eq!(get_f64_field(&policy, "missingItemsLimit"), 25.0);

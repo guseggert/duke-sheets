@@ -774,6 +774,42 @@ pub struct PivotLayout {
     pub missing_caption: Option<String>,
     /// Whether missing values should be replaced by [`Self::missing_caption`].
     pub show_missing: bool,
+    /// Show asterisks beside visual total captions.
+    pub asterisk_totals: bool,
+    /// Show items with no data.
+    pub show_items: bool,
+    /// Allow users to edit pivot table values.
+    pub edit_data: bool,
+    /// Disable the field list UI for this pivot.
+    pub disable_field_list: bool,
+    /// Show calculated members.
+    pub show_calculated_members: bool,
+    /// Use visual totals for filtered items.
+    pub visual_totals: bool,
+    /// Show the multiple-items label for page fields.
+    pub show_multiple_label: bool,
+    /// Show the data field dropdown.
+    pub show_data_drop_down: bool,
+    /// Show member property tooltips.
+    pub show_member_property_tips: bool,
+    /// Show data tooltips.
+    pub show_data_tips: bool,
+    /// Enable the classic pivot table wizard.
+    pub enable_wizard: bool,
+    /// Enable drill actions.
+    pub enable_drill: bool,
+    /// Enable field property editing.
+    pub enable_field_properties: bool,
+    /// Include hidden items when calculating subtotals.
+    pub subtotal_hidden_items: bool,
+    /// Show PivotChart drop zones.
+    pub show_drop_zones: bool,
+    /// Row field indentation level in compact/outline layouts.
+    pub indent: u32,
+    /// Show empty rows.
+    pub show_empty_rows: bool,
+    /// Show empty columns.
+    pub show_empty_columns: bool,
 }
 
 impl Default for PivotLayout {
@@ -797,6 +833,24 @@ impl Default for PivotLayout {
             show_error: false,
             missing_caption: None,
             show_missing: true,
+            asterisk_totals: false,
+            show_items: true,
+            edit_data: false,
+            disable_field_list: false,
+            show_calculated_members: true,
+            visual_totals: true,
+            show_multiple_label: true,
+            show_data_drop_down: true,
+            show_member_property_tips: true,
+            show_data_tips: true,
+            enable_wizard: true,
+            enable_drill: true,
+            enable_field_properties: true,
+            subtotal_hidden_items: false,
+            show_drop_zones: true,
+            indent: 1,
+            show_empty_rows: false,
+            show_empty_columns: false,
         }
     }
 }

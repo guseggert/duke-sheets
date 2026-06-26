@@ -11,9 +11,10 @@ use duke_sheets_core::style::NumberFormat;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
     PivotCalculatedField, PivotCalculatedItem, PivotDateGroupUnit, PivotExtension, PivotField,
-    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup,
-    PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
-    PivotStyle, PivotSubtotal, PivotTable, PivotValue, WorkbookConnection, WorkbookConnectionKind,
+    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
+    PivotManualGroup, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource,
+    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, WorkbookConnection,
+    WorkbookConnectionKind,
 };
 
 #[derive(Debug, Clone)]
@@ -593,24 +594,8 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut page_filters = Vec::new();
     let mut advanced_filters = Vec::new();
     let mut style = PivotStyle::default();
-    let mut row_grand_totals = true;
-    let mut col_grand_totals = true;
+    let mut layout = PivotLayout::default();
     let mut preserve_formatting = true;
-    let mut show_headers = true;
-    let mut show_expand_collapse = true;
-    let mut print_drill_indicators = false;
-    let mut item_print_titles = false;
-    let mut field_print_titles = false;
-    let mut page_wrap = 0;
-    let mut page_over_then_down = false;
-    let mut merge_item_labels = false;
-    let mut layout_kind = PivotLayoutKind::Compact;
-    let mut data_caption = "Values".to_string();
-    let mut grand_total_caption = None;
-    let mut error_caption = None;
-    let mut show_error = false;
-    let mut missing_caption = None;
-    let mut show_missing = true;
     let mut axis_context: Option<AxisContext> = None;
     let mut pivot_field_index = 0usize;
     let mut current_pivot_field: Option<(usize, Vec<u32>)> = None;
@@ -643,24 +628,8 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             &e,
                             &mut name,
                             &mut cache_id,
-                            &mut row_grand_totals,
-                            &mut col_grand_totals,
                             &mut preserve_formatting,
-                            &mut show_headers,
-                            &mut show_expand_collapse,
-                            &mut print_drill_indicators,
-                            &mut item_print_titles,
-                            &mut field_print_titles,
-                            &mut page_wrap,
-                            &mut page_over_then_down,
-                            &mut merge_item_labels,
-                            &mut layout_kind,
-                            &mut data_caption,
-                            &mut grand_total_caption,
-                            &mut error_caption,
-                            &mut show_error,
-                            &mut missing_caption,
-                            &mut show_missing,
+                            &mut layout,
                         );
                     }
                     b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
@@ -726,24 +695,8 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             &e,
                             &mut name,
                             &mut cache_id,
-                            &mut row_grand_totals,
-                            &mut col_grand_totals,
                             &mut preserve_formatting,
-                            &mut show_headers,
-                            &mut show_expand_collapse,
-                            &mut print_drill_indicators,
-                            &mut item_print_titles,
-                            &mut field_print_titles,
-                            &mut page_wrap,
-                            &mut page_over_then_down,
-                            &mut merge_item_labels,
-                            &mut layout_kind,
-                            &mut data_caption,
-                            &mut grand_total_caption,
-                            &mut error_caption,
-                            &mut show_error,
-                            &mut missing_caption,
-                            &mut show_missing,
+                            &mut layout,
                         );
                     }
                     b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
@@ -925,23 +878,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.page_fields = page_fields;
     pivot.measures = measures;
     pivot.calculated_fields = cache.calculated_fields.clone();
-    pivot.layout.show_row_grand_totals = row_grand_totals;
-    pivot.layout.show_column_grand_totals = col_grand_totals;
-    pivot.layout.show_field_headers = show_headers;
-    pivot.layout.show_expand_collapse = show_expand_collapse;
-    pivot.layout.print_drill_indicators = print_drill_indicators;
-    pivot.layout.item_print_titles = item_print_titles;
-    pivot.layout.field_print_titles = field_print_titles;
-    pivot.layout.page_wrap = page_wrap;
-    pivot.layout.page_over_then_down = page_over_then_down;
-    pivot.layout.merge_item_labels = merge_item_labels;
-    pivot.layout.kind = layout_kind;
-    pivot.layout.data_caption = data_caption;
-    pivot.layout.grand_total_caption = grand_total_caption;
-    pivot.layout.error_caption = error_caption;
-    pivot.layout.show_error = show_error;
-    pivot.layout.missing_caption = missing_caption;
-    pivot.layout.show_missing = show_missing;
+    pivot.layout = layout;
     pivot.refresh_policy.refresh_on_open = cache.refresh_on_load;
     pivot.refresh_policy.preserve_formatting = preserve_formatting;
     pivot.refresh_policy.background_query = cache.background_query;
@@ -1105,86 +1042,124 @@ fn parse_pivot_table_attrs(
     e: &BytesStart<'_>,
     name: &mut String,
     cache_id: &mut u32,
-    row_grand_totals: &mut bool,
-    col_grand_totals: &mut bool,
     preserve_formatting: &mut bool,
-    show_headers: &mut bool,
-    show_expand_collapse: &mut bool,
-    print_drill_indicators: &mut bool,
-    item_print_titles: &mut bool,
-    field_print_titles: &mut bool,
-    page_wrap: &mut u32,
-    page_over_then_down: &mut bool,
-    merge_item_labels: &mut bool,
-    layout_kind: &mut PivotLayoutKind,
-    data_caption: &mut String,
-    grand_total_caption: &mut Option<String>,
-    error_caption: &mut Option<String>,
-    show_error: &mut bool,
-    missing_caption: &mut Option<String>,
-    show_missing: &mut bool,
+    layout: &mut PivotLayout,
 ) {
     if let Some(value) = attr_string(e, b"name") {
         *name = value;
     }
     if let Some(value) = attr_string(e, b"dataCaption") {
-        *data_caption = value;
+        layout.data_caption = value;
     }
     if let Some(value) = attr_string(e, b"grandTotalCaption") {
-        *grand_total_caption = Some(value);
+        layout.grand_total_caption = Some(value);
     }
     if let Some(value) = attr_string(e, b"errorCaption") {
-        *error_caption = Some(value);
+        layout.error_caption = Some(value);
     }
     if let Some(value) = attr_bool(e, b"showError") {
-        *show_error = value;
+        layout.show_error = value;
     }
     if let Some(value) = attr_string(e, b"missingCaption") {
-        *missing_caption = Some(value);
+        layout.missing_caption = Some(value);
     }
     if let Some(value) = attr_bool(e, b"showMissing") {
-        *show_missing = value;
+        layout.show_missing = value;
     }
     if let Some(value) = attr_u32(e, b"cacheId") {
         *cache_id = value;
     }
+    if let Some(value) = attr_bool(e, b"asteriskTotals") {
+        layout.asterisk_totals = value;
+    }
+    if let Some(value) = attr_bool(e, b"showItems") {
+        layout.show_items = value;
+    }
+    if let Some(value) = attr_bool(e, b"editData") {
+        layout.edit_data = value;
+    }
+    if let Some(value) = attr_bool(e, b"disableFieldList") {
+        layout.disable_field_list = value;
+    }
+    if let Some(value) = attr_bool(e, b"showCalcMbrs") {
+        layout.show_calculated_members = value;
+    }
+    if let Some(value) = attr_bool(e, b"visualTotals") {
+        layout.visual_totals = value;
+    }
+    if let Some(value) = attr_bool(e, b"showMultipleLabel") {
+        layout.show_multiple_label = value;
+    }
+    if let Some(value) = attr_bool(e, b"showDataDropDown") {
+        layout.show_data_drop_down = value;
+    }
     if let Some(value) = attr_bool(e, b"rowGrandTotals") {
-        *row_grand_totals = value;
+        layout.show_row_grand_totals = value;
     }
     if let Some(value) = attr_bool(e, b"colGrandTotals") {
-        *col_grand_totals = value;
+        layout.show_column_grand_totals = value;
     }
     if let Some(value) = attr_bool(e, b"preserveFormatting") {
         *preserve_formatting = value;
     }
     if let Some(value) = attr_bool(e, b"showHeaders") {
-        *show_headers = value;
+        layout.show_field_headers = value;
     }
     if let Some(value) = attr_bool(e, b"showDrill") {
-        *show_expand_collapse = value;
+        layout.show_expand_collapse = value;
     }
     if let Some(value) = attr_bool(e, b"printDrill") {
-        *print_drill_indicators = value;
+        layout.print_drill_indicators = value;
+    }
+    if let Some(value) = attr_bool(e, b"showMemberPropertyTips") {
+        layout.show_member_property_tips = value;
+    }
+    if let Some(value) = attr_bool(e, b"showDataTips") {
+        layout.show_data_tips = value;
+    }
+    if let Some(value) = attr_bool(e, b"enableWizard") {
+        layout.enable_wizard = value;
+    }
+    if let Some(value) = attr_bool(e, b"enableDrill") {
+        layout.enable_drill = value;
+    }
+    if let Some(value) = attr_bool(e, b"enableFieldProperties") {
+        layout.enable_field_properties = value;
     }
     if let Some(value) = attr_bool(e, b"itemPrintTitles") {
-        *item_print_titles = value;
+        layout.item_print_titles = value;
     }
     if let Some(value) = attr_bool(e, b"fieldPrintTitles") {
-        *field_print_titles = value;
+        layout.field_print_titles = value;
     }
     if let Some(value) = attr_u32(e, b"pageWrap") {
-        *page_wrap = value;
+        layout.page_wrap = value;
     }
     if let Some(value) = attr_bool(e, b"pageOverThenDown") {
-        *page_over_then_down = value;
+        layout.page_over_then_down = value;
+    }
+    if let Some(value) = attr_bool(e, b"subtotalHiddenItems") {
+        layout.subtotal_hidden_items = value;
     }
     if let Some(value) = attr_bool(e, b"mergeItem") {
-        *merge_item_labels = value;
+        layout.merge_item_labels = value;
+    }
+    if let Some(value) = attr_bool(e, b"showDropZones") {
+        layout.show_drop_zones = value;
+    }
+    if let Some(value) = attr_u32(e, b"indent") {
+        layout.indent = value;
+    }
+    if let Some(value) = attr_bool(e, b"showEmptyRow") {
+        layout.show_empty_rows = value;
+    }
+    if let Some(value) = attr_bool(e, b"showEmptyCol") {
+        layout.show_empty_columns = value;
     }
 
     let compact = attr_bool(e, b"compact").unwrap_or(true);
     let outline = attr_bool(e, b"outline").unwrap_or(false);
-    *layout_kind = if outline {
+    layout.kind = if outline {
         PivotLayoutKind::Outline
     } else if compact {
         PivotLayoutKind::Compact
