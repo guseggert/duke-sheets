@@ -762,6 +762,18 @@ pub struct PivotLayout {
     pub page_over_then_down: bool,
     /// Merge repeated item labels in the rendered pivot layout when supported.
     pub merge_item_labels: bool,
+    /// Caption used for the aggregate-values field.
+    pub data_caption: String,
+    /// Optional caption for grand total labels.
+    pub grand_total_caption: Option<String>,
+    /// Optional display text for error values.
+    pub error_caption: Option<String>,
+    /// Whether error values should be replaced by [`Self::error_caption`].
+    pub show_error: bool,
+    /// Optional display text for missing values.
+    pub missing_caption: Option<String>,
+    /// Whether missing values should be replaced by [`Self::missing_caption`].
+    pub show_missing: bool,
 }
 
 impl Default for PivotLayout {
@@ -779,6 +791,12 @@ impl Default for PivotLayout {
             page_wrap: 0,
             page_over_then_down: false,
             merge_item_labels: false,
+            data_caption: "Values".to_string(),
+            grand_total_caption: None,
+            error_caption: None,
+            show_error: false,
+            missing_caption: None,
+            show_missing: true,
         }
     }
 }

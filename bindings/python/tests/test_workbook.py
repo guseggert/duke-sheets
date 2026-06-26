@@ -255,6 +255,12 @@ class TestPivotTables:
                     "page_wrap": 2,
                     "page_over_then_down": True,
                     "merge_item_labels": True,
+                    "data_caption": "Metrics",
+                    "grand_total_caption": "Overall",
+                    "error_caption": "ERR",
+                    "show_error": True,
+                    "missing_caption": "N/A",
+                    "show_missing": False,
                 },
                 "overwrite_policy": "fail_on_occupied",
             }
@@ -297,6 +303,12 @@ class TestPivotTables:
         assert pivot["layout"]["page_wrap"] == 2
         assert pivot["layout"]["page_over_then_down"] is True
         assert pivot["layout"]["merge_item_labels"] is True
+        assert pivot["layout"]["data_caption"] == "Metrics"
+        assert pivot["layout"]["grand_total_caption"] == "Overall"
+        assert pivot["layout"]["error_caption"] == "ERR"
+        assert pivot["layout"]["show_error"] is True
+        assert pivot["layout"]["missing_caption"] == "N/A"
+        assert pivot["layout"]["show_missing"] is False
         assert pivot["refresh_policy"]["refresh_on_open"] is True
         assert pivot["refresh_policy"]["missing_items_limit"] == 25
         assert pivot["overwrite_policy"] == "fail_on_occupied"

@@ -4608,6 +4608,12 @@ mod tests {
         layout.page_wrap = 2;
         layout.page_over_then_down = true;
         layout.merge_item_labels = true;
+        layout.data_caption = "Metrics".into();
+        layout.grand_total_caption = Some("Overall".into());
+        layout.error_caption = Some("ERR".into());
+        layout.show_error = true;
+        layout.missing_caption = Some("N/A".into());
+        layout.show_missing = false;
         let pivot = PivotTable::builder("LayoutPivot")
             .source_range(CellRange::parse("A1:B3").unwrap())
             .target_address("D1")
@@ -4634,6 +4640,12 @@ mod tests {
         assert!(pivot_xml.contains(r#"pageWrap="2""#));
         assert!(pivot_xml.contains(r#"pageOverThenDown="1""#));
         assert!(pivot_xml.contains(r#"mergeItem="1""#));
+        assert!(pivot_xml.contains(r#"dataCaption="Metrics""#));
+        assert!(pivot_xml.contains(r#"grandTotalCaption="Overall""#));
+        assert!(pivot_xml.contains(r#"errorCaption="ERR""#));
+        assert!(pivot_xml.contains(r#"showError="1""#));
+        assert!(pivot_xml.contains(r#"missingCaption="N/A""#));
+        assert!(pivot_xml.contains(r#"showMissing="0""#));
         assert!(pivot_xml.contains(r#"compact="0""#));
         assert!(pivot_xml.contains(r#"outline="0""#));
 
@@ -4654,6 +4666,12 @@ mod tests {
         assert_eq!(pivot.layout.page_wrap, 2);
         assert!(pivot.layout.page_over_then_down);
         assert!(pivot.layout.merge_item_labels);
+        assert_eq!(pivot.layout.data_caption, "Metrics");
+        assert_eq!(pivot.layout.grand_total_caption.as_deref(), Some("Overall"));
+        assert_eq!(pivot.layout.error_caption.as_deref(), Some("ERR"));
+        assert!(pivot.layout.show_error);
+        assert_eq!(pivot.layout.missing_caption.as_deref(), Some("N/A"));
+        assert!(!pivot.layout.show_missing);
     }
 
     #[test]

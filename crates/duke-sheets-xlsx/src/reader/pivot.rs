@@ -605,6 +605,12 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut page_over_then_down = false;
     let mut merge_item_labels = false;
     let mut layout_kind = PivotLayoutKind::Compact;
+    let mut data_caption = "Values".to_string();
+    let mut grand_total_caption = None;
+    let mut error_caption = None;
+    let mut show_error = false;
+    let mut missing_caption = None;
+    let mut show_missing = true;
     let mut axis_context: Option<AxisContext> = None;
     let mut pivot_field_index = 0usize;
     let mut current_pivot_field: Option<(usize, Vec<u32>)> = None;
@@ -649,6 +655,12 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             &mut page_over_then_down,
                             &mut merge_item_labels,
                             &mut layout_kind,
+                            &mut data_caption,
+                            &mut grand_total_caption,
+                            &mut error_caption,
+                            &mut show_error,
+                            &mut missing_caption,
+                            &mut show_missing,
                         );
                     }
                     b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
@@ -726,6 +738,12 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             &mut page_over_then_down,
                             &mut merge_item_labels,
                             &mut layout_kind,
+                            &mut data_caption,
+                            &mut grand_total_caption,
+                            &mut error_caption,
+                            &mut show_error,
+                            &mut missing_caption,
+                            &mut show_missing,
                         );
                     }
                     b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
@@ -918,6 +936,12 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.layout.page_over_then_down = page_over_then_down;
     pivot.layout.merge_item_labels = merge_item_labels;
     pivot.layout.kind = layout_kind;
+    pivot.layout.data_caption = data_caption;
+    pivot.layout.grand_total_caption = grand_total_caption;
+    pivot.layout.error_caption = error_caption;
+    pivot.layout.show_error = show_error;
+    pivot.layout.missing_caption = missing_caption;
+    pivot.layout.show_missing = show_missing;
     pivot.refresh_policy.refresh_on_open = cache.refresh_on_load;
     pivot.refresh_policy.preserve_formatting = preserve_formatting;
     pivot.refresh_policy.background_query = cache.background_query;
@@ -1093,9 +1117,33 @@ fn parse_pivot_table_attrs(
     page_over_then_down: &mut bool,
     merge_item_labels: &mut bool,
     layout_kind: &mut PivotLayoutKind,
+    data_caption: &mut String,
+    grand_total_caption: &mut Option<String>,
+    error_caption: &mut Option<String>,
+    show_error: &mut bool,
+    missing_caption: &mut Option<String>,
+    show_missing: &mut bool,
 ) {
     if let Some(value) = attr_string(e, b"name") {
         *name = value;
+    }
+    if let Some(value) = attr_string(e, b"dataCaption") {
+        *data_caption = value;
+    }
+    if let Some(value) = attr_string(e, b"grandTotalCaption") {
+        *grand_total_caption = Some(value);
+    }
+    if let Some(value) = attr_string(e, b"errorCaption") {
+        *error_caption = Some(value);
+    }
+    if let Some(value) = attr_bool(e, b"showError") {
+        *show_error = value;
+    }
+    if let Some(value) = attr_string(e, b"missingCaption") {
+        *missing_caption = Some(value);
+    }
+    if let Some(value) = attr_bool(e, b"showMissing") {
+        *show_missing = value;
     }
     if let Some(value) = attr_u32(e, b"cacheId") {
         *cache_id = value;

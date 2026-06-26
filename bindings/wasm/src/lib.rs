@@ -357,6 +357,12 @@ export interface PivotLayoutOptions {
   pageWrap?: number;
   pageOverThenDown?: boolean;
   mergeItemLabels?: boolean;
+  dataCaption?: string;
+  grandTotalCaption?: string;
+  errorCaption?: string;
+  showError?: boolean;
+  missingCaption?: string;
+  showMissing?: boolean;
 }
 
 export interface PivotStyleOptions {
@@ -510,6 +516,12 @@ export interface PivotLayoutDefinition {
   pageWrap: number;
   pageOverThenDown: boolean;
   mergeItemLabels: boolean;
+  dataCaption: string;
+  grandTotalCaption?: string;
+  errorCaption?: string;
+  showError: boolean;
+  missingCaption?: string;
+  showMissing: boolean;
 }
 
 export interface PivotStyleDefinition {
@@ -999,6 +1011,24 @@ fn build_pivot_layout_from_wasm(options: WasmPivotLayoutOptions) -> Result<Pivot
     }
     if let Some(value) = options.merge_item_labels {
         layout.merge_item_labels = value;
+    }
+    if let Some(value) = options.data_caption {
+        layout.data_caption = value;
+    }
+    if let Some(value) = options.grand_total_caption {
+        layout.grand_total_caption = Some(value);
+    }
+    if let Some(value) = options.error_caption {
+        layout.error_caption = Some(value);
+    }
+    if let Some(value) = options.show_error {
+        layout.show_error = value;
+    }
+    if let Some(value) = options.missing_caption {
+        layout.missing_caption = Some(value);
+    }
+    if let Some(value) = options.show_missing {
+        layout.show_missing = value;
     }
     Ok(layout)
 }

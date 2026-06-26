@@ -382,6 +382,12 @@ fn test_pivot_table_definitions_from_options() {
         ("pageWrap", JsValue::from_f64(2.0)),
         ("pageOverThenDown", JsValue::TRUE),
         ("mergeItemLabels", JsValue::TRUE),
+        ("dataCaption", JsValue::from_str("Metrics")),
+        ("grandTotalCaption", JsValue::from_str("Overall")),
+        ("errorCaption", JsValue::from_str("ERR")),
+        ("showError", JsValue::TRUE),
+        ("missingCaption", JsValue::from_str("N/A")),
+        ("showMissing", JsValue::FALSE),
     ]);
     let pivot = make_options(&[
         ("name", JsValue::from_str("SalesPivot")),
@@ -463,6 +469,15 @@ fn test_pivot_table_definitions_from_options() {
     assert_eq!(get_f64_field(&pivot_layout, "pageWrap"), 2.0);
     assert!(get_bool_field(&pivot_layout, "pageOverThenDown"));
     assert!(get_bool_field(&pivot_layout, "mergeItemLabels"));
+    assert_eq!(get_string_field(&pivot_layout, "dataCaption"), "Metrics");
+    assert_eq!(
+        get_string_field(&pivot_layout, "grandTotalCaption"),
+        "Overall"
+    );
+    assert_eq!(get_string_field(&pivot_layout, "errorCaption"), "ERR");
+    assert!(get_bool_field(&pivot_layout, "showError"));
+    assert_eq!(get_string_field(&pivot_layout, "missingCaption"), "N/A");
+    assert!(!get_bool_field(&pivot_layout, "showMissing"));
     let policy = Reflect::get(&pivot, &JsValue::from_str("refreshPolicy")).unwrap();
     assert!(get_bool_field(&policy, "refreshOnOpen"));
     assert_eq!(get_f64_field(&policy, "missingItemsLimit"), 25.0);

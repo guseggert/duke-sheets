@@ -422,6 +422,12 @@ pub struct JsPivotLayoutOptions {
     pub page_wrap: Option<u32>,
     pub page_over_then_down: Option<bool>,
     pub merge_item_labels: Option<bool>,
+    pub data_caption: Option<String>,
+    pub grand_total_caption: Option<String>,
+    pub error_caption: Option<String>,
+    pub show_error: Option<bool>,
+    pub missing_caption: Option<String>,
+    pub show_missing: Option<bool>,
 }
 
 #[napi(object)]
@@ -964,6 +970,24 @@ fn build_pivot_layout_from_js(options: JsPivotLayoutOptions) -> Result<PivotLayo
     }
     if let Some(value) = options.merge_item_labels {
         layout.merge_item_labels = value;
+    }
+    if let Some(value) = options.data_caption {
+        layout.data_caption = value;
+    }
+    if let Some(value) = options.grand_total_caption {
+        layout.grand_total_caption = Some(value);
+    }
+    if let Some(value) = options.error_caption {
+        layout.error_caption = Some(value);
+    }
+    if let Some(value) = options.show_error {
+        layout.show_error = value;
+    }
+    if let Some(value) = options.missing_caption {
+        layout.missing_caption = Some(value);
+    }
+    if let Some(value) = options.show_missing {
+        layout.show_missing = value;
     }
     Ok(layout)
 }

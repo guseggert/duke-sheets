@@ -1546,12 +1546,34 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         let page_wrap = pivot.layout.page_wrap.to_string();
         let page_over_then_down = bool_attr(pivot.layout.page_over_then_down);
         let merge_item = bool_attr(pivot.layout.merge_item_labels);
+        let data_caption = if pivot.layout.data_caption.trim().is_empty() {
+            "Values"
+        } else {
+            pivot.layout.data_caption.as_str()
+        };
+        let show_error = bool_attr(pivot.layout.show_error);
+        let show_missing = bool_attr(pivot.layout.show_missing);
 
         let mut tag = BytesStart::new("pivotTableDefinition");
         tag.push_attribute(("xmlns", NS_SPREADSHEET));
         tag.push_attribute(("name", pivot.name.as_str()));
         tag.push_attribute(("cacheId", cache_id.as_str()));
-        tag.push_attribute(("dataCaption", "Values"));
+        tag.push_attribute(("dataCaption", data_caption));
+        if let Some(caption) = &pivot.layout.grand_total_caption {
+            tag.push_attribute(("grandTotalCaption", caption.as_str()));
+        }
+        if let Some(caption) = &pivot.layout.error_caption {
+            tag.push_attribute(("errorCaption", caption.as_str()));
+        }
+        if pivot.layout.show_error {
+            tag.push_attribute(("showError", show_error));
+        }
+        if let Some(caption) = &pivot.layout.missing_caption {
+            tag.push_attribute(("missingCaption", caption.as_str()));
+        }
+        if !pivot.layout.show_missing {
+            tag.push_attribute(("showMissing", show_missing));
+        }
         tag.push_attribute(("updatedVersion", "8"));
         tag.push_attribute(("minRefreshableVersion", "3"));
         tag.push_attribute(("rowGrandTotals", row_grand));

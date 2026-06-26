@@ -230,6 +230,12 @@ describe("PivotTables", () => {
         pageWrap: 2,
         pageOverThenDown: true,
         mergeItemLabels: true,
+        dataCaption: "Metrics",
+        grandTotalCaption: "Overall",
+        errorCaption: "ERR",
+        showError: true,
+        missingCaption: "N/A",
+        showMissing: false,
       },
       overwritePolicy: "failOnOccupied",
     });
@@ -276,6 +282,12 @@ describe("PivotTables", () => {
       pageWrap: 2,
       pageOverThenDown: true,
       mergeItemLabels: true,
+      dataCaption: "Metrics",
+      grandTotalCaption: "Overall",
+      errorCaption: "ERR",
+      showError: true,
+      missingCaption: "N/A",
+      showMissing: false,
     });
     expect(pivot?.refreshPolicy).toMatchObject({ refreshOnOpen: true, missingItemsLimit: 25 });
     expect(pivot?.overwritePolicy).toBe("failOnOccupied");

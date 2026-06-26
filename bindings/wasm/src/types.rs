@@ -163,6 +163,12 @@ pub struct WasmPivotLayoutOptions {
     pub page_wrap: Option<u32>,
     pub page_over_then_down: Option<bool>,
     pub merge_item_labels: Option<bool>,
+    pub data_caption: Option<String>,
+    pub grand_total_caption: Option<String>,
+    pub error_caption: Option<String>,
+    pub show_error: Option<bool>,
+    pub missing_caption: Option<String>,
+    pub show_missing: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -766,6 +772,15 @@ pub struct WasmPivotLayoutDefinition {
     pub page_wrap: u32,
     pub page_over_then_down: bool,
     pub merge_item_labels: bool,
+    pub data_caption: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grand_total_caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_caption: Option<String>,
+    pub show_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing_caption: Option<String>,
+    pub show_missing: bool,
 }
 
 impl From<&core::PivotLayout> for WasmPivotLayoutDefinition {
@@ -783,6 +798,12 @@ impl From<&core::PivotLayout> for WasmPivotLayoutDefinition {
             page_wrap: layout.page_wrap,
             page_over_then_down: layout.page_over_then_down,
             merge_item_labels: layout.merge_item_labels,
+            data_caption: layout.data_caption.clone(),
+            grand_total_caption: layout.grand_total_caption.clone(),
+            error_caption: layout.error_caption.clone(),
+            show_error: layout.show_error,
+            missing_caption: layout.missing_caption.clone(),
+            show_missing: layout.show_missing,
         }
     }
 }

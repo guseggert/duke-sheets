@@ -194,6 +194,12 @@ export interface JsPivotLayoutOptions {
   pageWrap?: number
   pageOverThenDown?: boolean
   mergeItemLabels?: boolean
+  dataCaption?: string
+  grandTotalCaption?: string
+  errorCaption?: string
+  showError?: boolean
+  missingCaption?: string
+  showMissing?: boolean
 }
 
 export interface JsPivotStyleOptions {

@@ -360,6 +360,24 @@ fn build_pivot_layout_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotLayou
     if let Some(value) = optional_bool(dict, &["merge_item_labels", "mergeItemLabels"])? {
         layout.merge_item_labels = value;
     }
+    if let Some(value) = optional_string(dict, &["data_caption", "dataCaption"])? {
+        layout.data_caption = value;
+    }
+    if let Some(value) = optional_string(dict, &["grand_total_caption", "grandTotalCaption"])? {
+        layout.grand_total_caption = Some(value);
+    }
+    if let Some(value) = optional_string(dict, &["error_caption", "errorCaption"])? {
+        layout.error_caption = Some(value);
+    }
+    if let Some(value) = optional_bool(dict, &["show_error", "showError"])? {
+        layout.show_error = value;
+    }
+    if let Some(value) = optional_string(dict, &["missing_caption", "missingCaption"])? {
+        layout.missing_caption = Some(value);
+    }
+    if let Some(value) = optional_bool(dict, &["show_missing", "showMissing"])? {
+        layout.show_missing = value;
+    }
     Ok(layout)
 }
 
@@ -1183,6 +1201,12 @@ fn pivot_layout_to_py(py: Python<'_>, layout: &PivotLayout) -> PyResult<PyObject
     dict.set_item("page_wrap", layout.page_wrap)?;
     dict.set_item("page_over_then_down", layout.page_over_then_down)?;
     dict.set_item("merge_item_labels", layout.merge_item_labels)?;
+    dict.set_item("data_caption", &layout.data_caption)?;
+    dict.set_item("grand_total_caption", &layout.grand_total_caption)?;
+    dict.set_item("error_caption", &layout.error_caption)?;
+    dict.set_item("show_error", layout.show_error)?;
+    dict.set_item("missing_caption", &layout.missing_caption)?;
+    dict.set_item("show_missing", layout.show_missing)?;
     Ok(dict.into_any().unbind())
 }
 
