@@ -757,7 +757,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             if let Some(field) = pivot_axis_field(
                                 cache,
                                 field_index,
-                                options_by_field.get(&field_index).copied(),
+                                options_by_field.get(&field_index).cloned(),
                             ) {
                                 match axis_context {
                                     Some(AxisContext::Rows) => push_axis_field(&mut rows, field),
@@ -780,7 +780,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             if let Some(field) = pivot_axis_field(
                                 cache,
                                 field_index,
-                                options_by_field.get(&field_index).copied(),
+                                options_by_field.get(&field_index).cloned(),
                             ) {
                                 push_axis_field(&mut page_fields, field);
                                 if let Some(item_index) = attr_u32(&e, b"item") {
@@ -1276,10 +1276,11 @@ fn parse_pivot_sort(e: &BytesStart<'_>) -> PivotSort {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PivotFieldOptions {
     sort: PivotSort,
     subtotal: PivotSubtotal,
+    subtotals: Vec<PivotSubtotal>,
     show_empty_items: bool,
     show_drop_downs: bool,
     subtotal_top: bool,
@@ -1294,6 +1295,7 @@ impl Default for PivotFieldOptions {
         Self {
             sort: PivotSort::None,
             subtotal: PivotSubtotal::Automatic,
+            subtotals: Vec::new(),
             show_empty_items: false,
             show_drop_downs: true,
             subtotal_top: true,
@@ -1309,6 +1311,7 @@ fn parse_pivot_field_options(e: &BytesStart<'_>) -> PivotFieldOptions {
     PivotFieldOptions {
         sort: parse_pivot_sort(e),
         subtotal: parse_pivot_subtotal(e),
+        subtotals: parse_pivot_subtotals(e),
         show_empty_items: attr_bool(e, b"showAll").unwrap_or(false),
         show_drop_downs: attr_bool(e, b"showDropDowns").unwrap_or(true),
         subtotal_top: attr_bool(e, b"subtotalTop").unwrap_or(true),
@@ -1320,33 +1323,53 @@ fn parse_pivot_field_options(e: &BytesStart<'_>) -> PivotFieldOptions {
 }
 
 fn parse_pivot_subtotal(e: &BytesStart<'_>) -> PivotSubtotal {
-    if attr_bool(e, b"sumSubtotal").unwrap_or(false) {
-        PivotSubtotal::Sum
-    } else if attr_bool(e, b"countASubtotal").unwrap_or(false) {
-        PivotSubtotal::Count
-    } else if attr_bool(e, b"countSubtotal").unwrap_or(false) {
-        PivotSubtotal::CountNumbers
-    } else if attr_bool(e, b"avgSubtotal").unwrap_or(false) {
-        PivotSubtotal::Average
-    } else if attr_bool(e, b"minSubtotal").unwrap_or(false) {
-        PivotSubtotal::Min
-    } else if attr_bool(e, b"maxSubtotal").unwrap_or(false) {
-        PivotSubtotal::Max
-    } else if attr_bool(e, b"productSubtotal").unwrap_or(false) {
-        PivotSubtotal::Product
-    } else if attr_bool(e, b"stdDevSubtotal").unwrap_or(false) {
-        PivotSubtotal::StdDev
-    } else if attr_bool(e, b"stdDevPSubtotal").unwrap_or(false) {
-        PivotSubtotal::StdDevP
-    } else if attr_bool(e, b"varSubtotal").unwrap_or(false) {
-        PivotSubtotal::Var
-    } else if attr_bool(e, b"varPSubtotal").unwrap_or(false) {
-        PivotSubtotal::VarP
-    } else if attr_bool(e, b"defaultSubtotal").unwrap_or(true) {
+    if let Some(subtotal) = parse_pivot_subtotals(e).into_iter().next() {
+        return subtotal;
+    }
+
+    if attr_bool(e, b"defaultSubtotal").unwrap_or(true) {
         PivotSubtotal::Automatic
     } else {
         PivotSubtotal::None
     }
+}
+
+fn parse_pivot_subtotals(e: &BytesStart<'_>) -> Vec<PivotSubtotal> {
+    let mut subtotals = Vec::new();
+    if attr_bool(e, b"sumSubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::Sum);
+    }
+    if attr_bool(e, b"countASubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::Count);
+    }
+    if attr_bool(e, b"countSubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::CountNumbers);
+    }
+    if attr_bool(e, b"avgSubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::Average);
+    }
+    if attr_bool(e, b"minSubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::Min);
+    }
+    if attr_bool(e, b"maxSubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::Max);
+    }
+    if attr_bool(e, b"productSubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::Product);
+    }
+    if attr_bool(e, b"stdDevSubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::StdDev);
+    }
+    if attr_bool(e, b"stdDevPSubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::StdDevP);
+    }
+    if attr_bool(e, b"varSubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::Var);
+    }
+    if attr_bool(e, b"varPSubtotal").unwrap_or(false) {
+        subtotals.push(PivotSubtotal::VarP);
+    }
+    subtotals
 }
 
 fn pivot_axis_field(
@@ -1359,6 +1382,7 @@ fn pivot_axis_field(
     let mut pivot_field = PivotField::new(field_name);
     pivot_field.sort = options.sort;
     pivot_field.subtotal = options.subtotal;
+    pivot_field.subtotals = options.subtotals;
     pivot_field.show_empty_items = options.show_empty_items;
     pivot_field.show_drop_downs = options.show_drop_downs;
     pivot_field.subtotal_top = options.subtotal_top;

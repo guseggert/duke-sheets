@@ -4837,7 +4837,7 @@ mod tests {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
         let headers = [
-            "Region", "Segment", "Channel", "Bucket", "Group", "Class", "Tier", "Revenue",
+            "Region", "Segment", "Channel", "Bucket", "Group", "Class", "Tier", "Market", "Revenue",
         ];
         for (index, header) in headers.iter().enumerate() {
             sheet.set_cell_value_at(0, index as u16, *header).unwrap();
@@ -4845,7 +4845,7 @@ mod tests {
                 .set_cell_value_at(1, index as u16, format!("{header} A"))
                 .unwrap();
         }
-        sheet.set_cell_value("H2", 10.0).unwrap();
+        sheet.set_cell_value("I2", 10.0).unwrap();
 
         let subtotal_fields = [
             ("Region", PivotSubtotal::Count),
@@ -4858,10 +4858,16 @@ mod tests {
         ];
 
         let mut builder = PivotTable::builder("SubtotalFunctions")
-            .source_range(CellRange::parse("A1:H2").unwrap())
-            .target_address("J1")
+            .source_range(CellRange::parse("A1:I2").unwrap())
+            .target_address("K1")
             .unwrap()
             .named_measure("Revenue", PivotAggregate::Sum, "Revenue");
+        let multi_subtotal_field = PivotField::new("Market").with_subtotals([
+            PivotSubtotal::Sum,
+            PivotSubtotal::Average,
+            PivotSubtotal::Max,
+        ]);
+        builder = builder.row(multi_subtotal_field);
         for (field_name, subtotal) in subtotal_fields {
             let mut field = PivotField::new(field_name);
             field.subtotal = subtotal;
@@ -4874,6 +4880,9 @@ mod tests {
         let bytes = out.into_inner();
 
         let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"sumSubtotal="1""#));
+        assert!(pivot_xml.contains(r#"avgSubtotal="1""#));
+        assert!(pivot_xml.contains(r#"maxSubtotal="1""#));
         assert!(pivot_xml.contains(r#"countASubtotal="1""#));
         assert!(pivot_xml.contains(r#"countSubtotal="1""#));
         assert!(pivot_xml.contains(r#"productSubtotal="1""#));
@@ -4888,13 +4897,22 @@ mod tests {
             .unwrap()
             .pivot_table_by_name("SubtotalFunctions")
             .unwrap();
-        assert_eq!(pivot.rows[0].subtotal, PivotSubtotal::Count);
-        assert_eq!(pivot.rows[1].subtotal, PivotSubtotal::CountNumbers);
-        assert_eq!(pivot.rows[2].subtotal, PivotSubtotal::Product);
-        assert_eq!(pivot.rows[3].subtotal, PivotSubtotal::StdDev);
-        assert_eq!(pivot.rows[4].subtotal, PivotSubtotal::StdDevP);
-        assert_eq!(pivot.rows[5].subtotal, PivotSubtotal::Var);
-        assert_eq!(pivot.rows[6].subtotal, PivotSubtotal::VarP);
+        assert_eq!(pivot.rows[0].subtotal, PivotSubtotal::Sum);
+        assert_eq!(
+            pivot.rows[0].subtotals,
+            vec![
+                PivotSubtotal::Sum,
+                PivotSubtotal::Average,
+                PivotSubtotal::Max
+            ]
+        );
+        assert_eq!(pivot.rows[1].subtotal, PivotSubtotal::Count);
+        assert_eq!(pivot.rows[2].subtotal, PivotSubtotal::CountNumbers);
+        assert_eq!(pivot.rows[3].subtotal, PivotSubtotal::Product);
+        assert_eq!(pivot.rows[4].subtotal, PivotSubtotal::StdDev);
+        assert_eq!(pivot.rows[5].subtotal, PivotSubtotal::StdDevP);
+        assert_eq!(pivot.rows[6].subtotal, PivotSubtotal::Var);
+        assert_eq!(pivot.rows[7].subtotal, PivotSubtotal::VarP);
     }
 
     #[test]

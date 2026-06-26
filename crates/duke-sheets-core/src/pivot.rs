@@ -272,6 +272,11 @@ pub struct PivotField {
     pub sort: PivotSort,
     /// Subtotal behavior for this field.
     pub subtotal: PivotSubtotal,
+    /// Explicit subtotal functions for formats that support multiple subtotals.
+    ///
+    /// When empty, [`PivotField::subtotal`] is used for compatibility with the
+    /// simple single-subtotal API.
+    pub subtotals: Vec<PivotSubtotal>,
     /// Whether items with no data should be shown.
     pub show_empty_items: bool,
     /// Show the field dropdown/filter control where supported.
@@ -295,6 +300,7 @@ impl PivotField {
             field: field.into(),
             sort: PivotSort::Ascending,
             subtotal: PivotSubtotal::Automatic,
+            subtotals: Vec::new(),
             show_empty_items: false,
             show_drop_downs: true,
             subtotal_top: true,
@@ -302,6 +308,50 @@ impl PivotField {
             insert_page_break: false,
             include_new_items_in_filter: false,
             item_page_count: 10,
+        }
+    }
+
+    /// Set explicit subtotal functions for this axis field.
+    pub fn with_subtotals<I>(mut self, subtotals: I) -> Self
+    where
+        I: IntoIterator<Item = PivotSubtotal>,
+    {
+        self.subtotals = subtotals.into_iter().collect();
+        if let Some(subtotal) = self
+            .subtotals
+            .iter()
+            .copied()
+            .find(|subtotal| subtotal.is_custom_function())
+        {
+            self.subtotal = subtotal;
+        } else if self
+            .subtotals
+            .iter()
+            .any(|subtotal| matches!(subtotal, PivotSubtotal::None))
+        {
+            self.subtotal = PivotSubtotal::None;
+        }
+        self
+    }
+
+    /// Primary subtotal used by semantic refresh when multiple subtotal
+    /// functions are present.
+    pub fn primary_subtotal(&self) -> PivotSubtotal {
+        self.subtotals
+            .iter()
+            .copied()
+            .find(|subtotal| subtotal.is_custom_function())
+            .unwrap_or(self.subtotal)
+    }
+
+    /// Whether this field has any subtotal enabled.
+    pub fn has_enabled_subtotal(&self) -> bool {
+        if self.subtotals.is_empty() {
+            !matches!(self.subtotal, PivotSubtotal::None)
+        } else {
+            self.subtotals
+                .iter()
+                .any(|subtotal| !matches!(subtotal, PivotSubtotal::None))
         }
     }
 }
@@ -386,6 +436,13 @@ pub enum PivotSubtotal {
     Var,
     /// Population variance subtotal.
     VarP,
+}
+
+impl PivotSubtotal {
+    /// Whether this is an explicit subtotal function.
+    pub fn is_custom_function(self) -> bool {
+        !matches!(self, Self::Automatic | Self::None)
+    }
 }
 
 /// Aggregation function for a pivot measure.

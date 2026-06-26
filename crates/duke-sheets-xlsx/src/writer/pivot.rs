@@ -1887,7 +1887,7 @@ fn write_pivot_fields(
             if let Some(item_page_count) = &item_page_count_attr {
                 pivot_field.push_attribute(("itemPageCount", item_page_count.as_str()));
             }
-            push_subtotal_attrs(&mut pivot_field, axis_field.subtotal);
+            push_subtotal_attrs(&mut pivot_field, axis_field);
             item_page_count_attr
         } else {
             None
@@ -2082,54 +2082,89 @@ fn push_pivot_field_option_attrs(pivot_field: &mut BytesStart<'_>, field: &Pivot
     }
 }
 
-fn push_subtotal_attrs(pivot_field: &mut BytesStart<'_>, subtotal: PivotSubtotal) {
+fn push_subtotal_attrs(pivot_field: &mut BytesStart<'_>, field: &duke_sheets_core::PivotField) {
+    if !field.subtotals.is_empty() {
+        if field.subtotals.iter().any(|subtotal| {
+            matches!(subtotal, PivotSubtotal::None) || subtotal.is_custom_function()
+        }) {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+        }
+        for subtotal in field
+            .subtotals
+            .iter()
+            .copied()
+            .filter(|subtotal| subtotal.is_custom_function())
+        {
+            push_subtotal_function_attr(pivot_field, subtotal);
+        }
+        return;
+    }
+
+    let subtotal = field.subtotal;
     match subtotal {
         PivotSubtotal::Automatic => {}
         PivotSubtotal::None => pivot_field.push_attribute(("defaultSubtotal", "0")),
         PivotSubtotal::Sum => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("sumSubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
         PivotSubtotal::Count => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("countASubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
         PivotSubtotal::CountNumbers => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("countSubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
         PivotSubtotal::Average => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("avgSubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
         PivotSubtotal::Min => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("minSubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
         PivotSubtotal::Max => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("maxSubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
         PivotSubtotal::Product => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("productSubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
         PivotSubtotal::StdDev => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("stdDevSubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
         PivotSubtotal::StdDevP => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("stdDevPSubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
         PivotSubtotal::Var => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("varSubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
         PivotSubtotal::VarP => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
-            pivot_field.push_attribute(("varPSubtotal", "1"));
+            push_subtotal_function_attr(pivot_field, subtotal);
         }
+    }
+}
+
+fn push_subtotal_function_attr(pivot_field: &mut BytesStart<'_>, subtotal: PivotSubtotal) {
+    match subtotal {
+        PivotSubtotal::Automatic | PivotSubtotal::None => {}
+        PivotSubtotal::Sum => pivot_field.push_attribute(("sumSubtotal", "1")),
+        PivotSubtotal::Count => pivot_field.push_attribute(("countASubtotal", "1")),
+        PivotSubtotal::CountNumbers => pivot_field.push_attribute(("countSubtotal", "1")),
+        PivotSubtotal::Average => pivot_field.push_attribute(("avgSubtotal", "1")),
+        PivotSubtotal::Min => pivot_field.push_attribute(("minSubtotal", "1")),
+        PivotSubtotal::Max => pivot_field.push_attribute(("maxSubtotal", "1")),
+        PivotSubtotal::Product => pivot_field.push_attribute(("productSubtotal", "1")),
+        PivotSubtotal::StdDev => pivot_field.push_attribute(("stdDevSubtotal", "1")),
+        PivotSubtotal::StdDevP => pivot_field.push_attribute(("stdDevPSubtotal", "1")),
+        PivotSubtotal::Var => pivot_field.push_attribute(("varSubtotal", "1")),
+        PivotSubtotal::VarP => pivot_field.push_attribute(("varPSubtotal", "1")),
     }
 }
 

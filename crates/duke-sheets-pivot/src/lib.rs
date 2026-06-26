@@ -7080,7 +7080,7 @@ fn column_slot_aggregate_override(
         ColumnRenderSlot::Subtotal(prefix) => subtotal_aggregate_for_field(
             plan.column_fields
                 .get(prefix.len().saturating_sub(1))
-                .map(|field| field.subtotal)
+                .map(|field| field.primary_subtotal())
                 .unwrap_or(PivotSubtotal::Automatic),
         ),
         ColumnRenderSlot::Leaf(_) | ColumnRenderSlot::GrandTotal => None,
@@ -7471,7 +7471,7 @@ fn row_subtotal_aggregate_override(
     subtotal_aggregate_for_field(
         plan.row_fields
             .get(position)
-            .map(|field| field.subtotal)
+            .map(|field| field.primary_subtotal())
             .unwrap_or(PivotSubtotal::Automatic),
     )
 }
@@ -7570,14 +7570,14 @@ fn subtotal_prefixes(key: &[u32], enabled: impl Fn(usize) -> bool) -> Vec<Vec<u3
 fn row_subtotal_enabled(plan: &CompiledPivotPlan, position: usize) -> bool {
     plan.row_fields
         .get(position)
-        .map(|field| !matches!(field.subtotal, PivotSubtotal::None))
+        .map(|field| field.has_enabled_subtotal())
         .unwrap_or(false)
 }
 
 fn column_subtotal_enabled(plan: &CompiledPivotPlan, position: usize) -> bool {
     plan.column_fields
         .get(position)
-        .map(|field| !matches!(field.subtotal, PivotSubtotal::None))
+        .map(|field| field.has_enabled_subtotal())
         .unwrap_or(false)
 }
 
@@ -10600,6 +10600,40 @@ mod tests {
         assert_eq!(number(&workbook, "G4"), 15.0);
         assert_eq!(text(&workbook, "E5"), "Grand Total");
         assert_eq!(number(&workbook, "G5"), 30.0);
+    }
+
+    #[test]
+    fn refreshes_primary_multiple_row_subtotal_function() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+
+        let region =
+            PivotField::new("Region").with_subtotals([PivotSubtotal::Average, PivotSubtotal::Max]);
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row(region)
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(tabular_layout())
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E4"), "East Total");
+        assert_eq!(number(&workbook, "G4"), 15.0);
     }
 
     #[test]
