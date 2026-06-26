@@ -17,9 +17,9 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
-    PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotMeasure,
-    PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSubtotal, PivotTable, PivotValue,
-    Workbook as CoreWorkbook,
+    PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
+    PivotLayoutKind, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs,
+    PivotSort, PivotStyle, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -386,6 +386,25 @@ pub struct JsPivotRefreshPolicyOptions {
 }
 
 #[napi(object)]
+pub struct JsPivotLayoutOptions {
+    pub kind: Option<String>,
+    pub show_row_grand_totals: Option<bool>,
+    pub show_column_grand_totals: Option<bool>,
+    pub show_field_headers: Option<bool>,
+    pub repeat_item_labels: Option<bool>,
+    pub show_expand_collapse: Option<bool>,
+}
+
+#[napi(object)]
+pub struct JsPivotStyleOptions {
+    pub name: Option<String>,
+    pub show_row_headers: Option<bool>,
+    pub show_column_headers: Option<bool>,
+    pub show_row_stripes: Option<bool>,
+    pub show_column_stripes: Option<bool>,
+}
+
+#[napi(object)]
 pub struct JsPivotTableOptions {
     pub name: String,
     pub source_range: Option<String>,
@@ -403,6 +422,9 @@ pub struct JsPivotTableOptions {
     pub calculated_fields: Option<Vec<JsPivotCalculatedFieldOptions>>,
     pub groupings: Option<Vec<JsPivotGroupingOptions>>,
     pub refresh_policy: Option<JsPivotRefreshPolicyOptions>,
+    pub layout: Option<JsPivotLayoutOptions>,
+    pub style: Option<JsPivotStyleOptions>,
+    pub overwrite_policy: Option<String>,
 }
 
 #[napi(object)]
@@ -494,6 +516,15 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
     if let Some(refresh_policy) = options.refresh_policy {
         builder = builder.refresh_policy(build_pivot_refresh_policy_from_js(refresh_policy));
     }
+    if let Some(layout) = options.layout {
+        builder = builder.layout(build_pivot_layout_from_js(layout)?);
+    }
+    if let Some(style) = options.style {
+        builder = builder.style(build_pivot_style_from_js(style));
+    }
+    if let Some(overwrite_policy) = options.overwrite_policy {
+        builder = builder.overwrite_policy(parse_pivot_overwrite_policy(&overwrite_policy)?);
+    }
 
     builder.build().map_err(to_napi_err)
 }
@@ -525,6 +556,75 @@ fn build_pivot_refresh_policy_from_js(options: JsPivotRefreshPolicyOptions) -> P
     }
     policy.missing_items_limit = options.missing_items_limit;
     policy
+}
+
+fn build_pivot_layout_from_js(options: JsPivotLayoutOptions) -> Result<PivotLayout> {
+    let mut layout = PivotLayout::default();
+    if let Some(kind) = options.kind {
+        layout.kind = parse_pivot_layout_kind(&kind)?;
+    }
+    if let Some(value) = options.show_row_grand_totals {
+        layout.show_row_grand_totals = value;
+    }
+    if let Some(value) = options.show_column_grand_totals {
+        layout.show_column_grand_totals = value;
+    }
+    if let Some(value) = options.show_field_headers {
+        layout.show_field_headers = value;
+    }
+    if let Some(value) = options.repeat_item_labels {
+        layout.repeat_item_labels = value;
+    }
+    if let Some(value) = options.show_expand_collapse {
+        layout.show_expand_collapse = value;
+    }
+    Ok(layout)
+}
+
+fn build_pivot_style_from_js(options: JsPivotStyleOptions) -> PivotStyle {
+    let mut style = PivotStyle::default();
+    if let Some(name) = options.name {
+        style.name = if name.is_empty() { None } else { Some(name) };
+    }
+    if let Some(value) = options.show_row_headers {
+        style.show_row_headers = value;
+    }
+    if let Some(value) = options.show_column_headers {
+        style.show_column_headers = value;
+    }
+    if let Some(value) = options.show_row_stripes {
+        style.show_row_stripes = value;
+    }
+    if let Some(value) = options.show_column_stripes {
+        style.show_column_stripes = value;
+    }
+    style
+}
+
+fn parse_pivot_layout_kind(value: &str) -> Result<PivotLayoutKind> {
+    Ok(match value {
+        "compact" => PivotLayoutKind::Compact,
+        "outline" => PivotLayoutKind::Outline,
+        "tabular" => PivotLayoutKind::Tabular,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot layout kind: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_overwrite_policy(value: &str) -> Result<PivotOverwritePolicy> {
+    Ok(match value {
+        "clearOwnedRange" | "clear_owned_range" | "clear" => PivotOverwritePolicy::ClearOwnedRange,
+        "overwrite" => PivotOverwritePolicy::Overwrite,
+        "failOnOccupied" | "fail_on_occupied" => PivotOverwritePolicy::FailOnOccupied,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot overwrite policy: {other}"
+            )));
+        }
+    })
 }
 
 fn parse_pivot_sort(value: &str) -> Result<PivotSort> {

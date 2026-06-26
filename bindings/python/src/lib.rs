@@ -16,8 +16,9 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotDateGroupUnit, PivotField,
-    PivotFilter, PivotFilterOperator, PivotGrouping, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
-    PivotSort, PivotSubtotal, PivotTable, PivotValue,
+    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotMeasure,
+    PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotStyle, PivotSubtotal,
+    PivotTable, PivotValue,
 };
 
 mod types;
@@ -148,6 +149,16 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
     if let Some(refresh_policy) = optional_any(dict, &["refresh_policy", "refreshPolicy"])? {
         builder = builder.refresh_policy(build_pivot_refresh_policy_from_py(&refresh_policy)?);
     }
+    if let Some(layout) = optional_any(dict, &["layout"])? {
+        builder = builder.layout(build_pivot_layout_from_py(&layout)?);
+    }
+    if let Some(style) = optional_any(dict, &["style"])? {
+        builder = builder.style(build_pivot_style_from_py(&style)?);
+    }
+    if let Some(overwrite_policy) = optional_string(dict, &["overwrite_policy", "overwritePolicy"])?
+    {
+        builder = builder.overwrite_policy(parse_pivot_overwrite_policy(&overwrite_policy)?);
+    }
 
     builder.build().map_err(to_py_err)
 }
@@ -185,6 +196,57 @@ fn build_pivot_refresh_policy_from_py(options: &Bound<'_, PyAny>) -> PyResult<Pi
     }
     policy.missing_items_limit = optional_u32(dict, &["missing_items_limit", "missingItemsLimit"])?;
     Ok(policy)
+}
+
+fn build_pivot_layout_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotLayout> {
+    let dict = options
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("pivot layout must be a dict"))?;
+    let mut layout = PivotLayout::default();
+    if let Some(kind) = optional_string(dict, &["kind"])? {
+        layout.kind = parse_pivot_layout_kind(&kind)?;
+    }
+    if let Some(value) = optional_bool(dict, &["show_row_grand_totals", "showRowGrandTotals"])? {
+        layout.show_row_grand_totals = value;
+    }
+    if let Some(value) =
+        optional_bool(dict, &["show_column_grand_totals", "showColumnGrandTotals"])?
+    {
+        layout.show_column_grand_totals = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_field_headers", "showFieldHeaders"])? {
+        layout.show_field_headers = value;
+    }
+    if let Some(value) = optional_bool(dict, &["repeat_item_labels", "repeatItemLabels"])? {
+        layout.repeat_item_labels = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_expand_collapse", "showExpandCollapse"])? {
+        layout.show_expand_collapse = value;
+    }
+    Ok(layout)
+}
+
+fn build_pivot_style_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotStyle> {
+    let dict = options
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("pivot style must be a dict"))?;
+    let mut style = PivotStyle::default();
+    if let Some(name) = optional_string(dict, &["name"])? {
+        style.name = if name.is_empty() { None } else { Some(name) };
+    }
+    if let Some(value) = optional_bool(dict, &["show_row_headers", "showRowHeaders"])? {
+        style.show_row_headers = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_column_headers", "showColumnHeaders"])? {
+        style.show_column_headers = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_row_stripes", "showRowStripes"])? {
+        style.show_row_stripes = value;
+    }
+    if let Some(value) = optional_bool(dict, &["show_column_stripes", "showColumnStripes"])? {
+        style.show_column_stripes = value;
+    }
+    Ok(style)
 }
 
 fn build_pivot_measure_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotMeasure> {
@@ -342,6 +404,32 @@ fn optional_u32(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Option<u32>
     optional_any(dict, keys)?
         .map(|value| value.extract::<u32>())
         .transpose()
+}
+
+fn parse_pivot_layout_kind(value: &str) -> PyResult<PivotLayoutKind> {
+    Ok(match value {
+        "compact" => PivotLayoutKind::Compact,
+        "outline" => PivotLayoutKind::Outline,
+        "tabular" => PivotLayoutKind::Tabular,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported pivot layout kind: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_overwrite_policy(value: &str) -> PyResult<PivotOverwritePolicy> {
+    Ok(match value {
+        "clearOwnedRange" | "clear_owned_range" | "clear" => PivotOverwritePolicy::ClearOwnedRange,
+        "overwrite" => PivotOverwritePolicy::Overwrite,
+        "failOnOccupied" | "fail_on_occupied" => PivotOverwritePolicy::FailOnOccupied,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported pivot overwrite policy: {other}"
+            )));
+        }
+    })
 }
 
 fn parse_pivot_aggregate(value: Option<&str>) -> PyResult<PivotAggregate> {

@@ -10,9 +10,9 @@ use wasm_bindgen::JsCast;
 use duke_sheets::{CalculationOptions, FormulaValue, WorkbookCalculationExt, WorkbookPivotExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
-    PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotMeasure,
-    PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSubtotal, PivotTable, PivotValue,
-    Workbook as CoreWorkbook,
+    PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
+    PivotLayoutKind, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs,
+    PivotSort, PivotStyle, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -281,7 +281,36 @@ export interface PivotGroupingOptions {
 export interface PivotFieldOptions {
   field: string;
   sort?: "none" | "manual" | "ascending" | "asc" | "descending" | "desc";
-  subtotal?: "automatic" | "auto" | "none" | "sum" | "count" | "average" | "avg" | "min" | "max";
+  subtotal?:
+    | "automatic"
+    | "auto"
+    | "none"
+    | "sum"
+    | "count"
+    | "count_numbers"
+    | "countNumbers"
+    | "countnumbers"
+    | "count_nums"
+    | "countNums"
+    | "countnums"
+    | "average"
+    | "avg"
+    | "min"
+    | "max"
+    | "product"
+    | "std_dev"
+    | "stdDev"
+    | "stddev"
+    | "std_dev_p"
+    | "stdDevP"
+    | "stddevp"
+    | "var"
+    | "variance"
+    | "var_p"
+    | "varP"
+    | "varp"
+    | "variance_p"
+    | "varianceP";
   showEmptyItems?: boolean;
 }
 
@@ -290,6 +319,23 @@ export interface PivotRefreshPolicyOptions {
   preserveFormatting?: boolean;
   backgroundQuery?: boolean;
   missingItemsLimit?: number;
+}
+
+export interface PivotLayoutOptions {
+  kind?: "compact" | "outline" | "tabular";
+  showRowGrandTotals?: boolean;
+  showColumnGrandTotals?: boolean;
+  showFieldHeaders?: boolean;
+  repeatItemLabels?: boolean;
+  showExpandCollapse?: boolean;
+}
+
+export interface PivotStyleOptions {
+  name?: string;
+  showRowHeaders?: boolean;
+  showColumnHeaders?: boolean;
+  showRowStripes?: boolean;
+  showColumnStripes?: boolean;
 }
 
 export interface PivotTableOptions {
@@ -309,6 +355,9 @@ export interface PivotTableOptions {
   calculatedFields?: PivotCalculatedFieldOptions[];
   groupings?: PivotGroupingOptions[];
   refreshPolicy?: PivotRefreshPolicyOptions;
+  layout?: PivotLayoutOptions;
+  style?: PivotStyleOptions;
+  overwritePolicy?: "clearOwnedRange" | "clear_owned_range" | "clear" | "overwrite" | "failOnOccupied" | "fail_on_occupied";
 }
 
 export interface PivotRefreshStats {
@@ -444,6 +493,15 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
     if let Some(refresh_policy) = options.refresh_policy {
         builder = builder.refresh_policy(build_pivot_refresh_policy_from_wasm(refresh_policy));
     }
+    if let Some(layout) = options.layout {
+        builder = builder.layout(build_pivot_layout_from_wasm(layout)?);
+    }
+    if let Some(style) = options.style {
+        builder = builder.style(build_pivot_style_from_wasm(style));
+    }
+    if let Some(overwrite_policy) = options.overwrite_policy {
+        builder = builder.overwrite_policy(parse_pivot_overwrite_policy(&overwrite_policy)?);
+    }
 
     builder.build().map_err(to_js_error)
 }
@@ -477,6 +535,75 @@ fn build_pivot_refresh_policy_from_wasm(
     }
     policy.missing_items_limit = options.missing_items_limit;
     policy
+}
+
+fn build_pivot_layout_from_wasm(options: WasmPivotLayoutOptions) -> Result<PivotLayout, JsError> {
+    let mut layout = PivotLayout::default();
+    if let Some(kind) = options.kind {
+        layout.kind = parse_pivot_layout_kind(&kind)?;
+    }
+    if let Some(value) = options.show_row_grand_totals {
+        layout.show_row_grand_totals = value;
+    }
+    if let Some(value) = options.show_column_grand_totals {
+        layout.show_column_grand_totals = value;
+    }
+    if let Some(value) = options.show_field_headers {
+        layout.show_field_headers = value;
+    }
+    if let Some(value) = options.repeat_item_labels {
+        layout.repeat_item_labels = value;
+    }
+    if let Some(value) = options.show_expand_collapse {
+        layout.show_expand_collapse = value;
+    }
+    Ok(layout)
+}
+
+fn build_pivot_style_from_wasm(options: WasmPivotStyleOptions) -> PivotStyle {
+    let mut style = PivotStyle::default();
+    if let Some(name) = options.name {
+        style.name = if name.is_empty() { None } else { Some(name) };
+    }
+    if let Some(value) = options.show_row_headers {
+        style.show_row_headers = value;
+    }
+    if let Some(value) = options.show_column_headers {
+        style.show_column_headers = value;
+    }
+    if let Some(value) = options.show_row_stripes {
+        style.show_row_stripes = value;
+    }
+    if let Some(value) = options.show_column_stripes {
+        style.show_column_stripes = value;
+    }
+    style
+}
+
+fn parse_pivot_layout_kind(value: &str) -> Result<PivotLayoutKind, JsError> {
+    Ok(match value {
+        "compact" => PivotLayoutKind::Compact,
+        "outline" => PivotLayoutKind::Outline,
+        "tabular" => PivotLayoutKind::Tabular,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot layout kind: {other}"
+            )))
+        }
+    })
+}
+
+fn parse_pivot_overwrite_policy(value: &str) -> Result<PivotOverwritePolicy, JsError> {
+    Ok(match value {
+        "clearOwnedRange" | "clear_owned_range" | "clear" => PivotOverwritePolicy::ClearOwnedRange,
+        "overwrite" => PivotOverwritePolicy::Overwrite,
+        "failOnOccupied" | "fail_on_occupied" => PivotOverwritePolicy::FailOnOccupied,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot overwrite policy: {other}"
+            )));
+        }
+    })
 }
 
 fn parse_pivot_sort(value: &str) -> Result<PivotSort, JsError> {

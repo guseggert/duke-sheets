@@ -118,6 +118,27 @@ pub struct WasmPivotRefreshPolicyOptions {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmPivotLayoutOptions {
+    pub kind: Option<String>,
+    pub show_row_grand_totals: Option<bool>,
+    pub show_column_grand_totals: Option<bool>,
+    pub show_field_headers: Option<bool>,
+    pub repeat_item_labels: Option<bool>,
+    pub show_expand_collapse: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotStyleOptions {
+    pub name: Option<String>,
+    pub show_row_headers: Option<bool>,
+    pub show_column_headers: Option<bool>,
+    pub show_row_stripes: Option<bool>,
+    pub show_column_stripes: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmPivotTableOptions {
     pub name: String,
     pub source_range: Option<String>,
@@ -135,6 +156,9 @@ pub struct WasmPivotTableOptions {
     pub calculated_fields: Option<Vec<WasmPivotCalculatedFieldOptions>>,
     pub groupings: Option<Vec<WasmPivotGroupingOptions>>,
     pub refresh_policy: Option<WasmPivotRefreshPolicyOptions>,
+    pub layout: Option<WasmPivotLayoutOptions>,
+    pub style: Option<WasmPivotStyleOptions>,
+    pub overwrite_policy: Option<String>,
 }
 
 #[derive(Serialize)]

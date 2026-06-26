@@ -100,7 +100,36 @@ export interface JsPivotGroupingOptions {
 export interface JsPivotFieldOptions {
   field: string
   sort?: 'none' | 'manual' | 'ascending' | 'asc' | 'descending' | 'desc'
-  subtotal?: 'automatic' | 'auto' | 'none' | 'sum' | 'count' | 'average' | 'avg' | 'min' | 'max'
+  subtotal?:
+    | 'automatic'
+    | 'auto'
+    | 'none'
+    | 'sum'
+    | 'count'
+    | 'count_numbers'
+    | 'countNumbers'
+    | 'countnumbers'
+    | 'count_nums'
+    | 'countNums'
+    | 'countnums'
+    | 'average'
+    | 'avg'
+    | 'min'
+    | 'max'
+    | 'product'
+    | 'std_dev'
+    | 'stdDev'
+    | 'stddev'
+    | 'std_dev_p'
+    | 'stdDevP'
+    | 'stddevp'
+    | 'var'
+    | 'variance'
+    | 'var_p'
+    | 'varP'
+    | 'varp'
+    | 'variance_p'
+    | 'varianceP'
   showEmptyItems?: boolean
 }
 
@@ -109,6 +138,23 @@ export interface JsPivotRefreshPolicyOptions {
   preserveFormatting?: boolean
   backgroundQuery?: boolean
   missingItemsLimit?: number
+}
+
+export interface JsPivotLayoutOptions {
+  kind?: 'compact' | 'outline' | 'tabular'
+  showRowGrandTotals?: boolean
+  showColumnGrandTotals?: boolean
+  showFieldHeaders?: boolean
+  repeatItemLabels?: boolean
+  showExpandCollapse?: boolean
+}
+
+export interface JsPivotStyleOptions {
+  name?: string
+  showRowHeaders?: boolean
+  showColumnHeaders?: boolean
+  showRowStripes?: boolean
+  showColumnStripes?: boolean
 }
 
 export interface JsPivotTableOptions {
@@ -128,6 +174,9 @@ export interface JsPivotTableOptions {
   calculatedFields?: JsPivotCalculatedFieldOptions[]
   groupings?: JsPivotGroupingOptions[]
   refreshPolicy?: JsPivotRefreshPolicyOptions
+  layout?: JsPivotLayoutOptions
+  style?: JsPivotStyleOptions
+  overwritePolicy?: 'clearOwnedRange' | 'clear_owned_range' | 'clear' | 'overwrite' | 'failOnOccupied' | 'fail_on_occupied'
 }
 
 export interface JsPivotRefreshStats {
