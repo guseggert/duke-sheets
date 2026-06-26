@@ -8,7 +8,9 @@
 
 use std::io::Cursor;
 
-use duke_sheets_core::{CellRange, PivotAggregate, PivotFilter, PivotTable, Workbook};
+use duke_sheets_core::{
+    CellRange, PivotAggregate, PivotFilter, PivotTable, PivotValuesAxis, Workbook,
+};
 use duke_sheets_xls::{cfb::CompoundFile, XlsReader, XlsWriter};
 
 fn add_test_pivot(wb: &mut Workbook) {
@@ -100,6 +102,32 @@ fn add_page_pivot(wb: &mut Workbook) {
         .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
         .build()
         .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
+fn add_multi_measure_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("C1", "Units").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("C2", 2.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("C3", 3.0).unwrap();
+
+    let mut pivot = PivotTable::builder("RevenueAndUnits")
+        .source_range(CellRange::parse("A1:C3").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Region")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .named_measure("Units", PivotAggregate::Average, "Average Units")
+        .build()
+        .unwrap();
+    pivot.layout.values_axis = PivotValuesAxis::Columns;
+    pivot.layout.values_axis_position = Some(0);
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
 }
 
@@ -253,6 +281,55 @@ fn semantic_pivot_tables_emit_xls_page_axis_records() {
         .filter_map(|(record_type, payload)| (*record_type == 0x00B6).then_some(payload.clone()))
         .collect::<Vec<_>>();
     assert_eq!(page_fields, vec![vec![1, 0, 0, 0, 1, 0]]);
+}
+
+#[test]
+fn semantic_pivot_tables_emit_xls_multi_measure_values_axis_records() {
+    let mut wb = Workbook::new();
+    add_multi_measure_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let workbook_records = records_with_payload(&workbook);
+
+    let sxview = workbook_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00B0).then_some(payload))
+        .expect("SXVIEW record");
+    assert_eq!(u16::from_le_bytes(sxview[22..24].try_into().unwrap()), 3);
+    assert_eq!(u16::from_le_bytes(sxview[24..26].try_into().unwrap()), 1);
+    assert_eq!(u16::from_le_bytes(sxview[26..28].try_into().unwrap()), 1);
+    assert_eq!(u16::from_le_bytes(sxview[30..32].try_into().unwrap()), 2);
+    assert_eq!(u16::from_le_bytes(sxview[34..36].try_into().unwrap()), 2);
+
+    let sxvd_axes = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00B1).then(|| u16::from_le_bytes(payload[0..2].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sxvd_axes, vec![0x0001, 0x0008, 0x0008]);
+
+    let axis_declarations = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00B4).then_some(payload.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(axis_declarations, vec![vec![0, 0], vec![0xFE, 0xFF]]);
+
+    let data_field_aggregates = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00C5).then(|| u16::from_le_bytes(payload[2..4].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(data_field_aggregates, vec![0, 2]);
+
+    let sxli_lengths = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00B5).then_some(payload.len()))
+        .collect::<Vec<_>>();
+    assert_eq!(sxli_lengths, vec![30, 20]);
 }
 
 fn record_types(stream: &[u8]) -> Vec<u16> {

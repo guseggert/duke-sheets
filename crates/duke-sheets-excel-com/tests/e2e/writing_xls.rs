@@ -16,6 +16,7 @@ use duke_sheets_core::rich_text::{RichTextRun, RunFont};
 use duke_sheets_core::style::Color;
 use duke_sheets_core::validation::{DataValidation, ValidationOperator, ValidationType};
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
+use duke_sheets_core::PivotValuesAxis;
 use duke_sheets_core::{
     CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotFilter, PivotTable, Workbook,
 };
@@ -136,6 +137,34 @@ fn xls_page_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xls_multi_measure_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("C1", "Units").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("C2", 2.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("C3", 3.0).unwrap();
+
+    let mut pivot = PivotTable::builder("RevenueAndUnits")
+        .source_range(CellRange::parse("A1:C3").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Region")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .named_measure("Units", PivotAggregate::Average, "Average Units")
+        .build()
+        .unwrap();
+    pivot.layout.values_axis = PivotValuesAxis::Columns;
+    pivot.layout.values_axis_position = Some(0);
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xls_with_native_pivot_table() {
@@ -209,6 +238,36 @@ fn excel_preserves_xls_pivot_page_axis() {
             .iter()
             .any(|(record_type, _)| *record_type == 0x00B6),
         "Excel should preserve the page-field declaration"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_pivot_multi_measure_values_axis() {
+    let (_result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_multi_measure_pivot_workbook());
+    let workbook = xls_cfb_stream(&excel_bytes, "/Workbook");
+    let records = xls_record_payloads(&workbook);
+    let sxvd_axes = records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00B1).then(|| u16::from_le_bytes(payload[0..2].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sxvd_axes, vec![0x0001, 0x0008, 0x0008]);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|(record_type, _)| *record_type == 0x00C5)
+            .count(),
+        2,
+        "Excel should preserve both data fields"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|(record_type, payload)| *record_type == 0x00B4 && payload == &[0xFE, 0xFF]),
+        "Excel should preserve the synthetic Values column axis"
     );
 }
 

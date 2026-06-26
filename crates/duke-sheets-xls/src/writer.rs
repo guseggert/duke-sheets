@@ -18,7 +18,9 @@ use duke_sheets_core::style::{
 };
 use duke_sheets_core::workbook::Workbook;
 use duke_sheets_core::worksheet::Worksheet;
-use duke_sheets_core::{CellValue, PivotAggregate, PivotField, PivotFilter, PivotValue};
+use duke_sheets_core::{
+    CellValue, PivotAggregate, PivotField, PivotFilter, PivotValue, PivotValuesAxis,
+};
 use duke_sheets_pivot::{
     FormatPivotCache, FormatPivotCacheField, FormatPivotPlan, FormatPivotSource,
 };
@@ -414,23 +416,46 @@ fn build_pivot_cache_stream(cache: &FormatPivotCache) -> XlsResult<Vec<u8>> {
     for field in &cache.fields {
         write_sxfdb_record(&mut stream, field)?;
         write_biff_record(&mut stream, 0x01BB, &0u16.to_le_bytes());
-        if field_is_numeric(field) {
-            for (idx, value) in field.shared_items.iter().enumerate() {
-                let PivotValue::Number(number) = value else {
-                    continue;
-                };
-                write_biff_record(&mut stream, 0x00C8, &[idx as u8]);
-                write_biff_record(&mut stream, 0x00C9, &number.to_le_bytes());
-            }
-        } else {
+        if !field_is_numeric(field) {
             for value in &field.shared_items {
                 write_biff_record(&mut stream, 0x00CD, &pivot_value_string_payload(value)?);
             }
         }
     }
+    write_numeric_cache_records(&mut stream, cache)?;
 
     write_eof(&mut stream);
     Ok(stream)
+}
+
+fn write_numeric_cache_records(stream: &mut Vec<u8>, cache: &FormatPivotCache) -> XlsResult<()> {
+    let numeric_fields = cache
+        .fields
+        .iter()
+        .filter(|field| field_is_numeric(field))
+        .collect::<Vec<_>>();
+    if numeric_fields.is_empty() {
+        return Ok(());
+    }
+
+    for row in 0..cache.row_count {
+        let row_marker = checked_u8(row, "pivot cache row index")?;
+        write_biff_record(stream, 0x00C8, &[row_marker]);
+        for field in &numeric_fields {
+            if let Some(number) = numeric_cache_value(field, row) {
+                write_biff_record(stream, 0x00C9, &number.to_le_bytes());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn numeric_cache_value(field: &FormatPivotCacheField, row: usize) -> Option<f64> {
+    let item_id = *field.item_ids.get(row)? as usize;
+    let PivotValue::Number(number) = field.shared_items.get(item_id)? else {
+        return None;
+    };
+    Some(*number)
 }
 
 fn write_sxfdb_record(stream: &mut Vec<u8>, field: &FormatPivotCacheField) -> XlsResult<()> {
@@ -595,10 +620,13 @@ fn write_pivot_sheet_records(
             .get(part.pivot_index)
             .ok_or_else(|| XlsError::InvalidFormat("pivot table not found".into()))?;
 
+        let multi_measure = pivot.measures.len() > 1;
         if pivot.rows.len() != 1
             || pivot.columns.len() > 1
             || pivot.page_fields.len() > 1
-            || pivot.measures.len() != 1
+            || pivot.measures.is_empty()
+            || (multi_measure
+                && (!pivot.page_fields.is_empty() || !xls_values_field_on_columns(pivot)))
         {
             return Err(XlsError::InvalidFormat(format!(
                 "XLS pivot table {} uses a layout this BIFF8 writer slice does not encode yet",
@@ -644,14 +672,21 @@ fn write_classic_pivot_view_records(
         let axis = xls_pivot_field_axis(pivot, &field.name);
         write_sxvd_record(stream, field_index, field, axis)?;
     }
+    let values_on_columns = xls_values_field_on_columns(pivot);
     write_sxivd_record(stream, cache, &pivot.rows)?;
-    if !pivot.columns.is_empty() {
+    if values_on_columns {
+        write_values_sxivd_record(stream);
+    } else if !pivot.columns.is_empty() {
         write_sxivd_record(stream, cache, &pivot.columns)?;
     }
     write_sxpi_records(stream, pivot, cache)?;
-    write_sxdi_record(stream, pivot, cache)?;
+    write_sxdi_records(stream, pivot, cache)?;
     write_sxli_collection(stream, pivot, cache, &pivot.rows)?;
-    write_sxli_collection(stream, pivot, cache, &pivot.columns)?;
+    if values_on_columns {
+        write_values_axis_sxli_collection(stream, pivot)?;
+    } else {
+        write_sxli_collection(stream, pivot, cache, &pivot.columns)?;
+    }
     Ok(())
 }
 
@@ -666,10 +701,22 @@ fn write_sxview_record_biff8(
         pivot.layout.data_caption.as_str()
     };
     let row_line_count = axis_line_count(pivot, cache, &pivot.rows)?;
-    let column_line_count = axis_line_count(pivot, cache, &pivot.columns)?;
+    let values_on_columns = xls_values_field_on_columns(pivot);
+    let column_line_count = if values_on_columns {
+        checked_u16(pivot.measures.len(), "pivot values axis line count")?
+    } else {
+        axis_line_count(pivot, cache, &pivot.columns)?
+    };
     let row_axis_count = pivot.rows.len() as u16;
-    let column_axis_count = pivot.columns.len() as u16;
+    let column_axis_count = checked_u16(
+        pivot
+            .columns
+            .len()
+            .saturating_add(if values_on_columns { 1 } else { 0 }),
+        "pivot column field count",
+    )?;
     let page_axis_count = checked_u16(pivot.page_fields.len(), "pivot page field count")?;
+    let data_field_count = checked_u16(pivot.measures.len(), "pivot data field count")?;
     let (page_rows, _) = page_field_area_size(pivot);
     let first_row_offset = if page_rows == 0 {
         0
@@ -681,12 +728,24 @@ fn write_sxview_record_biff8(
         "pivot target row",
     )?;
     let first_col = checked_biff8_col(pivot.target.col, "pivot target column")?;
-    let first_header_row = first_row.saturating_add(1);
-    let first_data_row = first_header_row.saturating_add(column_axis_count);
+    let first_header_row = if values_on_columns && pivot.columns.is_empty() {
+        first_row
+    } else {
+        first_row.saturating_add(1)
+    };
+    let first_data_row = if values_on_columns && pivot.columns.is_empty() {
+        first_row.saturating_add(1)
+    } else {
+        first_header_row.saturating_add(column_axis_count)
+    };
     let first_data_col = first_col.saturating_add(row_axis_count);
-    let last_row = first_row
-        .saturating_add(column_axis_count)
-        .saturating_add(row_line_count);
+    let last_row = if values_on_columns && pivot.columns.is_empty() {
+        first_row.saturating_add(row_line_count)
+    } else {
+        first_row
+            .saturating_add(column_axis_count)
+            .saturating_add(row_line_count)
+    };
     let last_col = first_col
         .saturating_add(row_axis_count)
         .saturating_add(column_line_count)
@@ -707,7 +766,7 @@ fn write_sxview_record_biff8(
     body.extend_from_slice(&row_axis_count.to_le_bytes());
     body.extend_from_slice(&column_axis_count.to_le_bytes());
     body.extend_from_slice(&page_axis_count.to_le_bytes());
-    body.extend_from_slice(&(pivot.measures.len() as u16).to_le_bytes());
+    body.extend_from_slice(&data_field_count.to_le_bytes());
     body.extend_from_slice(&row_line_count.to_le_bytes());
     body.extend_from_slice(&column_line_count.to_le_bytes());
     let view_flags: u16 = if column_axis_count > 0 || page_axis_count > 0 {
@@ -807,6 +866,10 @@ fn write_sxivd_record(
     Ok(())
 }
 
+fn write_values_sxivd_record(stream: &mut Vec<u8>) {
+    write_biff_record(stream, 0x00B4, &(-2i16).to_le_bytes());
+}
+
 fn write_sxpi_records(
     stream: &mut Vec<u8>,
     pivot: &duke_sheets_core::PivotTable,
@@ -831,36 +894,40 @@ fn write_sxpi_records(
     Ok(())
 }
 
-fn write_sxdi_record(
+fn write_sxdi_records(
     stream: &mut Vec<u8>,
     pivot: &duke_sheets_core::PivotTable,
     cache: &FormatPivotCache,
 ) -> XlsResult<()> {
-    let measure = pivot
-        .measures
-        .first()
-        .ok_or_else(|| XlsError::InvalidFormat("pivot table has no data field".into()))?;
-    let field_index = cache.field_index(&measure.field.name).ok_or_else(|| {
-        XlsError::InvalidFormat(format!(
-            "pivot references unknown measure field {}",
-            measure.field.name
-        ))
-    })?;
-    if field_index > u16::MAX as usize {
+    if pivot.measures.is_empty() {
         return Err(XlsError::InvalidFormat(
-            "pivot data field index exceeds BIFF8 limits".into(),
+            "pivot table has no data field".into(),
         ));
     }
 
-    let mut body = Vec::new();
-    body.extend_from_slice(&(field_index as u16).to_le_bytes());
-    body.extend_from_slice(&xls_pivot_aggregate_code(measure.aggregate).to_le_bytes());
-    body.extend_from_slice(&0u16.to_le_bytes());
-    body.extend_from_slice(&0u16.to_le_bytes());
-    body.extend_from_slice(&0u16.to_le_bytes());
-    body.extend_from_slice(&0u16.to_le_bytes());
-    push_xlunicode_string(&mut body, &measure.caption())?;
-    write_biff_record(stream, 0x00C5, &body);
+    for measure in &pivot.measures {
+        let field_index = cache.field_index(&measure.field.name).ok_or_else(|| {
+            XlsError::InvalidFormat(format!(
+                "pivot references unknown measure field {}",
+                measure.field.name
+            ))
+        })?;
+        if field_index > u16::MAX as usize {
+            return Err(XlsError::InvalidFormat(
+                "pivot data field index exceeds BIFF8 limits".into(),
+            ));
+        }
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&(field_index as u16).to_le_bytes());
+        body.extend_from_slice(&xls_pivot_aggregate_code(measure.aggregate).to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        push_xlunicode_string(&mut body, &measure.caption())?;
+        write_biff_record(stream, 0x00C5, &body);
+    }
     Ok(())
 }
 
@@ -894,6 +961,23 @@ fn write_sxli_item(body: &mut Vec<u8>, item_indexes: &[u16], grand_total: bool) 
     for item_index in item_indexes {
         body.extend_from_slice(&item_index.to_le_bytes());
     }
+}
+
+fn write_values_axis_sxli_collection(
+    stream: &mut Vec<u8>,
+    pivot: &duke_sheets_core::PivotTable,
+) -> XlsResult<()> {
+    let mut body = Vec::new();
+    for data_item in 0..pivot.measures.len() {
+        let data_item = checked_u16(data_item, "pivot data item index")?;
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&(0x1000u16 | data_item.saturating_mul(2)).to_le_bytes());
+        body.extend_from_slice(&data_item.to_le_bytes());
+    }
+    write_biff_record(stream, 0x00B5, &body);
+    Ok(())
 }
 
 fn axis_line_count(
@@ -1039,6 +1123,15 @@ fn checked_u16(value: usize, label: &str) -> XlsResult<u16> {
     Ok(value as u16)
 }
 
+fn checked_u8(value: usize, label: &str) -> XlsResult<u8> {
+    if value > u8::MAX as usize {
+        return Err(XlsError::InvalidFormat(format!(
+            "{label} exceeds BIFF8 limits"
+        )));
+    }
+    Ok(value as u8)
+}
+
 fn checked_biff8_row(value: u32, label: &str) -> XlsResult<u16> {
     if value > u16::MAX as u32 {
         return Err(XlsError::InvalidFormat(format!(
@@ -1085,6 +1178,12 @@ fn xls_pivot_field_axis(pivot: &duke_sheets_core::PivotTable, field_name: &str) 
     } else {
         0x0000
     }
+}
+
+fn xls_values_field_on_columns(pivot: &duke_sheets_core::PivotTable) -> bool {
+    pivot.measures.len() > 1
+        && pivot.columns.is_empty()
+        && matches!(pivot.layout.values_axis, PivotValuesAxis::Columns)
 }
 
 fn xls_pivot_aggregate_code(aggregate: PivotAggregate) -> u16 {
