@@ -382,8 +382,10 @@ fn placeholder_source_for_kind(
 }
 
 fn database_connection_command(connection: &WorkbookConnection) -> Option<String> {
-    let WorkbookConnectionKind::Database { command, .. } = &connection.kind;
-    command.clone()
+    match &connection.kind {
+        WorkbookConnectionKind::Database { command, .. } => command.clone(),
+        _ => None,
+    }
 }
 
 fn parse_worksheet_source(e: &BytesStart<'_>) -> XlsxResult<Option<PivotSource>> {

@@ -20,7 +20,7 @@ use duke_sheets_core::{
     PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
     PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
     PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
-    PivotValue, Workbook as CoreWorkbook, WorkbookConnection,
+    PivotValue, Workbook as CoreWorkbook, WorkbookConnection, WorkbookConnectionKind,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -456,9 +456,28 @@ pub struct JsPivotTableOptions {
 pub struct JsWorkbookConnectionOptions {
     pub id: u32,
     pub name: String,
-    pub connection: String,
+    pub kind: Option<String>,
+    pub connection: Option<String>,
     pub command: Option<String>,
     pub command_type: Option<u32>,
+    pub url: Option<String>,
+    pub xml: Option<bool>,
+    pub source_data: Option<bool>,
+    pub html_tables: Option<bool>,
+    pub html_format: Option<String>,
+    pub post: Option<String>,
+    pub edit_page: Option<String>,
+    pub source_file: Option<String>,
+    pub delimiter: Option<String>,
+    pub first_row: Option<u32>,
+    pub delimited: Option<bool>,
+    pub decimal: Option<String>,
+    pub thousands: Option<String>,
+    pub local: Option<bool>,
+    pub local_connection: Option<String>,
+    pub local_refresh: Option<bool>,
+    pub send_locale: Option<bool>,
+    pub row_drill_count: Option<u32>,
     pub refresh_on_load: Option<bool>,
     pub background: Option<bool>,
     pub save_data: Option<bool>,
@@ -614,8 +633,68 @@ fn build_pivot_consolidation_ranges_from_js(
         .collect()
 }
 
-fn build_workbook_connection_from_js(options: JsWorkbookConnectionOptions) -> WorkbookConnection {
-    let mut connection = WorkbookConnection::database(options.id, options.name, options.connection);
+fn build_workbook_connection_from_js(
+    options: JsWorkbookConnectionOptions,
+) -> Result<WorkbookConnection> {
+    let kind = options
+        .kind
+        .as_deref()
+        .unwrap_or("database")
+        .to_ascii_lowercase();
+    let mut connection = match kind.as_str() {
+        "database" | "db" => WorkbookConnection::database(
+            options.id,
+            options.name,
+            options.connection.ok_or_else(|| {
+                napi::Error::from_reason("database data connections require connection")
+            })?,
+        ),
+        "web" => {
+            let mut connection = WorkbookConnection::web(options.id, options.name, "");
+            connection.kind = WorkbookConnectionKind::Web {
+                url: options.url,
+                xml: options.xml.unwrap_or(false),
+                source_data: options.source_data.unwrap_or(false),
+                html_tables: options.html_tables.unwrap_or(false),
+                html_format: options.html_format,
+                post: options.post,
+                edit_page: options.edit_page,
+            };
+            connection
+        }
+        "text" => {
+            let mut connection = WorkbookConnection::text(
+                options.id,
+                options.name,
+                options.source_file.clone().unwrap_or_default(),
+            );
+            connection.kind = WorkbookConnectionKind::Text {
+                source_file: options.source_file,
+                delimiter: options.delimiter,
+                first_row: options.first_row.unwrap_or(1),
+                delimited: options.delimited.unwrap_or(true),
+                decimal: options.decimal,
+                thousands: options.thousands,
+            };
+            connection
+        }
+        "olap" => {
+            let mut connection = WorkbookConnection::olap(options.id, options.name);
+            connection.kind = WorkbookConnectionKind::Olap {
+                local: options.local.unwrap_or(false),
+                local_connection: options.local_connection,
+                local_refresh: options.local_refresh.unwrap_or(true),
+                send_locale: options.send_locale.unwrap_or(false),
+                row_drill_count: options.row_drill_count,
+            };
+            connection
+        }
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "unknown data connection kind: {other}"
+            )))
+        }
+    };
     if let Some(command) = options.command {
         connection = connection.with_command(command);
     }
@@ -631,7 +710,7 @@ fn build_workbook_connection_from_js(options: JsWorkbookConnectionOptions) -> Wo
     if let Some(save_data) = options.save_data {
         connection = connection.with_save_data(save_data);
     }
-    connection
+    Ok(connection)
 }
 
 fn build_pivot_field_from_js(options: JsPivotFieldOptions) -> Result<PivotField> {
@@ -1718,7 +1797,7 @@ impl Workbook {
     pub fn add_data_connection(&self, options: JsWorkbookConnectionOptions) -> Result<()> {
         catch_panic(|| {
             let mut wb = self.inner.write().map_err(to_napi_err)?;
-            wb.add_data_connection(build_workbook_connection_from_js(options))
+            wb.add_data_connection(build_workbook_connection_from_js(options)?)
                 .map_err(to_napi_err)
         })
     }

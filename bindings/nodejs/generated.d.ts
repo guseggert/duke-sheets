@@ -1729,9 +1729,28 @@ export interface JsView3D {
 export interface JsWorkbookConnectionOptions {
   id: number
   name: string
-  connection: string
+  kind?: string
+  connection?: string
   command?: string
   commandType?: number
+  url?: string
+  xml?: boolean
+  sourceData?: boolean
+  htmlTables?: boolean
+  htmlFormat?: string
+  post?: string
+  editPage?: string
+  sourceFile?: string
+  delimiter?: string
+  firstRow?: number
+  delimited?: boolean
+  decimal?: string
+  thousands?: string
+  local?: boolean
+  localConnection?: string
+  localRefresh?: boolean
+  sendLocale?: boolean
+  rowDrillCount?: number
   refreshOnLoad?: boolean
   background?: boolean
   saveData?: boolean

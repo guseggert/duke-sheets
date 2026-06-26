@@ -2,12 +2,12 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use std::any::Any;
 use crate::error::{Error, Result};
 use crate::named_range::{NameScope, NamedRange, NamedRangeCollection};
 use crate::worksheet::{SheetVisibility, Worksheet};
-use duke_sheets_chart::Chart;
 use crate::MAX_SHEET_NAME_LEN;
+use duke_sheets_chart::Chart;
+use std::any::Any;
 
 static NEXT_WORKBOOK_NONCE: AtomicU64 = AtomicU64::new(1);
 
@@ -275,7 +275,8 @@ impl Workbook {
 
         // Update sheet_order: remove the entry and decrement indices above it
         if !self.sheet_order.is_empty() {
-            self.sheet_order.retain(|slot| *slot != SheetSlot::Worksheet(index));
+            self.sheet_order
+                .retain(|slot| *slot != SheetSlot::Worksheet(index));
             for slot in &mut self.sheet_order {
                 if let SheetSlot::Worksheet(ref mut idx) = slot {
                     if *idx > index {
@@ -431,7 +432,8 @@ impl Workbook {
 
     /// Remove a sheet-scoped named range
     pub fn remove_name_from_sheet(&mut self, name: &str, sheet_index: usize) -> Option<NamedRange> {
-        let result = self.named_ranges
+        let result = self
+            .named_ranges
             .remove(name, &NameScope::Sheet(sheet_index));
         if result.is_some() {
             self.structural_generation += 1;
@@ -677,22 +679,86 @@ impl WorkbookConnection {
         }
     }
 
+    /// Create a web query connection.
+    pub fn web(id: u32, name: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            kind: WorkbookConnectionKind::Web {
+                url: Some(url.into()),
+                xml: false,
+                source_data: false,
+                html_tables: false,
+                html_format: None,
+                post: None,
+                edit_page: None,
+            },
+            refreshed_version: 7,
+            refresh_on_load: false,
+            background: false,
+            save_data: false,
+        }
+    }
+
+    /// Create a text-file connection.
+    pub fn text(id: u32, name: impl Into<String>, source_file: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            kind: WorkbookConnectionKind::Text {
+                source_file: Some(source_file.into()),
+                delimiter: None,
+                first_row: 1,
+                delimited: true,
+                decimal: None,
+                thousands: None,
+            },
+            refreshed_version: 7,
+            refresh_on_load: false,
+            background: false,
+            save_data: false,
+        }
+    }
+
+    /// Create an OLAP connection.
+    pub fn olap(id: u32, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            kind: WorkbookConnectionKind::Olap {
+                local: false,
+                local_connection: None,
+                local_refresh: true,
+                send_locale: false,
+                row_drill_count: None,
+            },
+            refreshed_version: 7,
+            refresh_on_load: false,
+            background: false,
+            save_data: false,
+        }
+    }
+
     /// Set the database command text.
     pub fn with_command(mut self, command: impl Into<String>) -> Self {
-        let WorkbookConnectionKind::Database {
+        if let WorkbookConnectionKind::Database {
             command: existing, ..
-        } = &mut self.kind;
-        *existing = Some(command.into());
+        } = &mut self.kind
+        {
+            *existing = Some(command.into());
+        }
         self
     }
 
     /// Set the database command type.
     pub fn with_command_type(mut self, command_type: u32) -> Self {
-        let WorkbookConnectionKind::Database {
+        if let WorkbookConnectionKind::Database {
             command_type: existing,
             ..
-        } = &mut self.kind;
-        *existing = Some(command_type);
+        } = &mut self.kind
+        {
+            *existing = Some(command_type);
+        }
         self
     }
 
@@ -726,6 +792,51 @@ pub enum WorkbookConnectionKind {
         command: Option<String>,
         /// SpreadsheetML command type. Excel uses `2` for SQL text.
         command_type: Option<u32>,
+    },
+    /// OLAP connection represented by SpreadsheetML `olapPr`.
+    Olap {
+        /// Whether this is a local cube connection.
+        local: bool,
+        /// Optional local cube connection string.
+        local_connection: Option<String>,
+        /// Whether local cube refresh is enabled.
+        local_refresh: bool,
+        /// Whether to send locale information to the OLAP server.
+        send_locale: bool,
+        /// Optional drill row count.
+        row_drill_count: Option<u32>,
+    },
+    /// Web query connection represented by SpreadsheetML `webPr`.
+    Web {
+        /// Optional query URL.
+        url: Option<String>,
+        /// Whether the source is XML.
+        xml: bool,
+        /// Whether source data should be imported.
+        source_data: bool,
+        /// Whether HTML table extraction is enabled.
+        html_tables: bool,
+        /// Optional HTML formatting mode (`none`, `rtf`, or `all`).
+        html_format: Option<String>,
+        /// Optional POST payload.
+        post: Option<String>,
+        /// Optional edit-page URL.
+        edit_page: Option<String>,
+    },
+    /// Text-file connection represented by SpreadsheetML `textPr`.
+    Text {
+        /// Optional source file path.
+        source_file: Option<String>,
+        /// Optional custom delimiter.
+        delimiter: Option<String>,
+        /// First data row, 1-based.
+        first_row: u32,
+        /// Whether the text file is delimited.
+        delimited: bool,
+        /// Optional decimal separator.
+        decimal: Option<String>,
+        /// Optional thousands separator.
+        thousands: Option<String>,
     },
 }
 

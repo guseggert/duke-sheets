@@ -1524,6 +1524,86 @@ impl XlsxWriter {
                         }
                         w.write_event(Event::Empty(db_pr))?;
                     }
+                    WorkbookConnectionKind::Olap {
+                        local,
+                        local_connection,
+                        local_refresh,
+                        send_locale,
+                        row_drill_count,
+                    } => {
+                        let local = bool_xml(*local);
+                        let local_refresh = bool_xml(*local_refresh);
+                        let send_locale = bool_xml(*send_locale);
+                        let row_drill_count = row_drill_count.map(|value| value.to_string());
+                        let mut olap_pr = BytesStart::new("olapPr");
+                        olap_pr.push_attribute(("local", local));
+                        olap_pr.push_attribute(("localRefresh", local_refresh));
+                        olap_pr.push_attribute(("sendLocale", send_locale));
+                        if let Some(local_connection) = local_connection {
+                            olap_pr.push_attribute(("localConnection", local_connection.as_str()));
+                        }
+                        if let Some(row_drill_count) = row_drill_count.as_deref() {
+                            olap_pr.push_attribute(("rowDrillCount", row_drill_count));
+                        }
+                        w.write_event(Event::Empty(olap_pr))?;
+                    }
+                    WorkbookConnectionKind::Web {
+                        url,
+                        xml,
+                        source_data,
+                        html_tables,
+                        html_format,
+                        post,
+                        edit_page,
+                    } => {
+                        let xml = bool_xml(*xml);
+                        let source_data = bool_xml(*source_data);
+                        let html_tables = bool_xml(*html_tables);
+                        let mut web_pr = BytesStart::new("webPr");
+                        web_pr.push_attribute(("xml", xml));
+                        web_pr.push_attribute(("sourceData", source_data));
+                        web_pr.push_attribute(("htmlTables", html_tables));
+                        if let Some(url) = url {
+                            web_pr.push_attribute(("url", url.as_str()));
+                        }
+                        if let Some(html_format) = html_format {
+                            web_pr.push_attribute(("htmlFormat", html_format.as_str()));
+                        }
+                        if let Some(post) = post {
+                            web_pr.push_attribute(("post", post.as_str()));
+                        }
+                        if let Some(edit_page) = edit_page {
+                            web_pr.push_attribute(("editPage", edit_page.as_str()));
+                        }
+                        w.write_event(Event::Empty(web_pr))?;
+                    }
+                    WorkbookConnectionKind::Text {
+                        source_file,
+                        delimiter,
+                        first_row,
+                        delimited,
+                        decimal,
+                        thousands,
+                    } => {
+                        let first_row = first_row.to_string();
+                        let delimited = bool_xml(*delimited);
+                        let mut text_pr = BytesStart::new("textPr");
+                        text_pr.push_attribute(("firstRow", first_row.as_str()));
+                        text_pr.push_attribute(("delimited", delimited));
+                        if let Some(source_file) = source_file {
+                            text_pr.push_attribute(("sourceFile", source_file.as_str()));
+                        }
+                        if let Some(delimiter) = delimiter {
+                            text_pr.push_attribute(("delimiter", delimiter.as_str()));
+                        }
+                        if let Some(decimal) = decimal {
+                            text_pr.push_attribute(("decimal", decimal.as_str()));
+                        }
+                        if let Some(thousands) = thousands {
+                            text_pr.push_attribute(("thousands", thousands.as_str()));
+                        }
+                        w.write_event(Event::Empty(text_pr))?;
+                    }
                 }
 
                 w.write_event(Event::End(BytesEnd::new("connection")))?;
@@ -4040,6 +4120,7 @@ mod tests {
                 assert_eq!(roundtrip_command.as_deref(), Some(command));
                 assert_eq!(*command_type, Some(2));
             }
+            other => panic!("unexpected connection kind: {other:?}"),
         }
 
         let pivot = roundtrip
@@ -4054,6 +4135,106 @@ mod tests {
                 command_text: Some(roundtrip_command)
             } if connection_name == "SalesConnection" && roundtrip_command == command
         ));
+    }
+
+    #[test]
+    fn test_writer_round_trips_basic_non_database_connections() {
+        let mut wb = Workbook::new();
+        let mut web = WorkbookConnection::web(8, "WebSales", "https://example.test/sales.html");
+        web.kind = WorkbookConnectionKind::Web {
+            url: Some("https://example.test/sales.html".to_string()),
+            xml: false,
+            source_data: true,
+            html_tables: true,
+            html_format: Some("all".to_string()),
+            post: Some("region=all".to_string()),
+            edit_page: None,
+        };
+        wb.add_data_connection(web).unwrap();
+
+        let mut text = WorkbookConnection::text(9, "CsvSales", "/data/sales.csv");
+        text.kind = WorkbookConnectionKind::Text {
+            source_file: Some("/data/sales.csv".to_string()),
+            delimiter: Some("|".to_string()),
+            first_row: 2,
+            delimited: true,
+            decimal: Some(".".to_string()),
+            thousands: Some(",".to_string()),
+        };
+        wb.add_data_connection(text).unwrap();
+
+        let mut olap = WorkbookConnection::olap(10, "CubeSales");
+        olap.kind = WorkbookConnectionKind::Olap {
+            local: true,
+            local_connection: Some("CubeFile=cube.cub".to_string()),
+            local_refresh: false,
+            send_locale: true,
+            row_drill_count: Some(1000),
+        };
+        wb.add_data_connection(olap).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let connections = read_zip_entry(bytes.clone(), "xl/connections.xml");
+        assert!(connections.contains(r#"<webPr xml="0" sourceData="1" htmlTables="1" url="https://example.test/sales.html" htmlFormat="all" post="region=all"/>"#));
+        assert!(connections.contains(r#"<textPr firstRow="2" delimited="1" sourceFile="/data/sales.csv" delimiter="|" decimal="." thousands=","/>"#));
+        assert!(connections.contains(r#"<olapPr local="1" localRefresh="0" sendLocale="1" localConnection="CubeFile=cube.cub" rowDrillCount="1000"/>"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        assert_eq!(roundtrip.data_connections().len(), 3);
+        match &roundtrip.data_connections()[0].kind {
+            WorkbookConnectionKind::Web {
+                url,
+                source_data,
+                html_tables,
+                html_format,
+                post,
+                ..
+            } => {
+                assert_eq!(url.as_deref(), Some("https://example.test/sales.html"));
+                assert!(*source_data);
+                assert!(*html_tables);
+                assert_eq!(html_format.as_deref(), Some("all"));
+                assert_eq!(post.as_deref(), Some("region=all"));
+            }
+            other => panic!("unexpected connection kind: {other:?}"),
+        }
+        match &roundtrip.data_connections()[1].kind {
+            WorkbookConnectionKind::Text {
+                source_file,
+                delimiter,
+                first_row,
+                delimited,
+                decimal,
+                thousands,
+            } => {
+                assert_eq!(source_file.as_deref(), Some("/data/sales.csv"));
+                assert_eq!(delimiter.as_deref(), Some("|"));
+                assert_eq!(*first_row, 2);
+                assert!(*delimited);
+                assert_eq!(decimal.as_deref(), Some("."));
+                assert_eq!(thousands.as_deref(), Some(","));
+            }
+            other => panic!("unexpected connection kind: {other:?}"),
+        }
+        match &roundtrip.data_connections()[2].kind {
+            WorkbookConnectionKind::Olap {
+                local,
+                local_connection,
+                local_refresh,
+                send_locale,
+                row_drill_count,
+            } => {
+                assert!(*local);
+                assert_eq!(local_connection.as_deref(), Some("CubeFile=cube.cub"));
+                assert!(!*local_refresh);
+                assert!(*send_locale);
+                assert_eq!(*row_drill_count, Some(1000));
+            }
+            other => panic!("unexpected connection kind: {other:?}"),
+        }
     }
 
     #[test]

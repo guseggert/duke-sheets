@@ -328,6 +328,21 @@ pub(super) fn read_workbook_connections<R: Read + Seek>(
                         connection.kind = parse_db_pr(&e);
                     }
                 }
+                b"olapPr" => {
+                    if let Some(connection) = &mut current {
+                        connection.kind = Some(parse_olap_pr(&e));
+                    }
+                }
+                b"webPr" => {
+                    if let Some(connection) = &mut current {
+                        connection.kind = Some(parse_web_pr(&e));
+                    }
+                }
+                b"textPr" => {
+                    if let Some(connection) = &mut current {
+                        connection.kind = Some(parse_text_pr(&e));
+                    }
+                }
                 _ => {}
             },
             Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
@@ -339,6 +354,21 @@ pub(super) fn read_workbook_connections<R: Read + Seek>(
                 b"dbPr" => {
                     if let Some(connection) = &mut current {
                         connection.kind = parse_db_pr(&e);
+                    }
+                }
+                b"olapPr" => {
+                    if let Some(connection) = &mut current {
+                        connection.kind = Some(parse_olap_pr(&e));
+                    }
+                }
+                b"webPr" => {
+                    if let Some(connection) = &mut current {
+                        connection.kind = Some(parse_web_pr(&e));
+                    }
+                }
+                b"textPr" => {
+                    if let Some(connection) = &mut current {
+                        connection.kind = Some(parse_text_pr(&e));
                     }
                 }
                 _ => {}
@@ -404,6 +434,39 @@ fn parse_db_pr(e: &quick_xml::events::BytesStart<'_>) -> Option<WorkbookConnecti
         command: attr_string(e, b"command"),
         command_type: attr_u32(e, b"commandType"),
     })
+}
+
+fn parse_olap_pr(e: &quick_xml::events::BytesStart<'_>) -> WorkbookConnectionKind {
+    WorkbookConnectionKind::Olap {
+        local: attr_bool(e, b"local").unwrap_or(false),
+        local_connection: attr_string(e, b"localConnection"),
+        local_refresh: attr_bool(e, b"localRefresh").unwrap_or(true),
+        send_locale: attr_bool(e, b"sendLocale").unwrap_or(false),
+        row_drill_count: attr_u32(e, b"rowDrillCount"),
+    }
+}
+
+fn parse_web_pr(e: &quick_xml::events::BytesStart<'_>) -> WorkbookConnectionKind {
+    WorkbookConnectionKind::Web {
+        url: attr_string(e, b"url"),
+        xml: attr_bool(e, b"xml").unwrap_or(false),
+        source_data: attr_bool(e, b"sourceData").unwrap_or(false),
+        html_tables: attr_bool(e, b"htmlTables").unwrap_or(false),
+        html_format: attr_string(e, b"htmlFormat"),
+        post: attr_string(e, b"post"),
+        edit_page: attr_string(e, b"editPage"),
+    }
+}
+
+fn parse_text_pr(e: &quick_xml::events::BytesStart<'_>) -> WorkbookConnectionKind {
+    WorkbookConnectionKind::Text {
+        source_file: attr_string(e, b"sourceFile"),
+        delimiter: attr_string(e, b"delimiter"),
+        first_row: attr_u32(e, b"firstRow").unwrap_or(1),
+        delimited: attr_bool(e, b"delimited").unwrap_or(true),
+        decimal: attr_string(e, b"decimal"),
+        thousands: attr_string(e, b"thousands"),
+    }
 }
 
 fn attr_string(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {

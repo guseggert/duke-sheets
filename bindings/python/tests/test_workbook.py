@@ -243,6 +243,51 @@ class TestPivotTables:
         assert roundtrip.data_connection_names == ["SalesConnection"]
         assert roundtrip.get_sheet(0).pivot_table_names == ["ExternalSales"]
 
+    def test_non_database_data_connection_roundtrip(self, temp_dir):
+        """Should save and read web, text, and OLAP connection metadata."""
+        import os
+
+        import duke_sheets
+
+        path = os.path.join(temp_dir, "data_connections.xlsx")
+        wb = duke_sheets.Workbook()
+        wb.add_data_connection(
+            {
+                "id": 8,
+                "name": "WebSales",
+                "kind": "web",
+                "url": "https://example.test/sales.html",
+                "source_data": True,
+                "html_tables": True,
+            }
+        )
+        wb.add_data_connection(
+            {
+                "id": 9,
+                "name": "CsvSales",
+                "kind": "text",
+                "source_file": "/data/sales.csv",
+                "delimiter": "|",
+                "first_row": 2,
+            }
+        )
+        wb.add_data_connection(
+            {
+                "id": 10,
+                "name": "CubeSales",
+                "kind": "olap",
+                "local": True,
+                "local_connection": "CubeFile=cube.cub",
+                "send_locale": True,
+            }
+        )
+        assert wb.data_connection_names == ["WebSales", "CsvSales", "CubeSales"]
+
+        wb.save(path)
+        roundtrip = duke_sheets.Workbook.open(path)
+        assert roundtrip.data_connection_count == 3
+        assert roundtrip.data_connection_names == ["WebSales", "CsvSales", "CubeSales"]
+
     def test_consolidation_pivot_roundtrip(self, temp_dir):
         """Should save and read consolidation pivot source metadata."""
         import os

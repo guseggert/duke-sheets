@@ -13,7 +13,7 @@ use duke_sheets_core::{
     PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
     PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
     PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
-    PivotValue, Workbook as CoreWorkbook, WorkbookConnection,
+    PivotValue, Workbook as CoreWorkbook, WorkbookConnection, WorkbookConnectionKind,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -388,9 +388,28 @@ export interface PivotTableOptions {
 export interface DataConnectionOptions {
   id: number;
   name: string;
-  connection: string;
+  kind?: "database" | "db" | "web" | "text" | "olap";
+  connection?: string;
   command?: string;
   commandType?: number;
+  url?: string;
+  xml?: boolean;
+  sourceData?: boolean;
+  htmlTables?: boolean;
+  htmlFormat?: string;
+  post?: string;
+  editPage?: string;
+  sourceFile?: string;
+  delimiter?: string;
+  firstRow?: number;
+  delimited?: boolean;
+  decimal?: string;
+  thousands?: string;
+  local?: boolean;
+  localConnection?: string;
+  localRefresh?: boolean;
+  sendLocale?: boolean;
+  rowDrillCount?: number;
   refreshOnLoad?: boolean;
   background?: boolean;
   saveData?: boolean;
@@ -594,8 +613,66 @@ fn build_pivot_consolidation_ranges_from_wasm(
 
 fn build_workbook_connection_from_wasm(
     options: WasmWorkbookConnectionOptions,
-) -> WorkbookConnection {
-    let mut connection = WorkbookConnection::database(options.id, options.name, options.connection);
+) -> Result<WorkbookConnection, JsError> {
+    let kind = options
+        .kind
+        .as_deref()
+        .unwrap_or("database")
+        .to_ascii_lowercase();
+    let mut connection = match kind.as_str() {
+        "database" | "db" => WorkbookConnection::database(
+            options.id,
+            options.name,
+            options
+                .connection
+                .ok_or_else(|| JsError::new("database data connections require connection"))?,
+        ),
+        "web" => {
+            let mut connection = WorkbookConnection::web(options.id, options.name, "");
+            connection.kind = WorkbookConnectionKind::Web {
+                url: options.url,
+                xml: options.xml.unwrap_or(false),
+                source_data: options.source_data.unwrap_or(false),
+                html_tables: options.html_tables.unwrap_or(false),
+                html_format: options.html_format,
+                post: options.post,
+                edit_page: options.edit_page,
+            };
+            connection
+        }
+        "text" => {
+            let mut connection = WorkbookConnection::text(
+                options.id,
+                options.name,
+                options.source_file.clone().unwrap_or_default(),
+            );
+            connection.kind = WorkbookConnectionKind::Text {
+                source_file: options.source_file,
+                delimiter: options.delimiter,
+                first_row: options.first_row.unwrap_or(1),
+                delimited: options.delimited.unwrap_or(true),
+                decimal: options.decimal,
+                thousands: options.thousands,
+            };
+            connection
+        }
+        "olap" => {
+            let mut connection = WorkbookConnection::olap(options.id, options.name);
+            connection.kind = WorkbookConnectionKind::Olap {
+                local: options.local.unwrap_or(false),
+                local_connection: options.local_connection,
+                local_refresh: options.local_refresh.unwrap_or(true),
+                send_locale: options.send_locale.unwrap_or(false),
+                row_drill_count: options.row_drill_count,
+            };
+            connection
+        }
+        other => {
+            return Err(JsError::new(&format!(
+                "unknown data connection kind: {other}"
+            )))
+        }
+    };
     if let Some(command) = options.command {
         connection = connection.with_command(command);
     }
@@ -611,7 +688,7 @@ fn build_workbook_connection_from_wasm(
     if let Some(save_data) = options.save_data {
         connection = connection.with_save_data(save_data);
     }
-    connection
+    Ok(connection)
 }
 
 fn build_pivot_field_from_wasm(options: WasmPivotFieldOptions) -> Result<PivotField, JsError> {
@@ -1724,7 +1801,7 @@ impl Workbook {
         let options: WasmWorkbookConnectionOptions =
             serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
         let mut wb = self.inner.borrow_mut();
-        wb.add_data_connection(build_workbook_connection_from_wasm(options))
+        wb.add_data_connection(build_workbook_connection_from_wasm(options)?)
             .map_err(to_js_error)
     }
 

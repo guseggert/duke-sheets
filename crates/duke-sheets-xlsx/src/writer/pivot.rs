@@ -928,7 +928,11 @@ fn validate_external_pivot_connection(
             "XLSX pivot external source command text requires a matching workbook data connection: {connection_name}"
         )));
     };
-    let WorkbookConnectionKind::Database { command, .. } = &connection.kind;
+    let WorkbookConnectionKind::Database { command, .. } = &connection.kind else {
+        return Err(XlsxError::InvalidFormat(format!(
+            "XLSX pivot external source command text requires a database data connection: {connection_name}"
+        )));
+    };
     if command.as_deref() != Some(command_text) {
         return Err(XlsxError::InvalidFormat(format!(
             "XLSX pivot external source command text does not match workbook data connection: {connection_name}"

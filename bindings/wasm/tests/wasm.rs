@@ -395,6 +395,59 @@ fn test_pivot_external_connection_roundtrips_from_options() {
 }
 
 #[wasm_bindgen_test]
+fn test_non_database_connections_roundtrip_from_options() {
+    let wb = Workbook::new();
+    let web = make_options(&[
+        ("id", JsValue::from_f64(8.0)),
+        ("name", JsValue::from_str("WebSales")),
+        ("kind", JsValue::from_str("web")),
+        ("url", JsValue::from_str("https://example.test/sales.html")),
+        ("sourceData", JsValue::TRUE),
+        ("htmlTables", JsValue::TRUE),
+    ]);
+    let text = make_options(&[
+        ("id", JsValue::from_f64(9.0)),
+        ("name", JsValue::from_str("CsvSales")),
+        ("kind", JsValue::from_str("text")),
+        ("sourceFile", JsValue::from_str("/data/sales.csv")),
+        ("delimiter", JsValue::from_str("|")),
+        ("firstRow", JsValue::from_f64(2.0)),
+    ]);
+    let olap = make_options(&[
+        ("id", JsValue::from_f64(10.0)),
+        ("name", JsValue::from_str("CubeSales")),
+        ("kind", JsValue::from_str("olap")),
+        ("local", JsValue::TRUE),
+        ("localConnection", JsValue::from_str("CubeFile=cube.cub")),
+        ("sendLocale", JsValue::TRUE),
+    ]);
+
+    wb.add_data_connection(web).unwrap();
+    wb.add_data_connection(text).unwrap();
+    wb.add_data_connection(olap).unwrap();
+    assert_eq!(
+        wb.data_connection_names(),
+        vec![
+            "WebSales".to_string(),
+            "CsvSales".to_string(),
+            "CubeSales".to_string()
+        ]
+    );
+
+    let bytes = wb.save_xlsx_bytes().unwrap();
+    let roundtrip = Workbook::from_bytes(&bytes).unwrap();
+    assert_eq!(roundtrip.data_connection_count(), 3);
+    assert_eq!(
+        roundtrip.data_connection_names(),
+        vec![
+            "WebSales".to_string(),
+            "CsvSales".to_string(),
+            "CubeSales".to_string()
+        ]
+    );
+}
+
+#[wasm_bindgen_test]
 fn test_pivot_consolidation_roundtrips_from_options() {
     let wb = Workbook::new();
     wb.add_sheet("North").unwrap();

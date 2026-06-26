@@ -226,6 +226,48 @@ describe("PivotTables", () => {
     }
   });
 
+  it("adds non-database data connections", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
+    const filePath = path.join(tmpDir, "data-connections.xlsx");
+
+    try {
+      const wb = new Workbook();
+      wb.addDataConnection({
+        id: 8,
+        name: "WebSales",
+        kind: "web",
+        url: "https://example.test/sales.html",
+        sourceData: true,
+        htmlTables: true,
+      });
+      wb.addDataConnection({
+        id: 9,
+        name: "CsvSales",
+        kind: "text",
+        sourceFile: "/data/sales.csv",
+        delimiter: "|",
+        firstRow: 2,
+      });
+      wb.addDataConnection({
+        id: 10,
+        name: "CubeSales",
+        kind: "olap",
+        local: true,
+        localConnection: "CubeFile=cube.cub",
+        sendLocale: true,
+      });
+
+      expect(wb.dataConnectionNames).toEqual(["WebSales", "CsvSales", "CubeSales"]);
+      wb.save(filePath);
+
+      const roundtrip = Workbook.open(filePath);
+      expect(roundtrip.dataConnectionCount).toBe(3);
+      expect(roundtrip.dataConnectionNames).toEqual(["WebSales", "CsvSales", "CubeSales"]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("adds a consolidation pivot with page labels", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
     const filePath = path.join(tmpDir, "consolidation-pivot.xlsx");

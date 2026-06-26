@@ -19,7 +19,7 @@ use duke_sheets_core::{
     PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
     PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs,
     PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
-    WorkbookConnection,
+    WorkbookConnection, WorkbookConnectionKind,
 };
 
 mod types;
@@ -741,12 +741,65 @@ fn build_workbook_connection_from_py(options: &Bound<'_, PyAny>) -> PyResult<Wor
     let dict = options
         .downcast::<PyDict>()
         .map_err(|_| PyValueError::new_err("data connection options must be a dict"))?;
-    let mut connection = WorkbookConnection::database(
-        optional_u32(dict, &["id"])?
-            .ok_or_else(|| PyValueError::new_err("data connection options require id"))?,
-        required_string(dict, &["name"])?,
-        required_string(dict, &["connection"])?,
-    );
+    let id = optional_u32(dict, &["id"])?
+        .ok_or_else(|| PyValueError::new_err("data connection options require id"))?;
+    let name = required_string(dict, &["name"])?;
+    let kind = optional_string(dict, &["kind"])?
+        .unwrap_or_else(|| "database".to_string())
+        .to_ascii_lowercase();
+    let mut connection = match kind.as_str() {
+        "database" | "db" => {
+            WorkbookConnection::database(id, name, required_string(dict, &["connection"])?)
+        }
+        "web" => {
+            let mut connection = WorkbookConnection::web(
+                id,
+                name,
+                optional_string(dict, &["url"])?.unwrap_or_default(),
+            );
+            connection.kind = WorkbookConnectionKind::Web {
+                url: optional_string(dict, &["url"])?,
+                xml: optional_bool(dict, &["xml"])?.unwrap_or(false),
+                source_data: optional_bool(dict, &["source_data", "sourceData"])?.unwrap_or(false),
+                html_tables: optional_bool(dict, &["html_tables", "htmlTables"])?.unwrap_or(false),
+                html_format: optional_string(dict, &["html_format", "htmlFormat"])?,
+                post: optional_string(dict, &["post"])?,
+                edit_page: optional_string(dict, &["edit_page", "editPage"])?,
+            };
+            connection
+        }
+        "text" => {
+            let source_file = optional_string(dict, &["source_file", "sourceFile"])?;
+            let mut connection =
+                WorkbookConnection::text(id, name, source_file.clone().unwrap_or_default());
+            connection.kind = WorkbookConnectionKind::Text {
+                source_file,
+                delimiter: optional_string(dict, &["delimiter"])?,
+                first_row: optional_u32(dict, &["first_row", "firstRow"])?.unwrap_or(1),
+                delimited: optional_bool(dict, &["delimited"])?.unwrap_or(true),
+                decimal: optional_string(dict, &["decimal"])?,
+                thousands: optional_string(dict, &["thousands"])?,
+            };
+            connection
+        }
+        "olap" => {
+            let mut connection = WorkbookConnection::olap(id, name);
+            connection.kind = WorkbookConnectionKind::Olap {
+                local: optional_bool(dict, &["local"])?.unwrap_or(false),
+                local_connection: optional_string(dict, &["local_connection", "localConnection"])?,
+                local_refresh: optional_bool(dict, &["local_refresh", "localRefresh"])?
+                    .unwrap_or(true),
+                send_locale: optional_bool(dict, &["send_locale", "sendLocale"])?.unwrap_or(false),
+                row_drill_count: optional_u32(dict, &["row_drill_count", "rowDrillCount"])?,
+            };
+            connection
+        }
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown data connection kind: {other}"
+            )))
+        }
+    };
     if let Some(command) = optional_string(dict, &["command"])? {
         connection = connection.with_command(command);
     }
