@@ -17,10 +17,10 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotCalculatedField,
-    PivotCalculatedItem, PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator,
-    PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
-    PivotOverwritePolicy, PivotRefreshPolicy, PivotRefreshStatus, PivotShowAs, PivotSort,
-    PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    PivotCalculatedItem, PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFilter,
+    PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup,
+    PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotRefreshStatus, PivotShowAs,
+    PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
     WorkbookConnection, WorkbookConnectionKind, WorkbookExtension, WorkbookExtensionPart,
 };
 
@@ -562,6 +562,16 @@ fn build_pivot_filter_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotFilte
                 not_between: true,
             })
         }
+        "datePeriod" | "date_period" | "period" => Ok(PivotFilter::DatePeriod {
+            field: field.into(),
+            period: parse_pivot_date_period(
+                optional_string(dict, &["period"])?
+                    .as_deref()
+                    .ok_or_else(|| {
+                        PyValueError::new_err("pivot date-period filter requires period")
+                    })?,
+            )?,
+        }),
         "topN" | "top_n" | "top" => {
             let measure = optional_any(dict, &["measure"])?
                 .ok_or_else(|| PyValueError::new_err("pivot top-N filter requires measure"))?;
@@ -578,6 +588,48 @@ fn build_pivot_filter_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotFilte
             "Unsupported pivot filter kind: {other}"
         ))),
     }
+}
+
+fn parse_pivot_date_period(value: &str) -> PyResult<PivotDatePeriod> {
+    Ok(match value {
+        "tomorrow" => PivotDatePeriod::Tomorrow,
+        "today" => PivotDatePeriod::Today,
+        "yesterday" => PivotDatePeriod::Yesterday,
+        "nextWeek" | "next_week" => PivotDatePeriod::NextWeek,
+        "thisWeek" | "this_week" => PivotDatePeriod::ThisWeek,
+        "lastWeek" | "last_week" => PivotDatePeriod::LastWeek,
+        "nextMonth" | "next_month" => PivotDatePeriod::NextMonth,
+        "thisMonth" | "this_month" => PivotDatePeriod::ThisMonth,
+        "lastMonth" | "last_month" => PivotDatePeriod::LastMonth,
+        "nextQuarter" | "next_quarter" => PivotDatePeriod::NextQuarter,
+        "thisQuarter" | "this_quarter" => PivotDatePeriod::ThisQuarter,
+        "lastQuarter" | "last_quarter" => PivotDatePeriod::LastQuarter,
+        "nextYear" | "next_year" => PivotDatePeriod::NextYear,
+        "thisYear" | "this_year" => PivotDatePeriod::ThisYear,
+        "lastYear" | "last_year" => PivotDatePeriod::LastYear,
+        "yearToDate" | "year_to_date" => PivotDatePeriod::YearToDate,
+        "Q1" | "quarter1" | "quarter_1" => PivotDatePeriod::Quarter(1),
+        "Q2" | "quarter2" | "quarter_2" => PivotDatePeriod::Quarter(2),
+        "Q3" | "quarter3" | "quarter_3" => PivotDatePeriod::Quarter(3),
+        "Q4" | "quarter4" | "quarter_4" => PivotDatePeriod::Quarter(4),
+        "M1" | "month1" | "month_1" => PivotDatePeriod::Month(1),
+        "M2" | "month2" | "month_2" => PivotDatePeriod::Month(2),
+        "M3" | "month3" | "month_3" => PivotDatePeriod::Month(3),
+        "M4" | "month4" | "month_4" => PivotDatePeriod::Month(4),
+        "M5" | "month5" | "month_5" => PivotDatePeriod::Month(5),
+        "M6" | "month6" | "month_6" => PivotDatePeriod::Month(6),
+        "M7" | "month7" | "month_7" => PivotDatePeriod::Month(7),
+        "M8" | "month8" | "month_8" => PivotDatePeriod::Month(8),
+        "M9" | "month9" | "month_9" => PivotDatePeriod::Month(9),
+        "M10" | "month10" | "month_10" => PivotDatePeriod::Month(10),
+        "M11" | "month11" | "month_11" => PivotDatePeriod::Month(11),
+        "M12" | "month12" | "month_12" => PivotDatePeriod::Month(12),
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported pivot date period: {other}"
+            )))
+        }
+    })
 }
 
 fn build_pivot_grouping_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotGrouping> {
@@ -1208,6 +1260,11 @@ fn pivot_filter_to_py(py: Python<'_>, filter: &PivotFilter) -> PyResult<PyObject
             dict.set_item("start", start)?;
             dict.set_item("end", end)?;
         }
+        PivotFilter::DatePeriod { field, period } => {
+            dict.set_item("kind", "date_period")?;
+            dict.set_item("field", &field.name)?;
+            dict.set_item("period", pivot_date_period_to_python(*period))?;
+        }
         PivotFilter::TopN {
             field,
             measure,
@@ -1228,6 +1285,44 @@ fn pivot_filter_to_py(py: Python<'_>, filter: &PivotFilter) -> PyResult<PyObject
         }
     }
     Ok(dict.into_any().unbind())
+}
+
+fn pivot_date_period_to_python(period: PivotDatePeriod) -> &'static str {
+    match period {
+        PivotDatePeriod::Tomorrow => "tomorrow",
+        PivotDatePeriod::Today => "today",
+        PivotDatePeriod::Yesterday => "yesterday",
+        PivotDatePeriod::NextWeek => "next_week",
+        PivotDatePeriod::ThisWeek => "this_week",
+        PivotDatePeriod::LastWeek => "last_week",
+        PivotDatePeriod::NextMonth => "next_month",
+        PivotDatePeriod::ThisMonth => "this_month",
+        PivotDatePeriod::LastMonth => "last_month",
+        PivotDatePeriod::NextQuarter => "next_quarter",
+        PivotDatePeriod::ThisQuarter => "this_quarter",
+        PivotDatePeriod::LastQuarter => "last_quarter",
+        PivotDatePeriod::NextYear => "next_year",
+        PivotDatePeriod::ThisYear => "this_year",
+        PivotDatePeriod::LastYear => "last_year",
+        PivotDatePeriod::YearToDate => "year_to_date",
+        PivotDatePeriod::Quarter(1) => "Q1",
+        PivotDatePeriod::Quarter(2) => "Q2",
+        PivotDatePeriod::Quarter(3) => "Q3",
+        PivotDatePeriod::Quarter(4) => "Q4",
+        PivotDatePeriod::Month(1) => "M1",
+        PivotDatePeriod::Month(2) => "M2",
+        PivotDatePeriod::Month(3) => "M3",
+        PivotDatePeriod::Month(4) => "M4",
+        PivotDatePeriod::Month(5) => "M5",
+        PivotDatePeriod::Month(6) => "M6",
+        PivotDatePeriod::Month(7) => "M7",
+        PivotDatePeriod::Month(8) => "M8",
+        PivotDatePeriod::Month(9) => "M9",
+        PivotDatePeriod::Month(10) => "M10",
+        PivotDatePeriod::Month(11) => "M11",
+        PivotDatePeriod::Month(12) => "M12",
+        PivotDatePeriod::Month(_) | PivotDatePeriod::Quarter(_) => "unknown",
+    }
 }
 
 fn pivot_calculated_fields_to_py(
@@ -2641,11 +2736,17 @@ impl PyWorkbook {
     ///
     /// Args:
     ///     max_threads: Maximum worker threads for parallel refresh. None uses the active pool.
-    #[pyo3(signature = (*, max_threads=None))]
-    fn refresh_pivots(&self, py: Python<'_>, max_threads: Option<usize>) -> PyResult<PyObject> {
+    ///     today: Excel serial date used to evaluate relative date-period filters.
+    #[pyo3(signature = (*, max_threads=None, today=None))]
+    fn refresh_pivots(
+        &self,
+        py: Python<'_>,
+        max_threads: Option<usize>,
+        today: Option<f64>,
+    ) -> PyResult<PyObject> {
         let mut wb = self.inner.write().map_err(to_py_err)?;
         let stats = wb
-            .refresh_pivots_with_options(&PivotRefreshOptions { max_threads })
+            .refresh_pivots_with_options(&PivotRefreshOptions { max_threads, today })
             .map_err(to_py_err)?;
         pivot_refresh_stats_to_py(py, stats)
     }

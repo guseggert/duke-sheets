@@ -6,10 +6,10 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotCalculatedItem,
-    PivotDateGroupUnit, PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping,
-    PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort, PivotSource,
-    PivotSourceRange, PivotSubtotal, PivotTable, PivotValue, Table, Workbook, WorkbookConnection,
-    WorkbookConnectionKind, Worksheet,
+    PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFieldRef, PivotFilter,
+    PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure,
+    PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotSubtotal, PivotTable, PivotValue,
+    Table, Workbook, WorkbookConnection, WorkbookConnectionKind, Worksheet,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -286,6 +286,7 @@ fn is_writable_filter(filter: &PivotFilter) -> bool {
         | PivotFilter::DateBetween { .. }
         | PivotFilter::TopN { .. } => true,
         PivotFilter::Date { operator, .. } => date_filter_type_name(*operator).is_some(),
+        PivotFilter::DatePeriod { period, .. } => date_period_filter_type_name(*period).is_some(),
         PivotFilter::Value { operator, .. } => value_filter_type_name(*operator).is_some(),
         PivotFilter::Unsupported { .. } => false,
     }
@@ -844,6 +845,7 @@ fn filter_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
         | PivotFilter::Label { field, .. }
         | PivotFilter::Date { field, .. }
         | PivotFilter::DateBetween { field, .. }
+        | PivotFilter::DatePeriod { field, .. }
         | PivotFilter::Value { field, .. }
         | PivotFilter::TopN { field, .. } => Some(field),
         PivotFilter::Unsupported { .. } => None,
@@ -859,6 +861,7 @@ fn filter_measure_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
         | PivotFilter::Label { .. }
         | PivotFilter::Date { .. }
         | PivotFilter::DateBetween { .. }
+        | PivotFilter::DatePeriod { .. }
         | PivotFilter::Unsupported { .. } => None,
     }
 }
@@ -2553,6 +2556,13 @@ fn write_pivot_filter(
             }
             w.write_event(Event::End(BytesEnd::new("filter")))?;
         }
+        PivotFilter::DatePeriod { period, .. } => {
+            let filter_type = date_period_filter_type_name(*period).ok_or_else(|| {
+                XlsxError::InvalidFormat("unsupported pivot date period filter".into())
+            })?;
+            filter_el.push_attribute(("type", filter_type));
+            w.write_event(Event::Empty(filter_el))?;
+        }
         PivotFilter::TopN {
             measure,
             n,
@@ -2720,6 +2730,44 @@ fn date_filter_type_name(operator: PivotFilterOperator) -> Option<&'static str> 
         | PivotFilterOperator::DoesNotEndWith
         | PivotFilterOperator::Contains
         | PivotFilterOperator::DoesNotContain => return None,
+    })
+}
+
+fn date_period_filter_type_name(period: PivotDatePeriod) -> Option<&'static str> {
+    Some(match period {
+        PivotDatePeriod::Tomorrow => "tomorrow",
+        PivotDatePeriod::Today => "today",
+        PivotDatePeriod::Yesterday => "yesterday",
+        PivotDatePeriod::NextWeek => "nextWeek",
+        PivotDatePeriod::ThisWeek => "thisWeek",
+        PivotDatePeriod::LastWeek => "lastWeek",
+        PivotDatePeriod::NextMonth => "nextMonth",
+        PivotDatePeriod::ThisMonth => "thisMonth",
+        PivotDatePeriod::LastMonth => "lastMonth",
+        PivotDatePeriod::NextQuarter => "nextQuarter",
+        PivotDatePeriod::ThisQuarter => "thisQuarter",
+        PivotDatePeriod::LastQuarter => "lastQuarter",
+        PivotDatePeriod::NextYear => "nextYear",
+        PivotDatePeriod::ThisYear => "thisYear",
+        PivotDatePeriod::LastYear => "lastYear",
+        PivotDatePeriod::YearToDate => "yearToDate",
+        PivotDatePeriod::Quarter(1) => "Q1",
+        PivotDatePeriod::Quarter(2) => "Q2",
+        PivotDatePeriod::Quarter(3) => "Q3",
+        PivotDatePeriod::Quarter(4) => "Q4",
+        PivotDatePeriod::Month(1) => "M1",
+        PivotDatePeriod::Month(2) => "M2",
+        PivotDatePeriod::Month(3) => "M3",
+        PivotDatePeriod::Month(4) => "M4",
+        PivotDatePeriod::Month(5) => "M5",
+        PivotDatePeriod::Month(6) => "M6",
+        PivotDatePeriod::Month(7) => "M7",
+        PivotDatePeriod::Month(8) => "M8",
+        PivotDatePeriod::Month(9) => "M9",
+        PivotDatePeriod::Month(10) => "M10",
+        PivotDatePeriod::Month(11) => "M11",
+        PivotDatePeriod::Month(12) => "M12",
+        PivotDatePeriod::Month(_) | PivotDatePeriod::Quarter(_) => return None,
     })
 }
 

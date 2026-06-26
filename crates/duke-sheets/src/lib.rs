@@ -112,6 +112,7 @@ pub use duke_sheets_core::{
     PivotCacheSourceKind,
     PivotCalculatedItem,
     PivotDateGroupUnit,
+    PivotDatePeriod,
     PivotExtension,
     PivotExtensions,
     PivotField,

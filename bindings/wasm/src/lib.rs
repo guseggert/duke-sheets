@@ -13,10 +13,11 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
-    PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
-    PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
-    PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
-    PivotValue, Workbook as CoreWorkbook, WorkbookConnection, WorkbookConnectionKind,
+    PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFilter, PivotFilterOperator,
+    PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
+    PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource,
+    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
+    WorkbookConnection, WorkbookConnectionKind,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -269,6 +270,12 @@ export interface PivotDateBetweenFilterOptions {
   end: number;
 }
 
+export interface PivotDatePeriodFilterOptions {
+  kind: "datePeriod" | "date_period" | "period";
+  field: string;
+  period: string;
+}
+
 export interface PivotTopNFilterOptions {
   kind: "topN" | "top_n" | "top";
   field: string;
@@ -284,6 +291,7 @@ export type PivotFilterOptions =
   | PivotValueFilterOptions
   | PivotDateFilterOptions
   | PivotDateBetweenFilterOptions
+  | PivotDatePeriodFilterOptions
   | PivotTopNFilterOptions;
 
 export interface PivotCalculatedFieldOptions {
@@ -511,6 +519,7 @@ export interface PivotFilterDefinition {
   items?: PivotValue[];
   operator?: PivotFilterOperator;
   text?: string;
+  period?: string;
   measure?: PivotMeasureDefinition;
   value?: number;
   start?: number;
@@ -714,6 +723,7 @@ export interface PivotRefreshStats {
 
 export interface PivotRefreshOptions {
   maxThreads?: number;
+  today?: number;
 }
 
 export interface Workbook {
@@ -761,6 +771,7 @@ struct JsCalculationOptions {
 #[serde(rename_all = "camelCase")]
 struct JsPivotRefreshOptions {
     max_threads: Option<usize>,
+    today: Option<f64>,
 }
 
 /// Wrapper to make `js_sys::Function` implement Send + Sync.
@@ -1360,6 +1371,15 @@ fn build_pivot_filter_from_wasm(options: WasmPivotFilterOptions) -> Result<Pivot
                 not_between: true,
             })
         }
+        "datePeriod" | "date_period" | "period" => Ok(PivotFilter::DatePeriod {
+            field: options.field.into(),
+            period: parse_pivot_date_period(
+                options
+                    .period
+                    .as_deref()
+                    .ok_or_else(|| JsError::new("Pivot date-period filter requires period"))?,
+            )?,
+        }),
         "topN" | "top_n" | "top" => Ok(PivotFilter::TopN {
             field: options.field.into(),
             measure: build_pivot_measure_from_wasm(
@@ -1377,6 +1397,48 @@ fn build_pivot_filter_from_wasm(options: WasmPivotFilterOptions) -> Result<Pivot
             "Unsupported pivot filter kind: {other}"
         ))),
     }
+}
+
+fn parse_pivot_date_period(value: &str) -> Result<PivotDatePeriod, JsError> {
+    Ok(match value {
+        "tomorrow" => PivotDatePeriod::Tomorrow,
+        "today" => PivotDatePeriod::Today,
+        "yesterday" => PivotDatePeriod::Yesterday,
+        "nextWeek" | "next_week" => PivotDatePeriod::NextWeek,
+        "thisWeek" | "this_week" => PivotDatePeriod::ThisWeek,
+        "lastWeek" | "last_week" => PivotDatePeriod::LastWeek,
+        "nextMonth" | "next_month" => PivotDatePeriod::NextMonth,
+        "thisMonth" | "this_month" => PivotDatePeriod::ThisMonth,
+        "lastMonth" | "last_month" => PivotDatePeriod::LastMonth,
+        "nextQuarter" | "next_quarter" => PivotDatePeriod::NextQuarter,
+        "thisQuarter" | "this_quarter" => PivotDatePeriod::ThisQuarter,
+        "lastQuarter" | "last_quarter" => PivotDatePeriod::LastQuarter,
+        "nextYear" | "next_year" => PivotDatePeriod::NextYear,
+        "thisYear" | "this_year" => PivotDatePeriod::ThisYear,
+        "lastYear" | "last_year" => PivotDatePeriod::LastYear,
+        "yearToDate" | "year_to_date" => PivotDatePeriod::YearToDate,
+        "Q1" | "quarter1" | "quarter_1" => PivotDatePeriod::Quarter(1),
+        "Q2" | "quarter2" | "quarter_2" => PivotDatePeriod::Quarter(2),
+        "Q3" | "quarter3" | "quarter_3" => PivotDatePeriod::Quarter(3),
+        "Q4" | "quarter4" | "quarter_4" => PivotDatePeriod::Quarter(4),
+        "M1" | "month1" | "month_1" => PivotDatePeriod::Month(1),
+        "M2" | "month2" | "month_2" => PivotDatePeriod::Month(2),
+        "M3" | "month3" | "month_3" => PivotDatePeriod::Month(3),
+        "M4" | "month4" | "month_4" => PivotDatePeriod::Month(4),
+        "M5" | "month5" | "month_5" => PivotDatePeriod::Month(5),
+        "M6" | "month6" | "month_6" => PivotDatePeriod::Month(6),
+        "M7" | "month7" | "month_7" => PivotDatePeriod::Month(7),
+        "M8" | "month8" | "month_8" => PivotDatePeriod::Month(8),
+        "M9" | "month9" | "month_9" => PivotDatePeriod::Month(9),
+        "M10" | "month10" | "month_10" => PivotDatePeriod::Month(10),
+        "M11" | "month11" | "month_11" => PivotDatePeriod::Month(11),
+        "M12" | "month12" | "month_12" => PivotDatePeriod::Month(12),
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot date period: {other}"
+            )))
+        }
+    })
 }
 
 fn build_pivot_grouping_from_wasm(
@@ -2308,6 +2370,7 @@ impl Workbook {
                 serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
             PivotRefreshOptions {
                 max_threads: options.max_threads,
+                today: options.today,
             }
         } else {
             PivotRefreshOptions::default()

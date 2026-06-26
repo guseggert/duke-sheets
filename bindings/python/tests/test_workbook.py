@@ -249,6 +249,11 @@ class TestPivotTables:
                         "start": 45292,
                         "end": 45322,
                     },
+                    {
+                        "kind": "date_period",
+                        "field": "Date",
+                        "period": "this_month",
+                    },
                 ],
                 "calculated_fields": [{"name": "Margin", "formula": "=Revenue*0.2"}],
                 "calculated_items": [
@@ -318,6 +323,11 @@ class TestPivotTables:
             "field": "Date",
             "start": 45292.0,
             "end": 45322.0,
+        }
+        assert pivot["filters"][2] == {
+            "kind": "date_period",
+            "field": "Date",
+            "period": "this_month",
         }
         assert pivot["calculated_fields"][0] == {
             "name": "Margin",
@@ -679,6 +689,49 @@ class TestPivotTables:
         assert sheet.get_cell("D3").as_text() == "South"
         assert sheet.get_cell("E3").as_number() == 5.0
         assert sheet.get_cell("E4").as_number() == 35.0
+
+    def test_refresh_relative_date_period_from_options(self):
+        """Should refresh a relative date-period pivot from semantic options."""
+        import duke_sheets
+
+        wb = duke_sheets.Workbook()
+        sheet = wb.get_sheet(0)
+        sheet.set_cell("A1", "Date")
+        sheet.set_cell("B1", "Region")
+        sheet.set_cell("C1", "Revenue")
+        sheet.set_cell("A2", 45292)
+        sheet.set_cell("B2", "East")
+        sheet.set_cell("C2", 10.0)
+        sheet.set_cell("A3", 45323)
+        sheet.set_cell("B3", "North")
+        sheet.set_cell("C3", 30.0)
+        sheet.set_cell("A4", 45337)
+        sheet.set_cell("B4", "West")
+        sheet.set_cell("C4", 40.0)
+
+        sheet.add_pivot_table(
+            {
+                "name": "ThisMonthSales",
+                "source_range": "A1:C4",
+                "target": "E1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+                "filters": [
+                    {"kind": "date_period", "field": "Date", "period": "this_month"}
+                ],
+            }
+        )
+
+        stats = wb.refresh_pivots(today=45332)
+
+        assert stats["pivots_refreshed"] == 1
+        assert sheet.get_cell("E2").as_text() == "North"
+        assert sheet.get_cell("F2").as_number() == 30.0
+        assert sheet.get_cell("E3").as_text() == "West"
+        assert sheet.get_cell("F3").as_number() == 40.0
+        assert sheet.get_cell("F4").as_number() == 70.0
 
     def test_add_pivot_chart_from_refreshed_pivot(self):
         """Should generate a PivotChart from a refreshed pivot."""

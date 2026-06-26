@@ -3457,11 +3457,11 @@ mod tests {
     use crate::reader::XlsxReader;
     use duke_sheets_core::{
         CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotDateGroupUnit,
-        PivotExtension, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
-        PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
-        PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
-        PivotValue, SplitPanes, WorkbookConnection, WorkbookConnectionKind, WorkbookExtension,
-        WorkbookExtensionPart,
+        PivotDatePeriod, PivotExtension, PivotField, PivotFilter, PivotFilterOperator,
+        PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
+        PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
+        PivotSubtotal, PivotTable, PivotValue, SplitPanes, WorkbookConnection,
+        WorkbookConnectionKind, WorkbookExtension, WorkbookExtensionPart,
     };
     use ssfmt::{date_serial::date_to_serial, DateSystem};
     use std::io::Read;
@@ -5275,6 +5275,10 @@ mod tests {
                 end: date_end,
                 not_between: false,
             })
+            .filter(PivotFilter::DatePeriod {
+                field: "Date".into(),
+                period: PivotDatePeriod::Month(1),
+            })
             .filter(PivotFilter::TopN {
                 field: "Region".into(),
                 measure,
@@ -5291,7 +5295,7 @@ mod tests {
         let bytes = out.into_inner();
 
         let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
-        assert!(pivot_xml.contains(r#"<filters count="4">"#));
+        assert!(pivot_xml.contains(r#"<filters count="5">"#));
         assert!(pivot_xml.contains(r#"type="captionContains""#));
         assert!(pivot_xml.contains(r#"stringValue1="e""#));
         assert!(pivot_xml.contains(r#"type="valueGreaterThanOrEqual""#));
@@ -5307,6 +5311,7 @@ mod tests {
         assert!(pivot_xml.contains(&format!(
             r#"<customFilter operator="lessThanOrEqual" val="{date_end}"/>"#
         )));
+        assert!(pivot_xml.contains(r#"type="M1""#));
         assert!(pivot_xml.contains(r#"type="topCount""#));
         assert!(pivot_xml.contains(r#"<top10 top="1" percent="0" val="2"/>"#));
 
@@ -5316,7 +5321,7 @@ mod tests {
             .unwrap()
             .pivot_table_by_name("FilteredPivot")
             .unwrap();
-        assert_eq!(pivot.filters.len(), 4);
+        assert_eq!(pivot.filters.len(), 5);
         match &pivot.filters[0] {
             PivotFilter::Label {
                 field,
@@ -5360,6 +5365,13 @@ mod tests {
             other => panic!("unexpected pivot filter: {other:?}"),
         }
         match &pivot.filters[3] {
+            PivotFilter::DatePeriod { field, period } => {
+                assert_eq!(field.name, "Date");
+                assert_eq!(*period, PivotDatePeriod::Month(1));
+            }
+            other => panic!("unexpected pivot filter: {other:?}"),
+        }
+        match &pivot.filters[4] {
             PivotFilter::TopN {
                 field,
                 measure,

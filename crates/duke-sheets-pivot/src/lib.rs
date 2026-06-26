@@ -13,10 +13,10 @@ use std::sync::Arc;
 use ahash::{AHashMap, AHashSet};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue, Error, NumberFormat, PivotAggregate,
-    PivotCalculatedField, PivotCalculatedItem, PivotField, PivotFilter, PivotFilterOperator,
-    PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy,
-    PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue,
-    Result, Table, Workbook, Worksheet, MAX_COLS, MAX_ROWS,
+    PivotCalculatedField, PivotCalculatedItem, PivotDatePeriod, PivotField, PivotFilter,
+    PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure,
+    PivotOverwritePolicy, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSubtotal,
+    PivotTable, PivotValue, Result, Table, Workbook, Worksheet, MAX_COLS, MAX_ROWS,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -25,7 +25,7 @@ use duke_sheets_formula::{
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use ssfmt::{
-    date_serial::{serial_to_date, serial_to_time},
+    date_serial::{date_to_serial, serial_to_date, serial_to_time, serial_to_weekday},
     DateSystem,
 };
 
@@ -62,7 +62,7 @@ impl PivotRefreshStats {
 }
 
 /// Options for refreshing pivot tables.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct PivotRefreshOptions {
     /// Maximum number of worker threads to use when the `parallel` feature is enabled.
     ///
@@ -70,6 +70,12 @@ pub struct PivotRefreshOptions {
     /// to one worker thread. This option has no effect when the `parallel` feature
     /// is disabled.
     pub max_threads: Option<usize>,
+    /// Excel serial date used to evaluate relative date-period filters.
+    ///
+    /// The serial is interpreted in the workbook's date system. Static month and
+    /// quarter period filters do not require this option, but relative filters
+    /// such as `today`, `thisMonth`, and `yearToDate` do.
+    pub today: Option<f64>,
 }
 
 /// Extension methods for refreshing pivot tables in a workbook.
@@ -105,7 +111,8 @@ impl WorkbookPivotExt for Workbook {
         options: &PivotRefreshOptions,
     ) -> Result<PivotRefreshStats> {
         let mut cache = take_runtime_cache(self);
-        let result = with_pivot_refresh_pool(options, || refresh_pivots_inner(self, &mut cache));
+        let result =
+            with_pivot_refresh_pool(options, || refresh_pivots_inner(self, &mut cache, options));
         self.set_pivot_runtime_cache(Box::new(cache));
         result
     }
@@ -122,7 +129,7 @@ impl WorkbookPivotExt for Workbook {
     ) -> Result<PivotRefreshStats> {
         let mut cache = take_runtime_cache(self);
         let result = with_pivot_refresh_pool(options, || {
-            refresh_pivot_inner(self, sheet_index, pivot_name, &mut cache)
+            refresh_pivot_inner(self, sheet_index, pivot_name, &mut cache, options)
         });
         self.set_pivot_runtime_cache(Box::new(cache));
         result
@@ -161,11 +168,14 @@ struct PivotJob {
 struct PreparedPivotJob {
     job: PivotJob,
     snapshot: Arc<SourceSnapshot>,
+    date_system: DateSystem,
+    options: PivotRefreshOptions,
 }
 
 fn refresh_pivots_inner(
     workbook: &mut Workbook,
     cache: &mut PivotRuntimeCache,
+    options: &PivotRefreshOptions,
 ) -> Result<PivotRefreshStats> {
     let jobs = collect_pivot_jobs(workbook);
     let mut stats = PivotRefreshStats {
@@ -211,7 +221,12 @@ fn refresh_pivots_inner(
                     return Err(error);
                 }
             };
-        prepared.push(PreparedPivotJob { job, snapshot });
+        prepared.push(PreparedPivotJob {
+            job,
+            snapshot,
+            date_system: workbook_date_system(date_1904),
+            options: options.clone(),
+        });
     }
 
     let mut rendered = Vec::with_capacity(prepared.len());
@@ -270,8 +285,13 @@ fn render_prepared_pivots(
 }
 
 fn render_prepared_pivot(prepared: PreparedPivotJob) -> (PivotJob, Result<RenderedPivot>) {
-    let PreparedPivotJob { job, snapshot } = prepared;
-    let output = build_rendered_pivot_from_snapshot(&job.pivot, snapshot);
+    let PreparedPivotJob {
+        job,
+        snapshot,
+        date_system,
+        options,
+    } = prepared;
+    let output = build_rendered_pivot_from_snapshot(&job.pivot, snapshot, &options, date_system);
     (job, output)
 }
 
@@ -280,6 +300,7 @@ fn refresh_pivot_inner(
     sheet_index: usize,
     pivot_name: &str,
     cache: &mut PivotRuntimeCache,
+    options: &PivotRefreshOptions,
 ) -> Result<PivotRefreshStats> {
     let worksheet = workbook
         .worksheet(sheet_index)
@@ -301,13 +322,14 @@ fn refresh_pivot_inner(
         return Ok(stats);
     }
 
-    let output = match build_rendered_pivot(workbook, sheet_index, &pivot, cache, &mut stats) {
-        Ok(output) => output,
-        Err(error) => {
-            mark_pivot_failed(workbook, sheet_index, pivot_index, error.to_string());
-            return Err(error);
-        }
-    };
+    let output =
+        match build_rendered_pivot(workbook, sheet_index, &pivot, cache, &mut stats, options) {
+            Ok(output) => output,
+            Err(error) => {
+                mark_pivot_failed(workbook, sheet_index, pivot_index, error.to_string());
+                return Err(error);
+            }
+        };
     stats.add_rendered(&output);
     let output_range = output.range;
     let job = PivotJob {
@@ -371,6 +393,7 @@ fn build_rendered_pivot(
     pivot: &PivotTable,
     cache: &mut PivotRuntimeCache,
     stats: &mut PivotRefreshStats,
+    options: &PivotRefreshOptions,
 ) -> Result<RenderedPivot> {
     let source_snapshot =
         snapshot_for_source(workbook, pivot_sheet_index, &pivot.source, cache, stats)?;
@@ -380,7 +403,12 @@ fn build_rendered_pivot(
         workbook.settings().date_1904,
         cache,
     )?;
-    build_rendered_pivot_from_snapshot(pivot, snapshot)
+    build_rendered_pivot_from_snapshot(
+        pivot,
+        snapshot,
+        options,
+        workbook_date_system(workbook.settings().date_1904),
+    )
 }
 
 fn transformed_snapshot_for_pivot(
@@ -435,8 +463,10 @@ fn transformed_snapshot_for_pivot(
 fn build_rendered_pivot_from_snapshot(
     pivot: &PivotTable,
     snapshot: Arc<SourceSnapshot>,
+    options: &PivotRefreshOptions,
+    date_system: DateSystem,
 ) -> Result<RenderedPivot> {
-    let plan = CompiledPivotPlan::compile(pivot, &snapshot)?;
+    let plan = CompiledPivotPlan::compile(pivot, &snapshot, options, date_system)?;
     let mut aggregation = PivotAggregation::aggregate(&snapshot, &plan);
     let aggregate_restrictions = aggregation.apply_aggregate_filters(&plan);
     aggregation.apply_calculated_items(&pivot.name, &snapshot, &plan)?;
@@ -2054,7 +2084,12 @@ struct CompiledPivotPlan {
 }
 
 impl CompiledPivotPlan {
-    fn compile(pivot: &PivotTable, snapshot: &SourceSnapshot) -> Result<Self> {
+    fn compile(
+        pivot: &PivotTable,
+        snapshot: &SourceSnapshot,
+        options: &PivotRefreshOptions,
+        date_system: DateSystem,
+    ) -> Result<Self> {
         if pivot.measures.is_empty() {
             return Err(Error::other(format!(
                 "pivot table {} must contain at least one measure",
@@ -2097,8 +2132,15 @@ impl CompiledPivotPlan {
                 PivotFilter::FieldItems { .. }
                 | PivotFilter::Label { .. }
                 | PivotFilter::Date { .. }
-                | PivotFilter::DateBetween { .. } => {
-                    filters.push(CompiledFilter::compile(filter, snapshot, &pivot.name)?);
+                | PivotFilter::DateBetween { .. }
+                | PivotFilter::DatePeriod { .. } => {
+                    filters.push(CompiledFilter::compile(
+                        filter,
+                        snapshot,
+                        &pivot.name,
+                        options,
+                        date_system,
+                    )?);
                 }
                 PivotFilter::Value { .. } | PivotFilter::TopN { .. } => {
                     aggregate_filters.push(CompiledAggregateFilter::compile(
@@ -2624,10 +2666,36 @@ enum CompiledFilter {
         end: f64,
         not_between: bool,
     },
+    DatePeriod {
+        field_index: usize,
+        period: CompiledDatePeriod,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CompiledDatePeriod {
+    Range {
+        start: f64,
+        end: f64,
+    },
+    Month {
+        month: u8,
+        date_system: DateSystem,
+    },
+    Quarter {
+        quarter: u8,
+        date_system: DateSystem,
+    },
 }
 
 impl CompiledFilter {
-    fn compile(filter: &PivotFilter, snapshot: &SourceSnapshot, pivot_name: &str) -> Result<Self> {
+    fn compile(
+        filter: &PivotFilter,
+        snapshot: &SourceSnapshot,
+        pivot_name: &str,
+        options: &PivotRefreshOptions,
+        date_system: DateSystem,
+    ) -> Result<Self> {
         match filter {
             PivotFilter::FieldItems {
                 field,
@@ -2672,6 +2740,10 @@ impl CompiledFilter {
                 end: *end,
                 not_between: *not_between,
             }),
+            PivotFilter::DatePeriod { field, period } => Ok(Self::DatePeriod {
+                field_index: field_index(snapshot, &field.name, pivot_name)?,
+                period: compile_date_period(*period, options, date_system, pivot_name)?,
+            }),
             PivotFilter::Value { .. } | PivotFilter::TopN { .. } => Err(Error::other(format!(
                 "pivot table {pivot_name} tried to compile an aggregate filter as a row filter"
             ))),
@@ -2709,6 +2781,11 @@ impl CompiledFilter {
             } => pivot_number(snapshot.value(row, *field_index)).is_some_and(|actual| {
                 date_between_filter_matches(actual, *start, *end, *not_between)
             }),
+            Self::DatePeriod {
+                field_index,
+                period,
+            } => pivot_number(snapshot.value(row, *field_index))
+                .is_some_and(|actual| date_period_filter_matches(actual, *period)),
         }
     }
 
@@ -2743,6 +2820,13 @@ impl CompiledFilter {
                 pivot_number(snapshot.value_by_id(field_index, item_id)).is_some_and(|actual| {
                     date_between_filter_matches(actual, *start, *end, *not_between)
                 })
+            }
+            Self::DatePeriod {
+                field_index: filter_index,
+                period,
+            } if *filter_index == field_index => {
+                pivot_number(snapshot.value_by_id(field_index, item_id))
+                    .is_some_and(|actual| date_period_filter_matches(actual, *period))
             }
             _ => true,
         }
@@ -3032,6 +3116,181 @@ fn date_between_filter_matches(actual: f64, start: f64, end: f64, not_between: b
         !between
     } else {
         between
+    }
+}
+
+fn compile_date_period(
+    period: PivotDatePeriod,
+    options: &PivotRefreshOptions,
+    date_system: DateSystem,
+    pivot_name: &str,
+) -> Result<CompiledDatePeriod> {
+    match period {
+        PivotDatePeriod::Month(month) if (1..=12).contains(&month) => {
+            Ok(CompiledDatePeriod::Month { month, date_system })
+        }
+        PivotDatePeriod::Quarter(quarter) if (1..=4).contains(&quarter) => {
+            Ok(CompiledDatePeriod::Quarter {
+                quarter,
+                date_system,
+            })
+        }
+        PivotDatePeriod::Month(month) => Err(Error::other(format!(
+            "pivot table {pivot_name} uses invalid date period month {month}; expected 1..=12"
+        ))),
+        PivotDatePeriod::Quarter(quarter) => Err(Error::other(format!(
+            "pivot table {pivot_name} uses invalid date period quarter {quarter}; expected 1..=4"
+        ))),
+        _ => {
+            let today = options.today.ok_or_else(|| {
+                Error::other(format!(
+                    "pivot table {pivot_name} uses a relative date period filter but refresh options did not provide today"
+                ))
+            })?;
+            if !today.is_finite() {
+                return Err(Error::other(format!(
+                    "pivot table {pivot_name} uses a relative date period filter with a non-finite refresh date"
+                )));
+            }
+            relative_date_period_range(period, today, date_system)
+                .map(|(start, end)| CompiledDatePeriod::Range { start, end })
+                .ok_or_else(|| {
+                    Error::other(format!(
+                        "pivot table {pivot_name} could not evaluate relative date period filter"
+                    ))
+                })
+        }
+    }
+}
+
+fn date_period_filter_matches(actual: f64, period: CompiledDatePeriod) -> bool {
+    if !actual.is_finite() {
+        return false;
+    }
+    match period {
+        CompiledDatePeriod::Range { start, end } => {
+            date_between_filter_matches(actual, start, end, false)
+        }
+        CompiledDatePeriod::Month { month, date_system } => serial_to_date(actual, date_system)
+            .map(|(_, actual_month, _)| actual_month == u32::from(month))
+            .unwrap_or(false),
+        CompiledDatePeriod::Quarter {
+            quarter,
+            date_system,
+        } => serial_to_date(actual, date_system)
+            .map(|(_, actual_month, _)| ((actual_month - 1) / 3 + 1) == u32::from(quarter))
+            .unwrap_or(false),
+    }
+}
+
+fn relative_date_period_range(
+    period: PivotDatePeriod,
+    today: f64,
+    date_system: DateSystem,
+) -> Option<(f64, f64)> {
+    let (year, month, day) = serial_to_date(today, date_system)?;
+    let today = date_to_serial(year, month, day, date_system);
+    match period {
+        PivotDatePeriod::Tomorrow => Some((today + 1.0, today + 1.0)),
+        PivotDatePeriod::Today => Some((today, today)),
+        PivotDatePeriod::Yesterday => Some((today - 1.0, today - 1.0)),
+        PivotDatePeriod::NextWeek => week_range(today + 7.0, date_system),
+        PivotDatePeriod::ThisWeek => week_range(today, date_system),
+        PivotDatePeriod::LastWeek => week_range(today - 7.0, date_system),
+        PivotDatePeriod::NextMonth => {
+            let (year, month) = add_months(year, month, 1);
+            Some(month_range(year, month, date_system))
+        }
+        PivotDatePeriod::ThisMonth => Some(month_range(year, month, date_system)),
+        PivotDatePeriod::LastMonth => {
+            let (year, month) = add_months(year, month, -1);
+            Some(month_range(year, month, date_system))
+        }
+        PivotDatePeriod::NextQuarter => {
+            let (year, month) = add_months(year, quarter_start_month(month), 3);
+            Some(quarter_range(year, month, date_system))
+        }
+        PivotDatePeriod::ThisQuarter => {
+            Some(quarter_range(year, quarter_start_month(month), date_system))
+        }
+        PivotDatePeriod::LastQuarter => {
+            let (year, month) = add_months(year, quarter_start_month(month), -3);
+            Some(quarter_range(year, month, date_system))
+        }
+        PivotDatePeriod::NextYear => Some(year_range(year + 1, date_system)),
+        PivotDatePeriod::ThisYear => Some(year_range(year, date_system)),
+        PivotDatePeriod::LastYear => Some(year_range(year - 1, date_system)),
+        PivotDatePeriod::YearToDate => Some((date_to_serial(year, 1, 1, date_system), today)),
+        PivotDatePeriod::Month(_) | PivotDatePeriod::Quarter(_) => None,
+    }
+}
+
+fn week_range(serial: f64, date_system: DateSystem) -> Option<(f64, f64)> {
+    let (year, month, day) = serial_to_date(serial, date_system)?;
+    let day_serial = date_to_serial(year, month, day, date_system);
+    let weekday = serial_to_weekday(day_serial, date_system);
+    let start = day_serial - f64::from(weekday - 1);
+    Some((start, start + 6.0))
+}
+
+fn month_range(year: i32, month: u32, date_system: DateSystem) -> (f64, f64) {
+    (
+        date_to_serial(year, month, 1, date_system),
+        date_to_serial(year, month, days_in_month(year, month), date_system),
+    )
+}
+
+fn quarter_range(year: i32, start_month: u32, date_system: DateSystem) -> (f64, f64) {
+    let (end_year, end_month) = add_months(year, start_month, 2);
+    (
+        date_to_serial(year, start_month, 1, date_system),
+        date_to_serial(
+            end_year,
+            end_month,
+            days_in_month(end_year, end_month),
+            date_system,
+        ),
+    )
+}
+
+fn year_range(year: i32, date_system: DateSystem) -> (f64, f64) {
+    (
+        date_to_serial(year, 1, 1, date_system),
+        date_to_serial(year, 12, 31, date_system),
+    )
+}
+
+fn quarter_start_month(month: u32) -> u32 {
+    ((month - 1) / 3) * 3 + 1
+}
+
+fn add_months(year: i32, month: u32, delta: i32) -> (i32, u32) {
+    let month_index = year * 12 + month as i32 - 1 + delta;
+    let year = month_index.div_euclid(12);
+    let month = month_index.rem_euclid(12) + 1;
+    (year, month as u32)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year == 1900 => 29,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 31,
+    }
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn workbook_date_system(date_1904: bool) -> DateSystem {
+    if date_1904 {
+        DateSystem::Date1904
+    } else {
+        DateSystem::Date1900
     }
 }
 
@@ -6071,7 +6330,7 @@ fn output_range(target: CellAddress, row_count: usize, col_count: usize) -> Resu
 #[cfg(test)]
 mod tests {
     use duke_sheets_core::{
-        CellRange, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter,
+        CellRange, PivotAggregate, PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFilter,
         PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup,
         PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
         PivotSubtotal, PivotTable, PivotValue, Table, TableColumn, Workbook,
@@ -6204,6 +6463,7 @@ mod tests {
         let stats = workbook
             .refresh_pivots_with_options(&PivotRefreshOptions {
                 max_threads: Some(1),
+                ..PivotRefreshOptions::default()
             })
             .unwrap();
 
@@ -7919,7 +8179,26 @@ mod tests {
             .unwrap();
         sheet.add_pivot_table(january_window).unwrap();
 
-        workbook.refresh_pivots().unwrap();
+        let this_month = PivotTable::builder("ThisMonth")
+            .source_range(CellRange::parse("A1:C6").unwrap())
+            .target_address("K1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .filter(PivotFilter::DatePeriod {
+                field: "Date".into(),
+                period: PivotDatePeriod::ThisMonth,
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(this_month).unwrap();
+
+        workbook
+            .refresh_pivots_with_options(&PivotRefreshOptions {
+                today: Some(date_to_serial(2024, 2, 10, DateSystem::Date1900)),
+                ..PivotRefreshOptions::default()
+            })
+            .unwrap();
 
         assert_eq!(text(&workbook, "E2"), "North");
         assert_eq!(number(&workbook, "F2"), 30.0);
@@ -7934,6 +8213,43 @@ mod tests {
         assert_eq!(number(&workbook, "I3"), 7.0);
         assert_eq!(text(&workbook, "H4"), "Grand Total");
         assert_eq!(number(&workbook, "I4"), 27.0);
+
+        assert_eq!(text(&workbook, "K2"), "North");
+        assert_eq!(number(&workbook, "L2"), 30.0);
+        assert_eq!(text(&workbook, "K3"), "West");
+        assert_eq!(number(&workbook, "L3"), 40.0);
+        assert_eq!(text(&workbook, "K4"), "Grand Total");
+        assert_eq!(number(&workbook, "L4"), 70.0);
+    }
+
+    #[test]
+    fn relative_date_period_filters_require_today() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Date").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet
+            .set_cell_value("A2", date_to_serial(2024, 2, 10, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+
+        let pivot = PivotTable::builder("TodaySales")
+            .source_range(CellRange::parse("A1:B2").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Date")
+            .measure("Revenue", PivotAggregate::Sum)
+            .filter(PivotFilter::DatePeriod {
+                field: "Date".into(),
+                period: PivotDatePeriod::Today,
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let error = workbook.refresh_pivots().unwrap_err().to_string();
+
+        assert!(error.contains("refresh options did not provide today"));
     }
 
     #[test]

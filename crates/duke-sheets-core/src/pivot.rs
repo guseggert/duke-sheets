@@ -606,6 +606,13 @@ pub enum PivotFilter {
         /// Invert the range.
         not_between: bool,
     },
+    /// Date period filter.
+    DatePeriod {
+        /// Field to filter.
+        field: PivotFieldRef,
+        /// Period to include.
+        period: PivotDatePeriod,
+    },
     /// Value filter against an aggregate measure.
     Value {
         /// Field to filter.
@@ -651,6 +658,47 @@ impl PivotFilter {
             allowed_items: allowed_items.into_iter().map(Into::into).collect(),
         }
     }
+}
+
+/// Date periods used by pivot date filters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PivotDatePeriod {
+    /// Tomorrow relative to the refresh date.
+    Tomorrow,
+    /// Today relative to the refresh date.
+    Today,
+    /// Yesterday relative to the refresh date.
+    Yesterday,
+    /// Next week relative to the refresh date.
+    NextWeek,
+    /// Current week relative to the refresh date.
+    ThisWeek,
+    /// Previous week relative to the refresh date.
+    LastWeek,
+    /// Next month relative to the refresh date.
+    NextMonth,
+    /// Current month relative to the refresh date.
+    ThisMonth,
+    /// Previous month relative to the refresh date.
+    LastMonth,
+    /// Next quarter relative to the refresh date.
+    NextQuarter,
+    /// Current quarter relative to the refresh date.
+    ThisQuarter,
+    /// Previous quarter relative to the refresh date.
+    LastQuarter,
+    /// Next year relative to the refresh date.
+    NextYear,
+    /// Current year relative to the refresh date.
+    ThisYear,
+    /// Previous year relative to the refresh date.
+    LastYear,
+    /// From the first day of the refresh date's year through the refresh date.
+    YearToDate,
+    /// Any date in the given quarter, 1 through 4.
+    Quarter(u8),
+    /// Any date in the given month, 1 through 12.
+    Month(u8),
 }
 
 /// Operators used by pivot label and value filters.

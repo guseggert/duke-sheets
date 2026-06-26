@@ -369,6 +369,11 @@ fn test_pivot_table_definitions_from_options() {
         ("start", JsValue::from_f64(45292.0)),
         ("end", JsValue::from_f64(45322.0)),
     ]);
+    let period_filter = make_options(&[
+        ("kind", JsValue::from_str("datePeriod")),
+        ("field", JsValue::from_str("Date")),
+        ("period", JsValue::from_str("thisMonth")),
+    ]);
     let calculated = make_options(&[
         ("name", JsValue::from_str("Margin")),
         ("formula", JsValue::from_str("=Revenue*0.2")),
@@ -420,7 +425,7 @@ fn test_pivot_table_definitions_from_options() {
         ("rowFields", make_array(&[row_field])),
         ("columns", make_array(&[JsValue::from_str("Quarter")])),
         ("measures", make_array(&[measure])),
-        ("filters", make_array(&[filter, date_filter])),
+        ("filters", make_array(&[filter, date_filter, period_filter])),
         ("calculatedFields", make_array(&[calculated])),
         ("calculatedItems", make_array(&[calculated_item])),
         ("refreshPolicy", refresh_policy),
@@ -474,6 +479,10 @@ fn test_pivot_table_definitions_from_options() {
     assert_eq!(get_string_field(&date_filter, "field"), "Date");
     assert_eq!(get_f64_field(&date_filter, "start"), 45292.0);
     assert_eq!(get_f64_field(&date_filter, "end"), 45322.0);
+    let period_filter = filters.get(2);
+    assert_eq!(get_string_field(&period_filter, "kind"), "datePeriod");
+    assert_eq!(get_string_field(&period_filter, "field"), "Date");
+    assert_eq!(get_string_field(&period_filter, "period"), "thisMonth");
 
     let calculated =
         Array::from(&Reflect::get(&pivot, &JsValue::from_str("calculatedFields")).unwrap());

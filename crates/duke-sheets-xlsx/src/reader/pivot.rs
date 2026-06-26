@@ -12,8 +12,8 @@ use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::style::NumberFormat;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
-    PivotCalculatedField, PivotCalculatedItem, PivotDateGroupUnit, PivotExtension, PivotField,
-    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
+    PivotCalculatedField, PivotCalculatedItem, PivotDateGroupUnit, PivotDatePeriod, PivotExtension,
+    PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
     PivotManualGroup, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource,
     PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, WorkbookConnection,
     WorkbookConnectionKind,
@@ -964,6 +964,7 @@ struct CurrentPivotFilter {
 enum DatePivotFilterType {
     Comparison(PivotFilterOperator),
     Between { not_between: bool },
+    Period(PivotDatePeriod),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1474,6 +1475,7 @@ fn pivot_filter_from_context(
                     not_between,
                 })
             }
+            DatePivotFilterType::Period(period) => Some(PivotFilter::DatePeriod { field, period }),
         };
     }
 
@@ -1563,6 +1565,38 @@ fn parse_date_filter_type(value: &str) -> Option<DatePivotFilterType> {
         }
         "dateBetween" => DatePivotFilterType::Between { not_between: false },
         "dateNotBetween" => DatePivotFilterType::Between { not_between: true },
+        "tomorrow" => DatePivotFilterType::Period(PivotDatePeriod::Tomorrow),
+        "today" => DatePivotFilterType::Period(PivotDatePeriod::Today),
+        "yesterday" => DatePivotFilterType::Period(PivotDatePeriod::Yesterday),
+        "nextWeek" => DatePivotFilterType::Period(PivotDatePeriod::NextWeek),
+        "thisWeek" => DatePivotFilterType::Period(PivotDatePeriod::ThisWeek),
+        "lastWeek" => DatePivotFilterType::Period(PivotDatePeriod::LastWeek),
+        "nextMonth" => DatePivotFilterType::Period(PivotDatePeriod::NextMonth),
+        "thisMonth" => DatePivotFilterType::Period(PivotDatePeriod::ThisMonth),
+        "lastMonth" => DatePivotFilterType::Period(PivotDatePeriod::LastMonth),
+        "nextQuarter" => DatePivotFilterType::Period(PivotDatePeriod::NextQuarter),
+        "thisQuarter" => DatePivotFilterType::Period(PivotDatePeriod::ThisQuarter),
+        "lastQuarter" => DatePivotFilterType::Period(PivotDatePeriod::LastQuarter),
+        "nextYear" => DatePivotFilterType::Period(PivotDatePeriod::NextYear),
+        "thisYear" => DatePivotFilterType::Period(PivotDatePeriod::ThisYear),
+        "lastYear" => DatePivotFilterType::Period(PivotDatePeriod::LastYear),
+        "yearToDate" => DatePivotFilterType::Period(PivotDatePeriod::YearToDate),
+        "Q1" => DatePivotFilterType::Period(PivotDatePeriod::Quarter(1)),
+        "Q2" => DatePivotFilterType::Period(PivotDatePeriod::Quarter(2)),
+        "Q3" => DatePivotFilterType::Period(PivotDatePeriod::Quarter(3)),
+        "Q4" => DatePivotFilterType::Period(PivotDatePeriod::Quarter(4)),
+        "M1" => DatePivotFilterType::Period(PivotDatePeriod::Month(1)),
+        "M2" => DatePivotFilterType::Period(PivotDatePeriod::Month(2)),
+        "M3" => DatePivotFilterType::Period(PivotDatePeriod::Month(3)),
+        "M4" => DatePivotFilterType::Period(PivotDatePeriod::Month(4)),
+        "M5" => DatePivotFilterType::Period(PivotDatePeriod::Month(5)),
+        "M6" => DatePivotFilterType::Period(PivotDatePeriod::Month(6)),
+        "M7" => DatePivotFilterType::Period(PivotDatePeriod::Month(7)),
+        "M8" => DatePivotFilterType::Period(PivotDatePeriod::Month(8)),
+        "M9" => DatePivotFilterType::Period(PivotDatePeriod::Month(9)),
+        "M10" => DatePivotFilterType::Period(PivotDatePeriod::Month(10)),
+        "M11" => DatePivotFilterType::Period(PivotDatePeriod::Month(11)),
+        "M12" => DatePivotFilterType::Period(PivotDatePeriod::Month(12)),
         _ => return None,
     })
 }
@@ -1872,6 +1906,27 @@ mod tests {
             }
             other => panic!("unexpected filter: {other:?}"),
         }
+
+        let filter = CurrentPivotFilter {
+            field_index: 0,
+            filter_type: "thisQuarter".to_string(),
+            measure_index: None,
+            string_value1: None,
+            string_value2: None,
+            custom_values: Vec::new(),
+            top: None,
+            percent: None,
+            top_n: None,
+        };
+
+        let parsed = pivot_filter_from_context(filter, &cache, &[]).expect("date period filter");
+        match parsed {
+            PivotFilter::DatePeriod { field, period } => {
+                assert_eq!(field.name, "Order Date");
+                assert_eq!(period, PivotDatePeriod::ThisQuarter);
+            }
+            other => panic!("unexpected filter: {other:?}"),
+        }
     }
 
     #[test]
@@ -1879,7 +1934,7 @@ mod tests {
         let cache = minimal_cache_with_field("Region");
         let filter = CurrentPivotFilter {
             field_index: 0,
-            filter_type: "thisWeek".to_string(),
+            filter_type: "valueBetween".to_string(),
             measure_index: None,
             string_value1: None,
             string_value2: None,
@@ -1892,7 +1947,7 @@ mod tests {
         let parsed = pivot_filter_from_context(filter, &cache, &[]).expect("preserved filter");
         match parsed {
             PivotFilter::Unsupported { kind, detail } => {
-                assert_eq!(kind, "thisWeek");
+                assert_eq!(kind, "valueBetween");
                 assert_eq!(detail.as_deref(), Some("field=Region"));
             }
             other => panic!("unexpected filter: {other:?}"),

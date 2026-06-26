@@ -106,6 +106,12 @@ export interface JsPivotDateBetweenFilterOptions {
   end: number
 }
 
+export interface JsPivotDatePeriodFilterOptions {
+  kind: 'datePeriod' | 'date_period' | 'period'
+  field: string
+  period: string
+}
+
 export interface JsPivotTopNFilterOptions {
   kind: 'topN' | 'top_n' | 'top'
   field: string
@@ -121,6 +127,7 @@ export type JsPivotFilterOptions =
   | JsPivotValueFilterOptions
   | JsPivotDateFilterOptions
   | JsPivotDateBetweenFilterOptions
+  | JsPivotDatePeriodFilterOptions
   | JsPivotTopNFilterOptions
 
 export interface JsPivotCalculatedFieldOptions {

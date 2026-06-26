@@ -223,6 +223,7 @@ describe("PivotTables", () => {
       filters: [
         { kind: "label", field: "Region", operator: "beginsWith", text: "E" },
         { kind: "dateBetween", field: "Date", start: 45292, end: 45322 },
+        { kind: "datePeriod", field: "Date", period: "thisMonth" },
       ],
       calculatedFields: [{ name: "Margin", formula: "=Revenue*0.2" }],
       calculatedItems: [{ field: "Region", item: "Combined", formula: "East+West" }],
@@ -296,6 +297,11 @@ describe("PivotTables", () => {
       field: "Date",
       start: 45292,
       end: 45322,
+    });
+    expect(pivot?.filters[2]).toMatchObject({
+      kind: "datePeriod",
+      field: "Date",
+      period: "thisMonth",
     });
     expect(pivot?.calculatedFields[0]).toEqual({ name: "Margin", formula: "=Revenue*0.2" });
     expect(pivot?.calculatedItems[0]).toMatchObject({
@@ -573,6 +579,41 @@ describe("PivotTables", () => {
     expect(sheet.getCell("D3").asText()).toBe("South");
     expect(sheet.getCell("E3").asNumber()).toBe(5);
     expect(sheet.getCell("E4").asNumber()).toBe(35);
+  });
+
+  it("refreshes a relative date-period pivot from semantic options", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "Date");
+    sheet.setCell("B1", "Region");
+    sheet.setCell("C1", "Revenue");
+    sheet.setCell("A2", 45292);
+    sheet.setCell("B2", "East");
+    sheet.setCell("C2", 10);
+    sheet.setCell("A3", 45323);
+    sheet.setCell("B3", "North");
+    sheet.setCell("C3", 30);
+    sheet.setCell("A4", 45337);
+    sheet.setCell("B4", "West");
+    sheet.setCell("C4", 40);
+
+    sheet.addPivotTable({
+      name: "ThisMonthSales",
+      sourceRange: "A1:C4",
+      target: "E1",
+      rows: ["Region"],
+      measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+      filters: [{ kind: "datePeriod", field: "Date", period: "thisMonth" }],
+    });
+
+    const stats = wb.refreshPivots({ today: 45332 });
+
+    expect(stats.pivotsRefreshed).toBe(1);
+    expect(sheet.getCell("E2").asText()).toBe("North");
+    expect(sheet.getCell("F2").asNumber()).toBe(30);
+    expect(sheet.getCell("E3").asText()).toBe("West");
+    expect(sheet.getCell("F3").asNumber()).toBe(40);
+    expect(sheet.getCell("F4").asNumber()).toBe(70);
   });
 
   it("generates a PivotChart from a refreshed pivot", () => {

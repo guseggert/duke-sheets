@@ -1484,6 +1484,7 @@ export interface JsPivotFilterDefinition {
   items?: Array<JsPivotValue>
   operator?: string
   text?: string
+  period?: string
   measure?: JsPivotMeasureDefinition
   value?: number
   start?: number
@@ -1500,6 +1501,7 @@ export interface JsPivotFilterOptions {
   items?: Array<string>
   operator?: string
   text?: string
+  period?: string
   measure?: JsPivotMeasureOptions
   value?: number
   start?: number
@@ -1638,6 +1640,7 @@ export interface JsPivotMeasureOptions {
 
 export interface JsPivotRefreshOptions {
   maxThreads?: number
+  today?: number
 }
 
 export interface JsPivotRefreshPolicyDefinition {
