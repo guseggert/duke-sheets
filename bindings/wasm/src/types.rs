@@ -238,6 +238,13 @@ pub struct WasmPivotTableOptions {
     pub overwrite_policy: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotChartOptions {
+    pub pivot_name: String,
+    pub chart_type: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmPivotValue {

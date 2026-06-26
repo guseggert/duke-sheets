@@ -12,7 +12,8 @@ use std::sync::{Arc, RwLock};
 
 use duke_sheets::prelude::*;
 use duke_sheets::{
-    CalculationOptions, FormulaValue, ImageSizing, WorkbookCalculationExt, WorkbookPivotExt,
+    CalculationOptions, ChartType, FormulaValue, ImageSizing, WorkbookCalculationExt,
+    WorkbookPivotExt,
 };
 use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotCalculatedField,
@@ -692,6 +693,14 @@ fn parse_pivot_layout_kind(value: &str) -> PyResult<PivotLayoutKind> {
             )));
         }
     })
+}
+
+fn parse_chart_type(value: Option<&str>) -> PyResult<ChartType> {
+    match value {
+        Some(value) => ChartType::from_name(value)
+            .ok_or_else(|| PyValueError::new_err(format!("Unsupported chart type: {value}"))),
+        None => Ok(ChartType::ColumnClustered),
+    }
 }
 
 fn parse_pivot_overwrite_policy(value: &str) -> PyResult<PivotOverwritePolicy> {
@@ -2207,6 +2216,25 @@ impl PyWorksheet {
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
         ws.add_pivot_table(pivot).map_err(to_py_err)
+    }
+
+    /// Generate and add a PivotChart from a rendered pivot table.
+    #[pyo3(signature = (pivot_name, chart_type=None))]
+    fn add_pivot_chart(&self, pivot_name: &str, chart_type: Option<&str>) -> PyResult<PyChart> {
+        let chart_type = parse_chart_type(chart_type)?;
+        let mut wb = self.workbook.write().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        let chart = ws
+            .build_pivot_chart(
+                pivot_name,
+                chart_type,
+                duke_sheets::DrawingAnchor::default(),
+            )
+            .map_err(to_py_err)?;
+        ws.add_chart(chart.clone());
+        Ok(PyChart::from(&chart))
     }
 
     fn __repr__(&self) -> PyResult<String> {

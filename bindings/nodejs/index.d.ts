@@ -263,6 +263,11 @@ export interface JsPivotTableOptions {
   overwritePolicy?: 'clearOwnedRange' | 'clear_owned_range' | 'clear' | 'overwrite' | 'failOnOccupied' | 'fail_on_occupied'
 }
 
+export interface JsPivotChartOptions {
+  pivotName: string
+  chartType?: 'columnClustered' | 'columnStacked' | 'columnPercentStacked' | 'barClustered' | 'barStacked' | 'barPercentStacked' | 'line' | 'lineStacked' | 'pie' | 'pieExploded' | 'doughnut' | 'area' | 'areaStacked' | 'areaPercentStacked' | 'scatterMarkers' | 'scatterSmooth' | 'scatterLines' | 'bubble' | 'radar' | 'stock' | 'surface' | string
+}
+
 export interface JsWorkbookConnectionOptions {
   id: number
   name: string
@@ -349,6 +354,9 @@ declare module './generated' {
 
     /** Add a semantic pivot table definition to the worksheet. */
     addPivotTable(options: JsPivotTableOptions): void
+
+    /** Generate and add a PivotChart from a rendered pivot table. */
+    addPivotChart(options: JsPivotChartOptions): JsChart
   }
 }
 

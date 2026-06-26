@@ -593,3 +593,40 @@ class TestPivotTables:
         assert sheet.get_cell("D3").as_text() == "South"
         assert sheet.get_cell("E3").as_number() == 5.0
         assert sheet.get_cell("E4").as_number() == 35.0
+
+    def test_add_pivot_chart_from_refreshed_pivot(self):
+        """Should generate a PivotChart from a refreshed pivot."""
+        import duke_sheets
+
+        wb = duke_sheets.Workbook()
+        sheet = wb.get_sheet(0)
+        sheet.set_cell("A1", "Region")
+        sheet.set_cell("B1", "Revenue")
+        sheet.set_cell("A2", "East")
+        sheet.set_cell("B2", 10.0)
+        sheet.set_cell("A3", "West")
+        sheet.set_cell("B3", 20.0)
+
+        sheet.add_pivot_table(
+            {
+                "name": "SalesPivot",
+                "source_range": "A1:B3",
+                "target": "D1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+            }
+        )
+        wb.refresh_pivots()
+
+        chart = sheet.add_pivot_chart("SalesPivot", "barClustered")
+
+        assert chart.chart_type == "BarClustered"
+        assert chart.pivot_source.name == "SalesPivot"
+        assert chart.pivot_source.format_id == 0
+        assert len(chart.series) == 1
+        assert chart.series[0].values.ref_type == "formula"
+        assert chart.series[0].categories.ref_type == "formula"
+        assert sheet.chart_count == 1
+        assert sheet.charts[0].pivot_source.name == "SalesPivot"

@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use duke_sheets::{CalculationOptions, FormulaValue, WorkbookCalculationExt, WorkbookPivotExt};
+use duke_sheets::{
+    CalculationOptions, ChartType, FormulaValue, WorkbookCalculationExt, WorkbookPivotExt,
+};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
     PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
@@ -424,6 +426,11 @@ export interface PivotTableOptions {
   layout?: PivotLayoutOptions;
   style?: PivotStyleOptions;
   overwritePolicy?: "clearOwnedRange" | "clear_owned_range" | "clear" | "overwrite" | "failOnOccupied" | "fail_on_occupied";
+}
+
+export interface PivotChartOptions {
+  pivotName: string;
+  chartType?: "columnClustered" | "columnStacked" | "columnPercentStacked" | "barClustered" | "barStacked" | "barPercentStacked" | "line" | "lineStacked" | "pie" | "pieExploded" | "doughnut" | "area" | "areaStacked" | "areaPercentStacked" | "scatterMarkers" | "scatterSmooth" | "scatterLines" | "bubble" | "radar" | "stock" | "surface" | string;
 }
 
 export interface PivotValue {
@@ -1159,6 +1166,14 @@ fn parse_pivot_layout_kind(value: &str) -> Result<PivotLayoutKind, JsError> {
     })
 }
 
+fn parse_chart_type(value: Option<&str>) -> Result<ChartType, JsError> {
+    match value {
+        Some(value) => ChartType::from_name(value)
+            .ok_or_else(|| JsError::new(&format!("Unsupported chart type: {value}"))),
+        None => Ok(ChartType::ColumnClustered),
+    }
+}
+
 fn parse_pivot_overwrite_policy(value: &str) -> Result<PivotOverwritePolicy, JsError> {
     Ok(match value {
         "clearOwnedRange" | "clear_owned_range" | "clear" => PivotOverwritePolicy::ClearOwnedRange,
@@ -1885,6 +1900,26 @@ impl Worksheet {
             .worksheet_mut(self.sheet_index)
             .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
         ws.add_pivot_table(pivot).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = addPivotChart)]
+    pub fn add_pivot_chart(&self, options: JsValue) -> Result<JsValue, JsError> {
+        let options: WasmPivotChartOptions =
+            serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
+        let chart_type = parse_chart_type(options.chart_type.as_deref())?;
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let chart = ws
+            .build_pivot_chart(
+                &options.pivot_name,
+                chart_type,
+                duke_sheets::DrawingAnchor::default(),
+            )
+            .map_err(to_js_error)?;
+        ws.add_chart(chart.clone());
+        to_js_value(&WasmChart::from(&chart))
     }
 }
 

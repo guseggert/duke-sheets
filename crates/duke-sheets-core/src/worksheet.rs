@@ -3,9 +3,10 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use duke_sheets_chart::Chart;
-use duke_sheets_chart::ChartEx;
-use duke_sheets_chart::EmbeddedImage;
+use duke_sheets_chart::{
+    Chart, ChartEx, ChartType, DataReference, DataSeries, DrawingAnchor, EmbeddedImage,
+    PivotChartSource,
+};
 
 use crate::auto_filter::AutoFilter;
 use crate::cell::view::CellView;
@@ -137,6 +138,16 @@ pub struct ImageInfo {
     pub width: Option<f64>,
     /// Optional custom height.
     pub height: Option<f64>,
+}
+
+fn quote_formula_sheet_name(name: &str) -> String {
+    if !name.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        name.to_string()
+    } else {
+        format!("'{}'", name.replace('\'', "''"))
+    }
 }
 
 impl Worksheet {
@@ -1355,6 +1366,82 @@ impl Worksheet {
         self.pivot_tables.clear();
     }
 
+    /// Build a PivotChart from a rendered pivot table range.
+    ///
+    /// The generated chart keeps a `pivotSource` link to the pivot table and
+    /// uses the rendered pivot range for chart series: the first row supplies
+    /// series captions, the first column supplies categories, and each
+    /// remaining column becomes one value series.
+    pub fn build_pivot_chart(
+        &self,
+        pivot_name: &str,
+        chart_type: ChartType,
+        anchor: DrawingAnchor,
+    ) -> Result<Chart> {
+        let pivot = self
+            .pivot_table_by_name(pivot_name)
+            .ok_or_else(|| Error::other(format!("Pivot table not found: {pivot_name}")))?;
+        let range = pivot.rendered_range.ok_or_else(|| {
+            Error::other(format!(
+                "Pivot table {pivot_name} does not have a rendered range"
+            ))
+        })?;
+
+        if range.row_count() < 2 || range.col_count() < 2 {
+            return Err(Error::other(format!(
+                "Pivot table {pivot_name} rendered range must include headers and values"
+            )));
+        }
+
+        let mut chart = Chart::new(chart_type).with_title(pivot.name.clone());
+        chart.anchor = anchor;
+        chart.pivot_source = Some(PivotChartSource::new(pivot.name.clone()));
+
+        let category_ref = self.chart_formula_range(
+            range.start.row + 1,
+            range.start.col,
+            range.end.row,
+            range.start.col,
+        );
+        for col in range.start.col + 1..=range.end.col {
+            let header_ref = self.chart_formula_range(range.start.row, col, range.start.row, col);
+            let values_ref = self.chart_formula_range(range.start.row + 1, col, range.end.row, col);
+            chart.add_series(
+                DataSeries::new(DataReference::formula(values_ref))
+                    .with_name(header_ref)
+                    .with_categories(DataReference::formula(category_ref.clone())),
+            );
+        }
+
+        Ok(chart)
+    }
+
+    /// Add a PivotChart generated from a rendered pivot table range.
+    pub fn add_pivot_chart(
+        &mut self,
+        pivot_name: &str,
+        chart_type: ChartType,
+        anchor: DrawingAnchor,
+    ) -> Result<()> {
+        let chart = self.build_pivot_chart(pivot_name, chart_type, anchor)?;
+        self.add_chart(chart);
+        Ok(())
+    }
+
+    fn chart_formula_range(
+        &self,
+        start_row: u32,
+        start_col: u16,
+        end_row: u32,
+        end_col: u16,
+    ) -> String {
+        let range = CellRange::new(
+            CellAddress::absolute(start_row, start_col),
+            CellAddress::absolute(end_row, end_col),
+        );
+        format!("{}!{}", quote_formula_sheet_name(&self.name), range)
+    }
+
     /// Add a chart to this worksheet.
     pub fn add_chart(&mut self, chart: Chart) {
         self.charts.push(chart);
@@ -2137,6 +2224,78 @@ mod tests {
         // Can't merge overlapping
         let range2 = CellRange::parse("B2:D4").unwrap();
         assert!(ws.merge_cells(&range2).is_err());
+    }
+
+    #[test]
+    fn test_build_pivot_chart_from_rendered_range() {
+        let mut ws = Worksheet::new("Pivot Output");
+        let mut pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", crate::pivot::PivotAggregate::Sum, "Revenue")
+            .named_measure("Margin", crate::pivot::PivotAggregate::Sum, "Margin")
+            .build()
+            .unwrap();
+        pivot.rendered_range = Some(CellRange::parse("E1:G4").unwrap());
+        ws.add_pivot_table(pivot).unwrap();
+
+        let chart = ws
+            .build_pivot_chart(
+                "salespivot",
+                ChartType::ColumnClustered,
+                DrawingAnchor::default(),
+            )
+            .unwrap();
+        assert_eq!(chart.title.as_deref(), Some("SalesPivot"));
+        assert_eq!(chart.pivot_source.as_ref().unwrap().name, "SalesPivot");
+        assert_eq!(chart.series.len(), 2);
+        assert_eq!(chart.series[0].name.as_deref(), Some("'Pivot Output'!$F$1"));
+        assert_eq!(
+            chart.series[0].values,
+            DataReference::formula("'Pivot Output'!$F$2:$F$4")
+        );
+        assert_eq!(
+            chart.series[0].categories,
+            Some(DataReference::formula("'Pivot Output'!$E$2:$E$4"))
+        );
+        assert_eq!(chart.series[1].name.as_deref(), Some("'Pivot Output'!$G$1"));
+        assert_eq!(
+            chart.series[1].values,
+            DataReference::formula("'Pivot Output'!$G$2:$G$4")
+        );
+
+        ws.add_pivot_chart(
+            "SalesPivot",
+            ChartType::ColumnClustered,
+            DrawingAnchor::default(),
+        )
+        .unwrap();
+        assert_eq!(ws.chart_count(), 1);
+    }
+
+    #[test]
+    fn test_build_pivot_chart_requires_rendered_range() {
+        let mut ws = Worksheet::new("Pivot");
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B4").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", crate::pivot::PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        ws.add_pivot_table(pivot).unwrap();
+
+        let err = ws
+            .build_pivot_chart(
+                "SalesPivot",
+                ChartType::ColumnClustered,
+                DrawingAnchor::default(),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("does not have a rendered range"));
     }
 
     #[test]

@@ -832,6 +832,49 @@ fn test_pivot_manual_grouping_refreshes_from_options() {
 }
 
 #[wasm_bindgen_test]
+fn test_pivot_chart_from_refreshed_pivot() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from_str("Region")).unwrap();
+    sheet.set_cell("B1", JsValue::from_str("Revenue")).unwrap();
+    sheet.set_cell("A2", JsValue::from_str("East")).unwrap();
+    sheet.set_cell("B2", JsValue::from_f64(10.0)).unwrap();
+    sheet.set_cell("A3", JsValue::from_str("West")).unwrap();
+    sheet.set_cell("B3", JsValue::from_f64(20.0)).unwrap();
+
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("SalesPivot")),
+        ("sourceRange", JsValue::from_str("A1:B3")),
+        ("target", JsValue::from_str("D1")),
+        ("rows", make_array(&[JsValue::from_str("Region")])),
+        ("measures", make_array(&[measure])),
+    ]);
+    sheet.add_pivot_table(pivot).unwrap();
+    wb.refresh_pivots().unwrap();
+
+    let options = make_options(&[
+        ("pivotName", JsValue::from_str("SalesPivot")),
+        ("chartType", JsValue::from_str("barClustered")),
+    ]);
+    let chart = sheet.add_pivot_chart(options).unwrap();
+
+    assert_eq!(get_string_field(&chart, "chartType"), "BarClustered");
+    let pivot_source = Reflect::get(&chart, &JsValue::from_str("pivotSource")).unwrap();
+    assert_eq!(get_string_field(&pivot_source, "name"), "SalesPivot");
+    let series = Array::from(&Reflect::get(&chart, &JsValue::from_str("series")).unwrap());
+    assert_eq!(series.length(), 1);
+    let values = Reflect::get(&series.get(0), &JsValue::from_str("values")).unwrap();
+    assert_eq!(get_string_field(&values, "refType"), "formula");
+    let charts = Array::from(&sheet.charts().unwrap());
+    assert_eq!(charts.length(), 1);
+}
+
+#[wasm_bindgen_test]
 fn test_calculation_with_options() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();

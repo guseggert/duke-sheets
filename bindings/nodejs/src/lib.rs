@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::{
-    CalculationOptions, CalculationStats as CoreCalculationStats, FormulaValue, ImageSizing,
-    WorkbookCalculationExt, WorkbookExt, WorkbookPivotExt,
+    CalculationOptions, CalculationStats as CoreCalculationStats, ChartType, FormulaValue,
+    ImageSizing, WorkbookCalculationExt, WorkbookExt, WorkbookPivotExt,
 };
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
@@ -492,6 +492,12 @@ pub struct JsPivotTableOptions {
     pub layout: Option<JsPivotLayoutOptions>,
     pub style: Option<JsPivotStyleOptions>,
     pub overwrite_policy: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsPivotChartOptions {
+    pub pivot_name: String,
+    pub chart_type: Option<String>,
 }
 
 #[napi(object)]
@@ -1098,6 +1104,14 @@ fn parse_pivot_layout_kind(value: &str) -> Result<PivotLayoutKind> {
             )));
         }
     })
+}
+
+fn parse_chart_type(value: Option<&str>) -> Result<ChartType> {
+    match value {
+        Some(value) => ChartType::from_name(value)
+            .ok_or_else(|| napi::Error::from_reason(format!("Unsupported chart type: {value}"))),
+        None => Ok(ChartType::ColumnClustered),
+    }
 }
 
 fn parse_pivot_overwrite_policy(value: &str) -> Result<PivotOverwritePolicy> {
@@ -1710,6 +1724,27 @@ impl Worksheet {
                 .worksheet_mut(self.sheet_index)
                 .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
             ws.add_pivot_table(pivot).map_err(to_napi_err)
+        })
+    }
+
+    /// Generate and add a PivotChart from a rendered pivot table.
+    #[napi(js_name = "addPivotChart")]
+    pub fn add_pivot_chart(&self, options: JsPivotChartOptions) -> Result<JsChart> {
+        catch_panic(|| {
+            let chart_type = parse_chart_type(options.chart_type.as_deref())?;
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            let chart = ws
+                .build_pivot_chart(
+                    &options.pivot_name,
+                    chart_type,
+                    duke_sheets::DrawingAnchor::default(),
+                )
+                .map_err(to_napi_err)?;
+            ws.add_chart(chart.clone());
+            Ok(JsChart::from(&chart))
         })
     }
 

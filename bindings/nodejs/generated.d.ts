@@ -451,6 +451,8 @@ export declare class Worksheet {
   getPivotTable(name: string): JsPivotTableDefinition | null
   /** Add a semantic pivot table definition to the worksheet. */
   addPivotTable(options: JsPivotTableOptions): void
+  /** Generate and add a PivotChart from a rendered pivot table. */
+  addPivotChart(options: JsPivotChartOptions): JsChart
   /** Set the height of a row in points */
   setRowHeight(row: number, height: number): void
   /** Set the width of a column in character units */
@@ -1419,6 +1421,11 @@ export interface JsPivotCalculatedItemOptions {
   field: string
   item: number | string | boolean
   formula: string
+}
+
+export interface JsPivotChartOptions {
+  pivotName: string
+  chartType?: string
 }
 
 export interface JsPivotChartSource {

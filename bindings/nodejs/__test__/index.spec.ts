@@ -565,6 +565,36 @@ describe("PivotTables", () => {
     expect(sheet.getCell("E3").asNumber()).toBe(5);
     expect(sheet.getCell("E4").asNumber()).toBe(35);
   });
+
+  it("generates a PivotChart from a refreshed pivot", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "Region");
+    sheet.setCell("B1", "Revenue");
+    sheet.setCell("A2", "East");
+    sheet.setCell("B2", 10);
+    sheet.setCell("A3", "West");
+    sheet.setCell("B3", 20);
+
+    sheet.addPivotTable({
+      name: "SalesPivot",
+      sourceRange: "A1:B3",
+      target: "D1",
+      rows: ["Region"],
+      measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+    });
+    wb.refreshPivots();
+
+    const chart = sheet.addPivotChart({ pivotName: "SalesPivot", chartType: "barClustered" });
+
+    expect(chart.chartType).toBe("BarClustered");
+    expect(chart.pivotSource).toMatchObject({ name: "SalesPivot", formatId: 0 });
+    expect(chart.series).toHaveLength(1);
+    expect(chart.series[0].values.refType).toBe("formula");
+    expect(chart.series[0].categories?.refType).toBe("formula");
+    expect(sheet.charts).toHaveLength(1);
+    expect(sheet.charts[0].pivotSource?.name).toBe("SalesPivot");
+  });
 });
 
 // Worksheet Tests

@@ -51,6 +51,53 @@ pub enum ChartType {
     Unsupported(String),
 }
 
+impl ChartType {
+    /// Parse a public chart type name.
+    ///
+    /// Names are case-insensitive and may use camelCase, snake_case, or
+    /// kebab-case. Short aliases such as `"column"` and `"bar"` map to the
+    /// clustered variants.
+    pub fn from_name(name: &str) -> Option<Self> {
+        let normalized: String = name
+            .chars()
+            .filter(|c| *c != '_' && *c != '-' && !c.is_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect();
+        match normalized.as_str() {
+            "column" | "columnclustered" => Some(Self::ColumnClustered),
+            "columnstacked" => Some(Self::ColumnStacked),
+            "columnpercentstacked" => Some(Self::ColumnPercentStacked),
+            "bar" | "barclustered" => Some(Self::BarClustered),
+            "barstacked" => Some(Self::BarStacked),
+            "barpercentstacked" => Some(Self::BarPercentStacked),
+            "line" => Some(Self::Line),
+            "linestacked" => Some(Self::LineStacked),
+            "pie" => Some(Self::Pie),
+            "pieexploded" => Some(Self::PieExploded),
+            "doughnut" | "donut" => Some(Self::Doughnut),
+            "area" => Some(Self::Area),
+            "areastacked" => Some(Self::AreaStacked),
+            "areapercentstacked" => Some(Self::AreaPercentStacked),
+            "scatter" | "scattermarkers" => Some(Self::ScatterMarkers),
+            "scattersmooth" => Some(Self::ScatterSmooth),
+            "scatterlines" => Some(Self::ScatterLines),
+            "bubble" => Some(Self::Bubble),
+            "radar" => Some(Self::Radar),
+            "stock" => Some(Self::Stock),
+            "surface" => Some(Self::Surface),
+            _ => None,
+        }
+    }
+}
+
+impl std::str::FromStr for ChartType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s).ok_or(())
+    }
+}
+
 /// Chart line overlay (drop lines, high-low lines, series lines, leader lines).
 /// All share the same structure: optional shape properties for formatting.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -434,4 +481,27 @@ pub enum BarShape {
     Cylinder,
     Pyramid,
     PyramidToMax,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chart_type_from_name_accepts_common_public_names() {
+        assert_eq!(
+            ChartType::from_name("columnClustered"),
+            Some(ChartType::ColumnClustered)
+        );
+        assert_eq!(
+            ChartType::from_name("bar-stacked"),
+            Some(ChartType::BarStacked)
+        );
+        assert_eq!(
+            ChartType::from_name("scatter markers"),
+            Some(ChartType::ScatterMarkers)
+        );
+        assert_eq!(ChartType::from_name("donut"), Some(ChartType::Doughnut));
+        assert_eq!(ChartType::from_name("notAChart"), None);
+    }
 }
