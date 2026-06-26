@@ -3999,6 +3999,52 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_pivot_calculated_fields() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Units").unwrap();
+        sheet.set_cell_value("C1", "Price").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 2.0).unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 7.0).unwrap();
+        sheet.set_cell_value("C3", 3.0).unwrap();
+
+        let pivot = PivotTable::builder("CalculatedRevenue")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Revenue", "=Units*Price")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def
+            .contains(r#"<cacheField name="Revenue" formula="Units*Price" databaseField="0">"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("CalculatedRevenue")
+            .unwrap();
+        assert_eq!(pivot.calculated_fields.len(), 1);
+        assert_eq!(pivot.calculated_fields[0].name, "Revenue");
+        assert_eq!(pivot.calculated_fields[0].formula, "Units*Price");
+        assert_eq!(pivot.measures.len(), 1);
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+    }
+
+    #[test]
     fn test_writer_round_trips_pivot_grouping() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();

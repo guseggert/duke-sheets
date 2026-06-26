@@ -12,10 +12,14 @@ use std::sync::Arc;
 
 use ahash::{AHashMap, AHashSet};
 use duke_sheets_core::{
-    CellAddress, CellRange, CellValue, Error, PivotAggregate, PivotField, PivotFilter,
-    PivotFilterOperator, PivotGrouping, PivotMeasure, PivotOverwritePolicy, PivotRefreshStatus,
-    PivotShowAs, PivotSort, PivotSource, PivotTable, PivotValue, Result, Table, Workbook,
-    Worksheet, MAX_COLS, MAX_ROWS,
+    CellAddress, CellError, CellRange, CellValue, Error, PivotAggregate, PivotCalculatedField,
+    PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotMeasure,
+    PivotOverwritePolicy, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotTable,
+    PivotValue, Result, Table, Workbook, Worksheet, MAX_COLS, MAX_ROWS,
+};
+use duke_sheets_formula::{
+    evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
+    StructuredReference,
 };
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -203,10 +207,15 @@ fn build_rendered_pivot(
 ) -> Result<RenderedPivot> {
     let raw_snapshot =
         snapshot_for_source(workbook, pivot_sheet_index, &pivot.source, cache, stats)?;
-    let snapshot = if pivot.groupings.is_empty() {
+    let calculated_snapshot = if pivot.calculated_fields.is_empty() {
         raw_snapshot
     } else {
-        Arc::new(raw_snapshot.apply_groupings(
+        Arc::new(raw_snapshot.apply_calculated_fields(&pivot.name, &pivot.calculated_fields)?)
+    };
+    let snapshot = if pivot.groupings.is_empty() {
+        calculated_snapshot
+    } else {
+        Arc::new(calculated_snapshot.apply_groupings(
             &pivot.name,
             &pivot.groupings,
             workbook.settings().date_1904,
@@ -578,6 +587,55 @@ impl SourceSnapshot {
         self.columns[col].value_by_id(id)
     }
 
+    fn apply_calculated_fields(
+        &self,
+        pivot_name: &str,
+        calculated_fields: &[PivotCalculatedField],
+    ) -> Result<Self> {
+        let mut headers = self.headers.clone();
+        let mut columns = self.columns.clone();
+
+        for field in calculated_fields {
+            if field.name.trim().is_empty() {
+                return Err(Error::other(format!(
+                    "pivot table {pivot_name} has a calculated field with a blank name"
+                )));
+            }
+            if headers
+                .iter()
+                .any(|header| header.eq_ignore_ascii_case(&field.name))
+            {
+                return Err(Error::other(format!(
+                    "pivot table {pivot_name} calculated field duplicates source field: {}",
+                    field.name
+                )));
+            }
+
+            let ast = parse_calculated_formula(pivot_name, field)?;
+            let lookup = field_lookup(&headers);
+            let values = evaluate_calculated_values(
+                pivot_name,
+                field,
+                &ast,
+                &columns,
+                self.row_count,
+                &lookup,
+            )?;
+            let mut column = EncodedColumn::with_capacity(self.row_count);
+            for value in values {
+                column.push(value);
+            }
+            headers.push(field.name.clone());
+            columns.push(column);
+        }
+
+        Ok(Self {
+            headers,
+            columns,
+            row_count: self.row_count,
+        })
+    }
+
     fn apply_groupings(
         &self,
         pivot_name: &str,
@@ -613,6 +671,215 @@ impl SourceSnapshot {
 fn grouping_field_name(grouping: &PivotGrouping) -> &str {
     match grouping {
         PivotGrouping::Number { field, .. } | PivotGrouping::Date { field, .. } => &field.name,
+    }
+}
+
+fn parse_calculated_formula(pivot_name: &str, field: &PivotCalculatedField) -> Result<FormulaExpr> {
+    let formula = field.formula.trim();
+    if formula.is_empty() {
+        return Err(Error::other(format!(
+            "pivot table {pivot_name} calculated field {} has a blank formula",
+            field.name
+        )));
+    }
+    let formula = if formula.starts_with('=') {
+        formula.to_string()
+    } else {
+        format!("={formula}")
+    };
+    parse_formula(&formula).map_err(|error| {
+        Error::other(format!(
+            "pivot table {pivot_name} calculated field {} formula did not parse: {error}",
+            field.name
+        ))
+    })
+}
+
+fn field_lookup(headers: &[String]) -> AHashMap<String, usize> {
+    headers
+        .iter()
+        .enumerate()
+        .map(|(index, header)| (header.to_lowercase(), index))
+        .collect()
+}
+
+fn evaluate_calculated_values(
+    pivot_name: &str,
+    field: &PivotCalculatedField,
+    ast: &FormulaExpr,
+    columns: &[EncodedColumn],
+    row_count: usize,
+    lookup: &AHashMap<String, usize>,
+) -> Result<Vec<PivotValue>> {
+    #[cfg(feature = "parallel")]
+    {
+        if row_count >= PARALLEL_ROW_THRESHOLD {
+            return (0..row_count)
+                .into_par_iter()
+                .map(|row| evaluate_calculated_row(pivot_name, field, ast, columns, row, lookup))
+                .collect();
+        }
+    }
+
+    (0..row_count)
+        .map(|row| evaluate_calculated_row(pivot_name, field, ast, columns, row, lookup))
+        .collect()
+}
+
+fn evaluate_calculated_row(
+    pivot_name: &str,
+    field: &PivotCalculatedField,
+    ast: &FormulaExpr,
+    columns: &[EncodedColumn],
+    row: usize,
+    lookup: &AHashMap<String, usize>,
+) -> Result<PivotValue> {
+    let materialized = materialize_calculated_expr(pivot_name, field, ast, columns, row, lookup)?;
+    let value = evaluate(&materialized, &EvaluationContext::simple()).map_err(|error| {
+        Error::other(format!(
+            "pivot table {pivot_name} calculated field {} evaluation failed: {error}",
+            field.name
+        ))
+    })?;
+    Ok(formula_value_to_pivot_value(value))
+}
+
+fn materialize_calculated_expr(
+    pivot_name: &str,
+    field: &PivotCalculatedField,
+    expr: &FormulaExpr,
+    columns: &[EncodedColumn],
+    row: usize,
+    lookup: &AHashMap<String, usize>,
+) -> Result<FormulaExpr> {
+    Ok(match expr {
+        FormulaExpr::Number(value) => FormulaExpr::Number(*value),
+        FormulaExpr::String(value) => FormulaExpr::String(value.clone()),
+        FormulaExpr::Boolean(value) => FormulaExpr::Boolean(*value),
+        FormulaExpr::Error(value) => FormulaExpr::Error(*value),
+        FormulaExpr::Empty => FormulaExpr::Empty,
+        FormulaExpr::NameRef(name) => {
+            calculated_field_value_expr(pivot_name, field, name, columns, row, lookup)?
+        }
+        FormulaExpr::StructuredRef(reference) => {
+            if let Some(name) = structured_ref_field_name(reference) {
+                calculated_field_value_expr(pivot_name, field, name, columns, row, lookup)?
+            } else {
+                return Err(Error::other(format!(
+                    "pivot table {pivot_name} calculated field {} uses an unsupported structured reference",
+                    field.name
+                )));
+            }
+        }
+        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::ExternalRef(_) => {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} calculated field {} uses workbook references, which are not valid pivot source-field references",
+                field.name
+            )));
+        }
+        FormulaExpr::BinaryOp { op, left, right } => FormulaExpr::BinaryOp {
+            op: *op,
+            left: Box::new(materialize_calculated_expr(
+                pivot_name, field, left, columns, row, lookup,
+            )?),
+            right: Box::new(materialize_calculated_expr(
+                pivot_name, field, right, columns, row, lookup,
+            )?),
+        },
+        FormulaExpr::UnaryOp { op, operand } => FormulaExpr::UnaryOp {
+            op: *op,
+            operand: Box::new(materialize_calculated_expr(
+                pivot_name, field, operand, columns, row, lookup,
+            )?),
+        },
+        FormulaExpr::Function { name, args } => FormulaExpr::Function {
+            name: name.clone(),
+            args: materialize_calculated_args(pivot_name, field, args, columns, row, lookup)?,
+        },
+        FormulaExpr::ExternalFunction { book, name, args } => FormulaExpr::ExternalFunction {
+            book: book.clone(),
+            name: name.clone(),
+            args: materialize_calculated_args(pivot_name, field, args, columns, row, lookup)?,
+        },
+        FormulaExpr::Array(rows) => {
+            let mut materialized_rows = Vec::with_capacity(rows.len());
+            for formula_row in rows {
+                materialized_rows.push(materialize_calculated_args(
+                    pivot_name,
+                    field,
+                    formula_row,
+                    columns,
+                    row,
+                    lookup,
+                )?);
+            }
+            FormulaExpr::Array(materialized_rows)
+        }
+    })
+}
+
+fn materialize_calculated_args(
+    pivot_name: &str,
+    field: &PivotCalculatedField,
+    args: &[FormulaExpr],
+    columns: &[EncodedColumn],
+    row: usize,
+    lookup: &AHashMap<String, usize>,
+) -> Result<Vec<FormulaExpr>> {
+    args.iter()
+        .map(|arg| materialize_calculated_expr(pivot_name, field, arg, columns, row, lookup))
+        .collect()
+}
+
+fn calculated_field_value_expr(
+    pivot_name: &str,
+    field: &PivotCalculatedField,
+    name: &str,
+    columns: &[EncodedColumn],
+    row: usize,
+    lookup: &AHashMap<String, usize>,
+) -> Result<FormulaExpr> {
+    let index = lookup.get(&name.to_lowercase()).copied().ok_or_else(|| {
+        Error::other(format!(
+            "pivot table {pivot_name} calculated field {} references unknown field: {name}",
+            field.name
+        ))
+    })?;
+    Ok(pivot_value_to_formula_expr(columns[index].value(row)))
+}
+
+fn structured_ref_field_name(reference: &StructuredReference) -> Option<&str> {
+    if reference.table.is_some() {
+        return None;
+    }
+    if !reference
+        .specifiers
+        .iter()
+        .all(|specifier| matches!(specifier, StructuredRefSpecifier::ThisRow))
+    {
+        return None;
+    }
+    reference.column.as_deref()
+}
+
+fn pivot_value_to_formula_expr(value: &PivotValue) -> FormulaExpr {
+    match value {
+        PivotValue::Blank => FormulaExpr::Empty,
+        PivotValue::Boolean(value) => FormulaExpr::Boolean(*value),
+        PivotValue::Number(value) => FormulaExpr::Number(*value),
+        PivotValue::String(value) => FormulaExpr::String(value.clone()),
+        PivotValue::Error(value) => FormulaExpr::Error(*value),
+    }
+}
+
+fn formula_value_to_pivot_value(value: FormulaValue) -> PivotValue {
+    match value {
+        FormulaValue::Empty => PivotValue::Blank,
+        FormulaValue::Boolean(value) => PivotValue::Boolean(value),
+        FormulaValue::Number(value) => PivotValue::Number(value),
+        FormulaValue::String(value) => PivotValue::String(value),
+        FormulaValue::Error(value) => PivotValue::Error(value),
+        FormulaValue::Array { .. } => PivotValue::Error(CellError::Value),
     }
 }
 
@@ -2382,6 +2649,85 @@ mod tests {
         assert_eq!(number(&workbook, "E3"), 20.0);
         assert_eq!(text(&workbook, "D4"), "Grand Total");
         assert_eq!(number(&workbook, "E4"), 45.0);
+    }
+
+    #[test]
+    fn refreshes_calculated_field_measure() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Units").unwrap();
+        sheet.set_cell_value("C1", "Price").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 2.0).unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", 3.0).unwrap();
+        sheet.set_cell_value("C3", 10.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", 7.0).unwrap();
+        sheet.set_cell_value("C4", 3.0).unwrap();
+
+        let pivot = PivotTable::builder("CalculatedRevenue")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Revenue", "=Units*Price")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E1"), "Region");
+        assert_eq!(text(&workbook, "F1"), "Revenue");
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(number(&workbook, "F2"), 50.0);
+        assert_eq!(text(&workbook, "E3"), "West");
+        assert_eq!(number(&workbook, "F3"), 21.0);
+        assert_eq!(text(&workbook, "E4"), "Grand Total");
+        assert_eq!(number(&workbook, "F4"), 71.0);
+    }
+
+    #[test]
+    fn refreshes_sequential_calculated_fields_with_structured_refs() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Gross Sales").unwrap();
+        sheet.set_cell_value("C1", "Rate").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 100.0).unwrap();
+        sheet.set_cell_value("C2", 0.1).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", 50.0).unwrap();
+        sheet.set_cell_value("C3", 0.2).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", 80.0).unwrap();
+        sheet.set_cell_value("C4", 0.25).unwrap();
+
+        let pivot = PivotTable::builder("CalculatedCommission")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Commission", "=[Gross Sales]*Rate")
+            .calculated_field("CommissionWithFee", "=Commission+1")
+            .named_measure("CommissionWithFee", PivotAggregate::Sum, "Commission")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(number(&workbook, "F2"), 22.0);
+        assert_eq!(text(&workbook, "E3"), "West");
+        assert_eq!(number(&workbook, "F3"), 21.0);
+        assert_eq!(text(&workbook, "E4"), "Grand Total");
+        assert_eq!(number(&workbook, "F4"), 43.0);
     }
 
     #[test]

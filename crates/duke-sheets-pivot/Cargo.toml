@@ -9,6 +9,7 @@ description = "Pivot table refresh engine for duke-sheets"
 
 [dependencies]
 duke-sheets-core.workspace = true
+duke-sheets-formula.workspace = true
 ahash.workspace = true
 ssfmt.workspace = true
 rayon = { workspace = true, optional = true }

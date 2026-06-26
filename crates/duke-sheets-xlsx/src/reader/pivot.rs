@@ -8,14 +8,16 @@ use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
-    PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping, PivotLayoutKind, PivotMeasure,
-    PivotRefreshStatus, PivotShowAs, PivotSource, PivotStyle, PivotTable, PivotValue,
+    PivotCalculatedField, PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping,
+    PivotLayoutKind, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSource, PivotStyle,
+    PivotTable, PivotValue,
 };
 
 #[derive(Debug, Clone)]
 pub(super) struct PivotCacheDefinition {
     pub(super) source: PivotSource,
     pub(super) fields: Vec<PivotCacheField>,
+    pub(super) calculated_fields: Vec<PivotCalculatedField>,
     pub(super) groupings: Vec<PivotGrouping>,
     pub(super) record_count: Option<u64>,
     pub(super) refreshed_version: Option<String>,
@@ -24,6 +26,7 @@ pub(super) struct PivotCacheDefinition {
 #[derive(Debug, Clone)]
 pub(super) struct PivotCacheField {
     pub(super) name: String,
+    formula: Option<String>,
     pub(super) shared_items: Vec<PivotValue>,
     grouping: Option<PivotGrouping>,
 }
@@ -61,6 +64,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"cacheField" => {
                     current_field = Some(PivotCacheField {
                         name: attr_string(&e, b"name").unwrap_or_default(),
+                        formula: attr_string(&e, b"formula"),
                         shared_items: Vec::new(),
                         grouping: None,
                     });
@@ -81,6 +85,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"worksheetSource" => source = parse_worksheet_source(&e)?,
                 b"cacheField" => fields.push(PivotCacheField {
                     name: attr_string(&e, b"name").unwrap_or_default(),
+                    formula: attr_string(&e, b"formula"),
                     shared_items: Vec::new(),
                     grouping: None,
                 }),
@@ -120,10 +125,20 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
         .iter()
         .filter_map(|field| field.grouping.clone())
         .collect();
+    let calculated_fields = fields
+        .iter()
+        .filter_map(|field| {
+            Some(PivotCalculatedField::new(
+                field.name.clone(),
+                field.formula.clone()?,
+            ))
+        })
+        .collect();
 
     Ok(Some(PivotCacheDefinition {
         source,
         fields,
+        calculated_fields,
         groupings,
         record_count,
         refreshed_version,
@@ -393,6 +408,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.columns = columns;
     pivot.page_fields = page_fields;
     pivot.measures = measures;
+    pivot.calculated_fields = cache.calculated_fields.clone();
     pivot.layout.show_row_grand_totals = row_grand_totals;
     pivot.layout.show_column_grand_totals = col_grand_totals;
     pivot.layout.show_field_headers = show_headers;

@@ -420,6 +420,25 @@ impl PivotMeasure {
     }
 }
 
+/// A calculated field materialized from source-row values before aggregation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PivotCalculatedField {
+    /// Field name exposed to axes, filters, grouping, and measures.
+    pub name: String,
+    /// Formula text. The formula may reference source fields by name.
+    pub formula: String,
+}
+
+impl PivotCalculatedField {
+    /// Create a calculated field.
+    pub fn new(name: impl Into<String>, formula: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            formula: formula.into(),
+        }
+    }
+}
+
 /// Post-aggregation display transformation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PivotShowAs {
@@ -797,6 +816,8 @@ pub struct PivotTable {
     pub page_fields: Vec<PivotField>,
     /// Filter criteria.
     pub filters: Vec<PivotFilter>,
+    /// Calculated fields materialized before aggregation.
+    pub calculated_fields: Vec<PivotCalculatedField>,
     /// Value fields.
     pub measures: Vec<PivotMeasure>,
     /// Grouping definitions.
@@ -831,6 +852,7 @@ impl PivotTable {
             columns: Vec::new(),
             page_fields: Vec::new(),
             filters: Vec::new(),
+            calculated_fields: Vec::new(),
             measures: Vec::new(),
             groupings: Vec::new(),
             layout: PivotLayout::default(),
@@ -861,6 +883,7 @@ pub struct PivotTableBuilder {
     columns: Vec<PivotField>,
     page_fields: Vec<PivotField>,
     filters: Vec<PivotFilter>,
+    calculated_fields: Vec<PivotCalculatedField>,
     measures: Vec<PivotMeasure>,
     groupings: Vec<PivotGrouping>,
     layout: PivotLayout,
@@ -881,6 +904,7 @@ impl PivotTableBuilder {
             columns: Vec::new(),
             page_fields: Vec::new(),
             filters: Vec::new(),
+            calculated_fields: Vec::new(),
             measures: Vec::new(),
             groupings: Vec::new(),
             layout: PivotLayout::default(),
@@ -980,6 +1004,19 @@ impl PivotTableBuilder {
         self
     }
 
+    /// Add a calculated field.
+    pub fn calculated_field(mut self, name: impl Into<String>, formula: impl Into<String>) -> Self {
+        self.calculated_fields
+            .push(PivotCalculatedField::new(name, formula));
+        self
+    }
+
+    /// Add a fully configured calculated field.
+    pub fn pivot_calculated_field(mut self, field: PivotCalculatedField) -> Self {
+        self.calculated_fields.push(field);
+        self
+    }
+
     /// Add a grouping definition.
     pub fn grouping(mut self, grouping: PivotGrouping) -> Self {
         self.groupings.push(grouping);
@@ -1033,6 +1070,7 @@ impl PivotTableBuilder {
         table.columns = self.columns;
         table.page_fields = self.page_fields;
         table.filters = self.filters;
+        table.calculated_fields = self.calculated_fields;
         table.measures = self.measures;
         table.groupings = self.groupings;
         table.layout = self.layout;

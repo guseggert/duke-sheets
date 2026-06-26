@@ -206,6 +206,11 @@ export interface PivotItemFilterOptions {
   items: string[];
 }
 
+export interface PivotCalculatedFieldOptions {
+  name: string;
+  formula: string;
+}
+
 export interface PivotGroupingOptions {
   field: string;
   kind: "number" | "numeric" | "date";
@@ -226,6 +231,7 @@ export interface PivotTableOptions {
   pages?: string[];
   measures: PivotMeasureOptions[];
   filters?: PivotItemFilterOptions[];
+  calculatedFields?: PivotCalculatedFieldOptions[];
   groupings?: PivotGroupingOptions[];
 }
 
@@ -350,6 +356,9 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
                 .map(PivotValue::from)
                 .collect::<Vec<_>>(),
         ));
+    }
+    for calculated_field in options.calculated_fields.unwrap_or_default() {
+        builder = builder.calculated_field(calculated_field.name, calculated_field.formula);
     }
     for grouping in options.groupings.unwrap_or_default() {
         builder = builder.grouping(build_pivot_grouping_from_wasm(grouping)?);

@@ -4,9 +4,13 @@ use std::io::{Seek, Write};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 
 use duke_sheets_core::{
-    CellRange, PivotAggregate, PivotDateGroupUnit, PivotFieldRef, PivotFilter, PivotGrouping,
-    PivotLayoutKind, PivotShowAs, PivotSort, PivotSource, PivotTable, PivotValue, Table, Workbook,
-    Worksheet,
+    CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit, PivotFieldRef,
+    PivotFilter, PivotGrouping, PivotLayoutKind, PivotShowAs, PivotSort, PivotSource, PivotTable,
+    PivotValue, Table, Workbook, Worksheet,
+};
+use duke_sheets_formula::{
+    evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
+    StructuredReference,
 };
 
 use super::{
@@ -53,6 +57,8 @@ struct ResolvedPivotSource {
 #[derive(Debug, Clone)]
 struct CacheField {
     name: String,
+    formula: Option<String>,
+    database_field: bool,
     shared_items: Vec<PivotValue>,
     item_lookup: HashMap<PivotValue, u32>,
 }
@@ -61,6 +67,18 @@ impl CacheField {
     fn new(name: String) -> Self {
         Self {
             name,
+            formula: None,
+            database_field: true,
+            shared_items: Vec::new(),
+            item_lookup: HashMap::new(),
+        }
+    }
+
+    fn calculated(name: String, formula: String) -> Self {
+        Self {
+            name,
+            formula: Some(formula),
+            database_field: false,
             shared_items: Vec::new(),
             item_lookup: HashMap::new(),
         }
@@ -91,10 +109,11 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
         for (pivot_index, pivot) in sheet.pivot_tables().iter().enumerate() {
             validate_writable_pivot(pivot)?;
 
-            let resolved = resolve_pivot_source(workbook, sheet_index, &pivot.source)?;
+            let mut resolved = resolve_pivot_source(workbook, sheet_index, &pivot.source)?;
+            apply_calculated_cache_fields(&pivot.name, &mut resolved, &pivot.calculated_fields)?;
             validate_pivot_fields(pivot, &resolved.fields)?;
             validate_pivot_groupings(pivot, &resolved.fields)?;
-            let cache_key = cache_key_with_groupings(&resolved.key, pivot);
+            let cache_key = cache_key_for_pivot(&resolved.key, pivot);
 
             let cache_num = if let Some(cache_num) = cache_by_source.get(&cache_key) {
                 if pivot.refresh_policy.refresh_on_open {
@@ -252,18 +271,39 @@ fn grouping_field_ref(grouping: &PivotGrouping) -> &PivotFieldRef {
     }
 }
 
-fn cache_key_with_groupings(source_key: &str, pivot: &PivotTable) -> String {
-    if pivot.groupings.is_empty() {
+fn cache_key_for_pivot(source_key: &str, pivot: &PivotTable) -> String {
+    if pivot.groupings.is_empty() && pivot.calculated_fields.is_empty() {
         return source_key.to_string();
     }
 
-    let mut signatures = pivot
+    let mut grouping_signatures = pivot
         .groupings
         .iter()
         .map(grouping_signature)
         .collect::<Vec<_>>();
-    signatures.sort();
-    format!("{source_key}|groupings:{}", signatures.join(";"))
+    grouping_signatures.sort();
+    let calculated_signatures = pivot
+        .calculated_fields
+        .iter()
+        .map(calculated_field_signature)
+        .collect::<Vec<_>>()
+        .join(";");
+    format!(
+        "{source_key}|calculated:{calculated_signatures}|groupings:{}",
+        grouping_signatures.join(";")
+    )
+}
+
+fn calculated_field_signature(field: &PivotCalculatedField) -> String {
+    format!(
+        "{}:{}",
+        field.name.to_lowercase(),
+        normalized_formula_for_key(&field.formula)
+    )
+}
+
+fn normalized_formula_for_key(formula: &str) -> String {
+    formula.trim().trim_start_matches('=').to_string()
 }
 
 fn grouping_signature(grouping: &PivotGrouping) -> String {
@@ -495,6 +535,244 @@ fn effective_pivot_value(worksheet: &Worksheet, row: u32, col: u16) -> PivotValu
         .get_calculated_value_at(row, col)
         .map(PivotValue::from_cell_value)
         .unwrap_or_else(|| PivotValue::from_cell_value(&worksheet.get_value_at(row, col)))
+}
+
+fn apply_calculated_cache_fields(
+    pivot_name: &str,
+    resolved: &mut ResolvedPivotSource,
+    calculated_fields: &[PivotCalculatedField],
+) -> XlsxResult<()> {
+    for field in calculated_fields {
+        if field.name.trim().is_empty() {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} has a calculated field with a blank name"
+            )));
+        }
+        if field_index(&resolved.fields, &field.name).is_some() {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} calculated field duplicates source field: {}",
+                field.name
+            )));
+        }
+
+        let ast = parse_calculated_formula(pivot_name, field)?;
+        let lookup = cache_field_lookup(&resolved.fields);
+        let mut cache_field =
+            CacheField::calculated(field.name.clone(), formula_for_cache_attr(&field.formula));
+        for row in &mut resolved.rows {
+            let value = evaluate_calculated_cache_row(
+                pivot_name,
+                field,
+                &ast,
+                &resolved.fields,
+                row,
+                &lookup,
+            )?;
+            let index = cache_field.intern(value);
+            row.push(Some(index));
+        }
+        resolved.fields.push(cache_field);
+    }
+
+    Ok(())
+}
+
+fn parse_calculated_formula(
+    pivot_name: &str,
+    field: &PivotCalculatedField,
+) -> XlsxResult<FormulaExpr> {
+    let formula = field.formula.trim();
+    if formula.is_empty() {
+        return Err(XlsxError::InvalidFormat(format!(
+            "pivot table {pivot_name} calculated field {} has a blank formula",
+            field.name
+        )));
+    }
+    let formula = if formula.starts_with('=') {
+        formula.to_string()
+    } else {
+        format!("={formula}")
+    };
+    parse_formula(&formula).map_err(|error| {
+        XlsxError::InvalidFormat(format!(
+            "pivot table {pivot_name} calculated field {} formula did not parse: {error}",
+            field.name
+        ))
+    })
+}
+
+fn cache_field_lookup(fields: &[CacheField]) -> HashMap<String, usize> {
+    fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| (field.name.to_lowercase(), index))
+        .collect()
+}
+
+fn evaluate_calculated_cache_row(
+    pivot_name: &str,
+    field: &PivotCalculatedField,
+    ast: &FormulaExpr,
+    fields: &[CacheField],
+    row: &[Option<u32>],
+    lookup: &HashMap<String, usize>,
+) -> XlsxResult<PivotValue> {
+    let materialized = materialize_calculated_expr(pivot_name, field, ast, fields, row, lookup)?;
+    let value = evaluate(&materialized, &EvaluationContext::simple()).map_err(|error| {
+        XlsxError::InvalidFormat(format!(
+            "pivot table {pivot_name} calculated field {} evaluation failed: {error}",
+            field.name
+        ))
+    })?;
+    Ok(formula_value_to_pivot_value(value))
+}
+
+fn materialize_calculated_expr(
+    pivot_name: &str,
+    field: &PivotCalculatedField,
+    expr: &FormulaExpr,
+    fields: &[CacheField],
+    row: &[Option<u32>],
+    lookup: &HashMap<String, usize>,
+) -> XlsxResult<FormulaExpr> {
+    Ok(match expr {
+        FormulaExpr::Number(value) => FormulaExpr::Number(*value),
+        FormulaExpr::String(value) => FormulaExpr::String(value.clone()),
+        FormulaExpr::Boolean(value) => FormulaExpr::Boolean(*value),
+        FormulaExpr::Error(value) => FormulaExpr::Error(*value),
+        FormulaExpr::Empty => FormulaExpr::Empty,
+        FormulaExpr::NameRef(name) => {
+            calculated_cache_value_expr(pivot_name, field, name, fields, row, lookup)?
+        }
+        FormulaExpr::StructuredRef(reference) => {
+            if let Some(name) = structured_ref_field_name(reference) {
+                calculated_cache_value_expr(pivot_name, field, name, fields, row, lookup)?
+            } else {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "pivot table {pivot_name} calculated field {} uses an unsupported structured reference",
+                    field.name
+                )));
+            }
+        }
+        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::ExternalRef(_) => {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} calculated field {} uses workbook references, which are not valid pivot source-field references",
+                field.name
+            )));
+        }
+        FormulaExpr::BinaryOp { op, left, right } => FormulaExpr::BinaryOp {
+            op: *op,
+            left: Box::new(materialize_calculated_expr(
+                pivot_name, field, left, fields, row, lookup,
+            )?),
+            right: Box::new(materialize_calculated_expr(
+                pivot_name, field, right, fields, row, lookup,
+            )?),
+        },
+        FormulaExpr::UnaryOp { op, operand } => FormulaExpr::UnaryOp {
+            op: *op,
+            operand: Box::new(materialize_calculated_expr(
+                pivot_name, field, operand, fields, row, lookup,
+            )?),
+        },
+        FormulaExpr::Function { name, args } => FormulaExpr::Function {
+            name: name.clone(),
+            args: materialize_calculated_args(pivot_name, field, args, fields, row, lookup)?,
+        },
+        FormulaExpr::ExternalFunction { book, name, args } => FormulaExpr::ExternalFunction {
+            book: book.clone(),
+            name: name.clone(),
+            args: materialize_calculated_args(pivot_name, field, args, fields, row, lookup)?,
+        },
+        FormulaExpr::Array(rows) => {
+            let mut materialized_rows = Vec::with_capacity(rows.len());
+            for formula_row in rows {
+                materialized_rows.push(materialize_calculated_args(
+                    pivot_name,
+                    field,
+                    formula_row,
+                    fields,
+                    row,
+                    lookup,
+                )?);
+            }
+            FormulaExpr::Array(materialized_rows)
+        }
+    })
+}
+
+fn materialize_calculated_args(
+    pivot_name: &str,
+    field: &PivotCalculatedField,
+    args: &[FormulaExpr],
+    fields: &[CacheField],
+    row: &[Option<u32>],
+    lookup: &HashMap<String, usize>,
+) -> XlsxResult<Vec<FormulaExpr>> {
+    args.iter()
+        .map(|arg| materialize_calculated_expr(pivot_name, field, arg, fields, row, lookup))
+        .collect()
+}
+
+fn calculated_cache_value_expr(
+    pivot_name: &str,
+    field: &PivotCalculatedField,
+    name: &str,
+    fields: &[CacheField],
+    row: &[Option<u32>],
+    lookup: &HashMap<String, usize>,
+) -> XlsxResult<FormulaExpr> {
+    let field_index = lookup.get(&name.to_lowercase()).copied().ok_or_else(|| {
+        XlsxError::InvalidFormat(format!(
+            "pivot table {pivot_name} calculated field {} references unknown field: {name}",
+            field.name
+        ))
+    })?;
+    let value = row
+        .get(field_index)
+        .and_then(|index| *index)
+        .and_then(|index| fields[field_index].shared_items.get(index as usize))
+        .unwrap_or(&PivotValue::Blank);
+    Ok(pivot_value_to_formula_expr(value))
+}
+
+fn structured_ref_field_name(reference: &StructuredReference) -> Option<&str> {
+    if reference.table.is_some() {
+        return None;
+    }
+    if !reference
+        .specifiers
+        .iter()
+        .all(|specifier| matches!(specifier, StructuredRefSpecifier::ThisRow))
+    {
+        return None;
+    }
+    reference.column.as_deref()
+}
+
+fn pivot_value_to_formula_expr(value: &PivotValue) -> FormulaExpr {
+    match value {
+        PivotValue::Blank => FormulaExpr::Empty,
+        PivotValue::Boolean(value) => FormulaExpr::Boolean(*value),
+        PivotValue::Number(value) => FormulaExpr::Number(*value),
+        PivotValue::String(value) => FormulaExpr::String(value.clone()),
+        PivotValue::Error(value) => FormulaExpr::Error(*value),
+    }
+}
+
+fn formula_value_to_pivot_value(value: FormulaValue) -> PivotValue {
+    match value {
+        FormulaValue::Empty => PivotValue::Blank,
+        FormulaValue::Boolean(value) => PivotValue::Boolean(value),
+        FormulaValue::Number(value) => PivotValue::Number(value),
+        FormulaValue::String(value) => PivotValue::String(value),
+        FormulaValue::Error(value) => PivotValue::Error(value),
+        FormulaValue::Array { .. } => PivotValue::Error(CellError::Value),
+    }
+}
+
+fn formula_for_cache_attr(formula: &str) -> String {
+    formula.trim().trim_start_matches('=').to_string()
 }
 
 pub(super) fn write_pivot_table_part<W: Write + Seek>(
@@ -998,6 +1276,12 @@ fn write_cache_field(
 ) -> XlsxResult<()> {
     let mut cache_field = BytesStart::new("cacheField");
     cache_field.push_attribute(("name", field.name.as_str()));
+    if let Some(formula) = &field.formula {
+        cache_field.push_attribute(("formula", formula.as_str()));
+    }
+    if !field.database_field {
+        cache_field.push_attribute(("databaseField", "0"));
+    }
     w.write_event(Event::Start(cache_field))?;
 
     let mut shared_items = BytesStart::new("sharedItems");

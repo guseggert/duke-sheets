@@ -26,6 +26,11 @@ export interface JsPivotItemFilterOptions {
   items: string[]
 }
 
+export interface JsPivotCalculatedFieldOptions {
+  name: string
+  formula: string
+}
+
 export interface JsPivotGroupingOptions {
   field: string
   kind: 'number' | 'numeric' | 'date'
@@ -46,6 +51,7 @@ export interface JsPivotTableOptions {
   pages?: string[]
   measures: JsPivotMeasureOptions[]
   filters?: JsPivotItemFilterOptions[]
+  calculatedFields?: JsPivotCalculatedFieldOptions[]
   groupings?: JsPivotGroupingOptions[]
 }
 

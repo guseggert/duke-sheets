@@ -64,11 +64,12 @@ pub use error::{Error, Result};
 pub use hyperlink::Hyperlink;
 pub use locale::Locale;
 pub use pivot::{
-    PivotAggregate, PivotAxis, PivotCacheInfo, PivotCacheSourceKind, PivotDateGroupUnit,
-    PivotExtension, PivotExtensions, PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator,
-    PivotGrouping, PivotLayout, PivotLayoutKind, PivotMeasure, PivotOverwritePolicy,
-    PivotRefreshPolicy, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
-    PivotStyle, PivotSubtotal, PivotTable, PivotTableBuilder, PivotValue,
+    PivotAggregate, PivotAxis, PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField,
+    PivotDateGroupUnit, PivotExtension, PivotExtensions, PivotField, PivotFieldRef, PivotFilter,
+    PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotMeasure,
+    PivotOverwritePolicy, PivotRefreshPolicy, PivotRefreshStatus, PivotShowAs, PivotSort,
+    PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotTableBuilder,
+    PivotValue,
 };
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};

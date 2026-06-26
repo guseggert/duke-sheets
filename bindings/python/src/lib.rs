@@ -96,6 +96,22 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
             builder = builder.filter(build_pivot_item_filter_from_py(&filter)?);
         }
     }
+    if let Some(calculated_fields_value) =
+        optional_any(dict, &["calculated_fields", "calculatedFields"])?
+    {
+        let calculated_fields = calculated_fields_value
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("pivot calculated_fields must be a list"))?;
+        for calculated_field in calculated_fields.iter() {
+            let calculated_field = calculated_field
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("pivot calculated field must be a dict"))?;
+            builder = builder.calculated_field(
+                required_string(calculated_field, &["name"])?,
+                required_string(calculated_field, &["formula"])?,
+            );
+        }
+    }
     if let Some(groupings_value) = optional_any(dict, &["groupings"])? {
         let groupings = groupings_value
             .downcast::<PyList>()

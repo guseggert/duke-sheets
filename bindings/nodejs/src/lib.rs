@@ -344,6 +344,12 @@ pub struct JsPivotItemFilterOptions {
 }
 
 #[napi(object)]
+pub struct JsPivotCalculatedFieldOptions {
+    pub name: String,
+    pub formula: String,
+}
+
+#[napi(object)]
 pub struct JsPivotGroupingOptions {
     pub field: String,
     pub kind: String,
@@ -365,6 +371,7 @@ pub struct JsPivotTableOptions {
     pub pages: Option<Vec<String>>,
     pub measures: Vec<JsPivotMeasureOptions>,
     pub filters: Option<Vec<JsPivotItemFilterOptions>>,
+    pub calculated_fields: Option<Vec<JsPivotCalculatedFieldOptions>>,
     pub groupings: Option<Vec<JsPivotGroupingOptions>>,
 }
 
@@ -445,6 +452,9 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
                 .map(PivotValue::from)
                 .collect::<Vec<_>>(),
         ));
+    }
+    for calculated_field in options.calculated_fields.unwrap_or_default() {
+        builder = builder.calculated_field(calculated_field.name, calculated_field.formula);
     }
     for grouping in options.groupings.unwrap_or_default() {
         builder = builder.grouping(build_pivot_grouping_from_js(grouping)?);

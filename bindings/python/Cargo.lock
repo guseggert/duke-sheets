@@ -480,6 +480,7 @@ version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
  "duke-sheets-core",
+ "duke-sheets-formula",
  "rayon",
  "ssfmt",
 ]

@@ -73,6 +73,13 @@ pub struct WasmPivotItemFilterOptions {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmPivotCalculatedFieldOptions {
+    pub name: String,
+    pub formula: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmPivotGroupingOptions {
     pub field: String,
     pub kind: String,
@@ -95,6 +102,7 @@ pub struct WasmPivotTableOptions {
     pub pages: Option<Vec<String>>,
     pub measures: Vec<WasmPivotMeasureOptions>,
     pub filters: Option<Vec<WasmPivotItemFilterOptions>>,
+    pub calculated_fields: Option<Vec<WasmPivotCalculatedFieldOptions>>,
     pub groupings: Option<Vec<WasmPivotGroupingOptions>>,
 }
 
