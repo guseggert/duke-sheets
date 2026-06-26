@@ -947,6 +947,7 @@ dependencies = [
  "log",
  "pretty_assertions",
  "quick-xml 0.37.5",
+ "rayon",
  "ssfmt",
  "tempfile",
  "thiserror 1.0.69",

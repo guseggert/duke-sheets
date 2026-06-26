@@ -21,6 +21,11 @@ zip.workspace = true
 chrono.workspace = true
 log.workspace = true
 ssfmt.workspace = true
+rayon = { workspace = true, optional = true }
+
+[features]
+default = []
+parallel = ["dep:rayon"]
 
 [dev-dependencies]
 tempfile.workspace = true

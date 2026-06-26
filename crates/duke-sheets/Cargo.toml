@@ -47,7 +47,7 @@ xlsx = []
 xls = ["dep:duke-sheets-xls"]
 xlsb = ["dep:duke-sheets-xlsb"]
 csv = []
-parallel = ["dep:rayon", "duke-sheets-pivot/parallel"]
+parallel = ["dep:rayon", "duke-sheets-pivot/parallel", "duke-sheets-xlsx/parallel"]
 full = ["xlsx", "xls", "xlsb", "csv", "parallel"]
 
 [[bench]]

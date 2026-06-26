@@ -13,6 +13,8 @@ use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
     StructuredReference,
 };
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 use ssfmt::{
     date_serial::{serial_to_date, serial_to_time},
     DateSystem,
@@ -25,6 +27,8 @@ use super::{
 
 const NS_SPREADSHEET_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 const EXT_URI_X14_DATA_FIELD: &str = "{2946ED86-A175-432a-8AC1-64E0C546D7DE}";
+#[cfg(feature = "parallel")]
+const PARALLEL_CACHE_ROW_THRESHOLD: usize = 50_000;
 
 #[derive(Debug, Clone)]
 pub(super) struct PivotNumbering {
@@ -689,10 +693,11 @@ fn build_cache_data(
     let mut rows = Vec::new();
 
     if data_start <= data_end {
-        for row in data_start..=data_end {
+        for row_values in
+            collect_cache_row_values(worksheet, start_col, fields.len(), data_start, data_end)
+        {
             let mut record = Vec::with_capacity(fields.len());
-            for (offset, field) in fields.iter_mut().enumerate() {
-                let value = effective_pivot_value(worksheet, row, start_col + offset as u16);
+            for (field, value) in fields.iter_mut().zip(row_values) {
                 let index = field.intern(value);
                 record.push(Some(index));
             }
@@ -702,6 +707,40 @@ fn build_cache_data(
 
     let record_count = rows.len();
     Ok((fields, rows, record_count))
+}
+
+fn collect_cache_row_values(
+    worksheet: &Worksheet,
+    start_col: u16,
+    field_count: usize,
+    data_start: u32,
+    data_end: u32,
+) -> Vec<Vec<PivotValue>> {
+    #[cfg(feature = "parallel")]
+    {
+        let row_count = (data_end - data_start + 1) as usize;
+        if row_count >= PARALLEL_CACHE_ROW_THRESHOLD {
+            return (data_start..=data_end)
+                .into_par_iter()
+                .map(|row| cache_row_values(worksheet, row, start_col, field_count))
+                .collect();
+        }
+    }
+
+    (data_start..=data_end)
+        .map(|row| cache_row_values(worksheet, row, start_col, field_count))
+        .collect()
+}
+
+fn cache_row_values(
+    worksheet: &Worksheet,
+    row: u32,
+    start_col: u16,
+    field_count: usize,
+) -> Vec<PivotValue> {
+    (0..field_count)
+        .map(|offset| effective_pivot_value(worksheet, row, start_col + offset as u16))
+        .collect()
 }
 
 fn validate_headers(headers: &[String]) -> XlsxResult<()> {
