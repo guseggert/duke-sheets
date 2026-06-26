@@ -407,6 +407,7 @@ pub struct JsPivotStyleOptions {
     pub show_column_headers: Option<bool>,
     pub show_row_stripes: Option<bool>,
     pub show_column_stripes: Option<bool>,
+    pub show_last_column: Option<bool>,
 }
 
 #[napi(object)]
@@ -611,6 +612,9 @@ fn build_pivot_style_from_js(options: JsPivotStyleOptions) -> PivotStyle {
     }
     if let Some(value) = options.show_column_stripes {
         style.show_column_stripes = value;
+    }
+    if let Some(value) = options.show_last_column {
+        style.show_last_column = value;
     }
     style
 }

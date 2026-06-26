@@ -341,6 +341,7 @@ export interface PivotStyleOptions {
   showColumnHeaders?: boolean;
   showRowStripes?: boolean;
   showColumnStripes?: boolean;
+  showLastColumn?: boolean;
 }
 
 export interface PivotTableOptions {
@@ -590,6 +591,9 @@ fn build_pivot_style_from_wasm(options: WasmPivotStyleOptions) -> PivotStyle {
     }
     if let Some(value) = options.show_column_stripes {
         style.show_column_stripes = value;
+    }
+    if let Some(value) = options.show_last_column {
+        style.show_last_column = value;
     }
     style
 }

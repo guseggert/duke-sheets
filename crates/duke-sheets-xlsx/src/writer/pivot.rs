@@ -1905,6 +1905,7 @@ fn write_pivot_style(w: &mut XmlWriter, pivot: &PivotTable) -> XlsxResult<()> {
     style.push_attribute(("showColHeaders", bool_attr(pivot.style.show_column_headers)));
     style.push_attribute(("showRowStripes", bool_attr(pivot.style.show_row_stripes)));
     style.push_attribute(("showColStripes", bool_attr(pivot.style.show_column_stripes)));
+    style.push_attribute(("showLastColumn", bool_attr(pivot.style.show_last_column)));
     w.write_event(Event::Empty(style))?;
     Ok(())
 }

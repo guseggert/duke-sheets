@@ -810,6 +810,9 @@ fn parse_pivot_style(e: &BytesStart<'_>) -> PivotStyle {
     if let Some(value) = attr_bool(e, b"showColStripes") {
         style.show_column_stripes = value;
     }
+    if let Some(value) = attr_bool(e, b"showLastColumn") {
+        style.show_last_column = value;
+    }
     style
 }
 

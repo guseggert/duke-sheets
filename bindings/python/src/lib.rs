@@ -255,6 +255,9 @@ fn build_pivot_style_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotStyle>
     if let Some(value) = optional_bool(dict, &["show_column_stripes", "showColumnStripes"])? {
         style.show_column_stripes = value;
     }
+    if let Some(value) = optional_bool(dict, &["show_last_column", "showLastColumn"])? {
+        style.show_last_column = value;
+    }
     Ok(style)
 }
 

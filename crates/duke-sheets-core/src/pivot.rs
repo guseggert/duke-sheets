@@ -701,6 +701,8 @@ pub struct PivotStyle {
     pub show_row_stripes: bool,
     /// Show alternating column stripes.
     pub show_column_stripes: bool,
+    /// Show last-column styling.
+    pub show_last_column: bool,
 }
 
 impl Default for PivotStyle {
@@ -711,6 +713,7 @@ impl Default for PivotStyle {
             show_column_headers: true,
             show_row_stripes: false,
             show_column_stripes: false,
+            show_last_column: false,
         }
     }
 }

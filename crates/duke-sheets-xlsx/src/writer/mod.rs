@@ -3214,8 +3214,8 @@ mod tests {
     use duke_sheets_core::{
         CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotDateGroupUnit,
         PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
-        PivotMeasure, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource, PivotSubtotal,
-        PivotTable, PivotValue, SplitPanes,
+        PivotMeasure, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource, PivotStyle,
+        PivotSubtotal, PivotTable, PivotValue, SplitPanes,
     };
     use std::io::Read;
 
@@ -4057,6 +4057,60 @@ mod tests {
         assert!(pivot.layout.print_drill_indicators);
         assert!(pivot.layout.item_print_titles);
         assert!(pivot.layout.field_print_titles);
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_style_flags() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+
+        let style = PivotStyle {
+            name: Some("PivotStyleLight16".to_string()),
+            show_row_headers: false,
+            show_column_headers: false,
+            show_row_stripes: true,
+            show_column_stripes: true,
+            show_last_column: true,
+        };
+        let pivot = PivotTable::builder("StylePivot")
+            .source_range(CellRange::parse("A1:B2").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .style(style)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"name="PivotStyleLight16""#));
+        assert!(pivot_xml.contains(r#"showRowHeaders="0""#));
+        assert!(pivot_xml.contains(r#"showColHeaders="0""#));
+        assert!(pivot_xml.contains(r#"showRowStripes="1""#));
+        assert!(pivot_xml.contains(r#"showColStripes="1""#));
+        assert!(pivot_xml.contains(r#"showLastColumn="1""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("StylePivot")
+            .unwrap();
+        assert_eq!(pivot.style.name.as_deref(), Some("PivotStyleLight16"));
+        assert!(!pivot.style.show_row_headers);
+        assert!(!pivot.style.show_column_headers);
+        assert!(pivot.style.show_row_stripes);
+        assert!(pivot.style.show_column_stripes);
+        assert!(pivot.style.show_last_column);
     }
 
     #[test]

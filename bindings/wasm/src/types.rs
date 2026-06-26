@@ -148,6 +148,7 @@ pub struct WasmPivotStyleOptions {
     pub show_column_headers: Option<bool>,
     pub show_row_stripes: Option<bool>,
     pub show_column_stripes: Option<bool>,
+    pub show_last_column: Option<bool>,
 }
 
 #[derive(Deserialize)]

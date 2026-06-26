@@ -173,6 +173,7 @@ export interface JsPivotStyleOptions {
   showColumnHeaders?: boolean
   showRowStripes?: boolean
   showColumnStripes?: boolean
+  showLastColumn?: boolean
 }
 
 export interface JsPivotTableOptions {
