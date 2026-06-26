@@ -5,6 +5,7 @@
 //! are deliberately kept out of the public authoring API.
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 #[cfg(feature = "parallel")]
 use std::hash::Hash;
@@ -2120,6 +2121,7 @@ struct CompiledPivotPlan {
     filters: Vec<CompiledFilter>,
     aggregate_filters: Vec<CompiledAggregateFilter>,
     calculated_items: Vec<CompiledCalculatedItem>,
+    error_caption: Option<String>,
     missing_caption: Option<String>,
 }
 
@@ -2223,6 +2225,11 @@ impl CompiledPivotPlan {
             filters,
             aggregate_filters,
             calculated_items,
+            error_caption: pivot
+                .layout
+                .show_error
+                .then(|| pivot.layout.error_caption.clone())
+                .flatten(),
             missing_caption: pivot
                 .layout
                 .show_missing
@@ -5545,9 +5552,11 @@ fn column_slot_label(
     slot: &ColumnRenderSlot,
 ) -> String {
     match slot {
-        ColumnRenderSlot::Leaf(column_key) => key_label(snapshot, &plan.column_indexes, column_key),
+        ColumnRenderSlot::Leaf(column_key) => {
+            key_label(snapshot, plan, &plan.column_indexes, column_key)
+        }
         ColumnRenderSlot::Subtotal(prefix) => {
-            subtotal_key_label(snapshot, &plan.column_indexes, prefix)
+            subtotal_key_label(snapshot, plan, &plan.column_indexes, prefix)
         }
         ColumnRenderSlot::GrandTotal => "Grand Total".to_string(),
     }
@@ -5659,7 +5668,7 @@ fn append_row_subtotals_without_column_fields(
         if is_row_subtotal_position(row_key, position) && row_subtotal_enabled(plan, position) {
             let prefix = row_key[..=position].to_vec();
             if let Some(states) = aggregation.row_subtotals.get(&prefix) {
-                let mut row = row_subtotal_label_cells(snapshot, &plan.row_indexes, &prefix);
+                let mut row = row_subtotal_label_cells(snapshot, plan, &prefix);
                 let context = ShowAsContext {
                     snapshot,
                     plan,
@@ -5700,7 +5709,7 @@ fn append_row_subtotals_with_column_fields(
     for position in row_group_end_positions(row_key, next_row_key) {
         if is_row_subtotal_position(row_key, position) && row_subtotal_enabled(plan, position) {
             let prefix = row_key[..=position].to_vec();
-            let mut row = row_subtotal_label_cells(snapshot, &plan.row_indexes, &prefix);
+            let mut row = row_subtotal_label_cells(snapshot, plan, &prefix);
             let row_total = aggregation.row_subtotals.get(&prefix);
             let row_aggregate_override = row_subtotal_aggregate_override(plan, position);
 
@@ -5945,9 +5954,10 @@ fn subtotal_aggregate_for_field(subtotal: PivotSubtotal) -> Option<PivotAggregat
 
 fn row_subtotal_label_cells(
     snapshot: &SourceSnapshot,
-    row_indexes: &[usize],
+    plan: &CompiledPivotPlan,
     prefix: &[u32],
 ) -> Vec<CellValue> {
+    let row_indexes = &plan.row_indexes;
     let mut row = vec![CellValue::Empty; row_indexes.len()];
     if prefix.is_empty() {
         return row;
@@ -5955,29 +5965,32 @@ fn row_subtotal_label_cells(
 
     let subtotal_position = prefix.len() - 1;
     for index in 0..subtotal_position {
-        row[index] = snapshot
-            .value_by_id(row_indexes[index], prefix[index])
-            .to_cell_value();
+        row[index] = pivot_value_cell(
+            plan,
+            snapshot.value_by_id(row_indexes[index], prefix[index]),
+        );
     }
-    let value = snapshot
-        .value_by_id(row_indexes[subtotal_position], prefix[subtotal_position])
-        .to_string();
+    let value = pivot_value_label(
+        plan,
+        snapshot.value_by_id(row_indexes[subtotal_position], prefix[subtotal_position]),
+    );
     row[subtotal_position] = CellValue::string(format!("{value} Total"));
     row
 }
 
 fn subtotal_key_label(
     snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
     field_indexes: &[usize],
     prefix: &[u32],
 ) -> String {
     let mut labels = field_indexes
         .iter()
         .zip(prefix.iter())
-        .map(|(field_index, id)| snapshot.value_by_id(*field_index, *id).to_string())
+        .map(|(field_index, id)| pivot_value_label(plan, snapshot.value_by_id(*field_index, *id)))
         .collect::<Vec<_>>();
     if let Some(label) = labels.last_mut() {
-        label.push_str(" Total");
+        label.to_mut().push_str(" Total");
     }
     labels.join(" | ")
 }
@@ -6072,13 +6085,14 @@ fn page_field_caption(
 
 fn decode_key_cells(
     snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
     field_indexes: &[usize],
     key: &[u32],
 ) -> Vec<CellValue> {
     field_indexes
         .iter()
         .zip(key.iter())
-        .map(|(field_index, id)| snapshot.value_by_id(*field_index, *id).to_cell_value())
+        .map(|(field_index, id)| pivot_value_cell(plan, snapshot.value_by_id(*field_index, *id)))
         .collect()
 }
 
@@ -6089,7 +6103,7 @@ fn row_label_cells(
     row_key: &[u32],
     previous_row_key: Option<&Vec<u32>>,
 ) -> Vec<CellValue> {
-    let mut cells = decode_key_cells(snapshot, &plan.row_indexes, row_key);
+    let mut cells = decode_key_cells(snapshot, plan, &plan.row_indexes, row_key);
     if !matches!(
         pivot.layout.kind,
         PivotLayoutKind::Tabular | PivotLayoutKind::Outline
@@ -6119,6 +6133,7 @@ fn append_compact_group_headers(
     for position in compact_group_header_positions(row_key, previous_row_key) {
         let mut row = vec![key_position_cell(
             snapshot,
+            plan,
             &plan.row_indexes,
             row_key,
             position,
@@ -6151,7 +6166,7 @@ fn compact_leaf_label_cell(
     row_key: &[u32],
 ) -> CellValue {
     let position = row_key.len().saturating_sub(1);
-    key_position_cell(snapshot, &plan.row_indexes, row_key, position)
+    key_position_cell(snapshot, plan, &plan.row_indexes, row_key, position)
 }
 
 fn compact_subtotal_label_cell(
@@ -6162,14 +6177,16 @@ fn compact_subtotal_label_cell(
     let Some(position) = prefix.len().checked_sub(1) else {
         return CellValue::Empty;
     };
-    let value = snapshot
-        .value_by_id(plan.row_indexes[position], prefix[position])
-        .to_string();
+    let value = pivot_value_label(
+        plan,
+        snapshot.value_by_id(plan.row_indexes[position], prefix[position]),
+    );
     CellValue::string(format!("{value} Total"))
 }
 
 fn key_position_cell(
     snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
     field_indexes: &[usize],
     key: &[u32],
     position: usize,
@@ -6177,8 +6194,33 @@ fn key_position_cell(
     field_indexes
         .get(position)
         .zip(key.get(position))
-        .map(|(field_index, id)| snapshot.value_by_id(*field_index, *id).to_cell_value())
+        .map(|(field_index, id)| pivot_value_cell(plan, snapshot.value_by_id(*field_index, *id)))
         .unwrap_or(CellValue::Empty)
+}
+
+fn pivot_value_cell(plan: &CompiledPivotPlan, value: &PivotValue) -> CellValue {
+    if matches!(value, PivotValue::Error(_)) {
+        if let Some(caption) = &plan.error_caption {
+            return CellValue::string(caption);
+        }
+    }
+    value.to_cell_value()
+}
+
+fn pivot_value_label<'a>(plan: &'a CompiledPivotPlan, value: &'a PivotValue) -> Cow<'a, str> {
+    if matches!(value, PivotValue::Error(_)) {
+        if let Some(caption) = &plan.error_caption {
+            return Cow::Borrowed(caption.as_str());
+        }
+    }
+
+    match value {
+        PivotValue::Blank => Cow::Borrowed(""),
+        PivotValue::Boolean(value) => Cow::Borrowed(if *value { "TRUE" } else { "FALSE" }),
+        PivotValue::Number(value) => Cow::Owned(value.to_string()),
+        PivotValue::String(value) => Cow::Borrowed(value.as_str()),
+        PivotValue::Error(value) => Cow::Borrowed(value.as_str()),
+    }
 }
 
 fn empty_cells(count: usize) -> impl Iterator<Item = CellValue> {
@@ -6628,11 +6670,16 @@ fn rank_precedes(value: f64, current: f64, ascending: bool) -> bool {
     }
 }
 
-fn key_label(snapshot: &SourceSnapshot, field_indexes: &[usize], key: &[u32]) -> String {
+fn key_label(
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    field_indexes: &[usize],
+    key: &[u32],
+) -> String {
     field_indexes
         .iter()
         .zip(key.iter())
-        .map(|(field_index, id)| snapshot.value_by_id(*field_index, *id).to_string())
+        .map(|(field_index, id)| pivot_value_label(plan, snapshot.value_by_id(*field_index, *id)))
         .collect::<Vec<_>>()
         .join(" | ")
 }
@@ -6690,10 +6737,10 @@ fn output_range(target: CellAddress, row_count: usize, col_count: usize) -> Resu
 #[cfg(test)]
 mod tests {
     use duke_sheets_core::{
-        CellRange, PivotAggregate, PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFilter,
-        PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup,
-        PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
-        PivotSubtotal, PivotTable, PivotValue, Table, TableColumn, Workbook,
+        CellError, CellRange, CellValue, PivotAggregate, PivotDateGroupUnit, PivotDatePeriod,
+        PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
+        PivotManualGroup, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource,
+        PivotSourceRange, PivotSubtotal, PivotTable, PivotValue, Table, TableColumn, Workbook,
     };
     use pretty_assertions::assert_eq;
     use ssfmt::{date_serial::date_to_serial, DateSystem};
@@ -7263,6 +7310,49 @@ mod tests {
         assert_eq!(text(&workbook, "F3"), "-");
         assert_eq!(number(&workbook, "G3"), 7.0);
         assert_eq!(number(&workbook, "H3"), 7.0);
+    }
+
+    #[test]
+    fn refresh_applies_error_caption_to_axis_labels() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet
+            .set_cell_value("A2", CellValue::Error(CellError::Div0))
+            .unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet
+            .set_cell_value("B3", CellValue::Error(CellError::Value))
+            .unwrap();
+        sheet.set_cell_value("C3", 7.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.show_error = true;
+        layout.error_caption = Some("ERR".to_string());
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .measure("Revenue", PivotAggregate::Sum)
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F1"), "Q1");
+        assert_eq!(text(&workbook, "G1"), "ERR");
+        assert_eq!(text(&workbook, "E2"), "West");
+        assert_eq!(text(&workbook, "E3"), "ERR");
+        assert_eq!(number(&workbook, "G2"), 7.0);
+        assert_eq!(number(&workbook, "F3"), 10.0);
     }
 
     #[test]
