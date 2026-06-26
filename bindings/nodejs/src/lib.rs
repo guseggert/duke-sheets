@@ -385,6 +385,12 @@ pub struct JsPivotFieldOptions {
     pub sort: Option<String>,
     pub subtotal: Option<String>,
     pub show_empty_items: Option<bool>,
+    pub show_drop_downs: Option<bool>,
+    pub subtotal_top: Option<bool>,
+    pub insert_blank_row: Option<bool>,
+    pub insert_page_break: Option<bool>,
+    pub include_new_items_in_filter: Option<bool>,
+    pub item_page_count: Option<u32>,
 }
 
 #[napi(object)]
@@ -869,6 +875,24 @@ fn build_pivot_field_from_js(options: JsPivotFieldOptions) -> Result<PivotField>
     }
     if let Some(show_empty_items) = options.show_empty_items {
         field.show_empty_items = show_empty_items;
+    }
+    if let Some(value) = options.show_drop_downs {
+        field.show_drop_downs = value;
+    }
+    if let Some(value) = options.subtotal_top {
+        field.subtotal_top = value;
+    }
+    if let Some(value) = options.insert_blank_row {
+        field.insert_blank_row = value;
+    }
+    if let Some(value) = options.insert_page_break {
+        field.insert_page_break = value;
+    }
+    if let Some(value) = options.include_new_items_in_filter {
+        field.include_new_items_in_filter = value;
+    }
+    if let Some(value) = options.item_page_count {
+        field.item_page_count = value;
     }
     Ok(field)
 }

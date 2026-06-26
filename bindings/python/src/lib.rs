@@ -254,6 +254,27 @@ fn build_pivot_field_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotField>
     if let Some(show_empty_items) = optional_bool(dict, &["show_empty_items", "showEmptyItems"])? {
         field.show_empty_items = show_empty_items;
     }
+    if let Some(value) = optional_bool(dict, &["show_drop_downs", "showDropDowns"])? {
+        field.show_drop_downs = value;
+    }
+    if let Some(value) = optional_bool(dict, &["subtotal_top", "subtotalTop"])? {
+        field.subtotal_top = value;
+    }
+    if let Some(value) = optional_bool(dict, &["insert_blank_row", "insertBlankRow"])? {
+        field.insert_blank_row = value;
+    }
+    if let Some(value) = optional_bool(dict, &["insert_page_break", "insertPageBreak"])? {
+        field.insert_page_break = value;
+    }
+    if let Some(value) = optional_bool(
+        dict,
+        &["include_new_items_in_filter", "includeNewItemsInFilter"],
+    )? {
+        field.include_new_items_in_filter = value;
+    }
+    if let Some(value) = optional_u32(dict, &["item_page_count", "itemPageCount"])? {
+        field.item_page_count = value;
+    }
     Ok(field)
 }
 
@@ -864,6 +885,15 @@ fn pivot_field_to_py(py: Python<'_>, field: &PivotField) -> PyResult<PyObject> {
     dict.set_item("sort", pivot_sort_to_python(field.sort))?;
     dict.set_item("subtotal", pivot_subtotal_to_python(field.subtotal))?;
     dict.set_item("show_empty_items", field.show_empty_items)?;
+    dict.set_item("show_drop_downs", field.show_drop_downs)?;
+    dict.set_item("subtotal_top", field.subtotal_top)?;
+    dict.set_item("insert_blank_row", field.insert_blank_row)?;
+    dict.set_item("insert_page_break", field.insert_page_break)?;
+    dict.set_item(
+        "include_new_items_in_filter",
+        field.include_new_items_in_filter,
+    )?;
+    dict.set_item("item_page_count", field.item_page_count)?;
     Ok(dict.into_any().unbind())
 }
 

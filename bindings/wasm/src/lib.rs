@@ -323,6 +323,12 @@ export interface PivotFieldOptions {
     | "variance_p"
     | "varianceP";
   showEmptyItems?: boolean;
+  showDropDowns?: boolean;
+  subtotalTop?: boolean;
+  insertBlankRow?: boolean;
+  insertPageBreak?: boolean;
+  includeNewItemsInFilter?: boolean;
+  itemPageCount?: number;
 }
 
 export interface PivotRefreshPolicyOptions {
@@ -421,6 +427,12 @@ export interface PivotFieldDefinition {
   sort: "none" | "ascending" | "descending";
   subtotal: "automatic" | "none" | "sum" | "count" | "countNumbers" | "average" | "min" | "max" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
   showEmptyItems: boolean;
+  showDropDowns: boolean;
+  subtotalTop: boolean;
+  insertBlankRow: boolean;
+  insertPageBreak: boolean;
+  includeNewItemsInFilter: boolean;
+  itemPageCount: number;
 }
 
 export interface PivotShowAsDefinition {
@@ -890,6 +902,24 @@ fn build_pivot_field_from_wasm(options: WasmPivotFieldOptions) -> Result<PivotFi
     }
     if let Some(show_empty_items) = options.show_empty_items {
         field.show_empty_items = show_empty_items;
+    }
+    if let Some(value) = options.show_drop_downs {
+        field.show_drop_downs = value;
+    }
+    if let Some(value) = options.subtotal_top {
+        field.subtotal_top = value;
+    }
+    if let Some(value) = options.insert_blank_row {
+        field.insert_blank_row = value;
+    }
+    if let Some(value) = options.insert_page_break {
+        field.insert_page_break = value;
+    }
+    if let Some(value) = options.include_new_items_in_filter {
+        field.include_new_items_in_filter = value;
+    }
+    if let Some(value) = options.item_page_count {
+        field.item_page_count = value;
     }
     Ok(field)
 }

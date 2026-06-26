@@ -546,9 +546,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut current_pivot_filter: Option<CurrentPivotFilter> = None;
     let mut current_pivot_filter_depth = 0usize;
     let mut in_pivot_filters = false;
-    let mut sort_by_field: HashMap<usize, PivotSort> = HashMap::new();
-    let mut subtotal_by_field: HashMap<usize, PivotSubtotal> = HashMap::new();
-    let mut show_empty_by_field: HashMap<usize, bool> = HashMap::new();
+    let mut options_by_field: HashMap<usize, PivotFieldOptions> = HashMap::new();
     let mut hidden_items_by_field: HashMap<usize, Vec<u32>> = HashMap::new();
     let mut element_stack = Vec::new();
     let mut extensions = Vec::new();
@@ -589,12 +587,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                     }
                     b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
                     b"pivotField" => {
-                        sort_by_field.insert(pivot_field_index, parse_pivot_sort(&e));
-                        subtotal_by_field.insert(pivot_field_index, parse_pivot_subtotal(&e));
-                        show_empty_by_field.insert(
-                            pivot_field_index,
-                            attr_bool(&e, b"showAll").unwrap_or(false),
-                        );
+                        options_by_field.insert(pivot_field_index, parse_pivot_field_options(&e));
                         current_pivot_field = Some((pivot_field_index, Vec::new()));
                         pivot_field_index += 1;
                     }
@@ -671,12 +664,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                     }
                     b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
                     b"pivotField" => {
-                        sort_by_field.insert(pivot_field_index, parse_pivot_sort(&e));
-                        subtotal_by_field.insert(pivot_field_index, parse_pivot_subtotal(&e));
-                        show_empty_by_field.insert(
-                            pivot_field_index,
-                            attr_bool(&e, b"showAll").unwrap_or(false),
-                        );
+                        options_by_field.insert(pivot_field_index, parse_pivot_field_options(&e));
                         pivot_field_index += 1;
                     }
                     b"item" => {
@@ -699,9 +687,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             if let Some(field) = pivot_axis_field(
                                 cache,
                                 field_index,
-                                sort_by_field.get(&field_index).copied(),
-                                subtotal_by_field.get(&field_index).copied(),
-                                show_empty_by_field.get(&field_index).copied(),
+                                options_by_field.get(&field_index).copied(),
                             ) {
                                 match axis_context {
                                     Some(AxisContext::Rows) => push_axis_field(&mut rows, field),
@@ -724,9 +710,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             if let Some(field) = pivot_axis_field(
                                 cache,
                                 field_index,
-                                sort_by_field.get(&field_index).copied(),
-                                subtotal_by_field.get(&field_index).copied(),
-                                show_empty_by_field.get(&field_index).copied(),
+                                options_by_field.get(&field_index).copied(),
                             ) {
                                 push_axis_field(&mut page_fields, field);
                                 if let Some(item_index) = attr_u32(&e, b"item") {
@@ -1139,6 +1123,49 @@ fn parse_pivot_sort(e: &BytesStart<'_>) -> PivotSort {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PivotFieldOptions {
+    sort: PivotSort,
+    subtotal: PivotSubtotal,
+    show_empty_items: bool,
+    show_drop_downs: bool,
+    subtotal_top: bool,
+    insert_blank_row: bool,
+    insert_page_break: bool,
+    include_new_items_in_filter: bool,
+    item_page_count: u32,
+}
+
+impl Default for PivotFieldOptions {
+    fn default() -> Self {
+        Self {
+            sort: PivotSort::None,
+            subtotal: PivotSubtotal::Automatic,
+            show_empty_items: false,
+            show_drop_downs: true,
+            subtotal_top: true,
+            insert_blank_row: false,
+            insert_page_break: false,
+            include_new_items_in_filter: false,
+            item_page_count: 10,
+        }
+    }
+}
+
+fn parse_pivot_field_options(e: &BytesStart<'_>) -> PivotFieldOptions {
+    PivotFieldOptions {
+        sort: parse_pivot_sort(e),
+        subtotal: parse_pivot_subtotal(e),
+        show_empty_items: attr_bool(e, b"showAll").unwrap_or(false),
+        show_drop_downs: attr_bool(e, b"showDropDowns").unwrap_or(true),
+        subtotal_top: attr_bool(e, b"subtotalTop").unwrap_or(true),
+        insert_blank_row: attr_bool(e, b"insertBlankRow").unwrap_or(false),
+        insert_page_break: attr_bool(e, b"insertPageBreak").unwrap_or(false),
+        include_new_items_in_filter: attr_bool(e, b"includeNewItemsInFilter").unwrap_or(false),
+        item_page_count: attr_u32(e, b"itemPageCount").unwrap_or(10),
+    }
+}
+
 fn parse_pivot_subtotal(e: &BytesStart<'_>) -> PivotSubtotal {
     if attr_bool(e, b"sumSubtotal").unwrap_or(false) {
         PivotSubtotal::Sum
@@ -1172,15 +1199,20 @@ fn parse_pivot_subtotal(e: &BytesStart<'_>) -> PivotSubtotal {
 fn pivot_axis_field(
     cache: &PivotCacheDefinition,
     field_index: usize,
-    sort: Option<PivotSort>,
-    subtotal: Option<PivotSubtotal>,
-    show_empty_items: Option<bool>,
+    options: Option<PivotFieldOptions>,
 ) -> Option<PivotField> {
     let field_name = semantic_cache_field_name(cache, field_index)?;
+    let options = options.unwrap_or_default();
     let mut pivot_field = PivotField::new(field_name);
-    pivot_field.sort = sort.unwrap_or(PivotSort::None);
-    pivot_field.subtotal = subtotal.unwrap_or(PivotSubtotal::Automatic);
-    pivot_field.show_empty_items = show_empty_items.unwrap_or(false);
+    pivot_field.sort = options.sort;
+    pivot_field.subtotal = options.subtotal;
+    pivot_field.show_empty_items = options.show_empty_items;
+    pivot_field.show_drop_downs = options.show_drop_downs;
+    pivot_field.subtotal_top = options.subtotal_top;
+    pivot_field.insert_blank_row = options.insert_blank_row;
+    pivot_field.insert_page_break = options.insert_page_break;
+    pivot_field.include_new_items_in_filter = options.include_new_items_in_filter;
+    pivot_field.item_page_count = options.item_page_count;
     Some(pivot_field)
 }
 

@@ -1426,6 +1426,12 @@ export interface JsPivotFieldDefinition {
   sort: string
   subtotal: string
   showEmptyItems: boolean
+  showDropDowns: boolean
+  subtotalTop: boolean
+  insertBlankRow: boolean
+  insertPageBreak: boolean
+  includeNewItemsInFilter: boolean
+  itemPageCount: number
 }
 
 export interface JsPivotFieldOptions {
@@ -1433,6 +1439,12 @@ export interface JsPivotFieldOptions {
   sort?: string
   subtotal?: string
   showEmptyItems?: boolean
+  showDropDowns?: boolean
+  subtotalTop?: boolean
+  insertBlankRow?: boolean
+  insertPageBreak?: boolean
+  includeNewItemsInFilter?: boolean
+  itemPageCount?: number
 }
 
 export interface JsPivotFilterDefinition {

@@ -274,6 +274,18 @@ pub struct PivotField {
     pub subtotal: PivotSubtotal,
     /// Whether items with no data should be shown.
     pub show_empty_items: bool,
+    /// Show the field dropdown/filter control where supported.
+    pub show_drop_downs: bool,
+    /// Place subtotals above grouped items.
+    pub subtotal_top: bool,
+    /// Insert a blank row after each item group.
+    pub insert_blank_row: bool,
+    /// Insert a page break after each item group.
+    pub insert_page_break: bool,
+    /// Include new source items in existing filters.
+    pub include_new_items_in_filter: bool,
+    /// Number of items shown per page in item filter menus.
+    pub item_page_count: u32,
 }
 
 impl PivotField {
@@ -284,6 +296,12 @@ impl PivotField {
             sort: PivotSort::Ascending,
             subtotal: PivotSubtotal::Automatic,
             show_empty_items: false,
+            show_drop_downs: true,
+            subtotal_top: true,
+            insert_blank_row: false,
+            insert_page_break: false,
+            include_new_items_in_filter: false,
+            item_page_count: 10,
         }
     }
 }

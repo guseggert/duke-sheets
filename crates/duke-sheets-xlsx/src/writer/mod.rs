@@ -4461,6 +4461,12 @@ mod tests {
         let mut region = PivotField::new("Region");
         region.subtotal = PivotSubtotal::Sum;
         region.show_empty_items = true;
+        region.show_drop_downs = false;
+        region.subtotal_top = false;
+        region.insert_blank_row = true;
+        region.insert_page_break = true;
+        region.include_new_items_in_filter = true;
+        region.item_page_count = 25;
         let mut quarter = PivotField::new("Quarter");
         quarter.subtotal = PivotSubtotal::None;
         let pivot = PivotTable::builder("AxisFieldOptions")
@@ -4483,6 +4489,12 @@ mod tests {
         assert!(pivot_xml.contains(r#"showAll="0""#));
         assert!(pivot_xml.contains(r#"sumSubtotal="1""#));
         assert!(pivot_xml.contains(r#"defaultSubtotal="0""#));
+        assert!(pivot_xml.contains(r#"showDropDowns="0""#));
+        assert!(pivot_xml.contains(r#"subtotalTop="0""#));
+        assert!(pivot_xml.contains(r#"insertBlankRow="1""#));
+        assert!(pivot_xml.contains(r#"insertPageBreak="1""#));
+        assert!(pivot_xml.contains(r#"includeNewItemsInFilter="1""#));
+        assert!(pivot_xml.contains(r#"itemPageCount="25""#));
 
         let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let pivot = roundtrip
@@ -4492,8 +4504,20 @@ mod tests {
             .unwrap();
         assert_eq!(pivot.rows[0].subtotal, PivotSubtotal::Sum);
         assert!(pivot.rows[0].show_empty_items);
+        assert!(!pivot.rows[0].show_drop_downs);
+        assert!(!pivot.rows[0].subtotal_top);
+        assert!(pivot.rows[0].insert_blank_row);
+        assert!(pivot.rows[0].insert_page_break);
+        assert!(pivot.rows[0].include_new_items_in_filter);
+        assert_eq!(pivot.rows[0].item_page_count, 25);
         assert_eq!(pivot.columns[0].subtotal, PivotSubtotal::None);
         assert!(!pivot.columns[0].show_empty_items);
+        assert!(pivot.columns[0].show_drop_downs);
+        assert!(pivot.columns[0].subtotal_top);
+        assert!(!pivot.columns[0].insert_blank_row);
+        assert!(!pivot.columns[0].insert_page_break);
+        assert!(!pivot.columns[0].include_new_items_in_filter);
+        assert_eq!(pivot.columns[0].item_page_count, 10);
     }
 
     #[test]

@@ -123,6 +123,12 @@ pub struct WasmPivotFieldOptions {
     pub sort: Option<String>,
     pub subtotal: Option<String>,
     pub show_empty_items: Option<bool>,
+    pub show_drop_downs: Option<bool>,
+    pub subtotal_top: Option<bool>,
+    pub insert_blank_row: Option<bool>,
+    pub insert_page_break: Option<bool>,
+    pub include_new_items_in_filter: Option<bool>,
+    pub item_page_count: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -385,6 +391,12 @@ pub struct WasmPivotFieldDefinition {
     pub sort: String,
     pub subtotal: String,
     pub show_empty_items: bool,
+    pub show_drop_downs: bool,
+    pub subtotal_top: bool,
+    pub insert_blank_row: bool,
+    pub insert_page_break: bool,
+    pub include_new_items_in_filter: bool,
+    pub item_page_count: u32,
 }
 
 impl From<&core::PivotField> for WasmPivotFieldDefinition {
@@ -394,6 +406,12 @@ impl From<&core::PivotField> for WasmPivotFieldDefinition {
             sort: pivot_sort_to_string(field.sort).into(),
             subtotal: pivot_subtotal_to_string(field.subtotal).into(),
             show_empty_items: field.show_empty_items,
+            show_drop_downs: field.show_drop_downs,
+            subtotal_top: field.subtotal_top,
+            insert_blank_row: field.insert_blank_row,
+            insert_page_break: field.insert_page_break,
+            include_new_items_in_filter: field.include_new_items_in_filter,
+            item_page_count: field.item_page_count,
         }
     }
 }

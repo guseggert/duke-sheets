@@ -214,7 +214,17 @@ class TestPivotTables:
                 "source_range": "A1:C4",
                 "target": "E1",
                 "row_fields": [
-                    {"field": "Region", "sort": "descending", "subtotal": "none"}
+                    {
+                        "field": "Region",
+                        "sort": "descending",
+                        "subtotal": "none",
+                        "show_drop_downs": False,
+                        "subtotal_top": False,
+                        "insert_blank_row": True,
+                        "insert_page_break": True,
+                        "include_new_items_in_filter": True,
+                        "item_page_count": 25,
+                    }
                 ],
                 "columns": ["Quarter"],
                 "measures": [
@@ -256,6 +266,12 @@ class TestPivotTables:
         assert pivot["rows"][0]["field"] == "Region"
         assert pivot["rows"][0]["sort"] == "descending"
         assert pivot["rows"][0]["subtotal"] == "none"
+        assert pivot["rows"][0]["show_drop_downs"] is False
+        assert pivot["rows"][0]["subtotal_top"] is False
+        assert pivot["rows"][0]["insert_blank_row"] is True
+        assert pivot["rows"][0]["insert_page_break"] is True
+        assert pivot["rows"][0]["include_new_items_in_filter"] is True
+        assert pivot["rows"][0]["item_page_count"] == 25
         assert pivot["columns"][0]["field"] == "Quarter"
         assert pivot["measures"][0]["field"] == "Revenue"
         assert pivot["measures"][0]["aggregate"] == "sum"

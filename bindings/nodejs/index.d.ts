@@ -160,6 +160,12 @@ export interface JsPivotFieldOptions {
     | 'variance_p'
     | 'varianceP'
   showEmptyItems?: boolean
+  showDropDowns?: boolean
+  subtotalTop?: boolean
+  insertBlankRow?: boolean
+  insertPageBreak?: boolean
+  includeNewItemsInFilter?: boolean
+  itemPageCount?: number
 }
 
 export interface JsPivotRefreshPolicyOptions {

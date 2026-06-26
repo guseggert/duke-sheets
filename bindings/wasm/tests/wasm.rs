@@ -343,6 +343,12 @@ fn test_pivot_table_definitions_from_options() {
         ("field", JsValue::from_str("Region")),
         ("sort", JsValue::from_str("descending")),
         ("subtotal", JsValue::from_str("none")),
+        ("showDropDowns", JsValue::FALSE),
+        ("subtotalTop", JsValue::FALSE),
+        ("insertBlankRow", JsValue::TRUE),
+        ("insertPageBreak", JsValue::TRUE),
+        ("includeNewItemsInFilter", JsValue::TRUE),
+        ("itemPageCount", JsValue::from_f64(25.0)),
     ]);
     let measure = make_options(&[
         ("field", JsValue::from_str("Revenue")),
@@ -404,6 +410,12 @@ fn test_pivot_table_definitions_from_options() {
     assert_eq!(get_string_field(&row, "field"), "Region");
     assert_eq!(get_string_field(&row, "sort"), "descending");
     assert_eq!(get_string_field(&row, "subtotal"), "none");
+    assert!(!get_bool_field(&row, "showDropDowns"));
+    assert!(!get_bool_field(&row, "subtotalTop"));
+    assert!(get_bool_field(&row, "insertBlankRow"));
+    assert!(get_bool_field(&row, "insertPageBreak"));
+    assert!(get_bool_field(&row, "includeNewItemsInFilter"));
+    assert_eq!(get_f64_field(&row, "itemPageCount"), 25.0);
 
     let columns = Array::from(&Reflect::get(&pivot, &JsValue::from_str("columns")).unwrap());
     assert_eq!(get_string_field(&columns.get(0), "field"), "Quarter");

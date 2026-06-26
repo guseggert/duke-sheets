@@ -6,7 +6,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit,
-    PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind,
+    PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind,
     PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
     PivotSubtotal, PivotTable, PivotValue, Table, Workbook, WorkbookConnection,
     WorkbookConnectionKind, Worksheet,
@@ -1650,10 +1650,20 @@ fn write_pivot_fields(
         if field_is_filtered(pivot, &field.name) {
             pivot_field.push_attribute(("multipleItemSelectionAllowed", "1"));
         }
-        if let Some(axis_field) = pivot_axis_field(pivot, fields, index) {
+        let _item_page_count_attr = if let Some(axis_field) = pivot_axis_field(pivot, fields, index)
+        {
             pivot_field.push_attribute(("showAll", bool_attr(axis_field.show_empty_items)));
+            push_pivot_field_option_attrs(&mut pivot_field, axis_field);
+            let item_page_count_attr =
+                (axis_field.item_page_count != 10).then(|| axis_field.item_page_count.to_string());
+            if let Some(item_page_count) = &item_page_count_attr {
+                pivot_field.push_attribute(("itemPageCount", item_page_count.as_str()));
+            }
             push_subtotal_attrs(&mut pivot_field, axis_field.subtotal);
-        }
+            item_page_count_attr
+        } else {
+            None
+        };
 
         let hidden_items = hidden_item_indexes(pivot, fields, index)?;
         let include_default = should_write_pivot_field_items(pivot, fields, index);
@@ -1824,6 +1834,24 @@ fn has_grouped_children(fields: &[CacheField], field_index: usize) -> bool {
                 if base == field_index
         )
     })
+}
+
+fn push_pivot_field_option_attrs(pivot_field: &mut BytesStart<'_>, field: &PivotField) {
+    if !field.show_drop_downs {
+        pivot_field.push_attribute(("showDropDowns", "0"));
+    }
+    if !field.subtotal_top {
+        pivot_field.push_attribute(("subtotalTop", "0"));
+    }
+    if field.insert_blank_row {
+        pivot_field.push_attribute(("insertBlankRow", "1"));
+    }
+    if field.insert_page_break {
+        pivot_field.push_attribute(("insertPageBreak", "1"));
+    }
+    if field.include_new_items_in_filter {
+        pivot_field.push_attribute(("includeNewItemsInFilter", "1"));
+    }
 }
 
 fn push_subtotal_attrs(pivot_field: &mut BytesStart<'_>, subtotal: PivotSubtotal) {

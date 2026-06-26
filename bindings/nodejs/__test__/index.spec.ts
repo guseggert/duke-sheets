@@ -197,7 +197,19 @@ describe("PivotTables", () => {
       name: "SalesPivot",
       sourceRange: "A1:C4",
       target: "E1",
-      rowFields: [{ field: "Region", sort: "descending", subtotal: "none" }],
+      rowFields: [
+        {
+          field: "Region",
+          sort: "descending",
+          subtotal: "none",
+          showDropDowns: false,
+          subtotalTop: false,
+          insertBlankRow: true,
+          insertPageBreak: true,
+          includeNewItemsInFilter: true,
+          itemPageCount: 25,
+        },
+      ],
       columns: ["Quarter"],
       measures: [
         {
@@ -230,6 +242,12 @@ describe("PivotTables", () => {
       field: "Region",
       sort: "descending",
       subtotal: "none",
+      showDropDowns: false,
+      subtotalTop: false,
+      insertBlankRow: true,
+      insertPageBreak: true,
+      includeNewItemsInFilter: true,
+      itemPageCount: 25,
     });
     expect(pivot?.columns[0].field).toBe("Quarter");
     expect(pivot?.measures[0]).toMatchObject({
