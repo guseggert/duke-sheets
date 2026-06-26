@@ -169,6 +169,7 @@ struct PivotJob {
 struct PreparedPivotJob {
     job: PivotJob,
     snapshot: Arc<SourceSnapshot>,
+    filter_baselines: PivotFilterBaselines,
     date_system: DateSystem,
     options: PivotRefreshOptions,
 }
@@ -222,9 +223,12 @@ fn refresh_pivots_inner(
                     return Err(error);
                 }
             };
+        let filter_baselines =
+            filter_baselines_for_pivot(job.sheet_index, &job.pivot, &snapshot, cache);
         prepared.push(PreparedPivotJob {
             job,
             snapshot,
+            filter_baselines,
             date_system: workbook_date_system(date_1904),
             options: options.clone(),
         });
@@ -289,10 +293,17 @@ fn render_prepared_pivot(prepared: PreparedPivotJob) -> (PivotJob, Result<Render
     let PreparedPivotJob {
         job,
         snapshot,
+        filter_baselines,
         date_system,
         options,
     } = prepared;
-    let output = build_rendered_pivot_from_snapshot(&job.pivot, snapshot, &options, date_system);
+    let output = build_rendered_pivot_from_snapshot(
+        &job.pivot,
+        snapshot,
+        &filter_baselines,
+        &options,
+        date_system,
+    );
     (job, output)
 }
 
@@ -404,9 +415,11 @@ fn build_rendered_pivot(
         workbook.settings().date_1904,
         cache,
     )?;
+    let filter_baselines = filter_baselines_for_pivot(pivot_sheet_index, pivot, &snapshot, cache);
     build_rendered_pivot_from_snapshot(
         pivot,
         snapshot,
+        &filter_baselines,
         options,
         workbook_date_system(workbook.settings().date_1904),
     )
@@ -464,10 +477,12 @@ fn transformed_snapshot_for_pivot(
 fn build_rendered_pivot_from_snapshot(
     pivot: &PivotTable,
     snapshot: Arc<SourceSnapshot>,
+    filter_baselines: &PivotFilterBaselines,
     options: &PivotRefreshOptions,
     date_system: DateSystem,
 ) -> Result<RenderedPivot> {
-    let plan = CompiledPivotPlan::compile(pivot, &snapshot, options, date_system)?;
+    let plan =
+        CompiledPivotPlan::compile(pivot, &snapshot, filter_baselines, options, date_system)?;
     let mut aggregation = PivotAggregation::aggregate_visible(&snapshot, &plan);
     let aggregate_restrictions = aggregation.apply_aggregate_filters(&plan);
     aggregation.apply_calculated_items(&pivot.name, &snapshot, &plan)?;
@@ -680,6 +695,7 @@ struct PivotRuntimeCache {
     structural_generation: u64,
     snapshots: AHashMap<SourceCacheKey, Arc<SourceSnapshot>>,
     transformed_snapshots: AHashMap<TransformedSnapshotCacheKey, Arc<SourceSnapshot>>,
+    item_filter_baselines: AHashMap<PivotItemFilterBaselineKey, PivotItemFilterBaseline>,
 }
 
 impl PivotRuntimeCache {
@@ -689,6 +705,7 @@ impl PivotRuntimeCache {
             structural_generation: workbook.structural_generation(),
             snapshots: AHashMap::new(),
             transformed_snapshots: AHashMap::new(),
+            item_filter_baselines: AHashMap::new(),
         }
     }
 
@@ -718,6 +735,45 @@ impl PivotRuntimeCache {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PivotItemFilterBaselineKey {
+    sheet_index: usize,
+    pivot_name: String,
+    field_name: String,
+}
+
+impl PivotItemFilterBaselineKey {
+    fn new(sheet_index: usize, pivot: &PivotTable, field_name: &str) -> Self {
+        Self {
+            sheet_index,
+            pivot_name: pivot.name.to_lowercase(),
+            field_name: field_name.to_lowercase(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PivotItemFilterBaseline {
+    allowed_items: AHashSet<PivotValue>,
+    known_items: AHashSet<PivotValue>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PivotFilterBaselines {
+    known_items_by_field: AHashMap<String, AHashSet<PivotValue>>,
+}
+
+impl PivotFilterBaselines {
+    fn insert(&mut self, field_name: &str, known_items: AHashSet<PivotValue>) {
+        self.known_items_by_field
+            .insert(field_name.to_lowercase(), known_items);
+    }
+
+    fn known_items(&self, field_name: &str) -> Option<&AHashSet<PivotValue>> {
+        self.known_items_by_field.get(&field_name.to_lowercase())
+    }
+}
+
 fn take_runtime_cache(workbook: &mut Workbook) -> PivotRuntimeCache {
     let mut cache = workbook
         .take_pivot_runtime_cache()
@@ -735,6 +791,63 @@ fn take_runtime_cache(workbook: &mut Workbook) -> PivotRuntimeCache {
     }
 
     cache
+}
+
+fn filter_baselines_for_pivot(
+    sheet_index: usize,
+    pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
+    cache: &mut PivotRuntimeCache,
+) -> PivotFilterBaselines {
+    let mut baselines = PivotFilterBaselines::default();
+    for filter in &pivot.filters {
+        let PivotFilter::FieldItems {
+            field,
+            allowed_items,
+        } = filter
+        else {
+            continue;
+        };
+        if !pivot_axis_field_includes_new_items(pivot, &field.name) {
+            continue;
+        }
+        let Some(field_index) = snapshot.field_index(&field.name) else {
+            continue;
+        };
+
+        let current_items = snapshot.columns[field_index]
+            .dictionary
+            .iter()
+            .cloned()
+            .collect::<AHashSet<_>>();
+        let allowed_items = allowed_items.iter().cloned().collect::<AHashSet<_>>();
+        let key = PivotItemFilterBaselineKey::new(sheet_index, pivot, &field.name);
+        let baseline =
+            cache
+                .item_filter_baselines
+                .entry(key)
+                .or_insert_with(|| PivotItemFilterBaseline {
+                    allowed_items: allowed_items.clone(),
+                    known_items: current_items.clone(),
+                });
+        if baseline.allowed_items != allowed_items {
+            baseline.allowed_items = allowed_items;
+            baseline.known_items = current_items;
+        }
+        baselines.insert(&field.name, baseline.known_items.clone());
+    }
+    baselines
+}
+
+fn pivot_axis_field_includes_new_items(pivot: &PivotTable, field_name: &str) -> bool {
+    pivot
+        .rows
+        .iter()
+        .chain(pivot.columns.iter())
+        .chain(pivot.page_fields.iter())
+        .any(|field| {
+            field.field.name.eq_ignore_ascii_case(field_name) && field.include_new_items_in_filter
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2177,6 +2290,7 @@ impl CompiledPivotPlan {
     fn compile(
         pivot: &PivotTable,
         snapshot: &SourceSnapshot,
+        filter_baselines: &PivotFilterBaselines,
         options: &PivotRefreshOptions,
         date_system: DateSystem,
     ) -> Result<Self> {
@@ -2229,6 +2343,7 @@ impl CompiledPivotPlan {
                         filter,
                         snapshot,
                         &pivot.name,
+                        filter_baselines,
                         options,
                         date_system,
                     )?);
@@ -2809,6 +2924,7 @@ impl CompiledFilter {
         filter: &PivotFilter,
         snapshot: &SourceSnapshot,
         pivot_name: &str,
+        filter_baselines: &PivotFilterBaselines,
         options: &PivotRefreshOptions,
         date_system: DateSystem,
     ) -> Result<Self> {
@@ -2821,7 +2937,13 @@ impl CompiledFilter {
                 let allowed_ids = allowed_items
                     .iter()
                     .filter_map(|value| snapshot.columns[field_index].id_for_value(value))
-                    .collect();
+                    .collect::<AHashSet<_>>();
+                let allowed_ids = allowed_ids_with_new_items(
+                    allowed_ids,
+                    snapshot,
+                    field_index,
+                    filter_baselines.known_items(&field.name),
+                );
                 Ok(Self::Items {
                     field_index,
                     allowed_ids,
@@ -3003,6 +3125,24 @@ impl CompiledFilter {
             _ => true,
         }
     }
+}
+
+fn allowed_ids_with_new_items(
+    mut allowed_ids: AHashSet<u32>,
+    snapshot: &SourceSnapshot,
+    field_index: usize,
+    known_items: Option<&AHashSet<PivotValue>>,
+) -> AHashSet<u32> {
+    let Some(known_items) = known_items else {
+        return allowed_ids;
+    };
+
+    for (item_id, value) in snapshot.columns[field_index].dictionary.iter().enumerate() {
+        if !known_items.contains(value) {
+            allowed_ids.insert(item_id as u32);
+        }
+    }
+    allowed_ids
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -9632,6 +9772,53 @@ mod tests {
         assert_eq!(text(&workbook, "D3"), "Grand Total");
         assert_eq!(number(&workbook, "E3"), 25.0);
         assert_eq!(text(&workbook, "D4"), "");
+    }
+
+    #[test]
+    fn refresh_includes_new_items_in_existing_filters() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let mut region = PivotField::new("Region");
+        region.include_new_items_in_filter = true;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row(region)
+            .measure("Revenue", PivotAggregate::Sum)
+            .filter(PivotFilter::field_items("Region", ["East"]))
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D2"), "East");
+        assert_eq!(number(&workbook, "E2"), 10.0);
+        assert_eq!(text(&workbook, "D3"), "Grand Total");
+        assert_eq!(number(&workbook, "E3"), 10.0);
+
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A4", "North").unwrap();
+        sheet.set_cell_value("B4", 8.0).unwrap();
+        sheet.pivot_tables_mut()[0].source = PivotSource::range(CellRange::parse("A1:B4").unwrap());
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D2"), "East");
+        assert_eq!(number(&workbook, "E2"), 10.0);
+        assert_eq!(text(&workbook, "D3"), "North");
+        assert_eq!(number(&workbook, "E3"), 8.0);
+        assert_eq!(text(&workbook, "D4"), "Grand Total");
+        assert_eq!(number(&workbook, "E4"), 18.0);
+        assert_eq!(text(&workbook, "D5"), "");
     }
 
     #[test]
