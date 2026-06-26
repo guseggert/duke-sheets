@@ -84,12 +84,27 @@ export interface JsPivotLabelFilterOptions {
   text: string
 }
 
+export interface JsPivotLabelBetweenFilterOptions {
+  kind: 'labelBetween' | 'label_between' | 'captionBetween' | 'caption_between' | 'labelNotBetween' | 'label_not_between' | 'captionNotBetween' | 'caption_not_between'
+  field: string
+  startText: string
+  endText: string
+}
+
 export interface JsPivotValueFilterOptions {
   kind: 'value'
   field: string
   measure: JsPivotMeasureOptions
   operator: JsPivotFilterOperator
   value: number
+}
+
+export interface JsPivotValueBetweenFilterOptions {
+  kind: 'valueBetween' | 'value_between' | 'valueRange' | 'value_range' | 'valueNotBetween' | 'value_not_between' | 'valueNotRange' | 'value_not_range'
+  field: string
+  measure: JsPivotMeasureOptions
+  start: number
+  end: number
 }
 
 export interface JsPivotDateFilterOptions {
@@ -124,7 +139,9 @@ export interface JsPivotTopNFilterOptions {
 export type JsPivotFilterOptions =
   | JsPivotItemFilterOptions
   | JsPivotLabelFilterOptions
+  | JsPivotLabelBetweenFilterOptions
   | JsPivotValueFilterOptions
+  | JsPivotValueBetweenFilterOptions
   | JsPivotDateFilterOptions
   | JsPivotDateBetweenFilterOptions
   | JsPivotDatePeriodFilterOptions

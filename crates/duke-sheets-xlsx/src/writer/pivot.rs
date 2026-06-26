@@ -252,6 +252,14 @@ fn validate_writable_pivot(pivot: &PivotTable) -> XlsxResult<()> {
                     pivot.name
                 )));
             }
+            PivotFilter::ValueBetween { start, end, .. }
+                if !start.is_finite() || !end.is_finite() =>
+            {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "pivot table {} uses a non-finite value range filter operand",
+                    pivot.name
+                )));
+            }
             PivotFilter::Date { value, .. } if !value.is_finite() => {
                 return Err(XlsxError::InvalidFormat(format!(
                     "pivot table {} uses a non-finite date filter operand",
@@ -283,11 +291,13 @@ fn is_writable_filter(filter: &PivotFilter) -> bool {
     match filter {
         PivotFilter::FieldItems { .. }
         | PivotFilter::Label { .. }
+        | PivotFilter::LabelBetween { .. }
         | PivotFilter::DateBetween { .. }
         | PivotFilter::TopN { .. } => true,
         PivotFilter::Date { operator, .. } => date_filter_type_name(*operator).is_some(),
         PivotFilter::DatePeriod { period, .. } => date_period_filter_type_name(*period).is_some(),
         PivotFilter::Value { operator, .. } => value_filter_type_name(*operator).is_some(),
+        PivotFilter::ValueBetween { .. } => true,
         PivotFilter::Unsupported { .. } => false,
     }
 }
@@ -843,10 +853,12 @@ fn filter_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
     match filter {
         PivotFilter::FieldItems { field, .. }
         | PivotFilter::Label { field, .. }
+        | PivotFilter::LabelBetween { field, .. }
         | PivotFilter::Date { field, .. }
         | PivotFilter::DateBetween { field, .. }
         | PivotFilter::DatePeriod { field, .. }
         | PivotFilter::Value { field, .. }
+        | PivotFilter::ValueBetween { field, .. }
         | PivotFilter::TopN { field, .. } => Some(field),
         PivotFilter::Unsupported { .. } => None,
     }
@@ -854,11 +866,12 @@ fn filter_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
 
 fn filter_measure_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
     match filter {
-        PivotFilter::Value { measure, .. } | PivotFilter::TopN { measure, .. } => {
-            Some(&measure.field)
-        }
+        PivotFilter::Value { measure, .. }
+        | PivotFilter::ValueBetween { measure, .. }
+        | PivotFilter::TopN { measure, .. } => Some(&measure.field),
         PivotFilter::FieldItems { .. }
         | PivotFilter::Label { .. }
+        | PivotFilter::LabelBetween { .. }
         | PivotFilter::Date { .. }
         | PivotFilter::DateBetween { .. }
         | PivotFilter::DatePeriod { .. }
@@ -2487,6 +2500,41 @@ fn write_pivot_filter(
             write_pivot_custom_filter(w, custom_filter_operator(*operator), &custom_value)?;
             w.write_event(Event::End(BytesEnd::new("filter")))?;
         }
+        PivotFilter::LabelBetween {
+            start,
+            end,
+            not_between,
+            ..
+        } => {
+            filter_el.push_attribute((
+                "type",
+                if *not_between {
+                    "captionNotBetween"
+                } else {
+                    "captionBetween"
+                },
+            ));
+            filter_el.push_attribute(("stringValue1", start.as_str()));
+            filter_el.push_attribute(("stringValue2", end.as_str()));
+            w.write_event(Event::Start(filter_el))?;
+            if *not_between {
+                write_pivot_custom_filters(
+                    w,
+                    false,
+                    &[("lessThan", start.clone()), ("greaterThan", end.clone())],
+                )?;
+            } else {
+                write_pivot_custom_filters(
+                    w,
+                    true,
+                    &[
+                        ("greaterThanOrEqual", start.clone()),
+                        ("lessThanOrEqual", end.clone()),
+                    ],
+                )?;
+            }
+            w.write_event(Event::End(BytesEnd::new("filter")))?;
+        }
         PivotFilter::Value {
             measure,
             operator,
@@ -2504,6 +2552,47 @@ fn write_pivot_filter(
             filter_el.push_attribute(("stringValue1", value.as_str()));
             w.write_event(Event::Start(filter_el))?;
             write_pivot_custom_filter(w, custom_filter_operator(*operator), &value)?;
+            w.write_event(Event::End(BytesEnd::new("filter")))?;
+        }
+        PivotFilter::ValueBetween {
+            measure,
+            start,
+            end,
+            not_between,
+            ..
+        } => {
+            let measure_index = measure_index_for_filter(pivot, measure)?;
+            let i_measure_fld = measure_index.to_string();
+            let start = start.to_string();
+            let end = end.to_string();
+            filter_el.push_attribute((
+                "type",
+                if *not_between {
+                    "valueNotBetween"
+                } else {
+                    "valueBetween"
+                },
+            ));
+            filter_el.push_attribute(("iMeasureFld", i_measure_fld.as_str()));
+            filter_el.push_attribute(("stringValue1", start.as_str()));
+            filter_el.push_attribute(("stringValue2", end.as_str()));
+            w.write_event(Event::Start(filter_el))?;
+            if *not_between {
+                write_pivot_custom_filters(
+                    w,
+                    false,
+                    &[("lessThan", start.clone()), ("greaterThan", end.clone())],
+                )?;
+            } else {
+                write_pivot_custom_filters(
+                    w,
+                    true,
+                    &[
+                        ("greaterThanOrEqual", start.clone()),
+                        ("lessThanOrEqual", end.clone()),
+                    ],
+                )?;
+            }
             w.write_event(Event::End(BytesEnd::new("filter")))?;
         }
         PivotFilter::Date {

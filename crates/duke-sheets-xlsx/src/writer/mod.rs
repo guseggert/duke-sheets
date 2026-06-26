@@ -5263,11 +5263,24 @@ mod tests {
                 operator: PivotFilterOperator::Contains,
                 value: "e".into(),
             })
+            .filter(PivotFilter::LabelBetween {
+                field: "Region".into(),
+                start: "East".into(),
+                end: "North".into(),
+                not_between: false,
+            })
             .filter(PivotFilter::Value {
                 field: "Region".into(),
                 measure: measure.clone(),
                 operator: PivotFilterOperator::GreaterThanOrEqual,
                 value: 20.0,
+            })
+            .filter(PivotFilter::ValueBetween {
+                field: "Region".into(),
+                measure: measure.clone(),
+                start: 10.0,
+                end: 30.0,
+                not_between: false,
             })
             .filter(PivotFilter::DateBetween {
                 field: "Date".into(),
@@ -5295,12 +5308,18 @@ mod tests {
         let bytes = out.into_inner();
 
         let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
-        assert!(pivot_xml.contains(r#"<filters count="5">"#));
+        assert!(pivot_xml.contains(r#"<filters count="7">"#));
         assert!(pivot_xml.contains(r#"type="captionContains""#));
         assert!(pivot_xml.contains(r#"stringValue1="e""#));
+        assert!(pivot_xml.contains(r#"type="captionBetween""#));
+        assert!(pivot_xml.contains(r#"stringValue1="East""#));
+        assert!(pivot_xml.contains(r#"stringValue2="North""#));
         assert!(pivot_xml.contains(r#"type="valueGreaterThanOrEqual""#));
         assert!(pivot_xml.contains(r#"iMeasureFld="0""#));
         assert!(pivot_xml.contains(r#"<customFilter operator="greaterThanOrEqual" val="20"/>"#));
+        assert!(pivot_xml.contains(r#"type="valueBetween""#));
+        assert!(pivot_xml.contains(r#"stringValue1="10""#));
+        assert!(pivot_xml.contains(r#"stringValue2="30""#));
         assert!(pivot_xml.contains(r#"type="dateBetween""#));
         assert!(pivot_xml.contains(&format!(r#"stringValue1="{date_start}""#)));
         assert!(pivot_xml.contains(&format!(r#"stringValue2="{date_end}""#)));
@@ -5321,7 +5340,7 @@ mod tests {
             .unwrap()
             .pivot_table_by_name("FilteredPivot")
             .unwrap();
-        assert_eq!(pivot.filters.len(), 5);
+        assert_eq!(pivot.filters.len(), 7);
         match &pivot.filters[0] {
             PivotFilter::Label {
                 field,
@@ -5335,6 +5354,20 @@ mod tests {
             other => panic!("unexpected pivot filter: {other:?}"),
         }
         match &pivot.filters[1] {
+            PivotFilter::LabelBetween {
+                field,
+                start,
+                end,
+                not_between,
+            } => {
+                assert_eq!(field.name, "Region");
+                assert_eq!(start, "East");
+                assert_eq!(end, "North");
+                assert!(!*not_between);
+            }
+            other => panic!("unexpected pivot filter: {other:?}"),
+        }
+        match &pivot.filters[2] {
             PivotFilter::Value {
                 field,
                 measure,
@@ -5350,7 +5383,25 @@ mod tests {
             }
             other => panic!("unexpected pivot filter: {other:?}"),
         }
-        match &pivot.filters[2] {
+        match &pivot.filters[3] {
+            PivotFilter::ValueBetween {
+                field,
+                measure,
+                start,
+                end,
+                not_between,
+            } => {
+                assert_eq!(field.name, "Region");
+                assert_eq!(measure.field.name, "Revenue");
+                assert_eq!(measure.aggregate, PivotAggregate::Sum);
+                assert_eq!(measure.name.as_deref(), Some("Revenue"));
+                assert_eq!(*start, 10.0);
+                assert_eq!(*end, 30.0);
+                assert!(!*not_between);
+            }
+            other => panic!("unexpected pivot filter: {other:?}"),
+        }
+        match &pivot.filters[4] {
             PivotFilter::DateBetween {
                 field,
                 start,
@@ -5364,14 +5415,14 @@ mod tests {
             }
             other => panic!("unexpected pivot filter: {other:?}"),
         }
-        match &pivot.filters[3] {
+        match &pivot.filters[5] {
             PivotFilter::DatePeriod { field, period } => {
                 assert_eq!(field.name, "Date");
                 assert_eq!(*period, PivotDatePeriod::Month(1));
             }
             other => panic!("unexpected pivot filter: {other:?}"),
         }
-        match &pivot.filters[4] {
+        match &pivot.filters[6] {
             PivotFilter::TopN {
                 field,
                 measure,

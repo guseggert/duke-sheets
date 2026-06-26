@@ -586,6 +586,17 @@ pub enum PivotFilter {
         /// String operand.
         value: String,
     },
+    /// Label/text range filter.
+    LabelBetween {
+        /// Field to filter.
+        field: PivotFieldRef,
+        /// Lower bound.
+        start: String,
+        /// Upper bound.
+        end: String,
+        /// Invert the range.
+        not_between: bool,
+    },
     /// Date/serial-date filter.
     Date {
         /// Field to filter.
@@ -623,6 +634,19 @@ pub enum PivotFilter {
         operator: PivotFilterOperator,
         /// Numeric operand.
         value: f64,
+    },
+    /// Value range filter against an aggregate measure.
+    ValueBetween {
+        /// Field to filter.
+        field: PivotFieldRef,
+        /// Measure to compare.
+        measure: PivotMeasure,
+        /// Lower bound.
+        start: f64,
+        /// Upper bound.
+        end: f64,
+        /// Invert the range.
+        not_between: bool,
     },
     /// Top/bottom item filter.
     TopN {

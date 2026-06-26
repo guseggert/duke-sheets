@@ -244,6 +244,23 @@ class TestPivotTables:
                         "text": "E",
                     },
                     {
+                        "kind": "label_between",
+                        "field": "Region",
+                        "start_text": "East",
+                        "end_text": "North",
+                    },
+                    {
+                        "kind": "value_between",
+                        "field": "Region",
+                        "measure": {
+                            "field": "Revenue",
+                            "aggregate": "sum",
+                            "name": "Revenue",
+                        },
+                        "start": 10,
+                        "end": 30,
+                    },
+                    {
                         "kind": "date_between",
                         "field": "Date",
                         "start": 45292,
@@ -319,12 +336,23 @@ class TestPivotTables:
         assert pivot["filters"][0]["kind"] == "label"
         assert pivot["filters"][0]["operator"] == "begins_with"
         assert pivot["filters"][1] == {
+            "kind": "label_between",
+            "field": "Region",
+            "start_text": "East",
+            "end_text": "North",
+        }
+        assert pivot["filters"][2]["kind"] == "value_between"
+        assert pivot["filters"][2]["field"] == "Region"
+        assert pivot["filters"][2]["measure"]["field"] == "Revenue"
+        assert pivot["filters"][2]["start"] == 10.0
+        assert pivot["filters"][2]["end"] == 30.0
+        assert pivot["filters"][3] == {
             "kind": "date_between",
             "field": "Date",
             "start": 45292.0,
             "end": 45322.0,
         }
-        assert pivot["filters"][2] == {
+        assert pivot["filters"][4] == {
             "kind": "date_period",
             "field": "Date",
             "period": "this_month",

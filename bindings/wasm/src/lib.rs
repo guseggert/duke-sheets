@@ -248,12 +248,27 @@ export interface PivotLabelFilterOptions {
   text: string;
 }
 
+export interface PivotLabelBetweenFilterOptions {
+  kind: "labelBetween" | "label_between" | "captionBetween" | "caption_between" | "labelNotBetween" | "label_not_between" | "captionNotBetween" | "caption_not_between";
+  field: string;
+  startText: string;
+  endText: string;
+}
+
 export interface PivotValueFilterOptions {
   kind: "value";
   field: string;
   measure: PivotMeasureOptions;
   operator: PivotFilterOperator;
   value: number;
+}
+
+export interface PivotValueBetweenFilterOptions {
+  kind: "valueBetween" | "value_between" | "valueRange" | "value_range" | "valueNotBetween" | "value_not_between" | "valueNotRange" | "value_not_range";
+  field: string;
+  measure: PivotMeasureOptions;
+  start: number;
+  end: number;
 }
 
 export interface PivotDateFilterOptions {
@@ -288,7 +303,9 @@ export interface PivotTopNFilterOptions {
 export type PivotFilterOptions =
   | PivotItemFilterOptions
   | PivotLabelFilterOptions
+  | PivotLabelBetweenFilterOptions
   | PivotValueFilterOptions
+  | PivotValueBetweenFilterOptions
   | PivotDateFilterOptions
   | PivotDateBetweenFilterOptions
   | PivotDatePeriodFilterOptions
@@ -1325,6 +1342,31 @@ fn build_pivot_filter_from_wasm(options: WasmPivotFilterOptions) -> Result<Pivot
                 .text
                 .ok_or_else(|| JsError::new("Pivot label filter requires text"))?,
         }),
+        "labelBetween" | "label_between" | "captionBetween" | "caption_between" => {
+            Ok(PivotFilter::LabelBetween {
+                field: options.field.into(),
+                start: options
+                    .start_text
+                    .or(options.text)
+                    .ok_or_else(|| JsError::new("Pivot label-between filter requires startText"))?,
+                end: options
+                    .end_text
+                    .ok_or_else(|| JsError::new("Pivot label-between filter requires endText"))?,
+                not_between: false,
+            })
+        }
+        "labelNotBetween" | "label_not_between" | "captionNotBetween" | "caption_not_between" => {
+            Ok(PivotFilter::LabelBetween {
+                field: options.field.into(),
+                start: options.start_text.or(options.text).ok_or_else(|| {
+                    JsError::new("Pivot label-not-between filter requires startText")
+                })?,
+                end: options
+                    .end_text
+                    .ok_or_else(|| JsError::new("Pivot label-not-between filter requires endText"))?,
+                not_between: true,
+            })
+        }
         "value" => Ok(PivotFilter::Value {
             field: options.field.into(),
             measure: build_pivot_measure_from_wasm(
@@ -1337,6 +1379,42 @@ fn build_pivot_filter_from_wasm(options: WasmPivotFilterOptions) -> Result<Pivot
                 .value
                 .ok_or_else(|| JsError::new("Pivot value filter requires value"))?,
         }),
+        "valueBetween" | "value_between" | "valueRange" | "value_range" => {
+            Ok(PivotFilter::ValueBetween {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_wasm(
+                    options
+                        .measure
+                        .ok_or_else(|| JsError::new("Pivot value-between filter requires measure"))?,
+                )?,
+                start: options
+                    .start
+                    .or(options.value)
+                    .ok_or_else(|| JsError::new("Pivot value-between filter requires start"))?,
+                end: options
+                    .end
+                    .ok_or_else(|| JsError::new("Pivot value-between filter requires end"))?,
+                not_between: false,
+            })
+        }
+        "valueNotBetween" | "value_not_between" | "valueNotRange" | "value_not_range" => {
+            Ok(PivotFilter::ValueBetween {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_wasm(
+                    options.measure.ok_or_else(|| {
+                        JsError::new("Pivot value-not-between filter requires measure")
+                    })?,
+                )?,
+                start: options
+                    .start
+                    .or(options.value)
+                    .ok_or_else(|| JsError::new("Pivot value-not-between filter requires start"))?,
+                end: options
+                    .end
+                    .ok_or_else(|| JsError::new("Pivot value-not-between filter requires end"))?,
+                not_between: true,
+            })
+        }
         "date" => Ok(PivotFilter::Date {
             field: options.field.into(),
             operator: parse_pivot_filter_operator(options.operator.as_deref())?,

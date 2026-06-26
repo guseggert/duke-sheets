@@ -363,6 +363,24 @@ fn test_pivot_table_definitions_from_options() {
         ("operator", JsValue::from_str("beginsWith")),
         ("text", JsValue::from_str("E")),
     ]);
+    let label_range_filter = make_options(&[
+        ("kind", JsValue::from_str("labelBetween")),
+        ("field", JsValue::from_str("Region")),
+        ("startText", JsValue::from_str("East")),
+        ("endText", JsValue::from_str("North")),
+    ]);
+    let value_range_measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let value_range_filter = make_options(&[
+        ("kind", JsValue::from_str("valueBetween")),
+        ("field", JsValue::from_str("Region")),
+        ("measure", value_range_measure),
+        ("start", JsValue::from_f64(10.0)),
+        ("end", JsValue::from_f64(30.0)),
+    ]);
     let date_filter = make_options(&[
         ("kind", JsValue::from_str("dateBetween")),
         ("field", JsValue::from_str("Date")),
@@ -425,7 +443,16 @@ fn test_pivot_table_definitions_from_options() {
         ("rowFields", make_array(&[row_field])),
         ("columns", make_array(&[JsValue::from_str("Quarter")])),
         ("measures", make_array(&[measure])),
-        ("filters", make_array(&[filter, date_filter, period_filter])),
+        (
+            "filters",
+            make_array(&[
+                filter,
+                label_range_filter,
+                value_range_filter,
+                date_filter,
+                period_filter,
+            ]),
+        ),
         ("calculatedFields", make_array(&[calculated])),
         ("calculatedItems", make_array(&[calculated_item])),
         ("refreshPolicy", refresh_policy),
@@ -474,12 +501,22 @@ fn test_pivot_table_definitions_from_options() {
     let filter = filters.get(0);
     assert_eq!(get_string_field(&filter, "kind"), "label");
     assert_eq!(get_string_field(&filter, "operator"), "beginsWith");
-    let date_filter = filters.get(1);
+    let label_range_filter = filters.get(1);
+    assert_eq!(get_string_field(&label_range_filter, "kind"), "labelBetween");
+    assert_eq!(get_string_field(&label_range_filter, "field"), "Region");
+    assert_eq!(get_string_field(&label_range_filter, "startText"), "East");
+    assert_eq!(get_string_field(&label_range_filter, "endText"), "North");
+    let value_range_filter = filters.get(2);
+    assert_eq!(get_string_field(&value_range_filter, "kind"), "valueBetween");
+    assert_eq!(get_string_field(&value_range_filter, "field"), "Region");
+    assert_eq!(get_f64_field(&value_range_filter, "start"), 10.0);
+    assert_eq!(get_f64_field(&value_range_filter, "end"), 30.0);
+    let date_filter = filters.get(3);
     assert_eq!(get_string_field(&date_filter, "kind"), "dateBetween");
     assert_eq!(get_string_field(&date_filter, "field"), "Date");
     assert_eq!(get_f64_field(&date_filter, "start"), 45292.0);
     assert_eq!(get_f64_field(&date_filter, "end"), 45322.0);
-    let period_filter = filters.get(2);
+    let period_filter = filters.get(4);
     assert_eq!(get_string_field(&period_filter, "kind"), "datePeriod");
     assert_eq!(get_string_field(&period_filter, "field"), "Date");
     assert_eq!(get_string_field(&period_filter, "period"), "thisMonth");

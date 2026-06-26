@@ -2131,6 +2131,7 @@ impl CompiledPivotPlan {
             match filter {
                 PivotFilter::FieldItems { .. }
                 | PivotFilter::Label { .. }
+                | PivotFilter::LabelBetween { .. }
                 | PivotFilter::Date { .. }
                 | PivotFilter::DateBetween { .. }
                 | PivotFilter::DatePeriod { .. } => {
@@ -2142,7 +2143,9 @@ impl CompiledPivotPlan {
                         date_system,
                     )?);
                 }
-                PivotFilter::Value { .. } | PivotFilter::TopN { .. } => {
+                PivotFilter::Value { .. }
+                | PivotFilter::ValueBetween { .. }
+                | PivotFilter::TopN { .. } => {
                     aggregate_filters.push(CompiledAggregateFilter::compile(
                         filter,
                         snapshot,
@@ -2655,6 +2658,12 @@ enum CompiledFilter {
         operator: PivotFilterOperator,
         value: String,
     },
+    LabelBetween {
+        field_index: usize,
+        lower: String,
+        upper: String,
+        not_between: bool,
+    },
     Date {
         field_index: usize,
         operator: PivotFilterOperator,
@@ -2718,8 +2727,28 @@ impl CompiledFilter {
             } => Ok(Self::Label {
                 field_index: field_index(snapshot, &field.name, pivot_name)?,
                 operator: *operator,
-                value: value.clone(),
+                value: value.to_lowercase(),
             }),
+            PivotFilter::LabelBetween {
+                field,
+                start,
+                end,
+                not_between,
+            } => {
+                let start = start.to_lowercase();
+                let end = end.to_lowercase();
+                let (lower, upper) = if start <= end {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                Ok(Self::LabelBetween {
+                    field_index: field_index(snapshot, &field.name, pivot_name)?,
+                    lower,
+                    upper,
+                    not_between: *not_between,
+                })
+            }
             PivotFilter::Date {
                 field,
                 operator,
@@ -2744,7 +2773,9 @@ impl CompiledFilter {
                 field_index: field_index(snapshot, &field.name, pivot_name)?,
                 period: compile_date_period(*period, options, date_system, pivot_name)?,
             }),
-            PivotFilter::Value { .. } | PivotFilter::TopN { .. } => Err(Error::other(format!(
+            PivotFilter::Value { .. }
+            | PivotFilter::ValueBetween { .. }
+            | PivotFilter::TopN { .. } => Err(Error::other(format!(
                 "pivot table {pivot_name} tried to compile an aggregate filter as a row filter"
             ))),
             PivotFilter::Unsupported { kind, .. } => Err(Error::other(format!(
@@ -2766,6 +2797,15 @@ impl CompiledFilter {
             } => {
                 let actual = snapshot.value(row, *field_index).to_string();
                 label_filter_matches(&actual, *operator, value)
+            }
+            Self::LabelBetween {
+                field_index,
+                lower,
+                upper,
+                not_between,
+            } => {
+                let actual = snapshot.value(row, *field_index).to_string();
+                label_between_filter_matches(&actual, lower, upper, *not_between)
             }
             Self::Date {
                 field_index,
@@ -2802,6 +2842,15 @@ impl CompiledFilter {
             } if *filter_index == field_index => {
                 let actual = snapshot.value_by_id(field_index, item_id).to_string();
                 label_filter_matches(&actual, *operator, value)
+            }
+            Self::LabelBetween {
+                field_index: filter_index,
+                lower,
+                upper,
+                not_between,
+            } if *filter_index == field_index => {
+                let actual = snapshot.value_by_id(field_index, item_id).to_string();
+                label_between_filter_matches(&actual, lower, upper, *not_between)
             }
             Self::Date {
                 field_index: filter_index,
@@ -2884,6 +2933,15 @@ enum CompiledAggregateFilter {
         operator: PivotFilterOperator,
         value: f64,
     },
+    ValueBetween {
+        axis: AggregateFilterAxis,
+        field_position: usize,
+        measure_index: usize,
+        aggregate: PivotAggregate,
+        start: f64,
+        end: f64,
+        not_between: bool,
+    },
     TopN {
         axis: AggregateFilterAxis,
         field_position: usize,
@@ -2929,6 +2987,32 @@ impl CompiledAggregateFilter {
                     value: *value,
                 })
             }
+            PivotFilter::ValueBetween {
+                field,
+                measure,
+                start,
+                end,
+                not_between,
+            } => {
+                let field_index = field_index(snapshot, &field.name, pivot_name)?;
+                let (axis, field_position) = aggregate_filter_axis(
+                    pivot_name,
+                    &field.name,
+                    field_index,
+                    row_indexes,
+                    column_indexes,
+                )?;
+                let measure_index = measure_index_for_filter(pivot_name, measures, measure)?;
+                Ok(Self::ValueBetween {
+                    axis,
+                    field_position,
+                    measure_index,
+                    aggregate: measure.aggregate,
+                    start: *start,
+                    end: *end,
+                    not_between: *not_between,
+                })
+            }
             PivotFilter::TopN {
                 field,
                 measure,
@@ -2963,15 +3047,17 @@ impl CompiledAggregateFilter {
 
     fn axis(&self) -> AggregateFilterAxis {
         match self {
-            Self::Value { axis, .. } | Self::TopN { axis, .. } => *axis,
+            Self::Value { axis, .. }
+            | Self::ValueBetween { axis, .. }
+            | Self::TopN { axis, .. } => *axis,
         }
     }
 
     fn field_position(&self) -> usize {
         match self {
-            Self::Value { field_position, .. } | Self::TopN { field_position, .. } => {
-                *field_position
-            }
+            Self::Value { field_position, .. }
+            | Self::ValueBetween { field_position, .. }
+            | Self::TopN { field_position, .. } => *field_position,
         }
     }
 
@@ -2992,6 +3078,19 @@ impl CompiledAggregateFilter {
                     numeric_filter_matches(actual, *operator, *value).then_some(item_id)
                 })
                 .collect(),
+            Self::ValueBetween {
+                start,
+                end,
+                not_between,
+                ..
+            } => item_states
+                .into_iter()
+                .filter_map(|(item_id, state)| {
+                    let actual = state.finalize_number(self.aggregate())?;
+                    number_between_filter_matches(actual, *start, *end, *not_between)
+                        .then_some(item_id)
+                })
+                .collect(),
             Self::TopN {
                 n, top, percent, ..
             } => top_n_item_ids(item_states, self.aggregate(), *n, *top, *percent),
@@ -3000,13 +3099,17 @@ impl CompiledAggregateFilter {
 
     fn measure_index(&self) -> usize {
         match self {
-            Self::Value { measure_index, .. } | Self::TopN { measure_index, .. } => *measure_index,
+            Self::Value { measure_index, .. }
+            | Self::ValueBetween { measure_index, .. }
+            | Self::TopN { measure_index, .. } => *measure_index,
         }
     }
 
     fn aggregate(&self) -> PivotAggregate {
         match self {
-            Self::Value { aggregate, .. } | Self::TopN { aggregate, .. } => *aggregate,
+            Self::Value { aggregate, .. }
+            | Self::ValueBetween { aggregate, .. }
+            | Self::TopN { aggregate, .. } => *aggregate,
         }
     }
 }
@@ -3064,20 +3167,29 @@ fn measure_index_for_filter(
 
 fn label_filter_matches(actual: &str, operator: PivotFilterOperator, expected: &str) -> bool {
     let actual_folded = actual.to_lowercase();
-    let expected_folded = expected.to_lowercase();
     match operator {
-        PivotFilterOperator::Equals => actual_folded == expected_folded,
-        PivotFilterOperator::NotEquals => actual_folded != expected_folded,
-        PivotFilterOperator::LessThan => actual_folded < expected_folded,
-        PivotFilterOperator::LessThanOrEqual => actual_folded <= expected_folded,
-        PivotFilterOperator::GreaterThan => actual_folded > expected_folded,
-        PivotFilterOperator::GreaterThanOrEqual => actual_folded >= expected_folded,
-        PivotFilterOperator::BeginsWith => actual_folded.starts_with(&expected_folded),
-        PivotFilterOperator::DoesNotBeginWith => !actual_folded.starts_with(&expected_folded),
-        PivotFilterOperator::EndsWith => actual_folded.ends_with(&expected_folded),
-        PivotFilterOperator::DoesNotEndWith => !actual_folded.ends_with(&expected_folded),
-        PivotFilterOperator::Contains => actual_folded.contains(&expected_folded),
-        PivotFilterOperator::DoesNotContain => !actual_folded.contains(&expected_folded),
+        PivotFilterOperator::Equals => actual_folded.as_str() == expected,
+        PivotFilterOperator::NotEquals => actual_folded.as_str() != expected,
+        PivotFilterOperator::LessThan => actual_folded.as_str() < expected,
+        PivotFilterOperator::LessThanOrEqual => actual_folded.as_str() <= expected,
+        PivotFilterOperator::GreaterThan => actual_folded.as_str() > expected,
+        PivotFilterOperator::GreaterThanOrEqual => actual_folded.as_str() >= expected,
+        PivotFilterOperator::BeginsWith => actual_folded.starts_with(expected),
+        PivotFilterOperator::DoesNotBeginWith => !actual_folded.starts_with(expected),
+        PivotFilterOperator::EndsWith => actual_folded.ends_with(expected),
+        PivotFilterOperator::DoesNotEndWith => !actual_folded.ends_with(expected),
+        PivotFilterOperator::Contains => actual_folded.contains(expected),
+        PivotFilterOperator::DoesNotContain => !actual_folded.contains(expected),
+    }
+}
+
+fn label_between_filter_matches(actual: &str, lower: &str, upper: &str, not_between: bool) -> bool {
+    let actual = actual.to_lowercase();
+    let between = actual.as_str() >= lower && actual.as_str() <= upper;
+    if not_between {
+        !between
+    } else {
+        between
     }
 }
 
@@ -3098,14 +3210,7 @@ fn numeric_filter_matches(actual: f64, operator: PivotFilterOperator, expected: 
     }
 }
 
-fn date_filter_matches(actual: f64, operator: PivotFilterOperator, expected: f64) -> bool {
-    if !actual.is_finite() || !expected.is_finite() {
-        return false;
-    }
-    numeric_filter_matches(actual, operator, expected)
-}
-
-fn date_between_filter_matches(actual: f64, start: f64, end: f64, not_between: bool) -> bool {
+fn number_between_filter_matches(actual: f64, start: f64, end: f64, not_between: bool) -> bool {
     if !actual.is_finite() || !start.is_finite() || !end.is_finite() {
         return false;
     }
@@ -3117,6 +3222,17 @@ fn date_between_filter_matches(actual: f64, start: f64, end: f64, not_between: b
     } else {
         between
     }
+}
+
+fn date_filter_matches(actual: f64, operator: PivotFilterOperator, expected: f64) -> bool {
+    if !actual.is_finite() || !expected.is_finite() {
+        return false;
+    }
+    numeric_filter_matches(actual, operator, expected)
+}
+
+fn date_between_filter_matches(actual: f64, start: f64, end: f64, not_between: bool) -> bool {
+    number_between_filter_matches(actual, start, end, not_between)
 }
 
 fn compile_date_period(
@@ -8113,6 +8229,72 @@ mod tests {
         assert_eq!(text(&workbook, "D3"), "Grand Total");
         assert_eq!(number(&workbook, "E3"), 10.0);
         assert_eq!(text(&workbook, "D4"), "");
+    }
+
+    #[test]
+    fn refresh_applies_range_filters() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "East").unwrap();
+        sheet.set_cell_value("B4", 15.0).unwrap();
+        sheet.set_cell_value("A5", "North").unwrap();
+        sheet.set_cell_value("B5", 5.0).unwrap();
+
+        let label_range = PivotTable::builder("LabelRange")
+            .source_range(CellRange::parse("A1:B5").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .filter(PivotFilter::LabelBetween {
+                field: "Region".into(),
+                start: "East".into(),
+                end: "North".into(),
+                not_between: false,
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(label_range).unwrap();
+
+        let measure = PivotMeasure::new("Revenue", PivotAggregate::Sum);
+        let value_range = PivotTable::builder("ValueRange")
+            .source_range(CellRange::parse("A1:B5").unwrap())
+            .target_address("G1")
+            .unwrap()
+            .row("Region")
+            .pivot_measure(measure.clone())
+            .filter(PivotFilter::ValueBetween {
+                field: "Region".into(),
+                measure,
+                start: 10.0,
+                end: 25.0,
+                not_between: false,
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(value_range).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D2"), "East");
+        assert_eq!(number(&workbook, "E2"), 25.0);
+        assert_eq!(text(&workbook, "D3"), "North");
+        assert_eq!(number(&workbook, "E3"), 5.0);
+        assert_eq!(text(&workbook, "D4"), "Grand Total");
+        assert_eq!(number(&workbook, "E4"), 30.0);
+
+        assert_eq!(text(&workbook, "G2"), "East");
+        assert_eq!(number(&workbook, "H2"), 25.0);
+        assert_eq!(text(&workbook, "G3"), "West");
+        assert_eq!(number(&workbook, "H3"), 20.0);
+        assert_eq!(text(&workbook, "G4"), "Grand Total");
+        assert_eq!(number(&workbook, "H4"), 45.0);
     }
 
     #[test]

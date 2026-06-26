@@ -350,6 +350,8 @@ pub struct JsPivotFilterOptions {
     pub items: Option<Vec<String>>,
     pub operator: Option<String>,
     pub text: Option<String>,
+    pub start_text: Option<String>,
+    pub end_text: Option<String>,
     pub period: Option<String>,
     pub measure: Option<JsPivotMeasureOptions>,
     pub value: Option<f64>,
@@ -1263,6 +1265,30 @@ fn build_pivot_filter_from_js(options: JsPivotFilterOptions) -> Result<PivotFilt
                 .text
                 .ok_or_else(|| napi::Error::from_reason("Pivot label filter requires text"))?,
         }),
+        "labelBetween" | "label_between" | "captionBetween" | "caption_between" => {
+            Ok(PivotFilter::LabelBetween {
+                field: options.field.into(),
+                start: options.start_text.or(options.text).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot label-between filter requires startText")
+                })?,
+                end: options.end_text.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot label-between filter requires endText")
+                })?,
+                not_between: false,
+            })
+        }
+        "labelNotBetween" | "label_not_between" | "captionNotBetween" | "caption_not_between" => {
+            Ok(PivotFilter::LabelBetween {
+                field: options.field.into(),
+                start: options.start_text.or(options.text).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot label-not-between filter requires startText")
+                })?,
+                end: options.end_text.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot label-not-between filter requires endText")
+                })?,
+                not_between: true,
+            })
+        }
         "value" => {
             Ok(PivotFilter::Value {
                 field: options.field.into(),
@@ -1273,6 +1299,36 @@ fn build_pivot_filter_from_js(options: JsPivotFilterOptions) -> Result<PivotFilt
                 value: options
                     .value
                     .ok_or_else(|| napi::Error::from_reason("Pivot value filter requires value"))?,
+            })
+        }
+        "valueBetween" | "value_between" | "valueRange" | "value_range" => {
+            Ok(PivotFilter::ValueBetween {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_js(options.measure.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-between filter requires measure")
+                })?)?,
+                start: options.start.or(options.value).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-between filter requires start")
+                })?,
+                end: options.end.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-between filter requires end")
+                })?,
+                not_between: false,
+            })
+        }
+        "valueNotBetween" | "value_not_between" | "valueNotRange" | "value_not_range" => {
+            Ok(PivotFilter::ValueBetween {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_js(options.measure.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-not-between filter requires measure")
+                })?)?,
+                start: options.start.or(options.value).ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-not-between filter requires start")
+                })?,
+                end: options.end.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value-not-between filter requires end")
+                })?,
+                not_between: true,
             })
         }
         "date" => Ok(PivotFilter::Date {

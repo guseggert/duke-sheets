@@ -961,6 +961,18 @@ struct CurrentPivotFilter {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LabelPivotFilterType {
+    Comparison(PivotFilterOperator),
+    Between { not_between: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValuePivotFilterType {
+    Comparison(PivotFilterOperator),
+    Between { not_between: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DatePivotFilterType {
     Comparison(PivotFilterOperator),
     Between { not_between: bool },
@@ -1431,24 +1443,58 @@ fn pivot_filter_from_context(
     measures: &[PivotMeasure],
 ) -> Option<PivotFilter> {
     let field = cache.fields.get(filter.field_index)?;
-    if let Some(operator) = parse_label_filter_type(&filter.filter_type) {
-        let value = pivot_filter_operand1(&filter).unwrap_or_default();
-        return Some(PivotFilter::Label {
-            field: duke_sheets_core::PivotFieldRef::new(field.name.clone()),
-            operator,
-            value,
-        });
+    if let Some(filter_type) = parse_label_filter_type(&filter.filter_type) {
+        let field = duke_sheets_core::PivotFieldRef::new(field.name.clone());
+        return match filter_type {
+            LabelPivotFilterType::Comparison(operator) => {
+                let value = pivot_filter_operand1(&filter).unwrap_or_default();
+                Some(PivotFilter::Label {
+                    field,
+                    operator,
+                    value,
+                })
+            }
+            LabelPivotFilterType::Between { not_between } => {
+                let start = pivot_filter_operand1(&filter)?;
+                let end = pivot_filter_operand2(&filter)?;
+                Some(PivotFilter::LabelBetween {
+                    field,
+                    start,
+                    end,
+                    not_between,
+                })
+            }
+        };
     }
 
-    if let Some(operator) = parse_value_filter_type(&filter.filter_type) {
-        let value = pivot_filter_operand1(&filter).and_then(|value| value.parse::<f64>().ok())?;
+    if let Some(filter_type) = parse_value_filter_type(&filter.filter_type) {
         let measure = measure_for_pivot_filter(filter.measure_index, measures)?.clone();
-        return Some(PivotFilter::Value {
-            field: duke_sheets_core::PivotFieldRef::new(field.name.clone()),
-            measure,
-            operator,
-            value,
-        });
+        let field = duke_sheets_core::PivotFieldRef::new(field.name.clone());
+        return match filter_type {
+            ValuePivotFilterType::Comparison(operator) => {
+                let value =
+                    pivot_filter_operand1(&filter).and_then(|value| value.parse::<f64>().ok())?;
+                Some(PivotFilter::Value {
+                    field,
+                    measure,
+                    operator,
+                    value,
+                })
+            }
+            ValuePivotFilterType::Between { not_between } => {
+                let start =
+                    pivot_filter_operand1(&filter).and_then(|value| value.parse::<f64>().ok())?;
+                let end =
+                    pivot_filter_operand2(&filter).and_then(|value| value.parse::<f64>().ok())?;
+                Some(PivotFilter::ValueBetween {
+                    field,
+                    measure,
+                    start,
+                    end,
+                    not_between,
+                })
+            }
+        };
     }
 
     if let Some(filter_type) = parse_date_filter_type(&filter.filter_type) {
@@ -1521,32 +1567,50 @@ fn measure_for_pivot_filter(
     }
 }
 
-fn parse_label_filter_type(value: &str) -> Option<PivotFilterOperator> {
+fn parse_label_filter_type(value: &str) -> Option<LabelPivotFilterType> {
     Some(match value {
-        "captionEqual" => PivotFilterOperator::Equals,
-        "captionNotEqual" => PivotFilterOperator::NotEquals,
-        "captionLessThan" => PivotFilterOperator::LessThan,
-        "captionLessThanOrEqual" => PivotFilterOperator::LessThanOrEqual,
-        "captionGreaterThan" => PivotFilterOperator::GreaterThan,
-        "captionGreaterThanOrEqual" => PivotFilterOperator::GreaterThanOrEqual,
-        "captionBeginsWith" => PivotFilterOperator::BeginsWith,
-        "captionNotBeginsWith" => PivotFilterOperator::DoesNotBeginWith,
-        "captionEndsWith" => PivotFilterOperator::EndsWith,
-        "captionNotEndsWith" => PivotFilterOperator::DoesNotEndWith,
-        "captionContains" => PivotFilterOperator::Contains,
-        "captionNotContains" => PivotFilterOperator::DoesNotContain,
+        "captionEqual" => LabelPivotFilterType::Comparison(PivotFilterOperator::Equals),
+        "captionNotEqual" => LabelPivotFilterType::Comparison(PivotFilterOperator::NotEquals),
+        "captionLessThan" => LabelPivotFilterType::Comparison(PivotFilterOperator::LessThan),
+        "captionLessThanOrEqual" => {
+            LabelPivotFilterType::Comparison(PivotFilterOperator::LessThanOrEqual)
+        }
+        "captionGreaterThan" => LabelPivotFilterType::Comparison(PivotFilterOperator::GreaterThan),
+        "captionGreaterThanOrEqual" => {
+            LabelPivotFilterType::Comparison(PivotFilterOperator::GreaterThanOrEqual)
+        }
+        "captionBeginsWith" => LabelPivotFilterType::Comparison(PivotFilterOperator::BeginsWith),
+        "captionNotBeginsWith" => {
+            LabelPivotFilterType::Comparison(PivotFilterOperator::DoesNotBeginWith)
+        }
+        "captionEndsWith" => LabelPivotFilterType::Comparison(PivotFilterOperator::EndsWith),
+        "captionNotEndsWith" => {
+            LabelPivotFilterType::Comparison(PivotFilterOperator::DoesNotEndWith)
+        }
+        "captionContains" => LabelPivotFilterType::Comparison(PivotFilterOperator::Contains),
+        "captionNotContains" => {
+            LabelPivotFilterType::Comparison(PivotFilterOperator::DoesNotContain)
+        }
+        "captionBetween" => LabelPivotFilterType::Between { not_between: false },
+        "captionNotBetween" => LabelPivotFilterType::Between { not_between: true },
         _ => return None,
     })
 }
 
-fn parse_value_filter_type(value: &str) -> Option<PivotFilterOperator> {
+fn parse_value_filter_type(value: &str) -> Option<ValuePivotFilterType> {
     Some(match value {
-        "valueEqual" => PivotFilterOperator::Equals,
-        "valueNotEqual" => PivotFilterOperator::NotEquals,
-        "valueLessThan" => PivotFilterOperator::LessThan,
-        "valueLessThanOrEqual" => PivotFilterOperator::LessThanOrEqual,
-        "valueGreaterThan" => PivotFilterOperator::GreaterThan,
-        "valueGreaterThanOrEqual" => PivotFilterOperator::GreaterThanOrEqual,
+        "valueEqual" => ValuePivotFilterType::Comparison(PivotFilterOperator::Equals),
+        "valueNotEqual" => ValuePivotFilterType::Comparison(PivotFilterOperator::NotEquals),
+        "valueLessThan" => ValuePivotFilterType::Comparison(PivotFilterOperator::LessThan),
+        "valueLessThanOrEqual" => {
+            ValuePivotFilterType::Comparison(PivotFilterOperator::LessThanOrEqual)
+        }
+        "valueGreaterThan" => ValuePivotFilterType::Comparison(PivotFilterOperator::GreaterThan),
+        "valueGreaterThanOrEqual" => {
+            ValuePivotFilterType::Comparison(PivotFilterOperator::GreaterThanOrEqual)
+        }
+        "valueBetween" => ValuePivotFilterType::Between { not_between: false },
+        "valueNotBetween" => ValuePivotFilterType::Between { not_between: true },
         _ => return None,
     })
 }
@@ -1930,11 +1994,74 @@ mod tests {
     }
 
     #[test]
+    fn range_pivot_filter_types_are_parsed() {
+        let cache = minimal_cache_with_field("Region");
+        let filter = CurrentPivotFilter {
+            field_index: 0,
+            filter_type: "captionBetween".to_string(),
+            measure_index: None,
+            string_value1: Some("East".to_string()),
+            string_value2: Some("North".to_string()),
+            custom_values: Vec::new(),
+            top: None,
+            percent: None,
+            top_n: None,
+        };
+
+        let parsed = pivot_filter_from_context(filter, &cache, &[]).expect("caption range filter");
+        match parsed {
+            PivotFilter::LabelBetween {
+                field,
+                start,
+                end,
+                not_between,
+            } => {
+                assert_eq!(field.name, "Region");
+                assert_eq!(start, "East");
+                assert_eq!(end, "North");
+                assert!(!not_between);
+            }
+            other => panic!("unexpected filter: {other:?}"),
+        }
+
+        let measures = vec![PivotMeasure::new("Revenue", PivotAggregate::Sum)];
+        let filter = CurrentPivotFilter {
+            field_index: 0,
+            filter_type: "valueNotBetween".to_string(),
+            measure_index: Some(0),
+            string_value1: None,
+            string_value2: None,
+            custom_values: vec!["10".to_string(), "30".to_string()],
+            top: None,
+            percent: None,
+            top_n: None,
+        };
+
+        let parsed = pivot_filter_from_context(filter, &cache, &measures).expect("value range");
+        match parsed {
+            PivotFilter::ValueBetween {
+                field,
+                measure,
+                start,
+                end,
+                not_between,
+            } => {
+                assert_eq!(field.name, "Region");
+                assert_eq!(measure.field.name, "Revenue");
+                assert_eq!(start, 10.0);
+                assert_eq!(end, 30.0);
+                assert!(not_between);
+            }
+            other => panic!("unexpected filter: {other:?}"),
+        }
+    }
+
+    #[test]
     fn unsupported_pivot_filter_types_are_preserved() {
         let cache = minimal_cache_with_field("Region");
         let filter = CurrentPivotFilter {
             field_index: 0,
-            filter_type: "valueBetween".to_string(),
+            filter_type: "captionAboveAverage".to_string(),
             measure_index: None,
             string_value1: None,
             string_value2: None,
@@ -1947,7 +2074,7 @@ mod tests {
         let parsed = pivot_filter_from_context(filter, &cache, &[]).expect("preserved filter");
         match parsed {
             PivotFilter::Unsupported { kind, detail } => {
-                assert_eq!(kind, "valueBetween");
+                assert_eq!(kind, "captionAboveAverage");
                 assert_eq!(detail.as_deref(), Some("field=Region"));
             }
             other => panic!("unexpected filter: {other:?}"),

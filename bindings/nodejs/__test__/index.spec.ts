@@ -222,6 +222,14 @@ describe("PivotTables", () => {
       ],
       filters: [
         { kind: "label", field: "Region", operator: "beginsWith", text: "E" },
+        { kind: "labelBetween", field: "Region", startText: "East", endText: "North" },
+        {
+          kind: "valueBetween",
+          field: "Region",
+          measure: { field: "Revenue", aggregate: "sum", name: "Revenue" },
+          start: 10,
+          end: 30,
+        },
         { kind: "dateBetween", field: "Date", start: 45292, end: 45322 },
         { kind: "datePeriod", field: "Date", period: "thisMonth" },
       ],
@@ -293,12 +301,24 @@ describe("PivotTables", () => {
       text: "E",
     });
     expect(pivot?.filters[1]).toMatchObject({
+      kind: "labelBetween",
+      field: "Region",
+      startText: "East",
+      endText: "North",
+    });
+    expect(pivot?.filters[2]).toMatchObject({
+      kind: "valueBetween",
+      field: "Region",
+      start: 10,
+      end: 30,
+    });
+    expect(pivot?.filters[3]).toMatchObject({
       kind: "dateBetween",
       field: "Date",
       start: 45292,
       end: 45322,
     });
-    expect(pivot?.filters[2]).toMatchObject({
+    expect(pivot?.filters[4]).toMatchObject({
       kind: "datePeriod",
       field: "Date",
       period: "thisMonth",
