@@ -4979,7 +4979,7 @@ fn render_pivot(
         (false, true) => render_without_column_fields(pivot, snapshot, plan, aggregation),
         (false, false) => render_with_column_fields(pivot, snapshot, plan, aggregation),
     };
-    let page_field_row_count = page_field_row_count(plan);
+    let page_field_row_count = page_field_row_count(pivot, plan);
     if page_field_row_count > 0 {
         for offset in &mut row_page_break_offsets {
             *offset += page_field_row_count;
@@ -4996,7 +4996,7 @@ fn render_pivot(
     }
     let mut column_number_formats = pivot_column_number_formats(pivot, plan, aggregation);
     column_number_formats.resize(width, None);
-    let data_start_row = pivot_data_start_row(plan);
+    let data_start_row = pivot_data_start_row(pivot, plan);
 
     let range = output_range(pivot.target, cells.len(), width)?;
     Ok(RenderedPivot {
@@ -5013,16 +5013,32 @@ fn compact_row_layout(pivot: &PivotTable, plan: &CompiledPivotPlan) -> bool {
     matches!(pivot.layout.kind, PivotLayoutKind::Compact) && plan.row_indexes.len() > 1
 }
 
-fn pivot_data_start_row(plan: &CompiledPivotPlan) -> usize {
+fn pivot_data_start_row(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usize {
+    page_field_row_count(pivot, plan) as usize + 1
+}
+
+fn page_field_row_count(pivot: &PivotTable, plan: &CompiledPivotPlan) -> u32 {
     if plan.page_fields.is_empty() {
-        1
+        0
     } else {
-        plan.page_fields.len() + 2
+        page_field_display_row_count(pivot, plan) as u32 + 1
     }
 }
 
-fn page_field_row_count(plan: &CompiledPivotPlan) -> u32 {
-    pivot_data_start_row(plan).saturating_sub(1) as u32
+fn page_field_display_row_count(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usize {
+    let count = plan.page_fields.len();
+    if count == 0 {
+        return 0;
+    }
+
+    let wrap = pivot.layout.page_wrap as usize;
+    if wrap == 0 {
+        count
+    } else if pivot.layout.page_over_then_down {
+        (count + wrap - 1) / wrap
+    } else {
+        wrap.min(count)
+    }
 }
 
 fn pivot_row_page_break_offsets(
@@ -5958,21 +5974,45 @@ fn prepend_page_fields(
         return;
     }
 
-    let mut rows = Vec::with_capacity(plan.page_fields.len() + 1);
-    for (field, field_index) in plan.page_fields.iter().zip(plan.page_indexes.iter()) {
-        rows.push(vec![
-            CellValue::string(&field.field.name),
-            CellValue::string(page_field_caption(
-                pivot,
-                snapshot,
-                *field_index,
-                &field.field.name,
-            )),
-        ]);
+    let display_rows = page_field_display_row_count(pivot, plan);
+    let mut rows = vec![Vec::new(); display_rows];
+    for (index, (field, field_index)) in plan
+        .page_fields
+        .iter()
+        .zip(plan.page_indexes.iter())
+        .enumerate()
+    {
+        let (row, column) = page_field_grid_position(pivot, index, display_rows);
+        let start_column = column * 2;
+        let values = &mut rows[row];
+        values.resize(start_column + 2, CellValue::Empty);
+        values[start_column] = CellValue::string(&field.field.name);
+        values[start_column + 1] = CellValue::string(page_field_caption(
+            pivot,
+            snapshot,
+            *field_index,
+            &field.field.name,
+        ));
     }
     rows.push(Vec::new());
     rows.append(cells);
     *cells = rows;
+}
+
+fn page_field_grid_position(
+    pivot: &PivotTable,
+    index: usize,
+    display_rows: usize,
+) -> (usize, usize) {
+    let wrap = pivot.layout.page_wrap as usize;
+    if wrap == 0 {
+        (index, 0)
+    } else if pivot.layout.page_over_then_down {
+        (index / wrap, index % wrap)
+    } else {
+        debug_assert!(display_rows > 0);
+        (index % display_rows, index / display_rows)
+    }
 }
 
 fn page_field_caption(
@@ -6669,6 +6709,45 @@ mod tests {
         layout.kind = PivotLayoutKind::Tabular;
         layout.repeat_item_labels = true;
         layout
+    }
+
+    fn workbook_with_wrapped_page_fields(page_over_then_down: bool) -> Workbook {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Channel").unwrap();
+        sheet.set_cell_value("D1", "Country").unwrap();
+        sheet.set_cell_value("E1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", "Online").unwrap();
+        sheet.set_cell_value("D2", "US").unwrap();
+        sheet.set_cell_value("E2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Wholesale").unwrap();
+        sheet.set_cell_value("C3", "Store").unwrap();
+        sheet.set_cell_value("D3", "CA").unwrap();
+        sheet.set_cell_value("E3", 20.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.page_wrap = 2;
+        layout.page_over_then_down = page_over_then_down;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:E3").unwrap())
+            .target_address("G1")
+            .unwrap()
+            .page("Segment")
+            .page("Channel")
+            .page("Country")
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook
     }
 
     #[test]
@@ -8894,6 +8973,48 @@ mod tests {
         assert_eq!(number(&workbook, "F4"), 25.0);
         assert_eq!(text(&workbook, "E5"), "Grand Total");
         assert_eq!(number(&workbook, "F5"), 25.0);
+    }
+
+    #[test]
+    fn refresh_wraps_page_fields_down_then_over() {
+        let mut workbook = workbook_with_wrapped_page_fields(false);
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "G1"), "Segment");
+        assert_eq!(text(&workbook, "H1"), "(All)");
+        assert_eq!(text(&workbook, "I1"), "Country");
+        assert_eq!(text(&workbook, "J1"), "(All)");
+        assert_eq!(text(&workbook, "G2"), "Channel");
+        assert_eq!(text(&workbook, "H2"), "(All)");
+        assert_eq!(text(&workbook, "I2"), "");
+        assert_eq!(text(&workbook, "J2"), "");
+        assert_eq!(text(&workbook, "G4"), "Region");
+        assert_eq!(text(&workbook, "G5"), "East");
+        assert_eq!(number(&workbook, "H5"), 10.0);
+        assert_eq!(text(&workbook, "G6"), "West");
+        assert_eq!(number(&workbook, "H6"), 20.0);
+    }
+
+    #[test]
+    fn refresh_wraps_page_fields_over_then_down() {
+        let mut workbook = workbook_with_wrapped_page_fields(true);
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "G1"), "Segment");
+        assert_eq!(text(&workbook, "H1"), "(All)");
+        assert_eq!(text(&workbook, "I1"), "Channel");
+        assert_eq!(text(&workbook, "J1"), "(All)");
+        assert_eq!(text(&workbook, "G2"), "Country");
+        assert_eq!(text(&workbook, "H2"), "(All)");
+        assert_eq!(text(&workbook, "I2"), "");
+        assert_eq!(text(&workbook, "J2"), "");
+        assert_eq!(text(&workbook, "G4"), "Region");
+        assert_eq!(text(&workbook, "G5"), "East");
+        assert_eq!(number(&workbook, "H5"), 10.0);
+        assert_eq!(text(&workbook, "G6"), "West");
+        assert_eq!(number(&workbook, "H6"), 20.0);
     }
 
     #[test]
