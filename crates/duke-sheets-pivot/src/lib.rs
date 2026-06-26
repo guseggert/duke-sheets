@@ -1409,6 +1409,7 @@ fn table_data_end_row(table: &Table) -> Option<u32> {
 
 #[derive(Debug, Clone)]
 struct SourceSnapshot {
+    source_name: Option<String>,
     headers: Vec<String>,
     columns: Vec<EncodedColumn>,
     row_count: usize,
@@ -1444,6 +1445,9 @@ impl SourceSnapshot {
         let columns = source_snapshot_columns(worksheet, source, col_count, row_count);
 
         Ok(Self {
+            source_name: matches!(source.kind, SourceCacheKind::Table)
+                .then(|| source.source_name.clone())
+                .flatten(),
             headers,
             columns,
             row_count,
@@ -1477,6 +1481,7 @@ impl SourceSnapshot {
 
         let columns = consolidation_snapshot_columns(workbook, sources, col_count, row_count)?;
         Ok(Self {
+            source_name: None,
             headers,
             columns,
             row_count,
@@ -1531,6 +1536,7 @@ impl SourceSnapshot {
                 &columns,
                 self.row_count,
                 &lookup,
+                self.source_name.as_deref(),
                 workbook_context,
             )?;
             let mut column = EncodedColumn::with_capacity(self.row_count);
@@ -1542,6 +1548,7 @@ impl SourceSnapshot {
         }
 
         Ok(Self {
+            source_name: self.source_name.clone(),
             headers,
             columns,
             row_count: self.row_count,
@@ -1584,6 +1591,7 @@ impl SourceSnapshot {
         }
 
         Ok(Self {
+            source_name: self.source_name.clone(),
             headers,
             columns,
             row_count: self.row_count,
@@ -1623,6 +1631,7 @@ impl SourceSnapshot {
         }
 
         Ok(Self {
+            source_name: self.source_name.clone(),
             headers,
             columns,
             row_count: self.row_count,
@@ -1860,6 +1869,7 @@ fn evaluate_calculated_values(
     columns: &[EncodedColumn],
     row_count: usize,
     lookup: &AHashMap<String, usize>,
+    source_name: Option<&str>,
     workbook_context: Option<CalculatedWorkbookContext<'_>>,
 ) -> Result<Vec<PivotValue>> {
     #[cfg(feature = "parallel")]
@@ -1875,6 +1885,7 @@ fn evaluate_calculated_values(
                         columns,
                         row,
                         lookup,
+                        source_name,
                         workbook_context,
                     )
                 })
@@ -1891,6 +1902,7 @@ fn evaluate_calculated_values(
                 columns,
                 row,
                 lookup,
+                source_name,
                 workbook_context,
             )
         })
@@ -1904,6 +1916,7 @@ fn evaluate_calculated_row(
     columns: &[EncodedColumn],
     row: usize,
     lookup: &AHashMap<String, usize>,
+    source_name: Option<&str>,
     workbook_context: Option<CalculatedWorkbookContext<'_>>,
 ) -> Result<PivotValue> {
     let materialized = materialize_calculated_expr(
@@ -1913,6 +1926,7 @@ fn evaluate_calculated_row(
         columns,
         row,
         lookup,
+        source_name,
         workbook_context,
     )?;
     let value = if let Some(context) = workbook_context {
@@ -1938,6 +1952,7 @@ fn materialize_calculated_expr(
     columns: &[EncodedColumn],
     row: usize,
     lookup: &AHashMap<String, usize>,
+    source_name: Option<&str>,
     workbook_context: Option<CalculatedWorkbookContext<'_>>,
 ) -> Result<FormulaExpr> {
     Ok(match expr {
@@ -1950,7 +1965,7 @@ fn materialize_calculated_expr(
             calculated_field_value_expr(pivot_name, field, name, columns, row, lookup)?
         }
         FormulaExpr::StructuredRef(reference) => {
-            if let Some(name) = structured_ref_field_name(reference) {
+            if let Some(name) = structured_ref_field_name(reference, source_name) {
                 calculated_field_value_expr(pivot_name, field, name, columns, row, lookup)?
             } else {
                 return Err(Error::other(format!(
@@ -1983,6 +1998,7 @@ fn materialize_calculated_expr(
                 columns,
                 row,
                 lookup,
+                source_name,
                 workbook_context,
             )?),
             right: Box::new(materialize_calculated_expr(
@@ -1992,6 +2008,7 @@ fn materialize_calculated_expr(
                 columns,
                 row,
                 lookup,
+                source_name,
                 workbook_context,
             )?),
         },
@@ -2004,6 +2021,7 @@ fn materialize_calculated_expr(
                 columns,
                 row,
                 lookup,
+                source_name,
                 workbook_context,
             )?),
         },
@@ -2016,6 +2034,7 @@ fn materialize_calculated_expr(
                 columns,
                 row,
                 lookup,
+                source_name,
                 workbook_context,
             )?,
         },
@@ -2029,6 +2048,7 @@ fn materialize_calculated_expr(
                 columns,
                 row,
                 lookup,
+                source_name,
                 workbook_context,
             )?,
         },
@@ -2042,6 +2062,7 @@ fn materialize_calculated_expr(
                     columns,
                     row,
                     lookup,
+                    source_name,
                     workbook_context,
                 )?);
             }
@@ -2057,6 +2078,7 @@ fn materialize_calculated_args(
     columns: &[EncodedColumn],
     row: usize,
     lookup: &AHashMap<String, usize>,
+    source_name: Option<&str>,
     workbook_context: Option<CalculatedWorkbookContext<'_>>,
 ) -> Result<Vec<FormulaExpr>> {
     args.iter()
@@ -2068,6 +2090,7 @@ fn materialize_calculated_args(
                 columns,
                 row,
                 lookup,
+                source_name,
                 workbook_context,
             )
         })
@@ -2091,9 +2114,15 @@ fn calculated_field_value_expr(
     Ok(pivot_value_to_formula_expr(columns[index].value(row)))
 }
 
-fn structured_ref_field_name(reference: &StructuredReference) -> Option<&str> {
-    if reference.table.is_some() {
-        return None;
+fn structured_ref_field_name<'a>(
+    reference: &'a StructuredReference,
+    source_name: Option<&str>,
+) -> Option<&'a str> {
+    if let Some(table) = reference.table.as_deref() {
+        let source_name = source_name?;
+        if !table.eq_ignore_ascii_case(source_name) {
+            return None;
+        }
     }
     if !reference
         .specifiers
@@ -9904,6 +9933,52 @@ mod tests {
         assert_eq!(number(&workbook, "F3"), 21.0);
         assert_eq!(text(&workbook, "E4"), "Grand Total");
         assert_eq!(number(&workbook, "F4"), 43.0);
+    }
+
+    #[test]
+    fn refreshes_table_qualified_calculated_fields_with_structured_refs() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Units").unwrap();
+        sheet.set_cell_value("C1", "Price").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 2.0).unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", 3.0).unwrap();
+        sheet.set_cell_value("C3", 4.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", 7.0).unwrap();
+        sheet.set_cell_value("C4", 3.0).unwrap();
+
+        let mut table = Table::new(1, "SalesData", CellRange::parse("A1:C4").unwrap());
+        table.columns = vec![
+            TableColumn::new(1, "Region"),
+            TableColumn::new(2, "Units"),
+            TableColumn::new(3, "Price"),
+        ];
+        sheet.add_table(table);
+
+        let pivot = PivotTable::builder("CalculatedTableRevenue")
+            .table_source("SalesData")
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Revenue", "=SalesData[@Units]*SalesData[@Price]")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(number(&workbook, "F2"), 32.0);
+        assert_eq!(text(&workbook, "E3"), "West");
+        assert_eq!(number(&workbook, "F3"), 21.0);
+        assert_eq!(text(&workbook, "E4"), "Grand Total");
+        assert_eq!(number(&workbook, "F4"), 53.0);
     }
 
     #[test]

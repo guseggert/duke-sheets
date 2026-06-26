@@ -5989,6 +5989,66 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_table_qualified_pivot_calculated_fields() {
+        use duke_sheets_core::table::{Table, TableColumn};
+
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Units").unwrap();
+        sheet.set_cell_value("C1", "Price").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 2.0).unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 7.0).unwrap();
+        sheet.set_cell_value("C3", 3.0).unwrap();
+
+        let mut table = Table::new(1, "SalesData", CellRange::parse("A1:C3").unwrap());
+        table.columns = vec![
+            TableColumn::new(1, "Region"),
+            TableColumn::new(2, "Units"),
+            TableColumn::new(3, "Price"),
+        ];
+        sheet.add_table(table);
+
+        let pivot = PivotTable::builder("CalculatedTableRevenue")
+            .table_source("SalesData")
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Revenue", "=SalesData[@Units]*SalesData[@Price]")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(
+            r#"<cacheField name="Revenue" formula="SalesData[@Units]*SalesData[@Price]" databaseField="0">"#
+        ));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("CalculatedTableRevenue")
+            .unwrap();
+        assert_eq!(pivot.calculated_fields.len(), 1);
+        assert_eq!(pivot.calculated_fields[0].name, "Revenue");
+        assert_eq!(
+            pivot.calculated_fields[0].formula,
+            "SalesData[@Units]*SalesData[@Price]"
+        );
+        assert_eq!(pivot.measures.len(), 1);
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+    }
+
+    #[test]
     fn test_writer_round_trips_pivot_calculated_items() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();

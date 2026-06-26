@@ -1281,6 +1281,7 @@ fn apply_calculated_cache_fields(
     resolved: &mut ResolvedPivotSource,
     calculated_fields: &[PivotCalculatedField],
 ) -> XlsxResult<()> {
+    let source_name = structured_ref_source_name(&resolved.source).map(str::to_string);
     for field in calculated_fields {
         if field.name.trim().is_empty() {
             return Err(XlsxError::InvalidFormat(format!(
@@ -1306,6 +1307,7 @@ fn apply_calculated_cache_fields(
                 &resolved.fields,
                 row,
                 &lookup,
+                source_name.as_deref(),
             )?;
             let index = cache_field.intern(value);
             row.push(Some(index));
@@ -1391,8 +1393,10 @@ fn evaluate_calculated_cache_row(
     fields: &[CacheField],
     row: &[Option<u32>],
     lookup: &HashMap<String, usize>,
+    source_name: Option<&str>,
 ) -> XlsxResult<PivotValue> {
-    let materialized = materialize_calculated_expr(pivot_name, field, ast, fields, row, lookup)?;
+    let materialized =
+        materialize_calculated_expr(pivot_name, field, ast, fields, row, lookup, source_name)?;
     let value = evaluate(&materialized, &EvaluationContext::simple()).map_err(|error| {
         XlsxError::InvalidFormat(format!(
             "pivot table {pivot_name} calculated field {} evaluation failed: {error}",
@@ -1409,6 +1413,7 @@ fn materialize_calculated_expr(
     fields: &[CacheField],
     row: &[Option<u32>],
     lookup: &HashMap<String, usize>,
+    source_name: Option<&str>,
 ) -> XlsxResult<FormulaExpr> {
     Ok(match expr {
         FormulaExpr::Number(value) => FormulaExpr::Number(*value),
@@ -1420,7 +1425,7 @@ fn materialize_calculated_expr(
             calculated_cache_value_expr(pivot_name, field, name, fields, row, lookup)?
         }
         FormulaExpr::StructuredRef(reference) => {
-            if let Some(name) = structured_ref_field_name(reference) {
+            if let Some(name) = structured_ref_field_name(reference, source_name) {
                 calculated_cache_value_expr(pivot_name, field, name, fields, row, lookup)?
             } else {
                 return Err(XlsxError::InvalidFormat(format!(
@@ -1438,26 +1443,60 @@ fn materialize_calculated_expr(
         FormulaExpr::BinaryOp { op, left, right } => FormulaExpr::BinaryOp {
             op: *op,
             left: Box::new(materialize_calculated_expr(
-                pivot_name, field, left, fields, row, lookup,
+                pivot_name,
+                field,
+                left,
+                fields,
+                row,
+                lookup,
+                source_name,
             )?),
             right: Box::new(materialize_calculated_expr(
-                pivot_name, field, right, fields, row, lookup,
+                pivot_name,
+                field,
+                right,
+                fields,
+                row,
+                lookup,
+                source_name,
             )?),
         },
         FormulaExpr::UnaryOp { op, operand } => FormulaExpr::UnaryOp {
             op: *op,
             operand: Box::new(materialize_calculated_expr(
-                pivot_name, field, operand, fields, row, lookup,
+                pivot_name,
+                field,
+                operand,
+                fields,
+                row,
+                lookup,
+                source_name,
             )?),
         },
         FormulaExpr::Function { name, args } => FormulaExpr::Function {
             name: name.clone(),
-            args: materialize_calculated_args(pivot_name, field, args, fields, row, lookup)?,
+            args: materialize_calculated_args(
+                pivot_name,
+                field,
+                args,
+                fields,
+                row,
+                lookup,
+                source_name,
+            )?,
         },
         FormulaExpr::ExternalFunction { book, name, args } => FormulaExpr::ExternalFunction {
             book: book.clone(),
             name: name.clone(),
-            args: materialize_calculated_args(pivot_name, field, args, fields, row, lookup)?,
+            args: materialize_calculated_args(
+                pivot_name,
+                field,
+                args,
+                fields,
+                row,
+                lookup,
+                source_name,
+            )?,
         },
         FormulaExpr::Array(rows) => {
             let mut materialized_rows = Vec::with_capacity(rows.len());
@@ -1469,6 +1508,7 @@ fn materialize_calculated_expr(
                     fields,
                     row,
                     lookup,
+                    source_name,
                 )?);
             }
             FormulaExpr::Array(materialized_rows)
@@ -1483,9 +1523,12 @@ fn materialize_calculated_args(
     fields: &[CacheField],
     row: &[Option<u32>],
     lookup: &HashMap<String, usize>,
+    source_name: Option<&str>,
 ) -> XlsxResult<Vec<FormulaExpr>> {
     args.iter()
-        .map(|arg| materialize_calculated_expr(pivot_name, field, arg, fields, row, lookup))
+        .map(|arg| {
+            materialize_calculated_expr(pivot_name, field, arg, fields, row, lookup, source_name)
+        })
         .collect()
 }
 
@@ -1511,9 +1554,22 @@ fn calculated_cache_value_expr(
     Ok(pivot_value_to_formula_expr(value))
 }
 
-fn structured_ref_field_name(reference: &StructuredReference) -> Option<&str> {
-    if reference.table.is_some() {
-        return None;
+fn structured_ref_source_name(source: &PivotSource) -> Option<&str> {
+    match source {
+        PivotSource::Table { name } => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn structured_ref_field_name<'a>(
+    reference: &'a StructuredReference,
+    source_name: Option<&str>,
+) -> Option<&'a str> {
+    if let Some(table) = reference.table.as_deref() {
+        let source_name = source_name?;
+        if !table.eq_ignore_ascii_case(source_name) {
+            return None;
+        }
     }
     if !reference
         .specifiers
