@@ -925,6 +925,24 @@ fn grouped_number_column(
         )));
     }
 
+    #[cfg(feature = "parallel")]
+    {
+        if snapshot.row_count >= PARALLEL_ROW_THRESHOLD {
+            let values = (0..snapshot.row_count)
+                .into_par_iter()
+                .map(|row| {
+                    group_number_value(
+                        snapshot.value(row, field_index),
+                        effective_start,
+                        end,
+                        interval,
+                    )
+                })
+                .collect::<Vec<_>>();
+            return Ok(EncodedColumn::from_values(values));
+        }
+    }
+
     let mut column = EncodedColumn::with_capacity(snapshot.row_count);
     for row in 0..snapshot.row_count {
         column.push(group_number_value(
@@ -1001,6 +1019,18 @@ fn grouped_date_column(
     } else {
         DateSystem::Date1900
     };
+
+    #[cfg(feature = "parallel")]
+    {
+        if snapshot.row_count >= PARALLEL_ROW_THRESHOLD {
+            let values = (0..snapshot.row_count)
+                .into_par_iter()
+                .map(|row| group_date_value(snapshot.value(row, field_index), units, date_system))
+                .collect::<Vec<_>>();
+            return EncodedColumn::from_values(values);
+        }
+    }
+
     for row in 0..snapshot.row_count {
         column.push(group_date_value(
             snapshot.value(row, field_index),
@@ -1070,6 +1100,15 @@ impl EncodedColumn {
             dictionary: Vec::new(),
             lookup: AHashMap::new(),
         }
+    }
+
+    #[cfg(feature = "parallel")]
+    fn from_values(values: Vec<PivotValue>) -> Self {
+        let mut column = Self::with_capacity(values.len());
+        for value in values {
+            column.push(value);
+        }
+        column
     }
 
     fn push(&mut self, value: PivotValue) {
