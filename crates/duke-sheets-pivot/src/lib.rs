@@ -13,10 +13,10 @@ use std::sync::Arc;
 use ahash::{AHashMap, AHashSet};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue, Error, NumberFormat, PivotAggregate,
-    PivotCalculatedField, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping,
-    PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshStatus,
-    PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue, Result, Table,
-    Workbook, Worksheet, MAX_COLS, MAX_ROWS,
+    PivotCalculatedField, PivotCalculatedItem, PivotField, PivotFilter, PivotFilterOperator,
+    PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy,
+    PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue,
+    Result, Table, Workbook, Worksheet, MAX_COLS, MAX_ROWS,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -323,14 +323,10 @@ fn transformed_snapshot_for_pivot(
     date_1904: bool,
     cache: &mut PivotRuntimeCache,
 ) -> Result<Arc<SourceSnapshot>> {
-    if !pivot.calculated_items.is_empty() {
-        return Err(Error::other(format!(
-            "pivot table {} uses calculated items, which local refresh does not support yet",
-            pivot.name
-        )));
-    }
-
-    if pivot.calculated_fields.is_empty() && pivot.groupings.is_empty() {
+    if pivot.calculated_fields.is_empty()
+        && pivot.groupings.is_empty()
+        && pivot.calculated_items.is_empty()
+    {
         return Ok(source_snapshot.snapshot);
     }
 
@@ -338,6 +334,7 @@ fn transformed_snapshot_for_pivot(
         source_snapshot.key,
         &pivot.calculated_fields,
         &pivot.groupings,
+        &pivot.calculated_items,
         date_1904,
     );
     if let Some(snapshot) = cache.transformed_snapshots.get(&cache_key) {
@@ -353,10 +350,15 @@ fn transformed_snapshot_for_pivot(
                 .apply_calculated_fields(&pivot.name, &pivot.calculated_fields)?,
         )
     };
-    let snapshot = if pivot.groupings.is_empty() {
+    let grouped_snapshot = if pivot.groupings.is_empty() {
         calculated_snapshot
     } else {
         Arc::new(calculated_snapshot.apply_groupings(&pivot.name, &pivot.groupings, date_1904)?)
+    };
+    let snapshot = if pivot.calculated_items.is_empty() {
+        grouped_snapshot
+    } else {
+        Arc::new(grouped_snapshot.apply_calculated_items(&pivot.name, &pivot.calculated_items)?)
     };
     cache
         .transformed_snapshots
@@ -371,6 +373,7 @@ fn build_rendered_pivot_from_snapshot(
     let plan = CompiledPivotPlan::compile(pivot, &snapshot)?;
     let mut aggregation = PivotAggregation::aggregate(&snapshot, &plan);
     let aggregate_restrictions = aggregation.apply_aggregate_filters(&plan);
+    aggregation.apply_calculated_items(&pivot.name, &snapshot, &plan)?;
     aggregation.expand_show_empty_items(&pivot.name, &snapshot, &plan, &aggregate_restrictions)?;
     aggregation.sort_orders(&snapshot, &plan);
     render_pivot(pivot, &snapshot, &plan, &aggregation)
@@ -578,6 +581,7 @@ struct TransformedSnapshotCacheKey {
     source: SourceCacheKey,
     calculated_fields: Vec<PivotCalculatedField>,
     groupings: Vec<PivotGroupingCacheKey>,
+    calculated_items: Vec<PivotCalculatedItem>,
     date_1904: bool,
 }
 
@@ -586,12 +590,14 @@ impl TransformedSnapshotCacheKey {
         source: SourceCacheKey,
         calculated_fields: &[PivotCalculatedField],
         groupings: &[PivotGrouping],
+        calculated_items: &[PivotCalculatedItem],
         date_1904: bool,
     ) -> Self {
         Self {
             source,
             calculated_fields: calculated_fields.to_vec(),
             groupings: groupings.iter().map(PivotGroupingCacheKey::from).collect(),
+            calculated_items: calculated_items.to_vec(),
             date_1904,
         }
     }
@@ -1134,6 +1140,45 @@ impl SourceSnapshot {
             row_count: self.row_count,
         })
     }
+
+    fn apply_calculated_items(
+        &self,
+        pivot_name: &str,
+        calculated_items: &[PivotCalculatedItem],
+    ) -> Result<Self> {
+        let headers = self.headers.clone();
+        let mut columns = self.columns.clone();
+
+        for item in calculated_items {
+            if item.formula.trim().is_empty() {
+                return Err(Error::other(format!(
+                    "pivot table {pivot_name} calculated item {} has a blank formula",
+                    item.item
+                )));
+            }
+            let field_index = self.field_index(&item.field.name).ok_or_else(|| {
+                Error::other(format!(
+                    "pivot table {pivot_name} calculated item references unknown field: {}",
+                    item.field.name
+                ))
+            })?;
+            if let Some(existing_id) = columns[field_index].id_for_value(&item.item) {
+                if columns[field_index].values.contains(&existing_id) {
+                    return Err(Error::other(format!(
+                        "pivot table {pivot_name} calculated item {} duplicates a source item in field {}",
+                        item.item, item.field.name
+                    )));
+                }
+            }
+            columns[field_index].ensure_dictionary_value(item.item.clone());
+        }
+
+        Ok(Self {
+            headers,
+            columns,
+            row_count: self.row_count,
+        })
+    }
 }
 
 fn worksheet_for_source<'a>(
@@ -1323,6 +1368,30 @@ fn parse_calculated_formula(pivot_name: &str, field: &PivotCalculatedField) -> R
         Error::other(format!(
             "pivot table {pivot_name} calculated field {} formula did not parse: {error}",
             field.name
+        ))
+    })
+}
+
+fn parse_calculated_item_formula(
+    pivot_name: &str,
+    item: &PivotCalculatedItem,
+) -> Result<FormulaExpr> {
+    let formula = item.formula.trim();
+    if formula.is_empty() {
+        return Err(Error::other(format!(
+            "pivot table {pivot_name} calculated item {} has a blank formula",
+            item.item
+        )));
+    }
+    let formula = if formula.starts_with('=') {
+        formula.to_string()
+    } else {
+        format!("={formula}")
+    };
+    parse_formula(&formula).map_err(|error| {
+        Error::other(format!(
+            "pivot table {pivot_name} calculated item {} formula did not parse: {error}",
+            item.item
         ))
     })
 }
@@ -1780,6 +1849,17 @@ impl EncodedColumn {
         self.values.push(id);
     }
 
+    fn ensure_dictionary_value(&mut self, value: PivotValue) -> u32 {
+        if let Some(id) = self.lookup.get(&value) {
+            *id
+        } else {
+            let id = self.dictionary.len() as u32;
+            self.dictionary.push(value.clone());
+            self.lookup.insert(value, id);
+            id
+        }
+    }
+
     fn remap_dictionary<F>(&self, group_value: F) -> Self
     where
         F: Fn(&PivotValue) -> PivotValue,
@@ -1904,6 +1984,7 @@ struct CompiledPivotPlan {
     measures: Vec<PivotMeasure>,
     filters: Vec<CompiledFilter>,
     aggregate_filters: Vec<CompiledAggregateFilter>,
+    calculated_items: Vec<CompiledCalculatedItem>,
 }
 
 impl CompiledPivotPlan {
@@ -1968,6 +2049,13 @@ impl CompiledPivotPlan {
                 }
             }
         }
+        let calculated_items = compile_calculated_items(
+            &pivot.name,
+            &pivot.calculated_items,
+            snapshot,
+            &row_indexes,
+            &column_indexes,
+        )?;
 
         Ok(Self {
             row_indexes,
@@ -1980,6 +2068,7 @@ impl CompiledPivotPlan {
             measures: pivot.measures.clone(),
             filters,
             aggregate_filters,
+            calculated_items,
         })
     }
 }
@@ -2022,6 +2111,167 @@ fn compile_axis_fields(
         }
     }
     Ok((indexes, compiled_fields))
+}
+
+#[derive(Debug, Clone)]
+struct CompiledCalculatedItem {
+    axis: AggregateFilterAxis,
+    position: usize,
+    field_index: usize,
+    item_id: u32,
+    item: PivotValue,
+    ast: FormulaExpr,
+}
+
+fn compile_calculated_items(
+    pivot_name: &str,
+    calculated_items: &[PivotCalculatedItem],
+    snapshot: &SourceSnapshot,
+    row_indexes: &[usize],
+    column_indexes: &[usize],
+) -> Result<Vec<CompiledCalculatedItem>> {
+    let mut compiled = Vec::with_capacity(calculated_items.len());
+    let mut targets = AHashSet::new();
+
+    for item in calculated_items {
+        let field_index = field_index(snapshot, &item.field.name, pivot_name)?;
+        let (axis, position) = calculated_item_axis(
+            pivot_name,
+            &item.field.name,
+            field_index,
+            row_indexes,
+            column_indexes,
+        )?;
+        let item_id = snapshot.columns[field_index]
+            .id_for_value(&item.item)
+            .ok_or_else(|| {
+                Error::other(format!(
+                    "pivot table {pivot_name} calculated item {} was not registered in field {}",
+                    item.item, item.field.name
+                ))
+            })?;
+        let target_key = (axis_key(axis), position, item_id);
+        if !targets.insert(target_key) {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} defines calculated item {} more than once in field {}",
+                item.item, item.field.name
+            )));
+        }
+
+        let ast = parse_calculated_item_formula(pivot_name, item)?;
+        if calculated_item_formula_references_item(&ast, snapshot, field_index, item_id) {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} calculated item {} references itself",
+                item.item
+            )));
+        }
+
+        compiled.push(CompiledCalculatedItem {
+            axis,
+            position,
+            field_index,
+            item_id,
+            item: item.item.clone(),
+            ast,
+        });
+    }
+
+    Ok(compiled)
+}
+
+fn calculated_item_axis(
+    pivot_name: &str,
+    field_name: &str,
+    field_index: usize,
+    row_indexes: &[usize],
+    column_indexes: &[usize],
+) -> Result<(AggregateFilterAxis, usize)> {
+    row_indexes
+        .iter()
+        .position(|index| *index == field_index)
+        .map(|position| (AggregateFilterAxis::Row, position))
+        .or_else(|| {
+            column_indexes
+                .iter()
+                .position(|index| *index == field_index)
+                .map(|position| (AggregateFilterAxis::Column, position))
+        })
+        .ok_or_else(|| {
+            Error::other(format!(
+                "pivot table {pivot_name} calculated item field {field_name} is not on a row or column axis"
+            ))
+        })
+}
+
+fn axis_key(axis: AggregateFilterAxis) -> u8 {
+    match axis {
+        AggregateFilterAxis::Row => 0,
+        AggregateFilterAxis::Column => 1,
+    }
+}
+
+fn calculated_item_formula_references_item(
+    expr: &FormulaExpr,
+    snapshot: &SourceSnapshot,
+    field_index: usize,
+    item_id: u32,
+) -> bool {
+    match expr {
+        FormulaExpr::NameRef(name) | FormulaExpr::String(name) => {
+            formula_reference_item_id(snapshot, field_index, name) == Some(item_id)
+        }
+        FormulaExpr::BinaryOp { left, right, .. } => {
+            calculated_item_formula_references_item(left, snapshot, field_index, item_id)
+                || calculated_item_formula_references_item(right, snapshot, field_index, item_id)
+        }
+        FormulaExpr::UnaryOp { operand, .. } => {
+            calculated_item_formula_references_item(operand, snapshot, field_index, item_id)
+        }
+        FormulaExpr::Function { args, .. } | FormulaExpr::ExternalFunction { args, .. } => {
+            args.iter().any(|arg| {
+                calculated_item_formula_references_item(arg, snapshot, field_index, item_id)
+            })
+        }
+        FormulaExpr::Array(rows) => rows.iter().any(|row| {
+            row.iter().any(|arg| {
+                calculated_item_formula_references_item(arg, snapshot, field_index, item_id)
+            })
+        }),
+        FormulaExpr::Number(_)
+        | FormulaExpr::Boolean(_)
+        | FormulaExpr::Error(_)
+        | FormulaExpr::Empty
+        | FormulaExpr::StructuredRef(_)
+        | FormulaExpr::CellRef(_)
+        | FormulaExpr::RangeRef(_)
+        | FormulaExpr::ExternalRef(_) => false,
+    }
+}
+
+fn formula_reference_item_id(
+    snapshot: &SourceSnapshot,
+    field_index: usize,
+    reference: &str,
+) -> Option<u32> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return None;
+    }
+
+    let candidate = PivotValue::String(reference.to_string());
+    if let Some(id) = snapshot.columns[field_index].id_for_value(&candidate) {
+        return Some(id);
+    }
+
+    snapshot.columns[field_index]
+        .dictionary
+        .iter()
+        .enumerate()
+        .find_map(|(index, value)| match value {
+            PivotValue::String(text) if text.eq_ignore_ascii_case(reference) => Some(index as u32),
+            _ if value.to_string().eq_ignore_ascii_case(reference) => Some(index as u32),
+            _ => None,
+        })
 }
 
 fn grouped_date_field_index(
@@ -2224,7 +2474,7 @@ impl CompiledFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum AggregateFilterAxis {
     Row,
     Column,
@@ -2625,7 +2875,7 @@ impl PivotAggregation {
         };
 
         for partial in partials {
-            merged.merge_from(partial);
+            merged.merge_from(partial, plan);
         }
 
         merged
@@ -2788,6 +3038,64 @@ impl PivotAggregation {
         restrictions
     }
 
+    fn apply_calculated_items(
+        &mut self,
+        pivot_name: &str,
+        snapshot: &SourceSnapshot,
+        plan: &CompiledPivotPlan,
+    ) -> Result<()> {
+        if plan.calculated_items.is_empty() {
+            return Ok(());
+        }
+
+        for item in &plan.calculated_items {
+            self.apply_calculated_item(pivot_name, snapshot, plan, item)?;
+        }
+        self.rebuild_totals_from_groups(plan);
+        Ok(())
+    }
+
+    fn apply_calculated_item(
+        &mut self,
+        pivot_name: &str,
+        snapshot: &SourceSnapshot,
+        plan: &CompiledPivotPlan,
+        item: &CompiledCalculatedItem,
+    ) -> Result<()> {
+        let source_group_order = self.group_order.clone();
+        let mut emitted = AHashSet::new();
+
+        for source_key in source_group_order {
+            if !calculated_item_source_key_matches(item, &source_key) {
+                continue;
+            }
+
+            let virtual_key = calculated_item_virtual_key(item, &source_key);
+            if !emitted.insert(virtual_key.clone()) {
+                continue;
+            }
+
+            let states = evaluate_calculated_group_states(
+                pivot_name,
+                snapshot,
+                plan,
+                self,
+                item,
+                &virtual_key,
+            )?;
+            self.groups.insert(virtual_key.clone(), states);
+            push_unique_group_key(&mut self.group_order, virtual_key.clone());
+            match item.axis {
+                AggregateFilterAxis::Row => push_unique_key(&mut self.row_order, virtual_key.rows),
+                AggregateFilterAxis::Column => {
+                    push_unique_key(&mut self.column_order, virtual_key.columns)
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn retain_axis_items(
         &mut self,
         axis: AggregateFilterAxis,
@@ -2839,7 +3147,7 @@ impl PivotAggregation {
             item_states
                 .entry(key[field_position])
                 .or_insert_with(|| AggregateState::new(aggregate))
-                .merge(state);
+                .merge(state, aggregate);
         }
         item_states
     }
@@ -2861,13 +3169,13 @@ impl PivotAggregation {
                 .row_totals
                 .entry(key.rows.clone())
                 .or_insert_with(|| default_states(&plan.measures));
-            merge_state_slices(row_states, states);
+            merge_state_slices(row_states, states, &plan.measures);
 
             let column_states = self
                 .column_totals
                 .entry(key.columns.clone())
                 .or_insert_with(|| default_states(&plan.measures));
-            merge_state_slices(column_states, states);
+            merge_state_slices(column_states, states, &plan.measures);
 
             let row_prefixes = row_subtotal_prefixes(plan, &key.rows);
             let column_prefixes = column_subtotal_prefixes(plan, &key.columns);
@@ -2877,7 +3185,7 @@ impl PivotAggregation {
                     .row_subtotals
                     .entry(prefix.clone())
                     .or_insert_with(|| default_states(&plan.measures));
-                merge_state_slices(row_subtotal, states);
+                merge_state_slices(row_subtotal, states, &plan.measures);
 
                 if !key.columns.is_empty() {
                     let subtotal_group = self
@@ -2887,7 +3195,7 @@ impl PivotAggregation {
                             columns: key.columns.clone(),
                         })
                         .or_insert_with(|| default_states(&plan.measures));
-                    merge_state_slices(subtotal_group, states);
+                    merge_state_slices(subtotal_group, states, &plan.measures);
                 }
             }
 
@@ -2896,7 +3204,7 @@ impl PivotAggregation {
                     .column_subtotals
                     .entry(prefix.clone())
                     .or_insert_with(|| default_states(&plan.measures));
-                merge_state_slices(column_subtotal, states);
+                merge_state_slices(column_subtotal, states, &plan.measures);
 
                 let subtotal_group = self
                     .subtotal_groups
@@ -2905,7 +3213,7 @@ impl PivotAggregation {
                         columns: prefix.clone(),
                     })
                     .or_insert_with(|| default_states(&plan.measures));
-                merge_state_slices(subtotal_group, states);
+                merge_state_slices(subtotal_group, states, &plan.measures);
             }
 
             for row_prefix in &row_prefixes {
@@ -2917,11 +3225,11 @@ impl PivotAggregation {
                             columns: column_prefix.clone(),
                         })
                         .or_insert_with(|| default_states(&plan.measures));
-                    merge_state_slices(subtotal_group, states);
+                    merge_state_slices(subtotal_group, states, &plan.measures);
                 }
             }
 
-            merge_state_slices(&mut self.grand_totals, states);
+            merge_state_slices(&mut self.grand_totals, states, &plan.measures);
         }
 
         self.row_order
@@ -2996,9 +3304,9 @@ impl PivotAggregation {
     }
 
     #[cfg(feature = "parallel")]
-    fn merge_from(&mut self, other: Self) {
+    fn merge_from(&mut self, other: Self, plan: &CompiledPivotPlan) {
         self.matched_rows += other.matched_rows;
-        merge_state_slices(&mut self.grand_totals, &other.grand_totals);
+        merge_state_slices(&mut self.grand_totals, &other.grand_totals, &plan.measures);
 
         for key in other.group_order {
             let states = other
@@ -3006,7 +3314,13 @@ impl PivotAggregation {
                 .get(&key)
                 .expect("ordered group key must exist")
                 .clone();
-            merge_ordered_bucket(&mut self.groups, &mut self.group_order, key, states);
+            merge_ordered_bucket(
+                &mut self.groups,
+                &mut self.group_order,
+                key,
+                states,
+                &plan.measures,
+            );
         }
 
         for key in other.row_order {
@@ -3015,11 +3329,17 @@ impl PivotAggregation {
                 .get(&key)
                 .expect("ordered row key must exist")
                 .clone();
-            merge_ordered_bucket(&mut self.row_totals, &mut self.row_order, key, states);
+            merge_ordered_bucket(
+                &mut self.row_totals,
+                &mut self.row_order,
+                key,
+                states,
+                &plan.measures,
+            );
         }
 
         for (key, states) in other.row_subtotals {
-            merge_unordered_bucket(&mut self.row_subtotals, key, states);
+            merge_unordered_bucket(&mut self.row_subtotals, key, states, &plan.measures);
         }
 
         for key in other.column_order {
@@ -3028,15 +3348,21 @@ impl PivotAggregation {
                 .get(&key)
                 .expect("ordered column key must exist")
                 .clone();
-            merge_ordered_bucket(&mut self.column_totals, &mut self.column_order, key, states);
+            merge_ordered_bucket(
+                &mut self.column_totals,
+                &mut self.column_order,
+                key,
+                states,
+                &plan.measures,
+            );
         }
 
         for (key, states) in other.column_subtotals {
-            merge_unordered_bucket(&mut self.column_subtotals, key, states);
+            merge_unordered_bucket(&mut self.column_subtotals, key, states, &plan.measures);
         }
 
         for (key, states) in other.subtotal_groups {
-            merge_unordered_bucket(&mut self.subtotal_groups, key, states);
+            merge_unordered_bucket(&mut self.subtotal_groups, key, states, &plan.measures);
         }
     }
 }
@@ -3047,11 +3373,12 @@ fn merge_ordered_bucket<K>(
     order: &mut Vec<K>,
     key: K,
     states: Vec<AggregateState>,
+    measures: &[PivotMeasure],
 ) where
     K: Eq + Hash + Clone,
 {
     if let Some(existing) = map.get_mut(&key) {
-        merge_state_slices(existing, &states);
+        merge_state_slices(existing, &states, measures);
     } else {
         order.push(key.clone());
         map.insert(key, states);
@@ -3063,19 +3390,234 @@ fn merge_unordered_bucket<K>(
     map: &mut AHashMap<K, Vec<AggregateState>>,
     key: K,
     states: Vec<AggregateState>,
+    measures: &[PivotMeasure],
 ) where
     K: Eq + Hash,
 {
     if let Some(existing) = map.get_mut(&key) {
-        merge_state_slices(existing, &states);
+        merge_state_slices(existing, &states, measures);
     } else {
         map.insert(key, states);
     }
 }
 
-fn merge_state_slices(target: &mut [AggregateState], source: &[AggregateState]) {
-    for (target, source) in target.iter_mut().zip(source.iter()) {
-        target.merge(source);
+fn merge_state_slices(
+    target: &mut [AggregateState],
+    source: &[AggregateState],
+    measures: &[PivotMeasure],
+) {
+    for ((target, source), measure) in target.iter_mut().zip(source.iter()).zip(measures.iter()) {
+        target.merge(source, measure.aggregate);
+    }
+}
+
+fn calculated_item_source_key_matches(item: &CompiledCalculatedItem, key: &GroupKey) -> bool {
+    match item.axis {
+        AggregateFilterAxis::Row => key
+            .rows
+            .get(item.position)
+            .is_some_and(|id| *id != item.item_id),
+        AggregateFilterAxis::Column => key
+            .columns
+            .get(item.position)
+            .is_some_and(|id| *id != item.item_id),
+    }
+}
+
+fn calculated_item_virtual_key(item: &CompiledCalculatedItem, source_key: &GroupKey) -> GroupKey {
+    let mut key = source_key.clone();
+    match item.axis {
+        AggregateFilterAxis::Row => key.rows[item.position] = item.item_id,
+        AggregateFilterAxis::Column => key.columns[item.position] = item.item_id,
+    }
+    key
+}
+
+fn push_unique_key(order: &mut Vec<Vec<u32>>, key: Vec<u32>) {
+    if !order.iter().any(|existing| existing == &key) {
+        order.push(key);
+    }
+}
+
+fn push_unique_group_key(order: &mut Vec<GroupKey>, key: GroupKey) {
+    if !order.iter().any(|existing| existing == &key) {
+        order.push(key);
+    }
+}
+
+fn evaluate_calculated_group_states(
+    pivot_name: &str,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+    item: &CompiledCalculatedItem,
+    group_key: &GroupKey,
+) -> Result<Vec<AggregateState>> {
+    plan.measures
+        .iter()
+        .enumerate()
+        .map(|(measure_index, measure)| {
+            let context = CalculatedItemEvalContext {
+                snapshot,
+                aggregation,
+                group_key,
+                measure_index,
+                aggregate: measure.aggregate,
+            };
+            let materialized =
+                materialize_calculated_item_expr(pivot_name, item, &item.ast, &context)?;
+            let value = evaluate(&materialized, &EvaluationContext::simple()).map_err(|error| {
+                Error::other(format!(
+                    "pivot table {pivot_name} calculated item {} evaluation failed: {error}",
+                    item.item
+                ))
+            })?;
+            calculated_item_state_from_value(pivot_name, item, value)
+        })
+        .collect()
+}
+
+struct CalculatedItemEvalContext<'a> {
+    snapshot: &'a SourceSnapshot,
+    aggregation: &'a PivotAggregation,
+    group_key: &'a GroupKey,
+    measure_index: usize,
+    aggregate: PivotAggregate,
+}
+
+fn materialize_calculated_item_expr(
+    pivot_name: &str,
+    item: &CompiledCalculatedItem,
+    expr: &FormulaExpr,
+    context: &CalculatedItemEvalContext<'_>,
+) -> Result<FormulaExpr> {
+    Ok(match expr {
+        FormulaExpr::Number(value) => FormulaExpr::Number(*value),
+        FormulaExpr::String(value) => {
+            if formula_reference_item_id(context.snapshot, item.field_index, value).is_some() {
+                calculated_item_reference_expr(pivot_name, item, value, context)?
+            } else {
+                FormulaExpr::String(value.clone())
+            }
+        }
+        FormulaExpr::Boolean(value) => FormulaExpr::Boolean(*value),
+        FormulaExpr::Error(value) => FormulaExpr::Error(*value),
+        FormulaExpr::Empty => FormulaExpr::Empty,
+        FormulaExpr::NameRef(name) => {
+            calculated_item_reference_expr(pivot_name, item, name, context)?
+        }
+        FormulaExpr::StructuredRef(_) => {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} calculated item {} uses a structured reference, which is not valid for item formulas",
+                item.item
+            )));
+        }
+        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::ExternalRef(_) => {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} calculated item {} uses workbook references, which are not valid pivot item references",
+                item.item
+            )));
+        }
+        FormulaExpr::BinaryOp { op, left, right } => FormulaExpr::BinaryOp {
+            op: *op,
+            left: Box::new(materialize_calculated_item_expr(
+                pivot_name, item, left, context,
+            )?),
+            right: Box::new(materialize_calculated_item_expr(
+                pivot_name, item, right, context,
+            )?),
+        },
+        FormulaExpr::UnaryOp { op, operand } => FormulaExpr::UnaryOp {
+            op: *op,
+            operand: Box::new(materialize_calculated_item_expr(
+                pivot_name, item, operand, context,
+            )?),
+        },
+        FormulaExpr::Function { name, args } => FormulaExpr::Function {
+            name: name.clone(),
+            args: materialize_calculated_item_args(pivot_name, item, args, context)?,
+        },
+        FormulaExpr::ExternalFunction { book, name, args } => FormulaExpr::ExternalFunction {
+            book: book.clone(),
+            name: name.clone(),
+            args: materialize_calculated_item_args(pivot_name, item, args, context)?,
+        },
+        FormulaExpr::Array(rows) => {
+            let mut materialized_rows = Vec::with_capacity(rows.len());
+            for row in rows {
+                materialized_rows.push(materialize_calculated_item_args(
+                    pivot_name, item, row, context,
+                )?);
+            }
+            FormulaExpr::Array(materialized_rows)
+        }
+    })
+}
+
+fn materialize_calculated_item_args(
+    pivot_name: &str,
+    item: &CompiledCalculatedItem,
+    args: &[FormulaExpr],
+    context: &CalculatedItemEvalContext<'_>,
+) -> Result<Vec<FormulaExpr>> {
+    args.iter()
+        .map(|arg| materialize_calculated_item_expr(pivot_name, item, arg, context))
+        .collect()
+}
+
+fn calculated_item_reference_expr(
+    pivot_name: &str,
+    item: &CompiledCalculatedItem,
+    reference: &str,
+    context: &CalculatedItemEvalContext<'_>,
+) -> Result<FormulaExpr> {
+    let reference_id = formula_reference_item_id(context.snapshot, item.field_index, reference)
+        .ok_or_else(|| {
+            Error::other(format!(
+                "pivot table {pivot_name} calculated item {} references unknown item: {reference}",
+                item.item
+            ))
+        })?;
+
+    let mut reference_key = context.group_key.clone();
+    match item.axis {
+        AggregateFilterAxis::Row => reference_key.rows[item.position] = reference_id,
+        AggregateFilterAxis::Column => reference_key.columns[item.position] = reference_id,
+    }
+
+    let value = context
+        .aggregation
+        .groups
+        .get(&reference_key)
+        .and_then(|states| state_number(states, context.measure_index, context.aggregate));
+    Ok(value.map(FormulaExpr::Number).unwrap_or(FormulaExpr::Empty))
+}
+
+fn calculated_item_state_from_value(
+    pivot_name: &str,
+    item: &CompiledCalculatedItem,
+    value: FormulaValue,
+) -> Result<AggregateState> {
+    match value {
+        FormulaValue::Number(value) => Ok(AggregateState::from_calculated_number(value)),
+        FormulaValue::Boolean(value) => Ok(AggregateState::from_calculated_number(if value {
+            1.0
+        } else {
+            0.0
+        })),
+        FormulaValue::Empty => Ok(AggregateState::new(PivotAggregate::Sum)),
+        FormulaValue::Error(error) => Err(Error::other(format!(
+            "pivot table {pivot_name} calculated item {} evaluated to {error}",
+            item.item
+        ))),
+        FormulaValue::String(value) => Err(Error::other(format!(
+            "pivot table {pivot_name} calculated item {} evaluated to non-numeric value {value}",
+            item.item
+        ))),
+        FormulaValue::Array { .. } => Err(Error::other(format!(
+            "pivot table {pivot_name} calculated item {} evaluated to an array",
+            item.item
+        ))),
     }
 }
 
@@ -3263,6 +3805,7 @@ struct AggregateState {
     product: f64,
     min: Option<f64>,
     max: Option<f64>,
+    calculated_value: Option<f64>,
 }
 
 impl AggregateState {
@@ -3275,10 +3818,38 @@ impl AggregateState {
             product: 1.0,
             min: None,
             max: None,
+            calculated_value: None,
+        }
+    }
+
+    fn from_calculated_number(value: f64) -> Self {
+        Self {
+            count_non_blank: 1,
+            count_numbers: 1,
+            sum: value,
+            sum_sq: value * value,
+            product: value,
+            min: Some(value),
+            max: Some(value),
+            calculated_value: Some(value),
+        }
+    }
+
+    fn from_display_stats(stats: &DisplayAggregateStats, aggregate: PivotAggregate) -> Self {
+        Self {
+            count_non_blank: stats.count,
+            count_numbers: stats.count,
+            sum: stats.sum,
+            sum_sq: stats.sum_sq,
+            product: stats.product,
+            min: stats.min,
+            max: stats.max,
+            calculated_value: stats.finalize(aggregate),
         }
     }
 
     fn update(&mut self, value: &PivotValue, _aggregate: PivotAggregate) {
+        self.calculated_value = None;
         if !value.is_blank() {
             self.count_non_blank += 1;
         }
@@ -3302,6 +3873,10 @@ impl AggregateState {
     }
 
     fn finalize_number(&self, aggregate: PivotAggregate) -> Option<f64> {
+        if let Some(value) = self.calculated_value {
+            return Some(value);
+        }
+
         match aggregate {
             PivotAggregate::Sum => Some(self.sum),
             PivotAggregate::Count => Some(self.count_non_blank as f64),
@@ -3353,7 +3928,12 @@ impl AggregateState {
         }
     }
 
-    fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, other: &Self, aggregate: PivotAggregate) {
+        if self.calculated_value.is_some() || other.calculated_value.is_some() {
+            self.merge_display_value(other, aggregate);
+            return;
+        }
+
         self.count_non_blank += other.count_non_blank;
         self.count_numbers += other.count_numbers;
         self.sum += other.sum;
@@ -3372,6 +3952,137 @@ impl AggregateState {
             (None, None) => None,
         };
     }
+
+    fn merge_display_value(&mut self, other: &Self, aggregate: PivotAggregate) {
+        let Some(mut stats) = DisplayAggregateStats::from_state(self, aggregate) else {
+            if let Some(other_stats) = DisplayAggregateStats::from_state(other, aggregate) {
+                *self = AggregateState::from_display_stats(&other_stats, aggregate);
+            }
+            return;
+        };
+
+        if let Some(other_stats) = DisplayAggregateStats::from_state(other, aggregate) {
+            stats.merge(&other_stats);
+            *self = AggregateState::from_display_stats(&stats, aggregate);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DisplayAggregateStats {
+    count: u64,
+    sum: f64,
+    sum_sq: f64,
+    product: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+}
+
+impl DisplayAggregateStats {
+    fn single(value: f64) -> Self {
+        Self {
+            count: 1,
+            sum: value,
+            sum_sq: value * value,
+            product: value,
+            min: Some(value),
+            max: Some(value),
+        }
+    }
+
+    fn from_state(state: &AggregateState, aggregate: PivotAggregate) -> Option<Self> {
+        if state.calculated_value.is_some() {
+            return Some(Self {
+                count: state.count_numbers,
+                sum: state.sum,
+                sum_sq: state.sum_sq,
+                product: state.product,
+                min: state.min,
+                max: state.max,
+            });
+        }
+
+        state.finalize_number(aggregate).map(Self::single)
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.count += other.count;
+        self.sum += other.sum;
+        self.sum_sq += other.sum_sq;
+        self.product *= other.product;
+        self.min = match (self.min, other.min) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        };
+        self.max = match (self.max, other.max) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        };
+    }
+
+    fn finalize(&self, aggregate: PivotAggregate) -> Option<f64> {
+        match aggregate {
+            PivotAggregate::Sum | PivotAggregate::Count | PivotAggregate::CountNumbers => {
+                Some(self.sum)
+            }
+            PivotAggregate::Average => {
+                if self.count == 0 {
+                    None
+                } else {
+                    Some(self.sum / self.count as f64)
+                }
+            }
+            PivotAggregate::Max => self.max,
+            PivotAggregate::Min => self.min,
+            PivotAggregate::Product => {
+                if self.count == 0 {
+                    None
+                } else {
+                    Some(self.product)
+                }
+            }
+            PivotAggregate::StdDev => {
+                if self.count < 2 {
+                    None
+                } else {
+                    Some(sample_variance_from_parts(self.sum, self.sum_sq, self.count).sqrt())
+                }
+            }
+            PivotAggregate::StdDevP => {
+                if self.count == 0 {
+                    None
+                } else {
+                    Some(population_variance_from_parts(self.sum, self.sum_sq, self.count).sqrt())
+                }
+            }
+            PivotAggregate::Var => {
+                if self.count < 2 {
+                    None
+                } else {
+                    Some(sample_variance_from_parts(
+                        self.sum,
+                        self.sum_sq,
+                        self.count,
+                    ))
+                }
+            }
+            PivotAggregate::VarP => {
+                if self.count == 0 {
+                    None
+                } else {
+                    Some(population_variance_from_parts(
+                        self.sum,
+                        self.sum_sq,
+                        self.count,
+                    ))
+                }
+            }
+        }
+    }
 }
 
 fn pivot_number(value: &PivotValue) -> Option<f64> {
@@ -3382,13 +4093,21 @@ fn pivot_number(value: &PivotValue) -> Option<f64> {
 }
 
 fn population_variance(state: &AggregateState) -> f64 {
-    let count = state.count_numbers as f64;
-    ((state.sum_sq - (state.sum * state.sum / count)) / count).max(0.0)
+    population_variance_from_parts(state.sum, state.sum_sq, state.count_numbers)
 }
 
 fn sample_variance(state: &AggregateState) -> f64 {
-    let count = state.count_numbers as f64;
-    ((state.sum_sq - (state.sum * state.sum / count)) / (count - 1.0)).max(0.0)
+    sample_variance_from_parts(state.sum, state.sum_sq, state.count_numbers)
+}
+
+fn population_variance_from_parts(sum: f64, sum_sq: f64, count: u64) -> f64 {
+    let count = count as f64;
+    ((sum_sq - (sum * sum / count)) / count).max(0.0)
+}
+
+fn sample_variance_from_parts(sum: f64, sum_sq: f64, count: u64) -> f64 {
+    let count = count as f64;
+    ((sum_sq - (sum * sum / count)) / (count - 1.0)).max(0.0)
 }
 
 fn sort_key_order(
@@ -5189,7 +5908,7 @@ mod tests {
     }
 
     #[test]
-    fn calculated_items_are_rejected_by_local_refresh() {
+    fn refreshes_row_calculated_items() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
         sheet.set_cell_value("A1", "Region").unwrap();
@@ -5210,8 +5929,66 @@ mod tests {
             .unwrap();
         sheet.add_pivot_table(pivot).unwrap();
 
-        let err = workbook.refresh_pivots().unwrap_err();
-        assert!(err.to_string().contains("calculated items"));
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D1"), "Region");
+        assert_eq!(text(&workbook, "E1"), "Sum of Revenue");
+        assert_eq!(text(&workbook, "D2"), "Combined");
+        assert_eq!(number(&workbook, "E2"), 30.0);
+        assert_eq!(text(&workbook, "D3"), "East");
+        assert_eq!(number(&workbook, "E3"), 10.0);
+        assert_eq!(text(&workbook, "D4"), "West");
+        assert_eq!(number(&workbook, "E4"), 20.0);
+        assert_eq!(text(&workbook, "D5"), "Grand Total");
+        assert_eq!(number(&workbook, "E5"), 60.0);
+    }
+
+    #[test]
+    fn refreshes_calculated_items_across_column_buckets() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Q1").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+        sheet.set_cell_value("A5", "West").unwrap();
+        sheet.set_cell_value("B5", "Q2").unwrap();
+        sheet.set_cell_value("C5", 3.0).unwrap();
+
+        let pivot = PivotTable::builder("CalculatedRegionColumns")
+            .source_range(CellRange::parse("A1:C5").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .calculated_item("Region", "Combined", "East+West")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E1"), "Region");
+        assert_eq!(text(&workbook, "F1"), "Q1");
+        assert_eq!(text(&workbook, "G1"), "Q2");
+        assert_eq!(text(&workbook, "H1"), "Grand Total");
+        assert_eq!(text(&workbook, "E2"), "Combined");
+        assert_eq!(number(&workbook, "F2"), 17.0);
+        assert_eq!(number(&workbook, "G2"), 8.0);
+        assert_eq!(number(&workbook, "H2"), 25.0);
+        assert_eq!(text(&workbook, "E5"), "Grand Total");
+        assert_eq!(number(&workbook, "F5"), 34.0);
+        assert_eq!(number(&workbook, "G5"), 16.0);
+        assert_eq!(number(&workbook, "H5"), 50.0);
     }
 
     #[test]
