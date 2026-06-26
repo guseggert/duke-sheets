@@ -144,6 +144,10 @@ pub const BRT_BEGIN_PCD_SHARED_ITEMS: u16 = 0x00BD;
 pub const BRT_END_PCD_SHARED_ITEMS: u16 = 0x00BE;
 pub const BRT_BEGIN_PCD_RECORDS: u16 = 0x00C1;
 pub const BRT_END_PCD_RECORDS: u16 = 0x00C2;
+pub const BRT_BEGIN_PNAMES: u16 = 0x00FD;
+pub const BRT_END_PNAMES: u16 = 0x00FE;
+pub const BRT_BEGIN_PNAME: u16 = 0x00FF;
+pub const BRT_END_PNAME: u16 = 0x0100;
 
 pub const BRT_PCDI_STRING: u16 = 0x0018;
 pub const BRT_PCDI_NUMBER: u16 = 0x0015;

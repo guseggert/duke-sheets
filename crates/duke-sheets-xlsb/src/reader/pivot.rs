@@ -11,8 +11,8 @@ use crate::biff12::RecordIter;
 use crate::error::{XlsbError, XlsbResult};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
-    PivotField, PivotFilter, PivotMeasure, PivotRefreshStatus, PivotSource, PivotStyle, PivotTable,
-    PivotValue, PivotValuesAxis,
+    PivotCalculatedField, PivotField, PivotFilter, PivotMeasure, PivotRefreshStatus, PivotSource,
+    PivotStyle, PivotTable, PivotValue, PivotValuesAxis,
 };
 
 #[derive(Debug, Clone)]
@@ -28,7 +28,25 @@ struct PivotCacheDefinition {
 #[derive(Debug, Clone)]
 struct PivotCacheField {
     name: String,
+    formula: Option<String>,
+    formula_tokens: Option<Vec<u8>>,
+    pname_field_indexes: Vec<usize>,
     shared_items: Vec<PivotValue>,
+}
+
+#[derive(Debug, Clone)]
+struct PivotFormulaText {
+    text: String,
+    precedence: u8,
+}
+
+impl PivotFormulaText {
+    fn atom(text: String) -> Self {
+        Self {
+            text,
+            precedence: 8,
+        }
+    }
 }
 
 pub(crate) fn read_pivot_tables_for_sheet<R: Read + Seek>(
@@ -140,6 +158,16 @@ fn read_pivot_table<R: Read + Seek>(
     pivot.columns = columns;
     pivot.page_fields = page_fields;
     pivot.measures = measures;
+    pivot.calculated_fields = cache
+        .fields
+        .iter()
+        .filter_map(|field| {
+            Some(PivotCalculatedField::new(
+                field.name.clone(),
+                field.formula.clone()?,
+            ))
+        })
+        .collect();
     pivot.filters = filters;
     pivot.layout = layout;
     pivot.style = style;
@@ -196,10 +224,7 @@ fn read_pivot_cache_definition<R: Read + Seek>(
                 }
             }
             records::BRT_BEGIN_PCD_FIELD => {
-                current_field = Some(PivotCacheField {
-                    name: parse_cache_field_name(payload)?,
-                    shared_items: Vec::new(),
-                });
+                current_field = Some(parse_cache_field(payload)?);
             }
             records::BRT_PCDI_MISSING
             | records::BRT_PCDI_BOOLEAN
@@ -210,8 +235,16 @@ fn read_pivot_cache_definition<R: Read + Seek>(
                     field.shared_items.push(parse_shared_item(typ, payload)?);
                 }
             }
+            records::BRT_BEGIN_PNAME => {
+                if let Some(field) = &mut current_field {
+                    if let Some(field_index) = parse_pname(payload) {
+                        field.pname_field_indexes.push(field_index);
+                    }
+                }
+            }
             records::BRT_END_PCD_FIELD => {
-                if let Some(field) = current_field.take() {
+                if let Some(mut field) = current_field.take() {
+                    attach_pivot_formula(&mut field, &fields);
                     fields.push(field);
                 }
             }
@@ -408,11 +441,300 @@ fn parse_cache_sheet_source(payload: &[u8]) -> XlsbResult<Option<PivotSource>> {
     }
 }
 
-fn parse_cache_field_name(payload: &[u8]) -> XlsbResult<String> {
+fn parse_cache_field(payload: &[u8]) -> XlsbResult<PivotCacheField> {
     if payload.len() < 24 {
-        return Ok(String::new());
+        return Ok(PivotCacheField {
+            name: String::new(),
+            formula: None,
+            formula_tokens: None,
+            pname_field_indexes: Vec::new(),
+            shared_items: Vec::new(),
+        });
     }
-    parser::wide_str(payload, 20).map(|(name, _)| name)
+    let flags = parser::read_u16(payload, 0);
+    let (name, consumed) = parser::wide_str(payload, 20)?;
+    let formula_offset = 20 + consumed;
+    let formula_tokens = if flags & 0x0100 != 0 {
+        parse_pivot_parsed_formula(payload, formula_offset)
+    } else {
+        None
+    };
+    Ok(PivotCacheField {
+        name,
+        formula: None,
+        formula_tokens,
+        pname_field_indexes: Vec::new(),
+        shared_items: Vec::new(),
+    })
+}
+
+fn parse_pivot_parsed_formula(payload: &[u8], offset: usize) -> Option<Vec<u8>> {
+    if offset + 4 > payload.len() {
+        return None;
+    }
+    let token_len = parser::read_u32(payload, offset) as usize;
+    let tokens_start = offset + 4;
+    let tokens_end = tokens_start.checked_add(token_len)?;
+    if tokens_end > payload.len() {
+        return None;
+    }
+    Some(payload[tokens_start..tokens_end].to_vec())
+}
+
+fn parse_pname(payload: &[u8]) -> Option<usize> {
+    if payload.len() < 6 {
+        return None;
+    }
+    Some(parser::read_u32(payload, 0) as usize)
+}
+
+fn attach_pivot_formula(field: &mut PivotCacheField, previous_fields: &[PivotCacheField]) {
+    let Some(tokens) = field.formula_tokens.take() else {
+        return;
+    };
+    let mut field_names = previous_fields
+        .iter()
+        .map(|field| field.name.clone())
+        .collect::<Vec<_>>();
+    field_names.push(field.name.clone());
+    field.formula = decompile_pivot_formula(&tokens, &field.pname_field_indexes, &field_names);
+}
+
+fn decompile_pivot_formula(
+    tokens: &[u8],
+    pname_field_indexes: &[usize],
+    field_names: &[String],
+) -> Option<String> {
+    let mut stack: Vec<PivotFormulaText> = Vec::new();
+    let mut pos = 0usize;
+    while pos < tokens.len() {
+        let token = tokens[pos];
+        pos += 1;
+        match token {
+            0x03 => push_pivot_binary(&mut stack, "+", 3, false)?,
+            0x04 => push_pivot_binary(&mut stack, "-", 3, true)?,
+            0x05 => push_pivot_binary(&mut stack, "*", 4, false)?,
+            0x06 => push_pivot_binary(&mut stack, "/", 4, true)?,
+            0x07 => push_pivot_binary(&mut stack, "^", 5, true)?,
+            0x08 => push_pivot_binary(&mut stack, "&", 2, false)?,
+            0x09 => push_pivot_binary(&mut stack, "<", 1, true)?,
+            0x0A => push_pivot_binary(&mut stack, "<=", 1, true)?,
+            0x0B => push_pivot_binary(&mut stack, "=", 1, true)?,
+            0x0C => push_pivot_binary(&mut stack, ">=", 1, true)?,
+            0x0D => push_pivot_binary(&mut stack, ">", 1, true)?,
+            0x0E => push_pivot_binary(&mut stack, "<>", 1, true)?,
+            0x12 => push_pivot_prefix(&mut stack, "+")?,
+            0x13 => push_pivot_prefix(&mut stack, "-")?,
+            0x14 => push_pivot_percent(&mut stack)?,
+            0x15 => push_pivot_paren(&mut stack)?,
+            0x17 => {
+                let value = read_pivot_short_string(tokens, &mut pos)?;
+                stack.push(PivotFormulaText::atom(format!(
+                    "\"{}\"",
+                    value.replace('"', "\"\"")
+                )));
+            }
+            0x18 => {
+                if pos + 5 > tokens.len() {
+                    return None;
+                }
+                let subtype = tokens[pos];
+                pos += 1;
+                if subtype != 0x1D {
+                    return None;
+                }
+                let pname_index = u32::from_le_bytes([
+                    tokens[pos],
+                    tokens[pos + 1],
+                    tokens[pos + 2],
+                    tokens[pos + 3],
+                ]) as usize;
+                pos += 4;
+                let field_index = *pname_field_indexes.get(pname_index)?;
+                let field_name = field_names.get(field_index)?;
+                stack.push(PivotFormulaText::atom(pivot_formula_field_reference(
+                    field_name,
+                )));
+            }
+            0x1C => {
+                if pos >= tokens.len() {
+                    return None;
+                }
+                stack.push(PivotFormulaText::atom(format_formula_error(tokens[pos])));
+                pos += 1;
+            }
+            0x1D => {
+                if pos >= tokens.len() {
+                    return None;
+                }
+                stack.push(PivotFormulaText::atom(if tokens[pos] != 0 {
+                    "TRUE".to_string()
+                } else {
+                    "FALSE".to_string()
+                }));
+                pos += 1;
+            }
+            0x1E => {
+                if pos + 2 > tokens.len() {
+                    return None;
+                }
+                let value = u16::from_le_bytes([tokens[pos], tokens[pos + 1]]);
+                pos += 2;
+                stack.push(PivotFormulaText::atom(value.to_string()));
+            }
+            0x1F => {
+                if pos + 8 > tokens.len() {
+                    return None;
+                }
+                let value = f64::from_le_bytes(tokens[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                stack.push(PivotFormulaText::atom(format_formula_number(value)));
+            }
+            _ => return None,
+        }
+    }
+
+    (stack.len() == 1).then(|| stack.pop().unwrap().text)
+}
+
+fn read_pivot_short_string(data: &[u8], offset: &mut usize) -> Option<String> {
+    if *offset + 2 > data.len() {
+        return None;
+    }
+    let char_count = data[*offset] as usize;
+    *offset += 1;
+    let flags = data[*offset];
+    *offset += 1;
+    if flags & 0x01 != 0 {
+        let byte_len = char_count.checked_mul(2)?;
+        if *offset + byte_len > data.len() {
+            return None;
+        }
+        let units = data[*offset..*offset + byte_len]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        *offset += byte_len;
+        Some(String::from_utf16_lossy(&units))
+    } else {
+        if *offset + char_count > data.len() {
+            return None;
+        }
+        let text = data[*offset..*offset + char_count]
+            .iter()
+            .map(|&byte| byte as char)
+            .collect::<String>();
+        *offset += char_count;
+        Some(text)
+    }
+}
+
+fn push_pivot_binary(
+    stack: &mut Vec<PivotFormulaText>,
+    op: &str,
+    precedence: u8,
+    parenthesize_equal_right: bool,
+) -> Option<()> {
+    let right = stack.pop()?;
+    let left = stack.pop()?;
+    let left_text = if left.precedence < precedence {
+        format!("({})", left.text)
+    } else {
+        left.text
+    };
+    let right_text = if right.precedence < precedence
+        || (parenthesize_equal_right && right.precedence == precedence)
+    {
+        format!("({})", right.text)
+    } else {
+        right.text
+    };
+    stack.push(PivotFormulaText {
+        text: format!("{left_text}{op}{right_text}"),
+        precedence,
+    });
+    Some(())
+}
+
+fn push_pivot_prefix(stack: &mut Vec<PivotFormulaText>, op: &str) -> Option<()> {
+    let operand = stack.pop()?;
+    let text = if operand.precedence < 6 {
+        format!("{op}({})", operand.text)
+    } else {
+        format!("{op}{}", operand.text)
+    };
+    stack.push(PivotFormulaText {
+        text,
+        precedence: 6,
+    });
+    Some(())
+}
+
+fn push_pivot_percent(stack: &mut Vec<PivotFormulaText>) -> Option<()> {
+    let operand = stack.pop()?;
+    let text = if operand.precedence < 7 {
+        format!("({})%", operand.text)
+    } else {
+        format!("{}%", operand.text)
+    };
+    stack.push(PivotFormulaText {
+        text,
+        precedence: 7,
+    });
+    Some(())
+}
+
+fn push_pivot_paren(stack: &mut Vec<PivotFormulaText>) -> Option<()> {
+    let operand = stack.pop()?;
+    stack.push(PivotFormulaText {
+        text: format!("({})", operand.text),
+        precedence: 8,
+    });
+    Some(())
+}
+
+fn pivot_formula_field_reference(name: &str) -> String {
+    if is_simple_pivot_formula_name(name) {
+        name.to_string()
+    } else {
+        format!("[{}]", name.replace(']', "]]"))
+    }
+}
+
+fn is_simple_pivot_formula_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.') {
+        return false;
+    }
+    CellAddress::parse(name).is_err()
+}
+
+fn format_formula_number(value: f64) -> String {
+    if value.is_finite() && value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn format_formula_error(code: u8) -> String {
+    match code {
+        0x00 => "#NULL!",
+        0x07 => "#DIV/0!",
+        0x0F => "#VALUE!",
+        0x17 => "#REF!",
+        0x1D => "#NAME?",
+        0x24 => "#NUM!",
+        0x2A => "#N/A",
+        _ => "#VALUE!",
+    }
+    .to_string()
 }
 
 fn parse_shared_item(record_type: u16, payload: &[u8]) -> XlsbResult<PivotValue> {

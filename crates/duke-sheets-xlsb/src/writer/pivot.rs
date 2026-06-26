@@ -4,12 +4,14 @@ use std::io::{Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
-use crate::biff12::{encode_wide_str, records, RecordWriter};
+use crate::biff12::{encode_wide_str, ptg, records, RecordWriter};
 use crate::error::{XlsbError, XlsbResult};
 use duke_sheets_core::{
     CellError, CellRange, PivotAggregate, PivotField, PivotFilter, PivotTable, PivotValue,
     PivotValuesAxis, Workbook,
 };
+use duke_sheets_formula::ast::{BinaryOperator, UnaryOperator};
+use duke_sheets_formula::FormulaExpr;
 use duke_sheets_pivot::{
     FormatPivotCache, FormatPivotCacheField, FormatPivotPlan, FormatPivotSource, FormatPivotTable,
 };
@@ -93,8 +95,9 @@ fn write_pivot_cache_definition_part<W: Write + Seek>(
         &(cache.fields.len() as u32).to_le_bytes(),
     )?;
     for (field, store_items) in cache.fields.iter().zip(&usage.store_items) {
-        write_pcd_field(&mut rw, field)?;
+        let pnames = write_pcd_field(&mut rw, field, cache)?;
         write_pcd_shared_items(&mut rw, field, *store_items)?;
+        write_pnames(&mut rw, &pnames)?;
         rw.write_record(records::BRT_END_PCD_FIELD, &[])?;
     }
     rw.write_record(records::BRT_END_PCD_FIELDS, &[])?;
@@ -376,9 +379,13 @@ fn write_pivot_cache_source<W: Write>(
 fn write_pcd_field<W: Write>(
     rw: &mut RecordWriter<W>,
     field: &FormatPivotCacheField,
-) -> std::io::Result<()> {
+    cache: &FormatPivotCache,
+) -> XlsbResult<Vec<usize>> {
     let mut payload = Vec::new();
-    let flags: u16 = if field.database_field { 0x0004 } else { 0x0000 };
+    let mut flags: u16 = if field.database_field { 0x0004 } else { 0x0000 };
+    if field.formula.is_some() {
+        flags |= 0x0100;
+    }
     payload.extend_from_slice(&flags.to_le_bytes());
     payload.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
     payload.extend_from_slice(&0u16.to_le_bytes());
@@ -387,7 +394,183 @@ fn write_pcd_field<W: Write>(
     payload.extend_from_slice(&0u32.to_le_bytes());
     payload.extend_from_slice(&0u16.to_le_bytes());
     payload.extend_from_slice(&encode_wide_str(&field.name));
-    rw.write_record(records::BRT_BEGIN_PCD_FIELD, &payload)
+    let pnames = if let Some(formula) = field.formula.as_deref() {
+        write_pivot_parsed_formula(&mut payload, formula, cache)?
+    } else {
+        Vec::new()
+    };
+    rw.write_record(records::BRT_BEGIN_PCD_FIELD, &payload)?;
+    Ok(pnames)
+}
+
+fn write_pivot_parsed_formula(
+    payload: &mut Vec<u8>,
+    formula: &str,
+    cache: &FormatPivotCache,
+) -> XlsbResult<Vec<usize>> {
+    let trimmed = formula.trim();
+    let parse_input = if trimmed.starts_with('=') {
+        trimmed.to_string()
+    } else {
+        format!("={trimmed}")
+    };
+    let expr = duke_sheets_formula::parse_formula(&parse_input).map_err(|err| {
+        XlsbError::InvalidFormat(format!(
+            "XLSB pivot calculated field formula could not be parsed: {err}"
+        ))
+    })?;
+
+    let mut rgce = Vec::new();
+    let mut pnames = Vec::new();
+    compile_pivot_formula_expr(&expr, &mut rgce, &mut pnames, cache).map_err(|_| {
+        XlsbError::InvalidFormat(format!(
+            "XLSB pivot calculated field formula uses unsupported syntax: {formula}"
+        ))
+    })?;
+
+    payload.extend_from_slice(&(rgce.len() as u32).to_le_bytes());
+    payload.extend_from_slice(&rgce);
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    Ok(pnames)
+}
+
+fn write_pnames<W: Write>(rw: &mut RecordWriter<W>, field_indexes: &[usize]) -> XlsbResult<()> {
+    if field_indexes.is_empty() {
+        return Ok(());
+    }
+    rw.write_record(
+        records::BRT_BEGIN_PNAMES,
+        &(field_indexes.len() as u32).to_le_bytes(),
+    )?;
+    for field_index in field_indexes {
+        let field_index = checked_u32(*field_index, "pivot calculated formula source field index")?;
+        let mut payload = Vec::with_capacity(6);
+        payload.extend_from_slice(&field_index.to_le_bytes());
+        payload.push(0xFF);
+        payload.push(0x00);
+        rw.write_record(records::BRT_BEGIN_PNAME, &payload)?;
+        rw.write_record(records::BRT_END_PNAME, &[])?;
+    }
+    rw.write_record(records::BRT_END_PNAMES, &[])?;
+    Ok(())
+}
+
+fn compile_pivot_formula_expr(
+    expr: &FormulaExpr,
+    out: &mut Vec<u8>,
+    pnames: &mut Vec<usize>,
+    cache: &FormatPivotCache,
+) -> Result<(), ()> {
+    match expr {
+        FormulaExpr::Number(n) => emit_pivot_number(*n, out),
+        FormulaExpr::String(s) => emit_pivot_string(s, out),
+        FormulaExpr::Boolean(b) => {
+            out.push(ptg::PTG_BOOL);
+            out.push(if *b { 1 } else { 0 });
+            Ok(())
+        }
+        FormulaExpr::Error(e) => {
+            out.push(ptg::PTG_ERR);
+            out.push(error_code(*e));
+            Ok(())
+        }
+        FormulaExpr::NameRef(name) => emit_pivot_sxname(name, out, pnames, cache),
+        FormulaExpr::StructuredRef(reference) => {
+            let Some(column) = reference.column.as_deref() else {
+                return Err(());
+            };
+            emit_pivot_sxname(column, out, pnames, cache)
+        }
+        FormulaExpr::BinaryOp { op, left, right } => {
+            compile_pivot_formula_expr(left, out, pnames, cache)?;
+            compile_pivot_formula_expr(right, out, pnames, cache)?;
+            out.push(match op {
+                BinaryOperator::Add => ptg::PTG_ADD,
+                BinaryOperator::Subtract => ptg::PTG_SUB,
+                BinaryOperator::Multiply => ptg::PTG_MUL,
+                BinaryOperator::Divide => ptg::PTG_DIV,
+                BinaryOperator::Power => ptg::PTG_POWER,
+                BinaryOperator::Concat => ptg::PTG_CONCAT,
+                BinaryOperator::LessThan => ptg::PTG_LT,
+                BinaryOperator::LessEqual => ptg::PTG_LE,
+                BinaryOperator::Equal => ptg::PTG_EQ,
+                BinaryOperator::GreaterEqual => ptg::PTG_GE,
+                BinaryOperator::GreaterThan => ptg::PTG_GT,
+                BinaryOperator::NotEqual => ptg::PTG_NE,
+                BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
+                    return Err(());
+                }
+            });
+            Ok(())
+        }
+        FormulaExpr::UnaryOp { op, operand } => {
+            compile_pivot_formula_expr(operand, out, pnames, cache)?;
+            out.push(match op {
+                UnaryOperator::Plus => ptg::PTG_UPLUS,
+                UnaryOperator::Negate => ptg::PTG_UMINUS,
+                UnaryOperator::Percent => ptg::PTG_PERCENT,
+                UnaryOperator::Paren => ptg::PTG_PAREN,
+                UnaryOperator::ImplicitIntersection | UnaryOperator::SpillRange => {
+                    return Err(());
+                }
+            });
+            Ok(())
+        }
+        FormulaExpr::CellRef(_)
+        | FormulaExpr::RangeRef(_)
+        | FormulaExpr::Function { .. }
+        | FormulaExpr::ExternalFunction { .. }
+        | FormulaExpr::Array(_)
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::Empty => Err(()),
+    }
+}
+
+fn emit_pivot_number(value: f64, out: &mut Vec<u8>) -> Result<(), ()> {
+    if value.is_finite() && value.fract() == 0.0 && (0.0..=u16::MAX as f64).contains(&value) {
+        out.push(ptg::PTG_INT);
+        out.extend_from_slice(&(value as u16).to_le_bytes());
+    } else {
+        out.push(ptg::PTG_NUM);
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(())
+}
+
+fn emit_pivot_string(value: &str, out: &mut Vec<u8>) -> Result<(), ()> {
+    let units = value.encode_utf16().collect::<Vec<_>>();
+    if units.len() > u8::MAX as usize {
+        return Err(());
+    }
+    out.push(ptg::PTG_STR);
+    out.push(units.len() as u8);
+    let high_byte = units.iter().any(|&unit| unit > 0xFF);
+    out.push(if high_byte { 0x01 } else { 0x00 });
+    if high_byte {
+        for unit in units {
+            out.extend_from_slice(&unit.to_le_bytes());
+        }
+    } else {
+        for unit in units {
+            out.push(unit as u8);
+        }
+    }
+    Ok(())
+}
+
+fn emit_pivot_sxname(
+    field_name: &str,
+    out: &mut Vec<u8>,
+    pnames: &mut Vec<usize>,
+    cache: &FormatPivotCache,
+) -> Result<(), ()> {
+    let field_index = cache.field_index(field_name).ok_or(())?;
+    let pname_index =
+        checked_u32(pnames.len(), "pivot calculated formula PName index").map_err(|_| ())?;
+    pnames.push(field_index);
+    out.extend_from_slice(&[0x18, 0x1D]);
+    out.extend_from_slice(&pname_index.to_le_bytes());
+    Ok(())
 }
 
 fn write_pcd_shared_items<W: Write>(
@@ -1144,6 +1327,15 @@ fn aggregate_code(aggregate: PivotAggregate) -> u8 {
         PivotAggregate::Var => 0x0A,
         PivotAggregate::VarP => 0x0B,
     }
+}
+
+fn checked_u32(value: usize, label: &str) -> XlsbResult<u32> {
+    if value > u32::MAX as usize {
+        return Err(XlsbError::InvalidFormat(format!(
+            "{label} exceeds XLSB limits"
+        )));
+    }
+    Ok(value as u32)
 }
 
 fn write_unchecked_rfx(out: &mut Vec<u8>, range: CellRange) {

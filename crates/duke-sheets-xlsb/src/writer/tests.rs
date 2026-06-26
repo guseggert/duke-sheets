@@ -149,6 +149,30 @@ mod tests {
         wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
     }
 
+    fn add_calculated_field_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Region").unwrap();
+        ws.set_cell_value("B1", "Units").unwrap();
+        ws.set_cell_value("C1", "Price").unwrap();
+        ws.set_cell_value("A2", "East").unwrap();
+        ws.set_cell_value("B2", 2.0).unwrap();
+        ws.set_cell_value("C2", 10.0).unwrap();
+        ws.set_cell_value("A3", "West").unwrap();
+        ws.set_cell_value("B3", 7.0).unwrap();
+        ws.set_cell_value("C3", 3.0).unwrap();
+
+        let pivot = PivotTable::builder("CalculatedRevenue")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Revenue", "=Units*Price")
+            .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
     #[test]
     fn empty_workbook() {
         let wb = Workbook::new();
@@ -420,6 +444,95 @@ mod tests {
         let pivot = &wb2.worksheet(0).unwrap().pivot_tables()[0];
 
         assert_eq!(pivot.style, styled_pivot_style());
+    }
+
+    #[test]
+    fn semantic_pivot_tables_emit_xlsb_calculated_field_records() {
+        let mut wb = Workbook::new();
+        add_calculated_field_pivot(&mut wb);
+
+        let bytes = write_xlsb_bytes(&wb);
+        let cache_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotCache/pivotCacheDefinition1.bin",
+        ));
+
+        let calculated_field = cache_records
+            .iter()
+            .filter_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCD_FIELD).then_some(payload)
+            })
+            .find(|payload| wide_string_at(payload, 20).0 == "Revenue")
+            .expect("calculated-field BrtBeginPCDField");
+        assert_ne!(
+            u16::from_le_bytes(calculated_field[0..2].try_into().unwrap()) & 0x0100,
+            0,
+            "BrtBeginPCDField should set fLoadFmla for calculated fields"
+        );
+        assert_eq!(
+            u16::from_le_bytes(calculated_field[0..2].try_into().unwrap()) & 0x0004,
+            0,
+            "calculated fields should not be marked as source database fields"
+        );
+
+        let (_, name_len) = wide_string_at(calculated_field, 20);
+        let formula_offset = 20 + name_len;
+        assert_eq!(
+            u32::from_le_bytes(
+                calculated_field[formula_offset..formula_offset + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            13
+        );
+        assert_eq!(
+            &calculated_field[formula_offset + 4..formula_offset + 17],
+            &[0x18, 0x1D, 0, 0, 0, 0, 0x18, 0x1D, 1, 0, 0, 0, 0x05],
+            "PivotParsedFormula should encode Units * Price via two PtgSxName refs"
+        );
+        assert_eq!(
+            u32::from_le_bytes(
+                calculated_field[formula_offset + 17..formula_offset + 21]
+                    .try_into()
+                    .unwrap()
+            ),
+            0,
+            "PivotParsedFormula should not carry extra rgcb data for this expression"
+        );
+
+        let pnames_count = cache_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PNAMES)
+                    .then(|| u32::from_le_bytes(payload[0..4].try_into().unwrap()))
+            })
+            .expect("BrtBeginPNames");
+        assert_eq!(pnames_count, 2);
+        let pname_field_indexes = cache_records
+            .iter()
+            .filter_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PNAME)
+                    .then(|| u32::from_le_bytes(payload[0..4].try_into().unwrap()))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(pname_field_indexes, vec![1, 2]);
+    }
+
+    #[test]
+    fn semantic_pivot_tables_round_trip_xlsb_calculated_field() {
+        let mut wb = Workbook::new();
+        add_calculated_field_pivot(&mut wb);
+
+        let wb2 = round_trip(&wb);
+        let pivot = &wb2.worksheet(0).unwrap().pivot_tables()[0];
+
+        assert_eq!(pivot.name, "CalculatedRevenue");
+        assert_eq!(pivot.calculated_fields.len(), 1);
+        assert_eq!(pivot.calculated_fields[0].name, "Revenue");
+        assert_eq!(pivot.calculated_fields[0].formula, "Units*Price");
+        assert_eq!(pivot.measures.len(), 1);
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+        assert_eq!(pivot.measures[0].aggregate, PivotAggregate::Sum);
     }
 
     #[test]
@@ -2839,6 +2952,18 @@ mod tests {
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
             .collect::<Vec<_>>();
         String::from_utf16_lossy(&units)
+    }
+
+    fn wide_string_at(data: &[u8], offset: usize) -> (String, usize) {
+        let count = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        let byte_len = count * 2;
+        let start = offset + 4;
+        let end = start + byte_len;
+        let units = data[start..end]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        (String::from_utf16_lossy(&units), 4 + byte_len)
     }
 
     #[test]
