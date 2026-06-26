@@ -55,6 +55,73 @@ pub struct WasmRowsOptions {
     pub skip_blank_values: Option<bool>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotMeasureOptions {
+    pub field: String,
+    pub aggregate: Option<String>,
+    pub name: Option<String>,
+    pub show_as: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotItemFilterOptions {
+    pub field: String,
+    pub items: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotGroupingOptions {
+    pub field: String,
+    pub kind: String,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub interval: Option<f64>,
+    pub units: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotTableOptions {
+    pub name: String,
+    pub source_range: Option<String>,
+    pub source_sheet: Option<String>,
+    pub table_name: Option<String>,
+    pub target: String,
+    pub rows: Option<Vec<String>>,
+    pub columns: Option<Vec<String>>,
+    pub pages: Option<Vec<String>>,
+    pub measures: Vec<WasmPivotMeasureOptions>,
+    pub filters: Option<Vec<WasmPivotItemFilterOptions>>,
+    pub groupings: Option<Vec<WasmPivotGroupingOptions>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmPivotRefreshStats {
+    pub pivot_count: usize,
+    pub pivots_refreshed: usize,
+    pub source_rows: usize,
+    pub output_cells: usize,
+    pub cache_hits: usize,
+    pub cache_misses: usize,
+}
+
+impl From<duke_sheets::PivotRefreshStats> for WasmPivotRefreshStats {
+    fn from(stats: duke_sheets::PivotRefreshStats) -> Self {
+        Self {
+            pivot_count: stats.pivot_count,
+            pivots_refreshed: stats.pivots_refreshed,
+            source_rows: stats.source_rows,
+            output_cells: stats.output_cells,
+            cache_hits: stats.cache_hits,
+            cache_misses: stats.cache_misses,
+        }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmImageInfo {
@@ -653,9 +720,18 @@ impl WasmColorInput {
                     parse_rgb_hex(hex)
                 } else {
                     Ok(CoreColor::Rgb {
-                        r: u32_to_u8(self.r.ok_or_else(|| "rgb color requires r".to_string())?, "r")?,
-                        g: u32_to_u8(self.g.ok_or_else(|| "rgb color requires g".to_string())?, "g")?,
-                        b: u32_to_u8(self.b.ok_or_else(|| "rgb color requires b".to_string())?, "b")?,
+                        r: u32_to_u8(
+                            self.r.ok_or_else(|| "rgb color requires r".to_string())?,
+                            "r",
+                        )?,
+                        g: u32_to_u8(
+                            self.g.ok_or_else(|| "rgb color requires g".to_string())?,
+                            "g",
+                        )?,
+                        b: u32_to_u8(
+                            self.b.ok_or_else(|| "rgb color requires b".to_string())?,
+                            "b",
+                        )?,
                     })
                 }
             }
@@ -665,9 +741,18 @@ impl WasmColorInput {
                 } else {
                     Ok(CoreColor::Argb {
                         a: u32_to_u8(self.a.unwrap_or(255), "a")?,
-                        r: u32_to_u8(self.r.ok_or_else(|| "argb color requires r".to_string())?, "r")?,
-                        g: u32_to_u8(self.g.ok_or_else(|| "argb color requires g".to_string())?, "g")?,
-                        b: u32_to_u8(self.b.ok_or_else(|| "argb color requires b".to_string())?, "b")?,
+                        r: u32_to_u8(
+                            self.r.ok_or_else(|| "argb color requires r".to_string())?,
+                            "r",
+                        )?,
+                        g: u32_to_u8(
+                            self.g.ok_or_else(|| "argb color requires g".to_string())?,
+                            "g",
+                        )?,
+                        b: u32_to_u8(
+                            self.b.ok_or_else(|| "argb color requires b".to_string())?,
+                            "b",
+                        )?,
                     })
                 }
             }
@@ -690,9 +775,18 @@ impl WasmColorInput {
                     parse_color_hex(hex)
                 } else if self.r.is_some() || self.g.is_some() || self.b.is_some() {
                     Ok(CoreColor::Rgb {
-                        r: u32_to_u8(self.r.ok_or_else(|| "rgb color requires r".to_string())?, "r")?,
-                        g: u32_to_u8(self.g.ok_or_else(|| "rgb color requires g".to_string())?, "g")?,
-                        b: u32_to_u8(self.b.ok_or_else(|| "rgb color requires b".to_string())?, "b")?,
+                        r: u32_to_u8(
+                            self.r.ok_or_else(|| "rgb color requires r".to_string())?,
+                            "r",
+                        )?,
+                        g: u32_to_u8(
+                            self.g.ok_or_else(|| "rgb color requires g".to_string())?,
+                            "g",
+                        )?,
+                        b: u32_to_u8(
+                            self.b.ok_or_else(|| "rgb color requires b".to_string())?,
+                            "b",
+                        )?,
                     })
                 } else if let Some(theme_index) = self.theme_index {
                     Ok(CoreColor::Theme {
@@ -700,7 +794,10 @@ impl WasmColorInput {
                         tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
                     })
                 } else if let Some(palette_index) = self.palette_index {
-                    Ok(CoreColor::Indexed(u32_to_u8(palette_index, "paletteIndex")?))
+                    Ok(CoreColor::Indexed(u32_to_u8(
+                        palette_index,
+                        "paletteIndex",
+                    )?))
                 } else {
                     Err("color requires colorType, hex, rgb, themeIndex, or paletteIndex".into())
                 }
@@ -841,7 +938,9 @@ impl WasmFillStylePatch {
                     .to_core_color()?,
             }),
             Some("gradient") => Ok(CoreFillStyle::Gradient {
-                gradient_type: parse_gradient_type_input(self.gradient_type.as_deref().unwrap_or("linear"))?,
+                gradient_type: parse_gradient_type_input(
+                    self.gradient_type.as_deref().unwrap_or("linear"),
+                )?,
                 angle: self.angle.unwrap_or(0.0),
                 stops: self
                     .stops
@@ -893,7 +992,10 @@ fn parse_diagonal_direction_input(value: &str) -> Result<DiagonalDirection, Stri
 }
 
 impl WasmBorderEdgePatch {
-    fn apply_to_edge(&self, existing: Option<&CoreBorderEdge>) -> Result<Option<CoreBorderEdge>, String> {
+    fn apply_to_edge(
+        &self,
+        existing: Option<&CoreBorderEdge>,
+    ) -> Result<Option<CoreBorderEdge>, String> {
         let parsed_style = self
             .style
             .as_deref()
@@ -1022,10 +1124,11 @@ impl WasmNumberFormatPatch {
     fn to_core_number_format(&self) -> Result<CoreNumberFormat, String> {
         match self.format_type.as_deref() {
             Some("general") => Ok(CoreNumberFormat::General),
-            Some("builtin") => Ok(CoreNumberFormat::BuiltIn(
-                self.id
-                    .ok_or_else(|| "builtin number format requires id".to_string())?,
-            )),
+            Some("builtin") => {
+                Ok(CoreNumberFormat::BuiltIn(self.id.ok_or_else(|| {
+                    "builtin number format requires id".to_string()
+                })?))
+            }
             Some("custom") => Ok(CoreNumberFormat::Custom(
                 self.format_string
                     .clone()
@@ -2174,7 +2277,10 @@ impl From<&duke_sheets_chart::DataPoint> for WasmDataPoint {
             index: dp.index,
             marker: dp.marker.as_ref().map(WasmMarker::from),
             explosion: dp.explosion,
-            shape_properties: dp.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: dp
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2338,8 +2444,14 @@ impl From<&duke_sheets_chart::Axis> for WasmAxis {
             number_format: a.number_format.as_ref().map(WasmChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,
-            major_gridlines_shape_properties: a.major_gridlines_shape_properties.as_ref().map(WasmChartShapeProperties::from),
-            minor_gridlines_shape_properties: a.minor_gridlines_shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            major_gridlines_shape_properties: a
+                .major_gridlines_shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
+            minor_gridlines_shape_properties: a
+                .minor_gridlines_shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
             major_tick_mark: a.major_tick_mark.as_ref().map(|t| {
                 match t {
                     TickMark::Cross => "cross",
@@ -2546,7 +2658,10 @@ impl From<&duke_sheets_chart::Chart> for WasmChart {
             }),
             plot_visible_only: c.plot_visible_only,
             layout: c.layout.as_ref().map(WasmLayout::from),
-            shape_properties: c.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: c
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
             is_3d: c.is_3d,
             vary_colors: c.vary_colors,
             gap_width: c.gap_width,

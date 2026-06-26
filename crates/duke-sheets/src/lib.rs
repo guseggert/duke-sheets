@@ -39,10 +39,19 @@
 //! ```
 
 pub mod calculation;
+pub mod pivot {
+    //! Pivot table model and refresh API.
+
+    pub use duke_sheets_core::pivot::*;
+    pub use duke_sheets_pivot::*;
+}
 pub mod prelude;
 
 // Re-export calculation types
 pub use calculation::{CalculationOptions, CalculationStats, WorkbookCalculationExt};
+
+// Re-export pivot refresh types
+pub use duke_sheets_pivot::{PivotRefreshStats, WorkbookPivotExt};
 
 // Re-export core types
 pub use duke_sheets_core::auto_filter::{ColorFilter, DynamicFilter, DynamicFilterType};
@@ -97,6 +106,33 @@ pub use duke_sheets_core::{
     PageBreak,
     PageOrientation,
     PageSetup,
+    PivotAggregate,
+    PivotAxis,
+    PivotCacheInfo,
+    PivotCacheSourceKind,
+    PivotDateGroupUnit,
+    PivotExtension,
+    PivotExtensions,
+    PivotField,
+    PivotFieldRef,
+    PivotFilter,
+    PivotFilterOperator,
+    PivotGrouping,
+    PivotLayout,
+    PivotLayoutKind,
+    PivotMeasure,
+    PivotOverwritePolicy,
+    PivotRefreshPolicy,
+    PivotRefreshStatus,
+    PivotShowAs,
+    PivotSort,
+    PivotSource,
+    PivotSourceRange,
+    PivotStyle,
+    PivotSubtotal,
+    PivotTable,
+    PivotTableBuilder,
+    PivotValue,
     Result,
 
     // Rich text types

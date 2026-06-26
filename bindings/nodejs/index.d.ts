@@ -14,8 +14,57 @@ export declare class RowIterator implements IterableIterator<JsRow> {
   next(): IteratorResult<JsRow>
 }
 
+export interface JsPivotMeasureOptions {
+  field: string
+  aggregate?: 'sum' | 'count' | 'countNumbers' | 'average' | 'max' | 'min' | 'product' | 'stdDev' | 'stdDevP' | 'var' | 'varP'
+  name?: string
+  showAs?: 'normal' | 'percentOfGrandTotal' | 'percentOfRowTotal' | 'percentOfColumnTotal'
+}
+
+export interface JsPivotItemFilterOptions {
+  field: string
+  items: string[]
+}
+
+export interface JsPivotGroupingOptions {
+  field: string
+  kind: 'number' | 'numeric' | 'date'
+  start?: number
+  end?: number
+  interval?: number
+  units?: Array<'seconds' | 'minutes' | 'hours' | 'days' | 'months' | 'quarters' | 'years'>
+}
+
+export interface JsPivotTableOptions {
+  name: string
+  sourceRange?: string
+  sourceSheet?: string
+  tableName?: string
+  target: string
+  rows?: string[]
+  columns?: string[]
+  pages?: string[]
+  measures: JsPivotMeasureOptions[]
+  filters?: JsPivotItemFilterOptions[]
+  groupings?: JsPivotGroupingOptions[]
+}
+
+export interface JsPivotRefreshStats {
+  pivotCount: number
+  pivotsRefreshed: number
+  sourceRows: number
+  outputCells: number
+  cacheHits: number
+  cacheMisses: number
+}
+
 // Augment the generated Worksheet class with JS-side methods
 declare module './generated' {
+  interface Workbook {
+    /** Refresh all pivot tables in the workbook. */
+    refreshPivots(): JsPivotRefreshStats
+  }
+
   interface Worksheet {
     /**
      * Iterate over all rows with data as sparse rows.
@@ -23,6 +72,15 @@ declare module './generated' {
      * When metadata flags are enabled, cells with that metadata are included even if empty.
      */
     iterateRows(opts?: JsRowsOptions): RowIterator
+
+    /** Number of pivot tables on the worksheet. */
+    readonly pivotCount: number
+
+    /** Pivot table names on the worksheet. */
+    readonly pivotTableNames: string[]
+
+    /** Add a semantic pivot table definition to the worksheet. */
+    addPivotTable(options: JsPivotTableOptions): void
   }
 }
 

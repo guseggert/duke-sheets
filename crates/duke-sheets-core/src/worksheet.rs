@@ -15,6 +15,7 @@ use crate::conditional_format::ConditionalFormatRule;
 use crate::error::{Error, Result};
 use crate::hyperlink::Hyperlink;
 use crate::locale::Locale;
+use crate::pivot::PivotTable;
 use crate::style::Style;
 use crate::table::Table;
 use crate::validation::DataValidation;
@@ -69,6 +70,8 @@ pub struct Worksheet {
     conditional_formats: Vec<ConditionalFormatRule>,
     /// Tables (ListObjects)
     tables: Vec<Table>,
+    /// Pivot tables anchored on this worksheet
+    pivot_tables: Vec<PivotTable>,
     /// Embedded charts
     charts: Vec<Chart>,
     /// Embedded ChartEx charts (Office 2016+ extended charts)
@@ -157,6 +160,7 @@ impl Worksheet {
             data_validations: Vec::new(),
             conditional_formats: Vec::new(),
             tables: Vec::new(),
+            pivot_tables: Vec::new(),
             charts: Vec::new(),
             charts_ex: Vec::new(),
             images: Vec::new(),
@@ -1253,6 +1257,102 @@ impl Worksheet {
     /// Get the number of tables.
     pub fn table_count(&self) -> usize {
         self.tables.len()
+    }
+
+    /// Add a pivot table to this worksheet.
+    ///
+    /// If the pivot table ID is `0`, the worksheet assigns the next available
+    /// worksheet-local ID. Pivot table names must be unique within a worksheet.
+    pub fn add_pivot_table(&mut self, mut pivot_table: PivotTable) -> Result<()> {
+        if pivot_table.name.trim().is_empty() {
+            return Err(Error::other("pivot table name cannot be empty"));
+        }
+
+        if self
+            .pivot_tables
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(&pivot_table.name))
+        {
+            return Err(Error::other(format!(
+                "pivot table name already exists: {}",
+                pivot_table.name
+            )));
+        }
+
+        if pivot_table.id == 0 {
+            pivot_table.id = self
+                .pivot_tables
+                .iter()
+                .map(|p| p.id)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1);
+        } else if self.pivot_tables.iter().any(|p| p.id == pivot_table.id) {
+            return Err(Error::other(format!(
+                "pivot table id already exists: {}",
+                pivot_table.id
+            )));
+        }
+
+        self.pivot_tables.push(pivot_table);
+        self.mutation_count += 1;
+        self.topology_generation += 1;
+        Ok(())
+    }
+
+    /// Get all pivot tables.
+    pub fn pivot_tables(&self) -> &[PivotTable] {
+        &self.pivot_tables
+    }
+
+    /// Get a mutable reference to all pivot tables.
+    pub fn pivot_tables_mut(&mut self) -> &mut Vec<PivotTable> {
+        self.mutation_count += 1;
+        self.topology_generation += 1;
+        &mut self.pivot_tables
+    }
+
+    /// Get a pivot table by name.
+    pub fn pivot_table_by_name(&self, name: &str) -> Option<&PivotTable> {
+        self.pivot_tables
+            .iter()
+            .find(|pivot| pivot.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Get a mutable pivot table by name.
+    pub fn pivot_table_by_name_mut(&mut self, name: &str) -> Option<&mut PivotTable> {
+        let index = self
+            .pivot_tables
+            .iter()
+            .position(|pivot| pivot.name.eq_ignore_ascii_case(name))?;
+        self.mutation_count += 1;
+        self.topology_generation += 1;
+        self.pivot_tables.get_mut(index)
+    }
+
+    /// Get the number of pivot tables.
+    pub fn pivot_table_count(&self) -> usize {
+        self.pivot_tables.len()
+    }
+
+    /// Remove a pivot table by name.
+    pub fn remove_pivot_table(&mut self, name: &str) -> Option<PivotTable> {
+        let index = self
+            .pivot_tables
+            .iter()
+            .position(|pivot| pivot.name.eq_ignore_ascii_case(name))?;
+        self.mutation_count += 1;
+        self.topology_generation += 1;
+        Some(self.pivot_tables.remove(index))
+    }
+
+    /// Clear all pivot tables from this worksheet.
+    pub fn clear_pivot_tables(&mut self) {
+        if !self.pivot_tables.is_empty() {
+            self.mutation_count += 1;
+            self.topology_generation += 1;
+        }
+        self.pivot_tables.clear();
     }
 
     /// Add a chart to this worksheet.

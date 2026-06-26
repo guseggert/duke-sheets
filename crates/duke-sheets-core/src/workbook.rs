@@ -40,6 +40,10 @@ pub struct Workbook {
     /// Stored as type-erased `Box<dyn Any>` so the core crate needs no dependency
     /// on `duke-sheets-formula`.
     calc_cache: Option<Box<dyn Any + Send + Sync>>,
+    /// Opaque pivot runtime cache, populated and consumed by the pivot engine.
+    /// This is intentionally separate from file-format pivot cache records and
+    /// from the formula calculation cache.
+    pivot_runtime_cache: Option<Box<dyn Any + Send + Sync>>,
     /// Structural generation counter - incremented when sheets are added, removed,
     /// reordered, or renamed. The calculation engine uses this to detect stale caches.
     structural_generation: u64,
@@ -58,6 +62,7 @@ impl Workbook {
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
             calc_cache: None,
+            pivot_runtime_cache: None,
             structural_generation: 0,
             nonce: NEXT_WORKBOOK_NONCE.fetch_add(1, Ordering::Relaxed),
         };
@@ -75,6 +80,7 @@ impl Workbook {
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
             calc_cache: None,
+            pivot_runtime_cache: None,
             structural_generation: 0,
             nonce: NEXT_WORKBOOK_NONCE.fetch_add(1, Ordering::Relaxed),
         }
@@ -160,6 +166,24 @@ impl Workbook {
     /// Store a calculation cache on the workbook.
     pub fn set_calc_cache(&mut self, cache: Box<dyn Any + Send + Sync>) {
         self.calc_cache = Some(cache);
+    }
+
+    /// Take the pivot runtime cache (moves it out of the workbook).
+    #[doc(hidden)]
+    pub fn take_pivot_runtime_cache(&mut self) -> Option<Box<dyn Any + Send + Sync>> {
+        self.pivot_runtime_cache.take()
+    }
+
+    /// Store a pivot runtime cache on the workbook.
+    #[doc(hidden)]
+    pub fn set_pivot_runtime_cache(&mut self, cache: Box<dyn Any + Send + Sync>) {
+        self.pivot_runtime_cache = Some(cache);
+    }
+
+    /// Clear any pivot runtime cache stored on the workbook.
+    #[doc(hidden)]
+    pub fn clear_pivot_runtime_cache(&mut self) {
+        self.pivot_runtime_cache = None;
     }
 
     /// Add a new worksheet with default name

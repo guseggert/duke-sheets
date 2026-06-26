@@ -7,9 +7,11 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use duke_sheets::{CalculationOptions, FormulaValue, WorkbookCalculationExt};
+use duke_sheets::{CalculationOptions, FormulaValue, WorkbookCalculationExt, WorkbookPivotExt};
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
+    CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
+    PivotDateGroupUnit, PivotFilter, PivotGrouping, PivotMeasure, PivotShowAs, PivotTable,
+    PivotValue, Workbook as CoreWorkbook,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -192,11 +194,62 @@ export class RowIterator implements IterableIterator<JsRow> {
   next(): IteratorResult<JsRow>;
 }
 
+export interface PivotMeasureOptions {
+  field: string;
+  aggregate?: "sum" | "count" | "countNumbers" | "average" | "max" | "min" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
+  name?: string;
+  showAs?: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal";
+}
+
+export interface PivotItemFilterOptions {
+  field: string;
+  items: string[];
+}
+
+export interface PivotGroupingOptions {
+  field: string;
+  kind: "number" | "numeric" | "date";
+  start?: number;
+  end?: number;
+  interval?: number;
+  units?: Array<"seconds" | "minutes" | "hours" | "days" | "months" | "quarters" | "years">;
+}
+
+export interface PivotTableOptions {
+  name: string;
+  sourceRange?: string;
+  sourceSheet?: string;
+  tableName?: string;
+  target: string;
+  rows?: string[];
+  columns?: string[];
+  pages?: string[];
+  measures: PivotMeasureOptions[];
+  filters?: PivotItemFilterOptions[];
+  groupings?: PivotGroupingOptions[];
+}
+
+export interface PivotRefreshStats {
+  pivotCount: number;
+  pivotsRefreshed: number;
+  sourceRows: number;
+  outputCells: number;
+  cacheHits: number;
+  cacheMisses: number;
+}
+
+export interface Workbook {
+  refreshPivots(): PivotRefreshStats;
+}
+
 export interface Worksheet {
   iterateRows(opts?: JsRowsOptions): RowIterator;
   setCellStyle(address: string, style: StyleInput): void;
   setCellStyleAt(row: number, col: number, style: StyleInput): void;
   setRangeStyle(range: string, style: StyleInput): void;
+  readonly pivotCount: number;
+  readonly pivotTableNames: string[];
+  addPivotTable(options: PivotTableOptions): void;
 }
 "#;
 
@@ -244,6 +297,164 @@ pub(crate) fn to_js_error(e: impl std::fmt::Display) -> JsError {
 
 pub(crate) fn to_js_value<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(value).map_err(to_js_error)
+}
+
+fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTable, JsError> {
+    let mut builder = PivotTable::builder(options.name);
+    match (options.table_name, options.source_range) {
+        (Some(table_name), None) => {
+            builder = builder.table_source(table_name);
+        }
+        (None, Some(source_range)) => {
+            let range = CellRange::parse(&source_range)
+                .map_err(|e| JsError::new(&format!("Invalid pivot source range: {e}")))?;
+            builder = if let Some(sheet) = options.source_sheet {
+                builder.source_range_on_sheet(sheet, range)
+            } else {
+                builder.source_range(range)
+            };
+        }
+        (Some(_), Some(_)) => {
+            return Err(JsError::new(
+                "Pivot options must use either tableName or sourceRange, not both",
+            ));
+        }
+        (None, None) => {
+            return Err(JsError::new(
+                "Pivot options require tableName or sourceRange",
+            ));
+        }
+    }
+
+    builder = builder
+        .target_address(&options.target)
+        .map_err(|e| JsError::new(&format!("Invalid pivot target: {e}")))?;
+    for field in options.rows.unwrap_or_default() {
+        builder = builder.row(field);
+    }
+    for field in options.columns.unwrap_or_default() {
+        builder = builder.column(field);
+    }
+    for field in options.pages.unwrap_or_default() {
+        builder = builder.page(field);
+    }
+    for measure in options.measures {
+        builder = builder.pivot_measure(build_pivot_measure_from_wasm(measure)?);
+    }
+    for filter in options.filters.unwrap_or_default() {
+        builder = builder.filter(PivotFilter::field_items(
+            filter.field,
+            filter
+                .items
+                .into_iter()
+                .map(PivotValue::from)
+                .collect::<Vec<_>>(),
+        ));
+    }
+    for grouping in options.groupings.unwrap_or_default() {
+        builder = builder.grouping(build_pivot_grouping_from_wasm(grouping)?);
+    }
+
+    builder.build().map_err(to_js_error)
+}
+
+fn build_pivot_measure_from_wasm(
+    options: WasmPivotMeasureOptions,
+) -> Result<PivotMeasure, JsError> {
+    let aggregate = parse_pivot_aggregate(options.aggregate.as_deref())?;
+    let mut measure = PivotMeasure::new(options.field, aggregate);
+    if let Some(name) = options.name {
+        measure = measure.with_name(name);
+    }
+    if let Some(show_as) = options.show_as {
+        measure = measure.with_show_as(parse_pivot_show_as(&show_as)?);
+    }
+    Ok(measure)
+}
+
+fn build_pivot_grouping_from_wasm(
+    options: WasmPivotGroupingOptions,
+) -> Result<PivotGrouping, JsError> {
+    match options.kind.as_str() {
+        "number" | "numeric" => Ok(PivotGrouping::Number {
+            field: options.field.into(),
+            start: options.start,
+            end: options.end,
+            interval: options
+                .interval
+                .ok_or_else(|| JsError::new("Numeric pivot grouping requires interval"))?,
+        }),
+        "date" => {
+            let units = options
+                .units
+                .ok_or_else(|| JsError::new("Date pivot grouping requires units"))?
+                .iter()
+                .map(|unit| parse_pivot_date_group_unit(unit))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(PivotGrouping::Date {
+                field: options.field.into(),
+                units,
+            })
+        }
+        other => Err(JsError::new(&format!(
+            "Unsupported pivot grouping kind: {other}"
+        ))),
+    }
+}
+
+fn parse_pivot_aggregate(value: Option<&str>) -> Result<PivotAggregate, JsError> {
+    let Some(value) = value else {
+        return Ok(PivotAggregate::Sum);
+    };
+    Ok(match value {
+        "sum" => PivotAggregate::Sum,
+        "count" => PivotAggregate::Count,
+        "countNumbers" | "countNums" => PivotAggregate::CountNumbers,
+        "average" | "avg" => PivotAggregate::Average,
+        "max" => PivotAggregate::Max,
+        "min" => PivotAggregate::Min,
+        "product" => PivotAggregate::Product,
+        "stdDev" => PivotAggregate::StdDev,
+        "stdDevP" | "stdDevp" => PivotAggregate::StdDevP,
+        "var" => PivotAggregate::Var,
+        "varP" | "varp" => PivotAggregate::VarP,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot aggregate: {other}"
+            )))
+        }
+    })
+}
+
+fn parse_pivot_date_group_unit(value: &str) -> Result<PivotDateGroupUnit, JsError> {
+    Ok(match value {
+        "seconds" => PivotDateGroupUnit::Seconds,
+        "minutes" => PivotDateGroupUnit::Minutes,
+        "hours" => PivotDateGroupUnit::Hours,
+        "days" => PivotDateGroupUnit::Days,
+        "months" => PivotDateGroupUnit::Months,
+        "quarters" => PivotDateGroupUnit::Quarters,
+        "years" => PivotDateGroupUnit::Years,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot date grouping unit: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_show_as(value: &str) -> Result<PivotShowAs, JsError> {
+    Ok(match value {
+        "normal" => PivotShowAs::Normal,
+        "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
+        "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
+        "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot showAs mode: {other}"
+            )))
+        }
+    })
 }
 
 fn cell_error_to_string(e: &CellError) -> &'static str {
@@ -432,7 +643,9 @@ impl Worksheet {
             .cell_style_at(addr.row, addr.col)
             .cloned()
             .unwrap_or_default();
-        patch.apply_to_core_style(&mut core_style).map_err(to_js_error)?;
+        patch
+            .apply_to_core_style(&mut core_style)
+            .map_err(to_js_error)?;
         ws.set_cell_style_at(addr.row, addr.col, &core_style)
             .map_err(to_js_error)
     }
@@ -448,7 +661,9 @@ impl Worksheet {
             .cell_style_at(row, col as u16)
             .cloned()
             .unwrap_or_default();
-        patch.apply_to_core_style(&mut core_style).map_err(to_js_error)?;
+        patch
+            .apply_to_core_style(&mut core_style)
+            .map_err(to_js_error)?;
         ws.set_cell_style_at(row, col as u16, &core_style)
             .map_err(to_js_error)
     }
@@ -467,7 +682,9 @@ impl Worksheet {
                 .cell_style_at(addr.row, addr.col)
                 .cloned()
                 .unwrap_or_default();
-            patch.apply_to_core_style(&mut core_style).map_err(to_js_error)?;
+            patch
+                .apply_to_core_style(&mut core_style)
+                .map_err(to_js_error)?;
             ws.set_cell_style_at(addr.row, addr.col, &core_style)
                 .map_err(to_js_error)?;
         }
@@ -616,6 +833,40 @@ impl Worksheet {
             Some(info) => to_js_value(&WasmImageInfo::from(info)),
             None => Ok(JsValue::NULL),
         }
+    }
+
+    #[wasm_bindgen(getter, js_name = pivotCount)]
+    pub fn pivot_count(&self) -> Result<usize, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws.pivot_table_count())
+    }
+
+    #[wasm_bindgen(getter, js_name = pivotTableNames)]
+    pub fn pivot_table_names(&self) -> Result<Vec<String>, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        Ok(ws
+            .pivot_tables()
+            .iter()
+            .map(|pivot| pivot.name.clone())
+            .collect())
+    }
+
+    #[wasm_bindgen(js_name = addPivotTable)]
+    pub fn add_pivot_table(&self, options: JsValue) -> Result<(), JsError> {
+        let options: WasmPivotTableOptions =
+            serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
+        let pivot = build_pivot_table_from_wasm(options)?;
+        let mut wb = self.workbook.borrow_mut();
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        ws.add_pivot_table(pivot).map_err(to_js_error)
     }
 }
 
@@ -869,24 +1120,30 @@ impl Workbook {
             // Build external_fn from callback: externalFn(book, name, args[]) -> number|string|bool|null
             let external_fn = external_js_fn.map(|(js_fn, legacy_two_arg)| {
                 let wrapper = SendSyncFunction(js_fn);
-                Arc::new(move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
-                    let args_arr = js_sys::Array::new();
-                    for a in args {
-                        args_arr.push(&JsValue::from_str(a));
-                    }
-                    let result = if legacy_two_arg {
-                        wrapper.call2(&JsValue::NULL, &JsValue::from_str(name), &args_arr.into())
-                    } else {
-                        wrapper.call3(
-                            &JsValue::NULL,
-                            &JsValue::from_str(book),
-                            &JsValue::from_str(name),
-                            &args_arr.into(),
-                        )
-                    }
-                    .ok()?;
-                    js_value_to_formula_value(result)
-                })
+                Arc::new(
+                    move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
+                        let args_arr = js_sys::Array::new();
+                        for a in args {
+                            args_arr.push(&JsValue::from_str(a));
+                        }
+                        let result = if legacy_two_arg {
+                            wrapper.call2(
+                                &JsValue::NULL,
+                                &JsValue::from_str(name),
+                                &args_arr.into(),
+                            )
+                        } else {
+                            wrapper.call3(
+                                &JsValue::NULL,
+                                &JsValue::from_str(book),
+                                &JsValue::from_str(name),
+                                &args_arr.into(),
+                            )
+                        }
+                        .ok()?;
+                        js_value_to_formula_value(result)
+                    },
+                )
                     as Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>
             });
 
@@ -907,6 +1164,13 @@ impl Workbook {
         };
         let stats = wb.calculate_with_options(&options).map_err(to_js_error)?;
         to_js_value(&WasmCalculationStats::from(&stats))
+    }
+
+    #[wasm_bindgen(js_name = refreshPivots)]
+    pub fn refresh_pivots(&self) -> Result<JsValue, JsError> {
+        let mut wb = self.inner.borrow_mut();
+        let stats = wb.refresh_pivots().map_err(to_js_error)?;
+        to_js_value(&WasmPivotRefreshStats::from(stats))
     }
 
     #[wasm_bindgen(js_name = defineName)]

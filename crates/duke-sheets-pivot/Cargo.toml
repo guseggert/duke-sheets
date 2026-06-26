@@ -1,0 +1,21 @@
+[package]
+name = "duke-sheets-pivot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Pivot table refresh engine for duke-sheets"
+
+[dependencies]
+duke-sheets-core.workspace = true
+ahash.workspace = true
+ssfmt.workspace = true
+rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[features]
+default = []
+parallel = ["dep:rayon"]

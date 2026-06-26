@@ -40,6 +40,7 @@ mod conditional_format;
 mod data_validation;
 mod drawing;
 mod formulas;
+mod pivot;
 mod shared_strings;
 mod table;
 mod theme;
@@ -335,6 +336,17 @@ impl XlsxReader {
         // Read workbook.xml to get sheet info, properties, and defined names
         let wb_props = read_workbook_xml(&mut archive)?;
 
+        let mut pivot_caches = HashMap::new();
+        for cache_entry in &wb_props.pivot_caches {
+            if let Some(path) = workbook_rels.pivot_cache_paths.get(&cache_entry.r_id) {
+                if let Some(cache) =
+                    pivot::read_pivot_cache_definition(&mut archive, cache_entry.cache_id, path)?
+                {
+                    pivot_caches.insert(cache_entry.cache_id, cache);
+                }
+            }
+        }
+
         let sheet_paths = workbook_rels.sheet_paths;
         let chartsheet_paths = workbook_rels.chartsheet_paths;
 
@@ -413,6 +425,24 @@ impl XlsxReader {
                 for table_path in &table_rels {
                     if let Some(t) = table::read_table(&mut archive, table_path)? {
                         workbook.worksheet_mut(sheet_idx).unwrap().add_table(t);
+                    }
+                }
+
+                let mut pivot_rels: Vec<String> = sheet_rels
+                    .values()
+                    .filter(|r| r.rel_type.ends_with("/pivotTable"))
+                    .map(|r| r.target.clone())
+                    .collect();
+                pivot_rels.sort();
+                for pivot_path in &pivot_rels {
+                    if let Some(pivot) =
+                        pivot::read_pivot_table(&mut archive, pivot_path, &pivot_caches)?
+                    {
+                        workbook
+                            .worksheet_mut(sheet_idx)
+                            .unwrap()
+                            .add_pivot_table(pivot)
+                            .map_err(|e| XlsxError::InvalidFormat(e.to_string()))?;
                     }
                 }
 

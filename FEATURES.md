@@ -450,12 +450,12 @@ One row per category, backed by the formula engine test suite. Individual functi
 
 | Feature | XLSX | XLSB | XLS | ODS | Test | Spec |
 |---------|------|------|-----|-----|------|------|
-| Pivot cache (source data) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
-| Pivot table definition | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
-| Row / column / value fields | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
-| Filter (page) fields | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
-| Aggregate functions (Sum/Count/Avg/...) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
-| Pivot table styles | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
+| Pivot cache (source data) | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::tests::test_writer_emits_pivot_table_and_cache_parts`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_table_source_pivot` | §18.10.1 | Worksheet/table source cache definitions and generated cache records only; external, OLAP, scenario, and consolidation caches are not refreshable/writable yet |
+| Pivot table definition | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::tests::test_writer_emits_pivot_table_and_cache_parts`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_table_source_pivot` | §18.10.1 | Basic semantic definitions round-trip: source, location, layout flags, fields, measures, style, and item filters; advanced extensions are not preserved yet |
+| Row / column / value fields | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::tests::test_writer_emits_pivot_table_and_cache_parts`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_table_source_pivot` | §18.10.1 | Basic row, column, and data fields only; hierarchies and OLAP fields are not supported yet |
+| Filter (page) fields | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::tests::test_writer_round_trips_pivot_page_fields` | §18.10.1 | Basic report/page axis and single selected item filters round-trip; multiple-item UI state and advanced page-field layout are not complete yet |
+| Aggregate functions (Sum/Count/Avg/...) | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::tests::test_writer_emits_pivot_table_and_cache_parts`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_table_source_pivot`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_pivot_show_as_percentages`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_pivot_show_as_base_field` | §18.10.1 | Data-field subtotal functions, percent-of-row/column/grand-total, and ECMA base-field difference/percent-difference/running-total show-as calculations round-trip; rank/index extension modes are not written yet |
+| Pivot table styles | R● W● | R✖ W✖ | R✖ W✖ | R✖ W✖ | `duke-sheets-xlsx::writer::tests::test_writer_emits_pivot_table_and_cache_parts`, `duke-sheets-xlsx::writer::tests::test_writer_round_trips_table_source_pivot` | §18.10.1 | Basic `pivotTableStyleInfo` name/header/stripe flags only |
 | Calculated fields | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
 | Grouping (dates, numbers) | R✖ W✖ | R✖ W✖ | R✖ W✖ | R✖ W✖ | - | §18.10.1 |
 | Slicers | R✖ W✖ | R✖ W✖ | R- W- | R✖ W✖ | - | [MS-XLSX] §2.3.16 |

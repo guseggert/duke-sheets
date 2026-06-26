@@ -19,6 +19,7 @@ mod comments;
 mod conditional_format;
 mod data_validation;
 mod drawing;
+mod pivot;
 mod tables;
 
 const NS_SPREADSHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -43,6 +44,12 @@ const RT_VML_DRAWING: &str =
 const RT_HYPERLINK: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
 const RT_TABLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
+const RT_PIVOT_TABLE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable";
+const RT_PIVOT_CACHE_DEFINITION: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition";
+const RT_PIVOT_CACHE_RECORDS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords";
 const RT_SHEET_METADATA: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata";
 const RT_DRAWING: &str =
@@ -64,6 +71,12 @@ const CT_COMMENTS: &str =
 const CT_THEME: &str = "application/vnd.openxmlformats-officedocument.theme+xml";
 const CT_RELS: &str = "application/vnd.openxmlformats-package.relationships+xml";
 const CT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
+const CT_PIVOT_TABLE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml";
+const CT_PIVOT_CACHE_DEFINITION: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml";
+const CT_PIVOT_CACHE_RECORDS: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml";
 const CT_METADATA: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.metadata+xml";
 const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
@@ -637,6 +650,8 @@ impl XlsxWriter {
             }
         }
 
+        let pivot_numbering = pivot::build_pivot_numbering(workbook)?;
+
         // Build chart/drawing numbering:
         // chart_numbering: (sheet_idx, chart_in_sheet_idx, global_chart_num)
         // chart_ex_numbering: (sheet_idx, chartex_in_sheet_idx, global_chartex_num)
@@ -705,6 +720,8 @@ impl XlsxWriter {
             &sheets_with_comments,
             &sst,
             &table_numbering,
+            &pivot_numbering.cache_parts,
+            &pivot_numbering.table_parts,
             &drawing_numbering,
             &chart_numbering,
             &chart_ex_numbering,
@@ -719,10 +736,16 @@ impl XlsxWriter {
         Self::write_root_rels(&mut zip)?;
 
         // Write xl/workbook.xml
-        Self::write_workbook_xml(&mut zip, workbook)?;
+        Self::write_workbook_xml(&mut zip, workbook, &pivot_numbering.cache_parts)?;
 
         // Write xl/_rels/workbook.xml.rels
-        Self::write_workbook_rels(&mut zip, workbook, &sst, needs_metadata)?;
+        Self::write_workbook_rels(
+            &mut zip,
+            workbook,
+            &sst,
+            needs_metadata,
+            &pivot_numbering.cache_parts,
+        )?;
 
         // Write xl/styles.xml
         Self::write_styles_xml(&mut zip, &style_table)?;
@@ -747,6 +770,12 @@ impl XlsxWriter {
                 .filter(|(si, _, _)| *si == i)
                 .map(|(_, _, gn)| *gn)
                 .collect();
+            let sheet_pivot_parts: Vec<pivot::PivotTablePart> = pivot_numbering
+                .table_parts
+                .iter()
+                .filter(|part| part.sheet_index == i)
+                .cloned()
+                .collect();
 
             let drawing_num = drawing_numbering
                 .iter()
@@ -760,6 +789,7 @@ impl XlsxWriter {
                 &style_table,
                 &sst,
                 &sheet_table_globals,
+                &sheet_pivot_parts,
                 drawing_num,
             )?;
 
@@ -775,6 +805,9 @@ impl XlsxWriter {
             // Write table part XML files for this sheet
             for (local_idx, &global_num) in sheet_table_globals.iter().enumerate() {
                 tables::write_table_part(&mut zip, sheet, local_idx, global_num)?;
+            }
+            for part in &sheet_pivot_parts {
+                pivot::write_pivot_table_part(&mut zip, workbook, part)?;
             }
 
             // Write drawing and chart XML files for this sheet
@@ -864,6 +897,12 @@ impl XlsxWriter {
             }
         }
 
+        for cache_part in &pivot_numbering.cache_parts {
+            pivot::write_pivot_cache_definition_part(&mut zip, workbook, cache_part)?;
+            pivot::write_pivot_cache_records_part(&mut zip, workbook, cache_part)?;
+            pivot::write_pivot_cache_definition_rels(&mut zip, cache_part.cache_num)?;
+        }
+
         // Write chart sheets and their drawings/charts
         for (i, cs) in workbook.chartsheets().iter().enumerate() {
             let cs_dn = cs_drawing_numbering
@@ -910,6 +949,8 @@ impl XlsxWriter {
         sheets_with_comments: &[usize],
         sst: &SharedStringTable,
         table_numbering: &[(usize, usize, usize)],
+        pivot_cache_parts: &[pivot::PivotCachePart],
+        pivot_table_parts: &[pivot::PivotTablePart],
         drawing_numbering: &[(usize, usize)],
         chart_numbering: &[(usize, usize, usize)],
         chart_ex_numbering: &[(usize, usize, usize)],
@@ -1016,6 +1057,29 @@ impl XlsxWriter {
                 w.create_element("Override")
                     .with_attribute(("PartName", part.as_str()))
                     .with_attribute(("ContentType", CT_TABLE))
+                    .write_empty()?;
+            }
+
+            for part in pivot_table_parts {
+                let part_name = format!("/xl/pivotTables/pivotTable{}.xml", part.table_num);
+                w.create_element("Override")
+                    .with_attribute(("PartName", part_name.as_str()))
+                    .with_attribute(("ContentType", CT_PIVOT_TABLE))
+                    .write_empty()?;
+            }
+
+            for part in pivot_cache_parts {
+                let definition_part =
+                    format!("/xl/pivotCache/pivotCacheDefinition{}.xml", part.cache_num);
+                w.create_element("Override")
+                    .with_attribute(("PartName", definition_part.as_str()))
+                    .with_attribute(("ContentType", CT_PIVOT_CACHE_DEFINITION))
+                    .write_empty()?;
+                let records_part =
+                    format!("/xl/pivotCache/pivotCacheRecords{}.xml", part.cache_num);
+                w.create_element("Override")
+                    .with_attribute(("PartName", records_part.as_str()))
+                    .with_attribute(("ContentType", CT_PIVOT_CACHE_RECORDS))
                     .write_empty()?;
             }
 
@@ -1143,6 +1207,7 @@ impl XlsxWriter {
     fn write_workbook_xml<W: Write + Seek>(
         zip: &mut zip::ZipWriter<W>,
         workbook: &Workbook,
+        pivot_cache_parts: &[pivot::PivotCachePart],
     ) -> XlsxResult<()> {
         write_xml_part(zip, "xl/workbook.xml", |w| {
             let mut tag = BytesStart::new("workbook");
@@ -1262,6 +1327,19 @@ impl XlsxWriter {
                     .write_empty()?;
             }
 
+            if !pivot_cache_parts.is_empty() {
+                w.write_event(Event::Start(BytesStart::new("pivotCaches")))?;
+                for cache_part in pivot_cache_parts {
+                    let cache_id = cache_part.cache_num.to_string();
+                    let rid = pivot::workbook_cache_rid(workbook, cache_part.cache_num);
+                    w.create_element("pivotCache")
+                        .with_attribute(("cacheId", cache_id.as_str()))
+                        .with_attribute(("r:id", rid.as_str()))
+                        .write_empty()?;
+                }
+                w.write_event(Event::End(BytesEnd::new("pivotCaches")))?;
+            }
+
             w.write_event(Event::End(BytesEnd::new("workbook")))?;
             Ok(())
         })
@@ -1272,6 +1350,7 @@ impl XlsxWriter {
         workbook: &Workbook,
         sst: &SharedStringTable,
         has_metadata: bool,
+        pivot_cache_parts: &[pivot::PivotCachePart],
     ) -> XlsxResult<()> {
         write_xml_part(zip, "xl/_rels/workbook.xml.rels", |w| {
             let mut tag = BytesStart::new("Relationships");
@@ -1344,6 +1423,19 @@ impl XlsxWriter {
                     .with_attribute(("Id", rid.as_str()))
                     .with_attribute(("Type", RT_SHEET_METADATA))
                     .with_attribute(("Target", "metadata.xml"))
+                    .write_empty()?;
+            }
+
+            for cache_part in pivot_cache_parts {
+                let rid = pivot::workbook_cache_rid(workbook, cache_part.cache_num);
+                let target = format!(
+                    "pivotCache/pivotCacheDefinition{}.xml",
+                    cache_part.cache_num
+                );
+                w.create_element("Relationship")
+                    .with_attribute(("Id", rid.as_str()))
+                    .with_attribute(("Type", RT_PIVOT_CACHE_DEFINITION))
+                    .with_attribute(("Target", target.as_str()))
                     .write_empty()?;
             }
 
@@ -1715,6 +1807,7 @@ impl XlsxWriter {
         style_table: &XlsxStyleTable,
         sst: &SharedStringTable,
         sheet_table_globals: &[usize],
+        sheet_pivot_parts: &[pivot::PivotTablePart],
         drawing_num: Option<usize>,
     ) -> XlsxResult<Vec<WorksheetRelationship>> {
         let path = format!("xl/worksheets/sheet{}.xml", index + 1);
@@ -1829,6 +1922,24 @@ impl XlsxWriter {
                     w.write_event(Event::Empty(part))?;
                 }
                 w.write_event(Event::End(BytesEnd::new("tableParts")))?;
+            }
+
+            if !sheet_pivot_parts.is_empty() {
+                w.write_event(Event::Start(BytesStart::new("pivotTableDefinitions")))?;
+                for part in sheet_pivot_parts {
+                    let rid = format!("rId{}", rels.len() + 1);
+                    let target = format!("../pivotTables/pivotTable{}.xml", part.table_num);
+                    rels.push(WorksheetRelationship {
+                        id: rid.clone(),
+                        rel_type: RT_PIVOT_TABLE,
+                        target,
+                        target_mode: None,
+                    });
+                    let mut el = BytesStart::new("pivotTableDefinition");
+                    el.push_attribute(("r:id", rid.as_str()));
+                    w.write_event(Event::Empty(el))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("pivotTableDefinitions")))?;
             }
 
             w.write_event(Event::End(BytesEnd::new("worksheet")))?;
@@ -3100,7 +3211,10 @@ impl XlsxWriter {
 mod tests {
     use super::*;
     use crate::reader::XlsxReader;
-    use duke_sheets_core::{CellRange, ConditionalFormatRule, Hyperlink, SplitPanes};
+    use duke_sheets_core::{
+        CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotFilter, PivotMeasure,
+        PivotShowAs, PivotSource, PivotTable, PivotValue, SplitPanes,
+    };
     use std::io::Read;
 
     fn read_zip_entry(bytes: Vec<u8>, path: &str) -> String {
@@ -3554,6 +3668,333 @@ mod tests {
             "missing table rel target"
         );
         assert!(rels.contains("/table\""), "missing table rel type");
+    }
+
+    #[test]
+    fn test_writer_emits_pivot_table_and_cache_parts() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Q1").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "East").unwrap();
+        sheet.set_cell_value("B4", "Q2").unwrap();
+        sheet.set_cell_value("C4", 15.0).unwrap();
+
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .filter(PivotFilter::field_items("Region", ["East"]))
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let ct = read_zip_entry(bytes.clone(), "[Content_Types].xml");
+        assert!(ct.contains("/xl/pivotTables/pivotTable1.xml"));
+        assert!(ct.contains("/xl/pivotCache/pivotCacheDefinition1.xml"));
+        assert!(ct.contains("/xl/pivotCache/pivotCacheRecords1.xml"));
+
+        let workbook_xml = read_zip_entry(bytes.clone(), "xl/workbook.xml");
+        assert!(workbook_xml.contains("<pivotCaches>"));
+        assert!(workbook_xml.contains(r#"cacheId="1""#));
+        assert!(workbook_xml.contains(r#"r:id="rIdPivotCache1""#));
+
+        let workbook_rels = read_zip_entry(bytes.clone(), "xl/_rels/workbook.xml.rels");
+        assert!(workbook_rels.contains(RT_PIVOT_CACHE_DEFINITION));
+        assert!(workbook_rels.contains("pivotCache/pivotCacheDefinition1.xml"));
+
+        let sheet_xml = read_zip_entry(bytes.clone(), "xl/worksheets/sheet1.xml");
+        assert!(sheet_xml.contains("<pivotTableDefinitions>"));
+        assert!(sheet_xml.contains("<pivotTableDefinition r:id="));
+
+        let sheet_rels = read_zip_entry(bytes.clone(), "xl/worksheets/_rels/sheet1.xml.rels");
+        assert!(sheet_rels.contains(RT_PIVOT_TABLE));
+        assert!(sheet_rels.contains("../pivotTables/pivotTable1.xml"));
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"name="SalesPivot""#));
+        assert!(pivot_xml.contains(r#"cacheId="1""#));
+        assert!(pivot_xml.contains(r#"<rowFields count="1"><field x="0"/>"#));
+        assert!(pivot_xml.contains(r#"<colFields count="1"><field x="1"/>"#));
+        assert!(pivot_xml.contains(r#"<dataField name="Revenue" fld="2" subtotal="sum"/>"#));
+        assert!(
+            pivot_xml.contains(r#"<item x="1" h="1"/>"#),
+            "West should be hidden by the Region item filter"
+        );
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"<worksheetSource ref="A1:C4" sheet="Sheet1"/>"#));
+        assert!(cache_def.contains(r#"<cacheFields count="3">"#));
+        assert!(cache_def.contains(r#"<cacheField name="Region">"#));
+
+        let cache_records = read_zip_entry(bytes, "xl/pivotCache/pivotCacheRecords1.xml");
+        assert!(cache_records.contains(r#"<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="3">"#));
+        assert_eq!(cache_records.matches("<r>").count(), 3);
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("rewrite workbook");
+        let roundtrip = XlsxReader::read(Cursor::new(out.into_inner())).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("SalesPivot")
+            .unwrap();
+        assert_eq!(pivot.rows.len(), 1);
+        assert_eq!(pivot.rows[0].field.name, "Region");
+        assert_eq!(pivot.columns.len(), 1);
+        assert_eq!(pivot.columns[0].field.name, "Quarter");
+        assert_eq!(pivot.measures.len(), 1);
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+        assert_eq!(pivot.measures[0].aggregate, PivotAggregate::Sum);
+        assert!(matches!(
+            &pivot.source,
+            PivotSource::WorksheetRange {
+                sheet: Some(sheet),
+                range
+            } if sheet == "Sheet1" && range.to_a1_string() == "A1:C4"
+        ));
+        assert_eq!(pivot.filters.len(), 1);
+        match &pivot.filters[0] {
+            PivotFilter::FieldItems {
+                field,
+                allowed_items,
+            } => {
+                assert_eq!(field.name, "Region");
+                assert_eq!(allowed_items.len(), 1);
+                assert_eq!(allowed_items[0].to_string(), "East");
+            }
+            other => panic!("unexpected pivot filter: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_writer_round_trips_table_source_pivot() {
+        use duke_sheets_core::table::{Table, TableColumn};
+
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let mut table = Table::new(1, "SalesData", CellRange::parse("A1:B3").unwrap());
+        table.columns = vec![
+            TableColumn::new(1, "Region"),
+            TableColumn::new(2, "Revenue"),
+        ];
+        sheet.add_table(table);
+
+        let pivot = PivotTable::builder("SalesPivot")
+            .table_source("SalesData")
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"<worksheetSource name="SalesData"/>"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("SalesPivot")
+            .unwrap();
+        assert!(matches!(
+            &pivot.source,
+            PivotSource::Table { name } if name == "SalesData"
+        ));
+        assert_eq!(pivot.rows[0].field.name, "Region");
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_page_fields() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Enterprise").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "East").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 15.0).unwrap();
+
+        let pivot = PivotTable::builder("SalesBySegment")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .page("Segment")
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .filter(PivotFilter::field_items("Segment", ["Retail"]))
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"axis="axisPage""#));
+        assert!(pivot_xml.contains(r#"<pageFields count="1"><pageField fld="1" item="0"/>"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("SalesBySegment")
+            .unwrap();
+        assert_eq!(pivot.page_fields.len(), 1);
+        assert_eq!(pivot.page_fields[0].field.name, "Segment");
+        assert_eq!(pivot.rows.len(), 1);
+        assert_eq!(pivot.rows[0].field.name, "Region");
+        assert_eq!(pivot.measures.len(), 1);
+        assert_eq!(pivot.measures[0].field.name, "Revenue");
+        assert_eq!(pivot.filters.len(), 1);
+        match &pivot.filters[0] {
+            PivotFilter::FieldItems {
+                field,
+                allowed_items,
+            } => {
+                assert_eq!(field.name, "Segment");
+                assert_eq!(allowed_items.len(), 1);
+                assert_eq!(allowed_items[0].to_string(), "Retail");
+            }
+            other => panic!("unexpected pivot filter: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_show_as_percentages() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", 30.0).unwrap();
+
+        let pivot = PivotTable::builder("SalesPercent")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .pivot_measure(
+                PivotMeasure::new("Revenue", PivotAggregate::Sum)
+                    .with_name("% of Row")
+                    .with_show_as(PivotShowAs::PercentOfRowTotal),
+            )
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"showDataAs="percentOfRow""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("SalesPercent")
+            .unwrap();
+        assert_eq!(pivot.measures.len(), 1);
+        assert_eq!(pivot.measures[0].show_as, PivotShowAs::PercentOfRowTotal);
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_show_as_base_field() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Period").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", 1.0).unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", 2.0).unwrap();
+        sheet.set_cell_value("B3", 15.0).unwrap();
+
+        let pivot = PivotTable::builder("SalesDifference")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Period")
+            .pivot_measure(
+                PivotMeasure::new("Revenue", PivotAggregate::Sum).with_show_as(
+                    PivotShowAs::DifferenceFrom {
+                        base_field: "Period".into(),
+                        base_item: PivotValue::Number(1.0),
+                    },
+                ),
+            )
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"showDataAs="difference""#));
+        assert!(pivot_xml.contains(r#"baseField="0""#));
+        assert!(pivot_xml.contains(r#"baseItem="0""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("SalesDifference")
+            .unwrap();
+        assert_eq!(pivot.measures.len(), 1);
+        match &pivot.measures[0].show_as {
+            PivotShowAs::DifferenceFrom {
+                base_field,
+                base_item,
+            } => {
+                assert_eq!(base_field.name, "Period");
+                assert_eq!(*base_item, PivotValue::Number(1.0));
+            }
+            other => panic!("unexpected show-as mode: {other:?}"),
+        }
     }
 
     #[test]

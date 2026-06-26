@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/duke-sheets-core",
     "crates/duke-sheets-formula",
+    "crates/duke-sheets-pivot",
     "crates/duke-sheets-xlsx",
     "crates/duke-sheets-xls",
     "crates/duke-sheets-csv",
@@ -38,6 +39,7 @@ rust-version = "1.82"
 # Internal crates
 duke-sheets-core = { path = "crates/duke-sheets-core" }
 duke-sheets-formula = { path = "crates/duke-sheets-formula" }
+duke-sheets-pivot = { path = "crates/duke-sheets-pivot" }
 duke-sheets-xlsx = { path = "crates/duke-sheets-xlsx" }
 duke-sheets-xls = { path = "crates/duke-sheets-xls" }
 duke-sheets-csv = { path = "crates/duke-sheets-csv" }

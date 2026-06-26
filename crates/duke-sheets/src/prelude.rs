@@ -52,6 +52,20 @@ pub use crate::{
     ImageInfo,
     ImageSizing,
     NumberFormat,
+    PivotAggregate,
+    PivotField,
+    PivotFieldRef,
+    PivotFilter,
+    PivotLayout,
+    PivotLayoutKind,
+    PivotMeasure,
+    PivotOverwritePolicy,
+    PivotRefreshPolicy,
+    PivotRefreshStats,
+    PivotSource,
+    PivotStyle,
+    PivotTable,
+    PivotValue,
     Result,
 
     // Rich text types
@@ -67,6 +81,7 @@ pub use crate::{
     // Extension traits
     WorkbookCalculationExt,
     WorkbookExt,
+    WorkbookPivotExt,
     Worksheet,
 
     // I/O types

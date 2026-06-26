@@ -13,10 +13,12 @@ use std::sync::{Arc, RwLock};
 
 use duke_sheets::{
     CalculationOptions, CalculationStats as CoreCalculationStats, FormulaValue, ImageSizing,
-    WorkbookCalculationExt, WorkbookExt,
+    WorkbookCalculationExt, WorkbookExt, WorkbookPivotExt,
 };
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, CellValue as CoreCellValue, Workbook as CoreWorkbook,
+    CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
+    PivotDateGroupUnit, PivotFilter, PivotGrouping, PivotMeasure, PivotShowAs, PivotTable,
+    PivotValue, Workbook as CoreWorkbook,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -39,11 +41,9 @@ fn parse_encryption_profile(
         Some("standard") | Some("ooxml-standard") => EncryptionProfile::OoxmlStandard {
             key_bits: key_bits.unwrap_or(128),
         },
-        Some("rc4-cryptoapi") | Some("xls-rc4-cryptoapi") => {
-            EncryptionProfile::XlsRc4CryptoApi {
-                key_bits: key_bits.unwrap_or(128),
-            }
-        }
+        Some("rc4-cryptoapi") | Some("xls-rc4-cryptoapi") => EncryptionProfile::XlsRc4CryptoApi {
+            key_bits: key_bits.unwrap_or(128),
+        },
         Some("rc4-legacy") | Some("xls-rc4-legacy") => EncryptionProfile::XlsRc4Legacy,
         Some("xor") | Some("xls-xor") => EncryptionProfile::XlsXor,
         Some(other) => return Err(format!("unknown encryption profile: {other:?}")),
@@ -97,7 +97,7 @@ fn cell_error_to_string(e: &CellError) -> &'static str {
 fn try_get_property<'a, T: FromNapiValue + ValidateNapiValue>(
     obj: &Object<'a>,
     key: &str,
-    ) -> napi::Result<Option<T>> {
+) -> napi::Result<Option<T>> {
     if !obj.has_named_property(key)? {
         return Ok(None);
     }
@@ -109,7 +109,6 @@ fn try_get_property<'a, T: FromNapiValue + ValidateNapiValue>(
     let v = obj.value();
     unsafe { T::from_napi_value(v.env, val.raw()).map(Some) }
 }
-
 
 /// Represents a cell value in a spreadsheet.
 ///
@@ -243,7 +242,7 @@ pub struct JsCalculationOptions {
     /// - 1: force serial evaluation
     /// - n: use at most n threads
     pub max_threads: Option<u32>,
-    }
+}
 
 impl JsCalculationOptions {
     fn into_core(self) -> CalculationOptions {
@@ -318,7 +317,6 @@ impl CalculationStats {
     pub fn iterations(&self) -> u32 {
         self.inner.iterations as u32
     }
-
 }
 
 /// The used range of a worksheet, describing the bounding box of all cells
@@ -329,6 +327,225 @@ pub struct UsedRange {
     pub min_col: u32,
     pub max_row: u32,
     pub max_col: u32,
+}
+
+#[napi(object)]
+pub struct JsPivotMeasureOptions {
+    pub field: String,
+    pub aggregate: Option<String>,
+    pub name: Option<String>,
+    pub show_as: Option<String>,
+}
+
+#[napi(object)]
+pub struct JsPivotItemFilterOptions {
+    pub field: String,
+    pub items: Vec<String>,
+}
+
+#[napi(object)]
+pub struct JsPivotGroupingOptions {
+    pub field: String,
+    pub kind: String,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub interval: Option<f64>,
+    pub units: Option<Vec<String>>,
+}
+
+#[napi(object)]
+pub struct JsPivotTableOptions {
+    pub name: String,
+    pub source_range: Option<String>,
+    pub source_sheet: Option<String>,
+    pub table_name: Option<String>,
+    pub target: String,
+    pub rows: Option<Vec<String>>,
+    pub columns: Option<Vec<String>>,
+    pub pages: Option<Vec<String>>,
+    pub measures: Vec<JsPivotMeasureOptions>,
+    pub filters: Option<Vec<JsPivotItemFilterOptions>>,
+    pub groupings: Option<Vec<JsPivotGroupingOptions>>,
+}
+
+#[napi(object)]
+pub struct JsPivotRefreshStats {
+    pub pivot_count: u32,
+    pub pivots_refreshed: u32,
+    pub source_rows: u32,
+    pub output_cells: u32,
+    pub cache_hits: u32,
+    pub cache_misses: u32,
+}
+
+impl TryFrom<duke_sheets::PivotRefreshStats> for JsPivotRefreshStats {
+    type Error = napi::Error;
+
+    fn try_from(stats: duke_sheets::PivotRefreshStats) -> Result<Self> {
+        Ok(Self {
+            pivot_count: u32::try_from(stats.pivot_count).map_err(to_napi_err)?,
+            pivots_refreshed: u32::try_from(stats.pivots_refreshed).map_err(to_napi_err)?,
+            source_rows: u32::try_from(stats.source_rows).map_err(to_napi_err)?,
+            output_cells: u32::try_from(stats.output_cells).map_err(to_napi_err)?,
+            cache_hits: u32::try_from(stats.cache_hits).map_err(to_napi_err)?,
+            cache_misses: u32::try_from(stats.cache_misses).map_err(to_napi_err)?,
+        })
+    }
+}
+
+fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable> {
+    let mut builder = PivotTable::builder(options.name);
+    match (options.table_name, options.source_range) {
+        (Some(table_name), None) => {
+            builder = builder.table_source(table_name);
+        }
+        (None, Some(source_range)) => {
+            let range = CellRange::parse(&source_range).map_err(|e| {
+                napi::Error::from_reason(format!("Invalid pivot source range: {e}"))
+            })?;
+            builder = if let Some(sheet) = options.source_sheet {
+                builder.source_range_on_sheet(sheet, range)
+            } else {
+                builder.source_range(range)
+            };
+        }
+        (Some(_), Some(_)) => {
+            return Err(napi::Error::from_reason(
+                "Pivot options must use either tableName or sourceRange, not both",
+            ));
+        }
+        (None, None) => {
+            return Err(napi::Error::from_reason(
+                "Pivot options require tableName or sourceRange",
+            ));
+        }
+    }
+
+    builder = builder
+        .target_address(&options.target)
+        .map_err(|e| napi::Error::from_reason(format!("Invalid pivot target: {e}")))?;
+    for field in options.rows.unwrap_or_default() {
+        builder = builder.row(field);
+    }
+    for field in options.columns.unwrap_or_default() {
+        builder = builder.column(field);
+    }
+    for field in options.pages.unwrap_or_default() {
+        builder = builder.page(field);
+    }
+    for measure in options.measures {
+        builder = builder.pivot_measure(build_pivot_measure_from_js(measure)?);
+    }
+    for filter in options.filters.unwrap_or_default() {
+        builder = builder.filter(PivotFilter::field_items(
+            filter.field,
+            filter
+                .items
+                .into_iter()
+                .map(PivotValue::from)
+                .collect::<Vec<_>>(),
+        ));
+    }
+    for grouping in options.groupings.unwrap_or_default() {
+        builder = builder.grouping(build_pivot_grouping_from_js(grouping)?);
+    }
+
+    builder.build().map_err(to_napi_err)
+}
+
+fn build_pivot_measure_from_js(options: JsPivotMeasureOptions) -> Result<PivotMeasure> {
+    let aggregate = parse_pivot_aggregate(options.aggregate.as_deref())?;
+    let mut measure = PivotMeasure::new(options.field, aggregate);
+    if let Some(name) = options.name {
+        measure = measure.with_name(name);
+    }
+    if let Some(show_as) = options.show_as {
+        measure = measure.with_show_as(parse_pivot_show_as(&show_as)?);
+    }
+    Ok(measure)
+}
+
+fn build_pivot_grouping_from_js(options: JsPivotGroupingOptions) -> Result<PivotGrouping> {
+    match options.kind.as_str() {
+        "number" | "numeric" => Ok(PivotGrouping::Number {
+            field: options.field.into(),
+            start: options.start,
+            end: options.end,
+            interval: options.interval.ok_or_else(|| {
+                napi::Error::from_reason("Numeric pivot grouping requires interval")
+            })?,
+        }),
+        "date" => {
+            let units = options
+                .units
+                .ok_or_else(|| napi::Error::from_reason("Date pivot grouping requires units"))?
+                .iter()
+                .map(|unit| parse_pivot_date_group_unit(unit))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(PivotGrouping::Date {
+                field: options.field.into(),
+                units,
+            })
+        }
+        other => Err(napi::Error::from_reason(format!(
+            "Unsupported pivot grouping kind: {other}"
+        ))),
+    }
+}
+
+fn parse_pivot_aggregate(value: Option<&str>) -> Result<PivotAggregate> {
+    let Some(value) = value else {
+        return Ok(PivotAggregate::Sum);
+    };
+    Ok(match value {
+        "sum" => PivotAggregate::Sum,
+        "count" => PivotAggregate::Count,
+        "countNumbers" | "countNums" => PivotAggregate::CountNumbers,
+        "average" | "avg" => PivotAggregate::Average,
+        "max" => PivotAggregate::Max,
+        "min" => PivotAggregate::Min,
+        "product" => PivotAggregate::Product,
+        "stdDev" => PivotAggregate::StdDev,
+        "stdDevP" | "stdDevp" => PivotAggregate::StdDevP,
+        "var" => PivotAggregate::Var,
+        "varP" | "varp" => PivotAggregate::VarP,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot aggregate: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_date_group_unit(value: &str) -> Result<PivotDateGroupUnit> {
+    Ok(match value {
+        "seconds" => PivotDateGroupUnit::Seconds,
+        "minutes" => PivotDateGroupUnit::Minutes,
+        "hours" => PivotDateGroupUnit::Hours,
+        "days" => PivotDateGroupUnit::Days,
+        "months" => PivotDateGroupUnit::Months,
+        "quarters" => PivotDateGroupUnit::Quarters,
+        "years" => PivotDateGroupUnit::Years,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot date grouping unit: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_show_as(value: &str) -> Result<PivotShowAs> {
+    Ok(match value {
+        "normal" => PivotShowAs::Normal,
+        "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
+        "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
+        "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot showAs mode: {other}"
+            )));
+        }
+    })
 }
 
 /// A worksheet within a workbook.
@@ -588,6 +805,47 @@ impl Worksheet {
                 width: info.width,
                 height: info.height,
             }))
+        })
+    }
+
+    /// Number of pivot tables on the worksheet.
+    #[napi(getter)]
+    pub fn pivot_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            u32::try_from(ws.pivot_table_count()).map_err(to_napi_err)
+        })
+    }
+
+    /// Pivot table names on the worksheet.
+    #[napi(getter)]
+    pub fn pivot_table_names(&self) -> Result<Vec<String>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws
+                .pivot_tables()
+                .iter()
+                .map(|pivot| pivot.name.clone())
+                .collect())
+        })
+    }
+
+    /// Add a semantic pivot table definition to the worksheet.
+    #[napi]
+    pub fn add_pivot_table(&self, options: JsPivotTableOptions) -> Result<()> {
+        catch_panic(|| {
+            let pivot = build_pivot_table_from_js(options)?;
+            let mut wb = self.workbook.write().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet_mut(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            ws.add_pivot_table(pivot).map_err(to_napi_err)
         })
     }
 
@@ -960,18 +1218,27 @@ impl Workbook {
     /// @param options - Optional calculation options
     /// @returns Statistics about the calculation
     #[napi]
-    pub fn calculate(
-        &self,
-        options: Option<JsCalculationOptions>,
-    ) -> Result<CalculationStats> {
+    pub fn calculate(&self, options: Option<JsCalculationOptions>) -> Result<CalculationStats> {
         catch_panic(|| {
             let mut wb = self.inner.write().map_err(to_napi_err)?;
             let stats = if let Some(opts) = options {
-                wb.calculate_with_options(&opts.into_core()).map_err(to_napi_err)?
+                wb.calculate_with_options(&opts.into_core())
+                    .map_err(to_napi_err)?
             } else {
                 wb.calculate().map_err(to_napi_err)?
             };
             Ok(CalculationStats { inner: stats })
+        })
+    }
+
+    /// Refresh all pivot tables in the workbook.
+    #[napi]
+    pub fn refresh_pivots(&self) -> Result<JsPivotRefreshStats> {
+        catch_panic(|| {
+            let mut wb = self.inner.write().map_err(to_napi_err)?;
+            wb.refresh_pivots()
+                .map_err(to_napi_err)
+                .and_then(JsPivotRefreshStats::try_from)
         })
     }
 
@@ -1159,21 +1426,22 @@ impl Workbook {
             let max_change: Option<f64> = try_get_property(&options, "maxChange")?;
             let force_full_calculation: Option<bool> =
                 try_get_property(&options, "forceFullCalculation")?;
-            let calculate_volatile: Option<bool> =
-                try_get_property(&options, "calculateVolatile")?;
+            let calculate_volatile: Option<bool> = try_get_property(&options, "calculateVolatile")?;
             let sheets: Option<Vec<u32>> = try_get_property(&options, "sheets")?;
             let max_threads: Option<u32> = try_get_property(&options, "maxThreads")?;
 
             // Extract callback functions and build ThreadsafeFunctions
             let web_service_js_fn: Option<Function<'env, String, Promise<Option<String>>>> =
                 try_get_property(&options, "webServiceFn")?;
-            let rtd_js_fn: Option<Function<'env, (String, String, Vec<String>), Promise<Option<String>>>> =
-                try_get_property(&options, "rtdFn")?;
-            let external_js_fn: Option<Function<'env, (String, String, Vec<String>), Promise<Option<String>>>> =
-                match try_get_property(&options, "externalFn")? {
-                    Some(f) => Some(f),
-                    None => try_get_property(&options, "externalFnFn")?,
-                };
+            let rtd_js_fn: Option<
+                Function<'env, (String, String, Vec<String>), Promise<Option<String>>>,
+            > = try_get_property(&options, "rtdFn")?;
+            let external_js_fn: Option<
+                Function<'env, (String, String, Vec<String>), Promise<Option<String>>>,
+            > = match try_get_property(&options, "externalFn")? {
+                Some(f) => Some(f),
+                None => try_get_property(&options, "externalFnFn")?,
+            };
 
             let web_service_fn: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>> =
                 if let Some(js_fn) = web_service_js_fn {
@@ -1191,23 +1459,26 @@ impl Workbook {
                     None
                 };
 
-            let external_fn: Option<Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>> =
-                if let Some(js_fn) = external_js_fn {
-                    let tsfn = js_fn
-                        .build_threadsafe_function::<(String, String, Vec<String>)>()
-                        .build_callback(|ctx| Ok(FnArgs { data: ctx.value }))?;
-                    let tsfn = Arc::new(tsfn);
-                    Some(Arc::new(move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
+            let external_fn: Option<
+                Arc<dyn Fn(&str, &str, &[String]) -> Option<FormulaValue> + Send + Sync>,
+            > = if let Some(js_fn) = external_js_fn {
+                let tsfn = js_fn
+                    .build_threadsafe_function::<(String, String, Vec<String>)>()
+                    .build_callback(|ctx| Ok(FnArgs { data: ctx.value }))?;
+                let tsfn = Arc::new(tsfn);
+                Some(Arc::new(
+                    move |book: &str, name: &str, args: &[String]| -> Option<FormulaValue> {
                         let args = (book.to_string(), name.to_string(), args.to_vec());
                         let tsfn = Arc::clone(&tsfn);
                         napi::bindgen_prelude::block_on(async move {
                             let promise = tsfn.call_async(args).await.ok()?;
                             promise.await.ok().flatten().map(FormulaValue::String)
                         })
-                    }))
-                } else {
-                    None
-                };
+                    },
+                ))
+            } else {
+                None
+            };
 
             let rtd_fn: Option<Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>> =
                 if let Some(js_fn) = rtd_js_fn {
@@ -1215,14 +1486,16 @@ impl Workbook {
                         .build_threadsafe_function::<(String, String, Vec<String>)>()
                         .build_callback(|ctx| Ok(FnArgs { data: ctx.value }))?;
                     let tsfn = Arc::new(tsfn);
-                    Some(Arc::new(move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
-                        let args = (prog_id.to_string(), server.to_string(), topics.to_vec());
-                        let tsfn = Arc::clone(&tsfn);
-                        napi::bindgen_prelude::block_on(async move {
-                            let promise = tsfn.call_async(args).await.ok()?;
-                            promise.await.ok().flatten()
-                        })
-                    }))
+                    Some(Arc::new(
+                        move |prog_id: &str, server: &str, topics: &[String]| -> Option<String> {
+                            let args = (prog_id.to_string(), server.to_string(), topics.to_vec());
+                            let tsfn = Arc::clone(&tsfn);
+                            napi::bindgen_prelude::block_on(async move {
+                                let promise = tsfn.call_async(args).await.ok()?;
+                                promise.await.ok().flatten()
+                            })
+                        },
+                    ))
                 } else {
                     None
                 };

@@ -15,12 +15,14 @@ pub(super) struct WorkbookProps {
     pub(super) sheets: Vec<SheetEntry>,
     pub(super) date_1904: bool,
     pub(super) named_ranges: Vec<duke_sheets_core::named_range::NamedRange>,
+    pub(super) pivot_caches: Vec<PivotCacheEntry>,
 }
 
 pub(super) struct WorkbookRels {
     pub(super) sheet_paths: HashMap<String, String>,
     pub(super) chartsheet_paths: HashMap<String, String>,
     pub(super) theme_path: Option<String>,
+    pub(super) pivot_cache_paths: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +35,11 @@ pub(super) struct SheetEntry {
     pub(super) name: String,
     pub(super) r_id: String,
     pub(super) visibility: SheetVisibility,
+}
+
+pub(super) struct PivotCacheEntry {
+    pub(super) cache_id: u32,
+    pub(super) r_id: String,
 }
 
 /// Read workbook.xml to get sheet names, rIds, workbook properties,
@@ -53,17 +60,20 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     let mut sheets = Vec::new();
     let mut date_1904 = false;
     let mut named_ranges = Vec::new();
+    let mut pivot_caches = Vec::new();
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Empty(ref e)) => match e.name().local_name().as_ref() {
                 b"sheet" => parse_sheet_element(e, &mut sheets),
                 b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
+                b"pivotCache" => parse_pivot_cache_element(e, &mut pivot_caches),
                 _ => {}
             },
             Ok(Event::Start(ref e)) => match e.name().local_name().as_ref() {
                 b"sheet" => parse_sheet_element(e, &mut sheets),
                 b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
+                b"pivotCache" => parse_pivot_cache_element(e, &mut pivot_caches),
                 b"definedName" => {
                     let mut dn_name = None;
                     let mut local_sheet_id: Option<usize> = None;
@@ -122,6 +132,7 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
         sheets,
         date_1904,
         named_ranges,
+        pivot_caches,
     })
 }
 
@@ -169,6 +180,28 @@ fn parse_workbook_pr(e: &quick_xml::events::BytesStart<'_>, date_1904: &mut bool
     }
 }
 
+fn parse_pivot_cache_element(
+    e: &quick_xml::events::BytesStart<'_>,
+    pivot_caches: &mut Vec<PivotCacheEntry>,
+) {
+    let mut cache_id = None;
+    let mut r_id = None;
+
+    for attr in e.attributes().flatten() {
+        match attr.key.local_name().as_ref() {
+            b"cacheId" => {
+                cache_id = attr.unescape_value().ok().and_then(|s| s.parse().ok());
+            }
+            b"id" => r_id = attr.unescape_value().ok().map(|s| s.to_string()),
+            _ => {}
+        }
+    }
+
+    if let (Some(cache_id), Some(r_id)) = (cache_id, r_id) {
+        pivot_caches.push(PivotCacheEntry { cache_id, r_id });
+    }
+}
+
 /// Read workbook.xml.rels to get sheet file paths and theme path.
 pub(super) fn read_workbook_rels<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
@@ -184,6 +217,7 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
     let mut rels = HashMap::new();
     let mut chartsheet_rels = HashMap::new();
     let mut theme_path: Option<String> = None;
+    let mut pivot_cache_paths = HashMap::new();
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Empty(e)) | Ok(Event::Start(e))
@@ -230,6 +264,13 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
                             format!("xl/{}", target)
                         };
                         theme_path = Some(full_path);
+                    } else if rel_type.ends_with("/pivotCacheDefinition") {
+                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
+                            stripped.to_string()
+                        } else {
+                            format!("xl/{}", target)
+                        };
+                        pivot_cache_paths.insert(id, full_path);
                     }
                 }
             }
@@ -244,6 +285,7 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
         sheet_paths: rels,
         chartsheet_paths: chartsheet_rels,
         theme_path,
+        pivot_cache_paths,
     })
 }
 

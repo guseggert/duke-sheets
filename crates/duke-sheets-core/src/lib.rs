@@ -35,6 +35,7 @@ pub mod error;
 pub mod hyperlink;
 pub mod locale;
 pub mod named_range;
+pub mod pivot;
 pub mod range;
 pub mod rich_text;
 pub mod row;
@@ -50,7 +51,8 @@ pub use auto_filter::{
     Top10Filter, ValueFilter,
 };
 pub use cell::{
-    format_cell_value, CellAddress, CellData, CellError, CellRange, CellValue, CellView, FormulaData,
+    format_cell_value, CellAddress, CellData, CellError, CellRange, CellValue, CellView,
+    FormulaData,
 };
 pub use column::{Column, ColumnData};
 pub use comment::CellComment;
@@ -61,6 +63,13 @@ pub use conditional_format::{
 pub use error::{Error, Result};
 pub use hyperlink::Hyperlink;
 pub use locale::Locale;
+pub use pivot::{
+    PivotAggregate, PivotAxis, PivotCacheInfo, PivotCacheSourceKind, PivotDateGroupUnit,
+    PivotExtension, PivotExtensions, PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator,
+    PivotGrouping, PivotLayout, PivotLayoutKind, PivotMeasure, PivotOverwritePolicy,
+    PivotRefreshPolicy, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
+    PivotStyle, PivotSubtotal, PivotTable, PivotTableBuilder, PivotValue,
+};
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};

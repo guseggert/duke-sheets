@@ -5,14 +5,19 @@
 
 use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use duke_sheets::prelude::*;
-use duke_sheets::{CalculationOptions, FormulaValue, ImageSizing, WorkbookCalculationExt};
-use duke_sheets_core::{CellError, CellValue as CoreCellValue};
+use duke_sheets::{
+    CalculationOptions, FormulaValue, ImageSizing, WorkbookCalculationExt, WorkbookPivotExt,
+};
+use duke_sheets_core::{
+    CellError, CellValue as CoreCellValue, PivotAggregate, PivotDateGroupUnit, PivotFilter,
+    PivotGrouping, PivotMeasure, PivotShowAs, PivotTable, PivotValue,
+};
 
 mod types;
 pub use types::*;
@@ -24,6 +29,246 @@ pub use worksheet_read::PyRowIterator;
 
 pub(crate) fn to_py_err(e: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
+}
+
+fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable> {
+    let dict = options
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("pivot options must be a dict"))?;
+    let mut builder = PivotTable::builder(required_string(dict, &["name"])?);
+
+    let table_name = optional_string(dict, &["table_name", "tableName"])?;
+    let source_range = optional_string(dict, &["source_range", "sourceRange"])?;
+    match (table_name, source_range) {
+        (Some(table_name), None) => {
+            builder = builder.table_source(table_name);
+        }
+        (None, Some(source_range)) => {
+            let range = CellRange::parse(&source_range)
+                .map_err(|e| PyValueError::new_err(format!("Invalid pivot source range: {e}")))?;
+            builder = if let Some(sheet) = optional_string(dict, &["source_sheet", "sourceSheet"])?
+            {
+                builder.source_range_on_sheet(sheet, range)
+            } else {
+                builder.source_range(range)
+            };
+        }
+        (Some(_), Some(_)) => {
+            return Err(PyValueError::new_err(
+                "Pivot options must use either table_name/sourceRange or source_range/sourceRange, not both",
+            ));
+        }
+        (None, None) => {
+            return Err(PyValueError::new_err(
+                "Pivot options require table_name/tableName or source_range/sourceRange",
+            ));
+        }
+    }
+
+    builder = builder
+        .target_address(&required_string(dict, &["target"])?)
+        .map_err(|e| PyValueError::new_err(format!("Invalid pivot target: {e}")))?;
+    for field in optional_string_vec(dict, &["rows"])?.unwrap_or_default() {
+        builder = builder.row(field);
+    }
+    for field in optional_string_vec(dict, &["columns"])?.unwrap_or_default() {
+        builder = builder.column(field);
+    }
+    for field in optional_string_vec(dict, &["pages"])?.unwrap_or_default() {
+        builder = builder.page(field);
+    }
+
+    let measures_value = dict
+        .get_item("measures")?
+        .ok_or_else(|| PyValueError::new_err("pivot options require measures"))?;
+    let measures = measures_value
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("pivot measures must be a list"))?;
+    for measure in measures.iter() {
+        builder = builder.pivot_measure(build_pivot_measure_from_py(&measure)?);
+    }
+
+    if let Some(filters_value) = optional_any(dict, &["filters"])? {
+        let filters = filters_value
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("pivot filters must be a list"))?;
+        for filter in filters.iter() {
+            builder = builder.filter(build_pivot_item_filter_from_py(&filter)?);
+        }
+    }
+    if let Some(groupings_value) = optional_any(dict, &["groupings"])? {
+        let groupings = groupings_value
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("pivot groupings must be a list"))?;
+        for grouping in groupings.iter() {
+            builder = builder.grouping(build_pivot_grouping_from_py(&grouping)?);
+        }
+    }
+
+    builder.build().map_err(to_py_err)
+}
+
+fn build_pivot_measure_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotMeasure> {
+    let dict = options
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("pivot measure must be a dict"))?;
+    let aggregate = parse_pivot_aggregate(optional_string(dict, &["aggregate"])?.as_deref())?;
+    let mut measure = PivotMeasure::new(required_string(dict, &["field"])?, aggregate);
+    if let Some(name) = optional_string(dict, &["name"])? {
+        measure = measure.with_name(name);
+    }
+    if let Some(show_as) = optional_string(dict, &["show_as", "showAs"])? {
+        measure = measure.with_show_as(parse_pivot_show_as(&show_as)?);
+    }
+    Ok(measure)
+}
+
+fn build_pivot_item_filter_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotFilter> {
+    let dict = options
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("pivot filter must be a dict"))?;
+    let items = required_string_vec(dict, &["items"])?;
+    Ok(PivotFilter::field_items(
+        required_string(dict, &["field"])?,
+        items.into_iter().map(PivotValue::from).collect::<Vec<_>>(),
+    ))
+}
+
+fn build_pivot_grouping_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotGrouping> {
+    let dict = options
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("pivot grouping must be a dict"))?;
+    let field = required_string(dict, &["field"])?;
+    match required_string(dict, &["kind"])?.as_str() {
+        "number" | "numeric" => Ok(PivotGrouping::Number {
+            field: field.into(),
+            start: optional_f64(dict, &["start"])?,
+            end: optional_f64(dict, &["end"])?,
+            interval: optional_f64(dict, &["interval"])?
+                .ok_or_else(|| PyValueError::new_err("numeric pivot grouping requires interval"))?,
+        }),
+        "date" => Ok(PivotGrouping::Date {
+            field: field.into(),
+            units: required_string_vec(dict, &["units"])?
+                .iter()
+                .map(|unit| parse_pivot_date_group_unit(unit))
+                .collect::<PyResult<Vec<_>>>()?,
+        }),
+        other => Err(PyValueError::new_err(format!(
+            "Unsupported pivot grouping kind: {other}"
+        ))),
+    }
+}
+
+fn optional_any<'py>(
+    dict: &Bound<'py, PyDict>,
+    keys: &[&str],
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    for key in keys {
+        if let Some(value) = dict.get_item(*key)? {
+            if !value.is_none() {
+                return Ok(Some(value));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn optional_string(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Option<String>> {
+    optional_any(dict, keys)?
+        .map(|value| value.extract::<String>())
+        .transpose()
+}
+
+fn required_string(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<String> {
+    optional_string(dict, keys)?
+        .ok_or_else(|| PyValueError::new_err(format!("missing {}", keys[0])))
+}
+
+fn optional_string_vec(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Option<Vec<String>>> {
+    optional_any(dict, keys)?
+        .map(|value| value.extract::<Vec<String>>())
+        .transpose()
+}
+
+fn required_string_vec(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Vec<String>> {
+    optional_string_vec(dict, keys)?
+        .ok_or_else(|| PyValueError::new_err(format!("missing {}", keys[0])))
+}
+
+fn optional_f64(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Option<f64>> {
+    optional_any(dict, keys)?
+        .map(|value| value.extract::<f64>())
+        .transpose()
+}
+
+fn parse_pivot_aggregate(value: Option<&str>) -> PyResult<PivotAggregate> {
+    let Some(value) = value else {
+        return Ok(PivotAggregate::Sum);
+    };
+    Ok(match value {
+        "sum" => PivotAggregate::Sum,
+        "count" => PivotAggregate::Count,
+        "countNumbers" | "countNums" => PivotAggregate::CountNumbers,
+        "average" | "avg" => PivotAggregate::Average,
+        "max" => PivotAggregate::Max,
+        "min" => PivotAggregate::Min,
+        "product" => PivotAggregate::Product,
+        "stdDev" => PivotAggregate::StdDev,
+        "stdDevP" | "stdDevp" => PivotAggregate::StdDevP,
+        "var" => PivotAggregate::Var,
+        "varP" | "varp" => PivotAggregate::VarP,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported pivot aggregate: {other}"
+            )))
+        }
+    })
+}
+
+fn parse_pivot_date_group_unit(value: &str) -> PyResult<PivotDateGroupUnit> {
+    Ok(match value {
+        "seconds" => PivotDateGroupUnit::Seconds,
+        "minutes" => PivotDateGroupUnit::Minutes,
+        "hours" => PivotDateGroupUnit::Hours,
+        "days" => PivotDateGroupUnit::Days,
+        "months" => PivotDateGroupUnit::Months,
+        "quarters" => PivotDateGroupUnit::Quarters,
+        "years" => PivotDateGroupUnit::Years,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported pivot date grouping unit: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_show_as(value: &str) -> PyResult<PivotShowAs> {
+    Ok(match value {
+        "normal" => PivotShowAs::Normal,
+        "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
+        "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
+        "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported pivot show_as mode: {other}"
+            )))
+        }
+    })
+}
+
+fn pivot_refresh_stats_to_py(
+    py: Python<'_>,
+    stats: duke_sheets::PivotRefreshStats,
+) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("pivot_count", stats.pivot_count)?;
+    dict.set_item("pivots_refreshed", stats.pivots_refreshed)?;
+    dict.set_item("source_rows", stats.source_rows)?;
+    dict.set_item("output_cells", stats.output_cells)?;
+    dict.set_item("cache_hits", stats.cache_hits)?;
+    dict.set_item("cache_misses", stats.cache_misses)?;
+    Ok(dict.into_any().unbind())
 }
 
 fn parse_encryption_profile(
@@ -597,6 +842,41 @@ impl PyWorksheet {
         }
     }
 
+    /// Number of pivot tables on the worksheet.
+    #[getter]
+    fn pivot_count(&self) -> PyResult<usize> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws.pivot_table_count())
+    }
+
+    /// Pivot table names on the worksheet.
+    #[getter]
+    fn pivot_table_names(&self) -> PyResult<Vec<String>> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        Ok(ws
+            .pivot_tables()
+            .iter()
+            .map(|pivot| pivot.name.clone())
+            .collect())
+    }
+
+    /// Add a semantic pivot table definition to the worksheet.
+    #[pyo3(signature = (options))]
+    fn add_pivot_table(&self, options: &Bound<'_, PyAny>) -> PyResult<()> {
+        let pivot = build_pivot_table_from_py(options)?;
+        let mut wb = self.workbook.write().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        ws.add_pivot_table(pivot).map_err(to_py_err)
+    }
+
     fn __repr__(&self) -> PyResult<String> {
         let name = self.name()?;
         Ok(format!("Worksheet({:?})", name))
@@ -915,6 +1195,13 @@ impl PyWorkbook {
         };
         let stats = wb.calculate_with_options(&options).map_err(to_py_err)?;
         Ok(stats.into())
+    }
+
+    /// Refresh all pivot tables in the workbook.
+    fn refresh_pivots(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let mut wb = self.inner.write().map_err(to_py_err)?;
+        let stats = wb.refresh_pivots().map_err(to_py_err)?;
+        pivot_refresh_stats_to_py(py, stats)
     }
 
     /// Define a named range
