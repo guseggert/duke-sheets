@@ -1155,34 +1155,9 @@ fn grouped_number_column(
         )));
     }
 
-    #[cfg(feature = "parallel")]
-    {
-        if snapshot.row_count >= PARALLEL_ROW_THRESHOLD {
-            let values = (0..snapshot.row_count)
-                .into_par_iter()
-                .map(|row| {
-                    group_number_value(
-                        snapshot.value(row, field_index),
-                        effective_start,
-                        end,
-                        interval,
-                    )
-                })
-                .collect::<Vec<_>>();
-            return Ok(EncodedColumn::from_values(values));
-        }
-    }
-
-    let mut column = EncodedColumn::with_capacity(snapshot.row_count);
-    for row in 0..snapshot.row_count {
-        column.push(group_number_value(
-            snapshot.value(row, field_index),
-            effective_start,
-            end,
-            interval,
-        ));
-    }
-    Ok(column)
+    Ok(remap_grouped_column(snapshot, field_index, |value| {
+        group_number_value(value, effective_start, end, interval)
+    }))
 }
 
 fn numeric_column_min(snapshot: &SourceSnapshot, field_index: usize) -> Option<f64> {
@@ -1243,32 +1218,15 @@ fn grouped_date_column(
     units: &[duke_sheets_core::PivotDateGroupUnit],
     date_1904: bool,
 ) -> EncodedColumn {
-    let mut column = EncodedColumn::with_capacity(snapshot.row_count);
     let date_system = if date_1904 {
         DateSystem::Date1904
     } else {
         DateSystem::Date1900
     };
 
-    #[cfg(feature = "parallel")]
-    {
-        if snapshot.row_count >= PARALLEL_ROW_THRESHOLD {
-            let values = (0..snapshot.row_count)
-                .into_par_iter()
-                .map(|row| group_date_value(snapshot.value(row, field_index), units, date_system))
-                .collect::<Vec<_>>();
-            return EncodedColumn::from_values(values);
-        }
-    }
-
-    for row in 0..snapshot.row_count {
-        column.push(group_date_value(
-            snapshot.value(row, field_index),
-            units,
-            date_system,
-        ));
-    }
-    column
+    remap_grouped_column(snapshot, field_index, |value| {
+        group_date_value(value, units, date_system)
+    })
 }
 
 fn group_date_value(
@@ -1324,25 +1282,42 @@ fn grouped_manual_column(
 ) -> Result<EncodedColumn> {
     let lookup = manual_group_lookup(groups, pivot_name)?;
 
+    Ok(remap_grouped_column(snapshot, field_index, |value| {
+        group_manual_value(value, &lookup)
+    }))
+}
+
+fn remap_grouped_column<F>(
+    snapshot: &SourceSnapshot,
+    field_index: usize,
+    group_value: F,
+) -> EncodedColumn
+where
+    F: Fn(&PivotValue) -> PivotValue,
+{
+    let source_column = &snapshot.columns[field_index];
+    let grouped_by_id = source_column
+        .dictionary
+        .iter()
+        .map(group_value)
+        .collect::<Vec<_>>();
+
     #[cfg(feature = "parallel")]
     {
         if snapshot.row_count >= PARALLEL_ROW_THRESHOLD {
             let values = (0..snapshot.row_count)
                 .into_par_iter()
-                .map(|row| group_manual_value(snapshot.value(row, field_index), &lookup))
+                .map(|row| grouped_by_id[source_column.id_at(row) as usize].clone())
                 .collect::<Vec<_>>();
-            return Ok(EncodedColumn::from_values(values));
+            return EncodedColumn::from_values(values);
         }
     }
 
     let mut column = EncodedColumn::with_capacity(snapshot.row_count);
-    for row in 0..snapshot.row_count {
-        column.push(group_manual_value(
-            snapshot.value(row, field_index),
-            &lookup,
-        ));
+    for id in &source_column.values {
+        column.push(grouped_by_id[*id as usize].clone());
     }
-    Ok(column)
+    column
 }
 
 fn manual_group_lookup(
