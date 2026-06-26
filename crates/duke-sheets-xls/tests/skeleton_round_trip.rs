@@ -9,8 +9,8 @@
 use std::io::Cursor;
 
 use duke_sheets_core::{
-    CellRange, PivotAggregate, PivotFilter, PivotSource, PivotStyle, PivotTable, PivotValue,
-    PivotValuesAxis, Workbook,
+    CellRange, PivotAggregate, PivotFieldRef, PivotFilter, PivotGrouping, PivotSource, PivotStyle,
+    PivotTable, PivotValue, PivotValuesAxis, Workbook,
 };
 use duke_sheets_xls::{cfb::CompoundFile, XlsReader, XlsWriter};
 
@@ -216,6 +216,36 @@ fn add_calculated_field_pivot(wb: &mut Workbook) {
         .row("Region")
         .calculated_field("Revenue", "=Units*Price")
         .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
+fn add_numeric_grouped_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Age").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 7.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 13.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 28.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("A5", 42.0).unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+
+    let pivot = PivotTable::builder("AgeBands")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Age")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Number {
+            field: PivotFieldRef::new("Age"),
+            start: Some(0.0),
+            end: Some(60.0),
+            interval: 10.0,
+        })
         .build()
         .unwrap();
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
@@ -498,6 +528,90 @@ fn semantic_pivot_tables_emit_xls_calculated_field_records() {
         })
         .collect::<Vec<_>>();
     assert_eq!(sxname_field_indexes, vec![1, 2]);
+}
+
+#[test]
+fn semantic_pivot_tables_emit_xls_numeric_grouping_records() {
+    let mut wb = Workbook::new();
+    add_numeric_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = records_with_payload(&cache);
+
+    let age_sxfdb = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "Age")
+        .expect("Age SXFDB record");
+    let flags = u16::from_le_bytes(age_sxfdb[0..2].try_into().unwrap());
+    assert_ne!(
+        flags & 0x0010,
+        0,
+        "SXFDB should mark the field as a range group"
+    );
+    assert_ne!(
+        flags & 0x0020,
+        0,
+        "SXFDB should mark the grouped field as numeric"
+    );
+    assert_eq!(
+        u16::from_le_bytes(age_sxfdb[8..10].try_into().unwrap()),
+        4,
+        "SXFDB csxoper should count the group labels"
+    );
+
+    let sxrng = cache_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00D8).then_some(payload))
+        .expect("SXRng record");
+    assert_eq!(
+        u16::from_le_bytes(sxrng[0..2].try_into().unwrap()),
+        0,
+        "SXRng should use explicit numeric start/end and range grouping"
+    );
+
+    let sxnums = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00C9).then(|| f64::from_le_bytes(payload[0..8].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        sxnums.windows(3).any(|values| values == [0.0, 60.0, 10.0]),
+        "SXRng should be followed by SXNum start/end/interval records"
+    );
+}
+
+#[test]
+fn reads_writer_xls_numeric_grouping_semantics() {
+    let mut wb = Workbook::new();
+    add_numeric_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    let pivot = &ws.pivot_tables()[0];
+
+    assert_eq!(pivot.name, "AgeBands");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Number {
+            field,
+            start,
+            end,
+            interval,
+        } => {
+            assert_eq!(field.name, "Age");
+            assert_eq!(*start, Some(0.0));
+            assert_eq!(*end, Some(60.0));
+            assert_eq!(*interval, 10.0);
+        }
+        other => panic!("expected numeric grouping, got {other:?}"),
+    }
 }
 
 #[test]
@@ -784,6 +898,44 @@ fn lo_can_open_skeleton_workbook() {
     });
     let _ = std::fs::remove_file(&path);
     let count = outcome.expect("LO must open the skeleton workbook");
+    assert_eq!(count, 1);
+}
+
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_open_numeric_grouped_pivot_workbook() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    add_numeric_grouped_pivot(&mut wb);
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    std::fs::create_dir_all("/tmp/duke-sheets-urp").expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("/tmp/duke-sheets-urp/duke_grouped_pivot_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write to shared dir");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<i32, String> = rt.block_on(async {
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let count = wb
+            .sheet_count()
+            .await
+            .map_err(|e| format!("sheet_count: {e}"))?;
+        Ok(count)
+    });
+    let _ = std::fs::remove_file(&path);
+    let count = outcome.expect("LO must open the numeric-grouped pivot workbook");
     assert_eq!(count, 1);
 }
 

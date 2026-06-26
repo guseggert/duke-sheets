@@ -15,9 +15,9 @@ use duke_sheets_core::validation::{
 use duke_sheets_core::worksheet::{Selection, SheetProtection};
 use duke_sheets_core::{
     CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, PivotAggregate,
-    PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField, PivotField, PivotFilter,
-    PivotMeasure, PivotRefreshStatus, PivotSource, PivotStyle, PivotTable, PivotValue,
-    PivotValuesAxis, Style, Workbook,
+    PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField, PivotField, PivotFieldRef,
+    PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshStatus, PivotSource, PivotStyle,
+    PivotTable, PivotValue, PivotValuesAxis, Style, Workbook,
 };
 
 use crate::biff::formula::token_parser::ParsedToken;
@@ -105,7 +105,14 @@ struct XlsPivotCache {
 struct XlsPivotCacheField {
     name: String,
     formula: Option<String>,
+    grouping: Option<PivotGrouping>,
     shared_items: Vec<PivotValue>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingPivotRangeGroup {
+    flags: u16,
+    numbers: Vec<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1071,6 +1078,7 @@ impl XlsReader {
         let mut fields = Vec::new();
         let mut current_field: Option<XlsPivotCacheField> = None;
         let mut pending_formula: Option<XlsPivotFormulaPending> = None;
+        let mut pending_group_range: Option<PendingPivotRangeGroup> = None;
         let mut record_count = None;
 
         for rec in records {
@@ -1086,6 +1094,10 @@ impl XlsReader {
                     }
                 }
                 0x00C7 => {
+                    Self::attach_pending_pivot_grouping(
+                        &mut current_field,
+                        &mut pending_group_range,
+                    );
                     Self::attach_pending_pivot_formula(
                         &mut current_field,
                         &mut pending_formula,
@@ -1097,6 +1109,7 @@ impl XlsReader {
                     current_field = Some(XlsPivotCacheField {
                         name: Self::parse_sxfdb_name(&rec.data)?,
                         formula: None,
+                        grouping: None,
                         shared_items: Vec::new(),
                     });
                 }
@@ -1125,11 +1138,28 @@ impl XlsReader {
                         field.shared_items.push(Self::parse_sxstring(&rec.data)?);
                     }
                 }
+                0x00D8 => {
+                    pending_group_range = Self::parse_sxrng(&rec.data);
+                }
+                0x00C9 => {
+                    if let Some(pending) = &mut pending_group_range {
+                        if rec.data.len() >= 8 {
+                            pending
+                                .numbers
+                                .push(f64::from_le_bytes(rec.data[0..8].try_into().unwrap()));
+                        }
+                        Self::attach_pending_pivot_grouping(
+                            &mut current_field,
+                            &mut pending_group_range,
+                        );
+                    }
+                }
                 records::EOF => break,
                 _ => {}
             }
         }
 
+        Self::attach_pending_pivot_grouping(&mut current_field, &mut pending_group_range);
         Self::attach_pending_pivot_formula(&mut current_field, &mut pending_formula, &fields);
         if let Some(field) = current_field.take() {
             fields.push(field);
@@ -1266,6 +1296,11 @@ impl XlsReader {
                     field.formula.clone()?,
                 ))
             })
+            .collect();
+        pivot.groupings = cache
+            .fields
+            .iter()
+            .filter_map(|field| field.grouping.clone())
             .collect();
         pivot.filters = filters;
         pivot.layout = layout;
@@ -1451,6 +1486,16 @@ impl XlsReader {
         }
     }
 
+    fn parse_sxrng(data: &[u8]) -> Option<PendingPivotRangeGroup> {
+        if data.len() < 2 {
+            return None;
+        }
+        Some(PendingPivotRangeGroup {
+            flags: u16::from_le_bytes([data[0], data[1]]),
+            numbers: Vec::with_capacity(3),
+        })
+    }
+
     fn parse_sxfmla(data: &[u8]) -> Option<XlsPivotFormulaPending> {
         if data.len() < 4 {
             return None;
@@ -1507,6 +1552,49 @@ impl XlsReader {
         ) {
             field.formula = Some(formula);
         }
+    }
+
+    fn attach_pending_pivot_grouping(
+        current_field: &mut Option<XlsPivotCacheField>,
+        pending_group_range: &mut Option<PendingPivotRangeGroup>,
+    ) {
+        let ready = pending_group_range
+            .as_ref()
+            .is_some_and(|pending| pending.numbers.len() >= 3);
+        if !ready {
+            return;
+        }
+        let Some(pending) = pending_group_range.take() else {
+            return;
+        };
+        let Some(field) = current_field else {
+            return;
+        };
+        if pending.flags & 0x001C != 0 {
+            return;
+        }
+        let start_value = pending.numbers[0];
+        let end_value = pending.numbers[1];
+        let interval = pending.numbers[2];
+        if !interval.is_finite() || interval <= 0.0 {
+            return;
+        }
+        let start = if pending.flags & 0x0001 != 0 {
+            None
+        } else {
+            start_value.is_finite().then_some(start_value)
+        };
+        let end = if pending.flags & 0x0002 != 0 {
+            None
+        } else {
+            end_value.is_finite().then_some(end_value)
+        };
+        field.grouping = Some(PivotGrouping::Number {
+            field: PivotFieldRef::new(field.name.clone()),
+            start,
+            end,
+            interval,
+        });
     }
 
     fn decompile_pivot_formula(

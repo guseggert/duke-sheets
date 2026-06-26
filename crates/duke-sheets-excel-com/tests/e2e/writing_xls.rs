@@ -18,7 +18,8 @@ use duke_sheets_core::validation::{DataValidation, ValidationOperator, Validatio
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
 use duke_sheets_core::PivotValuesAxis;
 use duke_sheets_core::{
-    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotFilter, PivotTable, Workbook,
+    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotFilter, PivotGrouping,
+    PivotTable, Workbook,
 };
 use duke_sheets_excel_com::{ChainStep, SheetRef};
 use excel_com_protocol::ResponseData;
@@ -165,6 +166,38 @@ fn xls_multi_measure_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xls_numeric_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Age").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 7.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 13.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 28.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("A5", 42.0).unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+
+    let pivot = PivotTable::builder("AgeBands")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Age")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Number {
+            field: "Age".into(),
+            start: Some(0.0),
+            end: Some(60.0),
+            interval: 10.0,
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xls_with_native_pivot_table() {
@@ -268,6 +301,49 @@ fn excel_preserves_xls_pivot_multi_measure_values_axis() {
             .iter()
             .any(|(record_type, payload)| *record_type == 0x00B4 && payload == &[0xFE, 0xFF]),
         "Excel should preserve the synthetic Values column axis"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_pivot_numeric_grouping() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_numeric_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("AgeBands")
+        .unwrap();
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Number {
+            field,
+            start,
+            end,
+            interval,
+        } => {
+            assert_eq!(field.name, "Age");
+            assert_eq!(*start, Some(0.0));
+            assert_eq!(*end, Some(60.0));
+            assert_eq!(*interval, 10.0);
+        }
+        other => panic!("expected numeric grouping, got {other:?}"),
+    }
+
+    let cache = xls_cfb_stream(&excel_bytes, "/_SX_DB_CUR/0001");
+    let records = xls_record_payloads(&cache);
+    let sxrng_position = records
+        .iter()
+        .position(|(record_type, _)| *record_type == 0x00D8)
+        .expect("Excel should preserve an SXRng grouping record");
+    assert!(
+        records[sxrng_position + 1..]
+            .iter()
+            .filter(|(record_type, _)| *record_type == 0x00C9)
+            .take(3)
+            .count()
+            == 3,
+        "Excel should preserve SXNum start/end/interval records after SXRng"
     );
 }
 

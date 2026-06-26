@@ -19,7 +19,7 @@ use duke_sheets_core::style::{
 use duke_sheets_core::workbook::Workbook;
 use duke_sheets_core::worksheet::Worksheet;
 use duke_sheets_core::{
-    CellValue, PivotAggregate, PivotField, PivotFilter, PivotValue, PivotValuesAxis,
+    CellValue, PivotAggregate, PivotField, PivotFilter, PivotGrouping, PivotValue, PivotValuesAxis,
 };
 use duke_sheets_pivot::{
     FormatPivotCache, FormatPivotCacheField, FormatPivotPlan, FormatPivotSource,
@@ -82,6 +82,11 @@ const OBJ_RECORD: u16 = 0x005D;
 const TXO_RECORD: u16 = 0x01B6;
 const PIVOT_SXFMLA_RECORD: u16 = 0x00F8;
 const PIVOT_SXNAME_RECORD: u16 = 0x00F5;
+const PIVOT_SXFDB_RECORD: u16 = 0x00C7;
+const PIVOT_SXDBB_RECORD: u16 = 0x00C8;
+const PIVOT_SXNUM_RECORD: u16 = 0x00C9;
+const PIVOT_SXSTRING_RECORD: u16 = 0x00CD;
+const PIVOT_SXRNG_RECORD: u16 = 0x00D8;
 
 /// Built-in NAME index for `Print_Area` (MS-XLS §2.5.4).
 const BUILTIN_NAME_PRINT_AREA: u8 = 0x06;
@@ -246,7 +251,7 @@ fn cfb_to_xls(err: crate::cfb::CfbError) -> XlsError {
 fn build_workbook_package(workbook: &Workbook) -> XlsResult<XlsWritePackage> {
     let pivot_plan = duke_sheets_pivot::plan_format_pivots(workbook)?;
     let workbook_stream = build_workbook_stream_with_pivots(workbook, &pivot_plan)?;
-    let (extra_storages, extra_streams) = build_pivot_cache_streams(&pivot_plan)?;
+    let (extra_storages, extra_streams) = build_pivot_cache_streams(workbook, &pivot_plan)?;
     Ok(XlsWritePackage {
         workbook_stream,
         extra_storages,
@@ -376,6 +381,7 @@ fn sheet_has_pivot_tables(pivot_plan: &FormatPivotPlan, sheet_idx: usize) -> boo
 }
 
 fn build_pivot_cache_streams(
+    workbook: &Workbook,
     pivot_plan: &FormatPivotPlan,
 ) -> XlsResult<(Vec<String>, Vec<(String, Vec<u8>)>)> {
     if pivot_plan.caches.is_empty() {
@@ -385,15 +391,20 @@ fn build_pivot_cache_streams(
     let storages = vec!["/_SX_DB_CUR".to_string()];
     let mut streams = Vec::with_capacity(pivot_plan.caches.len());
     for cache in &pivot_plan.caches {
+        let groupings = groupings_for_cache(workbook, pivot_plan, cache)?;
+        validate_xls_pivot_groupings(cache, groupings)?;
         streams.push((
             format!("/_SX_DB_CUR/{:04}", cache.cache_num),
-            build_pivot_cache_stream(cache)?,
+            build_pivot_cache_stream(cache, groupings)?,
         ));
     }
     Ok((storages, streams))
 }
 
-fn build_pivot_cache_stream(cache: &FormatPivotCache) -> XlsResult<Vec<u8>> {
+fn build_pivot_cache_stream(
+    cache: &FormatPivotCache,
+    groupings: &[PivotGrouping],
+) -> XlsResult<Vec<u8>> {
     if !matches!(cache.source, FormatPivotSource::Worksheet { .. }) {
         return Err(XlsError::InvalidFormat(
             "XLS pivot cache writing requires worksheet or table sources".into(),
@@ -415,15 +426,22 @@ fn build_pivot_cache_stream(cache: &FormatPivotCache) -> XlsResult<Vec<u8>> {
     write_biff_record(&mut stream, 0x00C6, &sxdb);
     write_biff_record(&mut stream, 0x0122, &[0; 12]);
 
-    for field in &cache.fields {
-        write_sxfdb_record(&mut stream, field)?;
+    for (field_index, field) in cache.fields.iter().enumerate() {
+        let grouping = grouping_for_field(groupings, &field.name);
+        write_sxfdb_record(&mut stream, field_index, field, grouping)?;
         if let Some(formula) = field.formula.as_deref() {
             write_pivot_calculated_field_formula_records(&mut stream, cache, formula)?;
         }
         write_biff_record(&mut stream, 0x01BB, &0u16.to_le_bytes());
-        if !field_is_numeric(field) {
+        if let Some(grouping) = grouping {
+            write_pivot_numeric_grouping_records(&mut stream, field, grouping)?;
+        } else if !field_is_numeric(field) {
             for value in &field.shared_items {
-                write_biff_record(&mut stream, 0x00CD, &pivot_value_string_payload(value)?);
+                write_biff_record(
+                    &mut stream,
+                    PIVOT_SXSTRING_RECORD,
+                    &pivot_value_string_payload(value)?,
+                );
             }
         }
     }
@@ -445,10 +463,10 @@ fn write_numeric_cache_records(stream: &mut Vec<u8>, cache: &FormatPivotCache) -
 
     for row in 0..cache.row_count {
         let row_marker = checked_u8(row, "pivot cache row index")?;
-        write_biff_record(stream, 0x00C8, &[row_marker]);
+        write_biff_record(stream, PIVOT_SXDBB_RECORD, &[row_marker]);
         for field in &numeric_fields {
             if let Some(number) = numeric_cache_value(field, row) {
-                write_biff_record(stream, 0x00C9, &number.to_le_bytes());
+                write_biff_record(stream, PIVOT_SXNUM_RECORD, &number.to_le_bytes());
             }
         }
     }
@@ -463,9 +481,103 @@ fn numeric_cache_value(field: &FormatPivotCacheField, row: usize) -> Option<f64>
     Some(*number)
 }
 
-fn write_sxfdb_record(stream: &mut Vec<u8>, field: &FormatPivotCacheField) -> XlsResult<()> {
+fn groupings_for_cache<'a>(
+    workbook: &'a Workbook,
+    plan: &'a FormatPivotPlan,
+    cache: &FormatPivotCache,
+) -> XlsResult<&'a [PivotGrouping]> {
+    let Some(part) = plan
+        .tables
+        .iter()
+        .find(|part| part.cache_num == cache.cache_num)
+    else {
+        return Ok(&[]);
+    };
+    let worksheet = workbook
+        .worksheet(part.sheet_index)
+        .ok_or_else(|| XlsError::InvalidFormat("pivot table sheet not found".into()))?;
+    let pivot = worksheet
+        .pivot_tables()
+        .get(part.pivot_index)
+        .ok_or_else(|| XlsError::InvalidFormat("pivot table not found".into()))?;
+    Ok(&pivot.groupings)
+}
+
+fn validate_xls_pivot_groupings(
+    cache: &FormatPivotCache,
+    groupings: &[PivotGrouping],
+) -> XlsResult<()> {
+    let mut grouped_fields = HashSet::new();
+    for grouping in groupings {
+        let field_name = grouping_field_name(grouping);
+        if cache.field_index(field_name).is_none() {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS pivot grouping references unknown cache field: {field_name}"
+            )));
+        }
+        if !grouped_fields.insert(field_name.to_lowercase()) {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS pivot cache has more than one grouping for field {field_name}"
+            )));
+        }
+
+        match grouping {
+            PivotGrouping::Number {
+                start,
+                end,
+                interval,
+                ..
+            } => {
+                if !interval.is_finite() || *interval <= 0.0 {
+                    return Err(XlsError::InvalidFormat(format!(
+                        "XLS pivot grouping for field {field_name} has an invalid interval"
+                    )));
+                }
+                if start.is_some_and(|value| !value.is_finite())
+                    || end.is_some_and(|value| !value.is_finite())
+                {
+                    return Err(XlsError::InvalidFormat(format!(
+                        "XLS pivot grouping for field {field_name} has a non-finite bound"
+                    )));
+                }
+            }
+            PivotGrouping::Date { .. } | PivotGrouping::Manual { .. } => {
+                return Err(XlsError::InvalidFormat(format!(
+                    "XLS pivot grouping currently supports numeric range grouping only: {field_name}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn grouping_for_field<'a>(
+    groupings: &'a [PivotGrouping],
+    field_name: &str,
+) -> Option<&'a PivotGrouping> {
+    groupings
+        .iter()
+        .find(|grouping| grouping_field_name(grouping).eq_ignore_ascii_case(field_name))
+}
+
+fn grouping_field_name(grouping: &PivotGrouping) -> &str {
+    match grouping {
+        PivotGrouping::Number { field, .. }
+        | PivotGrouping::Date { field, .. }
+        | PivotGrouping::Manual { field, .. } => &field.name,
+    }
+}
+
+fn write_sxfdb_record(
+    stream: &mut Vec<u8>,
+    field_index: usize,
+    field: &FormatPivotCacheField,
+    grouping: Option<&PivotGrouping>,
+) -> XlsResult<()> {
     let mut body = Vec::new();
-    let mut flags = if field_is_numeric(field) {
+    let mut flags = if grouping.is_some() {
+        0x0570u16
+    } else if field_is_numeric(field) {
         0x0560u16
     } else {
         0x0481u16
@@ -474,16 +586,76 @@ fn write_sxfdb_record(stream: &mut Vec<u8>, field: &FormatPivotCacheField) -> Xl
         flags |= 0x8000;
     }
     body.extend_from_slice(&flags.to_le_bytes());
-    body.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-    body.extend_from_slice(&(field.shared_items.len() as u32).to_le_bytes());
-    body.extend_from_slice(&0u16.to_le_bytes());
-    body.extend_from_slice(&if field_is_numeric(field) {
-        0u16.to_le_bytes()
+    if grouping.is_some() {
+        body.extend_from_slice(&(-1i16).to_le_bytes());
+        body.extend_from_slice(
+            &checked_i16(field_index, "pivot grouped cache field index")?.to_le_bytes(),
+        );
+        let item_count = checked_u16(field.shared_items.len(), "pivot group item count")?;
+        body.extend_from_slice(&item_count.to_le_bytes());
+        body.extend_from_slice(&item_count.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
     } else {
-        2u16.to_le_bytes()
-    });
+        body.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        body.extend_from_slice(&(field.shared_items.len() as u32).to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&if field_is_numeric(field) {
+            0u16.to_le_bytes()
+        } else {
+            2u16.to_le_bytes()
+        });
+    }
     push_xlunicode_string(&mut body, &field.name)?;
-    write_biff_record(stream, 0x00C7, &body);
+    write_biff_record(stream, PIVOT_SXFDB_RECORD, &body);
+    Ok(())
+}
+
+fn write_pivot_numeric_grouping_records(
+    stream: &mut Vec<u8>,
+    field: &FormatPivotCacheField,
+    grouping: &PivotGrouping,
+) -> XlsResult<()> {
+    let PivotGrouping::Number {
+        start,
+        end,
+        interval,
+        ..
+    } = grouping
+    else {
+        return Err(XlsError::InvalidFormat(format!(
+            "XLS pivot grouping currently supports numeric range grouping only: {}",
+            grouping_field_name(grouping)
+        )));
+    };
+
+    for value in &field.shared_items {
+        write_biff_record(
+            stream,
+            PIVOT_SXSTRING_RECORD,
+            &pivot_value_string_payload(value)?,
+        );
+    }
+
+    let mut flags = 0u16;
+    if start.is_none() {
+        flags |= 0x0001;
+    }
+    if end.is_none() {
+        flags |= 0x0002;
+    }
+    write_biff_record(stream, PIVOT_SXRNG_RECORD, &flags.to_le_bytes());
+    write_biff_record(
+        stream,
+        PIVOT_SXNUM_RECORD,
+        &start.unwrap_or(0.0).to_le_bytes(),
+    );
+    write_biff_record(
+        stream,
+        PIVOT_SXNUM_RECORD,
+        &end.unwrap_or(0.0).to_le_bytes(),
+    );
+    write_biff_record(stream, PIVOT_SXNUM_RECORD, &interval.to_le_bytes());
     Ok(())
 }
 
