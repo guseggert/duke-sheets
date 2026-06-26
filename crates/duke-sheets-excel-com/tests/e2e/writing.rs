@@ -15,7 +15,8 @@ use duke_sheets_core::style::{
 use duke_sheets_core::worksheet::SheetVisibility;
 use duke_sheets_core::{
     CellAddress, CellRange, CellValue, Color, ConditionalFormatRule, DataValidation, Hyperlink,
-    Style, ValidationOperator, Workbook,
+    PivotAggregate, PivotGrouping, PivotManualGroup, PivotValue, Style, ValidationOperator,
+    Workbook,
 };
 
 fn range(start: &str, end: &str) -> CellRange {
@@ -23,6 +24,96 @@ fn range(start: &str, end: &str) -> CellRange {
         CellAddress::parse(start).unwrap(),
         CellAddress::parse(end).unwrap(),
     )
+}
+
+fn basic_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Region").unwrap();
+    sheet.set_cell_value("B1", "Revenue").unwrap();
+    sheet.set_cell_value("A2", "East").unwrap();
+    sheet.set_cell_value("B2", 10.0).unwrap();
+    sheet.set_cell_value("A3", "West").unwrap();
+    sheet.set_cell_value("B3", 20.0).unwrap();
+
+    let pivot = duke_sheets_core::PivotTable::builder("BasicPivot")
+        .source_range(CellRange::parse("A1:B3").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .measure("Revenue", PivotAggregate::Sum)
+        .build()
+        .unwrap();
+    sheet.add_pivot_table(pivot).unwrap();
+    wb
+}
+
+#[test]
+fn test_write_basic_pivot_survives_excel_roundtrip() {
+    let result = roundtrip_through_excel(&basic_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("BasicPivot")
+        .expect("pivot survives Excel roundtrip");
+
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "Region");
+    assert_eq!(pivot.measures.len(), 1);
+    assert_eq!(pivot.measures[0].field.name, "Revenue");
+    assert_eq!(pivot.measures[0].aggregate, PivotAggregate::Sum);
+}
+
+#[test]
+fn test_write_manual_pivot_grouping_survives_excel_roundtrip() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "Region").unwrap();
+    sheet.set_cell_value("B1", "Revenue").unwrap();
+    sheet.set_cell_value("A2", "East").unwrap();
+    sheet.set_cell_value("B2", 10.0).unwrap();
+    sheet.set_cell_value("A3", "West").unwrap();
+    sheet.set_cell_value("B3", 20.0).unwrap();
+    sheet.set_cell_value("A4", "Central").unwrap();
+    sheet.set_cell_value("B4", 5.0).unwrap();
+
+    let pivot = duke_sheets_core::PivotTable::builder("ManualGroupedRegions")
+        .source_range(CellRange::parse("A1:B4").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .measure("Revenue", PivotAggregate::Sum)
+        .grouping(PivotGrouping::Manual {
+            field: "Region".into(),
+            groups: vec![PivotManualGroup::new("Coastal", ["East", "West"])],
+        })
+        .build()
+        .unwrap();
+    sheet.add_pivot_table(pivot).unwrap();
+
+    let result = roundtrip_through_excel(&wb);
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("ManualGroupedRegions")
+        .expect("pivot survives Excel roundtrip");
+
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Manual { field, groups } => {
+            assert_eq!(field.name, "Region");
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0].name, "Coastal");
+            assert_eq!(
+                groups[0].members,
+                vec![
+                    PivotValue::String("East".to_string()),
+                    PivotValue::String("West".to_string())
+                ]
+            );
+        }
+        other => panic!("unexpected grouping after Excel roundtrip: {other:?}"),
+    }
 }
 
 // Font tests

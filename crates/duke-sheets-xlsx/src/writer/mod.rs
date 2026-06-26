@@ -813,6 +813,7 @@ impl XlsxWriter {
                     .find(|cache_part| cache_part.cache_num == part.cache_num)
                     .ok_or_else(|| XlsxError::InvalidFormat("pivot cache part not found".into()))?;
                 pivot::write_pivot_table_part(&mut zip, workbook, part, cache_part, &style_table)?;
+                pivot::write_pivot_table_rels(&mut zip, part)?;
             }
 
             // Write drawing and chart XML files for this sheet
@@ -3732,6 +3733,10 @@ mod tests {
         assert!(sheet_rels.contains(RT_PIVOT_TABLE));
         assert!(sheet_rels.contains("../pivotTables/pivotTable1.xml"));
 
+        let pivot_rels = read_zip_entry(bytes.clone(), "xl/pivotTables/_rels/pivotTable1.xml.rels");
+        assert!(pivot_rels.contains(RT_PIVOT_CACHE_DEFINITION));
+        assert!(pivot_rels.contains("../pivotCache/pivotCacheDefinition1.xml"));
+
         let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
         assert!(pivot_xml.contains(r#"name="SalesPivot""#));
         assert!(pivot_xml.contains(r#"cacheId="1""#));
@@ -4921,9 +4926,9 @@ mod tests {
         let bytes = out.into_inner();
 
         let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
-        assert!(cache_def.contains(r#"<fieldGroup par="2"></fieldGroup></cacheField>"#));
+        assert!(cache_def.contains(r#"<fieldGroup par="2"/></cacheField>"#));
         assert!(cache_def.contains(
-            r#"<cacheField name="Region2" databaseField="0"><fieldGroup base="0"><discretePr count="3"><x v="1"/><x v="1"/><x v="0"/></discretePr><groupItems count="2"><s v="Central"/><s v="Coastal"/></groupItems></fieldGroup></cacheField>"#
+            r#"<cacheField name="Region2" numFmtId="0" databaseField="0"><fieldGroup base="0"><discretePr count="3"><x v="1"/><x v="1"/><x v="0"/></discretePr><groupItems count="2"><s v="Central"/><s v="Coastal"/></groupItems></fieldGroup></cacheField>"#
         ));
 
         let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();

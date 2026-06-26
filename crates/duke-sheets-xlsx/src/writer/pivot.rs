@@ -5,10 +5,10 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 
 use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{
-    CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit, PivotFieldRef,
-    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup,
-    PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue, Table, Workbook,
-    Worksheet,
+    CellAddress, CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit,
+    PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind,
+    PivotManualGroup, PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue,
+    Table, Workbook, Worksheet,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -23,7 +23,7 @@ use ssfmt::{
 
 use super::{
     write_xml_part, XlsxError, XlsxResult, XmlWriter, NS_DOC_RELS, NS_RELATIONSHIPS,
-    NS_SPREADSHEET, RT_PIVOT_CACHE_RECORDS,
+    NS_SPREADSHEET, RT_PIVOT_CACHE_DEFINITION, RT_PIVOT_CACHE_RECORDS,
 };
 
 const NS_SPREADSHEET_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
@@ -73,6 +73,7 @@ struct CacheField {
     name: String,
     formula: Option<String>,
     database_field: bool,
+    metadata_only_shared_items: bool,
     group: Option<CacheFieldGroup>,
     shared_items: Vec<PivotValue>,
     item_lookup: HashMap<PivotValue, u32>,
@@ -102,6 +103,7 @@ impl CacheField {
             name,
             formula: None,
             database_field: true,
+            metadata_only_shared_items: false,
             group: None,
             shared_items: Vec::new(),
             item_lookup: HashMap::new(),
@@ -113,6 +115,7 @@ impl CacheField {
             name,
             formula: Some(formula),
             database_field: false,
+            metadata_only_shared_items: false,
             group: None,
             shared_items: Vec::new(),
             item_lookup: HashMap::new(),
@@ -154,9 +157,13 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
                 &pivot.groupings,
                 workbook.settings().date_1904,
             )?;
+            mark_metadata_only_measure_fields(pivot, &mut resolved.fields);
             let cache_key = cache_key_for_pivot(&resolved.key, pivot);
 
             let cache_num = if let Some(cache_num) = cache_by_source.get(&cache_key) {
+                if let Some(cache_part) = cache_parts.get_mut(*cache_num - 1) {
+                    merge_cache_field_usage(&mut cache_part.fields, &resolved.fields);
+                }
                 if pivot.refresh_policy.refresh_on_open {
                     if let Some(cache_part) = cache_parts.get_mut(*cache_num - 1) {
                         cache_part.refresh_on_load = true;
@@ -338,6 +345,52 @@ fn validate_pivot_groupings(pivot: &PivotTable, fields: &[CacheField]) -> XlsxRe
     }
 
     Ok(())
+}
+
+fn mark_metadata_only_measure_fields(pivot: &PivotTable, fields: &mut [CacheField]) {
+    let measure_fields = pivot
+        .measures
+        .iter()
+        .map(|measure| measure.field.name.to_lowercase())
+        .collect::<HashSet<_>>();
+    let explicit_item_fields = pivot
+        .rows
+        .iter()
+        .chain(pivot.columns.iter())
+        .chain(pivot.page_fields.iter())
+        .map(|field| field.field.name.to_lowercase())
+        .chain(
+            pivot
+                .filters
+                .iter()
+                .filter_map(filter_field_ref)
+                .map(|field| field.name.to_lowercase()),
+        )
+        .chain(
+            pivot
+                .groupings
+                .iter()
+                .map(grouping_field_ref)
+                .map(|field| field.name.to_lowercase()),
+        )
+        .collect::<HashSet<_>>();
+
+    for field in fields {
+        let name = field.name.to_lowercase();
+        field.metadata_only_shared_items =
+            measure_fields.contains(&name) && !explicit_item_fields.contains(&name);
+    }
+}
+
+fn merge_cache_field_usage(existing: &mut [CacheField], incoming: &[CacheField]) {
+    for field in existing {
+        if let Some(incoming) = incoming
+            .iter()
+            .find(|incoming| incoming.name.eq_ignore_ascii_case(&field.name))
+        {
+            field.metadata_only_shared_items &= incoming.metadata_only_shared_items;
+        }
+    }
 }
 
 fn apply_grouped_cache_fields(
@@ -1263,10 +1316,28 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         tag.push_attribute(("outline", outline));
         w.write_event(Event::Start(tag))?;
 
-        write_location(w, pivot, &cache_part.fields)?;
+        write_location(w, pivot, &cache_part.fields, &cache_part.rows)?;
         write_pivot_fields(w, pivot, &cache_part.fields)?;
         write_axis_fields(w, "rowFields", &pivot.rows, &cache_part.fields)?;
+        write_axis_items(
+            w,
+            "rowItems",
+            &pivot.rows,
+            &cache_part.fields,
+            &cache_part.rows,
+            pivot.layout.show_row_grand_totals,
+            false,
+        )?;
         write_axis_fields(w, "colFields", &pivot.columns, &cache_part.fields)?;
+        write_axis_items(
+            w,
+            "colItems",
+            &pivot.columns,
+            &cache_part.fields,
+            &cache_part.rows,
+            pivot.layout.show_column_grand_totals,
+            true,
+        )?;
         write_page_fields(w, pivot, &cache_part.fields)?;
         write_data_fields(w, pivot, &cache_part.fields, style_table)?;
         write_pivot_style(w, pivot)?;
@@ -1278,10 +1349,38 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
     })
 }
 
-fn write_location(w: &mut XmlWriter, pivot: &PivotTable, fields: &[CacheField]) -> XlsxResult<()> {
-    let range = pivot
-        .rendered_range
-        .unwrap_or_else(|| CellRange::single(pivot.target));
+pub(super) fn write_pivot_table_rels<W: Write + Seek>(
+    zip: &mut zip::ZipWriter<W>,
+    part: &PivotTablePart,
+) -> XlsxResult<()> {
+    let path = format!("xl/pivotTables/_rels/pivotTable{}.xml.rels", part.table_num);
+    write_xml_part(zip, &path, |w| {
+        let mut relationships = BytesStart::new("Relationships");
+        relationships.push_attribute(("xmlns", NS_RELATIONSHIPS));
+        w.write_event(Event::Start(relationships))?;
+
+        let target = format!("../pivotCache/pivotCacheDefinition{}.xml", part.cache_num);
+        w.create_element("Relationship")
+            .with_attribute(("Id", "rId1"))
+            .with_attribute(("Type", RT_PIVOT_CACHE_DEFINITION))
+            .with_attribute(("Target", target.as_str()))
+            .write_empty()?;
+
+        w.write_event(Event::End(BytesEnd::new("Relationships")))?;
+        Ok(())
+    })
+}
+
+fn write_location(
+    w: &mut XmlWriter,
+    pivot: &PivotTable,
+    fields: &[CacheField],
+    rows: &[Vec<Option<u32>>],
+) -> XlsxResult<()> {
+    let range = match pivot.rendered_range {
+        Some(range) => range,
+        None => estimated_pivot_output_range(pivot, fields, rows)?,
+    };
     let ref_str = range.to_a1_string();
     let first_data_col = expanded_axis_field_count(&pivot.rows, fields)
         .max(1)
@@ -1296,6 +1395,51 @@ fn write_location(w: &mut XmlWriter, pivot: &PivotTable, fields: &[CacheField]) 
     Ok(())
 }
 
+fn estimated_pivot_output_range(
+    pivot: &PivotTable,
+    fields: &[CacheField],
+    rows: &[Vec<Option<u32>>],
+) -> XlsxResult<CellRange> {
+    let row_label_width = expanded_axis_field_count(&pivot.rows, fields).max(1);
+    let measure_width = pivot.measures.len().max(1);
+    let column_tuple_count = axis_item_tuples(&pivot.columns, fields, rows)?.len().max(1);
+    let value_width = if pivot.columns.is_empty() {
+        measure_width
+    } else {
+        column_tuple_count * measure_width
+    };
+    let width = row_label_width + value_width;
+
+    let row_tuple_count = axis_item_tuples(&pivot.rows, fields, rows)?.len();
+    let data_rows = if pivot.rows.is_empty() {
+        1
+    } else {
+        row_tuple_count + usize::from(pivot.layout.show_row_grand_totals)
+    }
+    .max(1);
+    let header_rows = if pivot.columns.is_empty() {
+        1
+    } else {
+        expanded_axis_field_count(&pivot.columns, fields).max(1) + 1
+    };
+    let height = header_rows + data_rows;
+
+    Ok(range_from_size(pivot.target, width, height))
+}
+
+fn range_from_size(start: CellAddress, width: usize, height: usize) -> CellRange {
+    const MAX_ROWS: usize = 1_048_576;
+    const MAX_COLS: usize = 16_384;
+
+    let max_width = MAX_COLS.saturating_sub(start.col as usize).max(1);
+    let max_height = MAX_ROWS.saturating_sub(start.row as usize).max(1);
+    let width = width.max(1).min(max_width);
+    let height = height.max(1).min(max_height);
+    let end_row = start.row + (height - 1) as u32;
+    let end_col = start.col + (width - 1) as u16;
+    CellRange::new(start, CellAddress::new(end_row, end_col))
+}
+
 fn write_pivot_fields(
     w: &mut XmlWriter,
     pivot: &PivotTable,
@@ -1308,6 +1452,9 @@ fn write_pivot_fields(
 
     for (index, field) in fields.iter().enumerate() {
         let mut pivot_field = BytesStart::new("pivotField");
+        if pivot_field_is_data_field(pivot, field) {
+            pivot_field.push_attribute(("dataField", "1"));
+        }
         if let Some(axis) = field_axis(pivot, fields, index) {
             pivot_field.push_attribute(("axis", axis));
         }
@@ -1324,30 +1471,75 @@ fn write_pivot_fields(
         }
 
         let hidden_items = hidden_item_indexes(pivot, fields, index)?;
-        if hidden_items.is_empty() {
+        let include_default = should_write_pivot_field_items(pivot, fields, index);
+        if hidden_items.is_empty() && !include_default {
             w.write_event(Event::Empty(pivot_field))?;
         } else {
             w.write_event(Event::Start(pivot_field))?;
-            let count = field.shared_items.len().to_string();
-            let mut items = BytesStart::new("items");
-            items.push_attribute(("count", count.as_str()));
-            w.write_event(Event::Start(items))?;
-            for item_index in 0..field.shared_items.len() {
-                let x = item_index.to_string();
-                let mut item = BytesStart::new("item");
-                item.push_attribute(("x", x.as_str()));
-                if hidden_items.contains(&(item_index as u32)) {
-                    item.push_attribute(("h", "1"));
-                }
-                w.write_event(Event::Empty(item))?;
-            }
-            w.write_event(Event::End(BytesEnd::new("items")))?;
+            write_pivot_field_items(w, field, &hidden_items, include_default)?;
             w.write_event(Event::End(BytesEnd::new("pivotField")))?;
         }
     }
 
     w.write_event(Event::End(BytesEnd::new("pivotFields")))?;
     Ok(())
+}
+
+fn pivot_field_is_data_field(pivot: &PivotTable, field: &CacheField) -> bool {
+    pivot
+        .measures
+        .iter()
+        .any(|measure| measure.field.name.eq_ignore_ascii_case(&field.name))
+}
+
+fn should_write_pivot_field_items(
+    pivot: &PivotTable,
+    fields: &[CacheField],
+    field_index: usize,
+) -> bool {
+    pivot_axis_field(pivot, fields, field_index).is_some()
+        || fields.get(field_index).is_some_and(|field| {
+            matches!(
+                field.group,
+                Some(CacheFieldGroup::Base { .. } | CacheFieldGroup::Manual { .. })
+            )
+        })
+}
+
+fn write_pivot_field_items(
+    w: &mut XmlWriter,
+    field: &CacheField,
+    hidden_items: &[u32],
+    include_default: bool,
+) -> XlsxResult<()> {
+    let item_count = pivot_field_item_count(field);
+    let count = (item_count + usize::from(include_default)).to_string();
+    let mut items = BytesStart::new("items");
+    items.push_attribute(("count", count.as_str()));
+    w.write_event(Event::Start(items))?;
+    for item_index in 0..item_count {
+        let x = item_index.to_string();
+        let mut item = BytesStart::new("item");
+        item.push_attribute(("x", x.as_str()));
+        if hidden_items.contains(&(item_index as u32)) {
+            item.push_attribute(("h", "1"));
+        }
+        w.write_event(Event::Empty(item))?;
+    }
+    if include_default {
+        let mut item = BytesStart::new("item");
+        item.push_attribute(("t", "default"));
+        w.write_event(Event::Empty(item))?;
+    }
+    w.write_event(Event::End(BytesEnd::new("items")))?;
+    Ok(())
+}
+
+fn pivot_field_item_count(field: &CacheField) -> usize {
+    match &field.group {
+        Some(CacheFieldGroup::Manual { group_items, .. }) => group_items.len(),
+        _ => field.shared_items.len(),
+    }
 }
 
 fn field_axis(
@@ -1425,6 +1617,9 @@ fn pivot_axis_field<'a>(
 
 fn axis_semantic_field_name(fields: &[CacheField], field_index: usize) -> Option<String> {
     let field = fields.get(field_index)?;
+    if matches!(field.group, Some(CacheFieldGroup::Base { .. })) {
+        return Some(field.name.clone());
+    }
     if let Some(CacheFieldGroup::DateUnit { base, .. } | CacheFieldGroup::Manual { base, .. }) =
         &field.group
     {
@@ -1548,6 +1743,113 @@ fn write_axis_fields(
     Ok(())
 }
 
+fn write_axis_items(
+    w: &mut XmlWriter,
+    tag_name: &str,
+    axis_fields: &[duke_sheets_core::PivotField],
+    fields: &[CacheField],
+    rows: &[Vec<Option<u32>>],
+    include_grand_total: bool,
+    write_empty_item_when_no_fields: bool,
+) -> XlsxResult<()> {
+    if axis_fields.is_empty() {
+        if write_empty_item_when_no_fields {
+            let mut tag = BytesStart::new(tag_name);
+            tag.push_attribute(("count", "1"));
+            w.write_event(Event::Start(tag))?;
+            w.write_event(Event::Empty(BytesStart::new("i")))?;
+            w.write_event(Event::End(BytesEnd::new(tag_name)))?;
+        }
+        return Ok(());
+    }
+
+    let field_indexes = expanded_axis_field_indexes(axis_fields, fields)?;
+    let tuples = axis_item_tuples(axis_fields, fields, rows)?;
+
+    let count = (tuples.len() + usize::from(include_grand_total)).to_string();
+    let mut tag = BytesStart::new(tag_name);
+    tag.push_attribute(("count", count.as_str()));
+    w.write_event(Event::Start(tag))?;
+
+    for tuple in tuples {
+        write_axis_item(w, None, &tuple)?;
+    }
+    if include_grand_total {
+        let grand = vec![0; field_indexes.len()];
+        write_axis_item(w, Some("grand"), &grand)?;
+    }
+
+    w.write_event(Event::End(BytesEnd::new(tag_name)))?;
+    Ok(())
+}
+
+fn axis_item_tuples(
+    axis_fields: &[duke_sheets_core::PivotField],
+    fields: &[CacheField],
+    rows: &[Vec<Option<u32>>],
+) -> XlsxResult<Vec<Vec<u32>>> {
+    if axis_fields.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let field_indexes = expanded_axis_field_indexes(axis_fields, fields)?;
+    let mut seen = HashSet::new();
+    let mut tuples = Vec::new();
+    for row in rows {
+        let tuple = field_indexes
+            .iter()
+            .map(|field_index| cache_record_axis_item_index(fields, row, *field_index).unwrap_or(0))
+            .collect::<Vec<_>>();
+        if seen.insert(tuple.clone()) {
+            tuples.push(tuple);
+        }
+    }
+    Ok(tuples)
+}
+
+fn cache_record_axis_item_index(
+    fields: &[CacheField],
+    row: &[Option<u32>],
+    field_index: usize,
+) -> Option<u32> {
+    if let Some(index) = row.get(field_index).and_then(|index| *index) {
+        return Some(index);
+    }
+
+    match fields.get(field_index)?.group.as_ref()? {
+        CacheFieldGroup::Manual {
+            base, item_indexes, ..
+        } => row
+            .get(*base)
+            .and_then(|index| *index)
+            .and_then(|index| item_indexes.get(index as usize).copied()),
+        _ => None,
+    }
+}
+
+fn write_axis_item(w: &mut XmlWriter, item_type: Option<&str>, indexes: &[u32]) -> XlsxResult<()> {
+    let mut item = BytesStart::new("i");
+    if let Some(item_type) = item_type {
+        item.push_attribute(("t", item_type));
+    }
+    if indexes.is_empty() {
+        w.write_event(Event::Empty(item))?;
+        return Ok(());
+    }
+
+    w.write_event(Event::Start(item))?;
+    for index in indexes {
+        let mut x = BytesStart::new("x");
+        let value = index.to_string();
+        if *index != 0 {
+            x.push_attribute(("v", value.as_str()));
+        }
+        w.write_event(Event::Empty(x))?;
+    }
+    w.write_event(Event::End(BytesEnd::new("i")))?;
+    Ok(())
+}
+
 fn expanded_axis_field_count(
     axis_fields: &[duke_sheets_core::PivotField],
     fields: &[CacheField],
@@ -1583,14 +1885,27 @@ fn expanded_axis_field_indexes(
 
 fn grouped_cache_field_indexes(fields: &[CacheField], field_name: &str) -> Option<Vec<usize>> {
     let base = field_index(fields, field_name)?;
+    let manual_indexes = fields
+        .iter()
+        .enumerate()
+        .filter_map(|(index, field)| match field.group {
+            Some(CacheFieldGroup::Manual {
+                base: group_base, ..
+            }) if group_base == base => Some(index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if !manual_indexes.is_empty() {
+        let mut indexes = manual_indexes;
+        indexes.push(base);
+        return Some(indexes);
+    }
+
     let indexes = fields
         .iter()
         .enumerate()
         .filter_map(|(index, field)| match field.group {
             Some(CacheFieldGroup::DateUnit {
-                base: group_base, ..
-            }) if group_base == base => Some(index),
-            Some(CacheFieldGroup::Manual {
                 base: group_base, ..
             }) if group_base == base => Some(index),
             _ => None,
@@ -2188,6 +2503,12 @@ fn write_worksheet_source(
 fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
     let mut cache_field = BytesStart::new("cacheField");
     cache_field.push_attribute(("name", field.name.as_str()));
+    if matches!(
+        field.group,
+        Some(CacheFieldGroup::Base { .. } | CacheFieldGroup::Manual { .. })
+    ) {
+        cache_field.push_attribute(("numFmtId", "0"));
+    }
     if let Some(formula) = &field.formula {
         cache_field.push_attribute(("formula", formula.as_str()));
     }
@@ -2200,15 +2521,30 @@ fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
         || !field.shared_items.is_empty()
     {
         let mut shared_items = BytesStart::new("sharedItems");
+        let metadata_only = shared_items_are_metadata_only(field);
         let count = field.shared_items.len().to_string();
-        shared_items.push_attribute(("count", count.as_str()));
+        if !metadata_only {
+            shared_items.push_attribute(("count", count.as_str()));
+        }
         shared_items.push_attribute(("containsBlank", bool_attr(field_contains_blank(field))));
         shared_items.push_attribute(("containsString", bool_attr(field_contains_string(field))));
         shared_items.push_attribute(("containsNumber", bool_attr(field_contains_number(field))));
         shared_items.push_attribute(("containsMixedTypes", bool_attr(field_contains_mixed(field))));
+        let (contains_integer, min_value, max_value) = numeric_shared_item_stats(field);
+        if let Some(contains_integer) = contains_integer {
+            shared_items.push_attribute(("containsInteger", bool_attr(contains_integer)));
+        }
+        if let Some(min_value) = min_value.as_deref() {
+            shared_items.push_attribute(("minValue", min_value));
+        }
+        if let Some(max_value) = max_value.as_deref() {
+            shared_items.push_attribute(("maxValue", max_value));
+        }
         w.write_event(Event::Start(shared_items))?;
-        for value in &field.shared_items {
-            write_pivot_value(w, value)?;
+        if !metadata_only {
+            for value in &field.shared_items {
+                write_pivot_value(w, value)?;
+            }
         }
         w.write_event(Event::End(BytesEnd::new("sharedItems")))?;
     }
@@ -2219,6 +2555,41 @@ fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
 
     w.write_event(Event::End(BytesEnd::new("cacheField")))?;
     Ok(())
+}
+
+fn shared_items_are_metadata_only(field: &CacheField) -> bool {
+    field.metadata_only_shared_items
+        && field.group.is_none()
+        && !field.shared_items.is_empty()
+        && field
+            .shared_items
+            .iter()
+            .all(|value| matches!(value, PivotValue::Number(_)))
+}
+
+fn numeric_shared_item_stats(field: &CacheField) -> (Option<bool>, Option<String>, Option<String>) {
+    let mut numbers = field.shared_items.iter().filter_map(|value| match value {
+        PivotValue::Number(value) if value.is_finite() => Some(*value),
+        _ => None,
+    });
+    let Some(first) = numbers.next() else {
+        return (None, None, None);
+    };
+
+    let mut min = first;
+    let mut max = first;
+    let mut contains_integer = first.fract() == 0.0;
+    for value in numbers {
+        min = min.min(value);
+        max = max.max(value);
+        contains_integer &= value.fract() == 0.0;
+    }
+
+    (
+        Some(contains_integer),
+        Some(min.to_string()),
+        Some(max.to_string()),
+    )
 }
 
 fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResult<()> {
@@ -2243,12 +2614,13 @@ fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResul
     if let Some(parent) = parent.as_deref() {
         field_group.push_attribute(("par", parent));
     }
-    w.write_event(Event::Start(field_group))?;
 
     if let CacheFieldGroup::Base { .. } = grouping {
-        w.write_event(Event::End(BytesEnd::new("fieldGroup")))?;
+        w.write_event(Event::Empty(field_group))?;
         return Ok(());
     }
+
+    w.write_event(Event::Start(field_group))?;
 
     if let CacheFieldGroup::Manual {
         item_indexes,
@@ -2350,18 +2722,8 @@ pub(super) fn write_pivot_cache_records_part<W: Write + Seek>(
 
         for row in &part.rows {
             w.write_event(Event::Start(BytesStart::new("r")))?;
-            for value_index in row {
-                match value_index {
-                    Some(index) => {
-                        let value = index.to_string();
-                        let mut x = BytesStart::new("x");
-                        x.push_attribute(("v", value.as_str()));
-                        w.write_event(Event::Empty(x))?;
-                    }
-                    None => {
-                        w.write_event(Event::Empty(BytesStart::new("m")))?;
-                    }
-                }
+            for (field, value_index) in part.fields.iter().zip(row) {
+                write_cache_record_value(w, field, *value_index)?;
             }
             w.write_event(Event::End(BytesEnd::new("r")))?;
         }
@@ -2369,6 +2731,33 @@ pub(super) fn write_pivot_cache_records_part<W: Write + Seek>(
         w.write_event(Event::End(BytesEnd::new("pivotCacheRecords")))?;
         Ok(())
     })
+}
+
+fn write_cache_record_value(
+    w: &mut XmlWriter,
+    field: &CacheField,
+    value_index: Option<u32>,
+) -> XlsxResult<()> {
+    let Some(index) = value_index else {
+        w.write_event(Event::Empty(BytesStart::new("m")))?;
+        return Ok(());
+    };
+
+    let Some(value) = field.shared_items.get(index as usize) else {
+        w.write_event(Event::Empty(BytesStart::new("m")))?;
+        return Ok(());
+    };
+
+    match value {
+        PivotValue::String(_) => {
+            let value = index.to_string();
+            let mut x = BytesStart::new("x");
+            x.push_attribute(("v", value.as_str()));
+            w.write_event(Event::Empty(x))?;
+        }
+        _ => write_pivot_value(w, value)?,
+    }
+    Ok(())
 }
 
 pub(super) fn write_pivot_cache_definition_rels<W: Write + Seek>(
