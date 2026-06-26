@@ -4890,7 +4890,7 @@ mod tests {
     }
 
     #[test]
-    fn test_writer_rejects_manual_pivot_grouping_until_group_items_supported() {
+    fn test_writer_round_trips_manual_pivot_grouping() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
         sheet.set_cell_value("A1", "Region").unwrap();
@@ -4899,9 +4899,11 @@ mod tests {
         sheet.set_cell_value("B2", 10.0).unwrap();
         sheet.set_cell_value("A3", "West").unwrap();
         sheet.set_cell_value("B3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "Central").unwrap();
+        sheet.set_cell_value("B4", 5.0).unwrap();
 
         let pivot = PivotTable::builder("ManualGroupedRegions")
-            .source_range(CellRange::parse("A1:B3").unwrap())
+            .source_range(CellRange::parse("A1:B4").unwrap())
             .target_address("D1")
             .unwrap()
             .row("Region")
@@ -4915,9 +4917,37 @@ mod tests {
         sheet.add_pivot_table(pivot).unwrap();
 
         let mut out = Cursor::new(Vec::new());
-        let err = XlsxWriter::write(&wb, &mut out).unwrap_err();
-        assert!(err.to_string().contains("manual item grouping"));
-        assert!(err.to_string().contains("groupItems persistence"));
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"<fieldGroup par="2"></fieldGroup></cacheField>"#));
+        assert!(cache_def.contains(
+            r#"<cacheField name="Region2" databaseField="0"><fieldGroup base="0"><discretePr count="3"><x v="1"/><x v="1"/><x v="0"/></discretePr><groupItems count="2"><s v="Central"/><s v="Coastal"/></groupItems></fieldGroup></cacheField>"#
+        ));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("ManualGroupedRegions")
+            .unwrap();
+        assert_eq!(pivot.groupings.len(), 1);
+        match &pivot.groupings[0] {
+            PivotGrouping::Manual { field, groups } => {
+                assert_eq!(field.name, "Region");
+                assert_eq!(groups.len(), 1);
+                assert_eq!(groups[0].name, "Coastal");
+                assert_eq!(
+                    groups[0].members,
+                    vec![
+                        PivotValue::String("East".to_string()),
+                        PivotValue::String("West".to_string())
+                    ]
+                );
+            }
+            other => panic!("unexpected grouping: {other:?}"),
+        }
     }
 
     #[test]

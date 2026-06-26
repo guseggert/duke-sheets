@@ -6,8 +6,9 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{
     CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit, PivotFieldRef,
-    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotShowAs, PivotSort,
-    PivotSource, PivotSubtotal, PivotTable, PivotValue, Table, Workbook, Worksheet,
+    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup,
+    PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue, Table, Workbook,
+    Worksheet,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -79,7 +80,15 @@ struct CacheField {
 
 #[derive(Debug, Clone)]
 enum CacheFieldGroup {
+    Base {
+        parent: usize,
+    },
     Range(PivotGrouping),
+    Manual {
+        base: usize,
+        item_indexes: Vec<u32>,
+        group_items: Vec<PivotValue>,
+    },
     DateUnit {
         base: usize,
         parent: Option<usize>,
@@ -322,11 +331,8 @@ fn validate_pivot_groupings(pivot: &PivotTable, fields: &[CacheField]) -> XlsxRe
                     )));
                 }
             }
-            PivotGrouping::Manual { .. } => {
-                return Err(XlsxError::InvalidFormat(format!(
-                    "pivot table {} uses manual item grouping for field {}, but XLSX groupItems persistence is not implemented yet",
-                    pivot.name, field.name
-                )));
+            PivotGrouping::Manual { groups, .. } => {
+                validate_manual_grouping(&pivot.name, &field.name, groups)?;
             }
         }
     }
@@ -355,6 +361,27 @@ fn apply_grouped_cache_fields(
         })?;
 
         match grouping {
+            PivotGrouping::Manual { groups, .. } => {
+                let (item_indexes, group_items) = manual_group_cache_items(
+                    pivot_name,
+                    field_name,
+                    &resolved.fields[field_index],
+                    groups,
+                )?;
+                let grouped_name = unique_manual_grouped_header(&resolved.fields, field_name);
+                let grouped_index = resolved.fields.len();
+                resolved.fields[field_index].group = Some(CacheFieldGroup::Base {
+                    parent: grouped_index,
+                });
+                let mut grouped = CacheField::new(grouped_name);
+                grouped.database_field = false;
+                grouped.group = Some(CacheFieldGroup::Manual {
+                    base: field_index,
+                    item_indexes,
+                    group_items,
+                });
+                resolved.fields.push(grouped);
+            }
             PivotGrouping::Date { units, .. } if units.len() > 1 => {
                 let base_values = resolved
                     .rows
@@ -398,12 +425,6 @@ fn apply_grouped_cache_fields(
                 }
             }
             _ => match grouping {
-                PivotGrouping::Manual { .. } => {
-                    let message = format!(
-                        "pivot table {pivot_name} uses manual item grouping for field {field_name}, but XLSX groupItems persistence is not implemented yet"
-                    );
-                    return Err(XlsxError::InvalidFormat(message));
-                }
                 _ => {
                     resolved.fields[field_index].group =
                         Some(CacheFieldGroup::Range(grouping.clone()));
@@ -413,6 +434,130 @@ fn apply_grouped_cache_fields(
     }
 
     Ok(())
+}
+
+fn validate_manual_grouping(
+    pivot_name: &str,
+    field_name: &str,
+    groups: &[PivotManualGroup],
+) -> XlsxResult<()> {
+    if groups.is_empty() {
+        return Err(XlsxError::InvalidFormat(format!(
+            "pivot table {pivot_name} has an empty manual grouping for field {field_name}"
+        )));
+    }
+
+    let mut group_names = HashSet::new();
+    let mut members = HashSet::new();
+    for group in groups {
+        if group.name.trim().is_empty() {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} has a manual group with a blank name for field {field_name}"
+            )));
+        }
+        if group.members.is_empty() {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} manual group {} has no members",
+                group.name
+            )));
+        }
+        if !group_names.insert(group.name.to_lowercase()) {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} has duplicate manual group name {}",
+                group.name
+            )));
+        }
+        for member in &group.members {
+            if !members.insert(member.clone()) {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "pivot table {pivot_name} assigns pivot item {member} to more than one manual group"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn manual_group_cache_items(
+    pivot_name: &str,
+    field_name: &str,
+    base_field: &CacheField,
+    groups: &[PivotManualGroup],
+) -> XlsxResult<(Vec<u32>, Vec<PivotValue>)> {
+    let mut member_to_group = HashMap::new();
+    for group in groups {
+        for member in &group.members {
+            if !base_field.item_lookup.contains_key(member) {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "pivot table {pivot_name} manual group {} references item not found in field {field_name}: {member}",
+                    group.name
+                )));
+            }
+            member_to_group.insert(member.clone(), group.name.clone());
+        }
+    }
+
+    let mut group_items = Vec::new();
+    let mut ungrouped_item_indexes = HashMap::new();
+
+    for item in &base_field.shared_items {
+        if member_to_group.contains_key(item) {
+            continue;
+        }
+        let index = group_items.len() as u32;
+        ungrouped_item_indexes.insert(item.clone(), index);
+        group_items.push(item.clone());
+    }
+
+    let mut group_name_indexes = HashMap::new();
+    for group in groups {
+        let value = PivotValue::String(group.name.clone());
+        let index = group_items.len() as u32;
+        group_name_indexes.insert(group.name.clone(), index);
+        group_items.push(value);
+    }
+
+    let item_indexes = base_field
+        .shared_items
+        .iter()
+        .map(|item| {
+            if let Some(group_name) = member_to_group.get(item) {
+                group_name_indexes
+                    .get(group_name)
+                    .copied()
+                    .ok_or_else(|| {
+                        XlsxError::InvalidFormat(format!(
+                            "pivot table {pivot_name} could not map manual group for field {field_name}: {group_name}"
+                        ))
+                    })
+            } else {
+                ungrouped_item_indexes
+                    .get(item)
+                    .copied()
+                    .ok_or_else(|| {
+                        XlsxError::InvalidFormat(format!(
+                            "pivot table {pivot_name} could not map ungrouped item for field {field_name}: {item}"
+                        ))
+                    })
+            }
+        })
+        .collect::<XlsxResult<Vec<_>>>()?;
+
+    Ok((item_indexes, group_items))
+}
+
+fn unique_manual_grouped_header(fields: &[CacheField], field_name: &str) -> String {
+    for suffix in 2.. {
+        let candidate = format!("{field_name}{suffix}");
+        if fields
+            .iter()
+            .all(|field| !field.name.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded manual grouped header suffix search should return")
 }
 
 fn unique_grouped_header(
@@ -1280,7 +1425,9 @@ fn pivot_axis_field<'a>(
 
 fn axis_semantic_field_name(fields: &[CacheField], field_index: usize) -> Option<String> {
     let field = fields.get(field_index)?;
-    if let Some(CacheFieldGroup::DateUnit { base, .. }) = &field.group {
+    if let Some(CacheFieldGroup::DateUnit { base, .. } | CacheFieldGroup::Manual { base, .. }) =
+        &field.group
+    {
         return fields.get(*base).map(|field| field.name.clone());
     }
     if has_grouped_children(fields, field_index) {
@@ -1293,7 +1440,8 @@ fn has_grouped_children(fields: &[CacheField], field_index: usize) -> bool {
     fields.iter().any(|field| {
         matches!(
             field.group,
-            Some(CacheFieldGroup::DateUnit { base, .. }) if base == field_index
+            Some(CacheFieldGroup::DateUnit { base, .. } | CacheFieldGroup::Manual { base, .. })
+                if base == field_index
         )
     })
 }
@@ -1440,6 +1588,9 @@ fn grouped_cache_field_indexes(fields: &[CacheField], field_name: &str) -> Optio
         .enumerate()
         .filter_map(|(index, field)| match field.group {
             Some(CacheFieldGroup::DateUnit {
+                base: group_base, ..
+            }) if group_base == base => Some(index),
+            Some(CacheFieldGroup::Manual {
                 base: group_base, ..
             }) if group_base == base => Some(index),
             _ => None,
@@ -2045,18 +2196,22 @@ fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
     }
     w.write_event(Event::Start(cache_field))?;
 
-    let mut shared_items = BytesStart::new("sharedItems");
-    let count = field.shared_items.len().to_string();
-    shared_items.push_attribute(("count", count.as_str()));
-    shared_items.push_attribute(("containsBlank", bool_attr(field_contains_blank(field))));
-    shared_items.push_attribute(("containsString", bool_attr(field_contains_string(field))));
-    shared_items.push_attribute(("containsNumber", bool_attr(field_contains_number(field))));
-    shared_items.push_attribute(("containsMixedTypes", bool_attr(field_contains_mixed(field))));
-    w.write_event(Event::Start(shared_items))?;
-    for value in &field.shared_items {
-        write_pivot_value(w, value)?;
+    if !matches!(field.group, Some(CacheFieldGroup::Manual { .. }))
+        || !field.shared_items.is_empty()
+    {
+        let mut shared_items = BytesStart::new("sharedItems");
+        let count = field.shared_items.len().to_string();
+        shared_items.push_attribute(("count", count.as_str()));
+        shared_items.push_attribute(("containsBlank", bool_attr(field_contains_blank(field))));
+        shared_items.push_attribute(("containsString", bool_attr(field_contains_string(field))));
+        shared_items.push_attribute(("containsNumber", bool_attr(field_contains_number(field))));
+        shared_items.push_attribute(("containsMixedTypes", bool_attr(field_contains_mixed(field))));
+        w.write_event(Event::Start(shared_items))?;
+        for value in &field.shared_items {
+            write_pivot_value(w, value)?;
+        }
+        w.write_event(Event::End(BytesEnd::new("sharedItems")))?;
     }
-    w.write_event(Event::End(BytesEnd::new("sharedItems")))?;
 
     if let Some(grouping) = &field.group {
         write_field_group(w, grouping)?;
@@ -2069,10 +2224,13 @@ fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
 fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResult<()> {
     let mut field_group = BytesStart::new("fieldGroup");
     let base = match grouping {
+        CacheFieldGroup::Base { .. } => None,
         CacheFieldGroup::DateUnit { base, .. } => Some(base.to_string()),
+        CacheFieldGroup::Manual { base, .. } => Some(base.to_string()),
         CacheFieldGroup::Range(_) => None,
     };
     let parent = match grouping {
+        CacheFieldGroup::Base { parent } => Some(parent.to_string()),
         CacheFieldGroup::DateUnit {
             parent: Some(parent),
             ..
@@ -2087,8 +2245,44 @@ fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResul
     }
     w.write_event(Event::Start(field_group))?;
 
+    if let CacheFieldGroup::Base { .. } = grouping {
+        w.write_event(Event::End(BytesEnd::new("fieldGroup")))?;
+        return Ok(());
+    }
+
+    if let CacheFieldGroup::Manual {
+        item_indexes,
+        group_items,
+        ..
+    } = grouping
+    {
+        let count = item_indexes.len().to_string();
+        let mut discrete_pr = BytesStart::new("discretePr");
+        discrete_pr.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(discrete_pr))?;
+        for index in item_indexes {
+            let value = index.to_string();
+            let mut x = BytesStart::new("x");
+            x.push_attribute(("v", value.as_str()));
+            w.write_event(Event::Empty(x))?;
+        }
+        w.write_event(Event::End(BytesEnd::new("discretePr")))?;
+
+        let count = group_items.len().to_string();
+        let mut group_items_el = BytesStart::new("groupItems");
+        group_items_el.push_attribute(("count", count.as_str()));
+        w.write_event(Event::Start(group_items_el))?;
+        for value in group_items {
+            write_pivot_value(w, value)?;
+        }
+        w.write_event(Event::End(BytesEnd::new("groupItems")))?;
+        w.write_event(Event::End(BytesEnd::new("fieldGroup")))?;
+        return Ok(());
+    }
+
     let mut range_pr = BytesStart::new("rangePr");
     match grouping {
+        CacheFieldGroup::Base { .. } => unreachable!("base field groups return before rangePr"),
         CacheFieldGroup::Range(PivotGrouping::Number {
             start,
             end,
@@ -2116,10 +2310,9 @@ fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResul
             range_pr.push_attribute(("groupBy", date_group_by_name(units[0])));
         }
         CacheFieldGroup::Range(PivotGrouping::Manual { .. }) => {
-            return Err(XlsxError::InvalidFormat(
-                "XLSX manual pivot grouping persistence is not implemented yet".to_string(),
-            ));
+            unreachable!("manual pivot groups use CacheFieldGroup::Manual")
         }
+        CacheFieldGroup::Manual { .. } => unreachable!("manual groups return before rangePr"),
         CacheFieldGroup::DateUnit { unit, .. } => {
             range_pr.push_attribute(("groupBy", date_group_by_name(*unit)));
         }

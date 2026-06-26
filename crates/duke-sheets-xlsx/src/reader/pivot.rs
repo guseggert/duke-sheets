@@ -11,8 +11,9 @@ use duke_sheets_core::style::NumberFormat;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
     PivotCalculatedField, PivotDateGroupUnit, PivotExtension, PivotField, PivotFilter,
-    PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotMeasure, PivotRefreshStatus,
-    PivotShowAs, PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure,
+    PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable,
+    PivotValue,
 };
 
 #[derive(Debug, Clone)]
@@ -37,6 +38,8 @@ pub(super) struct PivotCacheField {
     grouping: Option<PivotGrouping>,
     group_base: Option<usize>,
     group_parent: Option<usize>,
+    discrete_item_indexes: Vec<u32>,
+    group_items: Vec<PivotValue>,
 }
 
 pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
@@ -65,6 +68,8 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     let mut missing_items_limit = None;
     let mut current_field: Option<PivotCacheField> = None;
     let mut in_shared_items = false;
+    let mut in_discrete_pr = false;
+    let mut in_group_items = false;
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
@@ -92,9 +97,13 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                         grouping: None,
                         group_base: None,
                         group_parent: None,
+                        discrete_item_indexes: Vec::new(),
+                        group_items: Vec::new(),
                     });
                 }
                 b"sharedItems" => in_shared_items = true,
+                b"discretePr" => in_discrete_pr = true,
+                b"groupItems" => in_group_items = true,
                 b"fieldGroup" => {
                     if let Some(field) = &mut current_field {
                         parse_field_group_attrs(field, &e);
@@ -130,6 +139,8 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     grouping: None,
                     group_base: None,
                     group_parent: None,
+                    discrete_item_indexes: Vec::new(),
+                    group_items: Vec::new(),
                 }),
                 b"fieldGroup" => {
                     if let Some(field) = &mut current_field {
@@ -146,6 +157,18 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                         field.shared_items.push(parse_shared_item(&e)?);
                     }
                 }
+                b"x" if in_discrete_pr => {
+                    if let Some(field) = &mut current_field {
+                        if let Some(index) = attr_u32(&e, b"v") {
+                            field.discrete_item_indexes.push(index);
+                        }
+                    }
+                }
+                b"m" | b"n" | b"b" | b"s" | b"e" if in_group_items => {
+                    if let Some(field) = &mut current_field {
+                        field.group_items.push(parse_shared_item(&e)?);
+                    }
+                }
                 _ => {}
             },
             Ok(Event::End(e)) => match e.name().local_name().as_ref() {
@@ -155,6 +178,8 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     }
                 }
                 b"sharedItems" => in_shared_items = false,
+                b"discretePr" => in_discrete_pr = false,
+                b"groupItems" => in_group_items = false,
                 _ => {}
             },
             Ok(Event::Eof) => break,
@@ -201,6 +226,11 @@ fn semantic_groupings_from_cache_fields(fields: &[PivotCacheField]) -> Vec<Pivot
     let mut date_units_by_base: BTreeMap<usize, Vec<PivotDateGroupUnit>> = BTreeMap::new();
 
     for field in fields {
+        if let Some(grouping) = manual_grouping_from_cache_field(fields, field) {
+            groupings.push(grouping);
+            continue;
+        }
+
         match &field.grouping {
             Some(PivotGrouping::Date { units, .. }) if field.group_base.is_some() => {
                 if let (Some(base), Some(unit)) = (field.group_base, units.first().copied()) {
@@ -222,6 +252,49 @@ fn semantic_groupings_from_cache_fields(fields: &[PivotCacheField]) -> Vec<Pivot
     }
 
     groupings
+}
+
+fn manual_grouping_from_cache_field(
+    fields: &[PivotCacheField],
+    field: &PivotCacheField,
+) -> Option<PivotGrouping> {
+    let base = field.group_base?;
+    let base_field = fields.get(base)?;
+    if field.discrete_item_indexes.is_empty() || field.group_items.is_empty() {
+        return None;
+    }
+
+    let mut members_by_group: BTreeMap<u32, Vec<PivotValue>> = BTreeMap::new();
+    for (base_index, group_index) in field.discrete_item_indexes.iter().copied().enumerate() {
+        let member = base_field.shared_items.get(base_index)?.clone();
+        members_by_group
+            .entry(group_index)
+            .or_default()
+            .push(member);
+    }
+
+    let groups = members_by_group
+        .into_iter()
+        .filter_map(|(group_index, members)| {
+            let group_value = field.group_items.get(group_index as usize)?;
+            let is_renamed_single_item = members
+                .first()
+                .is_some_and(|member| members.len() == 1 && member != group_value);
+            if members.len() <= 1 && !is_renamed_single_item {
+                return None;
+            }
+
+            Some(PivotManualGroup {
+                name: group_value.to_string(),
+                members,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    (!groups.is_empty()).then(|| PivotGrouping::Manual {
+        field: base_field.name.clone().into(),
+        groups,
+    })
 }
 
 fn parse_cache_source_kind(e: &BytesStart<'_>) -> PivotCacheSourceKind {
@@ -1317,6 +1390,8 @@ mod tests {
                 grouping: None,
                 group_base: None,
                 group_parent: None,
+                discrete_item_indexes: Vec::new(),
+                group_items: Vec::new(),
             }],
             calculated_fields: Vec::new(),
             groupings: Vec::new(),
