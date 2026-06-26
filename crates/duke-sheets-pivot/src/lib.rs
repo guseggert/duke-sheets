@@ -223,7 +223,8 @@ fn build_rendered_pivot(
     };
     let plan = CompiledPivotPlan::compile(pivot, &snapshot)?;
     let mut aggregation = PivotAggregation::aggregate(&snapshot, &plan);
-    aggregation.apply_aggregate_filters(&plan);
+    let aggregate_restrictions = aggregation.apply_aggregate_filters(&plan);
+    aggregation.expand_show_empty_items(&pivot.name, &snapshot, &plan, &aggregate_restrictions)?;
     aggregation.sort_orders(&snapshot, &plan);
     render_pivot(pivot, &snapshot, &plan, &aggregation)
 }
@@ -1431,12 +1432,65 @@ impl CompiledFilter {
             }
         }
     }
+
+    fn allows_item(&self, snapshot: &SourceSnapshot, field_index: usize, item_id: u32) -> bool {
+        match self {
+            Self::Items {
+                field_index: filter_index,
+                allowed_ids,
+            } if *filter_index == field_index => allowed_ids.contains(&item_id),
+            Self::Label {
+                field_index: filter_index,
+                operator,
+                value,
+            } if *filter_index == field_index => {
+                let actual = snapshot.value_by_id(field_index, item_id).to_string();
+                label_filter_matches(&actual, *operator, value)
+            }
+            _ => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 enum AggregateFilterAxis {
     Row,
     Column,
+}
+
+#[derive(Debug, Default, Clone)]
+struct AxisItemRestrictions {
+    rows: AHashMap<usize, AHashSet<u32>>,
+    columns: AHashMap<usize, AHashSet<u32>>,
+}
+
+impl AxisItemRestrictions {
+    fn restrict(
+        &mut self,
+        axis: AggregateFilterAxis,
+        field_position: usize,
+        allowed_item_ids: &AHashSet<u32>,
+    ) {
+        let target = match axis {
+            AggregateFilterAxis::Row => &mut self.rows,
+            AggregateFilterAxis::Column => &mut self.columns,
+        };
+        target
+            .entry(field_position)
+            .and_modify(|existing| existing.retain(|id| allowed_item_ids.contains(id)))
+            .or_insert_with(|| allowed_item_ids.clone());
+    }
+
+    fn allows(&self, axis: AggregateFilterAxis, field_position: usize, item_id: u32) -> bool {
+        let source = match axis {
+            AggregateFilterAxis::Row => &self.rows,
+            AggregateFilterAxis::Column => &self.columns,
+        };
+        source
+            .get(&field_position)
+            .map(|allowed| allowed.contains(&item_id))
+            .unwrap_or(true)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1947,9 +2001,11 @@ impl PivotAggregation {
         update_states(states, snapshot, plan, row);
     }
 
-    fn apply_aggregate_filters(&mut self, plan: &CompiledPivotPlan) {
+    fn apply_aggregate_filters(&mut self, plan: &CompiledPivotPlan) -> AxisItemRestrictions {
+        let mut restrictions = AxisItemRestrictions::default();
         for filter in &plan.aggregate_filters {
             let allowed_item_ids = filter.allowed_item_ids(self);
+            restrictions.restrict(filter.axis(), filter.field_position(), &allowed_item_ids);
             self.retain_axis_items(
                 filter.axis(),
                 filter.field_position(),
@@ -1957,6 +2013,7 @@ impl PivotAggregation {
                 plan,
             );
         }
+        restrictions
     }
 
     fn retain_axis_items(
@@ -2101,6 +2158,38 @@ impl PivotAggregation {
             .retain(|key| self.column_totals.contains_key(key));
     }
 
+    fn expand_show_empty_items(
+        &mut self,
+        pivot_name: &str,
+        snapshot: &SourceSnapshot,
+        plan: &CompiledPivotPlan,
+        aggregate_restrictions: &AxisItemRestrictions,
+    ) -> Result<()> {
+        expand_axis_show_empty_items(
+            pivot_name,
+            snapshot,
+            plan,
+            AggregateFilterAxis::Row,
+            &plan.row_indexes,
+            &plan.row_fields,
+            &plan.filters,
+            aggregate_restrictions,
+            &mut self.row_order,
+        )?;
+        expand_axis_show_empty_items(
+            pivot_name,
+            snapshot,
+            plan,
+            AggregateFilterAxis::Column,
+            &plan.column_indexes,
+            &plan.column_fields,
+            &plan.filters,
+            aggregate_restrictions,
+            &mut self.column_order,
+        )?;
+        Ok(())
+    }
+
     fn sort_orders(&mut self, snapshot: &SourceSnapshot, plan: &CompiledPivotPlan) {
         sort_key_order(
             &mut self.row_order,
@@ -2215,6 +2304,152 @@ fn merge_unordered_bucket<K>(
 fn merge_state_slices(target: &mut [AggregateState], source: &[AggregateState]) {
     for (target, source) in target.iter_mut().zip(source.iter()) {
         target.merge(source);
+    }
+}
+
+fn expand_axis_show_empty_items(
+    pivot_name: &str,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    axis: AggregateFilterAxis,
+    field_indexes: &[usize],
+    fields: &[PivotField],
+    filters: &[CompiledFilter],
+    aggregate_restrictions: &AxisItemRestrictions,
+    order: &mut Vec<Vec<u32>>,
+) -> Result<()> {
+    if field_indexes.is_empty() || fields.iter().all(|field| !field.show_empty_items) {
+        return Ok(());
+    }
+
+    let item_ids = axis_item_ids(
+        snapshot,
+        axis,
+        field_indexes,
+        fields,
+        filters,
+        aggregate_restrictions,
+        order,
+    );
+    if item_ids.iter().any(Vec::is_empty) {
+        return Ok(());
+    }
+
+    let key_count = cartesian_len(&item_ids)?;
+    let limit = show_empty_axis_key_limit(axis, plan);
+    if key_count > limit {
+        return Err(Error::other(format!(
+            "pivot table {pivot_name} show-empty-items expansion would produce {key_count} {} keys, exceeding the worksheet limit {limit}",
+            axis_name(axis)
+        )));
+    }
+
+    let mut seen = order.iter().cloned().collect::<AHashSet<_>>();
+    let mut key = Vec::with_capacity(field_indexes.len());
+    append_show_empty_axis_keys(&item_ids, 0, &mut key, &mut seen, order);
+    Ok(())
+}
+
+fn axis_item_ids(
+    snapshot: &SourceSnapshot,
+    axis: AggregateFilterAxis,
+    field_indexes: &[usize],
+    fields: &[PivotField],
+    filters: &[CompiledFilter],
+    aggregate_restrictions: &AxisItemRestrictions,
+    order: &[Vec<u32>],
+) -> Vec<Vec<u32>> {
+    field_indexes
+        .iter()
+        .enumerate()
+        .map(|(position, field_index)| {
+            let mut ids = if fields
+                .get(position)
+                .map(|field| field.show_empty_items)
+                .unwrap_or(false)
+            {
+                visible_dictionary_item_ids(snapshot, *field_index, filters)
+            } else {
+                observed_axis_item_ids(order, position)
+            };
+            ids.retain(|id| aggregate_restrictions.allows(axis, position, *id));
+            ids
+        })
+        .collect()
+}
+
+fn visible_dictionary_item_ids(
+    snapshot: &SourceSnapshot,
+    field_index: usize,
+    filters: &[CompiledFilter],
+) -> Vec<u32> {
+    (0..snapshot.columns[field_index].dictionary.len())
+        .map(|id| id as u32)
+        .filter(|id| {
+            filters
+                .iter()
+                .all(|filter| filter.allows_item(snapshot, field_index, *id))
+        })
+        .collect()
+}
+
+fn observed_axis_item_ids(order: &[Vec<u32>], position: usize) -> Vec<u32> {
+    let mut seen = AHashSet::new();
+    let mut ids = Vec::new();
+    for key in order {
+        let Some(id) = key.get(position) else {
+            continue;
+        };
+        if seen.insert(*id) {
+            ids.push(*id);
+        }
+    }
+    ids
+}
+
+fn cartesian_len(item_ids: &[Vec<u32>]) -> Result<usize> {
+    item_ids.iter().try_fold(1usize, |total, ids| {
+        total
+            .checked_mul(ids.len())
+            .ok_or_else(|| Error::other("pivot show-empty-items expansion is too large"))
+    })
+}
+
+fn show_empty_axis_key_limit(axis: AggregateFilterAxis, plan: &CompiledPivotPlan) -> usize {
+    match axis {
+        AggregateFilterAxis::Row => MAX_ROWS as usize,
+        AggregateFilterAxis::Column => {
+            let available_columns = (MAX_COLS as usize).saturating_sub(plan.row_indexes.len());
+            available_columns / plan.measures.len().max(1)
+        }
+    }
+}
+
+fn append_show_empty_axis_keys(
+    item_ids: &[Vec<u32>],
+    position: usize,
+    key: &mut Vec<u32>,
+    seen: &mut AHashSet<Vec<u32>>,
+    order: &mut Vec<Vec<u32>>,
+) {
+    if position == item_ids.len() {
+        if seen.insert(key.clone()) {
+            order.push(key.clone());
+        }
+        return;
+    }
+
+    for id in &item_ids[position] {
+        key.push(*id);
+        append_show_empty_axis_keys(item_ids, position + 1, key, seen, order);
+        key.pop();
+    }
+}
+
+fn axis_name(axis: AggregateFilterAxis) -> &'static str {
+    match axis {
+        AggregateFilterAxis::Row => "row",
+        AggregateFilterAxis::Column => "column",
     }
 }
 
@@ -3716,6 +3951,97 @@ mod tests {
     }
 
     #[test]
+    fn refreshes_show_empty_items_on_row_fields() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 7.0).unwrap();
+        sheet.set_cell_value("A4", "North").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 3.0).unwrap();
+
+        let mut region = PivotField::new("Region");
+        region.show_empty_items = true;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row(region)
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .filter(PivotFilter::field_items("Segment", ["Retail"]))
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E1"), "Region");
+        assert_eq!(text(&workbook, "F1"), "Revenue");
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(number(&workbook, "F2"), 10.0);
+        assert_eq!(text(&workbook, "E3"), "North");
+        assert_eq!(number(&workbook, "F3"), 3.0);
+        assert_eq!(text(&workbook, "E4"), "West");
+        assert_eq!(text(&workbook, "F4"), "");
+        assert_eq!(text(&workbook, "E5"), "Grand Total");
+        assert_eq!(number(&workbook, "F5"), 13.0);
+    }
+
+    #[test]
+    fn refreshes_show_empty_items_on_column_fields() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Segment").unwrap();
+        sheet.set_cell_value("D1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", "Retail").unwrap();
+        sheet.set_cell_value("D2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", "Online").unwrap();
+        sheet.set_cell_value("D3", 5.0).unwrap();
+
+        let mut quarter = PivotField::new("Quarter");
+        quarter.show_empty_items = true;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D3").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row("Region")
+            .column(quarter)
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .filter(PivotFilter::field_items("Segment", ["Retail"]))
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F1"), "Region");
+        assert_eq!(text(&workbook, "G1"), "Q1");
+        assert_eq!(text(&workbook, "H1"), "Q2");
+        assert_eq!(text(&workbook, "I1"), "Grand Total");
+        assert_eq!(text(&workbook, "F2"), "East");
+        assert_eq!(number(&workbook, "G2"), 10.0);
+        assert_eq!(text(&workbook, "H2"), "");
+        assert_eq!(number(&workbook, "I2"), 10.0);
+        assert_eq!(text(&workbook, "F3"), "Grand Total");
+        assert_eq!(number(&workbook, "G3"), 10.0);
+        assert_eq!(text(&workbook, "H3"), "");
+        assert_eq!(number(&workbook, "I3"), 10.0);
+    }
+
+    #[test]
     fn refreshes_row_field_subtotals() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
@@ -4425,6 +4751,45 @@ mod tests {
         assert_eq!(number(&workbook, "E3"), 20.0);
         assert_eq!(text(&workbook, "D4"), "Grand Total");
         assert_eq!(number(&workbook, "E4"), 45.0);
+    }
+
+    #[test]
+    fn show_empty_items_respects_value_filters() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 1.0).unwrap();
+
+        let mut region = PivotField::new("Region");
+        region.show_empty_items = true;
+        let measure = PivotMeasure::new("Revenue", PivotAggregate::Sum);
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row(region)
+            .pivot_measure(measure.clone())
+            .filter(PivotFilter::Value {
+                field: "Region".into(),
+                measure,
+                operator: PivotFilterOperator::GreaterThanOrEqual,
+                value: 5.0,
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D2"), "East");
+        assert_eq!(number(&workbook, "E2"), 10.0);
+        assert_eq!(text(&workbook, "D3"), "Grand Total");
+        assert_eq!(number(&workbook, "E3"), 10.0);
+        assert_eq!(text(&workbook, "D4"), "");
     }
 
     #[test]
