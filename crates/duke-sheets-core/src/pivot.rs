@@ -337,6 +337,15 @@ pub enum PivotAxis {
     Values,
 }
 
+/// Axis used to place multiple pivot value fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PivotValuesAxis {
+    /// Render value fields across columns.
+    Columns,
+    /// Render value fields down rows.
+    Rows,
+}
+
 /// Sort behavior for pivot items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PivotSort {
@@ -856,6 +865,10 @@ pub struct PivotLayout {
     pub merge_item_labels: bool,
     /// Caption used for the aggregate-values field.
     pub data_caption: String,
+    /// Axis used for the aggregate-values field when multiple measures are present.
+    pub values_axis: PivotValuesAxis,
+    /// Optional zero-based position of the aggregate-values field on its axis.
+    pub values_axis_position: Option<u32>,
     /// Optional caption for grand total labels.
     pub grand_total_caption: Option<String>,
     /// Optional display text for error values.
@@ -920,6 +933,8 @@ impl Default for PivotLayout {
             page_over_then_down: false,
             merge_item_labels: false,
             data_caption: "Values".to_string(),
+            values_axis: PivotValuesAxis::Columns,
+            values_axis_position: None,
             grand_total_caption: None,
             error_caption: None,
             show_error: false,

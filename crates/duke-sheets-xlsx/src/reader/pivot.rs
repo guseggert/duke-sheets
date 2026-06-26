@@ -15,8 +15,8 @@ use duke_sheets_core::{
     PivotCalculatedField, PivotCalculatedItem, PivotDateGroupUnit, PivotDatePeriod, PivotExtension,
     PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
     PivotManualGroup, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource,
-    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, WorkbookConnection,
-    WorkbookConnectionKind,
+    PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis,
+    WorkbookConnection, WorkbookConnectionKind,
 };
 
 #[derive(Debug, Clone)]
@@ -720,7 +720,21 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             buf.clear();
                             continue;
                         };
-                        if let Some(field_index) =
+                        if attr_i32(&e, b"x") == Some(-2) {
+                            match axis_context {
+                                Some(AxisContext::Rows) => {
+                                    layout.values_axis = PivotValuesAxis::Rows;
+                                    layout.values_axis_position.get_or_insert(rows.len() as u32);
+                                }
+                                Some(AxisContext::Columns) => {
+                                    layout.values_axis = PivotValuesAxis::Columns;
+                                    layout
+                                        .values_axis_position
+                                        .get_or_insert(columns.len() as u32);
+                                }
+                                _ => {}
+                            }
+                        } else if let Some(field_index) =
                             attr_i32(&e, b"x").and_then(|v| usize::try_from(v).ok())
                         {
                             if let Some(field) = pivot_axis_field(
@@ -1072,6 +1086,16 @@ fn parse_pivot_table_attrs(
     }
     if let Some(value) = attr_string(e, b"dataCaption") {
         layout.data_caption = value;
+    }
+    if let Some(value) = attr_bool(e, b"dataOnRows") {
+        layout.values_axis = if value {
+            PivotValuesAxis::Rows
+        } else {
+            PivotValuesAxis::Columns
+        };
+    }
+    if let Some(value) = attr_u32(e, b"dataPosition") {
+        layout.values_axis_position = Some(value);
     }
     if let Some(value) = attr_string(e, b"grandTotalCaption") {
         layout.grand_total_caption = Some(value);

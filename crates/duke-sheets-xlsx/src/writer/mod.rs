@@ -3460,7 +3460,7 @@ mod tests {
         PivotDatePeriod, PivotExtension, PivotField, PivotFilter, PivotFilterOperator,
         PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
         PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
-        PivotSubtotal, PivotTable, PivotValue, SplitPanes, WorkbookConnection,
+        PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis, SplitPanes, WorkbookConnection,
         WorkbookConnectionKind, WorkbookExtension, WorkbookExtensionPart,
     };
     use ssfmt::{date_serial::date_to_serial, DateSystem};
@@ -4785,6 +4785,8 @@ mod tests {
         layout.page_over_then_down = true;
         layout.merge_item_labels = true;
         layout.data_caption = "Metrics".into();
+        layout.values_axis = PivotValuesAxis::Rows;
+        layout.values_axis_position = Some(1);
         layout.grand_total_caption = Some("Overall".into());
         layout.error_caption = Some("ERR".into());
         layout.show_error = true;
@@ -4835,6 +4837,8 @@ mod tests {
         assert!(pivot_xml.contains(r#"pageOverThenDown="1""#));
         assert!(pivot_xml.contains(r#"mergeItem="1""#));
         assert!(pivot_xml.contains(r#"dataCaption="Metrics""#));
+        assert!(pivot_xml.contains(r#"dataOnRows="1""#));
+        assert!(pivot_xml.contains(r#"dataPosition="1""#));
         assert!(pivot_xml.contains(r#"grandTotalCaption="Overall""#));
         assert!(pivot_xml.contains(r#"errorCaption="ERR""#));
         assert!(pivot_xml.contains(r#"showError="1""#));
@@ -4879,6 +4883,8 @@ mod tests {
         assert!(pivot.layout.page_over_then_down);
         assert!(pivot.layout.merge_item_labels);
         assert_eq!(pivot.layout.data_caption, "Metrics");
+        assert_eq!(pivot.layout.values_axis, PivotValuesAxis::Rows);
+        assert_eq!(pivot.layout.values_axis_position, Some(1));
         assert_eq!(pivot.layout.grand_total_caption.as_deref(), Some("Overall"));
         assert_eq!(pivot.layout.error_caption.as_deref(), Some("ERR"));
         assert!(pivot.layout.show_error);

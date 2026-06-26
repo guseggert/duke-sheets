@@ -69,7 +69,7 @@ pub use pivot::{
     PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
     PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
     PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
-    PivotSubtotal, PivotTable, PivotTableBuilder, PivotValue,
+    PivotSubtotal, PivotTable, PivotTableBuilder, PivotValue, PivotValuesAxis,
 };
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};

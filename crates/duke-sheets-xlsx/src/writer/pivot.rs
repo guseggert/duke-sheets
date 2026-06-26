@@ -9,7 +9,7 @@ use duke_sheets_core::{
     PivotDateGroupUnit, PivotDatePeriod, PivotField, PivotFieldRef, PivotFilter,
     PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure,
     PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotSubtotal, PivotTable, PivotValue,
-    Table, Workbook, WorkbookConnection, WorkbookConnectionKind, Worksheet,
+    PivotValuesAxis, Table, Workbook, WorkbookConnection, WorkbookConnectionKind, Worksheet,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -1594,6 +1594,19 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         tag.push_attribute(("name", pivot.name.as_str()));
         tag.push_attribute(("cacheId", cache_id.as_str()));
         tag.push_attribute(("dataCaption", data_caption));
+        push_bool_attr_if(
+            &mut tag,
+            "dataOnRows",
+            matches!(pivot.layout.values_axis, PivotValuesAxis::Rows),
+            false,
+        );
+        let data_position = pivot
+            .layout
+            .values_axis_position
+            .map(|position| position.to_string());
+        if let Some(data_position) = data_position.as_deref() {
+            tag.push_attribute(("dataPosition", data_position));
+        }
         if let Some(caption) = &pivot.layout.grand_total_caption {
             tag.push_attribute(("grandTotalCaption", caption.as_str()));
         }
@@ -1704,7 +1717,14 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
 
         write_location(w, pivot, &cache_part.fields, &cache_part.rows)?;
         write_pivot_fields(w, pivot, &cache_part.fields)?;
-        write_axis_fields(w, "rowFields", &pivot.rows, &cache_part.fields)?;
+        write_axis_fields(
+            w,
+            "rowFields",
+            &pivot.rows,
+            &cache_part.fields,
+            values_field_on_axis(pivot, PivotValuesAxis::Rows),
+            pivot.layout.values_axis_position,
+        )?;
         write_axis_items(
             w,
             "rowItems",
@@ -1714,7 +1734,14 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
             pivot.layout.show_row_grand_totals,
             false,
         )?;
-        write_axis_fields(w, "colFields", &pivot.columns, &cache_part.fields)?;
+        write_axis_fields(
+            w,
+            "colFields",
+            &pivot.columns,
+            &cache_part.fields,
+            values_field_on_axis(pivot, PivotValuesAxis::Columns),
+            pivot.layout.values_axis_position,
+        )?;
         write_axis_items(
             w,
             "colItems",
@@ -2137,12 +2164,24 @@ fn write_axis_fields(
     tag_name: &str,
     axis_fields: &[duke_sheets_core::PivotField],
     fields: &[CacheField],
+    include_values_field: bool,
+    values_position: Option<u32>,
 ) -> XlsxResult<()> {
-    if axis_fields.is_empty() {
+    if axis_fields.is_empty() && !include_values_field {
         return Ok(());
     }
 
-    let indexes = expanded_axis_field_indexes(axis_fields, fields)?;
+    let mut indexes = expanded_axis_field_indexes(axis_fields, fields)?
+        .into_iter()
+        .map(|index| index as i32)
+        .collect::<Vec<_>>();
+    if include_values_field {
+        let position = values_position
+            .map(|position| position as usize)
+            .unwrap_or(indexes.len())
+            .min(indexes.len());
+        indexes.insert(position, -2);
+    }
     let count = indexes.len().to_string();
     let mut tag = BytesStart::new(tag_name);
     tag.push_attribute(("count", count.as_str()));
@@ -2155,6 +2194,12 @@ fn write_axis_fields(
     }
     w.write_event(Event::End(BytesEnd::new(tag_name)))?;
     Ok(())
+}
+
+fn values_field_on_axis(pivot: &PivotTable, axis: PivotValuesAxis) -> bool {
+    pivot.measures.len() > 1
+        && pivot.layout.values_axis == axis
+        && (matches!(axis, PivotValuesAxis::Rows) || pivot.layout.values_axis_position.is_some())
 }
 
 fn write_axis_items(
