@@ -79,6 +79,159 @@ pub struct PivotRefreshOptions {
     pub today: Option<f64>,
 }
 
+/// Workbook-level pivot cache plan used by file-format writers.
+///
+/// This is not an authoring API. It exposes an immutable, format-neutral view
+/// of resolved pivot cache data while keeping the mutable runtime caches inside
+/// this crate.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct FormatPivotPlan {
+    /// Planned cache parts, numbered from 1 in package/write order.
+    pub caches: Vec<FormatPivotCache>,
+    /// Planned pivot table parts, numbered from 1 in package/write order.
+    pub tables: Vec<FormatPivotTable>,
+}
+
+/// A resolved pivot cache for file-format writers.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct FormatPivotCache {
+    /// One-based cache number used for part names.
+    pub cache_num: usize,
+    /// Source descriptor for this cache.
+    pub source: FormatPivotSource,
+    /// Cache fields in source/cache order.
+    pub fields: Vec<FormatPivotCacheField>,
+    /// Number of source records.
+    pub row_count: usize,
+    /// Whether cache records should be written.
+    pub save_data: bool,
+    /// Refresh-on-open flag from the semantic pivot table.
+    pub refresh_on_load: bool,
+    /// Background refresh flag from the semantic pivot table.
+    pub background_query: bool,
+    /// Optional missing-items limit.
+    pub missing_items_limit: Option<u32>,
+}
+
+impl FormatPivotCache {
+    /// Find a field index by case-insensitive cache field name.
+    pub fn field_index(&self, name: &str) -> Option<usize> {
+        self.fields
+            .iter()
+            .position(|field| field.name.eq_ignore_ascii_case(name))
+    }
+}
+
+/// Source descriptor for a planned pivot cache.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub enum FormatPivotSource {
+    /// Worksheet range or table source.
+    Worksheet {
+        /// Zero-based sheet index containing the source.
+        sheet_index: usize,
+        /// Source sheet name.
+        sheet_name: String,
+        /// Source range including the header row.
+        range: CellRange,
+        /// Table name when the source is a table/list object.
+        table_name: Option<String>,
+    },
+    /// Consolidation source. Writers may reject this if unsupported.
+    Consolidation,
+}
+
+/// A resolved cache field for file-format writers.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct FormatPivotCacheField {
+    /// Cache field name.
+    pub name: String,
+    /// Formula when this field is a calculated field.
+    pub formula: Option<String>,
+    /// Whether the field maps to a source database field.
+    pub database_field: bool,
+    /// Shared item dictionary.
+    pub shared_items: Vec<PivotValue>,
+    /// Field-major item IDs for each source row.
+    pub item_ids: Vec<u32>,
+}
+
+/// A planned pivot table part for file-format writers.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct FormatPivotTable {
+    /// Zero-based worksheet index containing the pivot table.
+    pub sheet_index: usize,
+    /// Zero-based pivot index on the worksheet.
+    pub pivot_index: usize,
+    /// One-based pivot table number used for part names.
+    pub table_num: usize,
+    /// One-based cache number used by this pivot.
+    pub cache_num: usize,
+}
+
+/// Build immutable file-format pivot plans from a workbook.
+#[doc(hidden)]
+pub fn plan_format_pivots(workbook: &Workbook) -> Result<FormatPivotPlan> {
+    let mut cache = PivotRuntimeCache::for_workbook(workbook);
+    let mut stats = PivotRefreshStats::default();
+    let mut cache_by_key: AHashMap<TransformedSnapshotCacheKey, usize> = AHashMap::new();
+    let mut caches: Vec<FormatPivotCache> = Vec::new();
+    let mut tables = Vec::new();
+
+    for (sheet_index, worksheet) in workbook.worksheets().enumerate() {
+        for (pivot_index, pivot) in worksheet.pivot_tables().iter().enumerate() {
+            validate_format_pivot(pivot)?;
+            let resolved = resolve_source(workbook, sheet_index, &pivot.source)?;
+            let source = format_pivot_source(workbook, &resolved)?;
+            let source_snapshot =
+                snapshot_for_resolved_source(workbook, resolved, &mut cache, &mut stats)?;
+            let key = TransformedSnapshotCacheKey::new(
+                source_snapshot.key.clone(),
+                &pivot.calculated_fields,
+                &pivot.groupings,
+                &pivot.calculated_items,
+                workbook.settings().date_1904,
+            );
+            let snapshot = transformed_snapshot_for_pivot(
+                workbook,
+                sheet_index,
+                pivot,
+                source_snapshot,
+                workbook.settings().date_1904,
+                &mut cache,
+            )?;
+            validate_format_pivot_fields(&pivot.name, pivot, &snapshot)?;
+
+            let cache_num = if let Some(cache_num) = cache_by_key.get(&key).copied() {
+                if let Some(existing) = caches.get_mut(cache_num - 1) {
+                    existing.refresh_on_load |= pivot.refresh_policy.refresh_on_open;
+                    existing.background_query |= pivot.refresh_policy.background_query;
+                }
+                cache_num
+            } else {
+                let cache_num = caches.len() + 1;
+                let planned_cache = build_format_pivot_cache(cache_num, source, &snapshot, pivot);
+                cache_by_key.insert(key, cache_num);
+                caches.push(planned_cache);
+                cache_num
+            };
+
+            tables.push(FormatPivotTable {
+                sheet_index,
+                pivot_index,
+                table_num: tables.len() + 1,
+                cache_num,
+            });
+        }
+    }
+
+    Ok(FormatPivotPlan { caches, tables })
+}
+
 /// Extension methods for refreshing pivot tables in a workbook.
 pub trait WorkbookPivotExt {
     /// Refresh all pivot tables in the workbook.
@@ -1201,6 +1354,15 @@ fn snapshot_for_source(
     stats: &mut PivotRefreshStats,
 ) -> Result<CachedSourceSnapshot> {
     let resolved = resolve_source(workbook, pivot_sheet_index, source)?;
+    snapshot_for_resolved_source(workbook, resolved, cache, stats)
+}
+
+fn snapshot_for_resolved_source(
+    workbook: &Workbook,
+    resolved: ResolvedPivotSource,
+    cache: &mut PivotRuntimeCache,
+    stats: &mut PivotRefreshStats,
+) -> Result<CachedSourceSnapshot> {
     let cache_key = resolved.cache_key();
 
     if let Some(snapshot) = cache.snapshots.get(&cache_key) {
@@ -1220,6 +1382,126 @@ fn snapshot_for_source(
         key: cache_key,
         snapshot,
     })
+}
+
+fn validate_format_pivot(pivot: &PivotTable) -> Result<()> {
+    if pivot.measures.is_empty() {
+        return Err(Error::other(format!(
+            "pivot table {} has no measures",
+            pivot.name
+        )));
+    }
+    Ok(())
+}
+
+fn format_pivot_source(
+    workbook: &Workbook,
+    resolved: &ResolvedPivotSource,
+) -> Result<FormatPivotSource> {
+    match resolved {
+        ResolvedPivotSource::Single(source) => {
+            let worksheet = workbook.worksheet(source.sheet_index).ok_or_else(|| {
+                Error::SheetOutOfBounds(source.sheet_index, workbook.sheet_count())
+            })?;
+            Ok(FormatPivotSource::Worksheet {
+                sheet_index: source.sheet_index,
+                sheet_name: worksheet.name().to_string(),
+                range: source.range,
+                table_name: matches!(source.kind, SourceCacheKind::Table)
+                    .then(|| source.source_name.clone())
+                    .flatten(),
+            })
+        }
+        ResolvedPivotSource::Consolidation(_) => Ok(FormatPivotSource::Consolidation),
+    }
+}
+
+fn build_format_pivot_cache(
+    cache_num: usize,
+    source: FormatPivotSource,
+    snapshot: &SourceSnapshot,
+    pivot: &PivotTable,
+) -> FormatPivotCache {
+    let calculated_fields = pivot
+        .calculated_fields
+        .iter()
+        .map(|field| (field.name.to_lowercase(), field.formula.clone()))
+        .collect::<AHashMap<_, _>>();
+
+    let fields = snapshot
+        .headers
+        .iter()
+        .zip(snapshot.columns.iter())
+        .map(|(name, column)| {
+            let formula = calculated_fields.get(&name.to_lowercase()).cloned();
+            FormatPivotCacheField {
+                name: name.clone(),
+                database_field: formula.is_none(),
+                formula,
+                shared_items: column.dictionary.clone(),
+                item_ids: column.values.clone(),
+            }
+        })
+        .collect();
+
+    FormatPivotCache {
+        cache_num,
+        source,
+        fields,
+        row_count: snapshot.row_count,
+        save_data: true,
+        refresh_on_load: pivot.refresh_policy.refresh_on_open,
+        background_query: pivot.refresh_policy.background_query,
+        missing_items_limit: pivot.refresh_policy.missing_items_limit,
+    }
+}
+
+fn validate_format_pivot_fields(
+    pivot_name: &str,
+    pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
+) -> Result<()> {
+    for field_name in pivot
+        .rows
+        .iter()
+        .map(|field| field.field.name.as_str())
+        .chain(pivot.columns.iter().map(|field| field.field.name.as_str()))
+        .chain(
+            pivot
+                .page_fields
+                .iter()
+                .map(|field| field.field.name.as_str()),
+        )
+        .chain(
+            pivot
+                .measures
+                .iter()
+                .map(|measure| measure.field.name.as_str()),
+        )
+        .chain(pivot.filters.iter().filter_map(format_filter_field_name))
+    {
+        if snapshot.field_index(field_name).is_none() {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} references unknown source field: {field_name}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn format_filter_field_name(filter: &PivotFilter) -> Option<&str> {
+    match filter {
+        PivotFilter::FieldItems { field, .. }
+        | PivotFilter::Label { field, .. }
+        | PivotFilter::LabelBetween { field, .. }
+        | PivotFilter::Date { field, .. }
+        | PivotFilter::DateBetween { field, .. }
+        | PivotFilter::DatePeriod { field, .. }
+        | PivotFilter::Value { field, .. }
+        | PivotFilter::ValueBetween { field, .. }
+        | PivotFilter::TopN { field, .. } => Some(field.name.as_str()),
+        PivotFilter::Unsupported { .. } => None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2555,6 +2837,8 @@ struct CompiledPivotPlan {
     column_collapsed_item_ids: Vec<AHashSet<u32>>,
     measure_indexes: Vec<usize>,
     measures: Vec<PivotMeasure>,
+    row_sort_measure_indexes: Vec<Option<usize>>,
+    column_sort_measure_indexes: Vec<Option<usize>>,
     filters: Vec<CompiledFilter>,
     totals_filters: Vec<CompiledFilter>,
     axis_filters: Vec<CompiledFilter>,
@@ -2618,6 +2902,10 @@ impl CompiledPivotPlan {
             )?;
             measure_indexes.push(field_index(snapshot, &measure.field.name, &pivot.name)?);
         }
+        let row_sort_measure_indexes =
+            compile_axis_sort_measure_indexes(&pivot.name, &row_fields, &pivot.measures)?;
+        let column_sort_measure_indexes =
+            compile_axis_sort_measure_indexes(&pivot.name, &column_fields, &pivot.measures)?;
         let (row_parent_total_positions, column_parent_total_positions) =
             parent_total_subtotal_positions(
                 &pivot.name,
@@ -2695,6 +2983,8 @@ impl CompiledPivotPlan {
             column_collapsed_item_ids,
             measure_indexes,
             measures: pivot.measures.clone(),
+            row_sort_measure_indexes,
+            column_sort_measure_indexes,
             filters,
             totals_filters,
             axis_filters,
@@ -3220,11 +3510,11 @@ fn parent_total_subtotal_positions(
             }
             PivotShowAs::PercentOfParentTotal { base_field } => {
                 let field_index = field_index(snapshot, &base_field.name, pivot_name)?;
-                if let Some(position) = row_indexes.iter().position(|index| *index == field_index)
-                {
+                if let Some(position) = row_indexes.iter().position(|index| *index == field_index) {
                     row_positions.insert(position);
-                } else if let Some(position) =
-                    column_indexes.iter().position(|index| *index == field_index)
+                } else if let Some(position) = column_indexes
+                    .iter()
+                    .position(|index| *index == field_index)
                 {
                     column_positions.insert(position);
                 }
@@ -4675,31 +4965,31 @@ impl PivotAggregation {
             &mut self.row_order,
             &plan.row_indexes,
             &plan.row_fields,
+            &plan.row_sort_measure_indexes,
+            &self.row_totals,
+            &plan.measures,
             snapshot,
         );
         sort_key_order(
             &mut self.column_order,
             &plan.column_indexes,
             &plan.column_fields,
+            &plan.column_sort_measure_indexes,
+            &self.column_totals,
+            &plan.measures,
             snapshot,
         );
+        let row_positions = order_positions(&self.row_order);
+        let column_positions = order_positions(&self.column_order);
         self.group_order.sort_by(|a, b| {
-            compare_encoded_key(
-                &a.rows,
-                &b.rows,
-                &plan.row_indexes,
-                &plan.row_fields,
-                snapshot,
-            )
-            .then_with(|| {
-                compare_encoded_key(
-                    &a.columns,
-                    &b.columns,
-                    &plan.column_indexes,
-                    &plan.column_fields,
-                    snapshot,
-                )
-            })
+            row_positions
+                .get(&a.rows)
+                .cmp(&row_positions.get(&b.rows))
+                .then_with(|| {
+                    column_positions
+                        .get(&a.columns)
+                        .cmp(&column_positions.get(&b.columns))
+                })
         });
     }
 
@@ -5620,6 +5910,9 @@ fn sort_key_order(
     order: &mut [Vec<u32>],
     field_indexes: &[usize],
     fields: &[PivotField],
+    sort_measure_indexes: &[Option<usize>],
+    totals: &AHashMap<Vec<u32>, Vec<AggregateState>>,
+    measures: &[PivotMeasure],
     snapshot: &SourceSnapshot,
 ) {
     if fields
@@ -5629,7 +5922,65 @@ fn sort_key_order(
         return;
     }
 
-    order.sort_by(|a, b| compare_encoded_key(a, b, field_indexes, fields, snapshot));
+    order.sort_by(|a, b| {
+        compare_encoded_key(
+            a,
+            b,
+            field_indexes,
+            fields,
+            sort_measure_indexes,
+            totals,
+            measures,
+            snapshot,
+        )
+    });
+}
+
+fn order_positions(order: &[Vec<u32>]) -> AHashMap<Vec<u32>, usize> {
+    order
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, key)| (key, index))
+        .collect()
+}
+
+fn compile_axis_sort_measure_indexes(
+    pivot_name: &str,
+    fields: &[PivotField],
+    measures: &[PivotMeasure],
+) -> Result<Vec<Option<usize>>> {
+    fields
+        .iter()
+        .map(|field| {
+            field
+                .sort_by_measure
+                .as_ref()
+                .map(|sort_measure| {
+                    measures
+                        .iter()
+                        .position(|measure| {
+                            pivot_measure_matches_sort_target(measure, sort_measure)
+                        })
+                        .ok_or_else(|| {
+                            Error::other(format!(
+                                "pivot table {pivot_name} sorts field {} by an unknown measure",
+                                field.field.name
+                            ))
+                        })
+                })
+                .transpose()
+        })
+        .collect()
+}
+
+fn pivot_measure_matches_sort_target(measure: &PivotMeasure, target: &PivotMeasure) -> bool {
+    measure.field.name.eq_ignore_ascii_case(&target.field.name)
+        && measure.aggregate == target.aggregate
+        && target
+            .name
+            .as_ref()
+            .is_none_or(|name| measure.name.as_ref() == Some(name))
 }
 
 fn compare_encoded_key(
@@ -5637,6 +5988,9 @@ fn compare_encoded_key(
     right: &[u32],
     field_indexes: &[usize],
     fields: &[PivotField],
+    sort_measure_indexes: &[Option<usize>],
+    totals: &AHashMap<Vec<u32>, Vec<AggregateState>>,
+    measures: &[PivotMeasure],
     snapshot: &SourceSnapshot,
 ) -> Ordering {
     for (index, field_index) in field_indexes.iter().enumerate() {
@@ -5648,10 +6002,19 @@ fn compare_encoded_key(
             continue;
         }
 
-        let ordering = compare_pivot_values(
-            snapshot.value_by_id(*field_index, left[index]),
-            snapshot.value_by_id(*field_index, right[index]),
-        );
+        let ordering = sort_measure_indexes
+            .get(index)
+            .and_then(|measure_index| *measure_index)
+            .map(|measure_index| {
+                compare_measure_sort_values(left, right, totals, measures, measure_index)
+            })
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                compare_pivot_values(
+                    snapshot.value_by_id(*field_index, left[index]),
+                    snapshot.value_by_id(*field_index, right[index]),
+                )
+            });
 
         if ordering != Ordering::Equal {
             return match sort {
@@ -5663,6 +6026,34 @@ fn compare_encoded_key(
     }
 
     Ordering::Equal
+}
+
+fn compare_measure_sort_values(
+    left: &[u32],
+    right: &[u32],
+    totals: &AHashMap<Vec<u32>, Vec<AggregateState>>,
+    measures: &[PivotMeasure],
+    measure_index: usize,
+) -> Ordering {
+    let aggregate = measures[measure_index].aggregate;
+    let left = totals
+        .get(left)
+        .and_then(|states| states.get(measure_index))
+        .and_then(|state| state.finalize_number(aggregate));
+    let right = totals
+        .get(right)
+        .and_then(|states| states.get(measure_index))
+        .and_then(|state| state.finalize_number(aggregate));
+    compare_optional_numbers(left, right)
+}
+
+fn compare_optional_numbers(left: Option<f64>, right: Option<f64>) -> Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => left.partial_cmp(&right).unwrap_or(Ordering::Equal),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
 }
 
 fn compare_pivot_values(left: &PivotValue, right: &PivotValue) -> Ordering {
@@ -7339,10 +7730,7 @@ fn render_compact_values_on_rows_with_column_fields(
     rendered
 }
 
-fn values_on_rows_header(
-    pivot: &PivotTable,
-    plan: &CompiledPivotPlan,
-) -> Vec<CellValue> {
+fn values_on_rows_header(pivot: &PivotTable, plan: &CompiledPivotPlan) -> Vec<CellValue> {
     let mut header = row_field_header_cells(plan);
     header.insert(
         values_axis_row_position(pivot, plan),
@@ -9197,7 +9585,11 @@ fn parent_row_total_value(
     aggregate: PivotAggregate,
 ) -> Option<f64> {
     let Some(row_key) = context.row_key else {
-        return state_number(grand_total_states(context.aggregation), measure_index, aggregate);
+        return state_number(
+            grand_total_states(context.aggregation),
+            measure_index,
+            aggregate,
+        );
     };
     let states = if row_key.len() <= 1 {
         match context.column_key {
@@ -9219,7 +9611,11 @@ fn parent_column_total_value(
     aggregate: PivotAggregate,
 ) -> Option<f64> {
     let Some(column_key) = context.column_key else {
-        return state_number(grand_total_states(context.aggregation), measure_index, aggregate);
+        return state_number(
+            grand_total_states(context.aggregation),
+            measure_index,
+            aggregate,
+        );
     };
     let states = if column_key.len() <= 1 {
         match context.row_key {
@@ -9556,7 +9952,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ssfmt::{date_serial::date_to_serial, DateSystem};
 
-    use super::{PivotRefreshOptions, WorkbookPivotExt};
+    use super::{FormatPivotSource, PivotRefreshOptions, WorkbookPivotExt};
 
     fn number(workbook: &Workbook, address: &str) -> f64 {
         workbook
@@ -14328,5 +14724,77 @@ mod tests {
         assert_eq!(third.cache_misses, 1);
         assert_eq!(third.cache_hits, 0);
         assert_eq!(number(&workbook, "E2"), 15.0);
+    }
+
+    #[test]
+    fn format_pivot_plan_reuses_cache_and_exposes_field_major_items() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let pivot_a = PivotTable::builder("SalesPivotA")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        let pivot_b = PivotTable::builder("SalesPivotB")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("G1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.add_pivot_table(pivot_a).unwrap();
+        sheet.add_pivot_table(pivot_b).unwrap();
+
+        let plan = super::plan_format_pivots(&workbook).unwrap();
+
+        assert_eq!(plan.caches.len(), 1);
+        assert_eq!(plan.tables.len(), 2);
+        assert_eq!(plan.tables[0].cache_num, 1);
+        assert_eq!(plan.tables[1].cache_num, 1);
+
+        let cache = &plan.caches[0];
+        assert_eq!(cache.row_count, 2);
+        match &cache.source {
+            FormatPivotSource::Worksheet {
+                sheet_index,
+                sheet_name,
+                range,
+                table_name,
+            } => {
+                assert_eq!(*sheet_index, 0);
+                assert_eq!(sheet_name, "Sheet1");
+                assert_eq!(*range, CellRange::parse("A1:B3").unwrap());
+                assert_eq!(table_name, &None);
+            }
+            FormatPivotSource::Consolidation => panic!("expected worksheet source"),
+        }
+
+        let region = &cache.fields[0];
+        assert_eq!(region.name, "Region");
+        assert_eq!(
+            region.shared_items,
+            vec![PivotValue::from("East"), PivotValue::from("West")]
+        );
+        assert_eq!(region.item_ids, vec![0, 1]);
+
+        let revenue = &cache.fields[1];
+        assert_eq!(revenue.name, "Revenue");
+        assert_eq!(
+            revenue.shared_items,
+            vec![PivotValue::Number(10.0), PivotValue::Number(20.0)]
+        );
+        assert_eq!(revenue.item_ids, vec![0, 1]);
     }
 }
