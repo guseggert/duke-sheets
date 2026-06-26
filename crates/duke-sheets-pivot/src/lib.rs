@@ -33,6 +33,8 @@ use ssfmt::{
 const PARALLEL_ROW_THRESHOLD: usize = 50_000;
 #[cfg(feature = "parallel")]
 const PARALLEL_CHUNK_SIZE: usize = 16_384;
+#[cfg(feature = "parallel")]
+const PARALLEL_CALCULATED_ITEM_GROUP_THRESHOLD: usize = 4_096;
 
 /// Result statistics for a pivot refresh operation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -3062,27 +3064,11 @@ impl PivotAggregation {
         plan: &CompiledPivotPlan,
         item: &CompiledCalculatedItem,
     ) -> Result<()> {
-        let source_group_order = self.group_order.clone();
-        let mut emitted = AHashSet::new();
+        let virtual_keys = calculated_item_virtual_keys(item, &self.group_order);
+        let evaluated =
+            evaluate_calculated_item_groups(pivot_name, snapshot, plan, self, item, &virtual_keys)?;
 
-        for source_key in source_group_order {
-            if !calculated_item_source_key_matches(item, &source_key) {
-                continue;
-            }
-
-            let virtual_key = calculated_item_virtual_key(item, &source_key);
-            if !emitted.insert(virtual_key.clone()) {
-                continue;
-            }
-
-            let states = evaluate_calculated_group_states(
-                pivot_name,
-                snapshot,
-                plan,
-                self,
-                item,
-                &virtual_key,
-            )?;
+        for (virtual_key, states) in evaluated {
             self.groups.insert(virtual_key.clone(), states);
             push_unique_group_key(&mut self.group_order, virtual_key.clone());
             match item.axis {
@@ -3433,6 +3419,27 @@ fn calculated_item_virtual_key(item: &CompiledCalculatedItem, source_key: &Group
     key
 }
 
+fn calculated_item_virtual_keys(
+    item: &CompiledCalculatedItem,
+    source_group_order: &[GroupKey],
+) -> Vec<GroupKey> {
+    let mut emitted = AHashSet::new();
+    let mut virtual_keys = Vec::new();
+
+    for source_key in source_group_order {
+        if !calculated_item_source_key_matches(item, source_key) {
+            continue;
+        }
+
+        let virtual_key = calculated_item_virtual_key(item, source_key);
+        if emitted.insert(virtual_key.clone()) {
+            virtual_keys.push(virtual_key);
+        }
+    }
+
+    virtual_keys
+}
+
 fn push_unique_key(order: &mut Vec<Vec<u32>>, key: Vec<u32>) {
     if !order.iter().any(|existing| existing == &key) {
         order.push(key);
@@ -3443,6 +3450,50 @@ fn push_unique_group_key(order: &mut Vec<GroupKey>, key: GroupKey) {
     if !order.iter().any(|existing| existing == &key) {
         order.push(key);
     }
+}
+
+fn evaluate_calculated_item_groups(
+    pivot_name: &str,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+    item: &CompiledCalculatedItem,
+    group_keys: &[GroupKey],
+) -> Result<Vec<(GroupKey, Vec<AggregateState>)>> {
+    #[cfg(feature = "parallel")]
+    {
+        if group_keys.len() >= PARALLEL_CALCULATED_ITEM_GROUP_THRESHOLD {
+            return group_keys
+                .par_iter()
+                .map(|group_key| {
+                    evaluate_calculated_group_states(
+                        pivot_name,
+                        snapshot,
+                        plan,
+                        aggregation,
+                        item,
+                        group_key,
+                    )
+                    .map(|states| (group_key.clone(), states))
+                })
+                .collect();
+        }
+    }
+
+    group_keys
+        .iter()
+        .map(|group_key| {
+            evaluate_calculated_group_states(
+                pivot_name,
+                snapshot,
+                plan,
+                aggregation,
+                item,
+                group_key,
+            )
+            .map(|states| (group_key.clone(), states))
+        })
+        .collect()
 }
 
 fn evaluate_calculated_group_states(
