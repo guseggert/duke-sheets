@@ -80,6 +80,8 @@ const MSODRAWING_RECORD: u16 = 0x00EC;
 const NOTE_RECORD: u16 = 0x001C;
 const OBJ_RECORD: u16 = 0x005D;
 const TXO_RECORD: u16 = 0x01B6;
+const PIVOT_SXFMLA_RECORD: u16 = 0x00F8;
+const PIVOT_SXNAME_RECORD: u16 = 0x00F5;
 
 /// Built-in NAME index for `Print_Area` (MS-XLS §2.5.4).
 const BUILTIN_NAME_PRINT_AREA: u8 = 0x06;
@@ -415,6 +417,9 @@ fn build_pivot_cache_stream(cache: &FormatPivotCache) -> XlsResult<Vec<u8>> {
 
     for field in &cache.fields {
         write_sxfdb_record(&mut stream, field)?;
+        if let Some(formula) = field.formula.as_deref() {
+            write_pivot_calculated_field_formula_records(&mut stream, cache, formula)?;
+        }
         write_biff_record(&mut stream, 0x01BB, &0u16.to_le_bytes());
         if !field_is_numeric(field) {
             for value in &field.shared_items {
@@ -460,11 +465,14 @@ fn numeric_cache_value(field: &FormatPivotCacheField, row: usize) -> Option<f64>
 
 fn write_sxfdb_record(stream: &mut Vec<u8>, field: &FormatPivotCacheField) -> XlsResult<()> {
     let mut body = Vec::new();
-    let flags = if field_is_numeric(field) {
+    let mut flags = if field_is_numeric(field) {
         0x0560u16
     } else {
         0x0481u16
     };
+    if field.formula.is_some() {
+        flags |= 0x8000;
+    }
     body.extend_from_slice(&flags.to_le_bytes());
     body.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
     body.extend_from_slice(&(field.shared_items.len() as u32).to_le_bytes());
@@ -476,6 +484,165 @@ fn write_sxfdb_record(stream: &mut Vec<u8>, field: &FormatPivotCacheField) -> Xl
     });
     push_xlunicode_string(&mut body, &field.name)?;
     write_biff_record(stream, 0x00C7, &body);
+    Ok(())
+}
+
+fn write_pivot_calculated_field_formula_records(
+    stream: &mut Vec<u8>,
+    cache: &FormatPivotCache,
+    formula: &str,
+) -> XlsResult<()> {
+    let trimmed = formula.trim();
+    let parse_input = if trimmed.starts_with('=') {
+        trimmed.to_string()
+    } else {
+        format!("={trimmed}")
+    };
+    let expr = duke_sheets_formula::parse_formula(&parse_input).map_err(|err| {
+        XlsError::InvalidFormat(format!(
+            "XLS pivot calculated field formula could not be parsed: {err}"
+        ))
+    })?;
+
+    let mut ptgs = Vec::new();
+    let mut sx_names = Vec::new();
+    compile_pivot_calculated_formula_expr(&expr, &mut ptgs, &mut sx_names, cache).map_err(
+        |_| {
+            XlsError::InvalidFormat(format!(
+                "XLS pivot calculated field formula uses unsupported syntax: {formula}"
+            ))
+        },
+    )?;
+
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        &checked_u16(ptgs.len(), "pivot calculated formula token length")?.to_le_bytes(),
+    );
+    body.extend_from_slice(
+        &checked_u16(
+            sx_names.len(),
+            "pivot calculated formula field reference count",
+        )?
+        .to_le_bytes(),
+    );
+    body.extend_from_slice(&ptgs);
+    write_biff_record(stream, PIVOT_SXFMLA_RECORD, &body);
+
+    for field_index in sx_names {
+        write_pivot_sxname_record(stream, field_index)?;
+    }
+
+    Ok(())
+}
+
+fn write_pivot_sxname_record(stream: &mut Vec<u8>, field_index: usize) -> XlsResult<()> {
+    let field_index = checked_i16(field_index, "pivot calculated formula source field index")?;
+    let mut body = Vec::with_capacity(8);
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&field_index.to_le_bytes());
+    body.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    write_biff_record(stream, PIVOT_SXNAME_RECORD, &body);
+    Ok(())
+}
+
+fn compile_pivot_calculated_formula_expr(
+    expr: &duke_sheets_formula::FormulaExpr,
+    out: &mut Vec<u8>,
+    sx_names: &mut Vec<usize>,
+    cache: &FormatPivotCache,
+) -> Result<(), UnsupportedToken> {
+    use duke_sheets_formula::ast::{BinaryOperator, UnaryOperator};
+    use duke_sheets_formula::FormulaExpr;
+
+    match expr {
+        FormulaExpr::Number(n) => {
+            if let Some(i) = number_as_ptg_int(*n) {
+                out.push(0x1E);
+                out.extend_from_slice(&i.to_le_bytes());
+            } else {
+                out.push(0x1F);
+                out.extend_from_slice(&n.to_le_bytes());
+            }
+        }
+        FormulaExpr::String(s) => {
+            out.push(0x17);
+            push_short_xlunicode_string(out, s).map_err(|_| UnsupportedToken)?;
+        }
+        FormulaExpr::Boolean(b) => {
+            out.push(0x1D);
+            out.push(if *b { 1 } else { 0 });
+        }
+        FormulaExpr::Error(e) => {
+            out.push(0x1C);
+            out.push(e.code());
+        }
+        FormulaExpr::NameRef(name) => {
+            push_pivot_sxname_ptg(out, sx_names, cache, name)?;
+        }
+        FormulaExpr::StructuredRef(reference) => {
+            let Some(column) = reference.column.as_deref() else {
+                return Err(UnsupportedToken);
+            };
+            push_pivot_sxname_ptg(out, sx_names, cache, column)?;
+        }
+        FormulaExpr::BinaryOp { op, left, right } => {
+            compile_pivot_calculated_formula_expr(left, out, sx_names, cache)?;
+            compile_pivot_calculated_formula_expr(right, out, sx_names, cache)?;
+            out.push(match op {
+                BinaryOperator::Add => 0x03,
+                BinaryOperator::Subtract => 0x04,
+                BinaryOperator::Multiply => 0x05,
+                BinaryOperator::Divide => 0x06,
+                BinaryOperator::Power => 0x07,
+                BinaryOperator::Concat => 0x08,
+                BinaryOperator::LessThan => 0x09,
+                BinaryOperator::LessEqual => 0x0A,
+                BinaryOperator::Equal => 0x0B,
+                BinaryOperator::GreaterEqual => 0x0C,
+                BinaryOperator::GreaterThan => 0x0D,
+                BinaryOperator::NotEqual => 0x0E,
+                BinaryOperator::Intersect | BinaryOperator::Union | BinaryOperator::Range => {
+                    return Err(UnsupportedToken);
+                }
+            });
+        }
+        FormulaExpr::UnaryOp { op, operand } => {
+            compile_pivot_calculated_formula_expr(operand, out, sx_names, cache)?;
+            out.push(match op {
+                UnaryOperator::Plus => 0x12,
+                UnaryOperator::Negate => 0x13,
+                UnaryOperator::Percent => 0x14,
+                UnaryOperator::Paren => 0x15,
+                UnaryOperator::ImplicitIntersection | UnaryOperator::SpillRange => {
+                    return Err(UnsupportedToken);
+                }
+            });
+        }
+        FormulaExpr::CellRef(_)
+        | FormulaExpr::RangeRef(_)
+        | FormulaExpr::Function { .. }
+        | FormulaExpr::ExternalFunction { .. }
+        | FormulaExpr::Array(_)
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::Empty => return Err(UnsupportedToken),
+    }
+
+    Ok(())
+}
+
+fn push_pivot_sxname_ptg(
+    out: &mut Vec<u8>,
+    sx_names: &mut Vec<usize>,
+    cache: &FormatPivotCache,
+    field_name: &str,
+) -> Result<(), UnsupportedToken> {
+    let field_index = cache.field_index(field_name).ok_or(UnsupportedToken)?;
+    let sx_name_index = checked_u32(sx_names.len(), "pivot calculated formula SXNAME index")
+        .map_err(|_| UnsupportedToken)?;
+    sx_names.push(field_index);
+    out.extend_from_slice(&[0x18, 0x1D]);
+    out.extend_from_slice(&sx_name_index.to_le_bytes());
     Ok(())
 }
 
@@ -1130,6 +1297,24 @@ fn checked_u8(value: usize, label: &str) -> XlsResult<u8> {
         )));
     }
     Ok(value as u8)
+}
+
+fn checked_i16(value: usize, label: &str) -> XlsResult<i16> {
+    if value > i16::MAX as usize {
+        return Err(XlsError::InvalidFormat(format!(
+            "{label} exceeds BIFF8 limits"
+        )));
+    }
+    Ok(value as i16)
+}
+
+fn checked_u32(value: usize, label: &str) -> XlsResult<u32> {
+    if value > u32::MAX as usize {
+        return Err(XlsError::InvalidFormat(format!(
+            "{label} exceeds BIFF8 limits"
+        )));
+    }
+    Ok(value as u32)
 }
 
 fn checked_biff8_row(value: u32, label: &str) -> XlsResult<u16> {

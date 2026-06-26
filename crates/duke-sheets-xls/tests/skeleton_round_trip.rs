@@ -197,6 +197,30 @@ fn add_styled_pivot(wb: &mut Workbook) {
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
 }
 
+fn add_calculated_field_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Units").unwrap();
+    ws.set_cell_value("C1", "Price").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 2.0).unwrap();
+    ws.set_cell_value("C2", 10.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 7.0).unwrap();
+    ws.set_cell_value("C3", 3.0).unwrap();
+
+    let pivot = PivotTable::builder("CalculatedRevenue")
+        .source_range(CellRange::parse("A1:C3").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Region")
+        .calculated_field("Revenue", "=Units*Price")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
 #[test]
 fn empty_default_workbook_round_trips_via_reader() {
     let wb = Workbook::new();
@@ -433,6 +457,50 @@ fn semantic_pivot_tables_emit_xls_style_record() {
 }
 
 #[test]
+fn semantic_pivot_tables_emit_xls_calculated_field_records() {
+    let mut wb = Workbook::new();
+    add_calculated_field_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = records_with_payload(&cache);
+
+    let calculated_field = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "Revenue")
+        .expect("calculated-field SXFDB record");
+    assert_ne!(
+        u16::from_le_bytes(calculated_field[0..2].try_into().unwrap()) & 0x8000,
+        0,
+        "SXFDB should mark Revenue as a calculated field"
+    );
+
+    let sxfmla = cache_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00F8).then_some(payload))
+        .expect("SxFmla record");
+    assert_eq!(u16::from_le_bytes(sxfmla[0..2].try_into().unwrap()), 13);
+    assert_eq!(u16::from_le_bytes(sxfmla[2..4].try_into().unwrap()), 2);
+    assert_eq!(
+        &sxfmla[4..],
+        &[0x18, 0x1D, 0, 0, 0, 0, 0x18, 0x1D, 1, 0, 0, 0, 0x05],
+        "SxFmla should encode Units * Price via two PtgSxName refs"
+    );
+
+    let sxname_field_indexes = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00F5).then(|| i16::from_le_bytes(payload[2..4].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sxname_field_indexes, vec![1, 2]);
+}
+
+#[test]
 fn reads_writer_xls_pivot_table_semantics() {
     let mut wb = Workbook::new();
     add_page_column_pivot(&mut wb);
@@ -511,6 +579,25 @@ fn reads_writer_xls_pivot_style_semantics() {
     assert_eq!(pivot.style, styled_pivot_style());
 }
 
+#[test]
+fn reads_writer_xls_calculated_field_semantics() {
+    let mut wb = Workbook::new();
+    add_calculated_field_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    let pivot = &ws.pivot_tables()[0];
+
+    assert_eq!(pivot.name, "CalculatedRevenue");
+    assert_eq!(pivot.calculated_fields.len(), 1);
+    assert_eq!(pivot.calculated_fields[0].name, "Revenue");
+    assert_eq!(pivot.calculated_fields[0].formula, "Units*Price");
+    assert_eq!(pivot.measures.len(), 1);
+    assert_eq!(pivot.measures[0].field.name, "Revenue");
+    assert_eq!(pivot.measures[0].aggregate, PivotAggregate::Sum);
+}
+
 fn record_types(stream: &[u8]) -> Vec<u16> {
     let mut out = Vec::new();
     let mut pos = 0usize;
@@ -550,6 +637,30 @@ fn utf16le_string(bytes: &[u8]) -> String {
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect::<Vec<_>>();
     String::from_utf16_lossy(&units)
+}
+
+fn xls_unicode_string_at(bytes: &[u8], offset: usize) -> String {
+    if offset + 3 > bytes.len() {
+        return String::new();
+    }
+    let char_count = u16::from_le_bytes([bytes[offset], bytes[offset + 1]]) as usize;
+    let flags = bytes[offset + 2];
+    let start = offset + 3;
+    if flags & 0x01 != 0 {
+        let byte_len = char_count * 2;
+        if start + byte_len > bytes.len() {
+            return String::new();
+        }
+        utf16le_string(&bytes[start..start + byte_len])
+    } else {
+        if start + char_count > bytes.len() {
+            return String::new();
+        }
+        bytes[start..start + char_count]
+            .iter()
+            .map(|&byte| byte as char)
+            .collect()
+    }
 }
 
 #[test]
