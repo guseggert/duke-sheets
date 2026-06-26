@@ -3158,8 +3158,16 @@ fn write_cache_source(
             write_consolidation_source(w, ranges)?;
             w.write_event(Event::End(BytesEnd::new("cacheSource")))?;
         }
-        PivotSource::Scenario { .. } => {
-            w.write_event(Event::Empty(cache_source_tag("scenario")))?;
+        PivotSource::Scenario { name } => {
+            if name.is_empty() {
+                w.write_event(Event::Empty(cache_source_tag("scenario")))?;
+            } else {
+                w.write_event(Event::Start(cache_source_tag("scenario")))?;
+                let mut worksheet_source = BytesStart::new("worksheetSource");
+                worksheet_source.push_attribute(("name", name.as_str()));
+                w.write_event(Event::Empty(worksheet_source))?;
+                w.write_event(Event::End(BytesEnd::new("cacheSource")))?;
+            }
         }
         PivotSource::Olap {
             connection_name, ..

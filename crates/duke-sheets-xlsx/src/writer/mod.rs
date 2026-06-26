@@ -4487,7 +4487,8 @@ mod tests {
         let bytes = out.into_inner();
 
         let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
-        assert!(cache_def.contains(r#"<cacheSource type="scenario"/>"#));
+        assert!(cache_def.contains(r#"<cacheSource type="scenario">"#));
+        assert!(cache_def.contains(r#"<worksheetSource name="BestCase"/>"#));
         assert!(cache_def.contains(r#"saveData="0""#));
 
         let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
@@ -4496,7 +4497,10 @@ mod tests {
             .unwrap()
             .pivot_table_by_name("ScenarioSales")
             .unwrap();
-        assert!(matches!(&pivot.source, PivotSource::Scenario { .. }));
+        assert!(matches!(
+            &pivot.source,
+            PivotSource::Scenario { name } if name == "BestCase"
+        ));
         assert_eq!(pivot.rows[0].field.name, "Region");
         assert_eq!(pivot.measures[0].field.name, "Revenue");
         assert!(matches!(

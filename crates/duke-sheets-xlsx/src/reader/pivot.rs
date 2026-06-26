@@ -107,8 +107,10 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     connection_id = attr_u32(&e, b"connectionId");
                 }
                 b"worksheetSource" => {
-                    source = parse_worksheet_source(&e)?;
-                    source_kind = PivotCacheSourceKind::Worksheet;
+                    source = parse_cache_worksheet_source(&e, source_kind)?;
+                    if !matches!(source_kind, PivotCacheSourceKind::Scenario) {
+                        source_kind = PivotCacheSourceKind::Worksheet;
+                    }
                 }
                 b"consolidation" => in_consolidation = true,
                 b"page" if in_consolidation => {
@@ -174,8 +176,10 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     connection_id = attr_u32(&e, b"connectionId");
                 }
                 b"worksheetSource" => {
-                    source = parse_worksheet_source(&e)?;
-                    source_kind = PivotCacheSourceKind::Worksheet;
+                    source = parse_cache_worksheet_source(&e, source_kind)?;
+                    if !matches!(source_kind, PivotCacheSourceKind::Scenario) {
+                        source_kind = PivotCacheSourceKind::Worksheet;
+                    }
                 }
                 b"rangeSet" if in_consolidation => {
                     if let Some(range) = parse_consolidation_range_set(&e, &consolidation_pages)? {
@@ -455,6 +459,19 @@ fn database_connection_command(connection: &WorkbookConnection) -> Option<String
         WorkbookConnectionKind::Database { command, .. } => command.clone(),
         _ => None,
     }
+}
+
+fn parse_cache_worksheet_source(
+    e: &BytesStart<'_>,
+    source_kind: PivotCacheSourceKind,
+) -> XlsxResult<Option<PivotSource>> {
+    if matches!(source_kind, PivotCacheSourceKind::Scenario) {
+        return Ok(Some(PivotSource::Scenario {
+            name: attr_string(e, b"name").unwrap_or_default(),
+        }));
+    }
+
+    parse_worksheet_source(e)
 }
 
 fn parse_worksheet_source(e: &BytesStart<'_>) -> XlsxResult<Option<PivotSource>> {
