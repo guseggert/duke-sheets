@@ -1296,28 +1296,7 @@ where
     F: Fn(&PivotValue) -> PivotValue,
 {
     let source_column = &snapshot.columns[field_index];
-    let grouped_by_id = source_column
-        .dictionary
-        .iter()
-        .map(group_value)
-        .collect::<Vec<_>>();
-
-    #[cfg(feature = "parallel")]
-    {
-        if snapshot.row_count >= PARALLEL_ROW_THRESHOLD {
-            let values = (0..snapshot.row_count)
-                .into_par_iter()
-                .map(|row| grouped_by_id[source_column.id_at(row) as usize].clone())
-                .collect::<Vec<_>>();
-            return EncodedColumn::from_values(values);
-        }
-    }
-
-    let mut column = EncodedColumn::with_capacity(snapshot.row_count);
-    for id in &source_column.values {
-        column.push(grouped_by_id[*id as usize].clone());
-    }
-    column
+    source_column.remap_dictionary(group_value)
 }
 
 fn manual_group_lookup(
@@ -1385,15 +1364,6 @@ impl EncodedColumn {
         }
     }
 
-    #[cfg(feature = "parallel")]
-    fn from_values(values: Vec<PivotValue>) -> Self {
-        let mut column = Self::with_capacity(values.len());
-        for value in values {
-            column.push(value);
-        }
-        column
-    }
-
     fn push(&mut self, value: PivotValue) {
         let id = if let Some(id) = self.lookup.get(&value) {
             *id
@@ -1404,6 +1374,35 @@ impl EncodedColumn {
             id
         };
         self.values.push(id);
+    }
+
+    fn remap_dictionary<F>(&self, group_value: F) -> Self
+    where
+        F: Fn(&PivotValue) -> PivotValue,
+    {
+        let mut dictionary = Vec::new();
+        let mut lookup = AHashMap::new();
+        let mut id_map = Vec::with_capacity(self.dictionary.len());
+
+        for value in &self.dictionary {
+            let grouped = group_value(value);
+            let id = if let Some(id) = lookup.get(&grouped) {
+                *id
+            } else {
+                let id = dictionary.len() as u32;
+                dictionary.push(grouped.clone());
+                lookup.insert(grouped, id);
+                id
+            };
+            id_map.push(id);
+        }
+
+        let values = remap_column_ids(&self.values, &id_map);
+        Self {
+            values,
+            dictionary,
+            lookup,
+        }
     }
 
     fn id_at(&self, row: usize) -> u32 {
@@ -1421,6 +1420,20 @@ impl EncodedColumn {
     fn id_for_value(&self, value: &PivotValue) -> Option<u32> {
         self.lookup.get(value).copied()
     }
+}
+
+fn remap_column_ids(values: &[u32], id_map: &[u32]) -> Vec<u32> {
+    #[cfg(feature = "parallel")]
+    {
+        if values.len() >= PARALLEL_ROW_THRESHOLD {
+            return values
+                .par_iter()
+                .map(|id| id_map[*id as usize])
+                .collect::<Vec<_>>();
+        }
+    }
+
+    values.iter().map(|id| id_map[*id as usize]).collect()
 }
 
 fn normalize_supplied_headers(headers: &[String], col_count: usize) -> Vec<String> {
@@ -4623,6 +4636,34 @@ mod tests {
         assert!(
             (actual - expected).abs() < 1e-9,
             "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn remapping_grouped_column_coalesces_dictionary_ids() {
+        let mut column = super::EncodedColumn::with_capacity(5);
+        for value in ["East", "West", "South", "East", "West"] {
+            column.push(PivotValue::String(value.to_string()));
+        }
+
+        let grouped = column.remap_dictionary(|value| match value {
+            PivotValue::String(region) if region == "East" || region == "West" => {
+                PivotValue::String("Coastal".to_string())
+            }
+            value => value.clone(),
+        });
+
+        assert_eq!(
+            grouped.dictionary,
+            vec![
+                PivotValue::String("Coastal".to_string()),
+                PivotValue::String("South".to_string()),
+            ]
+        );
+        assert_eq!(grouped.values, vec![0, 0, 1, 0, 0]);
+        assert_eq!(
+            grouped.id_for_value(&PivotValue::String("Coastal".to_string())),
+            Some(0)
         );
     }
 
