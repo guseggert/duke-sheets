@@ -5676,10 +5676,20 @@ fn column_render_slots(
 ) -> Vec<ColumnRenderSlot> {
     let mut slots = Vec::new();
     for (column_index, column_key) in aggregation.column_order.iter().enumerate() {
+        let previous_column_key = column_index
+            .checked_sub(1)
+            .and_then(|index| aggregation.column_order.get(index));
+        for position in column_group_start_positions(column_key, previous_column_key) {
+            if column_subtotal_at_top(pivot, plan, position) {
+                slots.push(ColumnRenderSlot::Subtotal(column_key[..=position].to_vec()));
+            }
+        }
+
         slots.push(ColumnRenderSlot::Leaf(column_key.clone()));
 
         let next_column_key = aggregation.column_order.get(column_index + 1);
-        for position in column_subtotal_positions_to_emit(plan, column_key, next_column_key) {
+        for position in column_subtotal_positions_to_emit(pivot, plan, column_key, next_column_key)
+        {
             slots.push(ColumnRenderSlot::Subtotal(column_key[..=position].to_vec()));
         }
     }
@@ -6087,25 +6097,46 @@ fn row_subtotal_at_top(pivot: &PivotTable, plan: &CompiledPivotPlan, position: u
             .unwrap_or(false)
 }
 
+fn column_subtotal_at_top(pivot: &PivotTable, plan: &CompiledPivotPlan, position: usize) -> bool {
+    matches!(pivot.layout.kind, PivotLayoutKind::Outline)
+        && plan
+            .column_fields
+            .get(position)
+            .map(|field| field.subtotal_top)
+            .unwrap_or(false)
+}
+
 fn column_subtotal_positions_to_emit(
+    pivot: &PivotTable,
     plan: &CompiledPivotPlan,
     column_key: &[u32],
     next_column_key: Option<&Vec<u32>>,
 ) -> Vec<usize> {
     subtotal_positions_to_emit(column_key, next_column_key, |position| {
-        column_subtotal_enabled(plan, position)
+        column_subtotal_enabled(plan, position) && !column_subtotal_at_top(pivot, plan, position)
     })
 }
 
 fn row_group_start_positions(row_key: &[u32], previous_row_key: Option<&Vec<u32>>) -> Vec<usize> {
-    if row_key.len() < 2 {
+    group_start_positions(row_key, previous_row_key)
+}
+
+fn column_group_start_positions(
+    column_key: &[u32],
+    previous_column_key: Option<&Vec<u32>>,
+) -> Vec<usize> {
+    group_start_positions(column_key, previous_column_key)
+}
+
+fn group_start_positions(key: &[u32], previous_key: Option<&Vec<u32>>) -> Vec<usize> {
+    if key.len() < 2 {
         return Vec::new();
     }
 
-    (0..(row_key.len() - 1))
+    (0..(key.len() - 1))
         .filter(|position| {
-            previous_row_key
-                .map(|previous| !same_prefix(row_key, previous, *position + 1))
+            previous_key
+                .map(|previous| !same_prefix(key, previous, *position + 1))
                 .unwrap_or(true)
         })
         .collect()
@@ -8670,6 +8701,77 @@ mod tests {
         assert_eq!(number(&workbook, "G4"), 13.0);
         assert_eq!(number(&workbook, "H4"), 5.0);
         assert_eq!(number(&workbook, "I4"), 18.0);
+        assert_eq!(number(&workbook, "J4"), 7.0);
+        assert_eq!(number(&workbook, "K4"), 7.0);
+        assert_eq!(number(&workbook, "L4"), 25.0);
+    }
+
+    #[test]
+    fn refreshes_outline_layout_column_subtotals_at_top() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Year").unwrap();
+        sheet.set_cell_value("C1", "Quarter").unwrap();
+        sheet.set_cell_value("D1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "2024").unwrap();
+        sheet.set_cell_value("C2", "Q1").unwrap();
+        sheet.set_cell_value("D2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "2024").unwrap();
+        sheet.set_cell_value("C3", "Q2").unwrap();
+        sheet.set_cell_value("D3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "East").unwrap();
+        sheet.set_cell_value("B4", "2025").unwrap();
+        sheet.set_cell_value("C4", "Q1").unwrap();
+        sheet.set_cell_value("D4", 7.0).unwrap();
+        sheet.set_cell_value("A5", "West").unwrap();
+        sheet.set_cell_value("B5", "2024").unwrap();
+        sheet.set_cell_value("C5", "Q1").unwrap();
+        sheet.set_cell_value("D5", 3.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Outline;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D5").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row("Region")
+            .column("Year")
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F1"), "Region");
+        assert_eq!(text(&workbook, "G1"), "2024 Total");
+        assert_eq!(text(&workbook, "H1"), "2024 | Q1");
+        assert_eq!(text(&workbook, "I1"), "2024 | Q2");
+        assert_eq!(text(&workbook, "J1"), "2025 Total");
+        assert_eq!(text(&workbook, "K1"), "2025 | Q1");
+        assert_eq!(text(&workbook, "L1"), "Grand Total");
+        assert_eq!(text(&workbook, "F2"), "East");
+        assert_eq!(number(&workbook, "G2"), 15.0);
+        assert_eq!(number(&workbook, "H2"), 10.0);
+        assert_eq!(number(&workbook, "I2"), 5.0);
+        assert_eq!(number(&workbook, "J2"), 7.0);
+        assert_eq!(number(&workbook, "K2"), 7.0);
+        assert_eq!(number(&workbook, "L2"), 22.0);
+        assert_eq!(text(&workbook, "F3"), "West");
+        assert_eq!(number(&workbook, "G3"), 3.0);
+        assert_eq!(number(&workbook, "H3"), 3.0);
+        assert_eq!(text(&workbook, "J3"), "");
+        assert_eq!(text(&workbook, "K3"), "");
+        assert_eq!(number(&workbook, "L3"), 3.0);
+        assert_eq!(text(&workbook, "F4"), "Grand Total");
+        assert_eq!(number(&workbook, "G4"), 18.0);
+        assert_eq!(number(&workbook, "H4"), 13.0);
+        assert_eq!(number(&workbook, "I4"), 5.0);
         assert_eq!(number(&workbook, "J4"), 7.0);
         assert_eq!(number(&workbook, "K4"), 7.0);
         assert_eq!(number(&workbook, "L4"), 25.0);
