@@ -9,15 +9,23 @@
 use std::io::Cursor;
 
 use duke_sheets_core::{CellRange, PivotAggregate, PivotTable, Workbook};
-use duke_sheets_xls::{XlsReader, XlsWriter};
+use duke_sheets_xls::{cfb::CompoundFile, XlsReader, XlsWriter};
 
 fn add_test_pivot(wb: &mut Workbook) {
-    let pivot = PivotTable::builder("SalesPivot")
-        .source_range(CellRange::parse("A1:B2").unwrap())
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+
+    let pivot = PivotTable::builder("BasicPivot")
+        .source_range(CellRange::parse("A1:B3").unwrap())
         .target_address("D1")
         .unwrap()
         .row("Region")
-        .named_measure("Sales", PivotAggregate::Sum, "Total Sales")
+        .measure("Revenue", PivotAggregate::Sum)
         .build()
         .unwrap();
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
@@ -37,16 +45,58 @@ fn empty_default_workbook_round_trips_via_reader() {
 }
 
 #[test]
-fn semantic_pivot_tables_are_rejected_instead_of_dropped() {
+fn semantic_pivot_tables_emit_native_biff8_streams() {
     let mut wb = Workbook::new();
     add_test_pivot(&mut wb);
 
-    let err = XlsWriter::write_to_bytes(&wb).unwrap_err();
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    assert!(cfb.exists("/_SX_DB_CUR/0001"));
+
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let workbook_records = record_types(&workbook);
+    assert!(workbook_records.contains(&0x00D5));
+    assert!(workbook_records.contains(&0x00E3));
+    assert!(workbook_records.contains(&0x0051));
+    assert!(workbook_records.contains(&0x0160));
+    assert!(workbook_records.contains(&0x089A));
+    assert!(workbook_records.contains(&0x0802));
+    assert!(workbook_records.contains(&0x0864));
     assert!(
-        err.to_string()
-            .contains("XLS pivot table writing is not implemented"),
-        "unexpected error: {err}"
+        record_position(&workbook_records, 0x00D5) < record_position(&workbook_records, 0x0085),
+        "SXIDSTM must be emitted before BoundSheet8 so Excel can bind the cache stream"
     );
+
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = record_types(&cache);
+    assert!(cache_records.contains(&0x00C6));
+    assert_eq!(
+        cache_records.iter().filter(|&&typ| typ == 0x00C7).count(),
+        2
+    );
+    assert!(cache_records.contains(&0x00CD));
+    assert!(cache_records.contains(&0x00C9));
+}
+
+fn record_types(stream: &[u8]) -> Vec<u16> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while pos + 4 <= stream.len() {
+        let typ = u16::from_le_bytes([stream[pos], stream[pos + 1]]);
+        let len = u16::from_le_bytes([stream[pos + 2], stream[pos + 3]]) as usize;
+        out.push(typ);
+        pos += 4 + len;
+    }
+    out
+}
+
+fn record_position(records: &[u16], typ: u16) -> usize {
+    records
+        .iter()
+        .position(|&record| record == typ)
+        .unwrap_or(usize::MAX)
 }
 
 #[test]
@@ -96,7 +146,8 @@ fn writes_cfb_v3_envelope() {
 #[test]
 fn special_and_unicode_sheet_names_round_trip() {
     let mut wb = Workbook::new();
-    wb.rename_worksheet(0, "First & Last").expect("rename Sheet1");
+    wb.rename_worksheet(0, "First & Last")
+        .expect("rename Sheet1");
     wb.add_worksheet_with_name("with 'apostrophe'")
         .expect("apostrophe sheet");
     wb.add_worksheet_with_name("日本語データ")
@@ -153,12 +204,10 @@ fn lo_can_open_skeleton_workbook() {
         .build()
         .unwrap();
     let outcome: Result<i32, String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await
@@ -196,12 +245,10 @@ fn lo_can_read_cell_values_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(f64, f64), String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

@@ -16,7 +16,9 @@ use duke_sheets_core::rich_text::{RichTextRun, RunFont};
 use duke_sheets_core::style::Color;
 use duke_sheets_core::validation::{DataValidation, ValidationOperator, ValidationType};
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
-use duke_sheets_core::{CellAddress, CellRange, CellValue, Hyperlink, Workbook};
+use duke_sheets_core::{
+    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotTable, Workbook,
+};
 use duke_sheets_excel_com::{ChainStep, SheetRef};
 use excel_com_protocol::ResponseData;
 use serde_json::json;
@@ -32,6 +34,44 @@ fn range(start: &str, end: &str) -> CellRange {
         CellAddress::parse(start).unwrap(),
         CellAddress::parse(end).unwrap(),
     )
+}
+
+fn xls_basic_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+
+    let pivot = PivotTable::builder("BasicPivot")
+        .source_range(CellRange::parse("A1:B3").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .measure("Revenue", PivotAggregate::Sum)
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_opens_xls_with_native_pivot_table() {
+    let (_result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_basic_pivot_workbook());
+    assert!(xls_cfb_has_stream(&excel_bytes, "/_SX_DB_CUR/0001"));
+}
+
+fn xls_cfb_has_stream(bytes: &[u8], path: &str) -> bool {
+    let reader = std::io::Cursor::new(bytes);
+    let Ok(cfb) = duke_sheets_xls::cfb::CompoundFile::open(reader) else {
+        return false;
+    };
+    cfb.exists(path)
 }
 
 fn named_formula_workbook() -> Workbook {

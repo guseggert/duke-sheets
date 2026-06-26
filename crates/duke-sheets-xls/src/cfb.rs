@@ -926,6 +926,7 @@ struct EntryDef {
 /// reader) walk via DFS so a strict red-black tree is not required.
 pub struct CompoundFileBuilder {
     entries: Vec<EntryDef>,
+    root_clsid: [u8; 16],
 }
 
 impl Default for CompoundFileBuilder {
@@ -938,7 +939,12 @@ impl CompoundFileBuilder {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            root_clsid: [0; 16],
         }
+    }
+
+    pub fn set_root_clsid(&mut self, clsid: [u8; 16]) {
+        self.root_clsid = clsid;
     }
 
     /// Add an empty storage (directory). Path must start with `/`.
@@ -990,7 +996,7 @@ impl CompoundFileBuilder {
 
         // Build directory list with the root entry at index 0. The root
         // is always the first directory entry in CFB.
-        let mut dirs: Vec<DirWriteEntry> = vec![DirWriteEntry::root()];
+        let mut dirs: Vec<DirWriteEntry> = vec![DirWriteEntry::root(self.root_clsid)];
 
         let mut path_to_id: std::collections::HashMap<String, u32> =
             std::collections::HashMap::new();
@@ -1054,6 +1060,7 @@ impl CompoundFileBuilder {
                 left_sibling: NOSTREAM,
                 right_sibling: NOSTREAM,
                 child: NOSTREAM,
+                clsid: [0; 16],
                 start_sector: 0,
                 stream_size: 0,
                 stream_data,
@@ -1319,13 +1326,14 @@ struct DirWriteEntry {
     left_sibling: u32,
     right_sibling: u32,
     child: u32,
+    clsid: [u8; 16],
     start_sector: u32,
     stream_size: u64,
     stream_data: Vec<u8>,
 }
 
 impl DirWriteEntry {
-    fn root() -> Self {
+    fn root(clsid: [u8; 16]) -> Self {
         Self {
             name: ROOT_DIR_NAME.to_string(),
             object_type: OBJ_TYPE_ROOT,
@@ -1333,6 +1341,7 @@ impl DirWriteEntry {
             left_sibling: NOSTREAM,
             right_sibling: NOSTREAM,
             child: NOSTREAM,
+            clsid,
             start_sector: ENDOFCHAIN,
             stream_size: 0,
             stream_data: Vec::new(),
@@ -1624,7 +1633,7 @@ fn write_dir_entry(buf: &mut [u8], dir: &DirWriteEntry) {
     buf[68..72].copy_from_slice(&dir.left_sibling.to_le_bytes());
     buf[72..76].copy_from_slice(&dir.right_sibling.to_le_bytes());
     buf[76..80].copy_from_slice(&dir.child.to_le_bytes());
-    buf[80..96].fill(0);
+    buf[80..96].copy_from_slice(&dir.clsid);
     buf[96..100].copy_from_slice(&0u32.to_le_bytes());
     buf[100..108].copy_from_slice(&0u64.to_le_bytes());
     buf[108..116].copy_from_slice(&0u64.to_le_bytes());
@@ -1666,6 +1675,24 @@ mod writer_tests {
             .expect("our reader must accept our writer's output");
         assert!(cfb.exists("/Hello"));
         assert_eq!(cfb.read_stream("/Hello").unwrap(), b"world");
+    }
+
+    #[test]
+    fn writer_emits_configured_root_clsid() {
+        let clsid = [
+            0x20, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x46,
+        ];
+        let mut builder = CompoundFileBuilder::new();
+        builder.set_root_clsid(clsid);
+        builder.add_stream("/Workbook", b"data".to_vec()).unwrap();
+
+        let bytes = builder.build().unwrap();
+        let first_dir_sector =
+            u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+        let root_entry = (1 + first_dir_sector) * 512;
+
+        assert_eq!(&bytes[root_entry + 80..root_entry + 96], &clsid);
     }
 
     #[test]

@@ -10,6 +10,7 @@ use crate::error::XlsbResult;
 use duke_sheets_core::named_range::NameScope;
 use duke_sheets_core::worksheet::SheetVisibility;
 use duke_sheets_core::{CellAddress, Workbook};
+use duke_sheets_pivot::FormatPivotPlan;
 
 pub(crate) fn write_workbook<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
@@ -18,6 +19,8 @@ pub(crate) fn write_workbook<W: Write + Seek>(
     has_formulas: bool,
     xlfn_names: &HashMap<String, u32>,
     external_names: &[String],
+    pivot_plan: &FormatPivotPlan,
+    pivot_cache_rids: &[String],
 ) -> XlsbResult<()> {
     zip.start_file("xl/workbook.bin", *options)?;
     let mut buf = Vec::new();
@@ -84,11 +87,33 @@ pub(crate) fn write_workbook<W: Write + Seek>(
         write_print_name_records(&mut rw, workbook, xlfn_names)?;
     }
 
+    write_pivot_cache_ids(&mut rw, pivot_plan, pivot_cache_rids)?;
+
     rw.write_record(0x0084, &[])?; // BrtEndBook
 
     drop(rw);
     zip.write_all(&buf)?;
     Ok(())
+}
+
+fn write_pivot_cache_ids<W: Write>(
+    rw: &mut RecordWriter<W>,
+    pivot_plan: &FormatPivotPlan,
+    pivot_cache_rids: &[String],
+) -> std::io::Result<()> {
+    if pivot_plan.caches.is_empty() {
+        return Ok(());
+    }
+
+    rw.write_record(records::BRT_BEGIN_PIVOT_CACHE_IDS, &[])?;
+    for (cache, rel_id) in pivot_plan.caches.iter().zip(pivot_cache_rids) {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&((cache.cache_num - 1) as u32).to_le_bytes());
+        payload.extend_from_slice(&encode_wide_str(rel_id));
+        rw.write_record(records::BRT_PIVOT_CACHE_ID, &payload)?;
+        rw.write_record(records::BRT_END_PIVOT_CACHE_ID, &[])?;
+    }
+    rw.write_record(records::BRT_END_PIVOT_CACHE_IDS, &[])
 }
 
 fn write_file_version<W: Write>(rw: &mut RecordWriter<W>) -> std::io::Result<()> {
@@ -137,9 +162,9 @@ fn write_xlfn_name_records<W: Write>(
         payload.extend_from_slice(&encode_wide_str(&prefixed));
         payload.extend_from_slice(&0u32.to_le_bytes()); // cce (rgce size = 0)
         payload.extend_from_slice(&0u32.to_le_bytes()); // cb (rgcb size = 0)
-        // Trailing strings per [MS-XLSB] §2.4.718 BrtName: the comment
-        // (XLNullableWideString), then four strings that MUST exist if
-        // and only if fProc is set. We never write macro names.
+                                                        // Trailing strings per [MS-XLSB] §2.4.718 BrtName: the comment
+                                                        // (XLNullableWideString), then four strings that MUST exist if
+                                                        // and only if fProc is set. We never write macro names.
         payload.extend_from_slice(&encode_nullable_wide_str(None));
         rw.write_record(records::BRT_NAME, &payload)?;
     }
@@ -364,7 +389,11 @@ fn write_extern_sheet<W: Write>(
         payload.extend_from_slice(&0xFFFF_FFFEu32.to_le_bytes()); // firstSheet = -2
         payload.extend_from_slice(&0xFFFF_FFFEu32.to_le_bytes()); // lastSheet = -2
     }
-    let self_sup = if external_names.is_empty() { 0u32 } else { 1u32 };
+    let self_sup = if external_names.is_empty() {
+        0u32
+    } else {
+        1u32
+    };
     for i in 0..sheet_count {
         let idx = i as u32;
         payload.extend_from_slice(&self_sup.to_le_bytes());

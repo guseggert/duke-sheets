@@ -17,7 +17,9 @@ use duke_sheets_core::style::Color;
 use duke_sheets_core::table::{Table, TableColumn, TableStyleInfo};
 use duke_sheets_core::validation::{DataValidation, ValidationOperator, ValidationType};
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
-use duke_sheets_core::{CellAddress, CellRange, CellValue, Hyperlink, Workbook};
+use duke_sheets_core::{
+    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotTable, Workbook,
+};
 
 use crate::{
     atp_all_formulas, cleanup_fixture, ensure_vm_temp_dir, excel_bridge, pull_file_from_vm,
@@ -170,6 +172,54 @@ fn excel_authored_xlsb_atp_bytes() -> Vec<u8> {
         .unwrap_or_else(|e| panic!("read {}: {e}", fixture.host_path.display()));
     cleanup_fixture(&fixture);
     bytes
+}
+
+fn xlsb_basic_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+
+    let pivot = PivotTable::builder("BasicPivot")
+        .source_range(CellRange::parse("A1:B3").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .measure("Revenue", PivotAggregate::Sum)
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_opens_xlsb_with_native_pivot_table() {
+    let (_result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xlsb_bytes(&xlsb_basic_pivot_workbook());
+
+    assert!(zip_has_entry(&excel_bytes, "xl/pivotTables/pivotTable1.bin"));
+    assert!(zip_has_entry(
+        &excel_bytes,
+        "xl/pivotCache/pivotCacheDefinition1.bin"
+    ));
+    assert!(zip_has_entry(
+        &excel_bytes,
+        "xl/pivotCache/pivotCacheRecords1.bin"
+    ));
+}
+
+fn zip_has_entry(bytes: &[u8], name: &str) -> bool {
+    let reader = std::io::Cursor::new(bytes);
+    let Ok(mut archive) = zip::ZipArchive::new(reader) else {
+        return false;
+    };
+    let found = archive.by_name(name).is_ok();
+    found
 }
 
 #[test]

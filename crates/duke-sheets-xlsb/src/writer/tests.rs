@@ -17,8 +17,16 @@ mod tests {
     }
 
     fn add_test_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Region").unwrap();
+        ws.set_cell_value("B1", "Sales").unwrap();
+        ws.set_cell_value("A2", "East").unwrap();
+        ws.set_cell_value("B2", 10.0).unwrap();
+        ws.set_cell_value("A3", "West").unwrap();
+        ws.set_cell_value("B3", 20.0).unwrap();
+
         let pivot = PivotTable::builder("SalesPivot")
-            .source_range(CellRange::parse("A1:B2").unwrap())
+            .source_range(CellRange::parse("A1:B3").unwrap())
             .target_address("D1")
             .unwrap()
             .row("Region")
@@ -36,17 +44,58 @@ mod tests {
     }
 
     #[test]
-    fn semantic_pivot_tables_are_rejected_instead_of_dropped() {
+    fn semantic_pivot_tables_emit_native_parts() {
         let mut wb = Workbook::new();
         add_test_pivot(&mut wb);
 
-        let mut buf = Vec::new();
-        let err = XlsbWriter::write(&wb, Cursor::new(&mut buf)).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("XLSB pivot table writing is not implemented"),
-            "unexpected error: {err}"
+        let bytes = write_xlsb_bytes(&wb);
+        let ct = read_zip_entry(&bytes, "[Content_Types].xml");
+        assert!(ct.contains("/xl/pivotTables/pivotTable1.bin"));
+        assert!(ct.contains("/xl/pivotCache/pivotCacheDefinition1.bin"));
+        assert!(ct.contains("/xl/pivotCache/pivotCacheRecords1.bin"));
+        assert!(ct.contains("/xl/worksheets/binaryIndex1.bin"));
+
+        let workbook_rels = read_zip_entry(&bytes, "xl/_rels/workbook.bin.rels");
+        assert!(workbook_rels.contains("pivotCache/pivotCacheDefinition1.bin"));
+
+        let sheet_rels = read_zip_entry(&bytes, "xl/worksheets/_rels/sheet1.bin.rels");
+        assert!(sheet_rels.contains("xlBinaryIndex"));
+        assert!(sheet_rels.contains("../pivotTables/pivotTable1.bin"));
+
+        let pivot_rels = read_zip_entry(&bytes, "xl/pivotTables/_rels/pivotTable1.bin.rels");
+        assert!(pivot_rels.contains("../pivotCache/pivotCacheDefinition1.bin"));
+
+        let cache_rels =
+            read_zip_entry(&bytes, "xl/pivotCache/_rels/pivotCacheDefinition1.bin.rels");
+        assert!(cache_rels.contains("pivotCacheRecords1.bin"));
+
+        let workbook_records = record_types(read_zip_entry_bytes(&bytes, "xl/workbook.bin"));
+        assert!(workbook_records.contains(&crate::biff12::records::BRT_BEGIN_PIVOT_CACHE_IDS));
+        assert!(workbook_records.contains(&crate::biff12::records::BRT_PIVOT_CACHE_ID));
+
+        let cache_def_records =
+            record_types(read_zip_entry_bytes(&bytes, "xl/pivotCache/pivotCacheDefinition1.bin"));
+        assert!(cache_def_records.contains(&crate::biff12::records::BRT_BEGIN_PIVOT_CACHE_DEF));
+        assert!(cache_def_records.contains(&crate::biff12::records::BRT_BEGIN_PCD_FIELDS));
+        assert!(cache_def_records.contains(&crate::biff12::records::BRT_PCDI_STRING));
+
+        let cache_records =
+            record_types(read_zip_entry_bytes(&bytes, "xl/pivotCache/pivotCacheRecords1.bin"));
+        assert!(cache_records.contains(&crate::biff12::records::BRT_BEGIN_PCD_RECORDS));
+        assert_eq!(
+            cache_records
+                .iter()
+                .filter(|&&typ| typ == crate::biff12::records::BRT_PCD_RECORD)
+                .count(),
+            2
         );
+
+        let pivot_records =
+            record_types(read_zip_entry_bytes(&bytes, "xl/pivotTables/pivotTable1.bin"));
+        assert!(pivot_records.contains(&crate::biff12::records::BRT_BEGIN_SXVIEW));
+        assert!(pivot_records.contains(&crate::biff12::records::BRT_BEGIN_SXVDS));
+        assert!(pivot_records.contains(&crate::biff12::records::BRT_BEGIN_SX_ROW_ITEMS));
+        assert!(pivot_records.contains(&crate::biff12::records::BRT_BEGIN_SXDIS));
     }
 
     #[test]
@@ -782,7 +831,11 @@ mod tests {
         // fStrLookup header bit (bit 7) set so Excel splits the string
         // into dropdown entries ([MS-XLSB] BrtDVal).
         let (header, rgce) = first_dval_header_and_formula1(&list_dv("Red,Green,Blue"));
-        assert_ne!(header & (1 << 7), 0, "fStrLookup bit must be set: {header:08X}");
+        assert_ne!(
+            header & (1 << 7),
+            0,
+            "fStrLookup bit must be set: {header:08X}"
+        );
         assert_eq!(rgce.first(), Some(&0x17u8), "formula1 must be a tStr token");
     }
 
@@ -791,7 +844,11 @@ mod tests {
         // A range source must compile to a reference token, not a
         // quoted string literal, and must not set fStrLookup.
         let (header, rgce) = first_dval_header_and_formula1(&list_dv("$A$1:$A$3"));
-        assert_eq!(header & (1 << 7), 0, "fStrLookup must be clear: {header:08X}");
+        assert_eq!(
+            header & (1 << 7),
+            0,
+            "fStrLookup must be clear: {header:08X}"
+        );
         assert_eq!(
             rgce.first().map(|b| b & 0x1F),
             Some(0x05),
@@ -1099,7 +1156,12 @@ mod tests {
         let wb2 = round_trip(&wb);
         let ws2 = wb2.worksheet(0).unwrap();
         let texts: Vec<String> = (0..3)
-            .map(|c| ws2.formula_data_at(0, c).expect("formula should exist").text.clone())
+            .map(|c| {
+                ws2.formula_data_at(0, c)
+                    .expect("formula should exist")
+                    .text
+                    .clone()
+            })
             .collect();
         assert_eq!(texts[0], "=COUNTA({\"ab\",\"cde\"})");
         assert_eq!(texts[1], "=OR({TRUE,FALSE})");
@@ -1117,13 +1179,19 @@ mod tests {
         let ws = wb.worksheet_mut(0).unwrap();
         let f200 = format!(
             "=SUM({})",
-            (1..=200).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+            (1..=200)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         );
         ws.set_formula_with_cached_value_at(0, 0, &f200, CellValue::Number(20100.0))
             .unwrap();
         let f300 = format!(
             "=SUM({})",
-            (1..=300).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+            (1..=300)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         );
         ws.set_formula_with_cached_value_at(0, 1, &f300, CellValue::Number(45150.0))
             .unwrap();
@@ -2416,6 +2484,17 @@ mod tests {
         buf
     }
 
+    fn record_types(data: Vec<u8>) -> Vec<u16> {
+        let mut iter = crate::biff12::RecordIter::new(Cursor::new(data));
+        let mut out = Vec::new();
+        let mut buf = Vec::new();
+        while let Ok((typ, len)) = iter.next_record(&mut buf) {
+            out.push(typ);
+            buf.truncate(len);
+        }
+        out
+    }
+
     #[test]
     fn color_filter_emits_brt_color_filter_record_id() {
         use duke_sheets_core::auto_filter::{AutoFilter, ColorFilter, ColumnFilter, FilterColumn};
@@ -2468,7 +2547,10 @@ mod tests {
                 dxf_count += 1;
             }
         }
-        assert!(dxf_count >= 1, "styles.bin must contain the DXF entry backing the color filter");
+        assert!(
+            dxf_count >= 1,
+            "styles.bin must contain the DXF entry backing the color filter"
+        );
     }
 
     fn custom_filter_workbook(and: bool) -> Workbook {
@@ -2547,9 +2629,7 @@ mod tests {
 
     #[test]
     fn top10_without_computed_value_roundtrips_none() {
-        use duke_sheets_core::auto_filter::{
-            AutoFilter, ColumnFilter, FilterColumn, Top10Filter,
-        };
+        use duke_sheets_core::auto_filter::{AutoFilter, ColumnFilter, FilterColumn, Top10Filter};
         use duke_sheets_core::{CellAddress, CellRange};
 
         // fApplied (flags bit 2) asserts xNumFilter is a real value
@@ -2622,11 +2702,15 @@ mod tests {
         let wb2 = round_trip(&wb);
         let ws2 = wb2.worksheet(0).unwrap();
         assert_eq!(
-            ws2.formula_data_at(0, 3).expect("formula should exist").text,
+            ws2.formula_data_at(0, 3)
+                .expect("formula should exist")
+                .text,
             "=COUNT((A1,B1))"
         );
         assert_eq!(
-            ws2.formula_data_at(1, 3).expect("formula should exist").text,
+            ws2.formula_data_at(1, 3)
+                .expect("formula should exist")
+                .text,
             "=(A1,B1)"
         );
     }

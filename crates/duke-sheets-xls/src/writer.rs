@@ -18,7 +18,10 @@ use duke_sheets_core::style::{
 };
 use duke_sheets_core::workbook::Workbook;
 use duke_sheets_core::worksheet::Worksheet;
-use duke_sheets_core::CellValue;
+use duke_sheets_core::{CellValue, PivotValue};
+use duke_sheets_pivot::{
+    FormatPivotCache, FormatPivotCacheField, FormatPivotPlan, FormatPivotSource,
+};
 
 use crate::cfb::CompoundFileBuilder;
 use crate::error::{XlsError, XlsResult};
@@ -148,9 +151,8 @@ impl XlsWriter {
     /// Serialize a workbook to BIFF8 bytes (CFB envelope with a single
     /// `/Workbook` stream).
     pub fn write_to_bytes(workbook: &Workbook) -> XlsResult<Vec<u8>> {
-        reject_unsupported_pivot_tables(workbook)?;
-        let stream = build_workbook_stream(workbook)?;
-        wrap_workbook_stream_in_cfb(stream)
+        let package = build_workbook_package(workbook)?;
+        wrap_workbook_package_in_cfb(package)
     }
 
     /// Write a workbook to a filesystem path.
@@ -171,11 +173,12 @@ impl XlsWriter {
         password: &str,
         variant: duke_sheets_crypto::xls::XlsEncryptionVariant,
     ) -> XlsResult<Vec<u8>> {
-        reject_unsupported_pivot_tables(workbook)?;
-        let plain = build_workbook_stream(workbook)?;
+        let mut package = build_workbook_package(workbook)?;
+        let plain = std::mem::take(&mut package.workbook_stream);
         let encrypted = duke_sheets_crypto::xls::encrypt_workbook_stream(&plain, password, variant)
             .map_err(XlsError::from)?;
-        wrap_workbook_stream_in_cfb(encrypted)
+        package.workbook_stream = encrypted;
+        wrap_workbook_package_in_cfb(package)
     }
 
     /// Write a workbook to a filesystem path with FilePass encryption.
@@ -192,27 +195,31 @@ impl XlsWriter {
     }
 }
 
-fn reject_unsupported_pivot_tables(workbook: &Workbook) -> XlsResult<()> {
-    let has_pivot_tables = (0..workbook.sheet_count()).any(|i| {
-        workbook
-            .worksheet(i)
-            .is_some_and(|worksheet| !worksheet.pivot_tables().is_empty())
-    });
-    if has_pivot_tables {
-        return Err(XlsError::InvalidFormat(
-            "XLS pivot table writing is not implemented; write XLSX or refresh/export the pivot range before saving as XLS".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn wrap_workbook_stream_in_cfb(stream: Vec<u8>) -> XlsResult<Vec<u8>> {
+fn wrap_workbook_package_in_cfb(package: XlsWritePackage) -> XlsResult<Vec<u8>> {
     let mut builder = CompoundFileBuilder::new();
+    builder.set_root_clsid(EXCEL_WORKBOOK_ROOT_CLSID);
     builder
-        .add_stream("/Workbook", stream)
+        .add_stream("/Workbook", package.workbook_stream)
         .map_err(cfb_to_xls)?;
+    for storage in package.extra_storages {
+        builder.add_storage(&storage).map_err(cfb_to_xls)?;
+    }
+    for (path, data) in package.extra_streams {
+        builder.add_stream(&path, data).map_err(cfb_to_xls)?;
+    }
     builder.build().map_err(cfb_to_xls)
 }
+
+struct XlsWritePackage {
+    workbook_stream: Vec<u8>,
+    extra_storages: Vec<String>,
+    extra_streams: Vec<(String, Vec<u8>)>,
+}
+
+const EXCEL_WORKBOOK_ROOT_CLSID: [u8; 16] = [
+    0x20, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x46,
+];
 
 fn cfb_to_xls(err: crate::cfb::CfbError) -> XlsError {
     XlsError::Io(std::io::Error::from(err))
@@ -233,7 +240,26 @@ fn cfb_to_xls(err: crate::cfb::CfbError) -> XlsError {
 ///   EOF
 /// ...
 /// ```
+fn build_workbook_package(workbook: &Workbook) -> XlsResult<XlsWritePackage> {
+    let pivot_plan = duke_sheets_pivot::plan_format_pivots(workbook)?;
+    let workbook_stream = build_workbook_stream_with_pivots(workbook, &pivot_plan)?;
+    let (extra_storages, extra_streams) = build_pivot_cache_streams(&pivot_plan)?;
+    Ok(XlsWritePackage {
+        workbook_stream,
+        extra_storages,
+        extra_streams,
+    })
+}
+
+#[cfg(test)]
 fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
+    build_workbook_package(workbook).map(|package| package.workbook_stream)
+}
+
+fn build_workbook_stream_with_pivots(
+    workbook: &Workbook,
+    pivot_plan: &FormatPivotPlan,
+) -> XlsResult<Vec<u8>> {
     if workbook.sheet_count() == 0 {
         return Err(XlsError::InvalidFormat(
             "workbook must have at least one worksheet".into(),
@@ -251,6 +277,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     styles.write_xf_records(&mut stream);
 
     let mut lbplypos_field_offsets = Vec::with_capacity(workbook.sheet_count());
+    write_pivot_pre_boundsheet_records(&mut stream, pivot_plan)?;
     for sheet in workbook.worksheets() {
         let body_start = stream.len() + 4;
         write_boundsheet8_with_placeholder_offset(&mut stream, sheet)?;
@@ -261,8 +288,15 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     let externsheet_table = build_externsheet_table(workbook, !addin_table.is_empty());
     let name_table = build_name_table(workbook);
     write_supbook_and_externsheet(&mut stream, &externsheet_table, &addin_table);
-    write_user_name_records(&mut stream, workbook, &externsheet_table, &name_table, &addin_table);
+    write_user_name_records(
+        &mut stream,
+        workbook,
+        &externsheet_table,
+        &name_table,
+        &addin_table,
+    );
     write_print_name_records(&mut stream, workbook);
+    write_pivot_global_records(&mut stream, pivot_plan);
     sst.write_records(&mut stream)?;
     let drawing_state = compute_drawing_state(workbook);
     write_msodrawinggroup(&mut stream, &drawing_state);
@@ -270,6 +304,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
 
     let mut sheet_bof_offsets = Vec::with_capacity(workbook.sheet_count());
     for (sheet_idx, sheet) in workbook.worksheets().enumerate() {
+        let has_pivot_tables = sheet_has_pivot_tables(pivot_plan, sheet_idx);
         let bof_pos = stream.len() as u32;
         write_bof(&mut stream, DT_WORKSHEET);
         write_protect_records(&mut stream, sheet);
@@ -291,14 +326,23 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         write_margin_records(&mut stream, sheet);
         write_print_flags(&mut stream, sheet);
         write_setup_record(&mut stream, sheet);
-        write_window2(&mut stream, sheet);
+        write_pivot_sheet_records(&mut stream, workbook, pivot_plan, sheet_idx)?;
+        write_window2(&mut stream, sheet, has_pivot_tables);
         write_scl(&mut stream, sheet);
         write_pane(&mut stream, sheet);
-        write_selection_records(&mut stream, sheet);
+        if !has_pivot_tables {
+            write_selection_records(&mut stream, sheet);
+        }
         write_mergecells(&mut stream, sheet);
         write_hlink_records(&mut stream, sheet);
         write_autofilter_records(&mut stream, sheet);
-        write_data_validations(&mut stream, sheet, &externsheet_table, &name_table, &addin_table);
+        write_data_validations(
+            &mut stream,
+            sheet,
+            &externsheet_table,
+            &name_table,
+            &addin_table,
+        );
         write_conditional_formats(
             &mut stream,
             sheet,
@@ -309,6 +353,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
         if let Some(sheet_drawing) = drawing_state.sheets.get(&sheet_idx) {
             write_sheet_drawing_records(&mut stream, sheet_drawing);
         }
+        write_pivot_sheet_tail_records(&mut stream, sheet, pivot_plan, sheet_idx);
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
     }
@@ -318,6 +363,501 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     }
 
     Ok(stream)
+}
+
+fn sheet_has_pivot_tables(pivot_plan: &FormatPivotPlan, sheet_idx: usize) -> bool {
+    pivot_plan
+        .tables
+        .iter()
+        .any(|part| part.sheet_index == sheet_idx)
+}
+
+fn build_pivot_cache_streams(
+    pivot_plan: &FormatPivotPlan,
+) -> XlsResult<(Vec<String>, Vec<(String, Vec<u8>)>)> {
+    if pivot_plan.caches.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let storages = vec!["/_SX_DB_CUR".to_string()];
+    let mut streams = Vec::with_capacity(pivot_plan.caches.len());
+    for cache in &pivot_plan.caches {
+        streams.push((
+            format!("/_SX_DB_CUR/{:04}", cache.cache_num),
+            build_pivot_cache_stream(cache)?,
+        ));
+    }
+    Ok((storages, streams))
+}
+
+fn build_pivot_cache_stream(cache: &FormatPivotCache) -> XlsResult<Vec<u8>> {
+    if !matches!(cache.source, FormatPivotSource::Worksheet { .. }) {
+        return Err(XlsError::InvalidFormat(
+            "XLS pivot cache writing requires worksheet or table sources".into(),
+        ));
+    }
+
+    let mut stream = Vec::new();
+    let mut sxdb = Vec::new();
+    sxdb.extend_from_slice(&(cache.row_count as u32).to_le_bytes());
+    sxdb.extend_from_slice(&1u16.to_le_bytes());
+    sxdb.extend_from_slice(&(cache.fields.len() as u16 + 1).to_le_bytes());
+    sxdb.extend_from_slice(&0x1999u16.to_le_bytes());
+    sxdb.extend_from_slice(&2u16.to_le_bytes());
+    sxdb.extend_from_slice(&(cache.row_count as u32).to_le_bytes());
+    sxdb.extend_from_slice(&1u16.to_le_bytes());
+    sxdb.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    write_biff_record(&mut stream, 0x00C6, &sxdb);
+    write_biff_record(&mut stream, 0x0122, &[0; 12]);
+
+    for field in &cache.fields {
+        write_sxfdb_record(&mut stream, field)?;
+        write_biff_record(&mut stream, 0x01BB, &0u16.to_le_bytes());
+        if field_is_numeric(field) {
+            for (idx, value) in field.shared_items.iter().enumerate() {
+                let PivotValue::Number(number) = value else {
+                    continue;
+                };
+                write_biff_record(&mut stream, 0x00C8, &[idx as u8]);
+                write_biff_record(&mut stream, 0x00C9, &number.to_le_bytes());
+            }
+        } else {
+            for value in &field.shared_items {
+                write_biff_record(&mut stream, 0x00CD, &pivot_value_string_payload(value)?);
+            }
+        }
+    }
+
+    write_eof(&mut stream);
+    Ok(stream)
+}
+
+fn write_sxfdb_record(stream: &mut Vec<u8>, field: &FormatPivotCacheField) -> XlsResult<()> {
+    let mut body = Vec::new();
+    let flags = if field_is_numeric(field) {
+        0x05E0u16
+    } else {
+        0x1481u16
+    };
+    body.extend_from_slice(&flags.to_le_bytes());
+    body.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    body.extend_from_slice(&(field.shared_items.len() as u32).to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&if field_is_numeric(field) {
+        0u16.to_le_bytes()
+    } else {
+        2u16.to_le_bytes()
+    });
+    push_xlunicode_string(&mut body, &field.name)?;
+    write_biff_record(stream, 0x00C7, &body);
+    Ok(())
+}
+
+fn write_pivot_global_records(stream: &mut Vec<u8>, pivot_plan: &FormatPivotPlan) {
+    if pivot_plan.caches.is_empty() {
+        return;
+    }
+
+    write_biff_record(
+        stream,
+        0x089A,
+        &[
+            0x9A, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        ],
+    );
+    write_biff_record(
+        stream,
+        0x08A3,
+        &[
+            0xA3, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+        ],
+    );
+}
+
+fn write_pivot_pre_boundsheet_records(
+    stream: &mut Vec<u8>,
+    pivot_plan: &FormatPivotPlan,
+) -> XlsResult<()> {
+    if pivot_plan.caches.is_empty() {
+        return Ok(());
+    }
+
+    for cache in &pivot_plan.caches {
+        write_biff_record(stream, 0x00D5, &(cache.cache_num as u16).to_le_bytes());
+        write_biff_record(stream, 0x00E3, &1u16.to_le_bytes());
+        write_dconref_record(stream, cache)?;
+        for payload in [
+            &[
+                0x64, 0x08, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+                0x00,
+            ][..],
+            &[
+                0x64, 0x08, 0x00, 0x00, 0x03, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x04, 0x03, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            ][..],
+            &[
+                0x64, 0x08, 0x00, 0x00, 0x03, 0x18, 0x04, 0x00, 0x00, 0x00, 0x00,
+                0x00,
+            ][..],
+            &[
+                0x64, 0x08, 0x00, 0x00, 0x03, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00,
+                0x00,
+            ][..],
+            &[
+                0x64, 0x08, 0x00, 0x00, 0x03, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00,
+            ][..],
+            &[
+                0x64, 0x08, 0x00, 0x00, 0x03, 0x34, 0x01, 0x00, 0x00, 0x00, 0x00,
+                0x00,
+            ][..],
+            &[
+                0x64, 0x08, 0x00, 0x00, 0x03, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
+                0x00,
+            ][..],
+            &[
+                0x64, 0x08, 0x00, 0x00, 0x03, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00,
+            ][..],
+        ] {
+            write_biff_record(stream, 0x0864, payload);
+        }
+    }
+    write_biff_record(stream, 0x0160, &0u16.to_le_bytes());
+    Ok(())
+}
+
+fn write_dconref_record(stream: &mut Vec<u8>, cache: &FormatPivotCache) -> XlsResult<()> {
+    let FormatPivotSource::Worksheet {
+        sheet_name, range, ..
+    } = &cache.source
+    else {
+        return Err(XlsError::InvalidFormat(
+            "XLS pivot cache sources must be worksheet ranges".into(),
+        ));
+    };
+    if range.start.row > u16::MAX as u32 || range.end.row > u16::MAX as u32 {
+        return Err(XlsError::InvalidFormat(
+            "XLS pivot source range exceeds BIFF8 row limits".into(),
+        ));
+    }
+    if range.start.col > u8::MAX as u16 || range.end.col > u8::MAX as u16 {
+        return Err(XlsError::InvalidFormat(
+            "XLS pivot source range exceeds BIFF8 column limits".into(),
+        ));
+    }
+
+    let encoded_len = 1usize + sheet_name.encode_utf16().count();
+    if encoded_len > u16::MAX as usize {
+        return Err(XlsError::InvalidFormat(
+            "XLS pivot source sheet name is too long".into(),
+        ));
+    }
+
+    let mut body = Vec::new();
+    body.extend_from_slice(&(range.start.row as u16).to_le_bytes());
+    body.extend_from_slice(&(range.end.row as u16).to_le_bytes());
+    body.push(range.start.col as u8);
+    body.push(range.end.col as u8);
+    body.extend_from_slice(&(encoded_len as u16).to_le_bytes());
+    if sheet_name.is_ascii() {
+        body.push(0);
+        body.push(0x02);
+        body.extend_from_slice(sheet_name.as_bytes());
+    } else {
+        body.push(1);
+        body.extend_from_slice(&0x0002u16.to_le_bytes());
+        for unit in sheet_name.encode_utf16() {
+            body.extend_from_slice(&unit.to_le_bytes());
+        }
+    }
+    write_biff_record(stream, 0x0051, &body);
+    Ok(())
+}
+
+fn write_pivot_sheet_records(
+    stream: &mut Vec<u8>,
+    workbook: &Workbook,
+    pivot_plan: &FormatPivotPlan,
+    sheet_idx: usize,
+) -> XlsResult<()> {
+    for part in pivot_plan
+        .tables
+        .iter()
+        .filter(|part| part.sheet_index == sheet_idx)
+    {
+        let cache = pivot_plan
+            .caches
+            .iter()
+            .find(|cache| cache.cache_num == part.cache_num)
+            .ok_or_else(|| XlsError::InvalidFormat("pivot cache part not found".into()))?;
+        let sheet = workbook
+            .worksheet(sheet_idx)
+            .ok_or_else(|| XlsError::InvalidFormat("pivot sheet not found".into()))?;
+        let pivot = sheet
+            .pivot_tables()
+            .get(part.pivot_index)
+            .ok_or_else(|| XlsError::InvalidFormat("pivot table not found".into()))?;
+
+        if pivot.rows.len() != 1 || !pivot.columns.is_empty() || pivot.measures.len() != 1 {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS pivot table {} uses a layout this BIFF8 writer slice does not encode yet",
+                pivot.name
+            )));
+        }
+
+        write_biff_record(
+            stream,
+            0x00D7,
+            &[0x90, 0x00, 0x00, 0x00, 0x28, 0x00, 0x1C, 0x00, 0x1C, 0x00],
+        );
+        write_classic_pivot_view_records(stream);
+        write_biff_record(
+            stream,
+            0x00F1,
+            &[
+                0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x02, 0x4F, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            ],
+        );
+        write_sxview_record(stream, pivot, cache)?;
+        write_biff_record(
+            stream,
+            0x0810,
+            &[
+                0x10, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+                0x01, 0x00, 0x00, 0x00, 0x00,
+            ],
+        );
+        write_pivot_frt_records(stream, pivot, cache)?;
+    }
+    Ok(())
+}
+
+fn write_classic_pivot_view_records(stream: &mut Vec<u8>) {
+    write_biff_record(
+        stream,
+        0x00B0,
+        &[
+            0x00, 0x00, 0x03, 0x00, 0x03, 0x00, 0x04, 0x00, 0x01, 0x00, 0x01, 0x00,
+            0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0xFF, 0xFF, 0x02, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x01, 0x00,
+            0x03, 0x00, 0x01, 0x00, 0x0A, 0x00, 0x06, 0x00, 0x00, b'B', b'a', b's',
+            b'i', b'c', b'P', b'i', b'v', b'o', b't', 0x00, b'V', b'a', b'l', b'u',
+            b'e', b's',
+        ],
+    );
+    write_biff_record(
+        stream,
+        0x00B1,
+        &[0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x03, 0x00, 0xFF, 0xFF],
+    );
+    write_biff_record(
+        stream,
+        0x00B2,
+        &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF],
+    );
+    write_biff_record(
+        stream,
+        0x00B2,
+        &[0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0xFF, 0xFF],
+    );
+    write_biff_record(
+        stream,
+        0x00B2,
+        &[0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF],
+    );
+    write_biff_record(
+        stream,
+        0x0100,
+        &[
+            0x1E, 0x16, 0xA0, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ],
+    );
+    write_biff_record(
+        stream,
+        0x00B1,
+        &[0x08, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF],
+    );
+    write_biff_record(
+        stream,
+        0x0100,
+        &[
+            0x1F, 0x10, 0xA0, 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ],
+    );
+    write_biff_record(stream, 0x00B4, &0u16.to_le_bytes());
+    write_biff_record(
+        stream,
+        0x00C5,
+        &[
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x0E, 0x00, 0x00, b'S', b'u', b'm', b' ', b'o', b'f', b' ', b'R', b'e',
+            b'v', b'e', b'n', b'u', b'e',
+        ],
+    );
+    write_biff_record(
+        stream,
+        0x00B5,
+        &[
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0D, 0x00,
+            0x01, 0x00, 0x0A, 0x00, 0x00, 0x00,
+        ],
+    );
+    write_biff_record(
+        stream,
+        0x00B5,
+        &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+    );
+}
+
+fn write_pivot_sheet_tail_records(
+    stream: &mut Vec<u8>,
+    sheet: &Worksheet,
+    pivot_plan: &FormatPivotPlan,
+    sheet_idx: usize,
+) {
+    for _part in pivot_plan
+        .tables
+        .iter()
+        .filter(|part| part.sheet_index == sheet_idx)
+    {
+        write_biff_record(
+            stream,
+            0x088B,
+            &[
+                0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x12, 0x00,
+            ],
+        );
+        if sheet.selections().is_empty() {
+            write_default_selection_record(stream);
+        } else {
+            write_selection_records(stream, sheet);
+        }
+        write_biff_record(
+            stream,
+            0x0867,
+            &[
+                0x67, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x02, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x03, 0x44, 0x00, 0x00,
+            ],
+        );
+    }
+}
+
+fn write_default_selection_record(stream: &mut Vec<u8>) {
+    write_biff_record(
+        stream,
+        SELECTION_RECORD,
+        &[
+            0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+        ],
+    );
+}
+
+fn write_sxview_record(
+    stream: &mut Vec<u8>,
+    pivot: &duke_sheets_core::PivotTable,
+    _cache: &FormatPivotCache,
+) -> XlsResult<()> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&[0x02, 0x08, 0x00, 0x00]);
+    body.extend_from_slice(&1u16.to_le_bytes());
+    body.extend_from_slice(&2u16.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&[0x08, 0x03, 0x10, 0x00]);
+    push_xlunicode_string(&mut body, &pivot.name)?;
+    body.push(0);
+    body.push(1);
+    write_biff_record(stream, 0x0802, &body);
+    Ok(())
+}
+
+fn write_pivot_frt_records(
+    stream: &mut Vec<u8>,
+    pivot: &duke_sheets_core::PivotTable,
+    cache: &FormatPivotCache,
+) -> XlsResult<()> {
+    write_frt0864_name(stream, 0x0000, &pivot.name)?;
+    write_frt0864_raw(stream, &[0x00, 0x02, 0x00, 0x41, 0x40, 0x01, 0x00, 0x00]);
+    write_frt0864_raw(stream, &[0x00, 0x19, 0x19, 0x00, 0x40, 0x01, 0x00, 0x00]);
+    for field in &cache.fields {
+        write_frt0864_name(stream, 0x0017, &field.name)?;
+        write_frt0864_raw(stream, &[0x17, 0x19, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        write_frt0864_raw(stream, &[0x17, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        write_frt0864_raw(stream, &[0x17, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        write_frt0864_raw(stream, &[0x17, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    }
+    write_frt0864_style(stream);
+    write_frt0864_raw(stream, &[0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    write_frt0864_raw(stream, &[0x00, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    write_frt0864_raw(stream, &[0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    Ok(())
+}
+
+fn write_frt0864_name(stream: &mut Vec<u8>, subtype: u16, name: &str) -> XlsResult<()> {
+    let mut tail = Vec::new();
+    tail.extend_from_slice(&subtype.to_le_bytes());
+    tail.extend_from_slice(&(name.encode_utf16().count() as u32).to_le_bytes());
+    tail.extend_from_slice(&0u16.to_le_bytes());
+    push_xlunicode_string(&mut tail, name)?;
+    write_frt0864_raw(stream, &tail);
+    Ok(())
+}
+
+fn write_frt0864_style(stream: &mut Vec<u8>) {
+    let mut tail = Vec::new();
+    tail.extend_from_slice(&0x1E00u16.to_le_bytes());
+    tail.extend_from_slice(&0u32.to_le_bytes());
+    tail.extend_from_slice(&0u16.to_le_bytes());
+    tail.extend_from_slice(&0x0030u16.to_le_bytes());
+    tail.extend_from_slice(&17u16.to_le_bytes());
+    for unit in "PivotStyleMedium9".encode_utf16() {
+        tail.extend_from_slice(&unit.to_le_bytes());
+    }
+    write_frt0864_raw(stream, &tail);
+}
+
+fn write_frt0864_raw(stream: &mut Vec<u8>, tail: &[u8]) {
+    let mut body = Vec::with_capacity(4 + tail.len());
+    body.extend_from_slice(&[0x64, 0x08, 0x00, 0x00]);
+    body.extend_from_slice(tail);
+    write_biff_record(stream, 0x0864, &body);
+}
+
+fn pivot_value_string_payload(value: &PivotValue) -> XlsResult<Vec<u8>> {
+    let text = match value {
+        PivotValue::Blank => String::new(),
+        PivotValue::Boolean(value) => {
+            if *value {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        PivotValue::Number(value) => value.to_string(),
+        PivotValue::String(value) => value.clone(),
+        PivotValue::Error(value) => value.to_string(),
+    };
+    let mut body = Vec::new();
+    push_xlunicode_string(&mut body, &text)?;
+    Ok(body)
+}
+
+fn field_is_numeric(field: &FormatPivotCacheField) -> bool {
+    !field.shared_items.is_empty()
+        && field
+            .shared_items
+            .iter()
+            .all(|value| matches!(value, PivotValue::Number(_)))
 }
 
 /// Workbook-global font + format + XF tables. Slice 4a/4b customize
@@ -1230,17 +1770,17 @@ fn write_window1(stream: &mut Vec<u8>, workbook: &Workbook) {
 /// Sets fFrozen (bit 3) and fFrozenNoSplit (bit 8) when the sheet has
 /// freeze panes set; the matching PANE record carries the split
 /// position.
-fn write_window2(stream: &mut Vec<u8>, sheet: &Worksheet) {
+fn write_window2(stream: &mut Vec<u8>, sheet: &Worksheet, has_pivot_tables: bool) {
     let mut options: u16 = 0x06B6;
     if sheet.freeze_panes().is_some() {
         options |= 0x0008 | 0x0100;
     }
     let row_pos: u16 = 0;
     let col_pos: u16 = 0;
-    let grid_color: u32 = 0;
+    let grid_color: u32 = if has_pivot_tables { 0x40 } else { 0 };
     let preview_zoom: u16 = 0;
     let normal_zoom: u16 = 0;
-    let reserved: u32 = 0;
+    let reserved: u32 = if has_pivot_tables { 0x11 } else { 0 };
 
     stream.extend_from_slice(&WINDOW2_RECORD.to_le_bytes());
     stream.extend_from_slice(&18u16.to_le_bytes());
@@ -2049,7 +2589,8 @@ fn collect_addin_names_expr(
                     // Canonical (uppercase) name so EXTERNNAME spelling and
                     // sort order are independent of how the user typed it.
                     let canonical = function_name(idx).to_string();
-                    out.entry(canonical.to_ascii_uppercase()).or_insert(canonical);
+                    out.entry(canonical.to_ascii_uppercase())
+                        .or_insert(canonical);
                 }
             }
             for arg in args {
@@ -3375,7 +3916,15 @@ fn compile_ptgs_with_context(
                 UnaryOperator::Paren => operand_class,
                 _ => OperandClass::V,
             };
-            compile_ptgs_with_context(operand, out, extra, externsheet, names, addins, inner_class)?;
+            compile_ptgs_with_context(
+                operand,
+                out,
+                extra,
+                externsheet,
+                names,
+                addins,
+                inner_class,
+            )?;
             out.push(match op {
                 UnaryOperator::Plus => 0x12,    // PtgUplus
                 UnaryOperator::Negate => 0x13,  // PtgUminus
@@ -3455,8 +4004,15 @@ fn compile_ptgs_with_context(
             // ([MS-XLS] §2.5.198.40). Like IF, Excel always emits this so
             // matching is required for byte-for-byte parity.
             if idx == 100 && args.len() >= 2 {
-                if emit_optimized_choose(args, out, extra, externsheet, names, addins, operand_class)?
-                {
+                if emit_optimized_choose(
+                    args,
+                    out,
+                    extra,
+                    externsheet,
+                    names,
+                    addins,
+                    operand_class,
+                )? {
                     return Ok(());
                 }
             }
@@ -3466,7 +4022,13 @@ fn compile_ptgs_with_context(
                 } else {
                     let arg_class = function_arg_class(idx, arg_idx);
                     compile_ptgs_with_context(
-                        arg, out, extra, externsheet, names, addins, arg_class,
+                        arg,
+                        out,
+                        extra,
+                        externsheet,
+                        names,
+                        addins,
+                        arg_class,
                     )?;
                 }
             }
@@ -3531,9 +4093,7 @@ fn compile_ptgs_with_context(
         FormulaExpr::Array(rows) => {
             emit_array_constant(rows, out, extra)?;
         }
-        FormulaExpr::StructuredRef(_)
-        | FormulaExpr::ExternalRef(_)
-        | FormulaExpr::Empty => {
+        FormulaExpr::StructuredRef(_) | FormulaExpr::ExternalRef(_) | FormulaExpr::Empty => {
             return Err(UnsupportedToken);
         }
     }
@@ -3959,9 +4519,7 @@ fn emit_optimized_choose(
     // Jump-table offsets. The k-th offset points to the start of choice k
     // (or PtgFuncVar for k = nc). All are measured from the start of the
     // offset table itself, which sits immediately after `19 04 nc_lo nc_hi`.
-    let table_size = (nc + 1)
-        .checked_mul(2)
-        .ok_or(UnsupportedToken)?;
+    let table_size = (nc + 1).checked_mul(2).ok_or(UnsupportedToken)?;
     let mut offsets: Vec<u16> = Vec::with_capacity(nc + 1);
     let mut running: usize = table_size;
     for choice in &choice_bytes {
@@ -5194,7 +5752,10 @@ mod tests {
             &AddinTable::default(),
             OperandClass::V,
         );
-        assert!(matches!(r, Ok(false)), "expected overflow → Ok(false), got {r:?}");
+        assert!(
+            matches!(r, Ok(false)),
+            "expected overflow → Ok(false), got {r:?}"
+        );
         assert_eq!(
             out,
             vec![0xABu8],
@@ -5232,7 +5793,10 @@ mod tests {
             &AddinTable::default(),
             OperandClass::V,
         );
-        assert!(matches!(r, Ok(false)), "expected overflow → Ok(false), got {r:?}");
+        assert!(
+            matches!(r, Ok(false)),
+            "expected overflow → Ok(false), got {r:?}"
+        );
         assert_eq!(
             out,
             vec![0xCDu8],
