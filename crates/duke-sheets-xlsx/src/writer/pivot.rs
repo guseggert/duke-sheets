@@ -1041,6 +1041,7 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     workbook: &Workbook,
     part: &PivotTablePart,
+    cache_part: &PivotCachePart,
     style_table: &XlsxStyleTable,
 ) -> XlsxResult<()> {
     let sheet = workbook
@@ -1050,7 +1051,6 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         .pivot_tables()
         .get(part.pivot_index)
         .ok_or_else(|| XlsxError::InvalidFormat("pivot table not found".into()))?;
-    let cache_part = find_cache_part(workbook, part)?;
 
     let path = format!("xl/pivotTables/pivotTable{}.xml", part.table_num);
     write_xml_part(zip, &path, |w| {
@@ -1097,15 +1097,6 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         w.write_event(Event::End(BytesEnd::new("pivotTableDefinition")))?;
         Ok(())
     })
-}
-
-fn find_cache_part(workbook: &Workbook, table_part: &PivotTablePart) -> XlsxResult<PivotCachePart> {
-    let numbering = build_pivot_numbering(workbook)?;
-    numbering
-        .cache_parts
-        .into_iter()
-        .find(|part| part.cache_num == table_part.cache_num)
-        .ok_or_else(|| XlsxError::InvalidFormat("pivot cache part not found".into()))
 }
 
 fn write_location(w: &mut XmlWriter, pivot: &PivotTable, fields: &[CacheField]) -> XlsxResult<()> {

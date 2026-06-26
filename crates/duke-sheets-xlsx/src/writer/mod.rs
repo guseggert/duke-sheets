@@ -807,7 +807,12 @@ impl XlsxWriter {
                 tables::write_table_part(&mut zip, sheet, local_idx, global_num)?;
             }
             for part in &sheet_pivot_parts {
-                pivot::write_pivot_table_part(&mut zip, workbook, part, &style_table)?;
+                let cache_part = pivot_numbering
+                    .cache_parts
+                    .iter()
+                    .find(|cache_part| cache_part.cache_num == part.cache_num)
+                    .ok_or_else(|| XlsxError::InvalidFormat("pivot cache part not found".into()))?;
+                pivot::write_pivot_table_part(&mut zip, workbook, part, cache_part, &style_table)?;
             }
 
             // Write drawing and chart XML files for this sheet
