@@ -617,6 +617,37 @@ pub enum PivotGrouping {
         /// Grouping units.
         units: Vec<PivotDateGroupUnit>,
     },
+    /// Manual item grouping.
+    Manual {
+        /// Field to group.
+        field: PivotFieldRef,
+        /// Item groups to apply. Source items not listed in any group remain
+        /// visible under their original value.
+        groups: Vec<PivotManualGroup>,
+    },
+}
+
+/// A manually named group of source items in one pivot field.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PivotManualGroup {
+    /// Display caption for the grouped items.
+    pub name: String,
+    /// Source item values that should roll up under `name`.
+    pub members: Vec<PivotValue>,
+}
+
+impl PivotManualGroup {
+    /// Create a manual item group.
+    pub fn new<I, V>(name: impl Into<String>, members: I) -> Self
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<PivotValue>,
+    {
+        Self {
+            name: name.into(),
+            members: members.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 /// Date grouping unit.

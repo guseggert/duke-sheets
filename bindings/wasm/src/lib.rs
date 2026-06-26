@@ -11,8 +11,9 @@ use duke_sheets::{CalculationOptions, FormulaValue, WorkbookCalculationExt, Work
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
     PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
-    PivotLayoutKind, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs,
-    PivotSort, PivotStyle, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
+    PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
+    PivotShowAs, PivotSort, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    Workbook as CoreWorkbook,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -271,13 +272,21 @@ export interface PivotCalculatedFieldOptions {
   formula: string;
 }
 
+export type PivotValueInput = string | number | boolean;
+
+export interface PivotManualGroupOptions {
+  name: string;
+  members: PivotValueInput[];
+}
+
 export interface PivotGroupingOptions {
   field: string;
-  kind: "number" | "numeric" | "date";
+  kind: "number" | "numeric" | "date" | "manual" | "items" | "item";
   start?: number;
   end?: number;
   interval?: number;
   units?: Array<"seconds" | "minutes" | "hours" | "days" | "months" | "quarters" | "years">;
+  groups?: PivotManualGroupOptions[];
 }
 
 export interface PivotFieldOptions {
@@ -758,6 +767,22 @@ fn build_pivot_grouping_from_wasm(
                 units,
             })
         }
+        "manual" | "items" | "item" => Ok(PivotGrouping::Manual {
+            field: options.field.into(),
+            groups: options
+                .groups
+                .ok_or_else(|| JsError::new("Manual pivot grouping requires groups"))?
+                .into_iter()
+                .map(|group| PivotManualGroup {
+                    name: group.name,
+                    members: group
+                        .members
+                        .into_iter()
+                        .map(pivot_value_from_wasm)
+                        .collect(),
+                })
+                .collect(),
+        }),
         other => Err(JsError::new(&format!(
             "Unsupported pivot grouping kind: {other}"
         ))),

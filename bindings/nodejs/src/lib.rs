@@ -18,8 +18,9 @@ use duke_sheets::{
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
     PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
-    PivotLayoutKind, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs,
-    PivotSort, PivotStyle, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
+    PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
+    PivotShowAs, PivotSort, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    Workbook as CoreWorkbook,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -362,6 +363,12 @@ pub struct JsPivotCalculatedFieldOptions {
 }
 
 #[napi(object)]
+pub struct JsPivotManualGroupOptions {
+    pub name: String,
+    pub members: Vec<Either3<f64, String, bool>>,
+}
+
+#[napi(object)]
 pub struct JsPivotGroupingOptions {
     pub field: String,
     pub kind: String,
@@ -369,6 +376,7 @@ pub struct JsPivotGroupingOptions {
     pub end: Option<f64>,
     pub interval: Option<f64>,
     pub units: Option<Vec<String>>,
+    pub groups: Option<Vec<JsPivotManualGroupOptions>>,
 }
 
 #[napi(object)]
@@ -779,6 +787,18 @@ fn build_pivot_grouping_from_js(options: JsPivotGroupingOptions) -> Result<Pivot
                 units,
             })
         }
+        "manual" | "items" | "item" => Ok(PivotGrouping::Manual {
+            field: options.field.into(),
+            groups: options
+                .groups
+                .ok_or_else(|| napi::Error::from_reason("Manual pivot grouping requires groups"))?
+                .into_iter()
+                .map(|group| PivotManualGroup {
+                    name: group.name,
+                    members: group.members.into_iter().map(pivot_value_from_js).collect(),
+                })
+                .collect(),
+        }),
         other => Err(napi::Error::from_reason(format!(
             "Unsupported pivot grouping kind: {other}"
         ))),

@@ -14,9 +14,9 @@ use ahash::{AHashMap, AHashSet};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue, Error, NumberFormat, PivotAggregate,
     PivotCalculatedField, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping,
-    PivotLayoutKind, PivotMeasure, PivotOverwritePolicy, PivotRefreshStatus, PivotShowAs,
-    PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue, Result, Table, Workbook,
-    Worksheet, MAX_COLS, MAX_ROWS,
+    PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshStatus,
+    PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue, Result, Table,
+    Workbook, Worksheet, MAX_COLS, MAX_ROWS,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -896,7 +896,9 @@ fn date_group_unit_name(unit: duke_sheets_core::PivotDateGroupUnit) -> &'static 
 
 fn grouping_field_name(grouping: &PivotGrouping) -> &str {
     match grouping {
-        PivotGrouping::Number { field, .. } | PivotGrouping::Date { field, .. } => &field.name,
+        PivotGrouping::Number { field, .. }
+        | PivotGrouping::Date { field, .. }
+        | PivotGrouping::Manual { field, .. } => &field.name,
     }
 }
 
@@ -1126,6 +1128,9 @@ fn grouped_column(
         PivotGrouping::Date { units, .. } => {
             Ok(grouped_date_column(snapshot, field_index, units, date_1904))
         }
+        PivotGrouping::Manual { groups, .. } => {
+            grouped_manual_column(snapshot, field_index, groups, pivot_name)
+        }
     }
 }
 
@@ -1309,6 +1314,84 @@ fn group_date_value(
         })
         .collect::<Vec<_>>();
     PivotValue::String(parts.join("-"))
+}
+
+fn grouped_manual_column(
+    snapshot: &SourceSnapshot,
+    field_index: usize,
+    groups: &[PivotManualGroup],
+    pivot_name: &str,
+) -> Result<EncodedColumn> {
+    let lookup = manual_group_lookup(groups, pivot_name)?;
+
+    #[cfg(feature = "parallel")]
+    {
+        if snapshot.row_count >= PARALLEL_ROW_THRESHOLD {
+            let values = (0..snapshot.row_count)
+                .into_par_iter()
+                .map(|row| group_manual_value(snapshot.value(row, field_index), &lookup))
+                .collect::<Vec<_>>();
+            return Ok(EncodedColumn::from_values(values));
+        }
+    }
+
+    let mut column = EncodedColumn::with_capacity(snapshot.row_count);
+    for row in 0..snapshot.row_count {
+        column.push(group_manual_value(
+            snapshot.value(row, field_index),
+            &lookup,
+        ));
+    }
+    Ok(column)
+}
+
+fn manual_group_lookup(
+    groups: &[PivotManualGroup],
+    pivot_name: &str,
+) -> Result<AHashMap<PivotValue, String>> {
+    if groups.is_empty() {
+        return Err(Error::other(format!(
+            "pivot table {pivot_name} uses an empty manual grouping"
+        )));
+    }
+
+    let mut names = AHashSet::new();
+    let mut lookup = AHashMap::new();
+    for group in groups {
+        if group.name.trim().is_empty() {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} has a manual group with a blank name"
+            )));
+        }
+        if group.members.is_empty() {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} manual group {} has no members",
+                group.name
+            )));
+        }
+        if !names.insert(group.name.to_lowercase()) {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} has duplicate manual group name {}",
+                group.name
+            )));
+        }
+        for member in &group.members {
+            if lookup.insert(member.clone(), group.name.clone()).is_some() {
+                return Err(Error::other(format!(
+                    "pivot table {pivot_name} assigns pivot item {member} to more than one manual group"
+                )));
+            }
+        }
+    }
+
+    Ok(lookup)
+}
+
+fn group_manual_value(value: &PivotValue, lookup: &AHashMap<PivotValue, String>) -> PivotValue {
+    lookup
+        .get(value)
+        .map(|group| PivotValue::String(group.clone()))
+        .unwrap_or_else(|| value.clone())
 }
 
 #[derive(Debug, Clone)]
@@ -4533,9 +4616,9 @@ fn output_range(target: CellAddress, row_count: usize, col_count: usize) -> Resu
 mod tests {
     use duke_sheets_core::{
         CellRange, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter,
-        PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotMeasure,
-        PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue, Table,
-        TableColumn, Workbook,
+        PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup,
+        PivotMeasure, PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue,
+        Table, TableColumn, Workbook,
     };
     use pretty_assertions::assert_eq;
     use ssfmt::{date_serial::date_to_serial, DateSystem};
@@ -5738,6 +5821,54 @@ mod tests {
         assert_eq!(number(&workbook, "E4"), 5.0);
         assert_eq!(text(&workbook, "D5"), "Grand Total");
         assert_eq!(number(&workbook, "E5"), 15.0);
+    }
+
+    #[test]
+    fn refreshes_manual_item_grouping() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "North").unwrap();
+        sheet.set_cell_value("B4", 7.0).unwrap();
+        sheet.set_cell_value("A5", "South").unwrap();
+        sheet.set_cell_value("B5", 8.0).unwrap();
+        sheet.set_cell_value("A6", "Central").unwrap();
+        sheet.set_cell_value("B6", 5.0).unwrap();
+        sheet.set_cell_value("A7", "East").unwrap();
+        sheet.set_cell_value("B7", 3.0).unwrap();
+
+        let pivot = PivotTable::builder("GroupedRegions")
+            .source_range(CellRange::parse("A1:B7").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .grouping(PivotGrouping::Manual {
+                field: "Region".into(),
+                groups: vec![
+                    PivotManualGroup::new("Coastal", ["East", "West"]),
+                    PivotManualGroup::new("Inland", ["North", "South"]),
+                ],
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D2"), "Central");
+        assert_eq!(number(&workbook, "E2"), 5.0);
+        assert_eq!(text(&workbook, "D3"), "Coastal");
+        assert_eq!(number(&workbook, "E3"), 33.0);
+        assert_eq!(text(&workbook, "D4"), "Inland");
+        assert_eq!(number(&workbook, "E4"), 15.0);
+        assert_eq!(text(&workbook, "D5"), "Grand Total");
+        assert_eq!(number(&workbook, "E5"), 53.0);
     }
 
     #[test]

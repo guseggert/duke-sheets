@@ -3219,8 +3219,8 @@ mod tests {
     use duke_sheets_core::{
         CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotDateGroupUnit,
         PivotExtension, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
-        PivotLayoutKind, PivotMeasure, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource,
-        PivotStyle, PivotSubtotal, PivotTable, PivotValue, SplitPanes,
+        PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
+        PivotSort, PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue, SplitPanes,
     };
     use std::io::Read;
 
@@ -4887,6 +4887,37 @@ mod tests {
             }
             other => panic!("unexpected grouping: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_writer_rejects_manual_pivot_grouping_until_group_items_supported() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let pivot = PivotTable::builder("ManualGroupedRegions")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .grouping(PivotGrouping::Manual {
+                field: "Region".into(),
+                groups: vec![PivotManualGroup::new("Coastal", ["East", "West"])],
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        let err = XlsxWriter::write(&wb, &mut out).unwrap_err();
+        assert!(err.to_string().contains("manual item grouping"));
+        assert!(err.to_string().contains("groupItems persistence"));
     }
 
     #[test]

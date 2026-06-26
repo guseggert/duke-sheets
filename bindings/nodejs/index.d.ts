@@ -103,13 +103,21 @@ export interface JsPivotCalculatedFieldOptions {
   formula: string
 }
 
+export type JsPivotValueInput = string | number | boolean
+
+export interface JsPivotManualGroupOptions {
+  name: string
+  members: JsPivotValueInput[]
+}
+
 export interface JsPivotGroupingOptions {
   field: string
-  kind: 'number' | 'numeric' | 'date'
+  kind: 'number' | 'numeric' | 'date' | 'manual' | 'items' | 'item'
   start?: number
   end?: number
   interval?: number
   units?: Array<'seconds' | 'minutes' | 'hours' | 'days' | 'months' | 'quarters' | 'years'>
+  groups?: JsPivotManualGroupOptions[]
 }
 
 export interface JsPivotFieldOptions {

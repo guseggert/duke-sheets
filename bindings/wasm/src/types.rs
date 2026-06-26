@@ -99,6 +99,13 @@ pub struct WasmPivotCalculatedFieldOptions {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmPivotManualGroupOptions {
+    pub name: String,
+    pub members: Vec<WasmPivotValueInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmPivotGroupingOptions {
     pub field: String,
     pub kind: String,
@@ -106,6 +113,7 @@ pub struct WasmPivotGroupingOptions {
     pub end: Option<f64>,
     pub interval: Option<f64>,
     pub units: Option<Vec<String>>,
+    pub groups: Option<Vec<WasmPivotManualGroupOptions>>,
 }
 
 #[derive(Deserialize)]

@@ -16,9 +16,9 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotDateGroupUnit, PivotField,
-    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotMeasure,
-    PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotStyle, PivotSubtotal,
-    PivotTable, PivotValue,
+    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
+    PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs,
+    PivotSort, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
 };
 
 mod types;
@@ -362,10 +362,43 @@ fn build_pivot_grouping_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotGro
                 .map(|unit| parse_pivot_date_group_unit(unit))
                 .collect::<PyResult<Vec<_>>>()?,
         }),
+        "manual" | "items" | "item" => Ok(PivotGrouping::Manual {
+            field: field.into(),
+            groups: required_manual_groups(dict)?,
+        }),
         other => Err(PyValueError::new_err(format!(
             "Unsupported pivot grouping kind: {other}"
         ))),
     }
+}
+
+fn required_manual_groups(dict: &Bound<'_, PyDict>) -> PyResult<Vec<PivotManualGroup>> {
+    let groups_value = optional_any(dict, &["groups"])?
+        .ok_or_else(|| PyValueError::new_err("manual pivot grouping requires groups"))?;
+    let groups = groups_value
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("manual pivot grouping groups must be a list"))?;
+
+    groups
+        .iter()
+        .map(|group| {
+            let group_dict = group
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("manual pivot group must be a dict"))?;
+            let members_value = optional_any(group_dict, &["members"])?
+                .ok_or_else(|| PyValueError::new_err("manual pivot group requires members"))?;
+            let members = members_value
+                .downcast::<PyList>()
+                .map_err(|_| PyValueError::new_err("manual pivot group members must be a list"))?
+                .iter()
+                .map(|member| pivot_value_from_py(&member))
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(PivotManualGroup {
+                name: required_string(group_dict, &["name"])?,
+                members,
+            })
+        })
+        .collect()
 }
 
 fn optional_any<'py>(

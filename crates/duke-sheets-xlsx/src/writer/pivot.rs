@@ -322,6 +322,12 @@ fn validate_pivot_groupings(pivot: &PivotTable, fields: &[CacheField]) -> XlsxRe
                     )));
                 }
             }
+            PivotGrouping::Manual { .. } => {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "pivot table {} uses manual item grouping for field {}, but XLSX groupItems persistence is not implemented yet",
+                    pivot.name, field.name
+                )));
+            }
         }
     }
 
@@ -391,9 +397,18 @@ fn apply_grouped_cache_fields(
                     resolved.fields.push(grouped);
                 }
             }
-            _ => {
-                resolved.fields[field_index].group = Some(CacheFieldGroup::Range(grouping.clone()));
-            }
+            _ => match grouping {
+                PivotGrouping::Manual { .. } => {
+                    let message = format!(
+                        "pivot table {pivot_name} uses manual item grouping for field {field_name}, but XLSX groupItems persistence is not implemented yet"
+                    );
+                    return Err(XlsxError::InvalidFormat(message));
+                }
+                _ => {
+                    resolved.fields[field_index].group =
+                        Some(CacheFieldGroup::Range(grouping.clone()));
+                }
+            },
         }
     }
 
@@ -471,7 +486,9 @@ fn group_date_value(
 
 fn grouping_field_ref(grouping: &PivotGrouping) -> &PivotFieldRef {
     match grouping {
-        PivotGrouping::Number { field, .. } | PivotGrouping::Date { field, .. } => field,
+        PivotGrouping::Number { field, .. }
+        | PivotGrouping::Date { field, .. }
+        | PivotGrouping::Manual { field, .. } => field,
     }
 }
 
@@ -543,6 +560,22 @@ fn grouping_signature(grouping: &PivotGrouping) -> String {
                 .collect::<Vec<_>>()
                 .join(",");
             format!("d:{}:{units}", field.name.to_lowercase())
+        }
+        PivotGrouping::Manual { field, groups } => {
+            let groups = groups
+                .iter()
+                .map(|group| {
+                    let members = group
+                        .members
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!("{}=[{}]", group.name, members)
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("m:{}:{groups}", field.name.to_lowercase())
         }
     }
 }
@@ -2081,6 +2114,11 @@ fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResul
         }
         CacheFieldGroup::Range(PivotGrouping::Date { units, .. }) => {
             range_pr.push_attribute(("groupBy", date_group_by_name(units[0])));
+        }
+        CacheFieldGroup::Range(PivotGrouping::Manual { .. }) => {
+            return Err(XlsxError::InvalidFormat(
+                "XLSX manual pivot grouping persistence is not implemented yet".to_string(),
+            ));
         }
         CacheFieldGroup::DateUnit { unit, .. } => {
             range_pr.push_attribute(("groupBy", date_group_by_name(*unit)));
