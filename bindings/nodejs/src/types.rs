@@ -553,6 +553,7 @@ pub struct JsPivotLayoutDefinition {
     pub field_print_titles: bool,
     pub page_wrap: u32,
     pub page_over_then_down: bool,
+    pub merge_item_labels: bool,
 }
 
 impl From<&core::PivotLayout> for JsPivotLayoutDefinition {
@@ -569,6 +570,7 @@ impl From<&core::PivotLayout> for JsPivotLayoutDefinition {
             field_print_titles: layout.field_print_titles,
             page_wrap: layout.page_wrap,
             page_over_then_down: layout.page_over_then_down,
+            merge_item_labels: layout.merge_item_labels,
         }
     }
 }

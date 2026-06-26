@@ -181,6 +181,7 @@ export interface JsPivotLayoutOptions {
   fieldPrintTitles?: boolean
   pageWrap?: number
   pageOverThenDown?: boolean
+  mergeItemLabels?: boolean
 }
 
 export interface JsPivotStyleOptions {

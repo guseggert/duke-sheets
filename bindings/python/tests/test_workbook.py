@@ -241,6 +241,7 @@ class TestPivotTables:
                     "repeat_item_labels": True,
                     "page_wrap": 2,
                     "page_over_then_down": True,
+                    "merge_item_labels": True,
                 },
                 "overwrite_policy": "fail_on_occupied",
             }
@@ -271,6 +272,7 @@ class TestPivotTables:
         assert pivot["layout"]["repeat_item_labels"] is True
         assert pivot["layout"]["page_wrap"] == 2
         assert pivot["layout"]["page_over_then_down"] is True
+        assert pivot["layout"]["merge_item_labels"] is True
         assert pivot["refresh_policy"]["refresh_on_open"] is True
         assert pivot["refresh_policy"]["missing_items_limit"] == 25
         assert pivot["overwrite_policy"] == "fail_on_occupied"

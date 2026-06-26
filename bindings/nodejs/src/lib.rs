@@ -408,6 +408,7 @@ pub struct JsPivotLayoutOptions {
     pub field_print_titles: Option<bool>,
     pub page_wrap: Option<u32>,
     pub page_over_then_down: Option<bool>,
+    pub merge_item_labels: Option<bool>,
 }
 
 #[napi(object)]
@@ -921,6 +922,9 @@ fn build_pivot_layout_from_js(options: JsPivotLayoutOptions) -> Result<PivotLayo
     }
     if let Some(value) = options.page_over_then_down {
         layout.page_over_then_down = value;
+    }
+    if let Some(value) = options.merge_item_labels {
+        layout.merge_item_labels = value;
     }
     Ok(layout)
 }

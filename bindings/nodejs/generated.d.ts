@@ -1494,6 +1494,7 @@ export interface JsPivotLayoutDefinition {
   fieldPrintTitles: boolean
   pageWrap: number
   pageOverThenDown: boolean
+  mergeItemLabels: boolean
 }
 
 export interface JsPivotLayoutOptions {
@@ -1508,6 +1509,7 @@ export interface JsPivotLayoutOptions {
   fieldPrintTitles?: boolean
   pageWrap?: number
   pageOverThenDown?: boolean
+  mergeItemLabels?: boolean
 }
 
 export interface JsPivotManualGroupDefinition {

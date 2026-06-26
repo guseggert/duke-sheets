@@ -4583,6 +4583,7 @@ mod tests {
         layout.field_print_titles = true;
         layout.page_wrap = 2;
         layout.page_over_then_down = true;
+        layout.merge_item_labels = true;
         let pivot = PivotTable::builder("LayoutPivot")
             .source_range(CellRange::parse("A1:B3").unwrap())
             .target_address("D1")
@@ -4608,6 +4609,7 @@ mod tests {
         assert!(pivot_xml.contains(r#"fieldPrintTitles="1""#));
         assert!(pivot_xml.contains(r#"pageWrap="2""#));
         assert!(pivot_xml.contains(r#"pageOverThenDown="1""#));
+        assert!(pivot_xml.contains(r#"mergeItem="1""#));
         assert!(pivot_xml.contains(r#"compact="0""#));
         assert!(pivot_xml.contains(r#"outline="0""#));
 
@@ -4627,6 +4629,7 @@ mod tests {
         assert!(pivot.layout.field_print_titles);
         assert_eq!(pivot.layout.page_wrap, 2);
         assert!(pivot.layout.page_over_then_down);
+        assert!(pivot.layout.merge_item_labels);
     }
 
     #[test]

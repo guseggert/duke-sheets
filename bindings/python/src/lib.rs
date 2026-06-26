@@ -315,6 +315,9 @@ fn build_pivot_layout_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotLayou
     if let Some(value) = optional_bool(dict, &["page_over_then_down", "pageOverThenDown"])? {
         layout.page_over_then_down = value;
     }
+    if let Some(value) = optional_bool(dict, &["merge_item_labels", "mergeItemLabels"])? {
+        layout.merge_item_labels = value;
+    }
     Ok(layout)
 }
 
@@ -1109,6 +1112,7 @@ fn pivot_layout_to_py(py: Python<'_>, layout: &PivotLayout) -> PyResult<PyObject
     dict.set_item("field_print_titles", layout.field_print_titles)?;
     dict.set_item("page_wrap", layout.page_wrap)?;
     dict.set_item("page_over_then_down", layout.page_over_then_down)?;
+    dict.set_item("merge_item_labels", layout.merge_item_labels)?;
     Ok(dict.into_any().unbind())
 }
 

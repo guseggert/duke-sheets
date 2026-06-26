@@ -716,6 +716,8 @@ pub struct PivotLayout {
     pub page_wrap: u32,
     /// Lay wrapped report/page fields across rows before columns.
     pub page_over_then_down: bool,
+    /// Merge repeated item labels in the rendered pivot layout when supported.
+    pub merge_item_labels: bool,
 }
 
 impl Default for PivotLayout {
@@ -732,6 +734,7 @@ impl Default for PivotLayout {
             field_print_titles: false,
             page_wrap: 0,
             page_over_then_down: false,
+            merge_item_labels: false,
         }
     }
 }

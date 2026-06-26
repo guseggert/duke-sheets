@@ -344,6 +344,7 @@ export interface PivotLayoutOptions {
   fieldPrintTitles?: boolean;
   pageWrap?: number;
   pageOverThenDown?: boolean;
+  mergeItemLabels?: boolean;
 }
 
 export interface PivotStyleOptions {
@@ -483,6 +484,7 @@ export interface PivotLayoutDefinition {
   fieldPrintTitles: boolean;
   pageWrap: number;
   pageOverThenDown: boolean;
+  mergeItemLabels: boolean;
 }
 
 export interface PivotStyleDefinition {
@@ -943,6 +945,9 @@ fn build_pivot_layout_from_wasm(options: WasmPivotLayoutOptions) -> Result<Pivot
     }
     if let Some(value) = options.page_over_then_down {
         layout.page_over_then_down = value;
+    }
+    if let Some(value) = options.merge_item_labels {
+        layout.merge_item_labels = value;
     }
     Ok(layout)
 }

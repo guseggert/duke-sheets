@@ -537,6 +537,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut field_print_titles = false;
     let mut page_wrap = 0;
     let mut page_over_then_down = false;
+    let mut merge_item_labels = false;
     let mut layout_kind = PivotLayoutKind::Compact;
     let mut axis_context: Option<AxisContext> = None;
     let mut pivot_field_index = 0usize;
@@ -582,6 +583,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             &mut field_print_titles,
                             &mut page_wrap,
                             &mut page_over_then_down,
+                            &mut merge_item_labels,
                             &mut layout_kind,
                         );
                     }
@@ -663,6 +665,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             &mut field_print_titles,
                             &mut page_wrap,
                             &mut page_over_then_down,
+                            &mut merge_item_labels,
                             &mut layout_kind,
                         );
                     }
@@ -863,6 +866,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.layout.field_print_titles = field_print_titles;
     pivot.layout.page_wrap = page_wrap;
     pivot.layout.page_over_then_down = page_over_then_down;
+    pivot.layout.merge_item_labels = merge_item_labels;
     pivot.layout.kind = layout_kind;
     pivot.refresh_policy.refresh_on_open = cache.refresh_on_load;
     pivot.refresh_policy.preserve_formatting = preserve_formatting;
@@ -1036,6 +1040,7 @@ fn parse_pivot_table_attrs(
     field_print_titles: &mut bool,
     page_wrap: &mut u32,
     page_over_then_down: &mut bool,
+    merge_item_labels: &mut bool,
     layout_kind: &mut PivotLayoutKind,
 ) {
     if let Some(value) = attr_string(e, b"name") {
@@ -1073,6 +1078,9 @@ fn parse_pivot_table_attrs(
     }
     if let Some(value) = attr_bool(e, b"pageOverThenDown") {
         *page_over_then_down = value;
+    }
+    if let Some(value) = attr_bool(e, b"mergeItem") {
+        *merge_item_labels = value;
     }
 
     let compact = attr_bool(e, b"compact").unwrap_or(true);

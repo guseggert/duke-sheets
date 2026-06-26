@@ -1477,6 +1477,7 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         let outline = bool_attr(matches!(pivot.layout.kind, PivotLayoutKind::Outline));
         let page_wrap = pivot.layout.page_wrap.to_string();
         let page_over_then_down = bool_attr(pivot.layout.page_over_then_down);
+        let merge_item = bool_attr(pivot.layout.merge_item_labels);
 
         let mut tag = BytesStart::new("pivotTableDefinition");
         tag.push_attribute(("xmlns", NS_SPREADSHEET));
@@ -1495,6 +1496,7 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         tag.push_attribute(("fieldPrintTitles", field_print_titles));
         tag.push_attribute(("pageWrap", page_wrap.as_str()));
         tag.push_attribute(("pageOverThenDown", page_over_then_down));
+        tag.push_attribute(("mergeItem", merge_item));
         tag.push_attribute(("compact", compact));
         tag.push_attribute(("outline", outline));
         w.write_event(Event::Start(tag))?;

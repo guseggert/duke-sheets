@@ -211,7 +211,13 @@ describe("PivotTables", () => {
       filters: [{ kind: "label", field: "Region", operator: "beginsWith", text: "E" }],
       calculatedFields: [{ name: "Margin", formula: "=Revenue*0.2" }],
       refreshPolicy: { refreshOnOpen: true, missingItemsLimit: 25 },
-      layout: { kind: "tabular", repeatItemLabels: true, pageWrap: 2, pageOverThenDown: true },
+      layout: {
+        kind: "tabular",
+        repeatItemLabels: true,
+        pageWrap: 2,
+        pageOverThenDown: true,
+        mergeItemLabels: true,
+      },
       overwritePolicy: "failOnOccupied",
     });
 
@@ -245,6 +251,7 @@ describe("PivotTables", () => {
       repeatItemLabels: true,
       pageWrap: 2,
       pageOverThenDown: true,
+      mergeItemLabels: true,
     });
     expect(pivot?.refreshPolicy).toMatchObject({ refreshOnOpen: true, missingItemsLimit: 25 });
     expect(pivot?.overwritePolicy).toBe("failOnOccupied");
