@@ -13,7 +13,7 @@ use std::sync::Arc;
 use ahash::{AHashMap, AHashSet};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue, Error, PivotAggregate, PivotCalculatedField,
-    PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotMeasure,
+    PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotMeasure,
     PivotOverwritePolicy, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSubtotal,
     PivotTable, PivotValue, Result, Table, Workbook, Worksheet, MAX_COLS, MAX_ROWS,
 };
@@ -2760,7 +2760,10 @@ fn render_without_column_fields(
 
     let empty_column_key = Vec::new();
     for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
-        let mut row = decode_key_cells(snapshot, &plan.row_indexes, row_key);
+        let previous_row_key = row_index
+            .checked_sub(1)
+            .and_then(|index| aggregation.row_order.get(index));
+        let mut row = row_label_cells(pivot, snapshot, plan, row_key, previous_row_key);
         let key = GroupKey {
             rows: row_key.clone(),
             columns: empty_column_key.clone(),
@@ -2849,7 +2852,10 @@ fn render_with_column_fields(
     cells.push(header);
 
     for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
-        let mut row = decode_key_cells(snapshot, &plan.row_indexes, row_key);
+        let previous_row_key = row_index
+            .checked_sub(1)
+            .and_then(|index| aggregation.row_order.get(index));
+        let mut row = row_label_cells(pivot, snapshot, plan, row_key, previous_row_key);
         for slot in &column_slots {
             let context = ShowAsContext {
                 snapshot,
@@ -3335,6 +3341,32 @@ fn decode_key_cells(
         .collect()
 }
 
+fn row_label_cells(
+    pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    row_key: &[u32],
+    previous_row_key: Option<&Vec<u32>>,
+) -> Vec<CellValue> {
+    let mut cells = decode_key_cells(snapshot, &plan.row_indexes, row_key);
+    if !matches!(
+        pivot.layout.kind,
+        PivotLayoutKind::Tabular | PivotLayoutKind::Outline
+    ) || pivot.layout.repeat_item_labels
+    {
+        return cells;
+    }
+
+    if let Some(previous) = previous_row_key {
+        for position in 0..row_key.len().saturating_sub(1) {
+            if same_prefix(row_key, previous, position + 1) {
+                cells[position] = CellValue::Empty;
+            }
+        }
+    }
+    cells
+}
+
 fn grand_total_label_row(label_width: usize) -> Vec<CellValue> {
     if label_width == 0 {
         Vec::new()
@@ -3813,8 +3845,9 @@ fn output_range(target: CellAddress, row_count: usize, col_count: usize) -> Resu
 mod tests {
     use duke_sheets_core::{
         CellRange, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter,
-        PivotFilterOperator, PivotGrouping, PivotMeasure, PivotShowAs, PivotSort, PivotSource,
-        PivotSubtotal, PivotTable, PivotValue, Table, TableColumn, Workbook,
+        PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotMeasure,
+        PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable, PivotValue, Table,
+        TableColumn, Workbook,
     };
     use pretty_assertions::assert_eq;
     use ssfmt::{date_serial::date_to_serial, DateSystem};
@@ -4041,6 +4074,91 @@ mod tests {
         assert_eq!(number(&workbook, "F4"), 17.0);
         assert_eq!(number(&workbook, "G4"), 5.0);
         assert_eq!(number(&workbook, "H4"), 22.0);
+    }
+
+    #[test]
+    fn refreshes_tabular_layout_without_repeated_item_labels() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Tabular;
+        layout.repeat_item_labels = false;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E1"), "Region");
+        assert_eq!(text(&workbook, "F1"), "Segment");
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(text(&workbook, "F2"), "Online");
+        assert_eq!(text(&workbook, "E3"), "");
+        assert_eq!(text(&workbook, "F3"), "Retail");
+        assert_eq!(text(&workbook, "E4"), "East Total");
+        assert_eq!(number(&workbook, "G4"), 15.0);
+        assert_eq!(text(&workbook, "E5"), "West");
+        assert_eq!(text(&workbook, "F5"), "Retail");
+        assert_eq!(number(&workbook, "G5"), 7.0);
+    }
+
+    #[test]
+    fn refreshes_tabular_layout_with_repeated_item_labels() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Tabular;
+        layout.repeat_item_labels = true;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(text(&workbook, "F2"), "Online");
+        assert_eq!(text(&workbook, "E3"), "East");
+        assert_eq!(text(&workbook, "F3"), "Retail");
+        assert_eq!(text(&workbook, "E4"), "East Total");
     }
 
     #[test]
