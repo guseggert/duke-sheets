@@ -91,6 +91,12 @@ struct PivotJob {
     pivot: PivotTable,
 }
 
+#[derive(Debug)]
+struct PreparedPivotJob {
+    job: PivotJob,
+    raw_snapshot: Arc<SourceSnapshot>,
+}
+
 fn refresh_pivots_inner(
     workbook: &mut Workbook,
     cache: &mut PivotRuntimeCache,
@@ -101,9 +107,33 @@ fn refresh_pivots_inner(
         ..PivotRefreshStats::default()
     };
 
-    let mut rendered = Vec::with_capacity(jobs.len());
+    let mut prepared = Vec::with_capacity(jobs.len());
     for job in jobs {
-        match build_rendered_pivot(workbook, job.sheet_index, &job.pivot, cache, &mut stats) {
+        let raw_snapshot = match snapshot_for_source(
+            workbook,
+            job.sheet_index,
+            &job.pivot.source,
+            cache,
+            &mut stats,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                mark_pivot_failed(
+                    workbook,
+                    job.sheet_index,
+                    job.pivot_index,
+                    error.to_string(),
+                );
+                return Err(error);
+            }
+        };
+        prepared.push(PreparedPivotJob { job, raw_snapshot });
+    }
+
+    let date_1904 = workbook.settings().date_1904;
+    let mut rendered = Vec::with_capacity(prepared.len());
+    for (job, output) in render_prepared_pivots(prepared, date_1904) {
+        match output {
             Ok(output) => {
                 stats.add_rendered(&output);
                 rendered.push((job, output));
@@ -133,6 +163,35 @@ fn refresh_pivots_inner(
     }
 
     Ok(stats)
+}
+
+fn render_prepared_pivots(
+    prepared: Vec<PreparedPivotJob>,
+    date_1904: bool,
+) -> Vec<(PivotJob, Result<RenderedPivot>)> {
+    #[cfg(feature = "parallel")]
+    {
+        if prepared.len() > 1 {
+            return prepared
+                .into_par_iter()
+                .map(|prepared| render_prepared_pivot(prepared, date_1904))
+                .collect();
+        }
+    }
+
+    prepared
+        .into_iter()
+        .map(|prepared| render_prepared_pivot(prepared, date_1904))
+        .collect()
+}
+
+fn render_prepared_pivot(
+    prepared: PreparedPivotJob,
+    date_1904: bool,
+) -> (PivotJob, Result<RenderedPivot>) {
+    let PreparedPivotJob { job, raw_snapshot } = prepared;
+    let output = build_rendered_pivot_from_snapshot(&job.pivot, raw_snapshot, date_1904);
+    (job, output)
 }
 
 fn refresh_pivot_inner(
@@ -208,6 +267,14 @@ fn build_rendered_pivot(
 ) -> Result<RenderedPivot> {
     let raw_snapshot =
         snapshot_for_source(workbook, pivot_sheet_index, &pivot.source, cache, stats)?;
+    build_rendered_pivot_from_snapshot(pivot, raw_snapshot, workbook.settings().date_1904)
+}
+
+fn build_rendered_pivot_from_snapshot(
+    pivot: &PivotTable,
+    raw_snapshot: Arc<SourceSnapshot>,
+    date_1904: bool,
+) -> Result<RenderedPivot> {
     let calculated_snapshot = if pivot.calculated_fields.is_empty() {
         raw_snapshot
     } else {
@@ -216,11 +283,7 @@ fn build_rendered_pivot(
     let snapshot = if pivot.groupings.is_empty() {
         calculated_snapshot
     } else {
-        Arc::new(calculated_snapshot.apply_groupings(
-            &pivot.name,
-            &pivot.groupings,
-            workbook.settings().date_1904,
-        )?)
+        Arc::new(calculated_snapshot.apply_groupings(&pivot.name, &pivot.groupings, date_1904)?)
     };
     let plan = CompiledPivotPlan::compile(pivot, &snapshot)?;
     let mut aggregation = PivotAggregation::aggregate(&snapshot, &plan);
