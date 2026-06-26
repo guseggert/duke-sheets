@@ -1,5 +1,6 @@
 mod comments;
 mod drawing;
+mod pivot;
 pub(crate) mod shared_strings;
 pub(crate) mod styles;
 mod table;
@@ -163,6 +164,16 @@ impl XlsbReader {
                     wb.worksheet_mut(i).unwrap().add_table(t);
                 }
             }
+
+            for pivot in pivot::read_pivot_tables_for_sheet(&mut archive, &entry.path, &sheet_rels)?
+            {
+                wb.worksheet_mut(i)
+                    .unwrap()
+                    .add_pivot_table(pivot)
+                    .map_err(|e| {
+                        XlsbError::InvalidFormat(format!("invalid XLSB pivot table: {e}"))
+                    })?;
+            }
         }
 
         if !dxf_styles.is_empty() {
@@ -273,7 +284,7 @@ fn parse_print_titles_formula(
     (rows, cols)
 }
 
-fn resolve_rel_path(base_path: &str, rel_target: &str) -> String {
+pub(crate) fn resolve_rel_path(base_path: &str, rel_target: &str) -> String {
     if rel_target.starts_with('/') {
         return rel_target.trim_start_matches('/').to_string();
     }
