@@ -2155,6 +2155,7 @@ struct CompiledPivotPlan {
     calculated_items: Vec<CompiledCalculatedItem>,
     error_caption: Option<String>,
     missing_caption: Option<String>,
+    asterisk_totals: bool,
 }
 
 impl CompiledPivotPlan {
@@ -2267,6 +2268,7 @@ impl CompiledPivotPlan {
                 .show_missing
                 .then(|| pivot.layout.missing_caption.clone())
                 .flatten(),
+            asterisk_totals: pivot.layout.asterisk_totals,
         })
     }
 }
@@ -5329,7 +5331,7 @@ fn render_without_column_fields(
     }
 
     if pivot.layout.show_row_grand_totals {
-        let mut row = grand_total_label_row(plan.row_indexes.len(), grand_total_caption(pivot));
+        let mut row = grand_total_label_row(plan.row_indexes.len(), &grand_total_caption(pivot));
         let context = ShowAsContext {
             snapshot,
             plan,
@@ -5458,7 +5460,7 @@ fn render_with_column_fields(
         for measure in &plan.measures {
             let caption = match slot {
                 ColumnRenderSlot::GrandTotal => grand_total_measure_caption(
-                    grand_total_caption(pivot),
+                    &grand_total_caption(pivot),
                     measure,
                     plan.measures.len(),
                 ),
@@ -5530,7 +5532,7 @@ fn render_with_column_fields(
     }
 
     if pivot.layout.show_row_grand_totals {
-        let mut row = grand_total_label_row(plan.row_indexes.len(), grand_total_caption(pivot));
+        let mut row = grand_total_label_row(plan.row_indexes.len(), &grand_total_caption(pivot));
         for slot in &column_slots {
             let context = ShowAsContext {
                 snapshot,
@@ -5569,7 +5571,7 @@ fn render_compact_with_column_fields(
         for measure in &plan.measures {
             let caption = match slot {
                 ColumnRenderSlot::GrandTotal => grand_total_measure_caption(
-                    grand_total_caption(pivot),
+                    &grand_total_caption(pivot),
                     measure,
                     plan.measures.len(),
                 ),
@@ -6239,7 +6241,7 @@ fn row_subtotal_label_cells(
         plan,
         snapshot.value_by_id(row_indexes[subtotal_position], prefix[subtotal_position]),
     );
-    row[subtotal_position] = CellValue::string(format!("{value} Total"));
+    row[subtotal_position] = CellValue::string(total_caption(plan, &format!("{value} Total")));
     row
 }
 
@@ -6256,6 +6258,7 @@ fn subtotal_key_label(
         .collect::<Vec<_>>();
     if let Some(label) = labels.last_mut() {
         label.to_mut().push_str(" Total");
+        append_total_asterisk(plan, label.to_mut());
     }
     labels.join(" | ")
 }
@@ -6450,7 +6453,7 @@ fn compact_subtotal_label_cell(
         plan,
         snapshot.value_by_id(plan.row_indexes[position], prefix[position]),
     );
-    CellValue::string(format!("{value} Total"))
+    CellValue::string(total_caption(plan, &format!("{value} Total")))
 }
 
 fn key_position_cell(
@@ -6496,12 +6499,17 @@ fn empty_cells(count: usize) -> impl Iterator<Item = CellValue> {
     std::iter::repeat_with(|| CellValue::Empty).take(count)
 }
 
-fn grand_total_caption(pivot: &PivotTable) -> &str {
-    pivot
+fn grand_total_caption(pivot: &PivotTable) -> String {
+    let caption = pivot
         .layout
         .grand_total_caption
         .as_deref()
-        .unwrap_or("Grand Total")
+        .unwrap_or("Grand Total");
+    if pivot.layout.asterisk_totals {
+        format!("{caption}*")
+    } else {
+        caption.to_string()
+    }
 }
 
 fn grand_total_label_row(label_width: usize, caption: &str) -> Vec<CellValue> {
@@ -6511,6 +6519,20 @@ fn grand_total_label_row(label_width: usize, caption: &str) -> Vec<CellValue> {
         let mut row = vec![CellValue::Empty; label_width];
         row[0] = CellValue::string(caption);
         row
+    }
+}
+
+fn total_caption(plan: &CompiledPivotPlan, caption: &str) -> String {
+    if plan.asterisk_totals {
+        format!("{caption}*")
+    } else {
+        caption.to_string()
+    }
+}
+
+fn append_total_asterisk(plan: &CompiledPivotPlan, caption: &mut String) {
+    if plan.asterisk_totals {
+        caption.push('*');
     }
 }
 
@@ -7537,6 +7559,53 @@ mod tests {
         assert_eq!(text(&workbook, "H1"), "Overall");
         assert_eq!(text(&workbook, "E4"), "Overall");
         assert_eq!(number(&workbook, "H4"), 35.0);
+    }
+
+    #[test]
+    fn refresh_applies_total_asterisk_captions() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Quarter").unwrap();
+        sheet.set_cell_value("D1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", "Q1").unwrap();
+        sheet.set_cell_value("D2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", "Q2").unwrap();
+        sheet.set_cell_value("D3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", "Q1").unwrap();
+        sheet.set_cell_value("D4", 7.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Tabular;
+        layout.asterisk_totals = true;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D4").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .column("Quarter")
+            .measure("Revenue", PivotAggregate::Sum)
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "J1"), "Grand Total*");
+        assert_eq!(text(&workbook, "F4"), "East Total*");
+        assert_eq!(number(&workbook, "J4"), 15.0);
+        assert_eq!(text(&workbook, "F6"), "West Total*");
+        assert_eq!(text(&workbook, "F7"), "Grand Total*");
+        assert_eq!(number(&workbook, "J7"), 22.0);
     }
 
     #[test]
