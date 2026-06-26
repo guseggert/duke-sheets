@@ -733,18 +733,44 @@ pub struct WorkbookConnection {
     pub id: u32,
     /// User-visible connection name.
     pub name: String,
+    /// Optional source file for the connection.
+    pub source_file: Option<String>,
+    /// Optional Office Data Connection file path.
+    pub odc_file: Option<String>,
+    /// Optional user-visible description.
+    pub description: Option<String>,
+    /// Optional SpreadsheetML connection type code.
+    pub connection_type: Option<u32>,
     /// Connection payload.
     pub kind: WorkbookConnectionKind,
     /// Application version that last refreshed the connection.
     pub refreshed_version: u8,
+    /// Minimum application version required to refresh this connection.
+    pub min_refreshable_version: u8,
+    /// Whether the host should keep the connection alive.
+    pub keep_alive: bool,
+    /// Refresh interval in minutes. Zero disables interval refresh.
+    pub interval: u32,
+    /// SpreadsheetML reconnection method. The default is 1.
+    pub reconnection_method: u32,
     /// Whether the host application should refresh on open.
     pub refresh_on_load: bool,
     /// Whether refresh should run in the background.
     pub background: bool,
     /// Whether refreshed data should be saved in the workbook package.
     pub save_data: bool,
+    /// Whether stored passwords should be saved in the package.
+    pub save_password: bool,
+    /// Whether this connection is marked as new by the host application.
+    pub new_connection: bool,
+    /// Whether this connection is marked deleted by the host application.
+    pub deleted: bool,
+    /// Whether the host should only use the external connection file.
+    pub only_use_connection_file: bool,
     /// Optional credential method for applications that refresh this connection.
     pub credentials: Option<WorkbookConnectionCredentials>,
+    /// Optional single sign-on id.
+    pub single_sign_on_id: Option<String>,
     /// Query parameters associated with this connection.
     pub parameters: Vec<WorkbookConnectionParameter>,
 }
@@ -755,16 +781,29 @@ impl WorkbookConnection {
         Self {
             id,
             name: name.into(),
+            source_file: None,
+            odc_file: None,
+            description: None,
+            connection_type: None,
             kind: WorkbookConnectionKind::Database {
                 connection: connection.into(),
                 command: None,
                 command_type: Some(2),
             },
             refreshed_version: 7,
+            min_refreshable_version: 0,
+            keep_alive: false,
+            interval: 0,
+            reconnection_method: 1,
             refresh_on_load: false,
             background: false,
             save_data: false,
+            save_password: false,
+            new_connection: false,
+            deleted: false,
+            only_use_connection_file: false,
             credentials: None,
+            single_sign_on_id: None,
             parameters: Vec::new(),
         }
     }
@@ -774,6 +813,10 @@ impl WorkbookConnection {
         Self {
             id,
             name: name.into(),
+            source_file: None,
+            odc_file: None,
+            description: None,
+            connection_type: None,
             kind: WorkbookConnectionKind::Web {
                 url: Some(url.into()),
                 xml: false,
@@ -784,10 +827,19 @@ impl WorkbookConnection {
                 edit_page: None,
             },
             refreshed_version: 7,
+            min_refreshable_version: 0,
+            keep_alive: false,
+            interval: 0,
+            reconnection_method: 1,
             refresh_on_load: false,
             background: false,
             save_data: false,
+            save_password: false,
+            new_connection: false,
+            deleted: false,
+            only_use_connection_file: false,
             credentials: None,
+            single_sign_on_id: None,
             parameters: Vec::new(),
         }
     }
@@ -797,6 +849,10 @@ impl WorkbookConnection {
         Self {
             id,
             name: name.into(),
+            source_file: None,
+            odc_file: None,
+            description: None,
+            connection_type: None,
             kind: WorkbookConnectionKind::Text {
                 source_file: Some(source_file.into()),
                 delimiter: None,
@@ -806,10 +862,19 @@ impl WorkbookConnection {
                 thousands: None,
             },
             refreshed_version: 7,
+            min_refreshable_version: 0,
+            keep_alive: false,
+            interval: 0,
+            reconnection_method: 1,
             refresh_on_load: false,
             background: false,
             save_data: false,
+            save_password: false,
+            new_connection: false,
+            deleted: false,
+            only_use_connection_file: false,
             credentials: None,
+            single_sign_on_id: None,
             parameters: Vec::new(),
         }
     }
@@ -819,6 +884,10 @@ impl WorkbookConnection {
         Self {
             id,
             name: name.into(),
+            source_file: None,
+            odc_file: None,
+            description: None,
+            connection_type: None,
             kind: WorkbookConnectionKind::Olap {
                 local: false,
                 local_connection: None,
@@ -827,10 +896,19 @@ impl WorkbookConnection {
                 row_drill_count: None,
             },
             refreshed_version: 7,
+            min_refreshable_version: 0,
+            keep_alive: false,
+            interval: 0,
+            reconnection_method: 1,
             refresh_on_load: false,
             background: false,
             save_data: false,
+            save_password: false,
+            new_connection: false,
+            deleted: false,
+            only_use_connection_file: false,
             credentials: None,
+            single_sign_on_id: None,
             parameters: Vec::new(),
         }
     }
@@ -876,9 +954,69 @@ impl WorkbookConnection {
         self
     }
 
+    /// Set an external source file for this connection.
+    pub fn with_source_file(mut self, source_file: impl Into<String>) -> Self {
+        self.source_file = Some(source_file.into());
+        self
+    }
+
+    /// Set an Office Data Connection file for this connection.
+    pub fn with_odc_file(mut self, odc_file: impl Into<String>) -> Self {
+        self.odc_file = Some(odc_file.into());
+        self
+    }
+
+    /// Set the user-visible connection description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the SpreadsheetML connection type code.
+    pub fn with_connection_type(mut self, connection_type: u32) -> Self {
+        self.connection_type = Some(connection_type);
+        self
+    }
+
+    /// Set keep-alive behavior.
+    pub fn with_keep_alive(mut self, keep_alive: bool) -> Self {
+        self.keep_alive = keep_alive;
+        self
+    }
+
+    /// Set refresh interval in minutes.
+    pub fn with_interval(mut self, interval: u32) -> Self {
+        self.interval = interval;
+        self
+    }
+
+    /// Set the reconnection method.
+    pub fn with_reconnection_method(mut self, reconnection_method: u32) -> Self {
+        self.reconnection_method = reconnection_method;
+        self
+    }
+
+    /// Set whether saved passwords should be persisted.
+    pub fn with_save_password(mut self, save_password: bool) -> Self {
+        self.save_password = save_password;
+        self
+    }
+
+    /// Set whether only the external connection file should be used.
+    pub fn with_only_use_connection_file(mut self, only_use_connection_file: bool) -> Self {
+        self.only_use_connection_file = only_use_connection_file;
+        self
+    }
+
     /// Set the credential method used by host applications when refreshing.
     pub fn with_credentials(mut self, credentials: WorkbookConnectionCredentials) -> Self {
         self.credentials = Some(credentials);
+        self
+    }
+
+    /// Set a single sign-on id for this connection.
+    pub fn with_single_sign_on_id(mut self, single_sign_on_id: impl Into<String>) -> Self {
+        self.single_sign_on_id = Some(single_sign_on_id.into());
         self
     }
 

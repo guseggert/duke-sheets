@@ -1655,18 +1655,63 @@ impl XlsxWriter {
             for connection in workbook.data_connections() {
                 let id = connection.id.to_string();
                 let refreshed_version = connection.refreshed_version.to_string();
+                let min_refreshable_version = (connection.min_refreshable_version != 0)
+                    .then(|| connection.min_refreshable_version.to_string());
+                let interval = (connection.interval != 0).then(|| connection.interval.to_string());
+                let reconnection_method = (connection.reconnection_method != 1)
+                    .then(|| connection.reconnection_method.to_string());
+                let connection_type = connection.connection_type.map(|value| value.to_string());
                 let refresh_on_load = bool_xml(connection.refresh_on_load);
                 let background = bool_xml(connection.background);
                 let save_data = bool_xml(connection.save_data);
                 let mut tag = BytesStart::new("connection");
                 tag.push_attribute(("id", id.as_str()));
                 tag.push_attribute(("name", connection.name.as_str()));
+                if let Some(source_file) = &connection.source_file {
+                    tag.push_attribute(("sourceFile", source_file.as_str()));
+                }
+                if let Some(odc_file) = &connection.odc_file {
+                    tag.push_attribute(("odcFile", odc_file.as_str()));
+                }
+                if connection.keep_alive {
+                    tag.push_attribute(("keepAlive", "1"));
+                }
+                if let Some(interval) = interval.as_deref() {
+                    tag.push_attribute(("interval", interval));
+                }
+                if let Some(description) = &connection.description {
+                    tag.push_attribute(("description", description.as_str()));
+                }
+                if let Some(connection_type) = connection_type.as_deref() {
+                    tag.push_attribute(("type", connection_type));
+                }
+                if let Some(reconnection_method) = reconnection_method.as_deref() {
+                    tag.push_attribute(("reconnectionMethod", reconnection_method));
+                }
                 tag.push_attribute(("refreshedVersion", refreshed_version.as_str()));
+                if let Some(min_refreshable_version) = min_refreshable_version.as_deref() {
+                    tag.push_attribute(("minRefreshableVersion", min_refreshable_version));
+                }
+                if connection.save_password {
+                    tag.push_attribute(("savePassword", "1"));
+                }
+                if connection.new_connection {
+                    tag.push_attribute(("new", "1"));
+                }
+                if connection.deleted {
+                    tag.push_attribute(("deleted", "1"));
+                }
+                if connection.only_use_connection_file {
+                    tag.push_attribute(("onlyUseConnectionFile", "1"));
+                }
                 tag.push_attribute(("refreshOnLoad", refresh_on_load));
                 tag.push_attribute(("background", background));
                 tag.push_attribute(("saveData", save_data));
                 if let Some(credentials) = connection.credentials {
                     tag.push_attribute(("credentials", connection_credentials_attr(credentials)));
+                }
+                if let Some(single_sign_on_id) = &connection.single_sign_on_id {
+                    tag.push_attribute(("singleSignOnId", single_sign_on_id.as_str()));
                 }
                 w.write_event(Event::Start(tag))?;
 
@@ -4332,11 +4377,21 @@ mod tests {
     fn test_writer_round_trips_external_pivot_database_connection() {
         let command = "select Region, Revenue from Sales";
         let mut wb = Workbook::new();
-        wb.add_data_connection(
+        let mut connection =
             WorkbookConnection::database(7, "SalesConnection", "Provider=MSDASQL;DSN=Sales;")
                 .with_command(command)
+                .with_source_file("connections/sales.dsn")
+                .with_odc_file("connections/sales.odc")
+                .with_description("Sales warehouse")
+                .with_connection_type(5)
+                .with_keep_alive(true)
+                .with_interval(30)
+                .with_reconnection_method(2)
                 .with_refresh_on_load(true)
+                .with_save_password(true)
+                .with_only_use_connection_file(true)
                 .with_credentials(WorkbookConnectionCredentials::Stored)
+                .with_single_sign_on_id("sales-sso")
                 .with_parameter({
                     let mut parameter = WorkbookConnectionParameter::value(
                         "RegionParam",
@@ -4351,9 +4406,10 @@ mod tests {
                     parameter.sql_type = 8;
                     parameter.refresh_on_change = true;
                     parameter
-                }),
-        )
-        .unwrap();
+                });
+        connection.min_refreshable_version = 3;
+        connection.new_connection = true;
+        wb.add_data_connection(connection).unwrap();
         let sheet = wb.worksheet_mut(0).unwrap();
         let pivot = PivotTable::builder("ExternalSales")
             .source(PivotSource::External {
@@ -4382,8 +4438,20 @@ mod tests {
 
         let connections = read_zip_entry(bytes.clone(), "xl/connections.xml");
         assert!(connections.contains(r#"<connection id="7" name="SalesConnection""#));
+        assert!(connections.contains(r#"sourceFile="connections/sales.dsn""#));
+        assert!(connections.contains(r#"odcFile="connections/sales.odc""#));
+        assert!(connections.contains(r#"keepAlive="1""#));
+        assert!(connections.contains(r#"interval="30""#));
+        assert!(connections.contains(r#"description="Sales warehouse""#));
+        assert!(connections.contains(r#"type="5""#));
+        assert!(connections.contains(r#"reconnectionMethod="2""#));
+        assert!(connections.contains(r#"minRefreshableVersion="3""#));
+        assert!(connections.contains(r#"savePassword="1""#));
+        assert!(connections.contains(r#"new="1""#));
+        assert!(connections.contains(r#"onlyUseConnectionFile="1""#));
         assert!(connections.contains(r#"refreshOnLoad="1""#));
         assert!(connections.contains(r#"credentials="stored""#));
+        assert!(connections.contains(r#"singleSignOnId="sales-sso""#));
         assert!(connections.contains(r#"<dbPr connection="Provider=MSDASQL;DSN=Sales;" command="select Region, Revenue from Sales" commandType="2"/>"#));
         assert!(connections.contains(r#"<parameters count="2">"#));
         assert!(connections.contains(r#"<parameter name="RegionParam" sqlType="12" parameterType="value" refreshOnChange="0" string="East"/>"#));
@@ -4398,9 +4466,27 @@ mod tests {
         assert_eq!(connection.id, 7);
         assert_eq!(connection.name, "SalesConnection");
         assert_eq!(
+            connection.source_file.as_deref(),
+            Some("connections/sales.dsn")
+        );
+        assert_eq!(
+            connection.odc_file.as_deref(),
+            Some("connections/sales.odc")
+        );
+        assert_eq!(connection.description.as_deref(), Some("Sales warehouse"));
+        assert_eq!(connection.connection_type, Some(5));
+        assert_eq!(connection.min_refreshable_version, 3);
+        assert!(connection.keep_alive);
+        assert_eq!(connection.interval, 30);
+        assert_eq!(connection.reconnection_method, 2);
+        assert!(connection.save_password);
+        assert!(connection.new_connection);
+        assert!(connection.only_use_connection_file);
+        assert_eq!(
             connection.credentials,
             Some(WorkbookConnectionCredentials::Stored)
         );
+        assert_eq!(connection.single_sign_on_id.as_deref(), Some("sales-sso"));
         assert_eq!(connection.parameters.len(), 2);
         assert_eq!(
             connection.parameters[0].name.as_deref(),
