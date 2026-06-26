@@ -5673,10 +5673,9 @@ fn pivot_row_page_break_offsets(
             .and_then(|index| aggregation.row_order.get(index));
         if !compact {
             for position in row_group_start_positions(row_key, previous_row_key) {
-                if row_subtotal_at_top(pivot, plan, position)
-                    && row_subtotal_row_is_rendered(plan, aggregation, row_key, position)
-                {
-                    row_offset += rows_per_body_item;
+                if row_subtotal_at_top(pivot, plan, position) {
+                    row_offset += rows_per_body_item
+                        * row_subtotal_rendered_count(plan, aggregation, row_key, position) as u32;
                 }
             }
         }
@@ -5687,8 +5686,9 @@ fn pivot_row_page_break_offsets(
 
         let next_row_key = aggregation.row_order.get(row_index + 1);
         for position in row_group_end_positions(row_key, next_row_key) {
-            if row_subtotal_row_is_rendered(plan, aggregation, row_key, position) {
-                row_offset += rows_per_body_item;
+            if !row_subtotal_at_top(pivot, plan, position) {
+                row_offset += rows_per_body_item
+                    * row_subtotal_rendered_count(plan, aggregation, row_key, position) as u32;
             }
             if row_field_inserts_blank_row(plan, position) {
                 row_offset += 1;
@@ -5702,20 +5702,25 @@ fn pivot_row_page_break_offsets(
     offsets
 }
 
-fn row_subtotal_row_is_rendered(
+fn row_subtotal_rendered_count(
     plan: &CompiledPivotPlan,
     aggregation: &PivotAggregation,
     row_key: &[u32],
     position: usize,
-) -> bool {
+) -> usize {
     if !is_row_subtotal_position(row_key, position) || !row_subtotal_enabled(plan, position) {
-        return false;
+        return 0;
     }
+    let subtotal_count = row_subtotals_for_position(plan, position).len();
     if !plan.column_indexes.is_empty() {
-        return true;
+        return subtotal_count;
     }
 
-    row_subtotal_states(aggregation, &row_key[..=position]).is_some()
+    if row_subtotal_states(aggregation, &row_key[..=position]).is_some() {
+        subtotal_count
+    } else {
+        0
+    }
 }
 
 fn pivot_column_number_formats(
@@ -6052,7 +6057,7 @@ fn render_with_column_fields(
                 column_slot_total(aggregation, slot),
                 grand_total_states(aggregation),
                 &context,
-                column_slot_aggregate_override(plan, slot),
+                column_slot_aggregate_override(slot),
             ));
         }
         cells.push(row);
@@ -6088,7 +6093,7 @@ fn render_with_column_fields(
                 column_slot_total(aggregation, slot),
                 grand_total_states(aggregation),
                 &context,
-                column_slot_aggregate_override(plan, slot),
+                column_slot_aggregate_override(slot),
             ));
         }
         cells.push(row);
@@ -6158,7 +6163,7 @@ fn render_compact_with_column_fields(
                 column_slot_total(aggregation, slot),
                 grand_total_states(aggregation),
                 &context,
-                column_slot_aggregate_override(plan, slot),
+                column_slot_aggregate_override(slot),
             ));
         }
         cells.push(row);
@@ -6193,7 +6198,7 @@ fn render_compact_with_column_fields(
                 column_slot_total(aggregation, slot),
                 grand_total_states(aggregation),
                 &context,
-                column_slot_aggregate_override(plan, slot),
+                column_slot_aggregate_override(slot),
             ));
         }
         cells.push(row);
@@ -6474,7 +6479,7 @@ fn render_values_on_rows_with_column_fields(
                     grand_total_states(aggregation),
                     &context,
                     measure_index,
-                    column_slot_aggregate_override(plan, slot),
+                    column_slot_aggregate_override(slot),
                 ));
             }
             rendered.push_measure_row(row, measure_index);
@@ -6513,7 +6518,7 @@ fn render_values_on_rows_with_column_fields(
                     grand_total_states(aggregation),
                     &context,
                     measure_index,
-                    column_slot_aggregate_override(plan, slot),
+                    column_slot_aggregate_override(slot),
                 ));
             }
             rendered.push_measure_row(row, measure_index);
@@ -6577,7 +6582,7 @@ fn render_compact_values_on_rows_with_column_fields(
                     grand_total_states(aggregation),
                     &context,
                     measure_index,
-                    column_slot_aggregate_override(plan, slot),
+                    column_slot_aggregate_override(slot),
                 ));
             }
             rendered.push_measure_row(row, measure_index);
@@ -6618,7 +6623,7 @@ fn render_compact_values_on_rows_with_column_fields(
                     grand_total_states(aggregation),
                     &context,
                     measure_index,
-                    column_slot_aggregate_override(plan, slot),
+                    column_slot_aggregate_override(slot),
                 ));
             }
             rendered.push_measure_row(row, measure_index);
@@ -6694,8 +6699,9 @@ fn values_on_rows_subtotal_label_cells(
     plan: &CompiledPivotPlan,
     prefix: &[u32],
     measure_index: usize,
+    subtotal: PivotSubtotal,
 ) -> Vec<CellValue> {
-    let mut row = row_subtotal_label_cells(snapshot, plan, prefix);
+    let mut row = row_subtotal_label_cells(snapshot, plan, prefix, subtotal);
     row.insert(
         values_axis_row_position(pivot, plan),
         CellValue::string(plan.measures[measure_index].caption()),
@@ -6850,30 +6856,38 @@ fn append_values_on_rows_subtotal_rows_without_column_fields(
     position: usize,
     empty_column_key: &Vec<u32>,
 ) {
-    let aggregate_override = row_subtotal_aggregate_override(plan, position);
-    for measure_index in 0..plan.measures.len() {
-        let mut row =
-            values_on_rows_subtotal_label_cells(pivot, snapshot, plan, prefix, measure_index);
-        let context = ShowAsContext {
-            snapshot,
-            plan,
-            aggregation,
-            row_key: None,
-            column_key: Some(empty_column_key),
-        };
-        row.push(finalize_measure_from_state_slice(
-            states,
-            &plan.measures,
-            states,
-            column_total_states(aggregation, empty_column_key)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-            grand_total_states(aggregation),
-            &context,
-            measure_index,
-            aggregate_override,
-        ));
-        rendered.push_measure_row(row, measure_index);
+    for subtotal in row_subtotals_for_position(plan, position) {
+        let aggregate_override = subtotal_aggregate_for_field(subtotal);
+        for measure_index in 0..plan.measures.len() {
+            let mut row = values_on_rows_subtotal_label_cells(
+                pivot,
+                snapshot,
+                plan,
+                prefix,
+                measure_index,
+                subtotal,
+            );
+            let context = ShowAsContext {
+                snapshot,
+                plan,
+                aggregation,
+                row_key: None,
+                column_key: Some(empty_column_key),
+            };
+            row.push(finalize_measure_from_state_slice(
+                states,
+                &plan.measures,
+                states,
+                column_total_states(aggregation, empty_column_key)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+                grand_total_states(aggregation),
+                &context,
+                measure_index,
+                aggregate_override,
+            ));
+            rendered.push_measure_row(row, measure_index);
+        }
     }
 }
 
@@ -6888,30 +6902,38 @@ fn append_values_on_rows_subtotal_rows_with_column_fields(
     column_slots: &[ColumnRenderSlot],
 ) {
     let row_total = row_subtotal_states(aggregation, prefix);
-    let row_aggregate_override = row_subtotal_aggregate_override(plan, position);
-    for measure_index in 0..plan.measures.len() {
-        let mut row =
-            values_on_rows_subtotal_label_cells(pivot, snapshot, plan, prefix, measure_index);
-        for slot in column_slots {
-            let context = ShowAsContext {
+    for subtotal in row_subtotals_for_position(plan, position) {
+        let row_aggregate_override = subtotal_aggregate_for_field(subtotal);
+        for measure_index in 0..plan.measures.len() {
+            let mut row = values_on_rows_subtotal_label_cells(
+                pivot,
                 snapshot,
                 plan,
-                aggregation,
-                row_key: None,
-                column_key: column_context_key(slot),
-            };
-            row.push(finalize_measure_from_states(
-                subtotal_row_slot_states(aggregation, prefix, slot),
-                &plan.measures,
-                row_total,
-                column_slot_total(aggregation, slot),
-                grand_total_states(aggregation),
-                &context,
+                prefix,
                 measure_index,
-                row_aggregate_override.or_else(|| column_slot_aggregate_override(plan, slot)),
-            ));
+                subtotal,
+            );
+            for slot in column_slots {
+                let context = ShowAsContext {
+                    snapshot,
+                    plan,
+                    aggregation,
+                    row_key: None,
+                    column_key: column_context_key(slot),
+                };
+                row.push(finalize_measure_from_states(
+                    subtotal_row_slot_states(aggregation, prefix, slot),
+                    &plan.measures,
+                    row_total,
+                    column_slot_total(aggregation, slot),
+                    grand_total_states(aggregation),
+                    &context,
+                    measure_index,
+                    row_aggregate_override.or_else(|| column_slot_aggregate_override(slot)),
+                ));
+            }
+            rendered.push_measure_row(row, measure_index);
         }
-        rendered.push_measure_row(row, measure_index);
     }
 }
 
@@ -6929,32 +6951,34 @@ fn append_compact_values_on_rows_row_subtotals_without_column_fields(
         if is_row_subtotal_position(row_key, position) && row_subtotal_enabled(plan, position) {
             let prefix = row_key[..=position].to_vec();
             if let Some(states) = row_subtotal_states(aggregation, &prefix) {
-                let aggregate_override = row_subtotal_aggregate_override(plan, position);
-                for measure_index in 0..plan.measures.len() {
-                    let mut row = vec![
-                        compact_subtotal_label_cell(snapshot, plan, &prefix),
-                        CellValue::string(plan.measures[measure_index].caption()),
-                    ];
-                    let context = ShowAsContext {
-                        snapshot,
-                        plan,
-                        aggregation,
-                        row_key: None,
-                        column_key: Some(empty_column_key),
-                    };
-                    row.push(finalize_measure_from_state_slice(
-                        states,
-                        &plan.measures,
-                        states,
-                        column_total_states(aggregation, empty_column_key)
-                            .map(Vec::as_slice)
-                            .unwrap_or(&[]),
-                        grand_total_states(aggregation),
-                        &context,
-                        measure_index,
-                        aggregate_override,
-                    ));
-                    rendered.push_measure_row(row, measure_index);
+                for subtotal in row_subtotals_for_position(plan, position) {
+                    let aggregate_override = subtotal_aggregate_for_field(subtotal);
+                    for measure_index in 0..plan.measures.len() {
+                        let mut row = vec![
+                            compact_subtotal_label_cell(snapshot, plan, &prefix, subtotal),
+                            CellValue::string(plan.measures[measure_index].caption()),
+                        ];
+                        let context = ShowAsContext {
+                            snapshot,
+                            plan,
+                            aggregation,
+                            row_key: None,
+                            column_key: Some(empty_column_key),
+                        };
+                        row.push(finalize_measure_from_state_slice(
+                            states,
+                            &plan.measures,
+                            states,
+                            column_total_states(aggregation, empty_column_key)
+                                .map(Vec::as_slice)
+                                .unwrap_or(&[]),
+                            grand_total_states(aggregation),
+                            &context,
+                            measure_index,
+                            aggregate_override,
+                        ));
+                        rendered.push_measure_row(row, measure_index);
+                    }
                 }
             }
         }
@@ -6977,33 +7001,34 @@ fn append_compact_values_on_rows_row_subtotals_with_column_fields(
         if is_row_subtotal_position(row_key, position) && row_subtotal_enabled(plan, position) {
             let prefix = row_key[..=position].to_vec();
             let row_total = row_subtotal_states(aggregation, &prefix);
-            let row_aggregate_override = row_subtotal_aggregate_override(plan, position);
-            for measure_index in 0..plan.measures.len() {
-                let mut row = vec![
-                    compact_subtotal_label_cell(snapshot, plan, &prefix),
-                    CellValue::string(plan.measures[measure_index].caption()),
-                ];
-                for slot in column_slots {
-                    let context = ShowAsContext {
-                        snapshot,
-                        plan,
-                        aggregation,
-                        row_key: None,
-                        column_key: column_context_key(slot),
-                    };
-                    row.push(finalize_measure_from_states(
-                        subtotal_row_slot_states(aggregation, &prefix, slot),
-                        &plan.measures,
-                        row_total,
-                        column_slot_total(aggregation, slot),
-                        grand_total_states(aggregation),
-                        &context,
-                        measure_index,
-                        row_aggregate_override
-                            .or_else(|| column_slot_aggregate_override(plan, slot)),
-                    ));
+            for subtotal in row_subtotals_for_position(plan, position) {
+                let row_aggregate_override = subtotal_aggregate_for_field(subtotal);
+                for measure_index in 0..plan.measures.len() {
+                    let mut row = vec![
+                        compact_subtotal_label_cell(snapshot, plan, &prefix, subtotal),
+                        CellValue::string(plan.measures[measure_index].caption()),
+                    ];
+                    for slot in column_slots {
+                        let context = ShowAsContext {
+                            snapshot,
+                            plan,
+                            aggregation,
+                            row_key: None,
+                            column_key: column_context_key(slot),
+                        };
+                        row.push(finalize_measure_from_states(
+                            subtotal_row_slot_states(aggregation, &prefix, slot),
+                            &plan.measures,
+                            row_total,
+                            column_slot_total(aggregation, slot),
+                            grand_total_states(aggregation),
+                            &context,
+                            measure_index,
+                            row_aggregate_override.or_else(|| column_slot_aggregate_override(slot)),
+                        ));
+                    }
+                    rendered.push_measure_row(row, measure_index);
                 }
-                rendered.push_measure_row(row, measure_index);
             }
         }
         append_blank_row_after_ended_row_field(&mut rendered.cells, plan, position, row_width);
@@ -7014,7 +7039,10 @@ fn append_compact_values_on_rows_row_subtotals_with_column_fields(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ColumnRenderSlot {
     Leaf(Vec<u32>),
-    Subtotal(Vec<u32>),
+    Subtotal {
+        prefix: Vec<u32>,
+        subtotal: PivotSubtotal,
+    },
     GrandTotal,
 }
 
@@ -7030,7 +7058,12 @@ fn column_render_slots(
             .and_then(|index| aggregation.column_order.get(index));
         for position in column_group_start_positions(column_key, previous_column_key) {
             if column_subtotal_at_top(pivot, plan, position) {
-                slots.push(ColumnRenderSlot::Subtotal(column_key[..=position].to_vec()));
+                for subtotal in column_subtotals_for_position(plan, position) {
+                    slots.push(ColumnRenderSlot::Subtotal {
+                        prefix: column_key[..=position].to_vec(),
+                        subtotal,
+                    });
+                }
             }
         }
 
@@ -7039,7 +7072,12 @@ fn column_render_slots(
         let next_column_key = aggregation.column_order.get(column_index + 1);
         for position in column_subtotal_positions_to_emit(pivot, plan, column_key, next_column_key)
         {
-            slots.push(ColumnRenderSlot::Subtotal(column_key[..=position].to_vec()));
+            for subtotal in column_subtotals_for_position(plan, position) {
+                slots.push(ColumnRenderSlot::Subtotal {
+                    prefix: column_key[..=position].to_vec(),
+                    subtotal,
+                });
+            }
         }
     }
 
@@ -7058,8 +7096,8 @@ fn column_slot_label(
         ColumnRenderSlot::Leaf(column_key) => {
             key_label(snapshot, plan, &plan.column_indexes, column_key)
         }
-        ColumnRenderSlot::Subtotal(prefix) => {
-            subtotal_key_label(snapshot, plan, &plan.column_indexes, prefix)
+        ColumnRenderSlot::Subtotal { prefix, subtotal } => {
+            subtotal_key_label(snapshot, plan, &plan.column_indexes, prefix, *subtotal)
         }
         ColumnRenderSlot::GrandTotal => "Grand Total".to_string(),
     }
@@ -7068,21 +7106,13 @@ fn column_slot_label(
 fn column_context_key(slot: &ColumnRenderSlot) -> Option<&Vec<u32>> {
     match slot {
         ColumnRenderSlot::Leaf(column_key) => Some(column_key),
-        ColumnRenderSlot::Subtotal(_) | ColumnRenderSlot::GrandTotal => None,
+        ColumnRenderSlot::Subtotal { .. } | ColumnRenderSlot::GrandTotal => None,
     }
 }
 
-fn column_slot_aggregate_override(
-    plan: &CompiledPivotPlan,
-    slot: &ColumnRenderSlot,
-) -> Option<PivotAggregate> {
+fn column_slot_aggregate_override(slot: &ColumnRenderSlot) -> Option<PivotAggregate> {
     match slot {
-        ColumnRenderSlot::Subtotal(prefix) => subtotal_aggregate_for_field(
-            plan.column_fields
-                .get(prefix.len().saturating_sub(1))
-                .map(|field| field.primary_subtotal())
-                .unwrap_or(PivotSubtotal::Automatic),
-        ),
+        ColumnRenderSlot::Subtotal { subtotal, .. } => subtotal_aggregate_for_field(*subtotal),
         ColumnRenderSlot::Leaf(_) | ColumnRenderSlot::GrandTotal => None,
     }
 }
@@ -7097,8 +7127,8 @@ fn leaf_row_slot_states<'a>(
             rows: row_key.to_vec(),
             columns: column_key.clone(),
         }),
-        ColumnRenderSlot::Subtotal(column_prefix) => {
-            subtotal_group_states(aggregation, row_key, column_prefix)
+        ColumnRenderSlot::Subtotal { prefix, .. } => {
+            subtotal_group_states(aggregation, row_key, prefix)
         }
         ColumnRenderSlot::GrandTotal => row_total_states(aggregation, row_key),
     }
@@ -7113,8 +7143,8 @@ fn subtotal_row_slot_states<'a>(
         ColumnRenderSlot::Leaf(column_key) => {
             subtotal_group_states(aggregation, row_prefix, column_key)
         }
-        ColumnRenderSlot::Subtotal(column_prefix) => {
-            subtotal_group_states(aggregation, row_prefix, column_prefix)
+        ColumnRenderSlot::Subtotal { prefix, .. } => {
+            subtotal_group_states(aggregation, row_prefix, prefix)
         }
         ColumnRenderSlot::GrandTotal => row_subtotal_states(aggregation, row_prefix),
     }
@@ -7126,9 +7156,7 @@ fn grand_row_slot_states<'a>(
 ) -> Option<&'a Vec<AggregateState>> {
     match slot {
         ColumnRenderSlot::Leaf(column_key) => column_total_states(aggregation, column_key),
-        ColumnRenderSlot::Subtotal(column_prefix) => {
-            column_subtotal_states(aggregation, column_prefix)
-        }
+        ColumnRenderSlot::Subtotal { prefix, .. } => column_subtotal_states(aggregation, prefix),
         ColumnRenderSlot::GrandTotal => Some(grand_total_states(aggregation)),
     }
 }
@@ -7139,9 +7167,7 @@ fn column_slot_total<'a>(
 ) -> Option<&'a Vec<AggregateState>> {
     match slot {
         ColumnRenderSlot::Leaf(column_key) => column_total_states(aggregation, column_key),
-        ColumnRenderSlot::Subtotal(column_prefix) => {
-            column_subtotal_states(aggregation, column_prefix)
-        }
+        ColumnRenderSlot::Subtotal { prefix, .. } => column_subtotal_states(aggregation, prefix),
         ColumnRenderSlot::GrandTotal => Some(grand_total_states(aggregation)),
     }
 }
@@ -7220,26 +7246,28 @@ fn append_row_top_subtotals_without_column_fields(
 
         let prefix = row_key[..=position].to_vec();
         if let Some(states) = row_subtotal_states(aggregation, &prefix) {
-            let mut row = row_subtotal_label_cells(snapshot, plan, &prefix);
-            let context = ShowAsContext {
-                snapshot,
-                plan,
-                aggregation,
-                row_key: None,
-                column_key: Some(empty_column_key),
-            };
-            row.extend(finalize_state_slice_with_context_and_aggregate(
-                states,
-                &plan.measures,
-                states,
-                column_total_states(aggregation, empty_column_key)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]),
-                grand_total_states(aggregation),
-                &context,
-                row_subtotal_aggregate_override(plan, position),
-            ));
-            cells.push(row);
+            for subtotal in row_subtotals_for_position(plan, position) {
+                let mut row = row_subtotal_label_cells(snapshot, plan, &prefix, subtotal);
+                let context = ShowAsContext {
+                    snapshot,
+                    plan,
+                    aggregation,
+                    row_key: None,
+                    column_key: Some(empty_column_key),
+                };
+                row.extend(finalize_state_slice_with_context_and_aggregate(
+                    states,
+                    &plan.measures,
+                    states,
+                    column_total_states(aggregation, empty_column_key)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]),
+                    grand_total_states(aggregation),
+                    &context,
+                    subtotal_aggregate_for_field(subtotal),
+                ));
+                cells.push(row);
+            }
             emitted = true;
         }
     }
@@ -7263,30 +7291,32 @@ fn append_row_top_subtotals_with_column_fields(
         }
 
         let prefix = row_key[..=position].to_vec();
-        let mut row = row_subtotal_label_cells(snapshot, plan, &prefix);
         let row_total = row_subtotal_states(aggregation, &prefix);
-        let row_aggregate_override = row_subtotal_aggregate_override(plan, position);
 
-        for slot in column_slots {
-            let context = ShowAsContext {
-                snapshot,
-                plan,
-                aggregation,
-                row_key: None,
-                column_key: column_context_key(slot),
-            };
-            row.extend(finalize_states_with_context_and_aggregate(
-                subtotal_row_slot_states(aggregation, &prefix, slot),
-                &plan.measures,
-                row_total,
-                column_slot_total(aggregation, slot),
-                grand_total_states(aggregation),
-                &context,
-                row_aggregate_override.or_else(|| column_slot_aggregate_override(plan, slot)),
-            ));
+        for subtotal in row_subtotals_for_position(plan, position) {
+            let mut row = row_subtotal_label_cells(snapshot, plan, &prefix, subtotal);
+            let row_aggregate_override = subtotal_aggregate_for_field(subtotal);
+            for slot in column_slots {
+                let context = ShowAsContext {
+                    snapshot,
+                    plan,
+                    aggregation,
+                    row_key: None,
+                    column_key: column_context_key(slot),
+                };
+                row.extend(finalize_states_with_context_and_aggregate(
+                    subtotal_row_slot_states(aggregation, &prefix, slot),
+                    &plan.measures,
+                    row_total,
+                    column_slot_total(aggregation, slot),
+                    grand_total_states(aggregation),
+                    &context,
+                    row_aggregate_override.or_else(|| column_slot_aggregate_override(slot)),
+                ));
+            }
+
+            cells.push(row);
         }
-
-        cells.push(row);
         emitted = true;
     }
     emitted
@@ -7310,26 +7340,28 @@ fn append_row_subtotals_without_column_fields(
         {
             let prefix = row_key[..=position].to_vec();
             if let Some(states) = row_subtotal_states(aggregation, &prefix) {
-                let mut row = row_subtotal_label_cells(snapshot, plan, &prefix);
-                let context = ShowAsContext {
-                    snapshot,
-                    plan,
-                    aggregation,
-                    row_key: None,
-                    column_key: Some(empty_column_key),
-                };
-                row.extend(finalize_state_slice_with_context_and_aggregate(
-                    states,
-                    &plan.measures,
-                    states,
-                    column_total_states(aggregation, empty_column_key)
-                        .map(Vec::as_slice)
-                        .unwrap_or(&[]),
-                    grand_total_states(aggregation),
-                    &context,
-                    row_subtotal_aggregate_override(plan, position),
-                ));
-                cells.push(row);
+                for subtotal in row_subtotals_for_position(plan, position) {
+                    let mut row = row_subtotal_label_cells(snapshot, plan, &prefix, subtotal);
+                    let context = ShowAsContext {
+                        snapshot,
+                        plan,
+                        aggregation,
+                        row_key: None,
+                        column_key: Some(empty_column_key),
+                    };
+                    row.extend(finalize_state_slice_with_context_and_aggregate(
+                        states,
+                        &plan.measures,
+                        states,
+                        column_total_states(aggregation, empty_column_key)
+                            .map(Vec::as_slice)
+                            .unwrap_or(&[]),
+                        grand_total_states(aggregation),
+                        &context,
+                        subtotal_aggregate_for_field(subtotal),
+                    ));
+                    cells.push(row);
+                }
             }
         }
         append_blank_row_after_ended_row_field(cells, plan, position, row_width);
@@ -7353,30 +7385,32 @@ fn append_row_subtotals_with_column_fields(
             && !row_subtotal_at_top(pivot, plan, position)
         {
             let prefix = row_key[..=position].to_vec();
-            let mut row = row_subtotal_label_cells(snapshot, plan, &prefix);
             let row_total = row_subtotal_states(aggregation, &prefix);
-            let row_aggregate_override = row_subtotal_aggregate_override(plan, position);
 
-            for slot in column_slots {
-                let context = ShowAsContext {
-                    snapshot,
-                    plan,
-                    aggregation,
-                    row_key: None,
-                    column_key: column_context_key(slot),
-                };
-                row.extend(finalize_states_with_context_and_aggregate(
-                    subtotal_row_slot_states(aggregation, &prefix, slot),
-                    &plan.measures,
-                    row_total,
-                    column_slot_total(aggregation, slot),
-                    grand_total_states(aggregation),
-                    &context,
-                    row_aggregate_override.or_else(|| column_slot_aggregate_override(plan, slot)),
-                ));
+            for subtotal in row_subtotals_for_position(plan, position) {
+                let mut row = row_subtotal_label_cells(snapshot, plan, &prefix, subtotal);
+                let row_aggregate_override = subtotal_aggregate_for_field(subtotal);
+                for slot in column_slots {
+                    let context = ShowAsContext {
+                        snapshot,
+                        plan,
+                        aggregation,
+                        row_key: None,
+                        column_key: column_context_key(slot),
+                    };
+                    row.extend(finalize_states_with_context_and_aggregate(
+                        subtotal_row_slot_states(aggregation, &prefix, slot),
+                        &plan.measures,
+                        row_total,
+                        column_slot_total(aggregation, slot),
+                        grand_total_states(aggregation),
+                        &context,
+                        row_aggregate_override.or_else(|| column_slot_aggregate_override(slot)),
+                    ));
+                }
+
+                cells.push(row);
             }
-
-            cells.push(row);
         }
         append_blank_row_after_ended_row_field(cells, plan, position, row_width);
     }
@@ -7396,26 +7430,30 @@ fn append_compact_row_subtotals_without_column_fields(
         if is_row_subtotal_position(row_key, position) && row_subtotal_enabled(plan, position) {
             let prefix = row_key[..=position].to_vec();
             if let Some(states) = row_subtotal_states(aggregation, &prefix) {
-                let mut row = vec![compact_subtotal_label_cell(snapshot, plan, &prefix)];
-                let context = ShowAsContext {
-                    snapshot,
-                    plan,
-                    aggregation,
-                    row_key: None,
-                    column_key: Some(empty_column_key),
-                };
-                row.extend(finalize_state_slice_with_context_and_aggregate(
-                    states,
-                    &plan.measures,
-                    states,
-                    column_total_states(aggregation, empty_column_key)
-                        .map(Vec::as_slice)
-                        .unwrap_or(&[]),
-                    grand_total_states(aggregation),
-                    &context,
-                    row_subtotal_aggregate_override(plan, position),
-                ));
-                cells.push(row);
+                for subtotal in row_subtotals_for_position(plan, position) {
+                    let mut row = vec![compact_subtotal_label_cell(
+                        snapshot, plan, &prefix, subtotal,
+                    )];
+                    let context = ShowAsContext {
+                        snapshot,
+                        plan,
+                        aggregation,
+                        row_key: None,
+                        column_key: Some(empty_column_key),
+                    };
+                    row.extend(finalize_state_slice_with_context_and_aggregate(
+                        states,
+                        &plan.measures,
+                        states,
+                        column_total_states(aggregation, empty_column_key)
+                            .map(Vec::as_slice)
+                            .unwrap_or(&[]),
+                        grand_total_states(aggregation),
+                        &context,
+                        subtotal_aggregate_for_field(subtotal),
+                    ));
+                    cells.push(row);
+                }
             }
         }
         append_blank_row_after_ended_row_field(cells, plan, position, row_width);
@@ -7435,45 +7473,68 @@ fn append_compact_row_subtotals_with_column_fields(
     for position in row_group_end_positions(row_key, next_row_key) {
         if is_row_subtotal_position(row_key, position) && row_subtotal_enabled(plan, position) {
             let prefix = row_key[..=position].to_vec();
-            let mut row = vec![compact_subtotal_label_cell(snapshot, plan, &prefix)];
             let row_total = row_subtotal_states(aggregation, &prefix);
-            let row_aggregate_override = row_subtotal_aggregate_override(plan, position);
 
-            for slot in column_slots {
-                let context = ShowAsContext {
-                    snapshot,
-                    plan,
-                    aggregation,
-                    row_key: None,
-                    column_key: column_context_key(slot),
-                };
-                row.extend(finalize_states_with_context_and_aggregate(
-                    subtotal_row_slot_states(aggregation, &prefix, slot),
-                    &plan.measures,
-                    row_total,
-                    column_slot_total(aggregation, slot),
-                    grand_total_states(aggregation),
-                    &context,
-                    row_aggregate_override.or_else(|| column_slot_aggregate_override(plan, slot)),
-                ));
+            for subtotal in row_subtotals_for_position(plan, position) {
+                let mut row = vec![compact_subtotal_label_cell(
+                    snapshot, plan, &prefix, subtotal,
+                )];
+                let row_aggregate_override = subtotal_aggregate_for_field(subtotal);
+                for slot in column_slots {
+                    let context = ShowAsContext {
+                        snapshot,
+                        plan,
+                        aggregation,
+                        row_key: None,
+                        column_key: column_context_key(slot),
+                    };
+                    row.extend(finalize_states_with_context_and_aggregate(
+                        subtotal_row_slot_states(aggregation, &prefix, slot),
+                        &plan.measures,
+                        row_total,
+                        column_slot_total(aggregation, slot),
+                        grand_total_states(aggregation),
+                        &context,
+                        row_aggregate_override.or_else(|| column_slot_aggregate_override(slot)),
+                    ));
+                }
+
+                cells.push(row);
             }
-
-            cells.push(row);
         }
         append_blank_row_after_ended_row_field(cells, plan, position, row_width);
     }
 }
 
-fn row_subtotal_aggregate_override(
-    plan: &CompiledPivotPlan,
-    position: usize,
-) -> Option<PivotAggregate> {
-    subtotal_aggregate_for_field(
-        plan.row_fields
-            .get(position)
-            .map(|field| field.primary_subtotal())
-            .unwrap_or(PivotSubtotal::Automatic),
-    )
+fn row_subtotals_for_position(plan: &CompiledPivotPlan, position: usize) -> Vec<PivotSubtotal> {
+    plan.row_fields
+        .get(position)
+        .map(enabled_subtotals_for_field)
+        .unwrap_or_default()
+}
+
+fn column_subtotals_for_position(plan: &CompiledPivotPlan, position: usize) -> Vec<PivotSubtotal> {
+    plan.column_fields
+        .get(position)
+        .map(enabled_subtotals_for_field)
+        .unwrap_or_default()
+}
+
+fn enabled_subtotals_for_field(field: &PivotField) -> Vec<PivotSubtotal> {
+    if field.subtotals.is_empty() {
+        if matches!(field.subtotal, PivotSubtotal::None) {
+            Vec::new()
+        } else {
+            vec![field.subtotal]
+        }
+    } else {
+        field
+            .subtotals
+            .iter()
+            .copied()
+            .filter(|subtotal| !matches!(subtotal, PivotSubtotal::None))
+            .collect()
+    }
 }
 
 fn row_subtotal_at_top(pivot: &PivotTable, plan: &CompiledPivotPlan, position: usize) -> bool {
@@ -7568,17 +7629,11 @@ fn subtotal_prefixes(key: &[u32], enabled: impl Fn(usize) -> bool) -> Vec<Vec<u3
 }
 
 fn row_subtotal_enabled(plan: &CompiledPivotPlan, position: usize) -> bool {
-    plan.row_fields
-        .get(position)
-        .map(|field| field.has_enabled_subtotal())
-        .unwrap_or(false)
+    !row_subtotals_for_position(plan, position).is_empty()
 }
 
 fn column_subtotal_enabled(plan: &CompiledPivotPlan, position: usize) -> bool {
-    plan.column_fields
-        .get(position)
-        .map(|field| field.has_enabled_subtotal())
-        .unwrap_or(false)
+    !column_subtotals_for_position(plan, position).is_empty()
 }
 
 fn row_group_end_positions(row_key: &[u32], next_row_key: Option<&Vec<u32>>) -> Vec<usize> {
@@ -7642,6 +7697,7 @@ fn row_subtotal_label_cells(
     snapshot: &SourceSnapshot,
     plan: &CompiledPivotPlan,
     prefix: &[u32],
+    subtotal: PivotSubtotal,
 ) -> Vec<CellValue> {
     let row_indexes = &plan.row_indexes;
     let mut row = vec![CellValue::Empty; row_indexes.len()];
@@ -7660,7 +7716,8 @@ fn row_subtotal_label_cells(
         plan,
         snapshot.value_by_id(row_indexes[subtotal_position], prefix[subtotal_position]),
     );
-    row[subtotal_position] = CellValue::string(total_caption(plan, &format!("{value} Total")));
+    let field = plan.row_fields.get(subtotal_position);
+    row[subtotal_position] = CellValue::string(subtotal_label(plan, field, &value, subtotal));
     row
 }
 
@@ -7669,6 +7726,7 @@ fn subtotal_key_label(
     plan: &CompiledPivotPlan,
     field_indexes: &[usize],
     prefix: &[u32],
+    subtotal: PivotSubtotal,
 ) -> String {
     let mut labels = field_indexes
         .iter()
@@ -7676,10 +7734,33 @@ fn subtotal_key_label(
         .map(|(field_index, id)| pivot_value_label(plan, snapshot.value_by_id(*field_index, *id)))
         .collect::<Vec<_>>();
     if let Some(label) = labels.last_mut() {
-        label.to_mut().push_str(" Total");
-        append_total_asterisk(plan, label.to_mut());
+        let field = prefix
+            .len()
+            .checked_sub(1)
+            .and_then(|position| plan.column_fields.get(position));
+        let value = label.as_ref().to_string();
+        *label = Cow::Owned(subtotal_label(plan, field, &value, subtotal));
     }
     labels.join(" | ")
+}
+
+fn subtotal_label(
+    plan: &CompiledPivotPlan,
+    field: Option<&PivotField>,
+    value: &str,
+    subtotal: PivotSubtotal,
+) -> String {
+    let suffix = if field
+        .map(|field| enabled_subtotals_for_field(field).len() > 1)
+        .unwrap_or(false)
+    {
+        subtotal_aggregate_for_field(subtotal)
+            .map(|aggregate| aggregate.caption())
+            .unwrap_or("Total")
+    } else {
+        "Total"
+    };
+    total_caption(plan, &format!("{value} {suffix}"))
 }
 
 fn same_prefix(left: &[u32], right: &[u32], len: usize) -> bool {
@@ -7864,6 +7945,7 @@ fn compact_subtotal_label_cell(
     snapshot: &SourceSnapshot,
     plan: &CompiledPivotPlan,
     prefix: &[u32],
+    subtotal: PivotSubtotal,
 ) -> CellValue {
     let Some(position) = prefix.len().checked_sub(1) else {
         return CellValue::Empty;
@@ -7872,7 +7954,8 @@ fn compact_subtotal_label_cell(
         plan,
         snapshot.value_by_id(plan.row_indexes[position], prefix[position]),
     );
-    CellValue::string(total_caption(plan, &format!("{value} Total")))
+    let field = plan.row_fields.get(position);
+    CellValue::string(subtotal_label(plan, field, &value, subtotal))
 }
 
 fn key_position_cell(
@@ -7955,12 +8038,6 @@ fn values_caption(pivot: &PivotTable) -> &str {
         "Values"
     } else {
         pivot.layout.data_caption.as_str()
-    }
-}
-
-fn append_total_asterisk(plan: &CompiledPivotPlan, caption: &mut String) {
-    if plan.asterisk_totals {
-        caption.push('*');
     }
 }
 
@@ -10561,6 +10638,53 @@ mod tests {
     }
 
     #[test]
+    fn refresh_inserts_page_breaks_after_outline_top_subtotals() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Outline;
+        let mut region = PivotField::new("Region");
+        region.insert_page_break = true;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row(region)
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        let mut pivot_breaks = workbook
+            .worksheet(0)
+            .unwrap()
+            .row_breaks()
+            .iter()
+            .filter(|break_| break_.pt)
+            .map(|break_| break_.id)
+            .collect::<Vec<_>>();
+        pivot_breaks.sort_unstable();
+        assert_eq!(pivot_breaks, vec![3, 5]);
+    }
+
+    #[test]
     fn refreshes_custom_row_subtotal_function() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
@@ -10603,7 +10727,7 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_primary_multiple_row_subtotal_function() {
+    fn refreshes_multiple_row_subtotal_functions() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
         sheet.set_cell_value("A1", "Region").unwrap();
@@ -10632,8 +10756,12 @@ mod tests {
 
         workbook.refresh_pivots().unwrap();
 
-        assert_eq!(text(&workbook, "E4"), "East Total");
+        assert_eq!(text(&workbook, "E4"), "East Average");
         assert_eq!(number(&workbook, "G4"), 15.0);
+        assert_eq!(text(&workbook, "E5"), "East Max");
+        assert_eq!(number(&workbook, "G5"), 20.0);
+        assert_eq!(text(&workbook, "E6"), "Grand Total");
+        assert_eq!(number(&workbook, "G6"), 30.0);
     }
 
     #[test]
@@ -10876,6 +11004,57 @@ mod tests {
         assert_eq!(text(&workbook, "F3"), "Grand Total");
         assert_eq!(number(&workbook, "I3"), 15.0);
         assert_eq!(number(&workbook, "J3"), 30.0);
+    }
+
+    #[test]
+    fn refreshes_multiple_column_subtotal_functions() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Year").unwrap();
+        sheet.set_cell_value("C1", "Quarter").unwrap();
+        sheet.set_cell_value("D1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "2024").unwrap();
+        sheet.set_cell_value("C2", "Q1").unwrap();
+        sheet.set_cell_value("D2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "2024").unwrap();
+        sheet.set_cell_value("C3", "Q2").unwrap();
+        sheet.set_cell_value("D3", 20.0).unwrap();
+
+        let year =
+            PivotField::new("Year").with_subtotals([PivotSubtotal::Average, PivotSubtotal::Max]);
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D3").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row("Region")
+            .column(year)
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F1"), "Region");
+        assert_eq!(text(&workbook, "G1"), "2024 | Q1");
+        assert_eq!(text(&workbook, "H1"), "2024 | Q2");
+        assert_eq!(text(&workbook, "I1"), "2024 Average");
+        assert_eq!(text(&workbook, "J1"), "2024 Max");
+        assert_eq!(text(&workbook, "K1"), "Grand Total");
+        assert_eq!(text(&workbook, "F2"), "East");
+        assert_eq!(number(&workbook, "G2"), 10.0);
+        assert_eq!(number(&workbook, "H2"), 20.0);
+        assert_eq!(number(&workbook, "I2"), 15.0);
+        assert_eq!(number(&workbook, "J2"), 20.0);
+        assert_eq!(number(&workbook, "K2"), 30.0);
+        assert_eq!(text(&workbook, "F3"), "Grand Total");
+        assert_eq!(number(&workbook, "I3"), 15.0);
+        assert_eq!(number(&workbook, "J3"), 20.0);
+        assert_eq!(number(&workbook, "K3"), 30.0);
     }
 
     #[test]
