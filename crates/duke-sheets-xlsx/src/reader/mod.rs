@@ -24,7 +24,7 @@ use duke_sheets_core::style::{Color, Style};
 use duke_sheets_core::validation::DataValidation;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue, Hyperlink, PageBreak, SheetSlot, SplitPanes,
-    Workbook,
+    Workbook, WorkbookExtensionPart,
 };
 use formulas::{
     parse_cell_formula_state, resolve_cell_formula, CellFormulaKind, SharedFormulaMaster,
@@ -52,7 +52,7 @@ use shared_strings::SharedStringEntry;
 pub(crate) use theme::ThemePalette;
 use workbook::{
     read_sheet_rels, read_workbook_connections, read_workbook_rels, read_workbook_xml,
-    SheetRelationship,
+    SheetRelationship, WorkbookExtensionRelationship,
 };
 
 /// Resolve a relative path from a drawing's .rels against the drawing's own path.
@@ -171,6 +171,77 @@ fn read_chart_style_color_for_chart_ex<R: Read + Seek>(
             }
         }
     }
+}
+
+fn read_content_type_overrides<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> XlsxResult<HashMap<String, String>> {
+    let file = archive_by_name(archive, "[Content_Types].xml")
+        .map_err(|_| XlsxError::MissingPart("[Content_Types].xml".into()))?;
+    let reader = BufReader::new(file);
+    let mut xml_reader = Reader::from_reader(reader);
+    xml_reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut overrides = HashMap::new();
+    loop {
+        match xml_reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e))
+                if e.name().local_name().as_ref() == b"Override" =>
+            {
+                let mut part_name = None;
+                let mut content_type = None;
+                for attr in e.attributes().flatten() {
+                    match attr.key.local_name().as_ref() {
+                        b"PartName" => {
+                            part_name = attr.unescape_value().ok().map(|s| s.to_string())
+                        }
+                        b"ContentType" => {
+                            content_type = attr.unescape_value().ok().map(|s| s.to_string())
+                        }
+                        _ => {}
+                    }
+                }
+                if let (Some(part_name), Some(content_type)) = (part_name, content_type) {
+                    overrides.insert(part_name.trim_start_matches('/').to_string(), content_type);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(XlsxError::Xml(e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(overrides)
+}
+
+fn read_workbook_extension_parts<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    relationships: &[WorkbookExtensionRelationship],
+    content_type_overrides: &HashMap<String, String>,
+) -> XlsxResult<Vec<WorkbookExtensionPart>> {
+    let mut parts = Vec::new();
+    for relationship in relationships {
+        let mut file = match archive_by_name(archive, &relationship.target) {
+            Ok(file) => file,
+            Err(_) => continue,
+        };
+        let mut payload = Vec::new();
+        file.read_to_end(&mut payload)?;
+        let content_type = content_type_overrides
+            .get(relationship.target.trim_start_matches('/'))
+            .cloned()
+            .unwrap_or_else(|| "application/xml".to_string());
+        parts.push(WorkbookExtensionPart {
+            path: relationship.target.clone(),
+            content_type,
+            relationship_type: relationship.rel_type.clone(),
+            relationship_id: Some(relationship.r_id.clone()),
+            payload,
+        });
+    }
+    Ok(parts)
 }
 
 /// XLSX file reader
@@ -313,6 +384,7 @@ impl XlsxReader {
                 "Missing [Content_Types].xml".into(),
             ));
         }
+        let content_type_overrides = read_content_type_overrides(&mut archive)?;
 
         // Read shared strings (if present)
         let shared_strings = shared_strings::read_shared_strings(&mut archive)?;
@@ -324,6 +396,11 @@ impl XlsxReader {
         let workbook_rels = read_workbook_rels(&mut archive)?;
         let data_connections =
             read_workbook_connections(&mut archive, workbook_rels.connections_path.as_deref())?;
+        let workbook_extension_parts = read_workbook_extension_parts(
+            &mut archive,
+            &workbook_rels.extension_parts,
+            &content_type_overrides,
+        )?;
         let data_connections_by_id = data_connections
             .iter()
             .map(|connection| (connection.id, connection.clone()))
@@ -369,6 +446,12 @@ impl XlsxReader {
         for connection in data_connections {
             workbook.add_data_connection(connection)?;
         }
+        workbook
+            .workbook_extensions_mut()
+            .extend(wb_props.workbook_extensions);
+        workbook
+            .workbook_extension_parts_mut()
+            .extend(workbook_extension_parts);
 
         // Add named ranges
         for nr in wb_props.named_ranges {

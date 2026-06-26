@@ -449,6 +449,34 @@ pub(super) fn write_xml_part<W: Write + Seek>(
     Ok(())
 }
 
+fn write_raw_part<W: Write + Seek>(
+    zip: &mut zip::ZipWriter<W>,
+    path: &str,
+    payload: &[u8],
+) -> XlsxResult<()> {
+    let options = zip::write::SimpleFileOptions::default();
+    zip.start_file(zip_part_path(path), options)?;
+    zip.write_all(payload)?;
+    Ok(())
+}
+
+fn zip_part_path(path: &str) -> &str {
+    path.strip_prefix('/').unwrap_or(path)
+}
+
+fn package_part_name(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    }
+}
+
+fn workbook_relationship_target(path: &str) -> &str {
+    let path = path.strip_prefix('/').unwrap_or(path);
+    path.strip_prefix("xl/").unwrap_or(path)
+}
+
 impl SharedStringTable {
     /// Build the SST by scanning all string cells in the workbook.
     fn build(workbook: &Workbook) -> Self {
@@ -925,6 +953,10 @@ impl XlsxWriter {
             pivot::write_pivot_cache_definition_rels(&mut zip, cache_part.cache_num)?;
         }
 
+        for part in workbook.workbook_extension_parts() {
+            write_raw_part(&mut zip, &part.path, &part.payload)?;
+        }
+
         // Write chart sheets and their drawings/charts
         for (i, cs) in workbook.chartsheets().iter().enumerate() {
             let cs_dn = cs_drawing_numbering
@@ -1211,6 +1243,14 @@ impl XlsxWriter {
                     .write_empty()?;
             }
 
+            for part in workbook.workbook_extension_parts() {
+                let part_name = package_part_name(&part.path);
+                w.create_element("Override")
+                    .with_attribute(("PartName", part_name.as_str()))
+                    .with_attribute(("ContentType", part.content_type.as_str()))
+                    .write_empty()?;
+            }
+
             w.write_event(Event::End(BytesEnd::new("Types")))?;
             Ok(())
         })
@@ -1369,9 +1409,30 @@ impl XlsxWriter {
                 w.write_event(Event::End(BytesEnd::new("pivotCaches")))?;
             }
 
+            Self::write_workbook_extensions(w, workbook)?;
+
             w.write_event(Event::End(BytesEnd::new("workbook")))?;
             Ok(())
         })
+    }
+
+    fn write_workbook_extensions(w: &mut XmlWriter, workbook: &Workbook) -> XlsxResult<()> {
+        if workbook
+            .workbook_extensions()
+            .iter()
+            .all(|extension| extension.payload.is_empty())
+        {
+            return Ok(());
+        }
+
+        w.write_event(Event::Start(BytesStart::new("extLst")))?;
+        for extension in workbook.workbook_extensions() {
+            if !extension.payload.is_empty() {
+                w.get_mut().write_all(&extension.payload)?;
+            }
+        }
+        w.write_event(Event::End(BytesEnd::new("extLst")))?;
+        Ok(())
     }
 
     fn write_workbook_rels<W: Write + Seek>(
@@ -1473,6 +1534,19 @@ impl XlsxWriter {
                     .with_attribute(("Id", rid.as_str()))
                     .with_attribute(("Type", RT_PIVOT_CACHE_DEFINITION))
                     .with_attribute(("Target", target.as_str()))
+                    .write_empty()?;
+            }
+
+            for (index, part) in workbook.workbook_extension_parts().iter().enumerate() {
+                let rid = part
+                    .relationship_id
+                    .clone()
+                    .unwrap_or_else(|| format!("rIdWorkbookExt{}", index + 1));
+                let target = workbook_relationship_target(&part.path);
+                w.create_element("Relationship")
+                    .with_attribute(("Id", rid.as_str()))
+                    .with_attribute(("Type", part.relationship_type.as_str()))
+                    .with_attribute(("Target", target))
                     .write_empty()?;
             }
 
@@ -3386,7 +3460,8 @@ mod tests {
         PivotExtension, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
         PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
         PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
-        PivotValue, SplitPanes, WorkbookConnection, WorkbookConnectionKind,
+        PivotValue, SplitPanes, WorkbookConnection, WorkbookConnectionKind, WorkbookExtension,
+        WorkbookExtensionPart,
     };
     use std::io::Read;
 
@@ -3956,6 +4031,106 @@ mod tests {
             }
             other => panic!("unexpected pivot filter: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_writer_round_trips_workbook_extension_parts() {
+        const RT_SLICER_CACHE: &str =
+            "http://schemas.microsoft.com/office/2007/relationships/slicerCache";
+        const RT_TIMELINE_CACHE: &str =
+            "http://schemas.microsoft.com/office/2011/relationships/timelineCache";
+        const CT_SLICER_CACHE: &str = "application/vnd.ms-excel.slicerCache+xml";
+        const CT_TIMELINE_CACHE: &str = "application/vnd.ms-excel.timelineCache+xml";
+
+        let mut wb = Workbook::new();
+        wb.workbook_extensions_mut().push(WorkbookExtension {
+            uri: "{A8765BA9-456A-4DAB-B4F3-ACF838C121DE}".to_string(),
+            payload: br#"<ext uri="{A8765BA9-456A-4DAB-B4F3-ACF838C121DE}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:slicerCaches><x14:slicerCache r:id="rIdSlicerCache1"/></x14:slicerCaches></ext>"#.to_vec(),
+        });
+        wb.workbook_extensions_mut().push(WorkbookExtension {
+            uri: "{7E03D99C-DC04-49d9-9315-930204A7B6E9}".to_string(),
+            payload: br#"<ext uri="{7E03D99C-DC04-49d9-9315-930204A7B6E9}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:timelineRefs><x15:timelineRef r:id="rIdTimelineCache1"/></x15:timelineRefs></ext>"#.to_vec(),
+        });
+        wb.workbook_extension_parts_mut().push(
+            WorkbookExtensionPart::new(
+                "xl/slicerCaches/slicerCache1.xml",
+                CT_SLICER_CACHE,
+                RT_SLICER_CACHE,
+                br#"<slicerCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" name="RegionSlicer"/>"#.to_vec(),
+            )
+            .with_relationship_id("rIdSlicerCache1"),
+        );
+        wb.workbook_extension_parts_mut().push(
+            WorkbookExtensionPart::new(
+                "xl/timelineCaches/timelineCache1.xml",
+                CT_TIMELINE_CACHE,
+                RT_TIMELINE_CACHE,
+                br#"<timelineCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" name="OrderDateTimeline"/>"#.to_vec(),
+            )
+            .with_relationship_id("rIdTimelineCache1"),
+        );
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let content_types = read_zip_entry(bytes.clone(), "[Content_Types].xml");
+        assert!(content_types.contains("/xl/slicerCaches/slicerCache1.xml"));
+        assert!(content_types.contains(CT_SLICER_CACHE));
+        assert!(content_types.contains("/xl/timelineCaches/timelineCache1.xml"));
+        assert!(content_types.contains(CT_TIMELINE_CACHE));
+
+        let workbook_xml = read_zip_entry(bytes.clone(), "xl/workbook.xml");
+        assert!(workbook_xml.contains("<extLst>"));
+        assert!(workbook_xml.contains("x14:slicerCaches"));
+        assert!(workbook_xml.contains("x15:timelineRefs"));
+
+        let workbook_rels = read_zip_entry(bytes.clone(), "xl/_rels/workbook.xml.rels");
+        assert!(workbook_rels.contains(RT_SLICER_CACHE));
+        assert!(workbook_rels.contains("Target=\"slicerCaches/slicerCache1.xml\""));
+        assert!(workbook_rels.contains(RT_TIMELINE_CACHE));
+        assert!(workbook_rels.contains("Target=\"timelineCaches/timelineCache1.xml\""));
+
+        let slicer_part = read_zip_entry(bytes.clone(), "xl/slicerCaches/slicerCache1.xml");
+        assert!(slicer_part.contains("RegionSlicer"));
+        let timeline_part = read_zip_entry(bytes.clone(), "xl/timelineCaches/timelineCache1.xml");
+        assert!(timeline_part.contains("OrderDateTimeline"));
+
+        let wb2 = XlsxReader::read(Cursor::new(bytes)).expect("read workbook");
+        assert_eq!(wb2.workbook_extensions().len(), 2);
+        assert_eq!(wb2.workbook_extension_parts().len(), 2);
+        assert_eq!(
+            wb2.workbook_extension_parts()[0].relationship_id.as_deref(),
+            Some("rIdSlicerCache1")
+        );
+        assert_eq!(
+            wb2.workbook_extension_parts()[0].content_type,
+            CT_SLICER_CACHE
+        );
+        assert!(
+            std::str::from_utf8(&wb2.workbook_extension_parts()[0].payload)
+                .unwrap()
+                .contains("RegionSlicer")
+        );
+        assert_eq!(
+            wb2.workbook_extension_parts()[1].relationship_id.as_deref(),
+            Some("rIdTimelineCache1")
+        );
+        assert_eq!(
+            wb2.workbook_extension_parts()[1].content_type,
+            CT_TIMELINE_CACHE
+        );
+
+        let mut second = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb2, &mut second).expect("write workbook again");
+        let second_bytes = second.into_inner();
+        let second_rels = read_zip_entry(second_bytes.clone(), "xl/_rels/workbook.xml.rels");
+        assert!(second_rels.contains("rIdSlicerCache1"));
+        assert!(second_rels.contains("rIdTimelineCache1"));
+        assert!(
+            read_zip_entry(second_bytes, "xl/slicerCaches/slicerCache1.xml")
+                .contains("RegionSlicer")
+        );
     }
 
     #[test]

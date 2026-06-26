@@ -1,14 +1,17 @@
 //! Workbook-level XLSX reader helpers (workbook.xml, workbook.xml.rels, sheet .rels).
 
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufReader, Cursor, Read, Seek};
 
-use quick_xml::events::Event;
+use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
+use quick_xml::Writer;
 
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
-use duke_sheets_core::{SheetVisibility, WorkbookConnection, WorkbookConnectionKind};
+use duke_sheets_core::{
+    SheetVisibility, WorkbookConnection, WorkbookConnectionKind, WorkbookExtension,
+};
 
 /// Parsed workbook properties from workbook.xml
 pub(super) struct WorkbookProps {
@@ -16,6 +19,7 @@ pub(super) struct WorkbookProps {
     pub(super) date_1904: bool,
     pub(super) named_ranges: Vec<duke_sheets_core::named_range::NamedRange>,
     pub(super) pivot_caches: Vec<PivotCacheEntry>,
+    pub(super) workbook_extensions: Vec<WorkbookExtension>,
 }
 
 pub(super) struct WorkbookRels {
@@ -24,6 +28,13 @@ pub(super) struct WorkbookRels {
     pub(super) theme_path: Option<String>,
     pub(super) pivot_cache_paths: HashMap<String, String>,
     pub(super) connections_path: Option<String>,
+    pub(super) extension_parts: Vec<WorkbookExtensionRelationship>,
+}
+
+pub(super) struct WorkbookExtensionRelationship {
+    pub(super) r_id: String,
+    pub(super) rel_type: String,
+    pub(super) target: String,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +73,8 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
     let mut date_1904 = false;
     let mut named_ranges = Vec::new();
     let mut pivot_caches = Vec::new();
+    let mut workbook_extensions = Vec::new();
+    let mut in_ext_list = false;
 
     loop {
         match xml_reader.read_event_into(&mut buf) {
@@ -69,12 +82,21 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
                 b"sheet" => parse_sheet_element(e, &mut sheets),
                 b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
                 b"pivotCache" => parse_pivot_cache_element(e, &mut pivot_caches),
+                b"ext" if in_ext_list => {
+                    workbook_extensions.push(empty_workbook_extension(e)?);
+                }
                 _ => {}
             },
             Ok(Event::Start(ref e)) => match e.name().local_name().as_ref() {
                 b"sheet" => parse_sheet_element(e, &mut sheets),
                 b"workbookPr" => parse_workbook_pr(e, &mut date_1904),
                 b"pivotCache" => parse_pivot_cache_element(e, &mut pivot_caches),
+                b"extLst" => in_ext_list = true,
+                b"ext" if in_ext_list => {
+                    let extension =
+                        read_workbook_extension(&mut xml_reader, e.clone().into_owned(), &mut buf)?;
+                    workbook_extensions.push(extension);
+                }
                 b"definedName" => {
                     let mut dn_name = None;
                     let mut local_sheet_id: Option<usize> = None;
@@ -122,6 +144,9 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
                 }
                 _ => {}
             },
+            Ok(Event::End(ref e)) if e.name().local_name().as_ref() == b"extLst" => {
+                in_ext_list = false;
+            }
             Ok(Event::Eof) => break,
             Err(e) => return Err(XlsxError::Xml(e)),
             _ => {}
@@ -134,6 +159,7 @@ pub(super) fn read_workbook_xml<R: Read + Seek>(
         date_1904,
         named_ranges,
         pivot_caches,
+        workbook_extensions,
     })
 }
 
@@ -203,6 +229,62 @@ fn parse_pivot_cache_element(
     }
 }
 
+fn read_workbook_extension<B: std::io::BufRead>(
+    xml_reader: &mut Reader<B>,
+    start: BytesStart<'static>,
+    buf: &mut Vec<u8>,
+) -> XlsxResult<WorkbookExtension> {
+    let uri = attr_string(&start, b"uri").unwrap_or_default();
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    writer.write_event(Event::Start(start))?;
+
+    let mut depth = 1usize;
+    loop {
+        buf.clear();
+        let event = xml_reader.read_event_into(buf)?;
+        match event {
+            Event::Start(e) => {
+                depth += 1;
+                writer.write_event(Event::Start(e.into_owned()))?;
+            }
+            Event::End(e) => {
+                writer.write_event(Event::End(e.into_owned()))?;
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    break;
+                }
+            }
+            Event::Empty(e) => writer.write_event(Event::Empty(e.into_owned()))?,
+            Event::Text(e) => writer.write_event(Event::Text(e.into_owned()))?,
+            Event::CData(e) => writer.write_event(Event::CData(e.into_owned()))?,
+            Event::Comment(e) => writer.write_event(Event::Comment(e.into_owned()))?,
+            Event::Decl(e) => writer.write_event(Event::Decl(e.into_owned()))?,
+            Event::PI(e) => writer.write_event(Event::PI(e.into_owned()))?,
+            Event::DocType(e) => writer.write_event(Event::DocType(e.into_owned()))?,
+            Event::Eof => {
+                return Err(XlsxError::InvalidFormat(
+                    "unexpected EOF while reading workbook extension".into(),
+                ))
+            }
+        }
+    }
+
+    Ok(WorkbookExtension {
+        uri,
+        payload: writer.into_inner().into_inner(),
+    })
+}
+
+fn empty_workbook_extension(ext: &BytesStart<'_>) -> XlsxResult<WorkbookExtension> {
+    let uri = attr_string(ext, b"uri").unwrap_or_default();
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    writer.write_event(Event::Empty(ext.clone().into_owned()))?;
+    Ok(WorkbookExtension {
+        uri,
+        payload: writer.into_inner().into_inner(),
+    })
+}
+
 /// Read workbook.xml.rels to get sheet file paths and theme path.
 pub(super) fn read_workbook_rels<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
@@ -220,6 +302,7 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
     let mut theme_path: Option<String> = None;
     let mut pivot_cache_paths = HashMap::new();
     let mut connections_path = None;
+    let mut extension_parts = Vec::new();
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Empty(e)) | Ok(Event::Start(e))
@@ -280,6 +363,17 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
                             format!("xl/{}", target)
                         };
                         connections_path = Some(full_path);
+                    } else if is_workbook_extension_relationship(&rel_type) {
+                        let full_path = if let Some(stripped) = target.strip_prefix('/') {
+                            stripped.to_string()
+                        } else {
+                            format!("xl/{}", target)
+                        };
+                        extension_parts.push(WorkbookExtensionRelationship {
+                            r_id: id,
+                            rel_type,
+                            target: full_path,
+                        });
                     }
                 }
             }
@@ -296,7 +390,12 @@ pub(super) fn read_workbook_rels<R: Read + Seek>(
         theme_path,
         pivot_cache_paths,
         connections_path,
+        extension_parts,
     })
+}
+
+fn is_workbook_extension_relationship(rel_type: &str) -> bool {
+    rel_type.ends_with("/slicerCache") || rel_type.ends_with("/timelineCache")
 }
 
 pub(super) fn read_workbook_connections<R: Read + Seek>(

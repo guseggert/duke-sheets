@@ -67,16 +67,16 @@ pub use pivot::{
     PivotAggregate, PivotAxis, PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField,
     PivotCalculatedItem, PivotDateGroupUnit, PivotExtension, PivotExtensions, PivotField,
     PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
-    PivotManualGroup,
-    PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotRefreshStatus, PivotShowAs,
-    PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
+    PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotRefreshStatus,
+    PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
     PivotTableBuilder, PivotValue,
 };
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
 pub use workbook::{
-    ChartSheet, SheetSlot, Workbook, WorkbookConnection, WorkbookConnectionKind, WorkbookSettings,
+    ChartSheet, SheetSlot, Workbook, WorkbookConnection, WorkbookConnectionKind, WorkbookExtension,
+    WorkbookExtensionPart, WorkbookSettings,
 };
 pub use worksheet::{
     FreezePanes, ImageInfo, ImageSizing, PageBreak, PageOrientation, PageSetup, Selection,

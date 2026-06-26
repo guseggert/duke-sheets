@@ -38,6 +38,10 @@ pub struct Workbook {
     named_ranges: NamedRangeCollection,
     /// Workbook-level data connections.
     data_connections: Vec<WorkbookConnection>,
+    /// Raw workbook `<ext>` payloads preserved from package-level features.
+    workbook_extensions: Vec<WorkbookExtension>,
+    /// Raw workbook-related package parts preserved for package-level features.
+    workbook_extension_parts: Vec<WorkbookExtensionPart>,
     /// Opaque calculation cache, populated and consumed by the calculation engine.
     /// Stored as type-erased `Box<dyn Any>` so the core crate needs no dependency
     /// on `duke-sheets-formula`.
@@ -64,6 +68,8 @@ impl Workbook {
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
             data_connections: Vec::new(),
+            workbook_extensions: Vec::new(),
+            workbook_extension_parts: Vec::new(),
             calc_cache: None,
             pivot_runtime_cache: None,
             structural_generation: 0,
@@ -83,6 +89,8 @@ impl Workbook {
             active_sheet: 0,
             named_ranges: NamedRangeCollection::new(),
             data_connections: Vec::new(),
+            workbook_extensions: Vec::new(),
+            workbook_extension_parts: Vec::new(),
             calc_cache: None,
             pivot_runtime_cache: None,
             structural_generation: 0,
@@ -486,6 +494,33 @@ impl Workbook {
             .find(|connection| connection.name.eq_ignore_ascii_case(name))
     }
 
+    /// Raw workbook extension payloads.
+    ///
+    /// These are complete `<ext>` elements from `workbook.xml` and are used to
+    /// preserve package-level features whose semantic model is not yet exposed.
+    pub fn workbook_extensions(&self) -> &[WorkbookExtension] {
+        &self.workbook_extensions
+    }
+
+    /// Mutable raw workbook extension payloads.
+    pub fn workbook_extensions_mut(&mut self) -> &mut Vec<WorkbookExtension> {
+        &mut self.workbook_extensions
+    }
+
+    /// Raw workbook-related package parts.
+    ///
+    /// XLSX slicer and timeline caches are workbook relationships pointing to
+    /// standalone package parts. This collection preserves those parts without
+    /// making them part of the pivot refresh runtime cache API.
+    pub fn workbook_extension_parts(&self) -> &[WorkbookExtensionPart] {
+        &self.workbook_extension_parts
+    }
+
+    /// Mutable raw workbook-related package parts.
+    pub fn workbook_extension_parts_mut(&mut self) -> &mut Vec<WorkbookExtensionPart> {
+        &mut self.workbook_extension_parts
+    }
+
     fn validate_data_connection(&self, connection: &WorkbookConnection) -> Result<()> {
         if connection.id == 0 {
             return Err(Error::other("data connection id must be greater than zero"));
@@ -640,6 +675,54 @@ pub struct WorkbookSettings {
     pub calc_on_open: bool,
     /// Default theme name
     pub theme: Option<String>,
+}
+
+/// A raw workbook `<ext>` payload preserved from `workbook.xml`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkbookExtension {
+    /// Namespace or extension URI.
+    pub uri: String,
+    /// Complete `<ext>` element bytes, including namespace declarations.
+    pub payload: Vec<u8>,
+}
+
+/// A raw package part related from `xl/workbook.xml.rels`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkbookExtensionPart {
+    /// Package path, for example `xl/slicerCaches/slicerCache1.xml`.
+    pub path: String,
+    /// Content type override for `[Content_Types].xml`.
+    pub content_type: String,
+    /// Relationship type from `xl/_rels/workbook.xml.rels`.
+    pub relationship_type: String,
+    /// Relationship id. When absent, writers generate a stable id.
+    pub relationship_id: Option<String>,
+    /// Raw part bytes.
+    pub payload: Vec<u8>,
+}
+
+impl WorkbookExtensionPart {
+    /// Create a raw workbook-related package part.
+    pub fn new(
+        path: impl Into<String>,
+        content_type: impl Into<String>,
+        relationship_type: impl Into<String>,
+        payload: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            content_type: content_type.into(),
+            relationship_type: relationship_type.into(),
+            relationship_id: None,
+            payload: payload.into(),
+        }
+    }
+
+    /// Set the relationship id to use from `xl/workbook.xml.rels`.
+    pub fn with_relationship_id(mut self, relationship_id: impl Into<String>) -> Self {
+        self.relationship_id = Some(relationship_id.into());
+        self
+    }
 }
 
 /// A workbook-level external data connection.
