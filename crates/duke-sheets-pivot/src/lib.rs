@@ -6076,8 +6076,10 @@ fn page_field_caption(
                 .count();
             if selected_count == snapshot.columns[field_index].dictionary.len() {
                 "(All)".to_string()
-            } else {
+            } else if pivot.layout.show_multiple_label {
                 "(Multiple Items)".to_string()
+            } else {
+                "(All)".to_string()
             }
         }
     }
@@ -9227,6 +9229,53 @@ mod tests {
         assert_eq!(number(&workbook, "F4"), 25.0);
         assert_eq!(text(&workbook, "E5"), "Grand Total");
         assert_eq!(number(&workbook, "F5"), 25.0);
+    }
+
+    #[test]
+    fn refresh_respects_multiple_page_field_label_visibility() {
+        fn workbook_with_page_filter(show_multiple_label: bool) -> Workbook {
+            let mut workbook = Workbook::new();
+            let sheet = workbook.worksheet_mut(0).unwrap();
+            sheet.set_cell_value("A1", "Region").unwrap();
+            sheet.set_cell_value("B1", "Segment").unwrap();
+            sheet.set_cell_value("C1", "Revenue").unwrap();
+            sheet.set_cell_value("A2", "East").unwrap();
+            sheet.set_cell_value("B2", "Retail").unwrap();
+            sheet.set_cell_value("C2", 10.0).unwrap();
+            sheet.set_cell_value("A3", "East").unwrap();
+            sheet.set_cell_value("B3", "Wholesale").unwrap();
+            sheet.set_cell_value("C3", 20.0).unwrap();
+            sheet.set_cell_value("A4", "West").unwrap();
+            sheet.set_cell_value("B4", "Online").unwrap();
+            sheet.set_cell_value("C4", 7.0).unwrap();
+
+            let mut layout = PivotLayout::default();
+            layout.show_multiple_label = show_multiple_label;
+            let pivot = PivotTable::builder("SalesPivot")
+                .source_range(CellRange::parse("A1:C4").unwrap())
+                .target_address("E1")
+                .unwrap()
+                .page("Segment")
+                .row("Region")
+                .measure("Revenue", PivotAggregate::Sum)
+                .filter(PivotFilter::field_items("Segment", ["Retail", "Wholesale"]))
+                .layout(layout)
+                .build()
+                .unwrap();
+            sheet.add_pivot_table(pivot).unwrap();
+
+            workbook
+        }
+
+        let mut visible = workbook_with_page_filter(true);
+        visible.refresh_pivots().unwrap();
+        assert_eq!(text(&visible, "F1"), "(Multiple Items)");
+        assert_eq!(number(&visible, "F4"), 30.0);
+
+        let mut hidden = workbook_with_page_filter(false);
+        hidden.refresh_pivots().unwrap();
+        assert_eq!(text(&hidden, "F1"), "(All)");
+        assert_eq!(number(&hidden, "F4"), 30.0);
     }
 
     #[test]
