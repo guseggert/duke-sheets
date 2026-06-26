@@ -603,6 +603,7 @@ fn parse_show_as(
         "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        "index" => PivotShowAs::Index,
         "runTotal" => PivotShowAs::RunningTotal {
             base_field: duke_sheets_core::PivotFieldRef::new(
                 cache.fields.get(base_field_index?)?.name.clone(),

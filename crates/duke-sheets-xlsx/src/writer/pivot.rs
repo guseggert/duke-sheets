@@ -1144,6 +1144,7 @@ fn is_writable_show_as(show_as: &PivotShowAs) -> bool {
             | PivotShowAs::PercentOfGrandTotal
             | PivotShowAs::PercentOfRowTotal
             | PivotShowAs::PercentOfColumnTotal
+            | PivotShowAs::Index
             | PivotShowAs::RunningTotal { .. }
             | PivotShowAs::DifferenceFrom { .. }
             | PivotShowAs::PercentDifferenceFrom { .. }
@@ -1158,6 +1159,7 @@ fn show_data_as_name(show_as: &PivotShowAs) -> Option<&'static str> {
         PivotShowAs::PercentOfGrandTotal => Some("percentOfTotal"),
         PivotShowAs::PercentOfRowTotal => Some("percentOfRow"),
         PivotShowAs::PercentOfColumnTotal => Some("percentOfCol"),
+        PivotShowAs::Index => Some("index"),
         PivotShowAs::RunningTotal { .. } => Some("runTotal"),
         PivotShowAs::DifferenceFrom { .. } => Some("difference"),
         PivotShowAs::PercentDifferenceFrom { .. } => Some("percentDiff"),

@@ -450,6 +450,8 @@ pub enum PivotShowAs {
     PercentOfRowTotal,
     /// Percent of each column total.
     PercentOfColumnTotal,
+    /// Index contribution relative to row, column, and grand totals.
+    Index,
     /// Running total within a base field.
     RunningTotal {
         /// Base field.

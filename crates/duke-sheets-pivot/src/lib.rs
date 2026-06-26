@@ -1239,7 +1239,8 @@ fn validate_show_as(
         PivotShowAs::Normal
         | PivotShowAs::PercentOfGrandTotal
         | PivotShowAs::PercentOfRowTotal
-        | PivotShowAs::PercentOfColumnTotal => Ok(()),
+        | PivotShowAs::PercentOfColumnTotal
+        | PivotShowAs::Index => Ok(()),
         PivotShowAs::RunningTotal { base_field }
         | PivotShowAs::RankAscending { base_field }
         | PivotShowAs::RankDescending { base_field } => validate_base_field(
@@ -2257,6 +2258,12 @@ fn finalize_measure_with_context(
         PivotShowAs::PercentOfColumnTotal => {
             percentage_cell(state.finalize_number(measure.aggregate), column_total)
         }
+        PivotShowAs::Index => index_cell(
+            state.finalize_number(measure.aggregate),
+            row_total,
+            column_total,
+            grand_total,
+        ),
         PivotShowAs::RunningTotal { base_field } => optional_number_cell(running_total_value(
             context,
             base_field.name.as_str(),
@@ -2321,6 +2328,24 @@ fn percentage_cell(numerator: Option<f64>, denominator: Option<f64>) -> CellValu
     match (numerator, denominator) {
         (Some(numerator), Some(denominator)) if denominator != 0.0 => {
             CellValue::Number(numerator / denominator)
+        }
+        _ => CellValue::Empty,
+    }
+}
+
+fn index_cell(
+    value: Option<f64>,
+    row_total: Option<f64>,
+    column_total: Option<f64>,
+    grand_total: Option<f64>,
+) -> CellValue {
+    match (value, row_total, column_total, grand_total) {
+        (Some(value), Some(row_total), Some(column_total), Some(grand_total)) => {
+            if row_total == 0.0 || column_total == 0.0 {
+                CellValue::Empty
+            } else {
+                CellValue::Number(value * grand_total / (row_total * column_total))
+            }
         }
         _ => CellValue::Empty,
     }
@@ -2862,6 +2887,47 @@ mod tests {
         assert_close(number(&workbook, "Q3"), 0.625);
         assert_close(number(&workbook, "P4"), 1.0);
         assert_close(number(&workbook, "Q4"), 1.0);
+    }
+
+    #[test]
+    fn refreshes_index_show_as_calculation() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", 30.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Q1").unwrap();
+        sheet.set_cell_value("C4", 20.0).unwrap();
+        sheet.set_cell_value("A5", "West").unwrap();
+        sheet.set_cell_value("B5", "Q2").unwrap();
+        sheet.set_cell_value("C5", 40.0).unwrap();
+
+        let pivot = PivotTable::builder("IndexShowAs")
+            .source_range(CellRange::parse("A1:C5").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .pivot_measure(
+                PivotMeasure::new("Revenue", PivotAggregate::Sum).with_show_as(PivotShowAs::Index),
+            )
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_close(number(&workbook, "F2"), 10.0 * 100.0 / (40.0 * 30.0));
+        assert_close(number(&workbook, "G2"), 30.0 * 100.0 / (40.0 * 70.0));
+        assert_close(number(&workbook, "F3"), 20.0 * 100.0 / (60.0 * 30.0));
+        assert_close(number(&workbook, "G3"), 40.0 * 100.0 / (60.0 * 70.0));
     }
 
     #[test]

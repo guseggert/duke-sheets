@@ -551,6 +551,7 @@ fn parse_pivot_show_as(value: &str, base_field: Option<String>) -> Result<PivotS
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        "index" => PivotShowAs::Index,
         "rankAscending" => PivotShowAs::RankAscending {
             base_field: require_pivot_base_field(value, base_field)?.into(),
         },
