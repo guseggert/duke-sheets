@@ -5,7 +5,10 @@ mod tests {
     use duke_sheets_core::style::{
         BorderEdge, BorderLineStyle, Color, FillStyle, NumberFormat, Style,
     };
-    use duke_sheets_core::{CellValue, Workbook};
+    use duke_sheets_core::{
+        hash_legacy_protection_password, CellRange, CellValue, ProtectedRange, Workbook,
+        WorkbookProtection,
+    };
 
     use crate::reader::XlsbReader;
     use crate::writer::XlsbWriter;
@@ -756,7 +759,11 @@ mod tests {
         // fStrLookup header bit (bit 7) set so Excel splits the string
         // into dropdown entries ([MS-XLSB] BrtDVal).
         let (header, rgce) = first_dval_header_and_formula1(&list_dv("Red,Green,Blue"));
-        assert_ne!(header & (1 << 7), 0, "fStrLookup bit must be set: {header:08X}");
+        assert_ne!(
+            header & (1 << 7),
+            0,
+            "fStrLookup bit must be set: {header:08X}"
+        );
         assert_eq!(rgce.first(), Some(&0x17u8), "formula1 must be a tStr token");
     }
 
@@ -765,7 +772,11 @@ mod tests {
         // A range source must compile to a reference token, not a
         // quoted string literal, and must not set fStrLookup.
         let (header, rgce) = first_dval_header_and_formula1(&list_dv("$A$1:$A$3"));
-        assert_eq!(header & (1 << 7), 0, "fStrLookup must be clear: {header:08X}");
+        assert_eq!(
+            header & (1 << 7),
+            0,
+            "fStrLookup must be clear: {header:08X}"
+        );
         assert_eq!(
             rgce.first().map(|b| b & 0x1F),
             Some(0x05),
@@ -1073,7 +1084,12 @@ mod tests {
         let wb2 = round_trip(&wb);
         let ws2 = wb2.worksheet(0).unwrap();
         let texts: Vec<String> = (0..3)
-            .map(|c| ws2.formula_data_at(0, c).expect("formula should exist").text.clone())
+            .map(|c| {
+                ws2.formula_data_at(0, c)
+                    .expect("formula should exist")
+                    .text
+                    .clone()
+            })
             .collect();
         assert_eq!(texts[0], "=COUNTA({\"ab\",\"cde\"})");
         assert_eq!(texts[1], "=OR({TRUE,FALSE})");
@@ -1091,13 +1107,19 @@ mod tests {
         let ws = wb.worksheet_mut(0).unwrap();
         let f200 = format!(
             "=SUM({})",
-            (1..=200).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+            (1..=200)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         );
         ws.set_formula_with_cached_value_at(0, 0, &f200, CellValue::Number(20100.0))
             .unwrap();
         let f300 = format!(
             "=SUM({})",
-            (1..=300).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+            (1..=300)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         );
         ws.set_formula_with_cached_value_at(0, 1, &f300, CellValue::Number(45150.0))
             .unwrap();
@@ -2247,26 +2269,123 @@ mod tests {
             .unwrap()
             .set_protection(Some(SheetProtection {
                 protected: true,
-                password_hash: None,
+                password_hash: Some(hash_legacy_protection_password("password")),
                 select_locked_cells: true,
                 select_unlocked_cells: true,
-                format_cells: false,
-                format_columns: false,
-                format_rows: false,
-                insert_columns: false,
-                insert_rows: false,
-                insert_hyperlinks: false,
-                delete_columns: false,
-                delete_rows: false,
-                sort: false,
-                auto_filter: false,
-                pivot_tables: false,
+                format_cells: true,
+                format_columns: true,
+                format_rows: true,
+                insert_columns: true,
+                insert_rows: true,
+                insert_hyperlinks: true,
+                delete_columns: true,
+                delete_rows: true,
+                sort: true,
+                auto_filter: true,
+                pivot_tables: true,
             }));
         let wb2 = round_trip(&wb);
         let prot = wb2.worksheet(0).unwrap().protection().expect("protection");
         assert!(prot.protected);
+        assert_eq!(
+            prot.password_hash,
+            Some(hash_legacy_protection_password("password"))
+        );
         assert!(prot.select_locked_cells);
-        assert!(!prot.format_cells);
+        assert!(prot.select_unlocked_cells);
+        assert!(prot.format_cells);
+        assert!(prot.format_columns);
+        assert!(prot.format_rows);
+        assert!(prot.insert_columns);
+        assert!(prot.insert_rows);
+        assert!(prot.insert_hyperlinks);
+        assert!(prot.delete_columns);
+        assert!(prot.delete_rows);
+        assert!(prot.sort);
+        assert!(prot.auto_filter);
+        assert!(prot.pivot_tables);
+    }
+
+    #[test]
+    fn sheet_protection_raw_password_hash_roundtrip() {
+        use duke_sheets_core::worksheet::SheetProtection;
+        let mut wb = Workbook::new();
+        wb.worksheet_mut(0)
+            .unwrap()
+            .set_cell_value_at(0, 0, "data")
+            .unwrap();
+        wb.worksheet_mut(0)
+            .unwrap()
+            .set_protection(Some(SheetProtection {
+                protected: true,
+                password_hash: Some(0xCAFE),
+                ..Default::default()
+            }));
+
+        let wb2 = round_trip(&wb);
+        let prot = wb2.worksheet(0).unwrap().protection().expect("protection");
+        assert_eq!(prot.password_hash, Some(0xCAFE));
+    }
+
+    #[test]
+    fn workbook_protection_roundtrip() {
+        let mut wb = Workbook::new();
+        wb.set_workbook_protection(Some(WorkbookProtection {
+            structure: true,
+            windows: true,
+            password_hash: Some(hash_legacy_protection_password("book")),
+        }));
+        wb.worksheet_mut(0)
+            .unwrap()
+            .set_cell_value_at(0, 0, "data")
+            .unwrap();
+
+        let wb2 = round_trip(&wb);
+        let protection = wb2.workbook_protection().expect("workbook protection");
+        assert!(protection.structure);
+        assert!(protection.windows);
+        assert_eq!(
+            protection.password_hash,
+            Some(hash_legacy_protection_password("book"))
+        );
+    }
+
+    #[test]
+    fn protected_ranges_roundtrip() {
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value_at(0, 0, "editable").unwrap();
+        ws.set_protected_ranges(vec![
+            ProtectedRange::new(
+                "MainEdit",
+                vec![
+                    CellRange::parse("A1:B2").unwrap(),
+                    CellRange::parse("D4:D5").unwrap(),
+                ],
+            )
+            .with_password("range"),
+            ProtectedRange {
+                name: "RawHash".to_string(),
+                ranges: vec![CellRange::parse("F1:F3").unwrap()],
+                password_hash: Some(0xCAFE),
+                security_descriptor: None,
+            },
+        ]);
+
+        let wb2 = round_trip(&wb);
+        let ranges = wb2.worksheet(0).unwrap().protected_ranges();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].name, "MainEdit");
+        assert_eq!(ranges[0].ranges.len(), 2);
+        assert_eq!(ranges[0].ranges[0].to_string(), "A1:B2");
+        assert_eq!(ranges[0].ranges[1].to_string(), "D4:D5");
+        assert_eq!(
+            ranges[0].password_hash,
+            Some(hash_legacy_protection_password("range"))
+        );
+        assert_eq!(ranges[1].name, "RawHash");
+        assert_eq!(ranges[1].ranges[0].to_string(), "F1:F3");
+        assert_eq!(ranges[1].password_hash, Some(0xCAFE));
     }
 
     #[test]
@@ -2442,7 +2561,10 @@ mod tests {
                 dxf_count += 1;
             }
         }
-        assert!(dxf_count >= 1, "styles.bin must contain the DXF entry backing the color filter");
+        assert!(
+            dxf_count >= 1,
+            "styles.bin must contain the DXF entry backing the color filter"
+        );
     }
 
     fn custom_filter_workbook(and: bool) -> Workbook {
@@ -2521,9 +2643,7 @@ mod tests {
 
     #[test]
     fn top10_without_computed_value_roundtrips_none() {
-        use duke_sheets_core::auto_filter::{
-            AutoFilter, ColumnFilter, FilterColumn, Top10Filter,
-        };
+        use duke_sheets_core::auto_filter::{AutoFilter, ColumnFilter, FilterColumn, Top10Filter};
         use duke_sheets_core::{CellAddress, CellRange};
 
         // fApplied (flags bit 2) asserts xNumFilter is a real value
@@ -2596,11 +2716,15 @@ mod tests {
         let wb2 = round_trip(&wb);
         let ws2 = wb2.worksheet(0).unwrap();
         assert_eq!(
-            ws2.formula_data_at(0, 3).expect("formula should exist").text,
+            ws2.formula_data_at(0, 3)
+                .expect("formula should exist")
+                .text,
             "=COUNT((A1,B1))"
         );
         assert_eq!(
-            ws2.formula_data_at(1, 3).expect("formula should exist").text,
+            ws2.formula_data_at(1, 3)
+                .expect("formula should exist")
+                .text,
             "=(A1,B1)"
         );
     }

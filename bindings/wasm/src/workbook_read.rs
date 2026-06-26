@@ -2,7 +2,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     to_js_value, types::WasmChartSheet, types::WasmNamedRange, types::WasmSheetSlot,
-    types::WasmWorkbookSettings, Workbook,
+    types::WasmWorkbookProtection, types::WasmWorkbookSettings, Workbook,
 };
 
 #[wasm_bindgen]
@@ -29,6 +29,15 @@ impl Workbook {
     pub fn settings(&self) -> Result<JsValue, JsError> {
         let wb = self.inner.borrow();
         to_js_value(&WasmWorkbookSettings::from(wb.settings()))
+    }
+
+    #[wasm_bindgen(getter, js_name = workbookProtection)]
+    pub fn workbook_protection(&self) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        match wb.workbook_protection() {
+            Some(v) => to_js_value(&WasmWorkbookProtection::from(&v)),
+            None => Ok(JsValue::NULL),
+        }
     }
 
     #[wasm_bindgen(getter, js_name = namedRanges)]

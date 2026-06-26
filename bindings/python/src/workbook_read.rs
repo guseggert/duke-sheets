@@ -5,7 +5,10 @@ use duke_sheets_core::{named_range::NameScope, Workbook};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::{to_py_err, PyChartSheet, PyNamedRange, PySheetSlot, PyWorkbook, PyWorkbookSettings};
+use crate::{
+    to_py_err, PyChartSheet, PyNamedRange, PySheetSlot, PyWorkbook, PyWorkbookProtection,
+    PyWorkbookSettings,
+};
 
 #[pymethods]
 impl PyWorkbook {
@@ -80,6 +83,14 @@ impl PyWorkbook {
     fn settings(&self) -> PyResult<PyWorkbookSettings> {
         let wb = self.inner.read().map_err(to_py_err)?;
         Ok(PyWorkbookSettings::from(wb.settings()))
+    }
+
+    #[getter]
+    fn workbook_protection(&self) -> PyResult<Option<PyWorkbookProtection>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb
+            .workbook_protection()
+            .map(|protection| PyWorkbookProtection::from(&protection)))
     }
 
     #[getter]

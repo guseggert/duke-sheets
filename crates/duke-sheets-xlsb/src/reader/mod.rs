@@ -62,6 +62,7 @@ impl XlsbReader {
 
         let mut wb = Workbook::empty();
         wb.settings_mut().date_1904 = props.date_1904;
+        wb.set_workbook_protection(props.workbook_protection.clone());
 
         for entry in &props.sheets {
             wb.add_worksheet_with_name_unchecked(&entry.name);

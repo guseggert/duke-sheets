@@ -644,7 +644,8 @@ fn u32_to_u8(value: u32, field: &str) -> NapiResult<u8> {
 }
 
 fn i32_to_i8(value: i32, field: &str) -> NapiResult<i8> {
-    i8::try_from(value).map_err(|_| style_input_error(format!("{field} must be between -128 and 127")))
+    i8::try_from(value)
+        .map_err(|_| style_input_error(format!("{field} must be between -128 and 127")))
 }
 
 fn parse_color_hex(hex: &str) -> NapiResult<CoreColor> {
@@ -678,9 +679,21 @@ impl JsColorInput {
                     parse_rgb_hex(hex)
                 } else {
                     Ok(CoreColor::Rgb {
-                        r: u32_to_u8(self.r.ok_or_else(|| style_input_error("rgb color requires r"))?, "r")?,
-                        g: u32_to_u8(self.g.ok_or_else(|| style_input_error("rgb color requires g"))?, "g")?,
-                        b: u32_to_u8(self.b.ok_or_else(|| style_input_error("rgb color requires b"))?, "b")?,
+                        r: u32_to_u8(
+                            self.r
+                                .ok_or_else(|| style_input_error("rgb color requires r"))?,
+                            "r",
+                        )?,
+                        g: u32_to_u8(
+                            self.g
+                                .ok_or_else(|| style_input_error("rgb color requires g"))?,
+                            "g",
+                        )?,
+                        b: u32_to_u8(
+                            self.b
+                                .ok_or_else(|| style_input_error("rgb color requires b"))?,
+                            "b",
+                        )?,
                     })
                 }
             }
@@ -690,9 +703,21 @@ impl JsColorInput {
                 } else {
                     Ok(CoreColor::Argb {
                         a: u32_to_u8(self.a.unwrap_or(255), "a")?,
-                        r: u32_to_u8(self.r.ok_or_else(|| style_input_error("argb color requires r"))?, "r")?,
-                        g: u32_to_u8(self.g.ok_or_else(|| style_input_error("argb color requires g"))?, "g")?,
-                        b: u32_to_u8(self.b.ok_or_else(|| style_input_error("argb color requires b"))?, "b")?,
+                        r: u32_to_u8(
+                            self.r
+                                .ok_or_else(|| style_input_error("argb color requires r"))?,
+                            "r",
+                        )?,
+                        g: u32_to_u8(
+                            self.g
+                                .ok_or_else(|| style_input_error("argb color requires g"))?,
+                            "g",
+                        )?,
+                        b: u32_to_u8(
+                            self.b
+                                .ok_or_else(|| style_input_error("argb color requires b"))?,
+                            "b",
+                        )?,
                     })
                 }
             }
@@ -715,9 +740,21 @@ impl JsColorInput {
                     parse_color_hex(hex)
                 } else if self.r.is_some() || self.g.is_some() || self.b.is_some() {
                     Ok(CoreColor::Rgb {
-                        r: u32_to_u8(self.r.ok_or_else(|| style_input_error("rgb color requires r"))?, "r")?,
-                        g: u32_to_u8(self.g.ok_or_else(|| style_input_error("rgb color requires g"))?, "g")?,
-                        b: u32_to_u8(self.b.ok_or_else(|| style_input_error("rgb color requires b"))?, "b")?,
+                        r: u32_to_u8(
+                            self.r
+                                .ok_or_else(|| style_input_error("rgb color requires r"))?,
+                            "r",
+                        )?,
+                        g: u32_to_u8(
+                            self.g
+                                .ok_or_else(|| style_input_error("rgb color requires g"))?,
+                            "g",
+                        )?,
+                        b: u32_to_u8(
+                            self.b
+                                .ok_or_else(|| style_input_error("rgb color requires b"))?,
+                            "b",
+                        )?,
                     })
                 } else if let Some(theme_index) = self.theme_index {
                     Ok(CoreColor::Theme {
@@ -725,9 +762,14 @@ impl JsColorInput {
                         tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
                     })
                 } else if let Some(palette_index) = self.palette_index {
-                    Ok(CoreColor::Indexed(u32_to_u8(palette_index, "paletteIndex")?))
+                    Ok(CoreColor::Indexed(u32_to_u8(
+                        palette_index,
+                        "paletteIndex",
+                    )?))
                 } else {
-                    Err(style_input_error("color requires colorType, hex, rgb, themeIndex, or paletteIndex"))
+                    Err(style_input_error(
+                        "color requires colorType, hex, rgb, themeIndex, or paletteIndex",
+                    ))
                 }
             }
         }
@@ -750,7 +792,9 @@ fn parse_font_vertical_align(value: &str) -> NapiResult<FontVerticalAlign> {
         "baseline" => Ok(FontVerticalAlign::Baseline),
         "superscript" => Ok(FontVerticalAlign::Superscript),
         "subscript" => Ok(FontVerticalAlign::Subscript),
-        other => Err(style_input_error(format!("unknown verticalAlign {other:?}"))),
+        other => Err(style_input_error(format!(
+            "unknown verticalAlign {other:?}"
+        ))),
     }
 }
 
@@ -866,7 +910,9 @@ impl JsFillStylePatch {
                     .to_core_color()?,
             }),
             Some("gradient") => Ok(CoreFillStyle::Gradient {
-                gradient_type: parse_gradient_type(self.gradient_type.as_deref().unwrap_or("linear"))?,
+                gradient_type: parse_gradient_type(
+                    self.gradient_type.as_deref().unwrap_or("linear"),
+                )?,
                 angle: self.angle.unwrap_or(0.0),
                 stops: self
                     .stops
@@ -913,12 +959,17 @@ fn parse_diagonal_direction(value: &str) -> NapiResult<DiagonalDirection> {
         "down" => Ok(DiagonalDirection::Down),
         "up" => Ok(DiagonalDirection::Up),
         "both" => Ok(DiagonalDirection::Both),
-        other => Err(style_input_error(format!("unknown diagonalDirection {other:?}"))),
+        other => Err(style_input_error(format!(
+            "unknown diagonalDirection {other:?}"
+        ))),
     }
 }
 
 impl JsBorderEdgePatch {
-    fn apply_to_edge(&self, existing: Option<&CoreBorderEdge>) -> NapiResult<Option<CoreBorderEdge>> {
+    fn apply_to_edge(
+        &self,
+        existing: Option<&CoreBorderEdge>,
+    ) -> NapiResult<Option<CoreBorderEdge>> {
         let parsed_style = self
             .style
             .as_deref()
@@ -979,7 +1030,9 @@ fn parse_horizontal_alignment(value: &str) -> NapiResult<HorizontalAlignment> {
         "justify" => Ok(HorizontalAlignment::Justify),
         "centerContinuous" => Ok(HorizontalAlignment::CenterContinuous),
         "distributed" => Ok(HorizontalAlignment::Distributed),
-        other => Err(style_input_error(format!("unknown horizontal alignment {other:?}"))),
+        other => Err(style_input_error(format!(
+            "unknown horizontal alignment {other:?}"
+        ))),
     }
 }
 
@@ -990,7 +1043,9 @@ fn parse_vertical_alignment(value: &str) -> NapiResult<VerticalAlignment> {
         "bottom" => Ok(VerticalAlignment::Bottom),
         "justify" => Ok(VerticalAlignment::Justify),
         "distributed" => Ok(VerticalAlignment::Distributed),
-        other => Err(style_input_error(format!("unknown vertical alignment {other:?}"))),
+        other => Err(style_input_error(format!(
+            "unknown vertical alignment {other:?}"
+        ))),
     }
 }
 
@@ -1032,7 +1087,9 @@ impl JsAlignmentPatch {
         }
         if let Some(rotation) = self.rotation {
             if !((-90..=90).contains(&rotation) || rotation == 255) {
-                return Err(style_input_error("rotation must be between -90 and 90, or 255"));
+                return Err(style_input_error(
+                    "rotation must be between -90 and 90, or 255",
+                ));
             }
             alignment.rotation = rotation as i16;
         }
@@ -1047,21 +1104,24 @@ impl JsNumberFormatPatch {
     fn to_core_number_format(&self) -> NapiResult<CoreNumberFormat> {
         match self.format_type.as_deref() {
             Some("general") => Ok(CoreNumberFormat::General),
-            Some("builtin") => Ok(CoreNumberFormat::BuiltIn(
-                self.id
-                    .ok_or_else(|| style_input_error("builtin number format requires id"))?,
-            )),
+            Some("builtin") => {
+                Ok(CoreNumberFormat::BuiltIn(self.id.ok_or_else(|| {
+                    style_input_error("builtin number format requires id")
+                })?))
+            }
             Some("custom") => Ok(CoreNumberFormat::Custom(
-                self.format_string
-                    .clone()
-                    .ok_or_else(|| style_input_error("custom number format requires formatString"))?,
+                self.format_string.clone().ok_or_else(|| {
+                    style_input_error("custom number format requires formatString")
+                })?,
             )),
             Some(other) => Err(style_input_error(format!("unknown formatType {other:?}"))),
             None if self.id.is_some() => Ok(CoreNumberFormat::BuiltIn(self.id.unwrap())),
             None if self.format_string.is_some() => Ok(CoreNumberFormat::Custom(
                 self.format_string.clone().unwrap(),
             )),
-            None => Err(style_input_error("numberFormat requires formatType, id, or formatString")),
+            None => Err(style_input_error(
+                "numberFormat requires formatType, id, or formatString",
+            )),
         }
     }
 }
@@ -1237,6 +1297,7 @@ impl From<&core::Selection> for JsSelection {
 #[napi(object)]
 pub struct JsSheetProtection {
     pub protected: bool,
+    pub password_hash: Option<u32>,
     pub select_locked_cells: bool,
     pub select_unlocked_cells: bool,
     pub format_cells: bool,
@@ -1256,6 +1317,7 @@ impl From<&core::SheetProtection> for JsSheetProtection {
     fn from(p: &core::SheetProtection) -> Self {
         JsSheetProtection {
             protected: p.protected,
+            password_hash: p.password_hash.map(|h| h as u32),
             select_locked_cells: p.select_locked_cells,
             select_unlocked_cells: p.select_unlocked_cells,
             format_cells: p.format_cells,
@@ -1270,6 +1332,150 @@ impl From<&core::SheetProtection> for JsSheetProtection {
             auto_filter: p.auto_filter,
             pivot_tables: p.pivot_tables,
         }
+    }
+}
+
+/// Sheet protection setter input.
+#[napi(object)]
+pub struct JsSheetProtectionInput {
+    pub protected: Option<bool>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+    pub select_locked_cells: Option<bool>,
+    pub select_unlocked_cells: Option<bool>,
+    pub format_cells: Option<bool>,
+    pub format_columns: Option<bool>,
+    pub format_rows: Option<bool>,
+    pub insert_columns: Option<bool>,
+    pub insert_rows: Option<bool>,
+    pub insert_hyperlinks: Option<bool>,
+    pub delete_columns: Option<bool>,
+    pub delete_rows: Option<bool>,
+    pub sort: Option<bool>,
+    pub auto_filter: Option<bool>,
+    pub pivot_tables: Option<bool>,
+}
+
+impl JsSheetProtectionInput {
+    pub(crate) fn into_core(self) -> NapiResult<core::SheetProtection> {
+        let password_hash = protection_password_hash(self.password, self.password_hash)?;
+        Ok(core::SheetProtection {
+            protected: self.protected.unwrap_or(true),
+            password_hash,
+            select_locked_cells: self.select_locked_cells.unwrap_or(true),
+            select_unlocked_cells: self.select_unlocked_cells.unwrap_or(true),
+            format_cells: self.format_cells.unwrap_or(false),
+            format_columns: self.format_columns.unwrap_or(false),
+            format_rows: self.format_rows.unwrap_or(false),
+            insert_columns: self.insert_columns.unwrap_or(false),
+            insert_rows: self.insert_rows.unwrap_or(false),
+            insert_hyperlinks: self.insert_hyperlinks.unwrap_or(false),
+            delete_columns: self.delete_columns.unwrap_or(false),
+            delete_rows: self.delete_rows.unwrap_or(false),
+            sort: self.sort.unwrap_or(false),
+            auto_filter: self.auto_filter.unwrap_or(false),
+            pivot_tables: self.pivot_tables.unwrap_or(false),
+        })
+    }
+}
+
+/// Workbook protection settings.
+#[napi(object)]
+pub struct JsWorkbookProtection {
+    pub structure: bool,
+    pub windows: bool,
+    pub password_hash: Option<u32>,
+}
+
+impl From<&core::WorkbookProtection> for JsWorkbookProtection {
+    fn from(p: &core::WorkbookProtection) -> Self {
+        Self {
+            structure: p.structure,
+            windows: p.windows,
+            password_hash: p.password_hash.map(|h| h as u32),
+        }
+    }
+}
+
+/// Workbook protection setter input.
+#[napi(object)]
+pub struct JsWorkbookProtectionInput {
+    pub structure: Option<bool>,
+    pub windows: Option<bool>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+}
+
+impl JsWorkbookProtectionInput {
+    pub(crate) fn into_core(self) -> NapiResult<core::WorkbookProtection> {
+        Ok(core::WorkbookProtection {
+            structure: self.structure.unwrap_or(true),
+            windows: self.windows.unwrap_or(false),
+            password_hash: protection_password_hash(self.password, self.password_hash)?,
+        })
+    }
+}
+
+/// Protected editable range settings.
+#[napi(object)]
+pub struct JsProtectedRange {
+    pub name: String,
+    pub ranges: Vec<String>,
+    pub password_hash: Option<u32>,
+    pub security_descriptor: Option<String>,
+}
+
+impl From<&core::ProtectedRange> for JsProtectedRange {
+    fn from(p: &core::ProtectedRange) -> Self {
+        Self {
+            name: p.name.clone(),
+            ranges: p.ranges.iter().map(ToString::to_string).collect(),
+            password_hash: p.password_hash.map(|h| h as u32),
+            security_descriptor: p.security_descriptor.clone(),
+        }
+    }
+}
+
+/// Protected editable range setter input.
+#[napi(object)]
+pub struct JsProtectedRangeInput {
+    pub name: String,
+    pub ranges: Vec<String>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+    pub security_descriptor: Option<String>,
+}
+
+impl JsProtectedRangeInput {
+    pub(crate) fn into_core(self) -> NapiResult<core::ProtectedRange> {
+        let mut ranges = Vec::with_capacity(self.ranges.len());
+        for range in self.ranges {
+            ranges.push(core::CellRange::parse(&range).map_err(|e| {
+                NapiError::from_reason(format!("Invalid protected range '{}': {}", range, e))
+            })?);
+        }
+        Ok(core::ProtectedRange {
+            name: self.name,
+            ranges,
+            password_hash: protection_password_hash(self.password, self.password_hash)?,
+            security_descriptor: self.security_descriptor,
+        })
+    }
+}
+
+fn protection_password_hash(
+    password: Option<String>,
+    password_hash: Option<u32>,
+) -> NapiResult<Option<u16>> {
+    match (password, password_hash) {
+        (Some(_), Some(_)) => Err(NapiError::from_reason(
+            "Specify either password or passwordHash, not both",
+        )),
+        (Some(password), None) => Ok(Some(core::hash_legacy_protection_password(&password))),
+        (None, Some(hash)) => u16::try_from(hash)
+            .map(Some)
+            .map_err(|_| NapiError::from_reason("passwordHash must be between 0 and 65535")),
+        (None, None) => Ok(None),
     }
 }
 
@@ -2299,7 +2505,10 @@ impl From<&duke_sheets_chart::ChartShapeProperties> for JsChartShapeProperties {
             solid_fill_hex: sp.solid_fill.as_ref().map(|c| c.hex.clone()),
             no_fill: sp.no_fill,
             line_width: sp.line.as_ref().and_then(|l| l.width),
-            line_color_hex: sp.line.as_ref().and_then(|l| l.solid_fill.as_ref().map(|c| c.hex.clone())),
+            line_color_hex: sp
+                .line
+                .as_ref()
+                .and_then(|l| l.solid_fill.as_ref().map(|c| c.hex.clone())),
             line_no_fill: sp.line.as_ref().map(|l| l.no_fill).unwrap_or(false),
             line_dash_style: sp.line.as_ref().and_then(|l| l.dash_style.clone()),
         }
@@ -2421,7 +2630,10 @@ impl From<&duke_sheets_chart::DataPoint> for JsDataPoint {
             index: p.index,
             marker: p.marker.as_ref().map(JsMarker::from),
             explosion: p.explosion,
-            shape_properties: p.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: p
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -2457,7 +2669,10 @@ impl From<&duke_sheets_chart::DataSeries> for JsDataSeries {
             smooth: s.smooth,
             explosion: s.explosion,
             invert_if_negative: s.invert_if_negative,
-            shape_properties: s.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: s
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -2498,15 +2713,24 @@ impl From<&duke_sheets_chart::Axis> for JsAxis {
             number_format: a.number_format.as_ref().map(JsChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,
-            major_gridlines_shape_properties: a.major_gridlines_shape_properties.as_ref().map(JsChartShapeProperties::from),
-            minor_gridlines_shape_properties: a.minor_gridlines_shape_properties.as_ref().map(JsChartShapeProperties::from),
+            major_gridlines_shape_properties: a
+                .major_gridlines_shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
+            minor_gridlines_shape_properties: a
+                .minor_gridlines_shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
             major_tick_mark: a.major_tick_mark.as_ref().map(|t| format!("{:?}", t)),
             minor_tick_mark: a.minor_tick_mark.as_ref().map(|t| format!("{:?}", t)),
             label_position: a.label_position.as_ref().map(|p| format!("{:?}", p)),
             delete: a.delete,
             crosses: a.crosses.as_ref().map(|c| format!("{:?}", c)),
             cross_between: a.cross_between.as_ref().map(|c| format!("{:?}", c)),
-            shape_properties: a.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: a
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -2729,7 +2953,10 @@ impl From<&duke_sheets_chart::Chart> for JsChart {
             display_blanks_as: c.display_blanks_as.as_ref().map(|d| format!("{:?}", d)),
             plot_visible_only: c.plot_visible_only,
             layout: c.layout.as_ref().map(JsLayout::from),
-            shape_properties: c.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: c
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
             is_3d: c.is_3d,
             vary_colors: c.vary_colors,
             gap_width: c.gap_width,
@@ -2762,7 +2989,10 @@ pub struct JsChartLines {
 impl From<&duke_sheets_chart::ChartLines> for JsChartLines {
     fn from(cl: &duke_sheets_chart::ChartLines) -> Self {
         Self {
-            shape_properties: cl.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: cl
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -2942,7 +3172,12 @@ impl From<&duke_sheets_chart::ChartExScaling> for JsChartExScaling {
                 major_unit: None,
                 minor_unit: None,
             },
-            duke_sheets_chart::ChartExScaling::Value { min, max, major_unit, minor_unit } => Self {
+            duke_sheets_chart::ChartExScaling::Value {
+                min,
+                max,
+                major_unit,
+                minor_unit,
+            } => Self {
                 scaling_type: "value".into(),
                 gap_width: None,
                 min: *min,
@@ -2964,9 +3199,14 @@ impl From<&duke_sheets_chart::ChartExAxisTitle> for JsChartExAxisTitle {
     fn from(t: &duke_sheets_chart::ChartExAxisTitle) -> Self {
         Self {
             text: t.text.as_ref().and_then(|tx| {
-                tx.data.as_ref().and_then(|d| d.value.clone().or_else(|| d.formula.clone()))
+                tx.data
+                    .as_ref()
+                    .and_then(|d| d.value.clone().or_else(|| d.formula.clone()))
             }),
-            shape_properties: t.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: t
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -3070,7 +3310,10 @@ impl From<&duke_sheets_chart::ChartExDataPoint> for JsChartExDataPoint {
     fn from(p: &duke_sheets_chart::ChartExDataPoint) -> Self {
         Self {
             idx: p.idx,
-            shape_properties: p.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: p
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -3097,7 +3340,10 @@ impl From<&duke_sheets_chart::ChartExDataLabel> for JsChartExDataLabel {
             visibility_value: l.visibility_value,
             number_format: l.number_format.as_ref().map(JsChartNumberFormat::from),
             separator: l.separator.clone(),
-            shape_properties: l.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: l
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -3112,7 +3358,10 @@ impl From<&duke_sheets_chart::ChartExFormatOverride> for JsChartExFormatOverride
     fn from(o: &duke_sheets_chart::ChartExFormatOverride) -> Self {
         Self {
             idx: o.idx,
-            shape_properties: o.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: o
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -3229,7 +3478,10 @@ impl From<&duke_sheets_chart::ChartExPlotArea> for JsChartExPlotArea {
             plot_surface: p.plot_surface.as_ref().map(JsChartShapeProperties::from),
             series: p.series.iter().map(JsChartExSeries::from).collect(),
             axes: p.axes.iter().map(JsChartExAxis::from).collect(),
-            shape_properties: p.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: p
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -3244,30 +3496,36 @@ pub struct JsChartExDimension {
 impl From<&duke_sheets_chart::ChartExDimension> for JsChartExDimension {
     fn from(d: &duke_sheets_chart::ChartExDimension) -> Self {
         match d {
-            duke_sheets_chart::ChartExDimension::String { dim_type, formula, nf_formula, .. } => {
-                Self {
-                    dim_type: match dim_type {
-                        duke_sheets_chart::StringDimType::Cat => "cat".into(),
-                        duke_sheets_chart::StringDimType::ColorStr => "colorStr".into(),
-                        duke_sheets_chart::StringDimType::EntityId => "entityId".into(),
-                    },
-                    formula: formula.clone(),
-                    nf_formula: nf_formula.clone(),
-                }
-            }
-            duke_sheets_chart::ChartExDimension::Numeric { dim_type, formula, nf_formula, .. } => {
-                Self {
-                    dim_type: match dim_type {
-                        duke_sheets_chart::NumericDimType::Val => "val".into(),
-                        duke_sheets_chart::NumericDimType::X => "x".into(),
-                        duke_sheets_chart::NumericDimType::Y => "y".into(),
-                        duke_sheets_chart::NumericDimType::Size => "size".into(),
-                        duke_sheets_chart::NumericDimType::ColorVal => "colorVal".into(),
-                    },
-                    formula: formula.clone(),
-                    nf_formula: nf_formula.clone(),
-                }
-            }
+            duke_sheets_chart::ChartExDimension::String {
+                dim_type,
+                formula,
+                nf_formula,
+                ..
+            } => Self {
+                dim_type: match dim_type {
+                    duke_sheets_chart::StringDimType::Cat => "cat".into(),
+                    duke_sheets_chart::StringDimType::ColorStr => "colorStr".into(),
+                    duke_sheets_chart::StringDimType::EntityId => "entityId".into(),
+                },
+                formula: formula.clone(),
+                nf_formula: nf_formula.clone(),
+            },
+            duke_sheets_chart::ChartExDimension::Numeric {
+                dim_type,
+                formula,
+                nf_formula,
+                ..
+            } => Self {
+                dim_type: match dim_type {
+                    duke_sheets_chart::NumericDimType::Val => "val".into(),
+                    duke_sheets_chart::NumericDimType::X => "x".into(),
+                    duke_sheets_chart::NumericDimType::Y => "y".into(),
+                    duke_sheets_chart::NumericDimType::Size => "size".into(),
+                    duke_sheets_chart::NumericDimType::ColorVal => "colorVal".into(),
+                },
+                formula: formula.clone(),
+                nf_formula: nf_formula.clone(),
+            },
         }
     }
 }
@@ -3309,7 +3567,10 @@ impl From<&duke_sheets_chart::ChartExDataLabels> for JsChartExDataLabels {
             visibility_value: l.visibility_value,
             number_format: l.number_format.as_ref().map(JsChartNumberFormat::from),
             separator: l.separator.clone(),
-            shape_properties: l.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: l
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
             overrides: l.overrides.iter().map(JsChartExDataLabel::from).collect(),
             hidden_labels: l.hidden_labels.clone(),
         }
@@ -3334,7 +3595,10 @@ impl From<&duke_sheets_chart::ChartExTitle> for JsChartExTitle {
             align: t.align.clone(),
             overlay: t.overlay,
             offset: t.offset.as_ref().map(JsChartExOffset::from),
-            shape_properties: t.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: t
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -3355,7 +3619,10 @@ impl From<&duke_sheets_chart::ChartExLegend> for JsChartExLegend {
             align: l.align.clone(),
             overlay: l.overlay,
             offset: l.offset.as_ref().map(JsChartExOffset::from),
-            shape_properties: l.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: l
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -3417,7 +3684,10 @@ impl From<&duke_sheets_chart::ChartExAxis> for JsChartExAxis {
             minor_tick_marks: a.minor_tick_marks.clone(),
             tick_labels: a.tick_labels,
             number_format: a.number_format.as_ref().map(JsChartNumberFormat::from),
-            shape_properties: a.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            shape_properties: a
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -3455,8 +3725,14 @@ impl From<&duke_sheets_chart::ChartExSeries> for JsChartExSeries {
             layout_properties: s.layout_properties.as_ref().map(JsChartExLayoutPr::from),
             axis_ids: s.axis_ids.clone(),
             value_colors: s.value_colors.is_some(),
-            value_color_positions: s.value_color_positions.as_ref().map(JsChartExValueColorPositions::from),
-            shape_properties: s.shape_properties.as_ref().map(JsChartShapeProperties::from),
+            value_color_positions: s
+                .value_color_positions
+                .as_ref()
+                .map(JsChartExValueColorPositions::from),
+            shape_properties: s
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
         }
     }
 }
@@ -3497,8 +3773,15 @@ impl From<&duke_sheets_chart::ChartEx> for JsChartEx {
             plot_area: JsChartExPlotArea::from(&c.plot_area),
             legend: c.legend.as_ref().map(JsChartExLegend::from),
             anchor: JsDrawingAnchor::from(&c.anchor),
-            shape_properties: c.shape_properties.as_ref().map(JsChartShapeProperties::from),
-            format_overrides: c.format_overrides.iter().map(JsChartExFormatOverride::from).collect(),
+            shape_properties: c
+                .shape_properties
+                .as_ref()
+                .map(JsChartShapeProperties::from),
+            format_overrides: c
+                .format_overrides
+                .iter()
+                .map(JsChartExFormatOverride::from)
+                .collect(),
             print_settings: c.print_settings.as_ref().map(JsChartExPrintSettings::from),
             external_data_rel_id: c.external_data.as_ref().map(|e| e.rel_id.clone()),
             external_data_auto_update: c.external_data.as_ref().and_then(|e| e.auto_update),

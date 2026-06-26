@@ -5,7 +5,10 @@ use napi_derive::napi;
 
 use duke_sheets_core::named_range::NameScope;
 
-use super::{catch_panic, to_napi_err, JsChartSheet, JsNamedRange, JsSheetSlot, JsWorkbookSettings, Workbook};
+use super::{
+    catch_panic, to_napi_err, JsChartSheet, JsNamedRange, JsSheetSlot, JsWorkbookProtection,
+    JsWorkbookSettings, Workbook,
+};
 
 #[napi]
 impl Workbook {
@@ -42,6 +45,17 @@ impl Workbook {
         catch_panic(|| {
             let wb = self.inner.read().map_err(to_napi_err)?;
             Ok(JsWorkbookSettings::from(wb.settings()))
+        })
+    }
+
+    /// Workbook structure/window protection settings, or null if unprotected.
+    #[napi(getter)]
+    pub fn workbook_protection(&self) -> Result<Option<JsWorkbookProtection>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .workbook_protection()
+                .map(|protection| JsWorkbookProtection::from(&protection)))
         })
     }
 

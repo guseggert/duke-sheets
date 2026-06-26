@@ -79,6 +79,8 @@ export declare class Workbook {
   sheetIndex(name: string): number | null
   /** Workbook-level settings (date system, protection, etc.). */
   get settings(): JsWorkbookSettings
+  /** Workbook structure/window protection settings, or null if unprotected. */
+  get workbookProtection(): JsWorkbookProtection | null
   /** Get all named ranges defined in the workbook. */
   get namedRanges(): Array<JsNamedRange>
   /** Get all chart sheets. */
@@ -185,6 +187,8 @@ export declare class Workbook {
    * @returns Index of the new worksheet
    */
   addSheet(name: string): number
+  /** Set or clear workbook structure/window protection settings. */
+  setWorkbookProtection(protection?: JsWorkbookProtectionInput | undefined | null): void
   /**
    * Remove a worksheet by index
    *
@@ -340,6 +344,8 @@ export declare class Worksheet {
   get autoFilter(): JsAutoFilter | null
   /** Sheet protection settings, or null if unprotected. */
   get protection(): JsSheetProtection | null
+  /** Protected editable ranges on this worksheet. */
+  get protectedRanges(): Array<JsProtectedRange>
   /** Page setup / print settings. */
   get pageSetup(): JsPageSetup
   /** Print area range string, or null if not set. */
@@ -422,6 +428,10 @@ export declare class Worksheet {
   setCellStyleAt(row: number, col: number, style: JsStylePatch): void
   /** Set or update the style for all cells in a range (e.g. "A1:C3"). */
   setRangeStyle(rangeStr: string, style: JsStylePatch): void
+  /** Set or clear sheet protection settings. */
+  setProtection(protection?: JsSheetProtectionInput | undefined | null): void
+  /** Replace the protected editable ranges for this sheet. */
+  setProtectedRanges(ranges: Array<JsProtectedRangeInput>): void
   /** Get the raw cell value (not calculated) */
   getCell(address: string): CellValue
   /** Get the raw cell value by row/col (0-based). */
@@ -1445,6 +1455,23 @@ export interface JsPageSetup {
   alignWithMargins: boolean
 }
 
+/** Protected editable range settings. */
+export interface JsProtectedRange {
+  name: string
+  ranges: Array<string>
+  passwordHash?: number
+  securityDescriptor?: string
+}
+
+/** Protected editable range setter input. */
+export interface JsProtectedRangeInput {
+  name: string
+  ranges: Array<string>
+  password?: string
+  passwordHash?: number
+  securityDescriptor?: string
+}
+
 /** A single run of rich text. */
 export interface JsRichTextRun {
   text: string
@@ -1527,6 +1554,7 @@ export interface JsSelection {
 /** Sheet protection settings. */
 export interface JsSheetProtection {
   protected: boolean
+  passwordHash?: number
   selectLockedCells: boolean
   selectUnlockedCells: boolean
   formatCells: boolean
@@ -1540,6 +1568,26 @@ export interface JsSheetProtection {
   sort: boolean
   autoFilter: boolean
   pivotTables: boolean
+}
+
+/** Sheet protection setter input. */
+export interface JsSheetProtectionInput {
+  protected?: boolean
+  password?: string
+  passwordHash?: number
+  selectLockedCells?: boolean
+  selectUnlockedCells?: boolean
+  formatCells?: boolean
+  formatColumns?: boolean
+  formatRows?: boolean
+  insertColumns?: boolean
+  insertRows?: boolean
+  insertHyperlinks?: boolean
+  deleteColumns?: boolean
+  deleteRows?: boolean
+  sort?: boolean
+  autoFilter?: boolean
+  pivotTables?: boolean
 }
 
 /** A slot in the workbook tab bar. */
@@ -1656,6 +1704,21 @@ export interface JsView3D {
   heightPercent?: number
   perspective?: number
   rightAngleAxes?: boolean
+}
+
+/** Workbook protection settings. */
+export interface JsWorkbookProtection {
+  structure: boolean
+  windows: boolean
+  passwordHash?: number
+}
+
+/** Workbook protection setter input. */
+export interface JsWorkbookProtectionInput {
+  structure?: boolean
+  windows?: boolean
+  password?: string
+  passwordHash?: number
 }
 
 /** Workbook-level settings. */

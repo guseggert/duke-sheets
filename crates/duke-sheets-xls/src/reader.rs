@@ -14,7 +14,8 @@ use duke_sheets_core::validation::{
 };
 use duke_sheets_core::worksheet::{Selection, SheetProtection};
 use duke_sheets_core::{
-    CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, Style, Workbook,
+    CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, ProtectedRange, Style,
+    Workbook, WorkbookProtection, Worksheet,
 };
 
 use crate::biff::formula::token_parser::ParsedToken;
@@ -235,6 +236,7 @@ impl XlsReader {
         let mut style_ctx = StyleContext::new();
         let mut active_sheet_idx: u16 = 0;
         let mut workbook_protected = false;
+        let mut workbook_windows_protected = false;
         let mut workbook_password_hash: Option<u16> = None;
         let mut supbooks: Vec<SupBook> = Vec::new();
         let mut extern_sheet: Vec<ExternSheetEntry> = Vec::new();
@@ -313,6 +315,12 @@ impl XlsReader {
                     if rec.data.len() >= 2 {
                         let val = u16::from_le_bytes([rec.data[0], rec.data[1]]);
                         workbook_protected = val == 1;
+                    }
+                }
+                records::WINDOWPROTECT if in_globals => {
+                    if rec.data.len() >= 2 {
+                        let val = u16::from_le_bytes([rec.data[0], rec.data[1]]);
+                        workbook_windows_protected = val == 1;
                     }
                 }
                 records::PASSWORD if in_globals => {
@@ -496,8 +504,13 @@ impl XlsReader {
             let _ = workbook.set_active_sheet(active);
         }
 
-        // Store workbook-level protection info (currently unused, but parsed)
-        let _ = (workbook_protected, workbook_password_hash);
+        if workbook_protected || workbook_windows_protected || workbook_password_hash.is_some() {
+            workbook.set_workbook_protection(Some(WorkbookProtection {
+                structure: workbook_protected,
+                windows: workbook_windows_protected,
+                password_hash: workbook_password_hash,
+            }));
+        }
 
         Ok(workbook)
     }
@@ -772,6 +785,7 @@ impl XlsReader {
                         }
                     }
                 }
+                records::FEAT => Self::parse_feat_protection(&rec.data, ws),
                 // ── Drawing / comments (OBJ → TXO → NOTE) ────────────
                 records::MSODRAWING => {
                     escher_bytes.extend_from_slice(&rec.data);
@@ -3392,6 +3406,76 @@ impl XlsReader {
         if !tooltip.is_empty() {
             tooltips.insert((row_first, col_first), tooltip);
         }
+    }
+
+    fn parse_feat_protection(data: &[u8], ws: &mut Worksheet) {
+        if data.len() < 27 {
+            return;
+        }
+        let rt = u16::from_le_bytes([data[0], data[1]]);
+        if rt != records::FEAT {
+            return;
+        }
+        let isf = u16::from_le_bytes([data[12], data[13]]);
+        if isf != 2 {
+            return;
+        }
+        let cref = u16::from_le_bytes([data[19], data[20]]) as usize;
+        let mut off = 27usize;
+        if off + cref * 8 > data.len() {
+            return;
+        }
+        let mut ranges = Vec::with_capacity(cref);
+        for _ in 0..cref {
+            let row_first = u16::from_le_bytes([data[off], data[off + 1]]) as u32;
+            let row_last = u16::from_le_bytes([data[off + 2], data[off + 3]]) as u32;
+            let col_first = u16::from_le_bytes([data[off + 4], data[off + 5]]);
+            let col_last = u16::from_le_bytes([data[off + 6], data[off + 7]]);
+            off += 8;
+            ranges.push(CellRange::from_indices(
+                row_first, col_first, row_last, col_last,
+            ));
+        }
+        if off + 8 > data.len() {
+            return;
+        }
+        let flags = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+        off += 4;
+        let password = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+        off += 4;
+        let Ok(name) = read_unicode_string(data, &mut off) else {
+            return;
+        };
+        if name.is_empty() || ranges.is_empty() {
+            return;
+        }
+
+        let security_descriptor = if (flags & 0x0000_0001) != 0 && off < data.len() {
+            Some(format!("hex:{}", Self::hex_encode(&data[off..])))
+        } else {
+            None
+        };
+
+        ws.add_protected_range(ProtectedRange {
+            name,
+            ranges,
+            password_hash: if password != 0 {
+                Some(password as u16)
+            } else {
+                None
+            },
+            security_descriptor,
+        });
+    }
+
+    fn hex_encode(bytes: &[u8]) -> String {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for &byte in bytes {
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0x0F) as usize] as char);
+        }
+        out
     }
 
     // ── Conditional formatting record parsers ────────────────────────────

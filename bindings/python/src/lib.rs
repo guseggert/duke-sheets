@@ -412,6 +412,28 @@ impl PyWorksheet {
         Ok(())
     }
 
+    /// Set or clear sheet protection settings.
+    #[pyo3(signature = (protection))]
+    fn set_protection(&self, protection: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut wb = self.workbook.write().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        ws.set_protection(types::sheet_protection_input_to_core(protection)?);
+        Ok(())
+    }
+
+    /// Replace the protected editable ranges for this sheet.
+    #[pyo3(signature = (ranges))]
+    fn set_protected_ranges(&self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut wb = self.workbook.write().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet_mut(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        ws.set_protected_ranges(types::protected_ranges_input_to_core(ranges)?);
+        Ok(())
+    }
+
     /// Get the raw cell value (not calculated)
     #[pyo3(signature = (address))]
     fn get_cell(&self, address: &str) -> PyResult<PyCellValue> {
@@ -858,6 +880,14 @@ impl PyWorkbook {
         wb.add_worksheet_with_name(name).map_err(to_py_err)
     }
 
+    /// Set or clear workbook structure/window protection settings.
+    #[pyo3(signature = (protection))]
+    fn set_workbook_protection(&self, protection: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mut wb = self.inner.write().map_err(to_py_err)?;
+        wb.set_workbook_protection(types::workbook_protection_input_to_core(protection)?);
+        Ok(())
+    }
+
     /// Remove a worksheet by index
     ///
     /// Args:
@@ -1055,6 +1085,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySplitPanes>()?;
     m.add_class::<PySelection>()?;
     m.add_class::<PySheetProtection>()?;
+    m.add_class::<PyWorkbookProtection>()?;
+    m.add_class::<PyProtectedRange>()?;
     m.add_class::<PyPageSetup>()?;
     m.add_class::<PyPageBreak>()?;
     m.add_class::<PyWorkbookSettings>()?;

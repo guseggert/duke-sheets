@@ -8,11 +8,13 @@ use duke_sheets::{
 };
 use duke_sheets::{CellMarker, CheckState, ListSelection};
 use duke_sheets_core::style::Underline;
+use duke_sheets_core::worksheet::SheetProtection;
 use duke_sheets_core::{
-    CellAddress, PageOrientation, Selection, SplitPanes, Table, TableColumn, TableStyleInfo,
-    TotalsRowFunction,
+    hash_legacy_protection_password, CellAddress, CellRange, PageOrientation, ProtectedRange,
+    Selection, SplitPanes, Table, TableColumn, TableStyleInfo, TotalsRowFunction,
+    WorkbookProtection,
 };
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
 fn formula_text_at<'a>(sheet: &'a duke_sheets_core::Worksheet, address: &str) -> Option<&'a str> {
     let addr = CellAddress::parse(address).expect("valid cell address");
@@ -25,6 +27,135 @@ fn is_array_formula_at(sheet: &duke_sheets_core::Worksheet, address: &str) -> bo
         .formula_data_at(addr.row, addr.col)
         .map(|formula| formula.is_array_formula())
         .unwrap_or(false)
+}
+
+#[test]
+fn test_roundtrip_protection_settings() {
+    let mut wb = Workbook::new();
+    wb.set_workbook_protection(Some(WorkbookProtection {
+        structure: true,
+        windows: true,
+        password_hash: Some(hash_legacy_protection_password("book")),
+    }));
+
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "locked").unwrap();
+    sheet.set_protection(Some(SheetProtection {
+        protected: true,
+        password_hash: Some(hash_legacy_protection_password("password")),
+        select_locked_cells: true,
+        select_unlocked_cells: true,
+        format_cells: true,
+        format_columns: true,
+        format_rows: true,
+        insert_columns: true,
+        insert_rows: true,
+        insert_hyperlinks: true,
+        delete_columns: true,
+        delete_rows: true,
+        sort: true,
+        auto_filter: true,
+        pivot_tables: true,
+        ..Default::default()
+    }));
+    sheet.set_protected_ranges(vec![ProtectedRange {
+        name: "Editable".to_string(),
+        ranges: vec![
+            CellRange::parse("A1:B2").unwrap(),
+            CellRange::parse("D4:D5").unwrap(),
+        ],
+        password_hash: Some(0xCAFE),
+        security_descriptor: Some("S-1-5-21".to_string()),
+    }]);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+
+    let workbook_protection = wb2.workbook_protection().expect("workbook protection");
+    assert!(workbook_protection.structure);
+    assert!(workbook_protection.windows);
+    assert_eq!(
+        workbook_protection.password_hash,
+        Some(hash_legacy_protection_password("book"))
+    );
+
+    let sheet2 = wb2.worksheet(0).unwrap();
+    let protection = sheet2.protection().expect("sheet protection");
+    assert!(protection.protected);
+    assert_eq!(
+        protection.password_hash,
+        Some(hash_legacy_protection_password("password"))
+    );
+    assert!(protection.select_locked_cells);
+    assert!(protection.select_unlocked_cells);
+    assert!(protection.format_cells);
+    assert!(protection.format_columns);
+    assert!(protection.format_rows);
+    assert!(protection.insert_columns);
+    assert!(protection.insert_rows);
+    assert!(protection.insert_hyperlinks);
+    assert!(protection.delete_columns);
+    assert!(protection.delete_rows);
+    assert!(protection.sort);
+    assert!(protection.auto_filter);
+    assert!(protection.pivot_tables);
+
+    let ranges = sheet2.protected_ranges();
+    assert_eq!(ranges.len(), 1);
+    assert_eq!(ranges[0].name, "Editable");
+    assert_eq!(ranges[0].ranges.len(), 2);
+    assert_eq!(ranges[0].ranges[0].to_string(), "A1:B2");
+    assert_eq!(ranges[0].ranges[1].to_string(), "D4:D5");
+    assert_eq!(ranges[0].password_hash, Some(0xCAFE));
+    assert_eq!(ranges[0].security_descriptor.as_deref(), Some("S-1-5-21"));
+}
+
+#[test]
+fn test_roundtrip_sheet_protection_raw_hash() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_cell_value("A1", "locked").unwrap();
+    sheet.set_protection(Some(SheetProtection {
+        protected: true,
+        password_hash: Some(0xCAFE),
+        ..Default::default()
+    }));
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+    let wb2 = XlsxReader::read(Cursor::new(&buf)).unwrap();
+    assert_eq!(
+        wb2.worksheet(0)
+            .unwrap()
+            .protection()
+            .expect("sheet protection")
+            .password_hash,
+        Some(0xCAFE)
+    );
+}
+
+#[test]
+fn test_xlsx_skips_empty_protected_ranges_wrapper() {
+    let mut wb = Workbook::new();
+    let sheet = wb.worksheet_mut(0).unwrap();
+    sheet.set_protected_ranges(vec![ProtectedRange {
+        name: "Empty".to_string(),
+        ranges: Vec::new(),
+        password_hash: None,
+        security_descriptor: None,
+    }]);
+
+    let mut buf = Vec::new();
+    XlsxWriter::write(&wb, Cursor::new(&mut buf)).unwrap();
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(buf)).unwrap();
+    let mut sheet_xml = String::new();
+    zip.by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut sheet_xml)
+        .unwrap();
+    assert!(!sheet_xml.contains("<protectedRanges"));
 }
 
 /// Test basic roundtrip with numeric values

@@ -16,6 +16,7 @@ use crate::error::{Error, Result};
 use crate::form_control::FormControl;
 use crate::hyperlink::Hyperlink;
 use crate::locale::Locale;
+use crate::protection::{hash_legacy_protection_password, ProtectedRange};
 use crate::style::Style;
 use crate::table::Table;
 use crate::validation::DataValidation;
@@ -50,6 +51,8 @@ pub struct Worksheet {
     selections: Vec<Selection>,
     /// Sheet protection settings
     protection: Option<SheetProtection>,
+    /// Protected editable ranges.
+    protected_ranges: Vec<ProtectedRange>,
     /// Freeze pane settings
     freeze_panes: Option<FreezePanes>,
     /// Split pane settings
@@ -121,6 +124,7 @@ impl Clone for Worksheet {
             zoom_scale: self.zoom_scale,
             selections: self.selections.clone(),
             protection: self.protection.clone(),
+            protected_ranges: self.protected_ranges.clone(),
             freeze_panes: self.freeze_panes.clone(),
             split_panes: self.split_panes.clone(),
             page_setup: self.page_setup.clone(),
@@ -194,6 +198,7 @@ impl Worksheet {
             zoom_scale: None,
             selections: Vec::new(),
             protection: None,
+            protected_ranges: Vec::new(),
             freeze_panes: None,
             split_panes: None,
             page_setup: PageSetup::default(),
@@ -393,6 +398,21 @@ impl Worksheet {
     /// Set sheet protection settings
     pub fn set_protection(&mut self, protection: Option<SheetProtection>) {
         self.protection = protection;
+    }
+
+    /// Get protected ranges for this worksheet.
+    pub fn protected_ranges(&self) -> &[ProtectedRange] {
+        &self.protected_ranges
+    }
+
+    /// Set protected ranges for this worksheet.
+    pub fn set_protected_ranges(&mut self, protected_ranges: Vec<ProtectedRange>) {
+        self.protected_ranges = protected_ranges;
+    }
+
+    /// Add one protected range entry.
+    pub fn add_protected_range(&mut self, protected_range: ProtectedRange) {
+        self.protected_ranges.push(protected_range);
     }
 
     /// Get the page setup / print settings
@@ -1858,7 +1878,7 @@ pub struct Selection {
 }
 
 /// Sheet protection settings
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SheetProtection {
     /// Sheet is protected
     pub protected: bool,
@@ -1890,6 +1910,43 @@ pub struct SheetProtection {
     pub auto_filter: bool,
     /// Allow pivot tables
     pub pivot_tables: bool,
+}
+
+impl SheetProtection {
+    /// Create sheet protection with the sheet protected.
+    pub fn protected() -> Self {
+        Self {
+            protected: true,
+            select_locked_cells: true,
+            select_unlocked_cells: true,
+            ..Default::default()
+        }
+    }
+
+    /// Set the password from plaintext input, storing only the legacy verifier.
+    pub fn with_password(mut self, password: &str) -> Self {
+        self.password_hash = Some(hash_legacy_protection_password(password));
+        self
+    }
+
+    /// Set a precomputed legacy password verifier.
+    pub fn with_password_hash(mut self, password_hash: u16) -> Self {
+        self.password_hash = Some(password_hash);
+        self
+    }
+}
+
+#[cfg(test)]
+mod protection_tests {
+    use super::*;
+
+    #[test]
+    fn protected_builder_allows_selection_by_default() {
+        let protection = SheetProtection::protected();
+        assert!(protection.protected);
+        assert!(protection.select_locked_cells);
+        assert!(protection.select_unlocked_cells);
+    }
 }
 
 /// Page setup for printing

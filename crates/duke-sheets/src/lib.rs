@@ -47,6 +47,8 @@ pub use calculation::{CalculationOptions, CalculationStats, WorkbookCalculationE
 // Re-export core types
 pub use duke_sheets_core::auto_filter::{ColorFilter, DynamicFilter, DynamicFilterType};
 pub use duke_sheets_core::{
+    hash_legacy_protection_password,
+
     rich_text_to_plain,
     Alignment,
     AutoFilter,
@@ -102,6 +104,7 @@ pub use duke_sheets_core::{
     PageBreak,
     PageOrientation,
     PageSetup,
+    ProtectedRange,
     Result,
 
     // Rich text types
@@ -127,9 +130,9 @@ pub use duke_sheets_core::{
     VerticalAlignment,
     // Main types
     Workbook,
+    WorkbookProtection,
     WorkbookSettings,
     Worksheet,
-
     MAX_COLS,
     // Constants
     MAX_ROWS,

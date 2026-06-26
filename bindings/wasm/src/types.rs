@@ -653,9 +653,18 @@ impl WasmColorInput {
                     parse_rgb_hex(hex)
                 } else {
                     Ok(CoreColor::Rgb {
-                        r: u32_to_u8(self.r.ok_or_else(|| "rgb color requires r".to_string())?, "r")?,
-                        g: u32_to_u8(self.g.ok_or_else(|| "rgb color requires g".to_string())?, "g")?,
-                        b: u32_to_u8(self.b.ok_or_else(|| "rgb color requires b".to_string())?, "b")?,
+                        r: u32_to_u8(
+                            self.r.ok_or_else(|| "rgb color requires r".to_string())?,
+                            "r",
+                        )?,
+                        g: u32_to_u8(
+                            self.g.ok_or_else(|| "rgb color requires g".to_string())?,
+                            "g",
+                        )?,
+                        b: u32_to_u8(
+                            self.b.ok_or_else(|| "rgb color requires b".to_string())?,
+                            "b",
+                        )?,
                     })
                 }
             }
@@ -665,9 +674,18 @@ impl WasmColorInput {
                 } else {
                     Ok(CoreColor::Argb {
                         a: u32_to_u8(self.a.unwrap_or(255), "a")?,
-                        r: u32_to_u8(self.r.ok_or_else(|| "argb color requires r".to_string())?, "r")?,
-                        g: u32_to_u8(self.g.ok_or_else(|| "argb color requires g".to_string())?, "g")?,
-                        b: u32_to_u8(self.b.ok_or_else(|| "argb color requires b".to_string())?, "b")?,
+                        r: u32_to_u8(
+                            self.r.ok_or_else(|| "argb color requires r".to_string())?,
+                            "r",
+                        )?,
+                        g: u32_to_u8(
+                            self.g.ok_or_else(|| "argb color requires g".to_string())?,
+                            "g",
+                        )?,
+                        b: u32_to_u8(
+                            self.b.ok_or_else(|| "argb color requires b".to_string())?,
+                            "b",
+                        )?,
                     })
                 }
             }
@@ -690,9 +708,18 @@ impl WasmColorInput {
                     parse_color_hex(hex)
                 } else if self.r.is_some() || self.g.is_some() || self.b.is_some() {
                     Ok(CoreColor::Rgb {
-                        r: u32_to_u8(self.r.ok_or_else(|| "rgb color requires r".to_string())?, "r")?,
-                        g: u32_to_u8(self.g.ok_or_else(|| "rgb color requires g".to_string())?, "g")?,
-                        b: u32_to_u8(self.b.ok_or_else(|| "rgb color requires b".to_string())?, "b")?,
+                        r: u32_to_u8(
+                            self.r.ok_or_else(|| "rgb color requires r".to_string())?,
+                            "r",
+                        )?,
+                        g: u32_to_u8(
+                            self.g.ok_or_else(|| "rgb color requires g".to_string())?,
+                            "g",
+                        )?,
+                        b: u32_to_u8(
+                            self.b.ok_or_else(|| "rgb color requires b".to_string())?,
+                            "b",
+                        )?,
                     })
                 } else if let Some(theme_index) = self.theme_index {
                     Ok(CoreColor::Theme {
@@ -700,7 +727,10 @@ impl WasmColorInput {
                         tint: i32_to_i8(self.tint.unwrap_or(0), "tint")?,
                     })
                 } else if let Some(palette_index) = self.palette_index {
-                    Ok(CoreColor::Indexed(u32_to_u8(palette_index, "paletteIndex")?))
+                    Ok(CoreColor::Indexed(u32_to_u8(
+                        palette_index,
+                        "paletteIndex",
+                    )?))
                 } else {
                     Err("color requires colorType, hex, rgb, themeIndex, or paletteIndex".into())
                 }
@@ -841,7 +871,9 @@ impl WasmFillStylePatch {
                     .to_core_color()?,
             }),
             Some("gradient") => Ok(CoreFillStyle::Gradient {
-                gradient_type: parse_gradient_type_input(self.gradient_type.as_deref().unwrap_or("linear"))?,
+                gradient_type: parse_gradient_type_input(
+                    self.gradient_type.as_deref().unwrap_or("linear"),
+                )?,
                 angle: self.angle.unwrap_or(0.0),
                 stops: self
                     .stops
@@ -893,7 +925,10 @@ fn parse_diagonal_direction_input(value: &str) -> Result<DiagonalDirection, Stri
 }
 
 impl WasmBorderEdgePatch {
-    fn apply_to_edge(&self, existing: Option<&CoreBorderEdge>) -> Result<Option<CoreBorderEdge>, String> {
+    fn apply_to_edge(
+        &self,
+        existing: Option<&CoreBorderEdge>,
+    ) -> Result<Option<CoreBorderEdge>, String> {
         let parsed_style = self
             .style
             .as_deref()
@@ -1022,10 +1057,11 @@ impl WasmNumberFormatPatch {
     fn to_core_number_format(&self) -> Result<CoreNumberFormat, String> {
         match self.format_type.as_deref() {
             Some("general") => Ok(CoreNumberFormat::General),
-            Some("builtin") => Ok(CoreNumberFormat::BuiltIn(
-                self.id
-                    .ok_or_else(|| "builtin number format requires id".to_string())?,
-            )),
+            Some("builtin") => {
+                Ok(CoreNumberFormat::BuiltIn(self.id.ok_or_else(|| {
+                    "builtin number format requires id".to_string()
+                })?))
+            }
             Some("custom") => Ok(CoreNumberFormat::Custom(
                 self.format_string
                     .clone()
@@ -1206,6 +1242,7 @@ impl From<&core::Selection> for WasmSelection {
 #[serde(rename_all = "camelCase")]
 pub struct WasmSheetProtection {
     pub protected: bool,
+    pub password_hash: Option<u16>,
     pub select_locked_cells: bool,
     pub select_unlocked_cells: bool,
     pub format_cells: bool,
@@ -1225,6 +1262,7 @@ impl From<&core::SheetProtection> for WasmSheetProtection {
     fn from(p: &core::SheetProtection) -> Self {
         Self {
             protected: p.protected,
+            password_hash: p.password_hash,
             select_locked_cells: p.select_locked_cells,
             select_unlocked_cells: p.select_unlocked_cells,
             format_cells: p.format_cells,
@@ -1239,6 +1277,148 @@ impl From<&core::SheetProtection> for WasmSheetProtection {
             auto_filter: p.auto_filter,
             pivot_tables: p.pivot_tables,
         }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmSheetProtectionInput {
+    pub protected: Option<bool>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+    pub select_locked_cells: Option<bool>,
+    pub select_unlocked_cells: Option<bool>,
+    pub format_cells: Option<bool>,
+    pub format_columns: Option<bool>,
+    pub format_rows: Option<bool>,
+    pub insert_columns: Option<bool>,
+    pub insert_rows: Option<bool>,
+    pub insert_hyperlinks: Option<bool>,
+    pub delete_columns: Option<bool>,
+    pub delete_rows: Option<bool>,
+    pub sort: Option<bool>,
+    pub auto_filter: Option<bool>,
+    pub pivot_tables: Option<bool>,
+}
+
+impl WasmSheetProtectionInput {
+    pub fn into_core(self) -> Result<core::SheetProtection, String> {
+        Ok(core::SheetProtection {
+            protected: self.protected.unwrap_or(true),
+            password_hash: protection_password_hash(self.password, self.password_hash)?,
+            select_locked_cells: self.select_locked_cells.unwrap_or(true),
+            select_unlocked_cells: self.select_unlocked_cells.unwrap_or(true),
+            format_cells: self.format_cells.unwrap_or(false),
+            format_columns: self.format_columns.unwrap_or(false),
+            format_rows: self.format_rows.unwrap_or(false),
+            insert_columns: self.insert_columns.unwrap_or(false),
+            insert_rows: self.insert_rows.unwrap_or(false),
+            insert_hyperlinks: self.insert_hyperlinks.unwrap_or(false),
+            delete_columns: self.delete_columns.unwrap_or(false),
+            delete_rows: self.delete_rows.unwrap_or(false),
+            sort: self.sort.unwrap_or(false),
+            auto_filter: self.auto_filter.unwrap_or(false),
+            pivot_tables: self.pivot_tables.unwrap_or(false),
+        })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookProtection {
+    pub structure: bool,
+    pub windows: bool,
+    pub password_hash: Option<u16>,
+}
+
+impl From<&core::WorkbookProtection> for WasmWorkbookProtection {
+    fn from(p: &core::WorkbookProtection) -> Self {
+        Self {
+            structure: p.structure,
+            windows: p.windows,
+            password_hash: p.password_hash,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookProtectionInput {
+    pub structure: Option<bool>,
+    pub windows: Option<bool>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+}
+
+impl WasmWorkbookProtectionInput {
+    pub fn into_core(self) -> Result<core::WorkbookProtection, String> {
+        Ok(core::WorkbookProtection {
+            structure: self.structure.unwrap_or(true),
+            windows: self.windows.unwrap_or(false),
+            password_hash: protection_password_hash(self.password, self.password_hash)?,
+        })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmProtectedRange {
+    pub name: String,
+    pub ranges: Vec<String>,
+    pub password_hash: Option<u16>,
+    pub security_descriptor: Option<String>,
+}
+
+impl From<&core::ProtectedRange> for WasmProtectedRange {
+    fn from(p: &core::ProtectedRange) -> Self {
+        Self {
+            name: p.name.clone(),
+            ranges: p.ranges.iter().map(ToString::to_string).collect(),
+            password_hash: p.password_hash,
+            security_descriptor: p.security_descriptor.clone(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmProtectedRangeInput {
+    pub name: String,
+    pub ranges: Vec<String>,
+    pub password: Option<String>,
+    pub password_hash: Option<u32>,
+    pub security_descriptor: Option<String>,
+}
+
+impl WasmProtectedRangeInput {
+    pub fn into_core(self) -> Result<core::ProtectedRange, String> {
+        let mut ranges = Vec::with_capacity(self.ranges.len());
+        for range in self.ranges {
+            ranges.push(
+                core::CellRange::parse(&range)
+                    .map_err(|e| format!("Invalid protected range '{}': {}", range, e))?,
+            );
+        }
+        Ok(core::ProtectedRange {
+            name: self.name,
+            ranges,
+            password_hash: protection_password_hash(self.password, self.password_hash)?,
+            security_descriptor: self.security_descriptor,
+        })
+    }
+}
+
+fn protection_password_hash(
+    password: Option<String>,
+    password_hash: Option<u32>,
+) -> Result<Option<u16>, String> {
+    match (password, password_hash) {
+        (Some(_), Some(_)) => Err("Specify either password or passwordHash, not both".to_string()),
+        (Some(password), None) => Ok(Some(core::hash_legacy_protection_password(&password))),
+        (None, Some(hash)) => u16::try_from(hash)
+            .map(Some)
+            .map_err(|_| "passwordHash must be between 0 and 65535".to_string()),
+        (None, None) => Ok(None),
     }
 }
 
@@ -2300,7 +2480,10 @@ impl From<&duke_sheets_chart::DataPoint> for WasmDataPoint {
             index: dp.index,
             marker: dp.marker.as_ref().map(WasmMarker::from),
             explosion: dp.explosion,
-            shape_properties: dp.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: dp
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
         }
     }
 }
@@ -2464,8 +2647,14 @@ impl From<&duke_sheets_chart::Axis> for WasmAxis {
             number_format: a.number_format.as_ref().map(WasmChartNumberFormat::from),
             major_gridlines: a.major_gridlines,
             minor_gridlines: a.minor_gridlines,
-            major_gridlines_shape_properties: a.major_gridlines_shape_properties.as_ref().map(WasmChartShapeProperties::from),
-            minor_gridlines_shape_properties: a.minor_gridlines_shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            major_gridlines_shape_properties: a
+                .major_gridlines_shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
+            minor_gridlines_shape_properties: a
+                .minor_gridlines_shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
             major_tick_mark: a.major_tick_mark.as_ref().map(|t| {
                 match t {
                     TickMark::Cross => "cross",
@@ -2672,7 +2861,10 @@ impl From<&duke_sheets_chart::Chart> for WasmChart {
             }),
             plot_visible_only: c.plot_visible_only,
             layout: c.layout.as_ref().map(WasmLayout::from),
-            shape_properties: c.shape_properties.as_ref().map(WasmChartShapeProperties::from),
+            shape_properties: c
+                .shape_properties
+                .as_ref()
+                .map(WasmChartShapeProperties::from),
             is_3d: c.is_3d,
             vary_colors: c.vary_colors,
             gap_width: c.gap_width,

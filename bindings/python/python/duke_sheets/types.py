@@ -113,6 +113,40 @@ class StyleInput(TypedDict, total=False):
     protection: CellProtectionInput
 
 
+class WorkbookProtectionInput(TypedDict, total=False):
+    structure: bool
+    windows: bool
+    password: str
+    password_hash: int
+
+
+class SheetProtectionInput(TypedDict, total=False):
+    protected: bool
+    password: str
+    password_hash: int
+    select_locked_cells: bool
+    select_unlocked_cells: bool
+    format_cells: bool
+    format_columns: bool
+    format_rows: bool
+    insert_columns: bool
+    insert_rows: bool
+    insert_hyperlinks: bool
+    delete_columns: bool
+    delete_rows: bool
+    sort: bool
+    auto_filter: bool
+    pivot_tables: bool
+
+
+class ProtectedRangeInput(TypedDict, total=False):
+    name: str
+    ranges: List[str]
+    password: str
+    password_hash: int
+    security_descriptor: str
+
+
 __all__ = [
     "AlignmentInput",
     "BorderEdgeInput",
@@ -123,5 +157,8 @@ __all__ = [
     "FontStyleInput",
     "GradientStopInput",
     "NumberFormatInput",
+    "ProtectedRangeInput",
+    "SheetProtectionInput",
     "StyleInput",
+    "WorkbookProtectionInput",
 ]

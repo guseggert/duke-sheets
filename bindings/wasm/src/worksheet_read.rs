@@ -8,8 +8,9 @@ use crate::{
         WasmAutoFilter, WasmChart, WasmChartEx, WasmColor, WasmComment, WasmCommentEntry,
         WasmConditionalFormatRule, WasmDataValidation, WasmEmbeddedImage, WasmFormulaCell,
         WasmFreezePanes, WasmHyperlink, WasmHyperlinkEntry, WasmImageInfo, WasmMergeSpan,
-        WasmMergedRegion, WasmPageBreak, WasmPageSetup, WasmRow, WasmRowCell, WasmRowsOptions,
-        WasmSelection, WasmSheetProtection, WasmSpillSource, WasmSplitPanes, WasmStyle, WasmTable,
+        WasmMergedRegion, WasmPageBreak, WasmPageSetup, WasmProtectedRange, WasmRow, WasmRowCell,
+        WasmRowsOptions, WasmSelection, WasmSheetProtection, WasmSpillSource, WasmSplitPanes,
+        WasmStyle, WasmTable,
     },
     Worksheet,
 };
@@ -682,6 +683,20 @@ impl Worksheet {
             Some(v) => to_js_value(&WasmSheetProtection::from(v)),
             None => Ok(JsValue::NULL),
         }
+    }
+
+    #[wasm_bindgen(getter, js_name = protectedRanges)]
+    pub fn protected_ranges(&self) -> Result<JsValue, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let ranges: Vec<WasmProtectedRange> = ws
+            .protected_ranges()
+            .iter()
+            .map(WasmProtectedRange::from)
+            .collect();
+        to_js_value(&ranges)
     }
 
     #[wasm_bindgen(getter, js_name = pageSetup)]

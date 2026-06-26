@@ -11,7 +11,9 @@ use duke_sheets_core::validation::{
 };
 use duke_sheets_core::worksheet::PageOrientation;
 use duke_sheets_core::worksheet::{PageBreak, SheetProtection};
-use duke_sheets_core::{AutoFilter, CellError, CellRange, CellValue, Hyperlink, Worksheet};
+use duke_sheets_core::{
+    AutoFilter, CellError, CellRange, CellValue, Hyperlink, ProtectedRange, Worksheet,
+};
 
 use super::shared_strings::SharedStringEntry;
 use duke_sheets_formula::decompile::FormulaContext;
@@ -439,6 +441,9 @@ pub(crate) fn read_worksheet<R: Read>(
             records::BRT_SHEET_PROTECTION => {
                 parse_sheet_protection(&buf[..len], ws);
             }
+            records::BRT_RANGE_PROTECTION => {
+                parse_range_protection(&buf[..len], ws);
+            }
 
             records::BRT_BEGIN_RW_BRK => {
                 in_row_breaks = true;
@@ -646,6 +651,60 @@ fn parse_sheet_protection(data: &[u8], ws: &mut Worksheet) {
         }
     };
     ws.set_protection(Some(prot));
+}
+
+fn parse_range_protection(data: &[u8], ws: &mut Worksheet) {
+    if data.len() < 6 {
+        return;
+    }
+
+    let password_hash = parser::read_u16(data, 0);
+    let mut pos = 2;
+    let ranges = read_sqref(data, &mut pos);
+    if ranges.is_empty() || pos >= data.len() {
+        return;
+    }
+
+    let Ok((name, consumed)) = parser::wide_str(data, pos) else {
+        return;
+    };
+    pos += consumed;
+    if name.is_empty() {
+        return;
+    }
+
+    let security_descriptor = if pos + 4 <= data.len() {
+        let len = parser::read_u32(data, pos) as usize;
+        pos += 4;
+        if len > 0 && pos + len <= data.len() {
+            Some(format!("hex:{}", hex_encode(&data[pos..pos + len])))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    ws.add_protected_range(ProtectedRange {
+        name,
+        ranges,
+        password_hash: if password_hash != 0 {
+            Some(password_hash)
+        } else {
+            None
+        },
+        security_descriptor,
+    });
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0F) as usize] as char);
+    }
+    out
 }
 
 /// Parse BrtWsProp record for tab color.
