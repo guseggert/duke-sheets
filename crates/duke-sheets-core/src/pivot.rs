@@ -268,6 +268,8 @@ impl From<String> for PivotFieldRef {
 pub struct PivotField {
     /// Source field reference.
     pub field: PivotFieldRef,
+    /// Optional display caption for this field on the pivot axis.
+    pub caption: Option<String>,
     /// Sort behavior for this field.
     pub sort: PivotSort,
     /// Subtotal behavior for this field.
@@ -306,6 +308,7 @@ impl PivotField {
     pub fn new(field: impl Into<PivotFieldRef>) -> Self {
         Self {
             field: field.into(),
+            caption: None,
             sort: PivotSort::Ascending,
             subtotal: PivotSubtotal::Automatic,
             subtotal_caption: None,
@@ -319,6 +322,12 @@ impl PivotField {
             include_new_items_in_filter: false,
             item_page_count: 10,
         }
+    }
+
+    /// Set the display caption for this axis field.
+    pub fn with_caption(mut self, caption: impl Into<String>) -> Self {
+        self.caption = Some(caption.into());
+        self
     }
 
     /// Set the subtotal label suffix for this axis field.

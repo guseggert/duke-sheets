@@ -133,6 +133,7 @@ pub struct WasmPivotGroupingOptions {
 #[serde(rename_all = "camelCase")]
 pub struct WasmPivotFieldOptions {
     pub field: String,
+    pub caption: Option<String>,
     pub sort: Option<String>,
     pub subtotal: Option<String>,
     pub subtotal_caption: Option<String>,
@@ -438,6 +439,7 @@ impl From<&core::PivotSource> for WasmPivotSourceDefinition {
 #[serde(rename_all = "camelCase")]
 pub struct WasmPivotFieldDefinition {
     pub field: String,
+    pub caption: Option<String>,
     pub sort: String,
     pub subtotal: String,
     pub subtotal_caption: Option<String>,
@@ -456,6 +458,7 @@ impl From<&core::PivotField> for WasmPivotFieldDefinition {
     fn from(field: &core::PivotField) -> Self {
         Self {
             field: field.field.name.clone(),
+            caption: field.caption.clone(),
             sort: pivot_sort_to_string(field.sort).into(),
             subtotal: pivot_subtotal_to_string(field.subtotal).into(),
             subtotal_caption: field.subtotal_caption.clone(),

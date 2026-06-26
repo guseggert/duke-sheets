@@ -241,6 +241,7 @@ impl From<&core::PivotSource> for JsPivotSourceDefinition {
 #[napi(object)]
 pub struct JsPivotFieldDefinition {
     pub field: String,
+    pub caption: Option<String>,
     pub sort: String,
     pub subtotal: String,
     pub subtotal_caption: Option<String>,
@@ -259,6 +260,7 @@ impl From<&core::PivotField> for JsPivotFieldDefinition {
     fn from(field: &core::PivotField) -> Self {
         Self {
             field: field.field.name.clone(),
+            caption: field.caption.clone(),
             sort: pivot_sort_to_string(field.sort).into(),
             subtotal: pivot_subtotal_to_string(field.subtotal).into(),
             subtotal_caption: field.subtotal_caption.clone(),

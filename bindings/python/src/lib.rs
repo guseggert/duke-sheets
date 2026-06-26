@@ -268,6 +268,7 @@ fn build_pivot_field_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotField>
         .downcast::<PyDict>()
         .map_err(|_| PyValueError::new_err("pivot field options must be a dict"))?;
     let mut field = PivotField::new(required_string(dict, &["field"])?);
+    field.caption = optional_string(dict, &["caption"])?;
     if let Some(sort) = optional_string(dict, &["sort"])? {
         field.sort = parse_pivot_sort(&sort)?;
     }
@@ -1192,6 +1193,7 @@ fn pivot_fields_to_py(py: Python<'_>, fields: &[PivotField]) -> PyResult<PyObjec
 fn pivot_field_to_py(py: Python<'_>, field: &PivotField) -> PyResult<PyObject> {
     let dict = PyDict::new_bound(py);
     dict.set_item("field", &field.field.name)?;
+    dict.set_item("caption", &field.caption)?;
     dict.set_item("sort", pivot_sort_to_python(field.sort))?;
     dict.set_item("subtotal", pivot_subtotal_to_python(field.subtotal))?;
     dict.set_item("subtotal_caption", &field.subtotal_caption)?;

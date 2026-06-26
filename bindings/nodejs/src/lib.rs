@@ -396,6 +396,7 @@ pub struct JsPivotGroupingOptions {
 #[napi(object)]
 pub struct JsPivotFieldOptions {
     pub field: String,
+    pub caption: Option<String>,
     pub sort: Option<String>,
     pub subtotal: Option<String>,
     pub subtotal_caption: Option<String>,
@@ -975,6 +976,7 @@ fn build_workbook_connection_from_js(
 
 fn build_pivot_field_from_js(options: JsPivotFieldOptions) -> Result<PivotField> {
     let mut field = PivotField::new(options.field);
+    field.caption = options.caption;
     if let Some(sort) = options.sort {
         field.sort = parse_pivot_sort(&sort)?;
     }

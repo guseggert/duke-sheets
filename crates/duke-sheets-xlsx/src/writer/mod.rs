@@ -4857,6 +4857,7 @@ mod tests {
         sheet.set_cell_value("C3", 20.0).unwrap();
 
         let mut region = PivotField::new("Region");
+        region.caption = Some("Market".to_string());
         region.subtotal = PivotSubtotal::Sum;
         region.subtotal_caption = Some("Subtotal".to_string());
         region.show_empty_items = true;
@@ -4885,6 +4886,7 @@ mod tests {
         let bytes = out.into_inner();
 
         let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"name="Market""#));
         assert!(pivot_xml.contains(r#"showAll="1""#));
         assert!(pivot_xml.contains(r#"showAll="0""#));
         assert!(pivot_xml.contains(r#"sumSubtotal="1""#));
@@ -4905,6 +4907,7 @@ mod tests {
             .pivot_table_by_name("AxisFieldOptions")
             .unwrap();
         assert_eq!(pivot.rows[0].subtotal, PivotSubtotal::Sum);
+        assert_eq!(pivot.rows[0].caption.as_deref(), Some("Market"));
         assert_eq!(pivot.rows[0].subtotal_caption.as_deref(), Some("Subtotal"));
         assert!(pivot.rows[0].show_empty_items);
         assert!(!pivot.rows[0].show_drop_downs);
@@ -4918,6 +4921,7 @@ mod tests {
             vec![PivotValue::String("East".into())]
         );
         assert_eq!(pivot.columns[0].subtotal, PivotSubtotal::None);
+        assert_eq!(pivot.columns[0].caption, None);
         assert_eq!(pivot.columns[0].subtotal_caption, None);
         assert!(!pivot.columns[0].show_empty_items);
         assert!(pivot.columns[0].show_drop_downs);

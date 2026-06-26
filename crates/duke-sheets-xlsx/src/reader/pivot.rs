@@ -1302,6 +1302,7 @@ fn parse_pivot_sort(e: &BytesStart<'_>) -> PivotSort {
 
 #[derive(Debug, Clone)]
 struct PivotFieldOptions {
+    caption: Option<String>,
     sort: PivotSort,
     subtotal: PivotSubtotal,
     subtotal_caption: Option<String>,
@@ -1319,6 +1320,7 @@ struct PivotFieldOptions {
 impl Default for PivotFieldOptions {
     fn default() -> Self {
         Self {
+            caption: None,
             sort: PivotSort::None,
             subtotal: PivotSubtotal::Automatic,
             subtotal_caption: None,
@@ -1337,6 +1339,7 @@ impl Default for PivotFieldOptions {
 
 fn parse_pivot_field_options(e: &BytesStart<'_>) -> PivotFieldOptions {
     PivotFieldOptions {
+        caption: attr_string(e, b"name"),
         sort: parse_pivot_sort(e),
         subtotal: parse_pivot_subtotal(e),
         subtotal_caption: attr_string(e, b"subtotalCaption"),
@@ -1410,6 +1413,7 @@ fn pivot_axis_field(
     let field_name = semantic_cache_field_name(cache, field_index)?;
     let options = options.unwrap_or_default();
     let mut pivot_field = PivotField::new(field_name);
+    pivot_field.caption = options.caption;
     pivot_field.sort = options.sort;
     pivot_field.subtotal = options.subtotal;
     pivot_field.subtotal_caption = options.subtotal_caption;

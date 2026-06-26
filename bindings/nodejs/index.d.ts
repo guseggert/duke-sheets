@@ -183,6 +183,7 @@ export interface JsPivotGroupingOptions {
 
 export interface JsPivotFieldOptions {
   field: string
+  caption?: string
   sort?: 'none' | 'manual' | 'ascending' | 'asc' | 'descending' | 'desc'
   subtotalCaption?: string
   subtotal?:

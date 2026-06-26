@@ -6519,11 +6519,7 @@ fn render_without_column_fields(
     aggregation: &PivotAggregation,
 ) -> Vec<Vec<CellValue>> {
     let mut cells = Vec::new();
-    let mut header = plan
-        .row_indexes
-        .iter()
-        .map(|index| CellValue::string(&snapshot.headers[*index]))
-        .collect::<Vec<_>>();
+    let mut header = row_field_header_cells(plan);
     header.extend(
         plan.measures
             .iter()
@@ -6709,11 +6705,7 @@ fn render_with_column_fields(
 ) -> Vec<Vec<CellValue>> {
     let mut cells = Vec::new();
     let column_slots = column_render_slots(pivot, plan, aggregation);
-    let mut header = plan
-        .row_indexes
-        .iter()
-        .map(|index| CellValue::string(&snapshot.headers[*index]))
-        .collect::<Vec<_>>();
+    let mut header = row_field_header_cells(plan);
 
     for slot in &column_slots {
         for measure in &plan.measures {
@@ -6930,7 +6922,7 @@ fn render_values_on_rows_without_column_fields(
     let mut rendered = RenderedCells::new();
     let empty_column_key = Vec::new();
     let label_width = plan.row_indexes.len() + 1;
-    let mut header = values_on_rows_header(pivot, snapshot, plan);
+    let mut header = values_on_rows_header(pivot, plan);
     header.push(CellValue::string(grand_total_caption(pivot)));
     if pivot.layout.show_field_headers {
         rendered.push_row(header);
@@ -7141,7 +7133,7 @@ fn render_values_on_rows_with_column_fields(
     let mut rendered = RenderedCells::new();
     let column_slots = column_render_slots(pivot, plan, aggregation);
     let label_width = plan.row_indexes.len() + 1;
-    let mut header = values_on_rows_header(pivot, snapshot, plan);
+    let mut header = values_on_rows_header(pivot, plan);
     for slot in &column_slots {
         header.push(CellValue::string(column_slot_label(snapshot, plan, slot)));
     }
@@ -7349,19 +7341,25 @@ fn render_compact_values_on_rows_with_column_fields(
 
 fn values_on_rows_header(
     pivot: &PivotTable,
-    snapshot: &SourceSnapshot,
     plan: &CompiledPivotPlan,
 ) -> Vec<CellValue> {
-    let mut header = plan
-        .row_indexes
-        .iter()
-        .map(|index| CellValue::string(&snapshot.headers[*index]))
-        .collect::<Vec<_>>();
+    let mut header = row_field_header_cells(plan);
     header.insert(
         values_axis_row_position(pivot, plan),
         CellValue::string(values_caption(pivot)),
     );
     header
+}
+
+fn row_field_header_cells(plan: &CompiledPivotPlan) -> Vec<CellValue> {
+    plan.row_fields
+        .iter()
+        .map(|field| CellValue::string(pivot_field_caption(field)))
+        .collect()
+}
+
+fn pivot_field_caption(field: &PivotField) -> &str {
+    field.caption.as_deref().unwrap_or(&field.field.name)
 }
 
 fn values_on_rows_label_cells(
@@ -8598,7 +8596,7 @@ fn prepend_page_fields(
         let start_column = column * 2;
         let values = &mut rows[row];
         values.resize(start_column + 2, CellValue::Empty);
-        values[start_column] = CellValue::string(&field.field.name);
+        values[start_column] = CellValue::string(pivot_field_caption(field));
         values[start_column + 1] = CellValue::string(page_field_caption(
             pivot,
             snapshot,
@@ -10965,6 +10963,41 @@ mod tests {
         assert_eq!(number(&workbook, "E2"), 20.0);
         assert_eq!(text(&workbook, "D3"), "Grand Total");
         assert_eq!(number(&workbook, "E3"), 30.0);
+    }
+
+    #[test]
+    fn refresh_applies_axis_field_captions() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+
+        let region = PivotField::new("Region").with_caption("Market");
+        let period = PivotField::new("Quarter").with_caption("Period");
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .page(period)
+            .row(region)
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E1"), "Period");
+        assert_eq!(text(&workbook, "E3"), "Market");
+        assert_eq!(number(&workbook, "F4"), 10.0);
+        assert_eq!(number(&workbook, "F5"), 20.0);
     }
 
     #[cfg(feature = "parallel")]

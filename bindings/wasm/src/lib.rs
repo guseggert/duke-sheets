@@ -341,6 +341,7 @@ export interface PivotGroupingOptions {
 
 export interface PivotFieldOptions {
   field: string;
+  caption?: string;
   sort?: "none" | "manual" | "ascending" | "asc" | "descending" | "desc";
   subtotalCaption?: string;
   subtotal?:
@@ -509,6 +510,7 @@ export interface PivotSourceDefinition {
 
 export interface PivotFieldDefinition {
   field: string;
+  caption?: string;
   sort: "none" | "ascending" | "descending";
   subtotal: "automatic" | "none" | "sum" | "count" | "countNumbers" | "average" | "min" | "max" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
   subtotalCaption?: string;
@@ -1056,6 +1058,7 @@ fn build_workbook_connection_from_wasm(
 
 fn build_pivot_field_from_wasm(options: WasmPivotFieldOptions) -> Result<PivotField, JsError> {
     let mut field = PivotField::new(options.field);
+    field.caption = options.caption;
     if let Some(sort) = options.sort {
         field.sort = parse_pivot_sort(&sort)?;
     }
