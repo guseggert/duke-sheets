@@ -5429,6 +5429,11 @@ fn pivot_row_page_break_offsets(
     }
 
     let compact = compact_row_layout(pivot, plan);
+    let rows_per_body_item = if values_on_rows(pivot, plan) {
+        plan.measures.len() as u32
+    } else {
+        1
+    };
     let mut offsets = Vec::new();
     let mut row_offset = body_header_row_count(pivot);
     for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
@@ -5440,19 +5445,19 @@ fn pivot_row_page_break_offsets(
                 if row_subtotal_at_top(pivot, plan, position)
                     && row_subtotal_row_is_rendered(plan, aggregation, row_key, position)
                 {
-                    row_offset += 1;
+                    row_offset += rows_per_body_item;
                 }
             }
         }
         if compact {
             row_offset += compact_group_header_positions(row_key, previous_row_key).len() as u32;
         }
-        row_offset += 1;
+        row_offset += rows_per_body_item;
 
         let next_row_key = aggregation.row_order.get(row_index + 1);
         for position in row_group_end_positions(row_key, next_row_key) {
             if row_subtotal_row_is_rendered(plan, aggregation, row_key, position) {
-                row_offset += 1;
+                row_offset += rows_per_body_item;
             }
             if row_field_inserts_blank_row(plan, position) {
                 row_offset += 1;
@@ -5951,6 +5956,21 @@ fn render_values_on_rows_without_column_fields(
         let previous_row_key = row_index
             .checked_sub(1)
             .and_then(|index| aggregation.row_order.get(index));
+        let emitted_top_subtotal = append_values_on_rows_row_top_subtotals_without_column_fields(
+            &mut cells,
+            pivot,
+            snapshot,
+            plan,
+            aggregation,
+            row_key,
+            previous_row_key,
+            &empty_column_key,
+        );
+        let label_previous_row_key = if emitted_top_subtotal {
+            Some(row_key)
+        } else {
+            previous_row_key
+        };
         let key = GroupKey {
             rows: row_key.clone(),
             columns: empty_column_key.clone(),
@@ -5961,7 +5981,7 @@ fn render_values_on_rows_without_column_fields(
                 snapshot,
                 plan,
                 row_key,
-                previous_row_key,
+                label_previous_row_key,
                 measure_index,
             );
             let context = ShowAsContext {
@@ -5985,7 +6005,17 @@ fn render_values_on_rows_without_column_fields(
         }
 
         let next_row_key = aggregation.row_order.get(row_index + 1);
-        append_blank_rows_for_values_axis(&mut cells, plan, row_key, next_row_key, label_width + 1);
+        append_values_on_rows_row_subtotals_without_column_fields(
+            &mut cells,
+            pivot,
+            snapshot,
+            plan,
+            aggregation,
+            row_key,
+            next_row_key,
+            &empty_column_key,
+            label_width + 1,
+        );
     }
 
     if pivot.layout.show_row_grand_totals {
@@ -6068,7 +6098,16 @@ fn render_compact_values_on_rows_without_column_fields(
         }
 
         let next_row_key = aggregation.row_order.get(row_index + 1);
-        append_blank_rows_for_values_axis(&mut cells, plan, row_key, next_row_key, 3);
+        append_compact_values_on_rows_row_subtotals_without_column_fields(
+            &mut cells,
+            snapshot,
+            plan,
+            aggregation,
+            row_key,
+            next_row_key,
+            &empty_column_key,
+            3,
+        );
     }
 
     if pivot.layout.show_row_grand_totals {
@@ -6122,13 +6161,28 @@ fn render_values_on_rows_with_column_fields(
         let previous_row_key = row_index
             .checked_sub(1)
             .and_then(|index| aggregation.row_order.get(index));
+        let emitted_top_subtotal = append_values_on_rows_row_top_subtotals_with_column_fields(
+            &mut cells,
+            pivot,
+            snapshot,
+            plan,
+            aggregation,
+            row_key,
+            previous_row_key,
+            &column_slots,
+        );
+        let label_previous_row_key = if emitted_top_subtotal {
+            Some(row_key)
+        } else {
+            previous_row_key
+        };
         for measure_index in 0..plan.measures.len() {
             let mut row = values_on_rows_label_cells(
                 pivot,
                 snapshot,
                 plan,
                 row_key,
-                previous_row_key,
+                label_previous_row_key,
                 measure_index,
             );
             for slot in &column_slots {
@@ -6154,11 +6208,15 @@ fn render_values_on_rows_with_column_fields(
         }
 
         let next_row_key = aggregation.row_order.get(row_index + 1);
-        append_blank_rows_for_values_axis(
+        append_values_on_rows_row_subtotals_with_column_fields(
             &mut cells,
+            pivot,
+            snapshot,
             plan,
+            aggregation,
             row_key,
             next_row_key,
+            &column_slots,
             label_width + column_slots.len(),
         );
     }
@@ -6252,11 +6310,14 @@ fn render_compact_values_on_rows_with_column_fields(
         }
 
         let next_row_key = aggregation.row_order.get(row_index + 1);
-        append_blank_rows_for_values_axis(
+        append_compact_values_on_rows_row_subtotals_with_column_fields(
             &mut cells,
+            snapshot,
             plan,
+            aggregation,
             row_key,
             next_row_key,
+            &column_slots,
             2 + column_slots.len(),
         );
     }
@@ -6353,14 +6414,321 @@ fn values_axis_row_position(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usi
         .min(plan.row_indexes.len())
 }
 
-fn append_blank_rows_for_values_axis(
-    cells: &mut Vec<Vec<CellValue>>,
+fn values_on_rows_subtotal_label_cells(
+    pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
     plan: &CompiledPivotPlan,
+    prefix: &[u32],
+    measure_index: usize,
+) -> Vec<CellValue> {
+    let mut row = row_subtotal_label_cells(snapshot, plan, prefix);
+    row.insert(
+        values_axis_row_position(pivot, plan),
+        CellValue::string(plan.measures[measure_index].caption()),
+    );
+    row
+}
+
+fn append_values_on_rows_row_top_subtotals_without_column_fields(
+    cells: &mut Vec<Vec<CellValue>>,
+    pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+    row_key: &[u32],
+    previous_row_key: Option<&Vec<u32>>,
+    empty_column_key: &Vec<u32>,
+) -> bool {
+    let mut emitted = false;
+    for position in row_group_start_positions(row_key, previous_row_key) {
+        if !row_subtotal_at_top(pivot, plan, position) {
+            continue;
+        }
+
+        let prefix = row_key[..=position].to_vec();
+        if let Some(states) = row_subtotal_states(aggregation, &prefix) {
+            append_values_on_rows_subtotal_rows_without_column_fields(
+                cells,
+                pivot,
+                snapshot,
+                plan,
+                aggregation,
+                &prefix,
+                states,
+                position,
+                empty_column_key,
+            );
+            emitted = true;
+        }
+    }
+    emitted
+}
+
+fn append_values_on_rows_row_top_subtotals_with_column_fields(
+    cells: &mut Vec<Vec<CellValue>>,
+    pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+    row_key: &[u32],
+    previous_row_key: Option<&Vec<u32>>,
+    column_slots: &[ColumnRenderSlot],
+) -> bool {
+    let mut emitted = false;
+    for position in row_group_start_positions(row_key, previous_row_key) {
+        if !row_subtotal_at_top(pivot, plan, position) {
+            continue;
+        }
+
+        let prefix = row_key[..=position].to_vec();
+        append_values_on_rows_subtotal_rows_with_column_fields(
+            cells,
+            pivot,
+            snapshot,
+            plan,
+            aggregation,
+            &prefix,
+            position,
+            column_slots,
+        );
+        emitted = true;
+    }
+    emitted
+}
+
+fn append_values_on_rows_row_subtotals_without_column_fields(
+    cells: &mut Vec<Vec<CellValue>>,
+    pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
     row_key: &[u32],
     next_row_key: Option<&Vec<u32>>,
+    empty_column_key: &Vec<u32>,
     row_width: usize,
 ) {
     for position in row_group_end_positions(row_key, next_row_key) {
+        if is_row_subtotal_position(row_key, position)
+            && row_subtotal_enabled(plan, position)
+            && !row_subtotal_at_top(pivot, plan, position)
+        {
+            let prefix = row_key[..=position].to_vec();
+            if let Some(states) = row_subtotal_states(aggregation, &prefix) {
+                append_values_on_rows_subtotal_rows_without_column_fields(
+                    cells,
+                    pivot,
+                    snapshot,
+                    plan,
+                    aggregation,
+                    &prefix,
+                    states,
+                    position,
+                    empty_column_key,
+                );
+            }
+        }
+        append_blank_row_after_ended_row_field(cells, plan, position, row_width);
+    }
+}
+
+fn append_values_on_rows_row_subtotals_with_column_fields(
+    cells: &mut Vec<Vec<CellValue>>,
+    pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+    row_key: &[u32],
+    next_row_key: Option<&Vec<u32>>,
+    column_slots: &[ColumnRenderSlot],
+    row_width: usize,
+) {
+    for position in row_group_end_positions(row_key, next_row_key) {
+        if is_row_subtotal_position(row_key, position)
+            && row_subtotal_enabled(plan, position)
+            && !row_subtotal_at_top(pivot, plan, position)
+        {
+            let prefix = row_key[..=position].to_vec();
+            append_values_on_rows_subtotal_rows_with_column_fields(
+                cells,
+                pivot,
+                snapshot,
+                plan,
+                aggregation,
+                &prefix,
+                position,
+                column_slots,
+            );
+        }
+        append_blank_row_after_ended_row_field(cells, plan, position, row_width);
+    }
+}
+
+fn append_values_on_rows_subtotal_rows_without_column_fields(
+    cells: &mut Vec<Vec<CellValue>>,
+    pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+    prefix: &[u32],
+    states: &[AggregateState],
+    position: usize,
+    empty_column_key: &Vec<u32>,
+) {
+    let aggregate_override = row_subtotal_aggregate_override(plan, position);
+    for measure_index in 0..plan.measures.len() {
+        let mut row =
+            values_on_rows_subtotal_label_cells(pivot, snapshot, plan, prefix, measure_index);
+        let context = ShowAsContext {
+            snapshot,
+            plan,
+            aggregation,
+            row_key: None,
+            column_key: Some(empty_column_key),
+        };
+        row.push(finalize_measure_from_state_slice(
+            states,
+            &plan.measures,
+            states,
+            column_total_states(aggregation, empty_column_key)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            grand_total_states(aggregation),
+            &context,
+            measure_index,
+            aggregate_override,
+        ));
+        cells.push(row);
+    }
+}
+
+fn append_values_on_rows_subtotal_rows_with_column_fields(
+    cells: &mut Vec<Vec<CellValue>>,
+    pivot: &PivotTable,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+    prefix: &[u32],
+    position: usize,
+    column_slots: &[ColumnRenderSlot],
+) {
+    let row_total = row_subtotal_states(aggregation, prefix);
+    let row_aggregate_override = row_subtotal_aggregate_override(plan, position);
+    for measure_index in 0..plan.measures.len() {
+        let mut row =
+            values_on_rows_subtotal_label_cells(pivot, snapshot, plan, prefix, measure_index);
+        for slot in column_slots {
+            let context = ShowAsContext {
+                snapshot,
+                plan,
+                aggregation,
+                row_key: None,
+                column_key: column_context_key(slot),
+            };
+            row.push(finalize_measure_from_states(
+                subtotal_row_slot_states(aggregation, prefix, slot),
+                &plan.measures,
+                row_total,
+                column_slot_total(aggregation, slot),
+                grand_total_states(aggregation),
+                &context,
+                measure_index,
+                row_aggregate_override.or_else(|| column_slot_aggregate_override(plan, slot)),
+            ));
+        }
+        cells.push(row);
+    }
+}
+
+fn append_compact_values_on_rows_row_subtotals_without_column_fields(
+    cells: &mut Vec<Vec<CellValue>>,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+    row_key: &[u32],
+    next_row_key: Option<&Vec<u32>>,
+    empty_column_key: &Vec<u32>,
+    row_width: usize,
+) {
+    for position in row_group_end_positions(row_key, next_row_key) {
+        if is_row_subtotal_position(row_key, position) && row_subtotal_enabled(plan, position) {
+            let prefix = row_key[..=position].to_vec();
+            if let Some(states) = row_subtotal_states(aggregation, &prefix) {
+                let aggregate_override = row_subtotal_aggregate_override(plan, position);
+                for measure_index in 0..plan.measures.len() {
+                    let mut row = vec![
+                        compact_subtotal_label_cell(snapshot, plan, &prefix),
+                        CellValue::string(plan.measures[measure_index].caption()),
+                    ];
+                    let context = ShowAsContext {
+                        snapshot,
+                        plan,
+                        aggregation,
+                        row_key: None,
+                        column_key: Some(empty_column_key),
+                    };
+                    row.push(finalize_measure_from_state_slice(
+                        states,
+                        &plan.measures,
+                        states,
+                        column_total_states(aggregation, empty_column_key)
+                            .map(Vec::as_slice)
+                            .unwrap_or(&[]),
+                        grand_total_states(aggregation),
+                        &context,
+                        measure_index,
+                        aggregate_override,
+                    ));
+                    cells.push(row);
+                }
+            }
+        }
+        append_blank_row_after_ended_row_field(cells, plan, position, row_width);
+    }
+}
+
+fn append_compact_values_on_rows_row_subtotals_with_column_fields(
+    cells: &mut Vec<Vec<CellValue>>,
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+    row_key: &[u32],
+    next_row_key: Option<&Vec<u32>>,
+    column_slots: &[ColumnRenderSlot],
+    row_width: usize,
+) {
+    for position in row_group_end_positions(row_key, next_row_key) {
+        if is_row_subtotal_position(row_key, position) && row_subtotal_enabled(plan, position) {
+            let prefix = row_key[..=position].to_vec();
+            let row_total = row_subtotal_states(aggregation, &prefix);
+            let row_aggregate_override = row_subtotal_aggregate_override(plan, position);
+            for measure_index in 0..plan.measures.len() {
+                let mut row = vec![
+                    compact_subtotal_label_cell(snapshot, plan, &prefix),
+                    CellValue::string(plan.measures[measure_index].caption()),
+                ];
+                for slot in column_slots {
+                    let context = ShowAsContext {
+                        snapshot,
+                        plan,
+                        aggregation,
+                        row_key: None,
+                        column_key: column_context_key(slot),
+                    };
+                    row.push(finalize_measure_from_states(
+                        subtotal_row_slot_states(aggregation, &prefix, slot),
+                        &plan.measures,
+                        row_total,
+                        column_slot_total(aggregation, slot),
+                        grand_total_states(aggregation),
+                        &context,
+                        measure_index,
+                        row_aggregate_override
+                            .or_else(|| column_slot_aggregate_override(plan, slot)),
+                    ));
+                }
+                cells.push(row);
+            }
+        }
         append_blank_row_after_ended_row_field(cells, plan, position, row_width);
     }
 }
@@ -8461,11 +8829,13 @@ mod tests {
         layout.data_caption = "Metric".to_string();
         layout.values_axis = PivotValuesAxis::Rows;
         layout.values_axis_position = Some(1);
+        let mut region = PivotField::new("Region");
+        region.subtotal = PivotSubtotal::None;
         let pivot = PivotTable::builder("SalesPivot")
             .source_range(CellRange::parse("A1:D4").unwrap())
             .target_address("F1")
             .unwrap()
-            .row("Region")
+            .row(region)
             .row("Product")
             .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
             .named_measure("Units", PivotAggregate::Sum, "Units")
@@ -8512,6 +8882,259 @@ mod tests {
         assert_eq!(text(&workbook, "G9"), "Units");
         assert_eq!(text(&workbook, "H9"), "");
         assert_eq!(number(&workbook, "I9"), 9.0);
+    }
+
+    #[test]
+    fn refreshes_values_axis_on_rows_with_row_subtotals() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Quarter").unwrap();
+        sheet.set_cell_value("D1", "Revenue").unwrap();
+        sheet.set_cell_value("E1", "Units").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", "Q1").unwrap();
+        sheet.set_cell_value("D2", 10.0).unwrap();
+        sheet.set_cell_value("E2", 2.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", "Q2").unwrap();
+        sheet.set_cell_value("D3", 5.0).unwrap();
+        sheet.set_cell_value("E3", 3.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", "Q1").unwrap();
+        sheet.set_cell_value("D4", 7.0).unwrap();
+        sheet.set_cell_value("E4", 4.0).unwrap();
+
+        let mut layout = tabular_layout();
+        layout.data_caption = "Metric".to_string();
+        layout.values_axis = PivotValuesAxis::Rows;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:E4").unwrap())
+            .target_address("G1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .named_measure("Units", PivotAggregate::Sum, "Units")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "G1"), "Region");
+        assert_eq!(text(&workbook, "H1"), "Segment");
+        assert_eq!(text(&workbook, "I1"), "Metric");
+        assert_eq!(text(&workbook, "J1"), "Q1");
+        assert_eq!(text(&workbook, "K1"), "Q2");
+        assert_eq!(text(&workbook, "L1"), "Grand Total");
+        assert_eq!(text(&workbook, "G6"), "East Total");
+        assert_eq!(text(&workbook, "H6"), "");
+        assert_eq!(text(&workbook, "I6"), "Revenue");
+        assert_eq!(number(&workbook, "J6"), 10.0);
+        assert_eq!(number(&workbook, "K6"), 5.0);
+        assert_eq!(number(&workbook, "L6"), 15.0);
+        assert_eq!(text(&workbook, "G7"), "East Total");
+        assert_eq!(text(&workbook, "I7"), "Units");
+        assert_eq!(number(&workbook, "J7"), 2.0);
+        assert_eq!(number(&workbook, "K7"), 3.0);
+        assert_eq!(number(&workbook, "L7"), 5.0);
+        assert_eq!(text(&workbook, "G10"), "West Total");
+        assert_eq!(text(&workbook, "I10"), "Revenue");
+        assert_eq!(number(&workbook, "J10"), 7.0);
+        assert_eq!(text(&workbook, "K10"), "");
+        assert_eq!(number(&workbook, "L10"), 7.0);
+        assert_eq!(text(&workbook, "G11"), "West Total");
+        assert_eq!(text(&workbook, "I11"), "Units");
+        assert_eq!(number(&workbook, "J11"), 4.0);
+        assert_eq!(text(&workbook, "K11"), "");
+        assert_eq!(number(&workbook, "L11"), 4.0);
+        assert_eq!(text(&workbook, "G12"), "Grand Total");
+        assert_eq!(text(&workbook, "I12"), "Revenue");
+        assert_eq!(number(&workbook, "J12"), 17.0);
+        assert_eq!(number(&workbook, "K12"), 5.0);
+        assert_eq!(number(&workbook, "L12"), 22.0);
+        assert_eq!(text(&workbook, "G13"), "Grand Total");
+        assert_eq!(text(&workbook, "I13"), "Units");
+        assert_eq!(number(&workbook, "J13"), 6.0);
+        assert_eq!(number(&workbook, "K13"), 3.0);
+        assert_eq!(number(&workbook, "L13"), 9.0);
+    }
+
+    #[test]
+    fn refreshes_outline_values_axis_on_rows_subtotals_at_top() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("D1", "Units").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("D2", 2.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("D3", 3.0).unwrap();
+
+        let mut region = PivotField::new("Region");
+        region.subtotal_top = true;
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Outline;
+        layout.values_axis = PivotValuesAxis::Rows;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D3").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row(region)
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .named_measure("Units", PivotAggregate::Sum, "Units")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F2"), "East Total");
+        assert_eq!(text(&workbook, "G2"), "");
+        assert_eq!(text(&workbook, "H2"), "Revenue");
+        assert_eq!(number(&workbook, "I2"), 15.0);
+        assert_eq!(text(&workbook, "F3"), "East Total");
+        assert_eq!(text(&workbook, "H3"), "Units");
+        assert_eq!(number(&workbook, "I3"), 5.0);
+        assert_eq!(text(&workbook, "F4"), "");
+        assert_eq!(text(&workbook, "G4"), "Online");
+        assert_eq!(text(&workbook, "H4"), "Revenue");
+        assert_eq!(number(&workbook, "I4"), 5.0);
+        assert_eq!(text(&workbook, "F8"), "Grand Total");
+        assert_eq!(text(&workbook, "H8"), "Revenue");
+        assert_eq!(number(&workbook, "I8"), 15.0);
+        assert_eq!(text(&workbook, "F9"), "Grand Total");
+        assert_eq!(text(&workbook, "H9"), "Units");
+        assert_eq!(number(&workbook, "I9"), 5.0);
+    }
+
+    #[test]
+    fn refreshes_compact_values_axis_on_rows_with_row_subtotals() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("D1", "Units").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("D2", 2.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("D3", 3.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.values_axis = PivotValuesAxis::Rows;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D3").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .named_measure("Units", PivotAggregate::Sum, "Units")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F2"), "East");
+        assert_eq!(text(&workbook, "F3"), "Online");
+        assert_eq!(text(&workbook, "G3"), "Revenue");
+        assert_eq!(number(&workbook, "H3"), 5.0);
+        assert_eq!(text(&workbook, "F7"), "East Total");
+        assert_eq!(text(&workbook, "G7"), "Revenue");
+        assert_eq!(number(&workbook, "H7"), 15.0);
+        assert_eq!(text(&workbook, "F8"), "East Total");
+        assert_eq!(text(&workbook, "G8"), "Units");
+        assert_eq!(number(&workbook, "H8"), 5.0);
+        assert_eq!(text(&workbook, "F9"), "Grand Total");
+        assert_eq!(text(&workbook, "G9"), "Revenue");
+        assert_eq!(number(&workbook, "H9"), 15.0);
+        assert_eq!(text(&workbook, "F10"), "Grand Total");
+        assert_eq!(text(&workbook, "G10"), "Units");
+        assert_eq!(number(&workbook, "H10"), 5.0);
+    }
+
+    #[test]
+    fn refreshes_values_axis_on_rows_page_break_offsets() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("D1", "Units").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("D2", 2.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("D3", 3.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+        sheet.set_cell_value("D4", 4.0).unwrap();
+        sheet.add_row_break(20);
+
+        let mut region = PivotField::new("Region");
+        region.insert_page_break = true;
+        let mut layout = tabular_layout();
+        layout.values_axis = PivotValuesAxis::Rows;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D4").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row(region)
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .named_measure("Units", PivotAggregate::Sum, "Units")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+        workbook.refresh_pivots().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        let mut pivot_breaks = sheet
+            .row_breaks()
+            .iter()
+            .filter(|break_| break_.pt)
+            .map(|break_| break_.id)
+            .collect::<Vec<_>>();
+        pivot_breaks.sort_unstable();
+        assert_eq!(pivot_breaks, vec![6, 10]);
+
+        let mut user_breaks = sheet
+            .row_breaks()
+            .iter()
+            .filter(|break_| !break_.pt)
+            .map(|break_| break_.id)
+            .collect::<Vec<_>>();
+        user_breaks.sort_unstable();
+        assert_eq!(user_breaks, vec![20]);
     }
 
     #[test]
