@@ -188,6 +188,49 @@ describe("Workbook", () => {
   });
 });
 
+describe("PivotTables", () => {
+  it("refreshes a manually grouped pivot from semantic options", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+    sheet.setCell("A1", "Region");
+    sheet.setCell("B1", "Revenue");
+    sheet.setCell("A2", "East");
+    sheet.setCell("B2", 10);
+    sheet.setCell("A3", "West");
+    sheet.setCell("B3", 20);
+    sheet.setCell("A4", "South");
+    sheet.setCell("B4", 5);
+
+    sheet.addPivotTable({
+      name: "ManualGroupedRegions",
+      sourceRange: "A1:B4",
+      target: "D1",
+      rows: ["Region"],
+      measures: [{ field: "Revenue", aggregate: "sum", name: "Revenue" }],
+      groupings: [
+        {
+          kind: "manual",
+          field: "Region",
+          groups: [{ name: "Coastal", members: ["East", "West"] }],
+        },
+      ],
+    });
+
+    expect(sheet.pivotCount).toBe(1);
+    expect(sheet.pivotTableNames).toEqual(["ManualGroupedRegions"]);
+
+    const stats = wb.refreshPivots();
+
+    expect(stats.pivotCount).toBe(1);
+    expect(stats.pivotsRefreshed).toBe(1);
+    expect(sheet.getCell("D2").asText()).toBe("Coastal");
+    expect(sheet.getCell("E2").asNumber()).toBe(30);
+    expect(sheet.getCell("D3").asText()).toBe("South");
+    expect(sheet.getCell("E3").asNumber()).toBe(5);
+    expect(sheet.getCell("E4").asNumber()).toBe(35);
+  });
+});
+
 // Worksheet Tests
 
 describe("Worksheet", () => {

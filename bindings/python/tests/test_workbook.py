@@ -197,3 +197,54 @@ class TestNamedRanges:
         wb = duke_sheets.Workbook()
         result = wb.get_named_range("NotDefined")
         assert result is None
+
+
+class TestPivotTables:
+    """Test pivot table authoring through the Python binding."""
+
+    def test_refresh_manual_grouping_from_options(self):
+        """Should refresh a manually grouped pivot from semantic options."""
+        import duke_sheets
+
+        wb = duke_sheets.Workbook()
+        sheet = wb.get_sheet(0)
+        sheet.set_cell("A1", "Region")
+        sheet.set_cell("B1", "Revenue")
+        sheet.set_cell("A2", "East")
+        sheet.set_cell("B2", 10.0)
+        sheet.set_cell("A3", "West")
+        sheet.set_cell("B3", 20.0)
+        sheet.set_cell("A4", "South")
+        sheet.set_cell("B4", 5.0)
+
+        sheet.add_pivot_table(
+            {
+                "name": "ManualGroupedRegions",
+                "source_range": "A1:B4",
+                "target": "D1",
+                "rows": ["Region"],
+                "measures": [
+                    {"field": "Revenue", "aggregate": "sum", "name": "Revenue"}
+                ],
+                "groupings": [
+                    {
+                        "kind": "manual",
+                        "field": "Region",
+                        "groups": [{"name": "Coastal", "members": ["East", "West"]}],
+                    }
+                ],
+            }
+        )
+
+        assert sheet.pivot_count == 1
+        assert sheet.pivot_table_names == ["ManualGroupedRegions"]
+
+        stats = wb.refresh_pivots()
+
+        assert stats["pivot_count"] == 1
+        assert stats["pivots_refreshed"] == 1
+        assert sheet.get_cell("D2").as_text() == "Coastal"
+        assert sheet.get_cell("E2").as_number() == 30.0
+        assert sheet.get_cell("D3").as_text() == "South"
+        assert sheet.get_cell("E3").as_number() == 5.0
+        assert sheet.get_cell("E4").as_number() == 35.0

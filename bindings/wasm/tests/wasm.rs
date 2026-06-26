@@ -325,6 +325,79 @@ fn make_options(entries: &[(&str, JsValue)]) -> JsValue {
     obj.into()
 }
 
+/// Helper to build a JS array from values
+fn make_array(values: &[JsValue]) -> JsValue {
+    let array = js_sys::Array::new();
+    for value in values {
+        array.push(value);
+    }
+    array.into()
+}
+
+#[wasm_bindgen_test]
+fn test_pivot_manual_grouping_refreshes_from_options() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    sheet.set_cell("A1", JsValue::from_str("Region")).unwrap();
+    sheet.set_cell("B1", JsValue::from_str("Revenue")).unwrap();
+    sheet.set_cell("A2", JsValue::from_str("East")).unwrap();
+    sheet.set_cell("B2", JsValue::from_f64(10.0)).unwrap();
+    sheet.set_cell("A3", JsValue::from_str("West")).unwrap();
+    sheet.set_cell("B3", JsValue::from_f64(20.0)).unwrap();
+    sheet.set_cell("A4", JsValue::from_str("South")).unwrap();
+    sheet.set_cell("B4", JsValue::from_f64(5.0)).unwrap();
+
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
+    let group = make_options(&[
+        ("name", JsValue::from_str("Coastal")),
+        (
+            "members",
+            make_array(&[JsValue::from_str("East"), JsValue::from_str("West")]),
+        ),
+    ]);
+    let grouping = make_options(&[
+        ("kind", JsValue::from_str("manual")),
+        ("field", JsValue::from_str("Region")),
+        ("groups", make_array(&[group])),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("ManualGroupedRegions")),
+        ("sourceRange", JsValue::from_str("A1:B4")),
+        ("target", JsValue::from_str("D1")),
+        ("rows", make_array(&[JsValue::from_str("Region")])),
+        ("measures", make_array(&[measure])),
+        ("groupings", make_array(&[grouping])),
+    ]);
+
+    sheet.add_pivot_table(pivot).unwrap();
+
+    assert_eq!(sheet.pivot_count().unwrap(), 1);
+    assert_eq!(
+        sheet.pivot_table_names().unwrap(),
+        vec!["ManualGroupedRegions".to_string()]
+    );
+
+    let stats = wb.refresh_pivots().unwrap();
+
+    assert_eq!(get_f64_field(&stats, "pivotCount"), 1.0);
+    assert_eq!(get_f64_field(&stats, "pivotsRefreshed"), 1.0);
+    assert_eq!(
+        sheet.get_cell("D2").unwrap().as_text().as_deref(),
+        Some("Coastal")
+    );
+    assert_eq!(sheet.get_cell("E2").unwrap().as_number(), Some(30.0));
+    assert_eq!(
+        sheet.get_cell("D3").unwrap().as_text().as_deref(),
+        Some("South")
+    );
+    assert_eq!(sheet.get_cell("E3").unwrap().as_number(), Some(5.0));
+    assert_eq!(sheet.get_cell("E4").unwrap().as_number(), Some(35.0));
+}
+
 #[wasm_bindgen_test]
 fn test_calculation_with_options() {
     let wb = Workbook::new();
@@ -601,8 +674,8 @@ fn test_populated_feature_reads_through_binding() {
     // the binding's DTO conversions.
     use duke_sheets_core::auto_filter::{AutoFilter, ColumnFilter, FilterColumn, ValueFilter};
     use duke_sheets_core::comment::CellComment;
-    use duke_sheets_core::{CellAddress, CellRange};
     use duke_sheets_core::validation::DataValidation;
+    use duke_sheets_core::{CellAddress, CellRange};
 
     let mut core_wb = duke_sheets_core::Workbook::new();
     let ws = core_wb.worksheet_mut(0).unwrap();
@@ -1015,7 +1088,10 @@ fn encrypted_round_trip_xlsx(profile: Option<&str>, key_bits: Option<u32>) {
     let opened = Workbook::from_bytes_with_password(&bytes, PASSWORD, None)
         .expect("from_bytes_with_password");
     let sheet = opened.get_sheet(0).unwrap();
-    assert_eq!(sheet.get_cell("A1").unwrap().as_text().as_deref(), Some("hello"));
+    assert_eq!(
+        sheet.get_cell("A1").unwrap().as_text().as_deref(),
+        Some("hello")
+    );
     assert_eq!(sheet.get_cell("B1").unwrap().as_number(), Some(42.0));
 }
 
@@ -1032,7 +1108,10 @@ fn encrypted_round_trip_xls(profile: Option<&str>, key_bits: Option<u32>) {
     let opened = Workbook::from_bytes_with_password(&bytes, PASSWORD, None)
         .expect("from_bytes_with_password");
     let sheet = opened.get_sheet(0).unwrap();
-    assert_eq!(sheet.get_cell("A1").unwrap().as_text().as_deref(), Some("hello"));
+    assert_eq!(
+        sheet.get_cell("A1").unwrap().as_text().as_deref(),
+        Some("hello")
+    );
     assert_eq!(sheet.get_cell("B1").unwrap().as_number(), Some(42.0));
 }
 
