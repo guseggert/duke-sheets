@@ -900,8 +900,7 @@ pub struct PivotTable {
     pub rendered_range: Option<CellRange>,
     /// Latest semantic refresh status.
     pub refresh_status: PivotRefreshStatus,
-    /// Reader-provided cache diagnostics, if the source file contained them.
-    pub cache_info: Option<PivotCacheInfo>,
+    cache_info: Option<PivotCacheInfo>,
     /// Format-specific extension payloads.
     pub extensions: PivotExtensions,
 }
@@ -935,6 +934,29 @@ impl PivotTable {
     /// Start building a pivot table.
     pub fn builder(name: impl Into<String>) -> PivotTableBuilder {
         PivotTableBuilder::new(name)
+    }
+
+    /// Reader-provided cache diagnostics, if the source file contained them.
+    ///
+    /// This is intentionally read-only. Format-level pivot caches are internal
+    /// reader/writer artifacts; authoring should continue to use semantic
+    /// fields, measures, filters, grouping, layout, and refresh policy.
+    pub fn cache_info(&self) -> Option<&PivotCacheInfo> {
+        self.cache_info.as_ref()
+    }
+
+    /// Set reader-provided cache diagnostics.
+    #[doc(hidden)]
+    pub fn set_cache_info(&mut self, cache_info: Option<PivotCacheInfo>) {
+        self.cache_info = cache_info;
+    }
+
+    /// Update the cache diagnostic refresh status when diagnostics exist.
+    #[doc(hidden)]
+    pub fn set_cache_refresh_status(&mut self, refresh_status: PivotRefreshStatus) {
+        if let Some(cache_info) = &mut self.cache_info {
+            cache_info.refresh_status = refresh_status;
+        }
     }
 }
 

@@ -362,9 +362,7 @@ fn write_rendered_pivot(
     if let Some(pivot) = worksheet.pivot_tables_mut().get_mut(job.pivot_index) {
         pivot.rendered_range = Some(rendered.range);
         pivot.refresh_status = PivotRefreshStatus::Succeeded;
-        if let Some(cache_info) = &mut pivot.cache_info {
-            cache_info.refresh_status = PivotRefreshStatus::Succeeded;
-        }
+        pivot.set_cache_refresh_status(PivotRefreshStatus::Succeeded);
     }
 
     Ok(())
@@ -389,9 +387,7 @@ fn mark_pivot_failed(
         if let Some(pivot) = worksheet.pivot_tables_mut().get_mut(pivot_index) {
             let status = PivotRefreshStatus::Failed { message };
             pivot.refresh_status = status.clone();
-            if let Some(cache_info) = &mut pivot.cache_info {
-                cache_info.refresh_status = status;
-            }
+            pivot.set_cache_refresh_status(status);
         }
     }
 }

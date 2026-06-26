@@ -771,13 +771,13 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.rendered_range = rendered_range;
     pivot.groupings = cache.groupings.clone();
     pivot.extensions = extensions;
-    pivot.cache_info = Some(PivotCacheInfo {
+    pivot.set_cache_info(Some(PivotCacheInfo {
         cache_id,
         source_kind: cache.source_kind,
         record_count: cache.record_count,
         refreshed_version: cache.refreshed_version.clone(),
         refresh_status: PivotRefreshStatus::NotRefreshed,
-    });
+    }));
 
     let hidden_item_filters = hidden_items_by_field
         .into_iter()
