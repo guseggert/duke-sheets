@@ -663,6 +663,7 @@ impl SourceSnapshot {
         groupings: &[PivotGrouping],
         date_1904: bool,
     ) -> Result<Self> {
+        let mut headers = self.headers.clone();
         let mut columns = self.columns.clone();
         let mut grouped_fields = AHashSet::new();
         for grouping in groupings {
@@ -677,15 +678,68 @@ impl SourceSnapshot {
                     "pivot table {pivot_name} groups field {field_name} more than once"
                 )));
             }
-            columns[field_index] =
-                grouped_column(self, field_index, grouping, date_1904, pivot_name)?;
+            match grouping {
+                PivotGrouping::Date { units, .. } if units.len() > 1 => {
+                    for unit in units {
+                        headers.push(unique_grouped_header(&headers, field_name, *unit));
+                        columns.push(grouped_date_column(self, field_index, &[*unit], date_1904));
+                    }
+                }
+                _ => {
+                    columns[field_index] =
+                        grouped_column(self, field_index, grouping, date_1904, pivot_name)?;
+                }
+            }
         }
 
         Ok(Self {
-            headers: self.headers.clone(),
+            headers,
             columns,
             row_count: self.row_count,
         })
+    }
+}
+
+fn unique_grouped_header(
+    headers: &[String],
+    field_name: &str,
+    unit: duke_sheets_core::PivotDateGroupUnit,
+) -> String {
+    let base = grouped_date_header(field_name, unit);
+    if !headers
+        .iter()
+        .any(|header| header.eq_ignore_ascii_case(&base))
+    {
+        return base;
+    }
+
+    for suffix in 2.. {
+        let candidate = format!("{base} {suffix}");
+        if !headers
+            .iter()
+            .any(|header| header.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded grouped header suffix search should return")
+}
+
+fn grouped_date_header(field_name: &str, unit: duke_sheets_core::PivotDateGroupUnit) -> String {
+    format!("{field_name} ({})", date_group_unit_name(unit))
+}
+
+fn date_group_unit_name(unit: duke_sheets_core::PivotDateGroupUnit) -> &'static str {
+    use duke_sheets_core::PivotDateGroupUnit;
+
+    match unit {
+        PivotDateGroupUnit::Seconds => "Seconds",
+        PivotDateGroupUnit::Minutes => "Minutes",
+        PivotDateGroupUnit::Hours => "Hours",
+        PivotDateGroupUnit::Days => "Days",
+        PivotDateGroupUnit::Months => "Months",
+        PivotDateGroupUnit::Quarters => "Quarters",
+        PivotDateGroupUnit::Years => "Years",
     }
 }
 
@@ -1234,9 +1288,22 @@ impl CompiledPivotPlan {
                 pivot.name
             )));
         }
-        let row_indexes = compile_axis_fields("row", &pivot.name, &pivot.rows, snapshot)?;
-        let column_indexes = compile_axis_fields("column", &pivot.name, &pivot.columns, snapshot)?;
-        let page_indexes = compile_axis_fields("page", &pivot.name, &pivot.page_fields, snapshot)?;
+        let (row_indexes, row_fields) =
+            compile_axis_fields("row", &pivot.name, &pivot.rows, snapshot, &pivot.groupings)?;
+        let (column_indexes, column_fields) = compile_axis_fields(
+            "column",
+            &pivot.name,
+            &pivot.columns,
+            snapshot,
+            &pivot.groupings,
+        )?;
+        let (page_indexes, page_fields) = compile_axis_fields(
+            "page",
+            &pivot.name,
+            &pivot.page_fields,
+            snapshot,
+            &pivot.groupings,
+        )?;
 
         let mut measure_indexes = Vec::with_capacity(pivot.measures.len());
         for measure in &pivot.measures {
@@ -1280,9 +1347,9 @@ impl CompiledPivotPlan {
             row_indexes,
             column_indexes,
             page_indexes,
-            row_fields: pivot.rows.clone(),
-            column_fields: pivot.columns.clone(),
-            page_fields: pivot.page_fields.clone(),
+            row_fields,
+            column_fields,
+            page_fields,
             measure_indexes,
             measures: pivot.measures.clone(),
             filters,
@@ -1296,18 +1363,78 @@ fn compile_axis_fields(
     pivot_name: &str,
     fields: &[PivotField],
     snapshot: &SourceSnapshot,
-) -> Result<Vec<usize>> {
-    fields
-        .iter()
-        .map(|field| {
-            field_index(snapshot, &field.field.name, pivot_name).map_err(|_| {
+    groupings: &[PivotGrouping],
+) -> Result<(Vec<usize>, Vec<PivotField>)> {
+    let mut indexes = Vec::new();
+    let mut compiled_fields = Vec::new();
+    for field in fields {
+        if let Some(units) = multi_unit_date_grouping_units(groupings, &field.field.name) {
+            for unit in units {
+                let (index, header) =
+                    grouped_date_field_index(snapshot, &field.field.name, *unit).ok_or_else(
+                        || {
+                            Error::other(format!(
+                                "pivot table {pivot_name} references unknown grouped {axis_name} field: {}",
+                                grouped_date_header(&field.field.name, *unit)
+                            ))
+                        },
+                    )?;
+                let mut grouped_field = field.clone();
+                grouped_field.field.name = header;
+                indexes.push(index);
+                compiled_fields.push(grouped_field);
+            }
+        } else {
+            let index = field_index(snapshot, &field.field.name, pivot_name).map_err(|_| {
                 Error::other(format!(
                     "pivot table {pivot_name} references unknown {axis_name} field: {}",
                     field.field.name
                 ))
-            })
-        })
-        .collect()
+            })?;
+            indexes.push(index);
+            compiled_fields.push(field.clone());
+        }
+    }
+    Ok((indexes, compiled_fields))
+}
+
+fn grouped_date_field_index(
+    snapshot: &SourceSnapshot,
+    field_name: &str,
+    unit: duke_sheets_core::PivotDateGroupUnit,
+) -> Option<(usize, String)> {
+    let base = grouped_date_header(field_name, unit);
+    snapshot
+        .headers
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, header)| grouped_header_matches(header, &base))
+        .map(|(index, header)| (index, header.clone()))
+}
+
+fn grouped_header_matches(header: &str, base: &str) -> bool {
+    if header.eq_ignore_ascii_case(base) {
+        return true;
+    }
+    header
+        .strip_prefix(base)
+        .and_then(|suffix| suffix.strip_prefix(' '))
+        .is_some_and(|suffix| suffix.parse::<usize>().is_ok())
+}
+
+fn multi_unit_date_grouping_units<'a>(
+    groupings: &'a [PivotGrouping],
+    field_name: &str,
+) -> Option<&'a [duke_sheets_core::PivotDateGroupUnit]> {
+    groupings.iter().find_map(|grouping| match grouping {
+        PivotGrouping::Date { field, units }
+            if field.name.eq_ignore_ascii_case(field_name) && units.len() > 1 =>
+        {
+            Some(units.as_slice())
+        }
+        _ => None,
+    })
 }
 
 fn validate_show_as(
@@ -5409,7 +5536,7 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_date_grouping() {
+    fn refreshes_multi_unit_date_grouping_hierarchy() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
         sheet.set_cell_value("A1", "Date").unwrap();
@@ -5447,14 +5574,66 @@ mod tests {
 
         workbook.refresh_pivots().unwrap();
 
-        assert_eq!(text(&workbook, "D2"), "2024-01");
+        assert_eq!(text(&workbook, "D1"), "Row Labels");
+        assert_eq!(text(&workbook, "E1"), "Sum of Revenue");
+        assert_eq!(text(&workbook, "D2"), "2024");
+        assert_eq!(text(&workbook, "E2"), "");
+        assert_eq!(text(&workbook, "D3"), "1");
+        assert_eq!(number(&workbook, "E3"), 15.0);
+        assert_eq!(text(&workbook, "D4"), "2");
+        assert_eq!(number(&workbook, "E4"), 7.0);
+        assert_eq!(text(&workbook, "D5"), "2024 Total");
+        assert_eq!(number(&workbook, "E5"), 22.0);
+        assert_eq!(text(&workbook, "D6"), "2025");
+        assert_eq!(text(&workbook, "D7"), "1");
+        assert_eq!(number(&workbook, "E7"), 11.0);
+        assert_eq!(text(&workbook, "D8"), "2025 Total");
+        assert_eq!(number(&workbook, "E8"), 11.0);
+        assert_eq!(text(&workbook, "D9"), "Grand Total");
+        assert_eq!(number(&workbook, "E9"), 33.0);
+    }
+
+    #[test]
+    fn refreshes_single_unit_date_grouping() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Date").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet
+            .set_cell_value("A2", date_to_serial(2024, 1, 15, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet
+            .set_cell_value("A3", date_to_serial(2024, 1, 20, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B3", 5.0).unwrap();
+        sheet
+            .set_cell_value("A4", date_to_serial(2024, 2, 1, DateSystem::Date1900))
+            .unwrap();
+        sheet.set_cell_value("B4", 7.0).unwrap();
+
+        let pivot = PivotTable::builder("GroupedDates")
+            .source_range(CellRange::parse("A1:B4").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Date")
+            .measure("Revenue", PivotAggregate::Sum)
+            .grouping(PivotGrouping::Date {
+                field: "Date".into(),
+                units: vec![PivotDateGroupUnit::Months],
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D2"), "1");
         assert_eq!(number(&workbook, "E2"), 15.0);
-        assert_eq!(text(&workbook, "D3"), "2024-02");
+        assert_eq!(text(&workbook, "D3"), "2");
         assert_eq!(number(&workbook, "E3"), 7.0);
-        assert_eq!(text(&workbook, "D4"), "2025-01");
-        assert_eq!(number(&workbook, "E4"), 11.0);
-        assert_eq!(text(&workbook, "D5"), "Grand Total");
-        assert_eq!(number(&workbook, "E5"), 33.0);
+        assert_eq!(text(&workbook, "D4"), "Grand Total");
+        assert_eq!(number(&workbook, "E4"), 22.0);
     }
 
     #[test]
