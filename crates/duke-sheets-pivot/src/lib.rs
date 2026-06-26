@@ -2604,8 +2604,9 @@ fn output_range(target: CellAddress, row_count: usize, col_count: usize) -> Resu
 #[cfg(test)]
 mod tests {
     use duke_sheets_core::{
-        CellRange, PivotAggregate, PivotDateGroupUnit, PivotFilter, PivotGrouping, PivotMeasure,
-        PivotShowAs, PivotSource, PivotTable, PivotValue, Table, TableColumn, Workbook,
+        CellRange, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping,
+        PivotMeasure, PivotShowAs, PivotSort, PivotSource, PivotTable, PivotValue, Table,
+        TableColumn, Workbook,
     };
     use pretty_assertions::assert_eq;
     use ssfmt::{date_serial::date_to_serial, DateSystem};
@@ -2674,6 +2675,38 @@ mod tests {
         assert_eq!(number(&workbook, "E3"), 20.0);
         assert_eq!(text(&workbook, "D4"), "Grand Total");
         assert_eq!(number(&workbook, "E4"), 45.0);
+    }
+
+    #[test]
+    fn refreshes_sorted_row_fields() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "North").unwrap();
+        sheet.set_cell_value("B4", 15.0).unwrap();
+
+        let mut region = PivotField::new("Region");
+        region.sort = PivotSort::Descending;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B4").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row(region)
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D2"), "West");
+        assert_eq!(text(&workbook, "D3"), "North");
+        assert_eq!(text(&workbook, "D4"), "East");
     }
 
     #[test]

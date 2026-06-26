@@ -3213,8 +3213,8 @@ mod tests {
     use crate::reader::XlsxReader;
     use duke_sheets_core::{
         CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotDateGroupUnit,
-        PivotFilter, PivotGrouping, PivotMeasure, PivotShowAs, PivotSource, PivotTable, PivotValue,
-        SplitPanes,
+        PivotField, PivotFilter, PivotGrouping, PivotMeasure, PivotShowAs, PivotSort, PivotSource,
+        PivotTable, PivotValue, SplitPanes,
     };
     use std::io::Read;
 
@@ -3831,6 +3831,52 @@ mod tests {
         ));
         assert_eq!(pivot.rows[0].field.name, "Region");
         assert_eq!(pivot.measures[0].field.name, "Revenue");
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_field_sort() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+
+        let mut region = PivotField::new("Region");
+        region.sort = PivotSort::Descending;
+        let mut quarter = PivotField::new("Quarter");
+        quarter.sort = PivotSort::None;
+        let pivot = PivotTable::builder("SortedPivot")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row(region)
+            .column(quarter)
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"axis="axisRow" sortType="descending""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("SortedPivot")
+            .unwrap();
+        assert_eq!(pivot.rows[0].sort, PivotSort::Descending);
+        assert_eq!(pivot.columns[0].sort, PivotSort::None);
     }
 
     #[test]

@@ -9,8 +9,8 @@ use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
     PivotCalculatedField, PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping,
-    PivotLayoutKind, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSource, PivotStyle,
-    PivotTable, PivotValue,
+    PivotLayoutKind, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource,
+    PivotStyle, PivotTable, PivotValue,
 };
 
 #[derive(Debug, Clone)]
@@ -254,6 +254,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut pivot_field_index = 0usize;
     let mut current_pivot_field: Option<(usize, Vec<u32>)> = None;
     let mut current_data_field: Option<CurrentDataField> = None;
+    let mut sort_by_field: HashMap<usize, PivotSort> = HashMap::new();
     let mut hidden_items_by_field: HashMap<usize, Vec<u32>> = HashMap::new();
 
     loop {
@@ -272,6 +273,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                 }
                 b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
                 b"pivotField" => {
+                    sort_by_field.insert(pivot_field_index, parse_pivot_sort(&e));
                     current_pivot_field = Some((pivot_field_index, Vec::new()));
                     pivot_field_index += 1;
                 }
@@ -310,6 +312,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                 }
                 b"location" => parse_location(&e, &mut target, &mut rendered_range)?,
                 b"pivotField" => {
+                    sort_by_field.insert(pivot_field_index, parse_pivot_sort(&e));
                     pivot_field_index += 1;
                 }
                 b"item" => {
@@ -330,13 +333,11 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         attr_i32(&e, b"x").and_then(|v| usize::try_from(v).ok())
                     {
                         if let Some(field) = cache.fields.get(field_index) {
+                            let field =
+                                pivot_axis_field(field, sort_by_field.get(&field_index).copied());
                             match axis_context {
-                                Some(AxisContext::Rows) => {
-                                    rows.push(PivotField::new(field.name.clone()))
-                                }
-                                Some(AxisContext::Columns) => {
-                                    columns.push(PivotField::new(field.name.clone()))
-                                }
+                                Some(AxisContext::Rows) => rows.push(field),
+                                Some(AxisContext::Columns) => columns.push(field),
                                 _ => {}
                             }
                         }
@@ -351,7 +352,10 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         attr_i32(&e, b"fld").and_then(|v| usize::try_from(v).ok())
                     {
                         if let Some(field) = cache.fields.get(field_index) {
-                            page_fields.push(PivotField::new(field.name.clone()));
+                            page_fields.push(pivot_axis_field(
+                                field,
+                                sort_by_field.get(&field_index).copied(),
+                            ));
                             if let Some(item_index) = attr_u32(&e, b"item") {
                                 if let Some(item) = field.shared_items.get(item_index as usize) {
                                     page_filters.push(PivotFilter::FieldItems {
@@ -550,6 +554,21 @@ fn parse_pivot_style(e: &BytesStart<'_>) -> PivotStyle {
         style.show_column_stripes = value;
     }
     style
+}
+
+fn parse_pivot_sort(e: &BytesStart<'_>) -> PivotSort {
+    match attr_string(e, b"sortType").as_deref() {
+        Some("ascending") => PivotSort::Ascending,
+        Some("descending") => PivotSort::Descending,
+        Some("manual") | None => PivotSort::None,
+        Some(_) => PivotSort::None,
+    }
+}
+
+fn pivot_axis_field(field: &PivotCacheField, sort: Option<PivotSort>) -> PivotField {
+    let mut pivot_field = PivotField::new(field.name.clone());
+    pivot_field.sort = sort.unwrap_or(PivotSort::None);
+    pivot_field
 }
 
 fn parse_aggregate(value: &str) -> Option<PivotAggregate> {
