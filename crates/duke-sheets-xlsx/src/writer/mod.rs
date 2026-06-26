@@ -6049,6 +6049,66 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_escaped_table_qualified_pivot_calculated_fields() {
+        use duke_sheets_core::table::{Table, TableColumn};
+
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Gross Sales").unwrap();
+        sheet.set_cell_value("C1", "Rate").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 100.0).unwrap();
+        sheet.set_cell_value("C2", 0.1).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 80.0).unwrap();
+        sheet.set_cell_value("C3", 0.25).unwrap();
+
+        let mut table = Table::new(1, "SalesData", CellRange::parse("A1:C3").unwrap());
+        table.columns = vec![
+            TableColumn::new(1, "Region"),
+            TableColumn::new(2, "Gross Sales"),
+            TableColumn::new(3, "Rate"),
+        ];
+        sheet.add_table(table);
+
+        let pivot = PivotTable::builder("CalculatedTableCommission")
+            .table_source("SalesData")
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Commission", "=SalesData[@[Gross Sales]]*SalesData[@Rate]")
+            .named_measure("Commission", PivotAggregate::Sum, "Commission")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(
+            r#"<cacheField name="Commission" formula="SalesData[@[Gross Sales]]*SalesData[@Rate]" databaseField="0">"#
+        ));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("CalculatedTableCommission")
+            .unwrap();
+        assert_eq!(pivot.calculated_fields.len(), 1);
+        assert_eq!(pivot.calculated_fields[0].name, "Commission");
+        assert_eq!(
+            pivot.calculated_fields[0].formula,
+            "SalesData[@[Gross Sales]]*SalesData[@Rate]"
+        );
+        assert_eq!(pivot.measures.len(), 1);
+        assert_eq!(pivot.measures[0].field.name, "Commission");
+    }
+
+    #[test]
     fn test_writer_round_trips_pivot_calculated_items() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();

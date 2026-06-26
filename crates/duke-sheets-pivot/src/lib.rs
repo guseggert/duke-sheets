@@ -9982,6 +9982,52 @@ mod tests {
     }
 
     #[test]
+    fn refreshes_table_qualified_calculated_fields_with_escaped_structured_refs() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Gross Sales").unwrap();
+        sheet.set_cell_value("C1", "Rate").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 100.0).unwrap();
+        sheet.set_cell_value("C2", 0.1).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", 50.0).unwrap();
+        sheet.set_cell_value("C3", 0.2).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", 80.0).unwrap();
+        sheet.set_cell_value("C4", 0.25).unwrap();
+
+        let mut table = Table::new(1, "SalesData", CellRange::parse("A1:C4").unwrap());
+        table.columns = vec![
+            TableColumn::new(1, "Region"),
+            TableColumn::new(2, "Gross Sales"),
+            TableColumn::new(3, "Rate"),
+        ];
+        sheet.add_table(table);
+
+        let pivot = PivotTable::builder("CalculatedTableCommission")
+            .table_source("SalesData")
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Commission", "=SalesData[@[Gross Sales]]*SalesData[@Rate]")
+            .named_measure("Commission", PivotAggregate::Sum, "Commission")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(number(&workbook, "F2"), 20.0);
+        assert_eq!(text(&workbook, "E3"), "West");
+        assert_eq!(number(&workbook, "F3"), 20.0);
+        assert_eq!(text(&workbook, "E4"), "Grand Total");
+        assert_eq!(number(&workbook, "F4"), 40.0);
+    }
+
+    #[test]
     fn refreshes_row_and_column_fields() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
