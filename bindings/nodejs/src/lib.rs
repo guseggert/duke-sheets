@@ -1396,6 +1396,30 @@ impl Worksheet {
         })
     }
 
+    /// Pivot table definitions on the worksheet.
+    #[napi(getter)]
+    pub fn pivot_tables(&self) -> Result<Vec<JsPivotTableDefinition>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.pivot_tables().iter().map(Into::into).collect())
+        })
+    }
+
+    /// Get a pivot table definition by name.
+    #[napi(js_name = "getPivotTable")]
+    pub fn get_pivot_table(&self, name: String) -> Result<Option<JsPivotTableDefinition>> {
+        catch_panic(|| {
+            let wb = self.workbook.read().map_err(to_napi_err)?;
+            let ws = wb
+                .worksheet(self.sheet_index)
+                .ok_or_else(|| napi::Error::from_reason("Worksheet no longer exists"))?;
+            Ok(ws.pivot_table_by_name(&name).map(Into::into))
+        })
+    }
+
     /// Add a semantic pivot table definition to the worksheet.
     #[napi]
     pub fn add_pivot_table(&self, options: JsPivotTableOptions) -> Result<()> {

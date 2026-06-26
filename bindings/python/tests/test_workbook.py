@@ -202,6 +202,74 @@ class TestNamedRanges:
 class TestPivotTables:
     """Test pivot table authoring through the Python binding."""
 
+    def test_pivot_table_definitions(self):
+        """Should expose semantic pivot table definitions."""
+        import duke_sheets
+
+        wb = duke_sheets.Workbook()
+        sheet = wb.get_sheet(0)
+        sheet.add_pivot_table(
+            {
+                "name": "SalesPivot",
+                "source_range": "A1:C4",
+                "target": "E1",
+                "row_fields": [
+                    {"field": "Region", "sort": "descending", "subtotal": "none"}
+                ],
+                "columns": ["Quarter"],
+                "measures": [
+                    {
+                        "field": "Revenue",
+                        "aggregate": "sum",
+                        "name": "Revenue",
+                        "show_as": "percentOfGrandTotal",
+                        "number_format": "0.0%",
+                    }
+                ],
+                "filters": [
+                    {
+                        "kind": "label",
+                        "field": "Region",
+                        "operator": "beginsWith",
+                        "text": "E",
+                    }
+                ],
+                "calculated_fields": [{"name": "Margin", "formula": "=Revenue*0.2"}],
+                "refresh_policy": {"refresh_on_open": True, "missing_items_limit": 25},
+                "layout": {"kind": "tabular", "repeat_item_labels": True},
+                "overwrite_policy": "fail_on_occupied",
+            }
+        )
+
+        pivot = sheet.get_pivot_table("SalesPivot")
+        assert pivot is not None
+        assert sheet.pivot_tables == [pivot]
+        assert pivot["source"]["kind"] == "worksheet_range"
+        assert pivot["source"]["range"] == "A1:C4"
+        assert pivot["target"] == "E1"
+        assert pivot["rows"][0]["field"] == "Region"
+        assert pivot["rows"][0]["sort"] == "descending"
+        assert pivot["rows"][0]["subtotal"] == "none"
+        assert pivot["columns"][0]["field"] == "Quarter"
+        assert pivot["measures"][0]["field"] == "Revenue"
+        assert pivot["measures"][0]["aggregate"] == "sum"
+        assert pivot["measures"][0]["caption"] == "Revenue"
+        assert pivot["measures"][0]["number_format"] == "0.0%"
+        assert pivot["measures"][0]["show_as"]["kind"] == "percent_of_grand_total"
+        assert pivot["filters"][0]["kind"] == "label"
+        assert pivot["filters"][0]["operator"] == "begins_with"
+        assert pivot["calculated_fields"][0] == {
+            "name": "Margin",
+            "formula": "=Revenue*0.2",
+        }
+        assert pivot["layout"]["kind"] == "tabular"
+        assert pivot["layout"]["repeat_item_labels"] is True
+        assert pivot["refresh_policy"]["refresh_on_open"] is True
+        assert pivot["refresh_policy"]["missing_items_limit"] == 25
+        assert pivot["overwrite_policy"] == "fail_on_occupied"
+        assert pivot["refresh_status"]["kind"] == "not_refreshed"
+        assert sheet.get_pivot_table("Missing") is None
+
     def test_external_pivot_database_connection_roundtrip(self, temp_dir):
         """Should save and read external pivot database connection metadata."""
         import os

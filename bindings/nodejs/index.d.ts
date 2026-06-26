@@ -6,7 +6,12 @@
  */
 export * from './generated'
 
-import type { JsRow, JsRowsOptions, Worksheet as _Worksheet } from './generated'
+import type {
+  JsPivotTableDefinition,
+  JsRow,
+  JsRowsOptions,
+  Worksheet as _Worksheet,
+} from './generated'
 
 /** Iterator over sparse rows. Batches FFI calls internally for performance. */
 export declare class RowIterator implements IterableIterator<JsRow> {
@@ -285,6 +290,12 @@ declare module './generated' {
 
     /** Pivot table names on the worksheet. */
     readonly pivotTableNames: string[]
+
+    /** Pivot table definitions on the worksheet. */
+    readonly pivotTables: JsPivotTableDefinition[]
+
+    /** Get a pivot table definition by name. */
+    getPivotTable(name: string): JsPivotTableDefinition | null
 
     /** Add a semantic pivot table definition to the worksheet. */
     addPivotTable(options: JsPivotTableOptions): void

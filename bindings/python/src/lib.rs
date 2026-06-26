@@ -15,11 +15,11 @@ use duke_sheets::{
     CalculationOptions, FormulaValue, ImageSizing, WorkbookCalculationExt, WorkbookPivotExt,
 };
 use duke_sheets_core::{
-    CellError, CellValue as CoreCellValue, PivotAggregate, PivotDateGroupUnit, PivotField,
-    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
-    PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotShowAs,
-    PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
-    WorkbookConnection, WorkbookConnectionKind,
+    CellError, CellValue as CoreCellValue, PivotAggregate, PivotCalculatedField,
+    PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
+    PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
+    PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
+    PivotSubtotal, PivotTable, PivotValue, WorkbookConnection, WorkbookConnectionKind,
 };
 
 mod types;
@@ -748,6 +748,489 @@ fn pivot_refresh_stats_to_py(
     Ok(dict.into_any().unbind())
 }
 
+fn pivot_table_to_py(py: Python<'_>, pivot: &PivotTable) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("id", pivot.id)?;
+    dict.set_item("name", &pivot.name)?;
+    dict.set_item("source", pivot_source_to_py(py, &pivot.source)?)?;
+    dict.set_item("target", pivot.target.to_string())?;
+    dict.set_item("rows", pivot_fields_to_py(py, &pivot.rows)?)?;
+    dict.set_item("columns", pivot_fields_to_py(py, &pivot.columns)?)?;
+    dict.set_item("page_fields", pivot_fields_to_py(py, &pivot.page_fields)?)?;
+    dict.set_item("filters", pivot_filters_to_py(py, &pivot.filters)?)?;
+    dict.set_item(
+        "calculated_fields",
+        pivot_calculated_fields_to_py(py, &pivot.calculated_fields)?,
+    )?;
+    dict.set_item("measures", pivot_measures_to_py(py, &pivot.measures)?)?;
+    dict.set_item("groupings", pivot_groupings_to_py(py, &pivot.groupings)?)?;
+    dict.set_item("layout", pivot_layout_to_py(py, &pivot.layout)?)?;
+    dict.set_item("style", pivot_style_to_py(py, &pivot.style)?)?;
+    dict.set_item(
+        "refresh_policy",
+        pivot_refresh_policy_to_py(py, &pivot.refresh_policy)?,
+    )?;
+    dict.set_item(
+        "overwrite_policy",
+        pivot_overwrite_policy_to_python(pivot.overwrite_policy),
+    )?;
+    dict.set_item(
+        "rendered_range",
+        pivot.rendered_range.map(|range| range.to_string()),
+    )?;
+    dict.set_item(
+        "refresh_status",
+        pivot_refresh_status_to_py(py, &pivot.refresh_status)?,
+    )?;
+    dict.set_item("extension_count", pivot.extensions.len())?;
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_source_to_py(py: Python<'_>, source: &PivotSource) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    match source {
+        PivotSource::WorksheetRange { sheet, range } => {
+            dict.set_item("kind", "worksheet_range")?;
+            dict.set_item("sheet", sheet)?;
+            dict.set_item("range", range.to_string())?;
+        }
+        PivotSource::Table { name } => {
+            dict.set_item("kind", "table")?;
+            dict.set_item("table_name", name)?;
+        }
+        PivotSource::External {
+            connection_name,
+            command_text,
+        } => {
+            dict.set_item("kind", "external")?;
+            dict.set_item("connection_name", connection_name)?;
+            dict.set_item("command_text", command_text)?;
+        }
+        PivotSource::Consolidation { ranges } => {
+            dict.set_item("kind", "consolidation")?;
+            let items = PyList::empty_bound(py);
+            for range in ranges {
+                items.append(pivot_source_range_to_py(py, range)?)?;
+            }
+            dict.set_item("ranges", items)?;
+        }
+        PivotSource::Scenario { name } => {
+            dict.set_item("kind", "scenario")?;
+            dict.set_item("scenario_name", name)?;
+        }
+        PivotSource::Olap {
+            connection_name,
+            cube,
+            command_text,
+        } => {
+            dict.set_item("kind", "olap")?;
+            dict.set_item("connection_name", connection_name)?;
+            dict.set_item("cube", cube)?;
+            dict.set_item("command_text", command_text)?;
+        }
+    }
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_source_range_to_py(py: Python<'_>, range: &PivotSourceRange) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("sheet", &range.sheet)?;
+    dict.set_item("range", range.range.to_string())?;
+    dict.set_item("name", &range.name)?;
+    dict.set_item("page_items", &range.page_items)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_fields_to_py(py: Python<'_>, fields: &[PivotField]) -> PyResult<PyObject> {
+    let items = PyList::empty_bound(py);
+    for field in fields {
+        items.append(pivot_field_to_py(py, field)?)?;
+    }
+    Ok(items.into_any().unbind())
+}
+
+fn pivot_field_to_py(py: Python<'_>, field: &PivotField) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("field", &field.field.name)?;
+    dict.set_item("sort", pivot_sort_to_python(field.sort))?;
+    dict.set_item("subtotal", pivot_subtotal_to_python(field.subtotal))?;
+    dict.set_item("show_empty_items", field.show_empty_items)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_measures_to_py(py: Python<'_>, measures: &[PivotMeasure]) -> PyResult<PyObject> {
+    let items = PyList::empty_bound(py);
+    for measure in measures {
+        items.append(pivot_measure_to_py(py, measure)?)?;
+    }
+    Ok(items.into_any().unbind())
+}
+
+fn pivot_measure_to_py(py: Python<'_>, measure: &PivotMeasure) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("field", &measure.field.name)?;
+    dict.set_item("aggregate", pivot_aggregate_to_python(measure.aggregate))?;
+    dict.set_item("name", &measure.name)?;
+    dict.set_item("caption", measure.caption())?;
+    dict.set_item("show_as", pivot_show_as_to_py(py, &measure.show_as)?)?;
+    dict.set_item("number_format", &measure.number_format)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_show_as_to_py(py: Python<'_>, show_as: &PivotShowAs) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    match show_as {
+        PivotShowAs::Normal => {
+            dict.set_item("kind", "normal")?;
+        }
+        PivotShowAs::PercentOfGrandTotal => {
+            dict.set_item("kind", "percent_of_grand_total")?;
+        }
+        PivotShowAs::PercentOfRowTotal => {
+            dict.set_item("kind", "percent_of_row_total")?;
+        }
+        PivotShowAs::PercentOfColumnTotal => {
+            dict.set_item("kind", "percent_of_column_total")?;
+        }
+        PivotShowAs::Index => {
+            dict.set_item("kind", "index")?;
+        }
+        PivotShowAs::RunningTotal { base_field } => {
+            dict.set_item("kind", "running_total")?;
+            dict.set_item("base_field", &base_field.name)?;
+        }
+        PivotShowAs::DifferenceFrom {
+            base_field,
+            base_item,
+        } => {
+            dict.set_item("kind", "difference_from")?;
+            dict.set_item("base_field", &base_field.name)?;
+            dict.set_item("base_item", pivot_value_to_py(py, base_item)?)?;
+        }
+        PivotShowAs::PercentDifferenceFrom {
+            base_field,
+            base_item,
+        } => {
+            dict.set_item("kind", "percent_difference_from")?;
+            dict.set_item("base_field", &base_field.name)?;
+            dict.set_item("base_item", pivot_value_to_py(py, base_item)?)?;
+        }
+        PivotShowAs::RankAscending { base_field } => {
+            dict.set_item("kind", "rank_ascending")?;
+            dict.set_item("base_field", &base_field.name)?;
+        }
+        PivotShowAs::RankDescending { base_field } => {
+            dict.set_item("kind", "rank_descending")?;
+            dict.set_item("base_field", &base_field.name)?;
+        }
+    }
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_value_to_py(py: Python<'_>, value: &PivotValue) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    match value {
+        PivotValue::Blank => {
+            dict.set_item("kind", "blank")?;
+        }
+        PivotValue::Boolean(value) => {
+            dict.set_item("kind", "boolean")?;
+            dict.set_item("boolean", value)?;
+        }
+        PivotValue::Number(value) => {
+            dict.set_item("kind", "number")?;
+            dict.set_item("number", value)?;
+        }
+        PivotValue::String(value) => {
+            dict.set_item("kind", "string")?;
+            dict.set_item("text", value)?;
+        }
+        PivotValue::Error(value) => {
+            dict.set_item("kind", "error")?;
+            dict.set_item("error", value.to_string())?;
+        }
+    }
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_filters_to_py(py: Python<'_>, filters: &[PivotFilter]) -> PyResult<PyObject> {
+    let items = PyList::empty_bound(py);
+    for filter in filters {
+        items.append(pivot_filter_to_py(py, filter)?)?;
+    }
+    Ok(items.into_any().unbind())
+}
+
+fn pivot_filter_to_py(py: Python<'_>, filter: &PivotFilter) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    match filter {
+        PivotFilter::FieldItems {
+            field,
+            allowed_items,
+        } => {
+            dict.set_item("kind", "field_items")?;
+            dict.set_item("field", &field.name)?;
+            let items = PyList::empty_bound(py);
+            for item in allowed_items {
+                items.append(pivot_value_to_py(py, item)?)?;
+            }
+            dict.set_item("items", items)?;
+        }
+        PivotFilter::Label {
+            field,
+            operator,
+            value,
+        } => {
+            dict.set_item("kind", "label")?;
+            dict.set_item("field", &field.name)?;
+            dict.set_item("operator", pivot_filter_operator_to_python(*operator))?;
+            dict.set_item("text", value)?;
+        }
+        PivotFilter::Value {
+            field,
+            measure,
+            operator,
+            value,
+        } => {
+            dict.set_item("kind", "value")?;
+            dict.set_item("field", &field.name)?;
+            dict.set_item("measure", pivot_measure_to_py(py, measure)?)?;
+            dict.set_item("operator", pivot_filter_operator_to_python(*operator))?;
+            dict.set_item("value", value)?;
+        }
+        PivotFilter::TopN {
+            field,
+            measure,
+            n,
+            top,
+            percent,
+        } => {
+            dict.set_item("kind", "top_n")?;
+            dict.set_item("field", &field.name)?;
+            dict.set_item("measure", pivot_measure_to_py(py, measure)?)?;
+            dict.set_item("n", n)?;
+            dict.set_item("top", top)?;
+            dict.set_item("percent", percent)?;
+        }
+        PivotFilter::Unsupported { kind, detail } => {
+            dict.set_item("kind", kind)?;
+            dict.set_item("detail", detail)?;
+        }
+    }
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_calculated_fields_to_py(
+    py: Python<'_>,
+    fields: &[PivotCalculatedField],
+) -> PyResult<PyObject> {
+    let items = PyList::empty_bound(py);
+    for field in fields {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("name", &field.name)?;
+        dict.set_item("formula", &field.formula)?;
+        items.append(dict)?;
+    }
+    Ok(items.into_any().unbind())
+}
+
+fn pivot_groupings_to_py(py: Python<'_>, groupings: &[PivotGrouping]) -> PyResult<PyObject> {
+    let items = PyList::empty_bound(py);
+    for grouping in groupings {
+        items.append(pivot_grouping_to_py(py, grouping)?)?;
+    }
+    Ok(items.into_any().unbind())
+}
+
+fn pivot_grouping_to_py(py: Python<'_>, grouping: &PivotGrouping) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    match grouping {
+        PivotGrouping::Number {
+            field,
+            start,
+            end,
+            interval,
+        } => {
+            dict.set_item("kind", "number")?;
+            dict.set_item("field", &field.name)?;
+            dict.set_item("start", start)?;
+            dict.set_item("end", end)?;
+            dict.set_item("interval", interval)?;
+        }
+        PivotGrouping::Date { field, units } => {
+            dict.set_item("kind", "date")?;
+            dict.set_item("field", &field.name)?;
+            let unit_names = units
+                .iter()
+                .map(|unit| pivot_date_group_unit_to_python(*unit))
+                .collect::<Vec<_>>();
+            dict.set_item("units", unit_names)?;
+        }
+        PivotGrouping::Manual { field, groups } => {
+            dict.set_item("kind", "manual")?;
+            dict.set_item("field", &field.name)?;
+            let items = PyList::empty_bound(py);
+            for group in groups {
+                items.append(pivot_manual_group_to_py(py, group)?)?;
+            }
+            dict.set_item("groups", items)?;
+        }
+    }
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_manual_group_to_py(py: Python<'_>, group: &PivotManualGroup) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("name", &group.name)?;
+    let members = PyList::empty_bound(py);
+    for member in &group.members {
+        members.append(pivot_value_to_py(py, member)?)?;
+    }
+    dict.set_item("members", members)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_layout_to_py(py: Python<'_>, layout: &PivotLayout) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("kind", pivot_layout_kind_to_python(layout.kind))?;
+    dict.set_item("show_row_grand_totals", layout.show_row_grand_totals)?;
+    dict.set_item("show_column_grand_totals", layout.show_column_grand_totals)?;
+    dict.set_item("show_field_headers", layout.show_field_headers)?;
+    dict.set_item("repeat_item_labels", layout.repeat_item_labels)?;
+    dict.set_item("show_expand_collapse", layout.show_expand_collapse)?;
+    dict.set_item("print_drill_indicators", layout.print_drill_indicators)?;
+    dict.set_item("item_print_titles", layout.item_print_titles)?;
+    dict.set_item("field_print_titles", layout.field_print_titles)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_style_to_py(py: Python<'_>, style: &PivotStyle) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("name", &style.name)?;
+    dict.set_item("show_row_headers", style.show_row_headers)?;
+    dict.set_item("show_column_headers", style.show_column_headers)?;
+    dict.set_item("show_row_stripes", style.show_row_stripes)?;
+    dict.set_item("show_column_stripes", style.show_column_stripes)?;
+    dict.set_item("show_last_column", style.show_last_column)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_refresh_policy_to_py(py: Python<'_>, policy: &PivotRefreshPolicy) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("refresh_on_open", policy.refresh_on_open)?;
+    dict.set_item("preserve_formatting", policy.preserve_formatting)?;
+    dict.set_item("background_query", policy.background_query)?;
+    dict.set_item("missing_items_limit", policy.missing_items_limit)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_refresh_status_to_py(py: Python<'_>, status: &PivotRefreshStatus) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    match status {
+        PivotRefreshStatus::NotRefreshed => {
+            dict.set_item("kind", "not_refreshed")?;
+        }
+        PivotRefreshStatus::Succeeded => {
+            dict.set_item("kind", "succeeded")?;
+        }
+        PivotRefreshStatus::Failed { message } => {
+            dict.set_item("kind", "failed")?;
+            dict.set_item("message", message)?;
+        }
+        PivotRefreshStatus::External => {
+            dict.set_item("kind", "external")?;
+        }
+    }
+    Ok(dict.into_any().unbind())
+}
+
+fn pivot_sort_to_python(sort: PivotSort) -> &'static str {
+    match sort {
+        PivotSort::None => "none",
+        PivotSort::Ascending => "ascending",
+        PivotSort::Descending => "descending",
+    }
+}
+
+fn pivot_subtotal_to_python(subtotal: PivotSubtotal) -> &'static str {
+    match subtotal {
+        PivotSubtotal::Automatic => "automatic",
+        PivotSubtotal::None => "none",
+        PivotSubtotal::Sum => "sum",
+        PivotSubtotal::Count => "count",
+        PivotSubtotal::CountNumbers => "count_numbers",
+        PivotSubtotal::Average => "average",
+        PivotSubtotal::Min => "min",
+        PivotSubtotal::Max => "max",
+        PivotSubtotal::Product => "product",
+        PivotSubtotal::StdDev => "std_dev",
+        PivotSubtotal::StdDevP => "std_dev_p",
+        PivotSubtotal::Var => "var",
+        PivotSubtotal::VarP => "var_p",
+    }
+}
+
+fn pivot_aggregate_to_python(aggregate: PivotAggregate) -> &'static str {
+    match aggregate {
+        PivotAggregate::Sum => "sum",
+        PivotAggregate::Count => "count",
+        PivotAggregate::CountNumbers => "count_numbers",
+        PivotAggregate::Average => "average",
+        PivotAggregate::Max => "max",
+        PivotAggregate::Min => "min",
+        PivotAggregate::Product => "product",
+        PivotAggregate::StdDev => "std_dev",
+        PivotAggregate::StdDevP => "std_dev_p",
+        PivotAggregate::Var => "var",
+        PivotAggregate::VarP => "var_p",
+    }
+}
+
+fn pivot_filter_operator_to_python(operator: PivotFilterOperator) -> &'static str {
+    match operator {
+        PivotFilterOperator::Equals => "equals",
+        PivotFilterOperator::NotEquals => "not_equals",
+        PivotFilterOperator::LessThan => "less_than",
+        PivotFilterOperator::LessThanOrEqual => "less_than_or_equal",
+        PivotFilterOperator::GreaterThan => "greater_than",
+        PivotFilterOperator::GreaterThanOrEqual => "greater_than_or_equal",
+        PivotFilterOperator::BeginsWith => "begins_with",
+        PivotFilterOperator::DoesNotBeginWith => "does_not_begin_with",
+        PivotFilterOperator::EndsWith => "ends_with",
+        PivotFilterOperator::DoesNotEndWith => "does_not_end_with",
+        PivotFilterOperator::Contains => "contains",
+        PivotFilterOperator::DoesNotContain => "does_not_contain",
+    }
+}
+
+fn pivot_date_group_unit_to_python(unit: PivotDateGroupUnit) -> &'static str {
+    match unit {
+        PivotDateGroupUnit::Seconds => "seconds",
+        PivotDateGroupUnit::Minutes => "minutes",
+        PivotDateGroupUnit::Hours => "hours",
+        PivotDateGroupUnit::Days => "days",
+        PivotDateGroupUnit::Months => "months",
+        PivotDateGroupUnit::Quarters => "quarters",
+        PivotDateGroupUnit::Years => "years",
+    }
+}
+
+fn pivot_layout_kind_to_python(kind: PivotLayoutKind) -> &'static str {
+    match kind {
+        PivotLayoutKind::Compact => "compact",
+        PivotLayoutKind::Outline => "outline",
+        PivotLayoutKind::Tabular => "tabular",
+    }
+}
+
+fn pivot_overwrite_policy_to_python(policy: PivotOverwritePolicy) -> &'static str {
+    match policy {
+        PivotOverwritePolicy::ClearOwnedRange => "clear_owned_range",
+        PivotOverwritePolicy::Overwrite => "overwrite",
+        PivotOverwritePolicy::FailOnOccupied => "fail_on_occupied",
+    }
+}
+
 fn build_workbook_connection_from_py(options: &Bound<'_, PyAny>) -> PyResult<WorkbookConnection> {
     let dict = options
         .downcast::<PyDict>()
@@ -1422,6 +1905,31 @@ impl PyWorksheet {
             .iter()
             .map(|pivot| pivot.name.clone())
             .collect())
+    }
+
+    /// Pivot table definitions on the worksheet.
+    #[getter]
+    fn pivot_tables(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        ws.pivot_tables()
+            .iter()
+            .map(|pivot| pivot_table_to_py(py, pivot))
+            .collect()
+    }
+
+    /// Get a pivot table definition by name.
+    #[pyo3(signature = (name))]
+    fn get_pivot_table(&self, name: &str, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let wb = self.workbook.read().map_err(to_py_err)?;
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| PyIndexError::new_err("Worksheet no longer exists"))?;
+        ws.pivot_table_by_name(name)
+            .map(|pivot| pivot_table_to_py(py, pivot))
+            .transpose()
     }
 
     /// Add a semantic pivot table definition to the worksheet.

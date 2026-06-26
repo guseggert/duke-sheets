@@ -4,7 +4,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use js_sys::{Function, Object, Reflect};
+use js_sys::{Array, Function, Object, Reflect};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
@@ -332,6 +332,114 @@ fn make_array(values: &[JsValue]) -> JsValue {
         array.push(value);
     }
     array.into()
+}
+
+#[wasm_bindgen_test]
+fn test_pivot_table_definitions_from_options() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+
+    let row_field = make_options(&[
+        ("field", JsValue::from_str("Region")),
+        ("sort", JsValue::from_str("descending")),
+        ("subtotal", JsValue::from_str("none")),
+    ]);
+    let measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+        ("showAs", JsValue::from_str("percentOfGrandTotal")),
+        ("numberFormat", JsValue::from_str("0.0%")),
+    ]);
+    let filter = make_options(&[
+        ("kind", JsValue::from_str("label")),
+        ("field", JsValue::from_str("Region")),
+        ("operator", JsValue::from_str("beginsWith")),
+        ("text", JsValue::from_str("E")),
+    ]);
+    let calculated = make_options(&[
+        ("name", JsValue::from_str("Margin")),
+        ("formula", JsValue::from_str("=Revenue*0.2")),
+    ]);
+    let refresh_policy = make_options(&[
+        ("refreshOnOpen", JsValue::TRUE),
+        ("missingItemsLimit", JsValue::from_f64(25.0)),
+    ]);
+    let layout = make_options(&[
+        ("kind", JsValue::from_str("tabular")),
+        ("repeatItemLabels", JsValue::TRUE),
+    ]);
+    let pivot = make_options(&[
+        ("name", JsValue::from_str("SalesPivot")),
+        ("sourceRange", JsValue::from_str("A1:C4")),
+        ("target", JsValue::from_str("E1")),
+        ("rowFields", make_array(&[row_field])),
+        ("columns", make_array(&[JsValue::from_str("Quarter")])),
+        ("measures", make_array(&[measure])),
+        ("filters", make_array(&[filter])),
+        ("calculatedFields", make_array(&[calculated])),
+        ("refreshPolicy", refresh_policy),
+        ("layout", layout),
+        ("overwritePolicy", JsValue::from_str("failOnOccupied")),
+    ]);
+
+    sheet.add_pivot_table(pivot).unwrap();
+
+    let pivot = sheet.get_pivot_table("SalesPivot").unwrap();
+    assert!(!pivot.is_null());
+    let pivots = Array::from(&sheet.pivot_tables().unwrap());
+    assert_eq!(pivots.length(), 1);
+    assert_eq!(get_string_field(&pivots.get(0), "name"), "SalesPivot");
+
+    let source = Reflect::get(&pivot, &JsValue::from_str("source")).unwrap();
+    assert_eq!(get_string_field(&source, "kind"), "worksheetRange");
+    assert_eq!(get_string_field(&source, "range"), "A1:C4");
+    assert_eq!(get_string_field(&pivot, "target"), "E1");
+
+    let rows = Array::from(&Reflect::get(&pivot, &JsValue::from_str("rows")).unwrap());
+    let row = rows.get(0);
+    assert_eq!(get_string_field(&row, "field"), "Region");
+    assert_eq!(get_string_field(&row, "sort"), "descending");
+    assert_eq!(get_string_field(&row, "subtotal"), "none");
+
+    let columns = Array::from(&Reflect::get(&pivot, &JsValue::from_str("columns")).unwrap());
+    assert_eq!(get_string_field(&columns.get(0), "field"), "Quarter");
+
+    let measures = Array::from(&Reflect::get(&pivot, &JsValue::from_str("measures")).unwrap());
+    let measure = measures.get(0);
+    assert_eq!(get_string_field(&measure, "field"), "Revenue");
+    assert_eq!(get_string_field(&measure, "aggregate"), "sum");
+    assert_eq!(get_string_field(&measure, "caption"), "Revenue");
+    assert_eq!(get_string_field(&measure, "numberFormat"), "0.0%");
+    let show_as = Reflect::get(&measure, &JsValue::from_str("showAs")).unwrap();
+    assert_eq!(get_string_field(&show_as, "kind"), "percentOfGrandTotal");
+
+    let filters = Array::from(&Reflect::get(&pivot, &JsValue::from_str("filters")).unwrap());
+    let filter = filters.get(0);
+    assert_eq!(get_string_field(&filter, "kind"), "label");
+    assert_eq!(get_string_field(&filter, "operator"), "beginsWith");
+
+    let calculated =
+        Array::from(&Reflect::get(&pivot, &JsValue::from_str("calculatedFields")).unwrap());
+    assert_eq!(get_string_field(&calculated.get(0), "name"), "Margin");
+    assert_eq!(
+        get_string_field(&calculated.get(0), "formula"),
+        "=Revenue*0.2"
+    );
+
+    let pivot_layout = Reflect::get(&pivot, &JsValue::from_str("layout")).unwrap();
+    assert_eq!(get_string_field(&pivot_layout, "kind"), "tabular");
+    assert!(get_bool_field(&pivot_layout, "repeatItemLabels"));
+    let policy = Reflect::get(&pivot, &JsValue::from_str("refreshPolicy")).unwrap();
+    assert!(get_bool_field(&policy, "refreshOnOpen"));
+    assert_eq!(get_f64_field(&policy, "missingItemsLimit"), 25.0);
+    assert_eq!(
+        get_string_field(&pivot, "overwritePolicy"),
+        "failOnOccupied"
+    );
+    let status = Reflect::get(&pivot, &JsValue::from_str("refreshStatus")).unwrap();
+    assert_eq!(get_string_field(&status, "kind"), "notRefreshed");
+    assert!(sheet.get_pivot_table("Missing").unwrap().is_null());
 }
 
 #[wasm_bindgen_test]

@@ -189,6 +189,64 @@ describe("Workbook", () => {
 });
 
 describe("PivotTables", () => {
+  it("exposes pivot table definitions", () => {
+    const wb = new Workbook();
+    const sheet = wb.getSheet(0);
+
+    sheet.addPivotTable({
+      name: "SalesPivot",
+      sourceRange: "A1:C4",
+      target: "E1",
+      rowFields: [{ field: "Region", sort: "descending", subtotal: "none" }],
+      columns: ["Quarter"],
+      measures: [
+        {
+          field: "Revenue",
+          aggregate: "sum",
+          name: "Revenue",
+          showAs: "percentOfGrandTotal",
+          numberFormat: "0.0%",
+        },
+      ],
+      filters: [{ kind: "label", field: "Region", operator: "beginsWith", text: "E" }],
+      calculatedFields: [{ name: "Margin", formula: "=Revenue*0.2" }],
+      refreshPolicy: { refreshOnOpen: true, missingItemsLimit: 25 },
+      layout: { kind: "tabular", repeatItemLabels: true },
+      overwritePolicy: "failOnOccupied",
+    });
+
+    const pivot = sheet.getPivotTable("SalesPivot");
+    expect(pivot).not.toBeNull();
+    expect(sheet.pivotTables).toEqual([pivot]);
+    expect(pivot?.source).toMatchObject({ kind: "worksheetRange", range: "A1:C4" });
+    expect(pivot?.target).toBe("E1");
+    expect(pivot?.rows[0]).toMatchObject({
+      field: "Region",
+      sort: "descending",
+      subtotal: "none",
+    });
+    expect(pivot?.columns[0].field).toBe("Quarter");
+    expect(pivot?.measures[0]).toMatchObject({
+      field: "Revenue",
+      aggregate: "sum",
+      caption: "Revenue",
+      numberFormat: "0.0%",
+    });
+    expect(pivot?.measures[0].showAs.kind).toBe("percentOfGrandTotal");
+    expect(pivot?.filters[0]).toMatchObject({
+      kind: "label",
+      field: "Region",
+      operator: "beginsWith",
+      text: "E",
+    });
+    expect(pivot?.calculatedFields[0]).toEqual({ name: "Margin", formula: "=Revenue*0.2" });
+    expect(pivot?.layout).toMatchObject({ kind: "tabular", repeatItemLabels: true });
+    expect(pivot?.refreshPolicy).toMatchObject({ refreshOnOpen: true, missingItemsLimit: 25 });
+    expect(pivot?.overwritePolicy).toBe("failOnOccupied");
+    expect(pivot?.refreshStatus.kind).toBe("notRefreshed");
+    expect(sheet.getPivotTable("Missing")).toBeNull();
+  });
+
   it("adds an external pivot backed by a database connection", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duke-"));
     const filePath = path.join(tmpDir, "external-pivot.xlsx");

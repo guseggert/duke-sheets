@@ -386,6 +386,143 @@ export interface PivotTableOptions {
   overwritePolicy?: "clearOwnedRange" | "clear_owned_range" | "clear" | "overwrite" | "failOnOccupied" | "fail_on_occupied";
 }
 
+export interface PivotValue {
+  kind: "blank" | "boolean" | "number" | "string" | "error";
+  number?: number;
+  text?: string;
+  boolean?: boolean;
+  error?: string;
+}
+
+export interface PivotSourceRangeDefinition {
+  sheet: string;
+  range: string;
+  name?: string;
+  pageItems: string[];
+}
+
+export interface PivotSourceDefinition {
+  kind: "worksheetRange" | "table" | "external" | "consolidation" | "scenario" | "olap";
+  sheet?: string;
+  range?: string;
+  tableName?: string;
+  connectionName?: string;
+  commandText?: string;
+  ranges?: PivotSourceRangeDefinition[];
+  scenarioName?: string;
+  cube?: string;
+}
+
+export interface PivotFieldDefinition {
+  field: string;
+  sort: "none" | "ascending" | "descending";
+  subtotal: "automatic" | "none" | "sum" | "count" | "countNumbers" | "average" | "min" | "max" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
+  showEmptyItems: boolean;
+}
+
+export interface PivotShowAsDefinition {
+  kind: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "index" | "runningTotal" | "differenceFrom" | "percentDifferenceFrom" | "rankAscending" | "rankDescending";
+  baseField?: string;
+  baseItem?: PivotValue;
+}
+
+export interface PivotMeasureDefinition {
+  field: string;
+  aggregate: "sum" | "count" | "countNumbers" | "average" | "max" | "min" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
+  name?: string;
+  caption: string;
+  showAs: PivotShowAsDefinition;
+  numberFormat?: string;
+}
+
+export interface PivotFilterDefinition {
+  kind: string;
+  field?: string;
+  items?: PivotValue[];
+  operator?: PivotFilterOperator;
+  text?: string;
+  measure?: PivotMeasureDefinition;
+  value?: number;
+  n?: number;
+  top?: boolean;
+  percent?: boolean;
+  detail?: string;
+}
+
+export interface PivotCalculatedFieldDefinition {
+  name: string;
+  formula: string;
+}
+
+export interface PivotManualGroupDefinition {
+  name: string;
+  members: PivotValue[];
+}
+
+export interface PivotGroupingDefinition {
+  kind: "number" | "date" | "manual";
+  field: string;
+  start?: number;
+  end?: number;
+  interval?: number;
+  units?: PivotDateGroupUnit[];
+  groups?: PivotManualGroupDefinition[];
+}
+
+export interface PivotLayoutDefinition {
+  kind: "compact" | "outline" | "tabular";
+  showRowGrandTotals: boolean;
+  showColumnGrandTotals: boolean;
+  showFieldHeaders: boolean;
+  repeatItemLabels: boolean;
+  showExpandCollapse: boolean;
+  printDrillIndicators: boolean;
+  itemPrintTitles: boolean;
+  fieldPrintTitles: boolean;
+}
+
+export interface PivotStyleDefinition {
+  name?: string;
+  showRowHeaders: boolean;
+  showColumnHeaders: boolean;
+  showRowStripes: boolean;
+  showColumnStripes: boolean;
+  showLastColumn: boolean;
+}
+
+export interface PivotRefreshPolicyDefinition {
+  refreshOnOpen: boolean;
+  preserveFormatting: boolean;
+  backgroundQuery: boolean;
+  missingItemsLimit?: number;
+}
+
+export interface PivotRefreshStatusDefinition {
+  kind: "notRefreshed" | "succeeded" | "failed" | "external";
+  message?: string;
+}
+
+export interface PivotTableDefinition {
+  id: number;
+  name: string;
+  source: PivotSourceDefinition;
+  target: string;
+  rows: PivotFieldDefinition[];
+  columns: PivotFieldDefinition[];
+  pageFields: PivotFieldDefinition[];
+  filters: PivotFilterDefinition[];
+  calculatedFields: PivotCalculatedFieldDefinition[];
+  measures: PivotMeasureDefinition[];
+  groupings: PivotGroupingDefinition[];
+  layout: PivotLayoutDefinition;
+  style: PivotStyleDefinition;
+  refreshPolicy: PivotRefreshPolicyDefinition;
+  overwritePolicy: "clearOwnedRange" | "overwrite" | "failOnOccupied";
+  renderedRange?: string;
+  refreshStatus: PivotRefreshStatusDefinition;
+  extensionCount: number;
+}
+
 export interface DataConnectionOptions {
   id: number;
   name: string;
@@ -439,6 +576,8 @@ export interface Worksheet {
   setRangeStyle(range: string, style: StyleInput): void;
   readonly pivotCount: number;
   readonly pivotTableNames: string[];
+  readonly pivotTables: PivotTableDefinition[];
+  getPivotTable(name: string): PivotTableDefinition | null;
   addPivotTable(options: PivotTableOptions): void;
 }
 "#;
@@ -1488,6 +1627,32 @@ impl Worksheet {
             .iter()
             .map(|pivot| pivot.name.clone())
             .collect())
+    }
+
+    #[wasm_bindgen(getter, js_name = pivotTables)]
+    pub fn pivot_tables(&self) -> Result<JsValue, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        let pivots = ws
+            .pivot_tables()
+            .iter()
+            .map(WasmPivotTableDefinition::from)
+            .collect::<Vec<_>>();
+        to_js_value(&pivots)
+    }
+
+    #[wasm_bindgen(js_name = getPivotTable)]
+    pub fn get_pivot_table(&self, name: &str) -> Result<JsValue, JsError> {
+        let wb = self.workbook.borrow();
+        let ws = wb
+            .worksheet(self.sheet_index)
+            .ok_or_else(|| JsError::new("Worksheet no longer exists"))?;
+        match ws.pivot_table_by_name(name) {
+            Some(pivot) => to_js_value(&WasmPivotTableDefinition::from(pivot)),
+            None => Ok(JsValue::NULL),
+        }
     }
 
     #[wasm_bindgen(js_name = addPivotTable)]

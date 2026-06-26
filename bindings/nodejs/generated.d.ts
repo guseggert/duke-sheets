@@ -439,6 +439,10 @@ export declare class Worksheet {
   get pivotCount(): number
   /** Pivot table names on the worksheet. */
   get pivotTableNames(): Array<string>
+  /** Pivot table definitions on the worksheet. */
+  get pivotTables(): Array<JsPivotTableDefinition>
+  /** Get a pivot table definition by name. */
+  getPivotTable(name: string): JsPivotTableDefinition | null
   /** Add a semantic pivot table definition to the worksheet. */
   addPivotTable(options: JsPivotTableOptions): void
   /** Set the height of a row in points */
@@ -1389,6 +1393,11 @@ export interface JsPageSetup {
   alignWithMargins: boolean
 }
 
+export interface JsPivotCalculatedFieldDefinition {
+  name: string
+  formula: string
+}
+
 export interface JsPivotCalculatedFieldOptions {
   name: string
   formula: string
@@ -1406,11 +1415,32 @@ export interface JsPivotConsolidationRangeOptions {
   pageItems?: Array<string>
 }
 
+export interface JsPivotFieldDefinition {
+  field: string
+  sort: string
+  subtotal: string
+  showEmptyItems: boolean
+}
+
 export interface JsPivotFieldOptions {
   field: string
   sort?: string
   subtotal?: string
   showEmptyItems?: boolean
+}
+
+export interface JsPivotFilterDefinition {
+  kind: string
+  field?: string
+  items?: Array<JsPivotValue>
+  operator?: string
+  text?: string
+  measure?: JsPivotMeasureDefinition
+  value?: number
+  n?: number
+  top?: boolean
+  percent?: boolean
+  detail?: string
 }
 
 export interface JsPivotFilterOptions {
@@ -1426,6 +1456,16 @@ export interface JsPivotFilterOptions {
   percent?: boolean
 }
 
+export interface JsPivotGroupingDefinition {
+  kind: string
+  field: string
+  start?: number
+  end?: number
+  interval?: number
+  units?: Array<string>
+  groups?: Array<JsPivotManualGroupDefinition>
+}
+
 export interface JsPivotGroupingOptions {
   field: string
   kind: string
@@ -1434,6 +1474,18 @@ export interface JsPivotGroupingOptions {
   interval?: number
   units?: Array<string>
   groups?: Array<JsPivotManualGroupOptions>
+}
+
+export interface JsPivotLayoutDefinition {
+  kind: string
+  showRowGrandTotals: boolean
+  showColumnGrandTotals: boolean
+  showFieldHeaders: boolean
+  repeatItemLabels: boolean
+  showExpandCollapse: boolean
+  printDrillIndicators: boolean
+  itemPrintTitles: boolean
+  fieldPrintTitles: boolean
 }
 
 export interface JsPivotLayoutOptions {
@@ -1448,9 +1500,23 @@ export interface JsPivotLayoutOptions {
   fieldPrintTitles?: boolean
 }
 
+export interface JsPivotManualGroupDefinition {
+  name: string
+  members: Array<JsPivotValue>
+}
+
 export interface JsPivotManualGroupOptions {
   name: string
   members: Array<number | string | boolean>
+}
+
+export interface JsPivotMeasureDefinition {
+  field: string
+  aggregate: string
+  name?: string
+  caption: string
+  showAs: JsPivotShowAsDefinition
+  numberFormat?: string
 }
 
 export interface JsPivotMeasureOptions {
@@ -1461,6 +1527,13 @@ export interface JsPivotMeasureOptions {
   baseField?: string
   baseItem?: number | string | boolean
   numberFormat?: string
+}
+
+export interface JsPivotRefreshPolicyDefinition {
+  refreshOnOpen: boolean
+  preserveFormatting: boolean
+  backgroundQuery: boolean
+  missingItemsLimit?: number
 }
 
 export interface JsPivotRefreshPolicyOptions {
@@ -1479,6 +1552,45 @@ export interface JsPivotRefreshStats {
   cacheMisses: number
 }
 
+export interface JsPivotRefreshStatusDefinition {
+  kind: string
+  message?: string
+}
+
+export interface JsPivotShowAsDefinition {
+  kind: string
+  baseField?: string
+  baseItem?: JsPivotValue
+}
+
+export interface JsPivotSourceDefinition {
+  kind: string
+  sheet?: string
+  range?: string
+  tableName?: string
+  connectionName?: string
+  commandText?: string
+  ranges?: Array<JsPivotSourceRangeDefinition>
+  scenarioName?: string
+  cube?: string
+}
+
+export interface JsPivotSourceRangeDefinition {
+  sheet: string
+  range: string
+  name?: string
+  pageItems: Array<string>
+}
+
+export interface JsPivotStyleDefinition {
+  name?: string
+  showRowHeaders: boolean
+  showColumnHeaders: boolean
+  showRowStripes: boolean
+  showColumnStripes: boolean
+  showLastColumn: boolean
+}
+
 export interface JsPivotStyleOptions {
   name?: string
   showRowHeaders?: boolean
@@ -1486,6 +1598,27 @@ export interface JsPivotStyleOptions {
   showRowStripes?: boolean
   showColumnStripes?: boolean
   showLastColumn?: boolean
+}
+
+export interface JsPivotTableDefinition {
+  id: number
+  name: string
+  source: JsPivotSourceDefinition
+  target: string
+  rows: Array<JsPivotFieldDefinition>
+  columns: Array<JsPivotFieldDefinition>
+  pageFields: Array<JsPivotFieldDefinition>
+  filters: Array<JsPivotFilterDefinition>
+  calculatedFields: Array<JsPivotCalculatedFieldDefinition>
+  measures: Array<JsPivotMeasureDefinition>
+  groupings: Array<JsPivotGroupingDefinition>
+  layout: JsPivotLayoutDefinition
+  style: JsPivotStyleDefinition
+  refreshPolicy: JsPivotRefreshPolicyDefinition
+  overwritePolicy: string
+  renderedRange?: string
+  refreshStatus: JsPivotRefreshStatusDefinition
+  extensionCount: number
 }
 
 export interface JsPivotTableOptions {
@@ -1512,6 +1645,14 @@ export interface JsPivotTableOptions {
   layout?: JsPivotLayoutOptions
   style?: JsPivotStyleOptions
   overwritePolicy?: string
+}
+
+export interface JsPivotValue {
+  kind: string
+  number?: number
+  text?: string
+  boolean?: boolean
+  error?: string
 }
 
 /** A single run of rich text. */

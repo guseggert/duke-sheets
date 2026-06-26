@@ -75,6 +75,705 @@ pub struct JsRowsOptions {
     pub skip_blank_values: Option<bool>,
 }
 
+#[napi(object)]
+pub struct JsPivotValue {
+    pub kind: String,
+    pub number: Option<f64>,
+    pub text: Option<String>,
+    pub boolean: Option<bool>,
+    pub error: Option<String>,
+}
+
+impl From<&core::PivotValue> for JsPivotValue {
+    fn from(value: &core::PivotValue) -> Self {
+        match value {
+            core::PivotValue::Blank => Self {
+                kind: "blank".into(),
+                number: None,
+                text: None,
+                boolean: None,
+                error: None,
+            },
+            core::PivotValue::Boolean(value) => Self {
+                kind: "boolean".into(),
+                number: None,
+                text: None,
+                boolean: Some(*value),
+                error: None,
+            },
+            core::PivotValue::Number(value) => Self {
+                kind: "number".into(),
+                number: Some(*value),
+                text: None,
+                boolean: None,
+                error: None,
+            },
+            core::PivotValue::String(value) => Self {
+                kind: "string".into(),
+                number: None,
+                text: Some(value.clone()),
+                boolean: None,
+                error: None,
+            },
+            core::PivotValue::Error(value) => Self {
+                kind: "error".into(),
+                number: None,
+                text: None,
+                boolean: None,
+                error: Some(value.to_string()),
+            },
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotSourceRangeDefinition {
+    pub sheet: String,
+    pub range: String,
+    pub name: Option<String>,
+    pub page_items: Vec<String>,
+}
+
+impl From<&core::PivotSourceRange> for JsPivotSourceRangeDefinition {
+    fn from(range: &core::PivotSourceRange) -> Self {
+        Self {
+            sheet: range.sheet.clone(),
+            range: range.range.to_string(),
+            name: range.name.clone(),
+            page_items: range.page_items.clone(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotSourceDefinition {
+    pub kind: String,
+    pub sheet: Option<String>,
+    pub range: Option<String>,
+    pub table_name: Option<String>,
+    pub connection_name: Option<String>,
+    pub command_text: Option<String>,
+    pub ranges: Option<Vec<JsPivotSourceRangeDefinition>>,
+    pub scenario_name: Option<String>,
+    pub cube: Option<String>,
+}
+
+impl From<&core::PivotSource> for JsPivotSourceDefinition {
+    fn from(source: &core::PivotSource) -> Self {
+        match source {
+            core::PivotSource::WorksheetRange { sheet, range } => Self {
+                kind: "worksheetRange".into(),
+                sheet: sheet.clone(),
+                range: Some(range.to_string()),
+                table_name: None,
+                connection_name: None,
+                command_text: None,
+                ranges: None,
+                scenario_name: None,
+                cube: None,
+            },
+            core::PivotSource::Table { name } => Self {
+                kind: "table".into(),
+                sheet: None,
+                range: None,
+                table_name: Some(name.clone()),
+                connection_name: None,
+                command_text: None,
+                ranges: None,
+                scenario_name: None,
+                cube: None,
+            },
+            core::PivotSource::External {
+                connection_name,
+                command_text,
+            } => Self {
+                kind: "external".into(),
+                sheet: None,
+                range: None,
+                table_name: None,
+                connection_name: Some(connection_name.clone()),
+                command_text: command_text.clone(),
+                ranges: None,
+                scenario_name: None,
+                cube: None,
+            },
+            core::PivotSource::Consolidation { ranges } => Self {
+                kind: "consolidation".into(),
+                sheet: None,
+                range: None,
+                table_name: None,
+                connection_name: None,
+                command_text: None,
+                ranges: Some(ranges.iter().map(Into::into).collect()),
+                scenario_name: None,
+                cube: None,
+            },
+            core::PivotSource::Scenario { name } => Self {
+                kind: "scenario".into(),
+                sheet: None,
+                range: None,
+                table_name: None,
+                connection_name: None,
+                command_text: None,
+                ranges: None,
+                scenario_name: Some(name.clone()),
+                cube: None,
+            },
+            core::PivotSource::Olap {
+                connection_name,
+                cube,
+                command_text,
+            } => Self {
+                kind: "olap".into(),
+                sheet: None,
+                range: None,
+                table_name: None,
+                connection_name: Some(connection_name.clone()),
+                command_text: command_text.clone(),
+                ranges: None,
+                scenario_name: None,
+                cube: cube.clone(),
+            },
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotFieldDefinition {
+    pub field: String,
+    pub sort: String,
+    pub subtotal: String,
+    pub show_empty_items: bool,
+}
+
+impl From<&core::PivotField> for JsPivotFieldDefinition {
+    fn from(field: &core::PivotField) -> Self {
+        Self {
+            field: field.field.name.clone(),
+            sort: pivot_sort_to_string(field.sort).into(),
+            subtotal: pivot_subtotal_to_string(field.subtotal).into(),
+            show_empty_items: field.show_empty_items,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotShowAsDefinition {
+    pub kind: String,
+    pub base_field: Option<String>,
+    pub base_item: Option<JsPivotValue>,
+}
+
+impl From<&core::PivotShowAs> for JsPivotShowAsDefinition {
+    fn from(show_as: &core::PivotShowAs) -> Self {
+        match show_as {
+            core::PivotShowAs::Normal => Self {
+                kind: "normal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfGrandTotal => Self {
+                kind: "percentOfGrandTotal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfRowTotal => Self {
+                kind: "percentOfRowTotal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfColumnTotal => Self {
+                kind: "percentOfColumnTotal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::Index => Self {
+                kind: "index".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::RunningTotal { base_field } => Self {
+                kind: "runningTotal".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: None,
+            },
+            core::PivotShowAs::DifferenceFrom {
+                base_field,
+                base_item,
+            } => Self {
+                kind: "differenceFrom".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: Some(base_item.into()),
+            },
+            core::PivotShowAs::PercentDifferenceFrom {
+                base_field,
+                base_item,
+            } => Self {
+                kind: "percentDifferenceFrom".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: Some(base_item.into()),
+            },
+            core::PivotShowAs::RankAscending { base_field } => Self {
+                kind: "rankAscending".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: None,
+            },
+            core::PivotShowAs::RankDescending { base_field } => Self {
+                kind: "rankDescending".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: None,
+            },
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotMeasureDefinition {
+    pub field: String,
+    pub aggregate: String,
+    pub name: Option<String>,
+    pub caption: String,
+    pub show_as: JsPivotShowAsDefinition,
+    pub number_format: Option<String>,
+}
+
+impl From<&core::PivotMeasure> for JsPivotMeasureDefinition {
+    fn from(measure: &core::PivotMeasure) -> Self {
+        Self {
+            field: measure.field.name.clone(),
+            aggregate: pivot_aggregate_to_string(measure.aggregate).into(),
+            name: measure.name.clone(),
+            caption: measure.caption(),
+            show_as: JsPivotShowAsDefinition::from(&measure.show_as),
+            number_format: measure.number_format.clone(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotFilterDefinition {
+    pub kind: String,
+    pub field: Option<String>,
+    pub items: Option<Vec<JsPivotValue>>,
+    pub operator: Option<String>,
+    pub text: Option<String>,
+    pub measure: Option<JsPivotMeasureDefinition>,
+    pub value: Option<f64>,
+    pub n: Option<u32>,
+    pub top: Option<bool>,
+    pub percent: Option<bool>,
+    pub detail: Option<String>,
+}
+
+impl From<&core::PivotFilter> for JsPivotFilterDefinition {
+    fn from(filter: &core::PivotFilter) -> Self {
+        match filter {
+            core::PivotFilter::FieldItems {
+                field,
+                allowed_items,
+            } => Self {
+                kind: "fieldItems".into(),
+                field: Some(field.name.clone()),
+                items: Some(allowed_items.iter().map(Into::into).collect()),
+                operator: None,
+                text: None,
+                measure: None,
+                value: None,
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::Label {
+                field,
+                operator,
+                value,
+            } => Self {
+                kind: "label".into(),
+                field: Some(field.name.clone()),
+                items: None,
+                operator: Some(pivot_filter_operator_to_string(*operator).into()),
+                text: Some(value.clone()),
+                measure: None,
+                value: None,
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::Value {
+                field,
+                measure,
+                operator,
+                value,
+            } => Self {
+                kind: "value".into(),
+                field: Some(field.name.clone()),
+                items: None,
+                operator: Some(pivot_filter_operator_to_string(*operator).into()),
+                text: None,
+                measure: Some(measure.into()),
+                value: Some(*value),
+                n: None,
+                top: None,
+                percent: None,
+                detail: None,
+            },
+            core::PivotFilter::TopN {
+                field,
+                measure,
+                n,
+                top,
+                percent,
+            } => Self {
+                kind: "topN".into(),
+                field: Some(field.name.clone()),
+                items: None,
+                operator: None,
+                text: None,
+                measure: Some(measure.into()),
+                value: None,
+                n: Some(*n),
+                top: Some(*top),
+                percent: Some(*percent),
+                detail: None,
+            },
+            core::PivotFilter::Unsupported { kind, detail } => Self {
+                kind: kind.clone(),
+                field: None,
+                items: None,
+                operator: None,
+                text: None,
+                measure: None,
+                value: None,
+                n: None,
+                top: None,
+                percent: None,
+                detail: detail.clone(),
+            },
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotCalculatedFieldDefinition {
+    pub name: String,
+    pub formula: String,
+}
+
+impl From<&core::PivotCalculatedField> for JsPivotCalculatedFieldDefinition {
+    fn from(field: &core::PivotCalculatedField) -> Self {
+        Self {
+            name: field.name.clone(),
+            formula: field.formula.clone(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotManualGroupDefinition {
+    pub name: String,
+    pub members: Vec<JsPivotValue>,
+}
+
+impl From<&core::PivotManualGroup> for JsPivotManualGroupDefinition {
+    fn from(group: &core::PivotManualGroup) -> Self {
+        Self {
+            name: group.name.clone(),
+            members: group.members.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotGroupingDefinition {
+    pub kind: String,
+    pub field: String,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub interval: Option<f64>,
+    pub units: Option<Vec<String>>,
+    pub groups: Option<Vec<JsPivotManualGroupDefinition>>,
+}
+
+impl From<&core::PivotGrouping> for JsPivotGroupingDefinition {
+    fn from(grouping: &core::PivotGrouping) -> Self {
+        match grouping {
+            core::PivotGrouping::Number {
+                field,
+                start,
+                end,
+                interval,
+            } => Self {
+                kind: "number".into(),
+                field: field.name.clone(),
+                start: *start,
+                end: *end,
+                interval: Some(*interval),
+                units: None,
+                groups: None,
+            },
+            core::PivotGrouping::Date { field, units } => Self {
+                kind: "date".into(),
+                field: field.name.clone(),
+                start: None,
+                end: None,
+                interval: None,
+                units: Some(
+                    units
+                        .iter()
+                        .map(|unit| pivot_date_group_unit_to_string(*unit).into())
+                        .collect(),
+                ),
+                groups: None,
+            },
+            core::PivotGrouping::Manual { field, groups } => Self {
+                kind: "manual".into(),
+                field: field.name.clone(),
+                start: None,
+                end: None,
+                interval: None,
+                units: None,
+                groups: Some(groups.iter().map(Into::into).collect()),
+            },
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotLayoutDefinition {
+    pub kind: String,
+    pub show_row_grand_totals: bool,
+    pub show_column_grand_totals: bool,
+    pub show_field_headers: bool,
+    pub repeat_item_labels: bool,
+    pub show_expand_collapse: bool,
+    pub print_drill_indicators: bool,
+    pub item_print_titles: bool,
+    pub field_print_titles: bool,
+}
+
+impl From<&core::PivotLayout> for JsPivotLayoutDefinition {
+    fn from(layout: &core::PivotLayout) -> Self {
+        Self {
+            kind: pivot_layout_kind_to_string(layout.kind).into(),
+            show_row_grand_totals: layout.show_row_grand_totals,
+            show_column_grand_totals: layout.show_column_grand_totals,
+            show_field_headers: layout.show_field_headers,
+            repeat_item_labels: layout.repeat_item_labels,
+            show_expand_collapse: layout.show_expand_collapse,
+            print_drill_indicators: layout.print_drill_indicators,
+            item_print_titles: layout.item_print_titles,
+            field_print_titles: layout.field_print_titles,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotStyleDefinition {
+    pub name: Option<String>,
+    pub show_row_headers: bool,
+    pub show_column_headers: bool,
+    pub show_row_stripes: bool,
+    pub show_column_stripes: bool,
+    pub show_last_column: bool,
+}
+
+impl From<&core::PivotStyle> for JsPivotStyleDefinition {
+    fn from(style: &core::PivotStyle) -> Self {
+        Self {
+            name: style.name.clone(),
+            show_row_headers: style.show_row_headers,
+            show_column_headers: style.show_column_headers,
+            show_row_stripes: style.show_row_stripes,
+            show_column_stripes: style.show_column_stripes,
+            show_last_column: style.show_last_column,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotRefreshPolicyDefinition {
+    pub refresh_on_open: bool,
+    pub preserve_formatting: bool,
+    pub background_query: bool,
+    pub missing_items_limit: Option<u32>,
+}
+
+impl From<&core::PivotRefreshPolicy> for JsPivotRefreshPolicyDefinition {
+    fn from(policy: &core::PivotRefreshPolicy) -> Self {
+        Self {
+            refresh_on_open: policy.refresh_on_open,
+            preserve_formatting: policy.preserve_formatting,
+            background_query: policy.background_query,
+            missing_items_limit: policy.missing_items_limit,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotRefreshStatusDefinition {
+    pub kind: String,
+    pub message: Option<String>,
+}
+
+impl From<&core::PivotRefreshStatus> for JsPivotRefreshStatusDefinition {
+    fn from(status: &core::PivotRefreshStatus) -> Self {
+        match status {
+            core::PivotRefreshStatus::NotRefreshed => Self {
+                kind: "notRefreshed".into(),
+                message: None,
+            },
+            core::PivotRefreshStatus::Succeeded => Self {
+                kind: "succeeded".into(),
+                message: None,
+            },
+            core::PivotRefreshStatus::Failed { message } => Self {
+                kind: "failed".into(),
+                message: Some(message.clone()),
+            },
+            core::PivotRefreshStatus::External => Self {
+                kind: "external".into(),
+                message: None,
+            },
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotTableDefinition {
+    pub id: u32,
+    pub name: String,
+    pub source: JsPivotSourceDefinition,
+    pub target: String,
+    pub rows: Vec<JsPivotFieldDefinition>,
+    pub columns: Vec<JsPivotFieldDefinition>,
+    pub page_fields: Vec<JsPivotFieldDefinition>,
+    pub filters: Vec<JsPivotFilterDefinition>,
+    pub calculated_fields: Vec<JsPivotCalculatedFieldDefinition>,
+    pub measures: Vec<JsPivotMeasureDefinition>,
+    pub groupings: Vec<JsPivotGroupingDefinition>,
+    pub layout: JsPivotLayoutDefinition,
+    pub style: JsPivotStyleDefinition,
+    pub refresh_policy: JsPivotRefreshPolicyDefinition,
+    pub overwrite_policy: String,
+    pub rendered_range: Option<String>,
+    pub refresh_status: JsPivotRefreshStatusDefinition,
+    pub extension_count: u32,
+}
+
+impl From<&core::PivotTable> for JsPivotTableDefinition {
+    fn from(pivot: &core::PivotTable) -> Self {
+        Self {
+            id: pivot.id,
+            name: pivot.name.clone(),
+            source: JsPivotSourceDefinition::from(&pivot.source),
+            target: pivot.target.to_string(),
+            rows: pivot.rows.iter().map(Into::into).collect(),
+            columns: pivot.columns.iter().map(Into::into).collect(),
+            page_fields: pivot.page_fields.iter().map(Into::into).collect(),
+            filters: pivot.filters.iter().map(Into::into).collect(),
+            calculated_fields: pivot.calculated_fields.iter().map(Into::into).collect(),
+            measures: pivot.measures.iter().map(Into::into).collect(),
+            groupings: pivot.groupings.iter().map(Into::into).collect(),
+            layout: JsPivotLayoutDefinition::from(&pivot.layout),
+            style: JsPivotStyleDefinition::from(&pivot.style),
+            refresh_policy: JsPivotRefreshPolicyDefinition::from(&pivot.refresh_policy),
+            overwrite_policy: pivot_overwrite_policy_to_string(pivot.overwrite_policy).into(),
+            rendered_range: pivot.rendered_range.map(|range| range.to_string()),
+            refresh_status: JsPivotRefreshStatusDefinition::from(&pivot.refresh_status),
+            extension_count: pivot.extensions.len() as u32,
+        }
+    }
+}
+
+fn pivot_sort_to_string(sort: core::PivotSort) -> &'static str {
+    match sort {
+        core::PivotSort::None => "none",
+        core::PivotSort::Ascending => "ascending",
+        core::PivotSort::Descending => "descending",
+    }
+}
+
+fn pivot_subtotal_to_string(subtotal: core::PivotSubtotal) -> &'static str {
+    match subtotal {
+        core::PivotSubtotal::Automatic => "automatic",
+        core::PivotSubtotal::None => "none",
+        core::PivotSubtotal::Sum => "sum",
+        core::PivotSubtotal::Count => "count",
+        core::PivotSubtotal::CountNumbers => "countNumbers",
+        core::PivotSubtotal::Average => "average",
+        core::PivotSubtotal::Min => "min",
+        core::PivotSubtotal::Max => "max",
+        core::PivotSubtotal::Product => "product",
+        core::PivotSubtotal::StdDev => "stdDev",
+        core::PivotSubtotal::StdDevP => "stdDevP",
+        core::PivotSubtotal::Var => "var",
+        core::PivotSubtotal::VarP => "varP",
+    }
+}
+
+fn pivot_aggregate_to_string(aggregate: core::PivotAggregate) -> &'static str {
+    match aggregate {
+        core::PivotAggregate::Sum => "sum",
+        core::PivotAggregate::Count => "count",
+        core::PivotAggregate::CountNumbers => "countNumbers",
+        core::PivotAggregate::Average => "average",
+        core::PivotAggregate::Max => "max",
+        core::PivotAggregate::Min => "min",
+        core::PivotAggregate::Product => "product",
+        core::PivotAggregate::StdDev => "stdDev",
+        core::PivotAggregate::StdDevP => "stdDevP",
+        core::PivotAggregate::Var => "var",
+        core::PivotAggregate::VarP => "varP",
+    }
+}
+
+fn pivot_filter_operator_to_string(operator: core::PivotFilterOperator) -> &'static str {
+    match operator {
+        core::PivotFilterOperator::Equals => "equals",
+        core::PivotFilterOperator::NotEquals => "notEquals",
+        core::PivotFilterOperator::LessThan => "lessThan",
+        core::PivotFilterOperator::LessThanOrEqual => "lessThanOrEqual",
+        core::PivotFilterOperator::GreaterThan => "greaterThan",
+        core::PivotFilterOperator::GreaterThanOrEqual => "greaterThanOrEqual",
+        core::PivotFilterOperator::BeginsWith => "beginsWith",
+        core::PivotFilterOperator::DoesNotBeginWith => "doesNotBeginWith",
+        core::PivotFilterOperator::EndsWith => "endsWith",
+        core::PivotFilterOperator::DoesNotEndWith => "doesNotEndWith",
+        core::PivotFilterOperator::Contains => "contains",
+        core::PivotFilterOperator::DoesNotContain => "doesNotContain",
+    }
+}
+
+fn pivot_date_group_unit_to_string(unit: core::PivotDateGroupUnit) -> &'static str {
+    match unit {
+        core::PivotDateGroupUnit::Seconds => "seconds",
+        core::PivotDateGroupUnit::Minutes => "minutes",
+        core::PivotDateGroupUnit::Hours => "hours",
+        core::PivotDateGroupUnit::Days => "days",
+        core::PivotDateGroupUnit::Months => "months",
+        core::PivotDateGroupUnit::Quarters => "quarters",
+        core::PivotDateGroupUnit::Years => "years",
+    }
+}
+
+fn pivot_layout_kind_to_string(kind: core::PivotLayoutKind) -> &'static str {
+    match kind {
+        core::PivotLayoutKind::Compact => "compact",
+        core::PivotLayoutKind::Outline => "outline",
+        core::PivotLayoutKind::Tabular => "tabular",
+    }
+}
+
+fn pivot_overwrite_policy_to_string(policy: core::PivotOverwritePolicy) -> &'static str {
+    match policy {
+        core::PivotOverwritePolicy::ClearOwnedRange => "clearOwnedRange",
+        core::PivotOverwritePolicy::Overwrite => "overwrite",
+        core::PivotOverwritePolicy::FailOnOccupied => "failOnOccupied",
+    }
+}
+
 /// Color representation. The `colorType` field indicates the variant:
 /// `"auto"`, `"rgb"`, `"argb"`, `"theme"`, or `"indexed"`.
 /// The `hex` field always contains the resolved 6- or 8-char hex string.
