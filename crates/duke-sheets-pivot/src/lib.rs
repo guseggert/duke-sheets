@@ -20,8 +20,8 @@ use duke_sheets_core::{
     MAX_ROWS,
 };
 use duke_sheets_formula::{
-    evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
-    StructuredReference,
+    evaluate, parse_formula, CellReference, EvaluationContext, FormulaExpr, FormulaValue,
+    StructuredRefSpecifier, StructuredReference,
 };
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -2891,6 +2891,13 @@ fn collect_calculated_item_formula_references(
                 references.insert(item_id);
             }
         }
+        FormulaExpr::CellRef(reference) => {
+            if let Some(name) = calculated_item_cell_reference_name(reference) {
+                if let Some(item_id) = formula_reference_item_id(snapshot, field_index, &name) {
+                    references.insert(item_id);
+                }
+            }
+        }
         FormulaExpr::BinaryOp { left, right, .. } => {
             collect_calculated_item_formula_references(left, snapshot, field_index, references);
             collect_calculated_item_formula_references(right, snapshot, field_index, references);
@@ -2920,7 +2927,6 @@ fn collect_calculated_item_formula_references(
         | FormulaExpr::Error(_)
         | FormulaExpr::Empty
         | FormulaExpr::StructuredRef(_)
-        | FormulaExpr::CellRef(_)
         | FormulaExpr::RangeRef(_)
         | FormulaExpr::ExternalRef(_) => {}
     }
@@ -2993,6 +2999,12 @@ fn calculated_item_formula_references_item(
         FormulaExpr::NameRef(name) | FormulaExpr::String(name) => {
             formula_reference_item_id(snapshot, field_index, name) == Some(item_id)
         }
+        FormulaExpr::CellRef(reference) => {
+            calculated_item_cell_reference_name(reference)
+                .as_deref()
+                .and_then(|name| formula_reference_item_id(snapshot, field_index, name))
+                == Some(item_id)
+        }
         FormulaExpr::BinaryOp { left, right, .. } => {
             calculated_item_formula_references_item(left, snapshot, field_index, item_id)
                 || calculated_item_formula_references_item(right, snapshot, field_index, item_id)
@@ -3015,7 +3027,6 @@ fn calculated_item_formula_references_item(
         | FormulaExpr::Error(_)
         | FormulaExpr::Empty
         | FormulaExpr::StructuredRef(_)
-        | FormulaExpr::CellRef(_)
         | FormulaExpr::RangeRef(_)
         | FormulaExpr::ExternalRef(_) => false,
     }
@@ -3045,6 +3056,13 @@ fn formula_reference_item_id(
             _ if value.to_string().eq_ignore_ascii_case(reference) => Some(index as u32),
             _ => None,
         })
+}
+
+fn calculated_item_cell_reference_name(reference: &CellReference) -> Option<String> {
+    reference
+        .sheet
+        .is_none()
+        .then(|| reference.address.to_a1_string())
 }
 
 fn grouped_date_field_index(
@@ -4870,7 +4888,24 @@ fn materialize_calculated_item_expr(
                 item.item
             )));
         }
-        FormulaExpr::CellRef(_) | FormulaExpr::RangeRef(_) | FormulaExpr::ExternalRef(_) => {
+        FormulaExpr::CellRef(reference) => {
+            if let Some(name) = calculated_item_cell_reference_name(reference) {
+                if formula_reference_item_id(context.snapshot, item.field_index, &name).is_some() {
+                    calculated_item_reference_expr(pivot_name, item, &name, context)?
+                } else {
+                    return Err(Error::other(format!(
+                        "pivot table {pivot_name} calculated item {} uses workbook references, which are not valid pivot item references",
+                        item.item
+                    )));
+                }
+            } else {
+                return Err(Error::other(format!(
+                    "pivot table {pivot_name} calculated item {} uses workbook references, which are not valid pivot item references",
+                    item.item
+                )));
+            }
+        }
+        FormulaExpr::RangeRef(_) | FormulaExpr::ExternalRef(_) => {
             return Err(Error::other(format!(
                 "pivot table {pivot_name} calculated item {} uses workbook references, which are not valid pivot item references",
                 item.item
@@ -9656,6 +9691,49 @@ mod tests {
     }
 
     #[test]
+    fn refreshes_column_calculated_items_with_cell_like_item_names() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Q1").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+        sheet.set_cell_value("A5", "West").unwrap();
+        sheet.set_cell_value("B5", "Q2").unwrap();
+        sheet.set_cell_value("C5", 3.0).unwrap();
+
+        let pivot = PivotTable::builder("CalculatedQuarterColumns")
+            .source_range(CellRange::parse("A1:C5").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .calculated_item("Quarter", "H1", "Q1+Q2")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F1"), "H1");
+        assert_eq!(text(&workbook, "G1"), "Q1");
+        assert_eq!(text(&workbook, "H1"), "Q2");
+        assert_eq!(text(&workbook, "I1"), "Grand Total");
+        assert_eq!(number(&workbook, "F2"), 15.0);
+        assert_eq!(number(&workbook, "F3"), 10.0);
+        assert_eq!(number(&workbook, "F4"), 25.0);
+    }
+
+    #[test]
     fn refreshes_dependent_calculated_items_out_of_order() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
@@ -9720,6 +9798,33 @@ mod tests {
         let error = workbook.refresh_pivots().unwrap_err().to_string();
         assert!(
             error.contains("calculated items contain a circular reference"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn refresh_rejects_cell_like_calculated_item_self_reference() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+
+        let pivot = PivotTable::builder("CellLikeCalculatedItemSelfReference")
+            .source_range(CellRange::parse("A1:B2").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .calculated_item("Region", "H1", "H1+1")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let error = workbook.refresh_pivots().unwrap_err().to_string();
+        assert!(
+            error.contains("calculated item H1 references itself"),
             "{error}"
         );
     }
