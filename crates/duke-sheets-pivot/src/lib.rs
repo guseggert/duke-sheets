@@ -94,7 +94,7 @@ struct PivotJob {
 #[derive(Debug)]
 struct PreparedPivotJob {
     job: PivotJob,
-    raw_snapshot: Arc<SourceSnapshot>,
+    snapshot: Arc<SourceSnapshot>,
 }
 
 fn refresh_pivots_inner(
@@ -107,13 +107,14 @@ fn refresh_pivots_inner(
         ..PivotRefreshStats::default()
     };
 
+    let date_1904 = workbook.settings().date_1904;
     let mut prepared = Vec::with_capacity(jobs.len());
     for job in jobs {
         if source_requires_external_refresh(&job.pivot.source) {
             mark_pivot_external(workbook, job.sheet_index, job.pivot_index);
             continue;
         }
-        let raw_snapshot = match snapshot_for_source(
+        let source_snapshot = match snapshot_for_source(
             workbook,
             job.sheet_index,
             &job.pivot.source,
@@ -131,12 +132,24 @@ fn refresh_pivots_inner(
                 return Err(error);
             }
         };
-        prepared.push(PreparedPivotJob { job, raw_snapshot });
+        let snapshot =
+            match transformed_snapshot_for_pivot(&job.pivot, source_snapshot, date_1904, cache) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    mark_pivot_failed(
+                        workbook,
+                        job.sheet_index,
+                        job.pivot_index,
+                        error.to_string(),
+                    );
+                    return Err(error);
+                }
+            };
+        prepared.push(PreparedPivotJob { job, snapshot });
     }
 
-    let date_1904 = workbook.settings().date_1904;
     let mut rendered = Vec::with_capacity(prepared.len());
-    for (job, output) in render_prepared_pivots(prepared, date_1904) {
+    for (job, output) in render_prepared_pivots(prepared) {
         match output {
             Ok(output) => {
                 stats.add_rendered(&output);
@@ -176,30 +189,23 @@ fn refresh_pivots_inner(
 
 fn render_prepared_pivots(
     prepared: Vec<PreparedPivotJob>,
-    date_1904: bool,
 ) -> Vec<(PivotJob, Result<RenderedPivot>)> {
     #[cfg(feature = "parallel")]
     {
         if prepared.len() > 1 {
             return prepared
                 .into_par_iter()
-                .map(|prepared| render_prepared_pivot(prepared, date_1904))
+                .map(render_prepared_pivot)
                 .collect();
         }
     }
 
-    prepared
-        .into_iter()
-        .map(|prepared| render_prepared_pivot(prepared, date_1904))
-        .collect()
+    prepared.into_iter().map(render_prepared_pivot).collect()
 }
 
-fn render_prepared_pivot(
-    prepared: PreparedPivotJob,
-    date_1904: bool,
-) -> (PivotJob, Result<RenderedPivot>) {
-    let PreparedPivotJob { job, raw_snapshot } = prepared;
-    let output = build_rendered_pivot_from_snapshot(&job.pivot, raw_snapshot, date_1904);
+fn render_prepared_pivot(prepared: PreparedPivotJob) -> (PivotJob, Result<RenderedPivot>) {
+    let PreparedPivotJob { job, snapshot } = prepared;
+    let output = build_rendered_pivot_from_snapshot(&job.pivot, snapshot);
     (job, output)
 }
 
@@ -300,26 +306,61 @@ fn build_rendered_pivot(
     cache: &mut PivotRuntimeCache,
     stats: &mut PivotRefreshStats,
 ) -> Result<RenderedPivot> {
-    let raw_snapshot =
+    let source_snapshot =
         snapshot_for_source(workbook, pivot_sheet_index, &pivot.source, cache, stats)?;
-    build_rendered_pivot_from_snapshot(pivot, raw_snapshot, workbook.settings().date_1904)
+    let snapshot = transformed_snapshot_for_pivot(
+        pivot,
+        source_snapshot,
+        workbook.settings().date_1904,
+        cache,
+    )?;
+    build_rendered_pivot_from_snapshot(pivot, snapshot)
 }
 
-fn build_rendered_pivot_from_snapshot(
+fn transformed_snapshot_for_pivot(
     pivot: &PivotTable,
-    raw_snapshot: Arc<SourceSnapshot>,
+    source_snapshot: CachedSourceSnapshot,
     date_1904: bool,
-) -> Result<RenderedPivot> {
+    cache: &mut PivotRuntimeCache,
+) -> Result<Arc<SourceSnapshot>> {
+    if pivot.calculated_fields.is_empty() && pivot.groupings.is_empty() {
+        return Ok(source_snapshot.snapshot);
+    }
+
+    let cache_key = TransformedSnapshotCacheKey::new(
+        source_snapshot.key,
+        &pivot.calculated_fields,
+        &pivot.groupings,
+        date_1904,
+    );
+    if let Some(snapshot) = cache.transformed_snapshots.get(&cache_key) {
+        return Ok(Arc::clone(snapshot));
+    }
+
     let calculated_snapshot = if pivot.calculated_fields.is_empty() {
-        raw_snapshot
+        source_snapshot.snapshot
     } else {
-        Arc::new(raw_snapshot.apply_calculated_fields(&pivot.name, &pivot.calculated_fields)?)
+        Arc::new(
+            source_snapshot
+                .snapshot
+                .apply_calculated_fields(&pivot.name, &pivot.calculated_fields)?,
+        )
     };
     let snapshot = if pivot.groupings.is_empty() {
         calculated_snapshot
     } else {
         Arc::new(calculated_snapshot.apply_groupings(&pivot.name, &pivot.groupings, date_1904)?)
     };
+    cache
+        .transformed_snapshots
+        .insert(cache_key, Arc::clone(&snapshot));
+    Ok(snapshot)
+}
+
+fn build_rendered_pivot_from_snapshot(
+    pivot: &PivotTable,
+    snapshot: Arc<SourceSnapshot>,
+) -> Result<RenderedPivot> {
     let plan = CompiledPivotPlan::compile(pivot, &snapshot)?;
     let mut aggregation = PivotAggregation::aggregate(&snapshot, &plan);
     let aggregate_restrictions = aggregation.apply_aggregate_filters(&plan);
@@ -446,6 +487,7 @@ struct PivotRuntimeCache {
     workbook_nonce: u64,
     structural_generation: u64,
     snapshots: AHashMap<SourceCacheKey, Arc<SourceSnapshot>>,
+    transformed_snapshots: AHashMap<TransformedSnapshotCacheKey, Arc<SourceSnapshot>>,
 }
 
 impl PivotRuntimeCache {
@@ -454,6 +496,7 @@ impl PivotRuntimeCache {
             workbook_nonce: workbook.nonce(),
             structural_generation: workbook.structural_generation(),
             snapshots: AHashMap::new(),
+            transformed_snapshots: AHashMap::new(),
         }
     }
 
@@ -469,9 +512,17 @@ impl PivotRuntimeCache {
             }
             snapshots.insert(key, snapshot);
         }
+        let mut transformed_snapshots = AHashMap::with_capacity(self.transformed_snapshots.len());
+        for (mut key, snapshot) in std::mem::take(&mut self.transformed_snapshots) {
+            if !key.rebase_untouched(workbook, touched_ranges) {
+                continue;
+            }
+            transformed_snapshots.insert(key, snapshot);
+        }
         self.workbook_nonce = workbook.nonce();
         self.structural_generation = workbook.structural_generation();
         self.snapshots = snapshots;
+        self.transformed_snapshots = transformed_snapshots;
     }
 }
 
@@ -513,6 +564,101 @@ impl SourceCacheKey {
                 .all(|key| key.rebase_untouched(workbook, touched_ranges)),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TransformedSnapshotCacheKey {
+    source: SourceCacheKey,
+    calculated_fields: Vec<PivotCalculatedField>,
+    groupings: Vec<PivotGroupingCacheKey>,
+    date_1904: bool,
+}
+
+impl TransformedSnapshotCacheKey {
+    fn new(
+        source: SourceCacheKey,
+        calculated_fields: &[PivotCalculatedField],
+        groupings: &[PivotGrouping],
+        date_1904: bool,
+    ) -> Self {
+        Self {
+            source,
+            calculated_fields: calculated_fields.to_vec(),
+            groupings: groupings.iter().map(PivotGroupingCacheKey::from).collect(),
+            date_1904,
+        }
+    }
+
+    fn rebase_untouched(
+        &mut self,
+        workbook: &Workbook,
+        touched_ranges: &[(usize, CellRange)],
+    ) -> bool {
+        self.source.rebase_untouched(workbook, touched_ranges)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum PivotGroupingCacheKey {
+    Number {
+        field: String,
+        start: Option<u64>,
+        end: Option<u64>,
+        interval: u64,
+    },
+    Date {
+        field: String,
+        units: Vec<duke_sheets_core::PivotDateGroupUnit>,
+    },
+    Manual {
+        field: String,
+        groups: Vec<PivotManualGroupCacheKey>,
+    },
+}
+
+impl From<&PivotGrouping> for PivotGroupingCacheKey {
+    fn from(grouping: &PivotGrouping) -> Self {
+        match grouping {
+            PivotGrouping::Number {
+                field,
+                start,
+                end,
+                interval,
+            } => Self::Number {
+                field: field.name.clone(),
+                start: start.map(f64_cache_key),
+                end: end.map(f64_cache_key),
+                interval: f64_cache_key(*interval),
+            },
+            PivotGrouping::Date { field, units } => Self::Date {
+                field: field.name.clone(),
+                units: units.clone(),
+            },
+            PivotGrouping::Manual { field, groups } => Self::Manual {
+                field: field.name.clone(),
+                groups: groups.iter().map(PivotManualGroupCacheKey::from).collect(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PivotManualGroupCacheKey {
+    name: String,
+    members: Vec<PivotValue>,
+}
+
+impl From<&PivotManualGroup> for PivotManualGroupCacheKey {
+    fn from(group: &PivotManualGroup) -> Self {
+        Self {
+            name: group.name.clone(),
+            members: group.members.clone(),
+        }
+    }
+}
+
+fn f64_cache_key(value: f64) -> u64 {
+    value.to_bits()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -581,25 +727,39 @@ impl ResolvedSource {
     }
 }
 
+#[derive(Debug, Clone)]
+struct CachedSourceSnapshot {
+    key: SourceCacheKey,
+    snapshot: Arc<SourceSnapshot>,
+}
+
 fn snapshot_for_source(
     workbook: &Workbook,
     pivot_sheet_index: usize,
     source: &PivotSource,
     cache: &mut PivotRuntimeCache,
     stats: &mut PivotRefreshStats,
-) -> Result<Arc<SourceSnapshot>> {
+) -> Result<CachedSourceSnapshot> {
     let resolved = resolve_source(workbook, pivot_sheet_index, source)?;
     let cache_key = resolved.cache_key();
 
     if let Some(snapshot) = cache.snapshots.get(&cache_key) {
         stats.cache_hits += 1;
-        return Ok(Arc::clone(snapshot));
+        return Ok(CachedSourceSnapshot {
+            key: cache_key,
+            snapshot: Arc::clone(snapshot),
+        });
     }
 
     let snapshot = Arc::new(SourceSnapshot::from_resolved(workbook, &resolved)?);
-    cache.snapshots.insert(cache_key, Arc::clone(&snapshot));
+    cache
+        .snapshots
+        .insert(cache_key.clone(), Arc::clone(&snapshot));
     stats.cache_misses += 1;
-    Ok(snapshot)
+    Ok(CachedSourceSnapshot {
+        key: cache_key,
+        snapshot,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -6644,6 +6804,66 @@ mod tests {
         assert_eq!(stats.cache_hits, 1);
         assert_eq!(number(&workbook, "E2"), 10.0);
         assert_eq!(number(&workbook, "H2"), 10.0);
+    }
+
+    #[test]
+    fn shared_transforms_hit_the_internal_snapshot_cache() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Units").unwrap();
+        sheet.set_cell_value("C1", "Price").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 2.0).unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 1.0).unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+
+        let source = CellRange::parse("A1:C3").unwrap();
+        let grouping = PivotGrouping::Manual {
+            field: "Region".into(),
+            groups: vec![PivotManualGroup::new("Coastal", ["East", "West"])],
+        };
+        let pivot_a = PivotTable::builder("PivotA")
+            .source_range(source)
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Revenue", "=Units*Price")
+            .grouping(grouping.clone())
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        let pivot_b = PivotTable::builder("PivotB")
+            .source_range(source)
+            .target_address("H1")
+            .unwrap()
+            .row("Region")
+            .calculated_field("Revenue", "=Units*Price")
+            .grouping(grouping)
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot_a).unwrap();
+        sheet.add_pivot_table(pivot_b).unwrap();
+
+        let stats = workbook.refresh_pivots().unwrap();
+
+        assert_eq!(stats.cache_misses, 1);
+        assert_eq!(stats.cache_hits, 1);
+        assert_eq!(text(&workbook, "E2"), "Coastal");
+        assert_eq!(number(&workbook, "F2"), 40.0);
+        assert_eq!(text(&workbook, "H2"), "Coastal");
+        assert_eq!(number(&workbook, "I2"), 40.0);
+
+        let cache = workbook
+            .take_pivot_runtime_cache()
+            .unwrap()
+            .downcast::<super::PivotRuntimeCache>()
+            .unwrap();
+        assert_eq!(cache.snapshots.len(), 1);
+        assert_eq!(cache.transformed_snapshots.len(), 1);
     }
 
     #[test]
