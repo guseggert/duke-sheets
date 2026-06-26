@@ -485,6 +485,139 @@ pub struct JsWorkbookConnectionOptions {
 }
 
 #[napi(object)]
+pub struct JsWorkbookConnectionDefinition {
+    pub id: u32,
+    pub name: String,
+    pub kind: String,
+    pub refreshed_version: u32,
+    pub refresh_on_load: bool,
+    pub background: bool,
+    pub save_data: bool,
+    pub connection: Option<String>,
+    pub command: Option<String>,
+    pub command_type: Option<u32>,
+    pub url: Option<String>,
+    pub xml: Option<bool>,
+    pub source_data: Option<bool>,
+    pub html_tables: Option<bool>,
+    pub html_format: Option<String>,
+    pub post: Option<String>,
+    pub edit_page: Option<String>,
+    pub source_file: Option<String>,
+    pub delimiter: Option<String>,
+    pub first_row: Option<u32>,
+    pub delimited: Option<bool>,
+    pub decimal: Option<String>,
+    pub thousands: Option<String>,
+    pub local: Option<bool>,
+    pub local_connection: Option<String>,
+    pub local_refresh: Option<bool>,
+    pub send_locale: Option<bool>,
+    pub row_drill_count: Option<u32>,
+}
+
+impl From<&WorkbookConnection> for JsWorkbookConnectionDefinition {
+    fn from(connection: &WorkbookConnection) -> Self {
+        let mut definition = Self {
+            id: connection.id,
+            name: connection.name.clone(),
+            kind: workbook_connection_kind_name(&connection.kind).into(),
+            refreshed_version: u32::from(connection.refreshed_version),
+            refresh_on_load: connection.refresh_on_load,
+            background: connection.background,
+            save_data: connection.save_data,
+            connection: None,
+            command: None,
+            command_type: None,
+            url: None,
+            xml: None,
+            source_data: None,
+            html_tables: None,
+            html_format: None,
+            post: None,
+            edit_page: None,
+            source_file: None,
+            delimiter: None,
+            first_row: None,
+            delimited: None,
+            decimal: None,
+            thousands: None,
+            local: None,
+            local_connection: None,
+            local_refresh: None,
+            send_locale: None,
+            row_drill_count: None,
+        };
+        match &connection.kind {
+            WorkbookConnectionKind::Database {
+                connection,
+                command,
+                command_type,
+            } => {
+                definition.connection = Some(connection.clone());
+                definition.command = command.clone();
+                definition.command_type = *command_type;
+            }
+            WorkbookConnectionKind::Olap {
+                local,
+                local_connection,
+                local_refresh,
+                send_locale,
+                row_drill_count,
+            } => {
+                definition.local = Some(*local);
+                definition.local_connection = local_connection.clone();
+                definition.local_refresh = Some(*local_refresh);
+                definition.send_locale = Some(*send_locale);
+                definition.row_drill_count = *row_drill_count;
+            }
+            WorkbookConnectionKind::Web {
+                url,
+                xml,
+                source_data,
+                html_tables,
+                html_format,
+                post,
+                edit_page,
+            } => {
+                definition.url = url.clone();
+                definition.xml = Some(*xml);
+                definition.source_data = Some(*source_data);
+                definition.html_tables = Some(*html_tables);
+                definition.html_format = html_format.clone();
+                definition.post = post.clone();
+                definition.edit_page = edit_page.clone();
+            }
+            WorkbookConnectionKind::Text {
+                source_file,
+                delimiter,
+                first_row,
+                delimited,
+                decimal,
+                thousands,
+            } => {
+                definition.source_file = source_file.clone();
+                definition.delimiter = delimiter.clone();
+                definition.first_row = Some(*first_row);
+                definition.delimited = Some(*delimited);
+                definition.decimal = decimal.clone();
+                definition.thousands = thousands.clone();
+            }
+        }
+        definition
+    }
+}
+
+fn workbook_connection_kind_name(kind: &WorkbookConnectionKind) -> &'static str {
+    match kind {
+        WorkbookConnectionKind::Database { .. } => "database",
+        WorkbookConnectionKind::Olap { .. } => "olap",
+        WorkbookConnectionKind::Web { .. } => "web",
+        WorkbookConnectionKind::Text { .. } => "text",
+    }
+}
+
+#[napi(object)]
 pub struct JsPivotRefreshStats {
     pub pivot_count: u32,
     pub pivots_refreshed: u32,
@@ -1855,6 +1988,39 @@ impl Workbook {
                 .iter()
                 .map(|connection| connection.name.clone())
                 .collect())
+        })
+    }
+
+    /// Workbook-level data connection definitions.
+    #[napi(getter)]
+    pub fn data_connections(&self) -> Result<Vec<JsWorkbookConnectionDefinition>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.data_connections().iter().map(Into::into).collect())
+        })
+    }
+
+    /// Get a workbook-level data connection by name.
+    #[napi(js_name = "getDataConnection")]
+    pub fn get_data_connection(
+        &self,
+        name: String,
+    ) -> Result<Option<JsWorkbookConnectionDefinition>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.data_connection_by_name(&name).map(Into::into))
+        })
+    }
+
+    /// Get a workbook-level data connection by id.
+    #[napi(js_name = "getDataConnectionById")]
+    pub fn get_data_connection_by_id(
+        &self,
+        id: u32,
+    ) -> Result<Option<JsWorkbookConnectionDefinition>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.data_connection_by_id(id).map(Into::into))
         })
     }
 

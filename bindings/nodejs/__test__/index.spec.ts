@@ -316,11 +316,52 @@ describe("PivotTables", () => {
       });
 
       expect(wb.dataConnectionNames).toEqual(["WebSales", "CsvSales", "CubeSales"]);
+      expect(wb.dataConnections.map((connection) => connection.kind)).toEqual([
+        "web",
+        "text",
+        "olap",
+      ]);
+      expect(wb.getDataConnection("CsvSales")).toMatchObject({
+        id: 9,
+        kind: "text",
+        sourceFile: "/data/sales.csv",
+        delimiter: "|",
+        firstRow: 2,
+        delimited: true,
+      });
+      expect(wb.getDataConnectionById(10)).toMatchObject({
+        name: "CubeSales",
+        kind: "olap",
+        local: true,
+        localConnection: "CubeFile=cube.cub",
+        localRefresh: true,
+        sendLocale: true,
+      });
+      expect(wb.getDataConnection("Missing")).toBeNull();
       wb.save(filePath);
 
       const roundtrip = Workbook.open(filePath);
       expect(roundtrip.dataConnectionCount).toBe(3);
       expect(roundtrip.dataConnectionNames).toEqual(["WebSales", "CsvSales", "CubeSales"]);
+      expect(roundtrip.dataConnections.map((connection) => connection.kind)).toEqual([
+        "web",
+        "text",
+        "olap",
+      ]);
+      expect(roundtrip.getDataConnection("WebSales")).toMatchObject({
+        id: 8,
+        kind: "web",
+        url: "https://example.test/sales.html",
+        sourceData: true,
+        htmlTables: true,
+      });
+      expect(roundtrip.getDataConnectionById(10)).toMatchObject({
+        name: "CubeSales",
+        kind: "olap",
+        local: true,
+        localConnection: "CubeFile=cube.cub",
+        sendLocale: true,
+      });
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

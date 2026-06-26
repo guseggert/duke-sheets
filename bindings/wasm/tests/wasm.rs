@@ -541,6 +541,28 @@ fn test_non_database_connections_roundtrip_from_options() {
             "CubeSales".to_string()
         ]
     );
+    let connections = Array::from(&wb.data_connections().unwrap());
+    assert_eq!(connections.length(), 3);
+    assert_eq!(get_string_field(&connections.get(0), "kind"), "web");
+    assert_eq!(get_string_field(&connections.get(1), "kind"), "text");
+    assert_eq!(get_string_field(&connections.get(2), "kind"), "olap");
+    let text_connection = wb.get_data_connection("CsvSales").unwrap();
+    assert_eq!(get_string_field(&text_connection, "kind"), "text");
+    assert_eq!(
+        get_string_field(&text_connection, "sourceFile"),
+        "/data/sales.csv"
+    );
+    assert_eq!(get_string_field(&text_connection, "delimiter"), "|");
+    assert_eq!(get_f64_field(&text_connection, "firstRow"), 2.0);
+    assert!(get_bool_field(&text_connection, "delimited"));
+    let olap_connection = wb.get_data_connection_by_id(10).unwrap();
+    assert_eq!(get_string_field(&olap_connection, "kind"), "olap");
+    assert_eq!(
+        get_string_field(&olap_connection, "localConnection"),
+        "CubeFile=cube.cub"
+    );
+    assert!(get_bool_field(&olap_connection, "sendLocale"));
+    assert!(wb.get_data_connection("Missing").unwrap().is_null());
 
     let bytes = wb.save_xlsx_bytes().unwrap();
     let roundtrip = Workbook::from_bytes(&bytes).unwrap();
@@ -553,6 +575,19 @@ fn test_non_database_connections_roundtrip_from_options() {
             "CubeSales".to_string()
         ]
     );
+    let roundtrip_connections = Array::from(&roundtrip.data_connections().unwrap());
+    assert_eq!(
+        get_string_field(&roundtrip_connections.get(0), "kind"),
+        "web"
+    );
+    assert_eq!(
+        get_string_field(&roundtrip.get_data_connection("WebSales").unwrap(), "url"),
+        "https://example.test/sales.html"
+    );
+    assert!(get_bool_field(
+        &roundtrip.get_data_connection_by_id(10).unwrap(),
+        "sendLocale"
+    ));
 }
 
 #[wasm_bindgen_test]

@@ -553,6 +553,37 @@ export interface DataConnectionOptions {
   saveData?: boolean;
 }
 
+export interface DataConnectionDefinition {
+  id: number;
+  name: string;
+  kind: "database" | "web" | "text" | "olap";
+  refreshedVersion: number;
+  refreshOnLoad: boolean;
+  background: boolean;
+  saveData: boolean;
+  connection?: string;
+  command?: string;
+  commandType?: number;
+  url?: string;
+  xml?: boolean;
+  sourceData?: boolean;
+  htmlTables?: boolean;
+  htmlFormat?: string;
+  post?: string;
+  editPage?: string;
+  sourceFile?: string;
+  delimiter?: string;
+  firstRow?: number;
+  delimited?: boolean;
+  decimal?: string;
+  thousands?: string;
+  local?: boolean;
+  localConnection?: string;
+  localRefresh?: boolean;
+  sendLocale?: boolean;
+  rowDrillCount?: number;
+}
+
 export interface PivotRefreshStats {
   pivotCount: number;
   pivotsRefreshed: number;
@@ -565,6 +596,9 @@ export interface PivotRefreshStats {
 export interface Workbook {
   readonly dataConnectionCount: number;
   readonly dataConnectionNames: string[];
+  readonly dataConnections: DataConnectionDefinition[];
+  getDataConnection(name: string): DataConnectionDefinition | null;
+  getDataConnectionById(id: number): DataConnectionDefinition | null;
   addDataConnection(options: DataConnectionOptions): void;
   refreshPivots(): PivotRefreshStats;
 }
@@ -1993,6 +2027,35 @@ impl Workbook {
             .iter()
             .map(|connection| connection.name.clone())
             .collect()
+    }
+
+    #[wasm_bindgen(getter, js_name = dataConnections)]
+    pub fn data_connections(&self) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        let connections = wb
+            .data_connections()
+            .iter()
+            .map(WasmWorkbookConnectionDefinition::from)
+            .collect::<Vec<_>>();
+        to_js_value(&connections)
+    }
+
+    #[wasm_bindgen(js_name = getDataConnection)]
+    pub fn get_data_connection(&self, name: &str) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        match wb.data_connection_by_name(name) {
+            Some(connection) => to_js_value(&WasmWorkbookConnectionDefinition::from(connection)),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = getDataConnectionById)]
+    pub fn get_data_connection_by_id(&self, id: u32) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        match wb.data_connection_by_id(id) {
+            Some(connection) => to_js_value(&WasmWorkbookConnectionDefinition::from(connection)),
+            None => Ok(JsValue::NULL),
+        }
     }
 
     #[wasm_bindgen(js_name = defineName)]

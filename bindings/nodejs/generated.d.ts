@@ -200,6 +200,12 @@ export declare class Workbook {
   get dataConnectionCount(): number
   /** Workbook-level data connection names. */
   get dataConnectionNames(): Array<string>
+  /** Workbook-level data connection definitions. */
+  get dataConnections(): Array<JsWorkbookConnectionDefinition>
+  /** Get a workbook-level data connection by name. */
+  getDataConnection(name: string): JsWorkbookConnectionDefinition | null
+  /** Get a workbook-level data connection by id. */
+  getDataConnectionById(id: number): JsWorkbookConnectionDefinition | null
   /**
    * Define a named range
    *
@@ -1866,6 +1872,37 @@ export interface JsView3D {
   heightPercent?: number
   perspective?: number
   rightAngleAxes?: boolean
+}
+
+export interface JsWorkbookConnectionDefinition {
+  id: number
+  name: string
+  kind: string
+  refreshedVersion: number
+  refreshOnLoad: boolean
+  background: boolean
+  saveData: boolean
+  connection?: string
+  command?: string
+  commandType?: number
+  url?: string
+  xml?: boolean
+  sourceData?: boolean
+  htmlTables?: boolean
+  htmlFormat?: string
+  post?: string
+  editPage?: string
+  sourceFile?: string
+  delimiter?: string
+  firstRow?: number
+  delimited?: boolean
+  decimal?: string
+  thousands?: string
+  local?: boolean
+  localConnection?: string
+  localRefresh?: boolean
+  sendLocale?: boolean
+  rowDrillCount?: number
 }
 
 export interface JsWorkbookConnectionOptions {

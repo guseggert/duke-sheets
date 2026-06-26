@@ -1231,6 +1231,86 @@ fn pivot_overwrite_policy_to_python(policy: PivotOverwritePolicy) -> &'static st
     }
 }
 
+fn workbook_connection_to_py(
+    py: Python<'_>,
+    connection: &WorkbookConnection,
+) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("id", connection.id)?;
+    dict.set_item("name", &connection.name)?;
+    dict.set_item("kind", workbook_connection_kind_to_python(&connection.kind))?;
+    dict.set_item("refreshed_version", connection.refreshed_version)?;
+    dict.set_item("refresh_on_load", connection.refresh_on_load)?;
+    dict.set_item("background", connection.background)?;
+    dict.set_item("save_data", connection.save_data)?;
+    match &connection.kind {
+        WorkbookConnectionKind::Database {
+            connection,
+            command,
+            command_type,
+        } => {
+            dict.set_item("connection", connection)?;
+            dict.set_item("command", command)?;
+            dict.set_item("command_type", command_type)?;
+        }
+        WorkbookConnectionKind::Olap {
+            local,
+            local_connection,
+            local_refresh,
+            send_locale,
+            row_drill_count,
+        } => {
+            dict.set_item("local", local)?;
+            dict.set_item("local_connection", local_connection)?;
+            dict.set_item("local_refresh", local_refresh)?;
+            dict.set_item("send_locale", send_locale)?;
+            dict.set_item("row_drill_count", row_drill_count)?;
+        }
+        WorkbookConnectionKind::Web {
+            url,
+            xml,
+            source_data,
+            html_tables,
+            html_format,
+            post,
+            edit_page,
+        } => {
+            dict.set_item("url", url)?;
+            dict.set_item("xml", xml)?;
+            dict.set_item("source_data", source_data)?;
+            dict.set_item("html_tables", html_tables)?;
+            dict.set_item("html_format", html_format)?;
+            dict.set_item("post", post)?;
+            dict.set_item("edit_page", edit_page)?;
+        }
+        WorkbookConnectionKind::Text {
+            source_file,
+            delimiter,
+            first_row,
+            delimited,
+            decimal,
+            thousands,
+        } => {
+            dict.set_item("source_file", source_file)?;
+            dict.set_item("delimiter", delimiter)?;
+            dict.set_item("first_row", first_row)?;
+            dict.set_item("delimited", delimited)?;
+            dict.set_item("decimal", decimal)?;
+            dict.set_item("thousands", thousands)?;
+        }
+    }
+    Ok(dict.into_any().unbind())
+}
+
+fn workbook_connection_kind_to_python(kind: &WorkbookConnectionKind) -> &'static str {
+    match kind {
+        WorkbookConnectionKind::Database { .. } => "database",
+        WorkbookConnectionKind::Olap { .. } => "olap",
+        WorkbookConnectionKind::Web { .. } => "web",
+        WorkbookConnectionKind::Text { .. } => "text",
+    }
+}
+
 fn build_workbook_connection_from_py(options: &Bound<'_, PyAny>) -> PyResult<WorkbookConnection> {
     let dict = options
         .downcast::<PyDict>()
@@ -2293,6 +2373,34 @@ impl PyWorkbook {
             .iter()
             .map(|connection| connection.name.clone())
             .collect())
+    }
+
+    /// Workbook-level data connection definitions.
+    #[getter]
+    fn data_connections(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        wb.data_connections()
+            .iter()
+            .map(|connection| workbook_connection_to_py(py, connection))
+            .collect()
+    }
+
+    /// Get a workbook-level data connection by name.
+    #[pyo3(signature = (name))]
+    fn get_data_connection(&self, name: &str, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        wb.data_connection_by_name(name)
+            .map(|connection| workbook_connection_to_py(py, connection))
+            .transpose()
+    }
+
+    /// Get a workbook-level data connection by id.
+    #[pyo3(signature = (id))]
+    fn get_data_connection_by_id(&self, id: u32, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        wb.data_connection_by_id(id)
+            .map(|connection| workbook_connection_to_py(py, connection))
+            .transpose()
     }
 
     /// Define a named range

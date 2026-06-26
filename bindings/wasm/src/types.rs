@@ -980,6 +980,161 @@ pub struct WasmWorkbookConnectionOptions {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookConnectionDefinition {
+    pub id: u32,
+    pub name: String,
+    pub kind: String,
+    pub refreshed_version: u8,
+    pub refresh_on_load: bool,
+    pub background: bool,
+    pub save_data: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_type: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xml: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_data: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html_tables: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edit_page: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delimiter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_row: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delimited: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thousands: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_connection: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_refresh: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_locale: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_drill_count: Option<u32>,
+}
+
+impl From<&core::WorkbookConnection> for WasmWorkbookConnectionDefinition {
+    fn from(connection: &core::WorkbookConnection) -> Self {
+        let mut definition = Self {
+            id: connection.id,
+            name: connection.name.clone(),
+            kind: workbook_connection_kind_name(&connection.kind).into(),
+            refreshed_version: connection.refreshed_version,
+            refresh_on_load: connection.refresh_on_load,
+            background: connection.background,
+            save_data: connection.save_data,
+            connection: None,
+            command: None,
+            command_type: None,
+            url: None,
+            xml: None,
+            source_data: None,
+            html_tables: None,
+            html_format: None,
+            post: None,
+            edit_page: None,
+            source_file: None,
+            delimiter: None,
+            first_row: None,
+            delimited: None,
+            decimal: None,
+            thousands: None,
+            local: None,
+            local_connection: None,
+            local_refresh: None,
+            send_locale: None,
+            row_drill_count: None,
+        };
+        match &connection.kind {
+            core::WorkbookConnectionKind::Database {
+                connection,
+                command,
+                command_type,
+            } => {
+                definition.connection = Some(connection.clone());
+                definition.command = command.clone();
+                definition.command_type = *command_type;
+            }
+            core::WorkbookConnectionKind::Olap {
+                local,
+                local_connection,
+                local_refresh,
+                send_locale,
+                row_drill_count,
+            } => {
+                definition.local = Some(*local);
+                definition.local_connection = local_connection.clone();
+                definition.local_refresh = Some(*local_refresh);
+                definition.send_locale = Some(*send_locale);
+                definition.row_drill_count = *row_drill_count;
+            }
+            core::WorkbookConnectionKind::Web {
+                url,
+                xml,
+                source_data,
+                html_tables,
+                html_format,
+                post,
+                edit_page,
+            } => {
+                definition.url = url.clone();
+                definition.xml = Some(*xml);
+                definition.source_data = Some(*source_data);
+                definition.html_tables = Some(*html_tables);
+                definition.html_format = html_format.clone();
+                definition.post = post.clone();
+                definition.edit_page = edit_page.clone();
+            }
+            core::WorkbookConnectionKind::Text {
+                source_file,
+                delimiter,
+                first_row,
+                delimited,
+                decimal,
+                thousands,
+            } => {
+                definition.source_file = source_file.clone();
+                definition.delimiter = delimiter.clone();
+                definition.first_row = Some(*first_row);
+                definition.delimited = Some(*delimited);
+                definition.decimal = decimal.clone();
+                definition.thousands = thousands.clone();
+            }
+        }
+        definition
+    }
+}
+
+fn workbook_connection_kind_name(kind: &core::WorkbookConnectionKind) -> &'static str {
+    match kind {
+        core::WorkbookConnectionKind::Database { .. } => "database",
+        core::WorkbookConnectionKind::Olap { .. } => "olap",
+        core::WorkbookConnectionKind::Web { .. } => "web",
+        core::WorkbookConnectionKind::Text { .. } => "text",
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmPivotRefreshStats {
     pub pivot_count: usize,
     pub pivots_refreshed: usize,

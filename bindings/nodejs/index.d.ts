@@ -10,6 +10,7 @@ import type {
   JsPivotTableDefinition,
   JsRow,
   JsRowsOptions,
+  JsWorkbookConnectionDefinition,
   Worksheet as _Worksheet,
 } from './generated'
 
@@ -269,6 +270,15 @@ declare module './generated' {
 
     /** Workbook-level data connection names. */
     readonly dataConnectionNames: string[]
+
+    /** Workbook-level data connection definitions. */
+    readonly dataConnections: JsWorkbookConnectionDefinition[]
+
+    /** Get a workbook-level data connection by name. */
+    getDataConnection(name: string): JsWorkbookConnectionDefinition | null
+
+    /** Get a workbook-level data connection by id. */
+    getDataConnectionById(id: number): JsWorkbookConnectionDefinition | null
 
     /** Add a workbook-level database connection. */
     addDataConnection(options: JsWorkbookConnectionOptions): void

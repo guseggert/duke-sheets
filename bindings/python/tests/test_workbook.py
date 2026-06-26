@@ -350,11 +350,42 @@ class TestPivotTables:
             }
         )
         assert wb.data_connection_names == ["WebSales", "CsvSales", "CubeSales"]
+        assert [connection["kind"] for connection in wb.data_connections] == [
+            "web",
+            "text",
+            "olap",
+        ]
+        assert wb.get_data_connection("CsvSales") == {
+            "id": 9,
+            "name": "CsvSales",
+            "kind": "text",
+            "refreshed_version": 7,
+            "refresh_on_load": False,
+            "background": False,
+            "save_data": False,
+            "source_file": "/data/sales.csv",
+            "delimiter": "|",
+            "first_row": 2,
+            "delimited": True,
+            "decimal": None,
+            "thousands": None,
+        }
+        assert wb.get_data_connection_by_id(10)["local_connection"] == "CubeFile=cube.cub"
+        assert wb.get_data_connection("Missing") is None
 
         wb.save(path)
         roundtrip = duke_sheets.Workbook.open(path)
         assert roundtrip.data_connection_count == 3
         assert roundtrip.data_connection_names == ["WebSales", "CsvSales", "CubeSales"]
+        assert [connection["kind"] for connection in roundtrip.data_connections] == [
+            "web",
+            "text",
+            "olap",
+        ]
+        assert roundtrip.get_data_connection("WebSales")["url"] == (
+            "https://example.test/sales.html"
+        )
+        assert roundtrip.get_data_connection_by_id(10)["send_locale"] is True
 
     def test_olap_pivot_roundtrip(self, temp_dir):
         """Should save and read OLAP pivot source metadata."""
