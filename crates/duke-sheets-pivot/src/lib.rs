@@ -5184,7 +5184,7 @@ fn render_without_column_fields(
     }
 
     if pivot.layout.show_row_grand_totals {
-        let mut row = grand_total_label_row(plan.row_indexes.len());
+        let mut row = grand_total_label_row(plan.row_indexes.len(), grand_total_caption(pivot));
         let context = ShowAsContext {
             snapshot,
             plan,
@@ -5271,7 +5271,7 @@ fn render_compact_without_column_fields(
     }
 
     if pivot.layout.show_row_grand_totals {
-        let mut row = vec![CellValue::string("Grand Total")];
+        let mut row = vec![CellValue::string(grand_total_caption(pivot))];
         let context = ShowAsContext {
             snapshot,
             plan,
@@ -5310,9 +5310,11 @@ fn render_with_column_fields(
     for slot in &column_slots {
         for measure in &plan.measures {
             let caption = match slot {
-                ColumnRenderSlot::GrandTotal => {
-                    grand_total_measure_caption(measure, plan.measures.len())
-                }
+                ColumnRenderSlot::GrandTotal => grand_total_measure_caption(
+                    grand_total_caption(pivot),
+                    measure,
+                    plan.measures.len(),
+                ),
                 _ => measure_column_caption(
                     &column_slot_label(snapshot, plan, slot),
                     measure,
@@ -5363,7 +5365,7 @@ fn render_with_column_fields(
     }
 
     if pivot.layout.show_row_grand_totals {
-        let mut row = grand_total_label_row(plan.row_indexes.len());
+        let mut row = grand_total_label_row(plan.row_indexes.len(), grand_total_caption(pivot));
         for slot in &column_slots {
             let context = ShowAsContext {
                 snapshot,
@@ -5401,9 +5403,11 @@ fn render_compact_with_column_fields(
     for slot in &column_slots {
         for measure in &plan.measures {
             let caption = match slot {
-                ColumnRenderSlot::GrandTotal => {
-                    grand_total_measure_caption(measure, plan.measures.len())
-                }
+                ColumnRenderSlot::GrandTotal => grand_total_measure_caption(
+                    grand_total_caption(pivot),
+                    measure,
+                    plan.measures.len(),
+                ),
                 _ => measure_column_caption(
                     &column_slot_label(snapshot, plan, slot),
                     measure,
@@ -5464,7 +5468,7 @@ fn render_compact_with_column_fields(
     }
 
     if pivot.layout.show_row_grand_totals {
-        let mut row = vec![CellValue::string("Grand Total")];
+        let mut row = vec![CellValue::string(grand_total_caption(pivot))];
         for slot in &column_slots {
             let context = ShowAsContext {
                 snapshot,
@@ -6163,12 +6167,20 @@ fn empty_cells(count: usize) -> impl Iterator<Item = CellValue> {
     std::iter::repeat_with(|| CellValue::Empty).take(count)
 }
 
-fn grand_total_label_row(label_width: usize) -> Vec<CellValue> {
+fn grand_total_caption(pivot: &PivotTable) -> &str {
+    pivot
+        .layout
+        .grand_total_caption
+        .as_deref()
+        .unwrap_or("Grand Total")
+}
+
+fn grand_total_label_row(label_width: usize, caption: &str) -> Vec<CellValue> {
     if label_width == 0 {
         Vec::new()
     } else {
         let mut row = vec![CellValue::Empty; label_width];
-        row[0] = CellValue::string("Grand Total");
+        row[0] = CellValue::string(caption);
         row
     }
 }
@@ -6603,11 +6615,15 @@ fn measure_column_caption(
     }
 }
 
-fn grand_total_measure_caption(measure: &PivotMeasure, measure_count: usize) -> String {
+fn grand_total_measure_caption(
+    caption: &str,
+    measure: &PivotMeasure,
+    measure_count: usize,
+) -> String {
     if measure_count == 1 {
-        "Grand Total".to_string()
+        caption.to_string()
     } else {
-        format!("Grand Total {}", measure.caption())
+        format!("{} {}", caption, measure.caption())
     }
 }
 
@@ -7133,6 +7149,44 @@ mod tests {
         assert_eq!(number(&workbook, "F4"), 17.0);
         assert_eq!(number(&workbook, "G4"), 5.0);
         assert_eq!(number(&workbook, "H4"), 22.0);
+    }
+
+    #[test]
+    fn refresh_applies_grand_total_caption() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Q1").unwrap();
+        sheet.set_cell_value("C4", 5.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.grand_total_caption = Some("Overall".to_string());
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .measure("Revenue", PivotAggregate::Sum)
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "H1"), "Overall");
+        assert_eq!(text(&workbook, "E4"), "Overall");
+        assert_eq!(number(&workbook, "H4"), 35.0);
     }
 
     #[cfg(feature = "parallel")]
