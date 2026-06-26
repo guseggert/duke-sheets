@@ -18,7 +18,7 @@ use duke_sheets_core::style::{
 };
 use duke_sheets_core::workbook::Workbook;
 use duke_sheets_core::worksheet::Worksheet;
-use duke_sheets_core::{CellValue, PivotAggregate, PivotValue};
+use duke_sheets_core::{CellValue, PivotAggregate, PivotField, PivotFilter, PivotValue};
 use duke_sheets_pivot::{
     FormatPivotCache, FormatPivotCacheField, FormatPivotPlan, FormatPivotSource,
 };
@@ -597,7 +597,7 @@ fn write_pivot_sheet_records(
 
         if pivot.rows.len() != 1
             || pivot.columns.len() > 1
-            || !pivot.page_fields.is_empty()
+            || pivot.page_fields.len() > 1
             || pivot.measures.len() != 1
         {
             return Err(XlsError::InvalidFormat(format!(
@@ -648,9 +648,10 @@ fn write_classic_pivot_view_records(
     if !pivot.columns.is_empty() {
         write_sxivd_record(stream, cache, &pivot.columns)?;
     }
+    write_sxpi_records(stream, pivot, cache)?;
     write_sxdi_record(stream, pivot, cache)?;
-    write_sxli_collection(stream, cache, &pivot.rows)?;
-    write_sxli_collection(stream, cache, &pivot.columns)?;
+    write_sxli_collection(stream, pivot, cache, &pivot.rows)?;
+    write_sxli_collection(stream, pivot, cache, &pivot.columns)?;
     Ok(())
 }
 
@@ -664,11 +665,21 @@ fn write_sxview_record_biff8(
     } else {
         pivot.layout.data_caption.as_str()
     };
-    let row_line_count = axis_line_count(cache, &pivot.rows)?;
-    let column_line_count = axis_line_count(cache, &pivot.columns)?;
+    let row_line_count = axis_line_count(pivot, cache, &pivot.rows)?;
+    let column_line_count = axis_line_count(pivot, cache, &pivot.columns)?;
     let row_axis_count = pivot.rows.len() as u16;
     let column_axis_count = pivot.columns.len() as u16;
-    let first_row = checked_biff8_row(pivot.target.row, "pivot target row")?;
+    let page_axis_count = checked_u16(pivot.page_fields.len(), "pivot page field count")?;
+    let (page_rows, _) = page_field_area_size(pivot);
+    let first_row_offset = if page_rows == 0 {
+        0
+    } else {
+        page_rows.saturating_add(1)
+    };
+    let first_row = checked_biff8_row(
+        pivot.target.row.saturating_add(first_row_offset),
+        "pivot target row",
+    )?;
     let first_col = checked_biff8_col(pivot.target.col, "pivot target column")?;
     let first_header_row = first_row.saturating_add(1);
     let first_data_row = first_header_row.saturating_add(column_axis_count);
@@ -695,11 +706,11 @@ fn write_sxview_record_biff8(
     body.extend_from_slice(&(cache.fields.len() as u16).to_le_bytes());
     body.extend_from_slice(&row_axis_count.to_le_bytes());
     body.extend_from_slice(&column_axis_count.to_le_bytes());
-    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&page_axis_count.to_le_bytes());
     body.extend_from_slice(&(pivot.measures.len() as u16).to_le_bytes());
     body.extend_from_slice(&row_line_count.to_le_bytes());
     body.extend_from_slice(&column_line_count.to_le_bytes());
-    let view_flags: u16 = if column_axis_count > 0 {
+    let view_flags: u16 = if column_axis_count > 0 || page_axis_count > 0 {
         0x020B
     } else {
         0x0003
@@ -796,6 +807,30 @@ fn write_sxivd_record(
     Ok(())
 }
 
+fn write_sxpi_records(
+    stream: &mut Vec<u8>,
+    pivot: &duke_sheets_core::PivotTable,
+    cache: &FormatPivotCache,
+) -> XlsResult<()> {
+    for field in &pivot.page_fields {
+        let field_index = cache.field_index(&field.field.name).ok_or_else(|| {
+            XlsError::InvalidFormat(format!(
+                "pivot references unknown page field {}",
+                field.field.name
+            ))
+        })?;
+        let selected_item =
+            selected_page_item_index(pivot, &field.field.name, &cache.fields[field_index])
+                .unwrap_or(0xFFFF);
+        let mut body = Vec::new();
+        body.extend_from_slice(&checked_u16(field_index, "pivot page field index")?.to_le_bytes());
+        body.extend_from_slice(&selected_item.to_le_bytes());
+        body.extend_from_slice(&1u16.to_le_bytes());
+        write_biff_record(stream, 0x00B6, &body);
+    }
+    Ok(())
+}
+
 fn write_sxdi_record(
     stream: &mut Vec<u8>,
     pivot: &duke_sheets_core::PivotTable,
@@ -831,14 +866,15 @@ fn write_sxdi_record(
 
 fn write_sxli_collection(
     stream: &mut Vec<u8>,
+    pivot: &duke_sheets_core::PivotTable,
     cache: &FormatPivotCache,
-    fields: &[duke_sheets_core::PivotField],
+    fields: &[PivotField],
 ) -> XlsResult<()> {
     let mut body = Vec::new();
     if fields.is_empty() {
         write_sxli_item(&mut body, &[], false);
     } else {
-        let tuples = axis_item_tuples(cache, fields)?;
+        let tuples = axis_item_tuples(pivot, cache, fields)?;
         for tuple in &tuples {
             write_sxli_item(&mut body, tuple, false);
         }
@@ -861,21 +897,25 @@ fn write_sxli_item(body: &mut Vec<u8>, item_indexes: &[u16], grand_total: bool) 
 }
 
 fn axis_line_count(
+    pivot: &duke_sheets_core::PivotTable,
     cache: &FormatPivotCache,
-    fields: &[duke_sheets_core::PivotField],
+    fields: &[PivotField],
 ) -> XlsResult<u16> {
     if fields.is_empty() {
         return Ok(1);
     }
     checked_u16(
-        axis_item_tuples(cache, fields)?.len().saturating_add(1),
+        axis_item_tuples(pivot, cache, fields)?
+            .len()
+            .saturating_add(1),
         "pivot line count",
     )
 }
 
 fn axis_item_tuples(
+    pivot: &duke_sheets_core::PivotTable,
     cache: &FormatPivotCache,
-    fields: &[duke_sheets_core::PivotField],
+    fields: &[PivotField],
 ) -> XlsResult<Vec<Vec<u16>>> {
     let indexes = fields
         .iter()
@@ -892,6 +932,9 @@ fn axis_item_tuples(
     let mut seen = HashSet::new();
     let mut tuples = Vec::new();
     for row in 0..cache.row_count {
+        if !row_matches_page_filters(pivot, cache, row)? {
+            continue;
+        }
         let tuple = indexes
             .iter()
             .map(|index| {
@@ -904,6 +947,87 @@ fn axis_item_tuples(
         }
     }
     Ok(tuples)
+}
+
+fn row_matches_page_filters(
+    pivot: &duke_sheets_core::PivotTable,
+    cache: &FormatPivotCache,
+    row: usize,
+) -> XlsResult<bool> {
+    for field in &pivot.page_fields {
+        let field_index = cache.field_index(&field.field.name).ok_or_else(|| {
+            XlsError::InvalidFormat(format!(
+                "pivot references unknown page field {}",
+                field.field.name
+            ))
+        })?;
+        let Some(selected_item) =
+            selected_page_item_index(pivot, &field.field.name, &cache.fields[field_index])
+        else {
+            continue;
+        };
+        let row_item = cache.fields[field_index]
+            .item_ids
+            .get(row)
+            .copied()
+            .unwrap_or(0);
+        if row_item != u32::from(selected_item) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn selected_page_item_index(
+    pivot: &duke_sheets_core::PivotTable,
+    field_name: &str,
+    field: &FormatPivotCacheField,
+) -> Option<u16> {
+    let PivotFilter::FieldItems { allowed_items, .. } = pivot.filters.iter().find(|filter| {
+        matches!(
+            filter,
+            PivotFilter::FieldItems {
+                field: filter_field,
+                ..
+            } if filter_field.name.eq_ignore_ascii_case(field_name)
+        )
+    })?
+    else {
+        return None;
+    };
+
+    let [item] = allowed_items.as_slice() else {
+        return None;
+    };
+    field
+        .shared_items
+        .iter()
+        .position(|candidate| candidate == item)
+        .and_then(|index| u16::try_from(index).ok())
+}
+
+fn page_field_area_size(pivot: &duke_sheets_core::PivotTable) -> (u32, u32) {
+    let count = pivot.page_fields.len();
+    if count == 0 {
+        return (0, 0);
+    }
+
+    let wrap = pivot.layout.page_wrap as usize;
+    let row_count = if wrap == 0 {
+        count
+    } else if pivot.layout.page_over_then_down {
+        (count + wrap - 1) / wrap
+    } else {
+        wrap.min(count)
+    };
+    let col_count = if wrap == 0 {
+        1
+    } else if pivot.layout.page_over_then_down {
+        wrap.min(count)
+    } else {
+        (count + row_count - 1) / row_count
+    };
+    (row_count as u32, col_count as u32)
 }
 
 fn checked_u16(value: usize, label: &str) -> XlsResult<u16> {

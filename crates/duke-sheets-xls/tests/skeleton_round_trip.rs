@@ -8,7 +8,7 @@
 
 use std::io::Cursor;
 
-use duke_sheets_core::{CellRange, PivotAggregate, PivotTable, Workbook};
+use duke_sheets_core::{CellRange, PivotAggregate, PivotFilter, PivotTable, Workbook};
 use duke_sheets_xls::{cfb::CompoundFile, XlsReader, XlsWriter};
 
 fn add_test_pivot(wb: &mut Workbook) {
@@ -72,6 +72,31 @@ fn add_column_pivot(wb: &mut Workbook) {
         .unwrap()
         .row("Region")
         .column("Quarter")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
+fn add_page_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Salesperson").unwrap();
+    ws.set_cell_value("C1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", "Ada").unwrap();
+    ws.set_cell_value("C2", 10.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", "Ben").unwrap();
+    ws.set_cell_value("C3", 20.0).unwrap();
+
+    let pivot = PivotTable::builder("RevenueByRep")
+        .source_range(CellRange::parse("A1:C3").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Region")
+        .page("Salesperson")
+        .filter(PivotFilter::field_items("Salesperson", ["Ada"]))
         .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
         .build()
         .unwrap();
@@ -194,6 +219,40 @@ fn semantic_pivot_tables_emit_xls_column_axis_records() {
         .filter_map(|(record_type, payload)| (*record_type == 0x00B5).then_some(payload.len()))
         .collect::<Vec<_>>();
     assert_eq!(sxli_lengths, vec![30, 30]);
+}
+
+#[test]
+fn semantic_pivot_tables_emit_xls_page_axis_records() {
+    let mut wb = Workbook::new();
+    add_page_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let workbook_records = records_with_payload(&workbook);
+
+    let sxview = workbook_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00B0).then_some(payload))
+        .expect("SXVIEW record");
+    assert_eq!(u16::from_le_bytes(sxview[22..24].try_into().unwrap()), 3);
+    assert_eq!(u16::from_le_bytes(sxview[24..26].try_into().unwrap()), 1);
+    assert_eq!(u16::from_le_bytes(sxview[26..28].try_into().unwrap()), 0);
+    assert_eq!(u16::from_le_bytes(sxview[28..30].try_into().unwrap()), 1);
+
+    let sxvd_axes = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00B1).then(|| u16::from_le_bytes(payload[0..2].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sxvd_axes, vec![0x0001, 0x0004, 0x0008]);
+
+    let page_fields = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00B6).then_some(payload.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(page_fields, vec![vec![1, 0, 0, 0, 1, 0]]);
 }
 
 fn record_types(stream: &[u8]) -> Vec<u16> {
