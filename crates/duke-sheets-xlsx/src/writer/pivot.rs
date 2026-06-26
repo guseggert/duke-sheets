@@ -890,6 +890,9 @@ fn show_as_base_field_ref(measure: &PivotMeasure) -> Option<&PivotFieldRef> {
         | PivotShowAs::PercentOfGrandTotal
         | PivotShowAs::PercentOfRowTotal
         | PivotShowAs::PercentOfColumnTotal
+        | PivotShowAs::PercentOfParentRowTotal
+        | PivotShowAs::PercentOfParentColumnTotal
+        | PivotShowAs::PercentOfParentTotal { .. }
         | PivotShowAs::Index => None,
     }
 }
@@ -2604,9 +2607,10 @@ fn write_data_fields(
             let base_item = base_item.to_string();
             data_field.push_attribute(("baseItem", base_item.as_str()));
         }
-        if let Some(rank_show_as) = rank_show_as_name(&measure.show_as) {
+        if let Some(x14_show_as) = x14_show_as_name(&measure.show_as) {
+            let source_field = x14_show_as_source_field_index(&measure.show_as, fields)?;
             w.write_event(Event::Start(data_field))?;
-            write_data_field_ext(w, rank_show_as)?;
+            write_data_field_ext_with_source(w, x14_show_as, source_field)?;
             w.write_event(Event::End(BytesEnd::new("dataField")))?;
         } else {
             w.write_event(Event::Empty(data_field))?;
@@ -3075,7 +3079,11 @@ fn label_custom_filter_value(operator: PivotFilterOperator, value: &str) -> Stri
     }
 }
 
-fn write_data_field_ext(w: &mut XmlWriter, pivot_show_as: &str) -> XlsxResult<()> {
+fn write_data_field_ext_with_source(
+    w: &mut XmlWriter,
+    pivot_show_as: &str,
+    source_field: Option<usize>,
+) -> XlsxResult<()> {
     w.write_event(Event::Start(BytesStart::new("extLst")))?;
 
     let mut ext = BytesStart::new("ext");
@@ -3085,6 +3093,10 @@ fn write_data_field_ext(w: &mut XmlWriter, pivot_show_as: &str) -> XlsxResult<()
     let mut data_field = BytesStart::new("x14:dataField");
     data_field.push_attribute(("xmlns:x14", NS_SPREADSHEET_X14));
     data_field.push_attribute(("pivotShowAs", pivot_show_as));
+    let source_field = source_field.map(|field| field.to_string());
+    if let Some(source_field) = source_field.as_deref() {
+        data_field.push_attribute(("sourceField", source_field));
+    }
     w.write_event(Event::Empty(data_field))?;
 
     w.write_event(Event::End(BytesEnd::new("ext")))?;
@@ -3118,6 +3130,9 @@ fn is_writable_show_as(show_as: &PivotShowAs) -> bool {
             | PivotShowAs::PercentOfGrandTotal
             | PivotShowAs::PercentOfRowTotal
             | PivotShowAs::PercentOfColumnTotal
+            | PivotShowAs::PercentOfParentRowTotal
+            | PivotShowAs::PercentOfParentColumnTotal
+            | PivotShowAs::PercentOfParentTotal { .. }
             | PivotShowAs::Index
             | PivotShowAs::RunningTotal { .. }
             | PivotShowAs::DifferenceFrom { .. }
@@ -3133,6 +3148,9 @@ fn show_data_as_name(show_as: &PivotShowAs) -> Option<&'static str> {
         PivotShowAs::PercentOfGrandTotal => Some("percentOfTotal"),
         PivotShowAs::PercentOfRowTotal => Some("percentOfRow"),
         PivotShowAs::PercentOfColumnTotal => Some("percentOfCol"),
+        PivotShowAs::PercentOfParentRowTotal
+        | PivotShowAs::PercentOfParentColumnTotal
+        | PivotShowAs::PercentOfParentTotal { .. } => None,
         PivotShowAs::Index => Some("index"),
         PivotShowAs::RunningTotal { .. } => Some("runTotal"),
         PivotShowAs::DifferenceFrom { .. } => Some("difference"),
@@ -3141,12 +3159,28 @@ fn show_data_as_name(show_as: &PivotShowAs) -> Option<&'static str> {
     }
 }
 
-fn rank_show_as_name(show_as: &PivotShowAs) -> Option<&'static str> {
+fn x14_show_as_name(show_as: &PivotShowAs) -> Option<&'static str> {
     match show_as {
+        PivotShowAs::PercentOfParentTotal { .. } => Some("percentOfParent"),
+        PivotShowAs::PercentOfParentRowTotal => Some("percentOfParentRow"),
+        PivotShowAs::PercentOfParentColumnTotal => Some("percentOfParentCol"),
         PivotShowAs::RankAscending { .. } => Some("rankAscending"),
         PivotShowAs::RankDescending { .. } => Some("rankDescending"),
         _ => None,
     }
+}
+
+fn x14_show_as_source_field_index(
+    show_as: &PivotShowAs,
+    fields: &[CacheField],
+) -> XlsxResult<Option<usize>> {
+    let PivotShowAs::PercentOfParentTotal { base_field } = show_as else {
+        return Ok(None);
+    };
+    let base_field = &base_field.name;
+    field_index(fields, base_field).map(Some).ok_or_else(|| {
+        XlsxError::InvalidFormat(format!("pivot base field not found: {base_field}"))
+    })
 }
 
 fn show_as_base_field_index(

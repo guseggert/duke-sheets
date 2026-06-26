@@ -2560,6 +2560,8 @@ struct CompiledPivotPlan {
     axis_filters: Vec<CompiledFilter>,
     aggregate_filters: Vec<CompiledAggregateFilter>,
     calculated_items: Vec<CompiledCalculatedItem>,
+    row_parent_total_positions: AHashSet<usize>,
+    column_parent_total_positions: AHashSet<usize>,
     error_caption: Option<String>,
     missing_caption: Option<String>,
     asterisk_totals: bool,
@@ -2616,6 +2618,14 @@ impl CompiledPivotPlan {
             )?;
             measure_indexes.push(field_index(snapshot, &measure.field.name, &pivot.name)?);
         }
+        let (row_parent_total_positions, column_parent_total_positions) =
+            parent_total_subtotal_positions(
+                &pivot.name,
+                snapshot,
+                &row_indexes,
+                &column_indexes,
+                &pivot.measures,
+            )?;
 
         let mut filters = Vec::new();
         let mut aggregate_filters = Vec::new();
@@ -2690,6 +2700,8 @@ impl CompiledPivotPlan {
             axis_filters,
             aggregate_filters,
             calculated_items,
+            row_parent_total_positions,
+            column_parent_total_positions,
             error_caption: pivot
                 .layout
                 .show_error
@@ -3145,8 +3157,11 @@ fn validate_show_as(
         | PivotShowAs::PercentOfGrandTotal
         | PivotShowAs::PercentOfRowTotal
         | PivotShowAs::PercentOfColumnTotal
+        | PivotShowAs::PercentOfParentRowTotal
+        | PivotShowAs::PercentOfParentColumnTotal
         | PivotShowAs::Index => Ok(()),
         PivotShowAs::RunningTotal { base_field }
+        | PivotShowAs::PercentOfParentTotal { base_field }
         | PivotShowAs::RankAscending { base_field }
         | PivotShowAs::RankDescending { base_field } => validate_base_field(
             pivot_name,
@@ -3183,6 +3198,51 @@ fn validate_show_as(
             Ok(())
         }
     }
+}
+
+fn parent_total_subtotal_positions(
+    pivot_name: &str,
+    snapshot: &SourceSnapshot,
+    row_indexes: &[usize],
+    column_indexes: &[usize],
+    measures: &[PivotMeasure],
+) -> Result<(AHashSet<usize>, AHashSet<usize>)> {
+    let mut row_positions = AHashSet::new();
+    let mut column_positions = AHashSet::new();
+
+    for measure in measures {
+        match &measure.show_as {
+            PivotShowAs::PercentOfParentRowTotal => {
+                row_positions.extend(0..row_indexes.len().saturating_sub(1));
+            }
+            PivotShowAs::PercentOfParentColumnTotal => {
+                column_positions.extend(0..column_indexes.len().saturating_sub(1));
+            }
+            PivotShowAs::PercentOfParentTotal { base_field } => {
+                let field_index = field_index(snapshot, &base_field.name, pivot_name)?;
+                if let Some(position) = row_indexes.iter().position(|index| *index == field_index)
+                {
+                    row_positions.insert(position);
+                } else if let Some(position) =
+                    column_indexes.iter().position(|index| *index == field_index)
+                {
+                    column_positions.insert(position);
+                }
+            }
+            PivotShowAs::Normal
+            | PivotShowAs::PercentOfGrandTotal
+            | PivotShowAs::PercentOfRowTotal
+            | PivotShowAs::PercentOfColumnTotal
+            | PivotShowAs::Index
+            | PivotShowAs::RunningTotal { .. }
+            | PivotShowAs::DifferenceFrom { .. }
+            | PivotShowAs::PercentDifferenceFrom { .. }
+            | PivotShowAs::RankAscending { .. }
+            | PivotShowAs::RankDescending { .. } => {}
+        }
+    }
+
+    Ok((row_positions, column_positions))
 }
 
 fn validate_base_field(
@@ -8356,12 +8416,15 @@ fn subtotal_positions_to_emit(
 }
 
 fn row_subtotal_prefixes(plan: &CompiledPivotPlan, row_key: &[u32]) -> Vec<Vec<u32>> {
-    subtotal_prefixes(row_key, |position| row_subtotal_enabled(plan, position))
+    subtotal_prefixes(row_key, |position| {
+        row_subtotal_enabled(plan, position) || plan.row_parent_total_positions.contains(&position)
+    })
 }
 
 fn column_subtotal_prefixes(plan: &CompiledPivotPlan, column_key: &[u32]) -> Vec<Vec<u32>> {
     subtotal_prefixes(column_key, |position| {
         column_subtotal_enabled(plan, position)
+            || plan.column_parent_total_positions.contains(&position)
     })
 }
 
@@ -8998,6 +9061,23 @@ fn finalize_measure_with_context(
         PivotShowAs::PercentOfColumnTotal => {
             percentage_cell(state.finalize_number(aggregate), column_total)
         }
+        PivotShowAs::PercentOfParentRowTotal => percentage_cell(
+            state.finalize_number(aggregate),
+            parent_row_total_value(context, measure_index, aggregate),
+        ),
+        PivotShowAs::PercentOfParentColumnTotal => percentage_cell(
+            state.finalize_number(aggregate),
+            parent_column_total_value(context, measure_index, aggregate),
+        ),
+        PivotShowAs::PercentOfParentTotal { base_field } => percentage_cell(
+            state.finalize_number(aggregate),
+            parent_base_field_total_value(
+                context,
+                base_field.name.as_str(),
+                measure_index,
+                aggregate,
+            ),
+        ),
         PivotShowAs::Index => index_cell(
             state.finalize_number(aggregate),
             row_total,
@@ -9109,6 +9189,104 @@ fn index_cell(
 
 fn optional_number_cell(value: Option<f64>) -> CellValue {
     value.map(CellValue::Number).unwrap_or(CellValue::Empty)
+}
+
+fn parent_row_total_value(
+    context: &ShowAsContext<'_>,
+    measure_index: usize,
+    aggregate: PivotAggregate,
+) -> Option<f64> {
+    let Some(row_key) = context.row_key else {
+        return state_number(grand_total_states(context.aggregation), measure_index, aggregate);
+    };
+    let states = if row_key.len() <= 1 {
+        match context.column_key {
+            Some(column_key) if !column_key.is_empty() => {
+                column_total_states(context.aggregation, column_key)
+            }
+            None => Some(grand_total_states(context.aggregation)),
+            Some(_) => Some(grand_total_states(context.aggregation)),
+        }
+    } else {
+        parent_row_prefix_states(context, &row_key[..row_key.len() - 1])
+    }?;
+    state_number(states, measure_index, aggregate)
+}
+
+fn parent_column_total_value(
+    context: &ShowAsContext<'_>,
+    measure_index: usize,
+    aggregate: PivotAggregate,
+) -> Option<f64> {
+    let Some(column_key) = context.column_key else {
+        return state_number(grand_total_states(context.aggregation), measure_index, aggregate);
+    };
+    let states = if column_key.len() <= 1 {
+        match context.row_key {
+            Some(row_key) if !row_key.is_empty() => row_total_states(context.aggregation, row_key),
+            None => Some(grand_total_states(context.aggregation)),
+            Some(_) => Some(grand_total_states(context.aggregation)),
+        }
+    } else {
+        parent_column_prefix_states(context, &column_key[..column_key.len() - 1])
+    }?;
+    state_number(states, measure_index, aggregate)
+}
+
+fn parent_base_field_total_value(
+    context: &ShowAsContext<'_>,
+    base_field: &str,
+    measure_index: usize,
+    aggregate: PivotAggregate,
+) -> Option<f64> {
+    match show_as_axis(context, base_field)? {
+        ShowAsAxis::Row(position) => {
+            let row_key = context.row_key?;
+            let prefix = row_key.get(..=position)?;
+            let states = if prefix.len() == row_key.len() {
+                states_for_row_axis_key(context, row_key)
+            } else {
+                parent_row_prefix_states(context, prefix)
+            }?;
+            state_number(states, measure_index, aggregate)
+        }
+        ShowAsAxis::Column(position) => {
+            let column_key = context.column_key?;
+            let prefix = column_key.get(..=position)?;
+            let states = if prefix.len() == column_key.len() {
+                states_for_column_axis_key(context, column_key)
+            } else {
+                parent_column_prefix_states(context, prefix)
+            }?;
+            state_number(states, measure_index, aggregate)
+        }
+    }
+}
+
+fn parent_row_prefix_states<'a>(
+    context: &'a ShowAsContext<'_>,
+    row_prefix: &[u32],
+) -> Option<&'a Vec<AggregateState>> {
+    match context.column_key {
+        Some(column_key) if !column_key.is_empty() => {
+            subtotal_group_states(context.aggregation, row_prefix, column_key)
+        }
+        None => row_subtotal_states(context.aggregation, row_prefix),
+        Some(_) => row_subtotal_states(context.aggregation, row_prefix),
+    }
+}
+
+fn parent_column_prefix_states<'a>(
+    context: &'a ShowAsContext<'_>,
+    column_prefix: &[u32],
+) -> Option<&'a Vec<AggregateState>> {
+    match context.row_key {
+        Some(row_key) if !row_key.is_empty() => {
+            subtotal_group_states(context.aggregation, row_key, column_prefix)
+        }
+        None => column_subtotal_states(context.aggregation, column_prefix),
+        Some(_) => column_subtotal_states(context.aggregation, column_prefix),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -12506,6 +12684,111 @@ mod tests {
         assert_close(number(&workbook, "Q3"), 0.625);
         assert_close(number(&workbook, "P4"), 1.0);
         assert_close(number(&workbook, "Q4"), 1.0);
+    }
+
+    #[test]
+    fn refreshes_parent_percentage_show_as_calculations() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Year").unwrap();
+        sheet.set_cell_value("D1", "Quarter").unwrap();
+        sheet.set_cell_value("E1", "Revenue").unwrap();
+        let rows = [
+            ("East", "Retail", "2024", "Q1", 10.0),
+            ("East", "Online", "2024", "Q1", 30.0),
+            ("East", "Retail", "2024", "Q2", 15.0),
+            ("East", "Online", "2024", "Q2", 45.0),
+            ("West", "Retail", "2024", "Q1", 20.0),
+            ("West", "Online", "2024", "Q1", 10.0),
+            ("West", "Retail", "2024", "Q2", 30.0),
+            ("West", "Online", "2024", "Q2", 20.0),
+            ("East", "Online", "2025", "Q1", 60.0),
+            ("West", "Online", "2025", "Q1", 40.0),
+        ];
+        for (index, (region, segment, year, quarter, revenue)) in rows.into_iter().enumerate() {
+            let row = (index + 2) as u32;
+            sheet.set_cell_value_at(row - 1, 0, region).unwrap();
+            sheet.set_cell_value_at(row - 1, 1, segment).unwrap();
+            sheet.set_cell_value_at(row - 1, 2, year).unwrap();
+            sheet.set_cell_value_at(row - 1, 3, quarter).unwrap();
+            sheet.set_cell_value_at(row - 1, 4, revenue).unwrap();
+        }
+
+        let source = CellRange::parse("A1:E11").unwrap();
+        let parent_row = PivotTable::builder("ParentRow")
+            .source_range(source)
+            .target_address("G1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .column("Quarter")
+            .pivot_measure(
+                PivotMeasure::new("Revenue", PivotAggregate::Sum)
+                    .with_show_as(PivotShowAs::PercentOfParentRowTotal),
+            )
+            .build()
+            .unwrap();
+        let parent_total = PivotTable::builder("ParentTotal")
+            .source_range(source)
+            .target_address("L1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .pivot_measure(
+                PivotMeasure::new("Revenue", PivotAggregate::Sum).with_show_as(
+                    PivotShowAs::PercentOfParentTotal {
+                        base_field: "Region".into(),
+                    },
+                ),
+            )
+            .build()
+            .unwrap();
+        let parent_column = PivotTable::builder("ParentColumn")
+            .source_range(source)
+            .target_address("O1")
+            .unwrap()
+            .row("Region")
+            .column("Year")
+            .column("Quarter")
+            .pivot_measure(
+                PivotMeasure::new("Revenue", PivotAggregate::Sum)
+                    .with_show_as(PivotShowAs::PercentOfParentColumnTotal),
+            )
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(parent_row).unwrap();
+        sheet.add_pivot_table(parent_total).unwrap();
+        sheet.add_pivot_table(parent_column).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "G3"), "Online");
+        assert_close(number(&workbook, "H3"), 90.0 / 100.0);
+        assert_close(number(&workbook, "I3"), 45.0 / 60.0);
+        assert_close(number(&workbook, "J3"), 135.0 / 160.0);
+        assert_eq!(text(&workbook, "G4"), "Retail");
+        assert_close(number(&workbook, "H4"), 10.0 / 100.0);
+        assert_close(number(&workbook, "I4"), 15.0 / 60.0);
+        assert_close(number(&workbook, "J4"), 25.0 / 160.0);
+
+        assert_eq!(text(&workbook, "L3"), "Online");
+        assert_close(number(&workbook, "M3"), 135.0 / 160.0);
+        assert_eq!(text(&workbook, "L4"), "Retail");
+        assert_close(number(&workbook, "M4"), 25.0 / 160.0);
+
+        assert_eq!(text(&workbook, "O1"), "Region");
+        assert_close(number(&workbook, "P2"), 40.0 / 100.0);
+        assert_close(number(&workbook, "Q2"), 60.0 / 100.0);
+        assert_close(number(&workbook, "R2"), 100.0 / 280.0);
+        assert_close(number(&workbook, "S2"), 60.0 / 60.0);
+        assert_close(number(&workbook, "T2"), 60.0 / 280.0);
+        assert_close(number(&workbook, "P3"), 30.0 / 80.0);
+        assert_close(number(&workbook, "Q3"), 50.0 / 80.0);
+        assert_close(number(&workbook, "R3"), 80.0 / 280.0);
+        assert_close(number(&workbook, "S3"), 40.0 / 40.0);
+        assert_close(number(&workbook, "T3"), 40.0 / 280.0);
     }
 
     #[test]

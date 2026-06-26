@@ -5943,6 +5943,88 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_pivot_parent_show_as() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Year").unwrap();
+        sheet.set_cell_value("D1", "Quarter").unwrap();
+        sheet.set_cell_value("E1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", "2024").unwrap();
+        sheet.set_cell_value("D2", "Q1").unwrap();
+        sheet.set_cell_value("E2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", "2024").unwrap();
+        sheet.set_cell_value("D3", "Q2").unwrap();
+        sheet.set_cell_value("E3", 30.0).unwrap();
+
+        let pivot = PivotTable::builder("ParentShowAs")
+            .source_range(CellRange::parse("A1:E3").unwrap())
+            .target_address("G1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .column("Year")
+            .column("Quarter")
+            .pivot_measure(
+                PivotMeasure::new("Revenue", PivotAggregate::Sum)
+                    .with_name("% Parent Row")
+                    .with_show_as(PivotShowAs::PercentOfParentRowTotal),
+            )
+            .pivot_measure(
+                PivotMeasure::new("Revenue", PivotAggregate::Sum)
+                    .with_name("% Parent Column")
+                    .with_show_as(PivotShowAs::PercentOfParentColumnTotal),
+            )
+            .pivot_measure(
+                PivotMeasure::new("Revenue", PivotAggregate::Sum)
+                    .with_name("% Parent Region")
+                    .with_show_as(PivotShowAs::PercentOfParentTotal {
+                        base_field: "Region".into(),
+                    }),
+            )
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"pivotShowAs="percentOfParentRow""#));
+        assert!(pivot_xml.contains(r#"pivotShowAs="percentOfParentCol""#));
+        assert!(pivot_xml.contains(r#"pivotShowAs="percentOfParent""#));
+        assert!(pivot_xml.contains(r#"sourceField="0""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("ParentShowAs")
+            .unwrap();
+        assert_eq!(pivot.measures.len(), 3);
+        assert_eq!(
+            pivot.measures[0].show_as,
+            PivotShowAs::PercentOfParentRowTotal
+        );
+        assert_eq!(
+            pivot.measures[1].show_as,
+            PivotShowAs::PercentOfParentColumnTotal
+        );
+        match &pivot.measures[2].show_as {
+            PivotShowAs::PercentOfParentTotal { base_field } => {
+                assert_eq!(base_field.name, "Region");
+            }
+            other => panic!("unexpected show-as mode: {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_writer_round_trips_pivot_calculated_fields() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();

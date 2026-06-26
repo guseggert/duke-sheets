@@ -617,6 +617,15 @@ pub enum PivotShowAs {
     PercentOfRowTotal,
     /// Percent of each column total.
     PercentOfColumnTotal,
+    /// Percent of the parent row item total.
+    PercentOfParentRowTotal,
+    /// Percent of the parent column item total.
+    PercentOfParentColumnTotal,
+    /// Percent of the parent item total for a base field.
+    PercentOfParentTotal {
+        /// Base field whose item defines the parent total.
+        base_field: PivotFieldRef,
+    },
     /// Index contribution relative to row, column, and grand totals.
     Index,
     /// Running total within a base field.

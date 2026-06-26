@@ -311,6 +311,21 @@ impl From<&core::PivotShowAs> for JsPivotShowAsDefinition {
                 base_field: None,
                 base_item: None,
             },
+            core::PivotShowAs::PercentOfParentRowTotal => Self {
+                kind: "percentOfParentRowTotal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfParentColumnTotal => Self {
+                kind: "percentOfParentColumnTotal".into(),
+                base_field: None,
+                base_item: None,
+            },
+            core::PivotShowAs::PercentOfParentTotal { base_field } => Self {
+                kind: "percentOfParentTotal".into(),
+                base_field: Some(base_field.name.clone()),
+                base_item: None,
+            },
             core::PivotShowAs::Index => Self {
                 kind: "index".into(),
                 base_field: None,

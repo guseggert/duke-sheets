@@ -1020,6 +1020,16 @@ fn parse_pivot_show_as(
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        "percentOfParentRowTotal" | "percentOfParentRow" | "percent_of_parent_row_total"
+        | "percent_of_parent_row" => PivotShowAs::PercentOfParentRowTotal,
+        "percentOfParentColumnTotal" | "percentOfParentCol"
+        | "percent_of_parent_column_total" | "percent_of_parent_col" => {
+            PivotShowAs::PercentOfParentColumnTotal
+        }
+        "percentOfParentTotal" | "percentOfParent" | "percent_of_parent_total"
+        | "percent_of_parent" => PivotShowAs::PercentOfParentTotal {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
         "index" => PivotShowAs::Index,
         "runningTotal" | "runTotal" => PivotShowAs::RunningTotal {
             base_field: require_pivot_base_field(value, base_field)?.into(),
@@ -1239,6 +1249,16 @@ fn pivot_show_as_to_py(py: Python<'_>, show_as: &PivotShowAs) -> PyResult<PyObje
         }
         PivotShowAs::PercentOfColumnTotal => {
             dict.set_item("kind", "percent_of_column_total")?;
+        }
+        PivotShowAs::PercentOfParentRowTotal => {
+            dict.set_item("kind", "percent_of_parent_row_total")?;
+        }
+        PivotShowAs::PercentOfParentColumnTotal => {
+            dict.set_item("kind", "percent_of_parent_column_total")?;
+        }
+        PivotShowAs::PercentOfParentTotal { base_field } => {
+            dict.set_item("kind", "percent_of_parent_total")?;
+            dict.set_item("base_field", &base_field.name)?;
         }
         PivotShowAs::Index => {
             dict.set_item("kind", "index")?;

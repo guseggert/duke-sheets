@@ -824,10 +824,13 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         };
                         if let Some(pivot_show_as) = attr_string(&e, b"pivotShowAs") {
                             if let Some(current) = current_data_field {
+                                let source_field_index = attr_u32(&e, b"sourceField")
+                                    .map(|value| value as usize)
+                                    .or(current.base_field_index);
                                 if let Some(show_as) = parse_x14_show_as(
                                     &pivot_show_as,
                                     cache,
-                                    current.base_field_index,
+                                    source_field_index,
                                 ) {
                                     if let Some(measure) = measures.get_mut(current.measure_index) {
                                         measure.show_as = show_as;
@@ -1859,10 +1862,17 @@ fn parse_show_as(
 fn parse_x14_show_as(
     value: &str,
     cache: &PivotCacheDefinition,
-    base_field_index: Option<usize>,
+    source_field_index: Option<usize>,
 ) -> Option<PivotShowAs> {
     match value {
-        "rankAscending" | "rankDescending" => parse_show_as(value, cache, base_field_index, None),
+        "percentOfParent" => Some(PivotShowAs::PercentOfParentTotal {
+            base_field: duke_sheets_core::PivotFieldRef::new(
+                cache.fields.get(source_field_index?)?.name.clone(),
+            ),
+        }),
+        "percentOfParentRow" => Some(PivotShowAs::PercentOfParentRowTotal),
+        "percentOfParentCol" => Some(PivotShowAs::PercentOfParentColumnTotal),
+        "rankAscending" | "rankDescending" => parse_show_as(value, cache, source_field_index, None),
         _ => None,
     }
 }

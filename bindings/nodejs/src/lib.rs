@@ -1575,6 +1575,15 @@ fn parse_pivot_show_as(
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        "percentOfParentRowTotal" | "percentOfParentRow" => {
+            PivotShowAs::PercentOfParentRowTotal
+        }
+        "percentOfParentColumnTotal" | "percentOfParentCol" => {
+            PivotShowAs::PercentOfParentColumnTotal
+        }
+        "percentOfParentTotal" | "percentOfParent" => PivotShowAs::PercentOfParentTotal {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
         "index" => PivotShowAs::Index,
         "runningTotal" | "runTotal" => PivotShowAs::RunningTotal {
             base_field: require_pivot_base_field(value, base_field)?.into(),

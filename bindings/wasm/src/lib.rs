@@ -204,7 +204,7 @@ export interface PivotMeasureOptions {
   field: string;
   aggregate?: "sum" | "count" | "countNumbers" | "average" | "max" | "min" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
   name?: string;
-  showAs?: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "index" | "runningTotal" | "runTotal" | "differenceFrom" | "difference" | "percentDifferenceFrom" | "percentDiff" | "rankAscending" | "rankDescending";
+  showAs?: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "percentOfParentRowTotal" | "percentOfParentRow" | "percentOfParentColumnTotal" | "percentOfParentCol" | "percentOfParentTotal" | "percentOfParent" | "index" | "runningTotal" | "runTotal" | "differenceFrom" | "difference" | "percentDifferenceFrom" | "percentDiff" | "rankAscending" | "rankDescending";
   baseField?: string;
   baseItem?: string | number | boolean;
   numberFormat?: string;
@@ -522,7 +522,7 @@ export interface PivotFieldDefinition {
 }
 
 export interface PivotShowAsDefinition {
-  kind: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "index" | "runningTotal" | "differenceFrom" | "percentDifferenceFrom" | "rankAscending" | "rankDescending";
+  kind: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "percentOfParentRowTotal" | "percentOfParentColumnTotal" | "percentOfParentTotal" | "index" | "runningTotal" | "differenceFrom" | "percentDifferenceFrom" | "rankAscending" | "rankDescending";
   baseField?: string;
   baseItem?: PivotValue;
 }
@@ -1673,6 +1673,15 @@ fn parse_pivot_show_as(
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
+        "percentOfParentRowTotal" | "percentOfParentRow" => {
+            PivotShowAs::PercentOfParentRowTotal
+        }
+        "percentOfParentColumnTotal" | "percentOfParentCol" => {
+            PivotShowAs::PercentOfParentColumnTotal
+        }
+        "percentOfParentTotal" | "percentOfParent" => PivotShowAs::PercentOfParentTotal {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
         "index" => PivotShowAs::Index,
         "runningTotal" | "runTotal" => PivotShowAs::RunningTotal {
             base_field: require_pivot_base_field(value, base_field)?.into(),
