@@ -909,6 +909,7 @@ dependencies = [
  "log",
  "md-5",
  "pretty_assertions",
+ "ssfmt",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

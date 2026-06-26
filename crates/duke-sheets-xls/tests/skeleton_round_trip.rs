@@ -9,8 +9,8 @@
 use std::io::Cursor;
 
 use duke_sheets_core::{
-    CellRange, PivotAggregate, PivotFieldRef, PivotFilter, PivotGrouping, PivotSource, PivotStyle,
-    PivotTable, PivotValue, PivotValuesAxis, Workbook,
+    CellRange, PivotAggregate, PivotDateGroupUnit, PivotFieldRef, PivotFilter, PivotGrouping,
+    PivotSource, PivotStyle, PivotTable, PivotValue, PivotValuesAxis, Workbook,
 };
 use duke_sheets_xls::{cfb::CompoundFile, XlsReader, XlsWriter};
 
@@ -245,6 +245,34 @@ fn add_numeric_grouped_pivot(wb: &mut Workbook) {
             start: Some(0.0),
             end: Some(60.0),
             interval: 10.0,
+        })
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
+fn add_date_grouped_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Date").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 43831.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 43862.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 43891.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("A5", 43922.0).unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+
+    let pivot = PivotTable::builder("MonthlyRevenue")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Date")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Date {
+            field: PivotFieldRef::new("Date"),
+            units: vec![PivotDateGroupUnit::Months],
         })
         .build()
         .unwrap();
@@ -587,6 +615,123 @@ fn semantic_pivot_tables_emit_xls_numeric_grouping_records() {
 }
 
 #[test]
+fn semantic_pivot_tables_emit_xls_date_grouping_records() {
+    let mut wb = Workbook::new();
+    add_date_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = records_with_payload(&cache);
+
+    let date_sxfdb = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "Date")
+        .expect("Date SXFDB record");
+    let flags = u16::from_le_bytes(date_sxfdb[0..2].try_into().unwrap());
+    assert_eq!(
+        flags, 0x0909,
+        "source date SXFDB should link to the derived grouped field"
+    );
+    assert_eq!(
+        i16::from_le_bytes(date_sxfdb[2..4].try_into().unwrap()),
+        2,
+        "source date SXFDB should point at the derived month field"
+    );
+    assert_eq!(
+        u16::from_le_bytes(date_sxfdb[12..14].try_into().unwrap()),
+        4,
+        "source date SXFDB should count source date atoms"
+    );
+
+    let month_sxfdb = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "Months (Date)")
+        .expect("derived month SXFDB record");
+    assert_eq!(
+        u16::from_le_bytes(month_sxfdb[0..2].try_into().unwrap()),
+        0x0011,
+        "derived date SXFDB should use Excel's grouped date flags"
+    );
+    assert_eq!(
+        i16::from_le_bytes(month_sxfdb[4..6].try_into().unwrap()),
+        0,
+        "derived date SXFDB should link back to the source Date field"
+    );
+    assert_eq!(
+        u16::from_le_bytes(month_sxfdb[6..8].try_into().unwrap()),
+        14,
+        "derived month field should include boundary items plus twelve months"
+    );
+
+    let sxrng_position = cache_records
+        .iter()
+        .position(|(record_type, _)| *record_type == 0x00D8)
+        .expect("SXRng record");
+    let sxrng = &cache_records[sxrng_position].1;
+    assert_eq!(
+        u16::from_le_bytes(sxrng[0..2].try_into().unwrap()),
+        0x0017,
+        "SXRng should encode automatic month date grouping"
+    );
+
+    let date_source_atoms = cache_records[..sxrng_position]
+        .iter()
+        .filter(|(record_type, _)| *record_type == 0x00CE)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        date_source_atoms.len(),
+        4,
+        "source date field should carry the four date atoms as SXDTR records"
+    );
+
+    let group_items = cache_records[..sxrng_position]
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00CD).then(|| xls_unicode_string_at(payload, 0))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        group_items
+            .windows(4)
+            .any(|values| values == ["Jan", "Feb", "Mar", "Apr"]),
+        "derived month field should carry Excel-style month labels"
+    );
+
+    let date_group_tail = cache_records[sxrng_position + 1..]
+        .iter()
+        .take(3)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        date_group_tail
+            .iter()
+            .map(|(record_type, _)| *record_type)
+            .collect::<Vec<_>>(),
+        vec![0x00CE, 0x00CE, 0x00CC],
+        "derived date grouping should emit start/end/interval after SXRng"
+    );
+    assert_eq!(
+        date_group_tail[0].1,
+        vec![0xE4, 0x07, 0x01, 0x00, 0x01, 0, 0, 0],
+        "date grouping start should be 2020-01-01"
+    );
+    assert_eq!(
+        date_group_tail[1].1,
+        vec![0xE4, 0x07, 0x04, 0x00, 0x01, 0, 0, 0],
+        "date grouping end should preserve the max source date"
+    );
+    assert_eq!(
+        date_group_tail[2].1,
+        vec![0x01, 0x00],
+        "date grouping interval should be one unit"
+    );
+}
+
+#[test]
 fn reads_writer_xls_numeric_grouping_semantics() {
     let mut wb = Workbook::new();
     add_numeric_grouped_pivot(&mut wb);
@@ -611,6 +756,27 @@ fn reads_writer_xls_numeric_grouping_semantics() {
             assert_eq!(*interval, 10.0);
         }
         other => panic!("expected numeric grouping, got {other:?}"),
+    }
+}
+
+#[test]
+fn reads_writer_xls_date_grouping_semantics() {
+    let mut wb = Workbook::new();
+    add_date_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    let pivot = &ws.pivot_tables()[0];
+
+    assert_eq!(pivot.name, "MonthlyRevenue");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Date { field, units } => {
+            assert_eq!(field.name, "Date");
+            assert_eq!(*units, vec![PivotDateGroupUnit::Months]);
+        }
+        other => panic!("expected date grouping, got {other:?}"),
     }
 }
 
@@ -936,6 +1102,44 @@ fn lo_can_open_numeric_grouped_pivot_workbook() {
     });
     let _ = std::fs::remove_file(&path);
     let count = outcome.expect("LO must open the numeric-grouped pivot workbook");
+    assert_eq!(count, 1);
+}
+
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_open_date_grouped_pivot_workbook() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    add_date_grouped_pivot(&mut wb);
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    std::fs::create_dir_all("/tmp/duke-sheets-urp").expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("/tmp/duke-sheets-urp/duke_date_grouped_pivot_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write to shared dir");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<i32, String> = rt.block_on(async {
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let count = wb
+            .sheet_count()
+            .await
+            .map_err(|e| format!("sheet_count: {e}"))?;
+        Ok(count)
+    });
+    let _ = std::fs::remove_file(&path);
+    let count = outcome.expect("LO must open the date-grouped pivot workbook");
     assert_eq!(count, 1);
 }
 

@@ -18,8 +18,8 @@ use duke_sheets_core::validation::{DataValidation, ValidationOperator, Validatio
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
 use duke_sheets_core::PivotValuesAxis;
 use duke_sheets_core::{
-    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotFilter, PivotGrouping,
-    PivotTable, Workbook,
+    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotDateGroupUnit, PivotFilter,
+    PivotGrouping, PivotTable, Workbook,
 };
 use duke_sheets_excel_com::{ChainStep, SheetRef};
 use excel_com_protocol::ResponseData;
@@ -198,6 +198,35 @@ fn xls_numeric_grouped_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xls_date_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Date").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 43831.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 43862.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 43891.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("A5", 43922.0).unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+    let pivot = PivotTable::builder("MonthlyRevenue")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Date")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Date {
+            field: "Date".into(),
+            units: vec![PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xls_with_native_pivot_table() {
@@ -344,6 +373,37 @@ fn excel_preserves_xls_pivot_numeric_grouping() {
             .count()
             == 3,
         "Excel should preserve SXNum start/end/interval records after SXRng"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_pivot_date_grouping() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_date_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("MonthlyRevenue")
+        .unwrap();
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Date { field, units } => {
+            assert_eq!(field.name, "Date");
+            assert_eq!(*units, vec![PivotDateGroupUnit::Months]);
+        }
+        other => panic!("expected date grouping, got {other:?}"),
+    }
+
+    let cache = xls_cfb_stream(&excel_bytes, "/_SX_DB_CUR/0001");
+    let sxrng = xls_record_payloads(&cache)
+        .into_iter()
+        .find_map(|(record_type, payload)| (record_type == 0x00D8).then_some(payload))
+        .expect("Excel should preserve an SXRng grouping record");
+    assert_eq!(
+        u16::from_le_bytes(sxrng[0..2].try_into().unwrap()),
+        0x0017,
+        "Excel should preserve month date grouping flags"
     );
 }
 

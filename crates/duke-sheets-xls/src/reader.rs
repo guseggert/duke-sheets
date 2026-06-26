@@ -15,9 +15,9 @@ use duke_sheets_core::validation::{
 use duke_sheets_core::worksheet::{Selection, SheetProtection};
 use duke_sheets_core::{
     CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, PivotAggregate,
-    PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField, PivotField, PivotFieldRef,
-    PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshStatus, PivotSource, PivotStyle,
-    PivotTable, PivotValue, PivotValuesAxis, Style, Workbook,
+    PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField, PivotDateGroupUnit, PivotField,
+    PivotFieldRef, PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshStatus, PivotSource,
+    PivotStyle, PivotTable, PivotValue, PivotValuesAxis, Style, Workbook,
 };
 
 use crate::biff::formula::token_parser::ParsedToken;
@@ -107,6 +107,7 @@ struct XlsPivotCacheField {
     formula: Option<String>,
     grouping: Option<PivotGrouping>,
     shared_items: Vec<PivotValue>,
+    group_base_field: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -1097,6 +1098,7 @@ impl XlsReader {
                     Self::attach_pending_pivot_grouping(
                         &mut current_field,
                         &mut pending_group_range,
+                        &fields,
                     );
                     Self::attach_pending_pivot_formula(
                         &mut current_field,
@@ -1111,6 +1113,7 @@ impl XlsReader {
                         formula: None,
                         grouping: None,
                         shared_items: Vec::new(),
+                        group_base_field: Self::parse_sxfdb_field_index(&rec.data, 4),
                     });
                 }
                 0x00F8 => {
@@ -1151,6 +1154,7 @@ impl XlsReader {
                         Self::attach_pending_pivot_grouping(
                             &mut current_field,
                             &mut pending_group_range,
+                            &fields,
                         );
                     }
                 }
@@ -1159,7 +1163,7 @@ impl XlsReader {
             }
         }
 
-        Self::attach_pending_pivot_grouping(&mut current_field, &mut pending_group_range);
+        Self::attach_pending_pivot_grouping(&mut current_field, &mut pending_group_range, &fields);
         Self::attach_pending_pivot_formula(&mut current_field, &mut pending_formula, &fields);
         if let Some(field) = current_field.take() {
             fields.push(field);
@@ -1331,7 +1335,11 @@ impl XlsReader {
                     .get_or_insert(fields.len() as u32);
             } else if *index >= 0 {
                 if let Some(field) = cache.fields.get(*index as usize) {
-                    Self::push_axis_field(fields, PivotField::new(field.name.clone()));
+                    let field_name = match &field.grouping {
+                        Some(PivotGrouping::Date { field, .. }) => field.name.clone(),
+                        _ => field.name.clone(),
+                    };
+                    Self::push_axis_field(fields, PivotField::new(field_name));
                 }
             }
         }
@@ -1476,6 +1484,14 @@ impl XlsReader {
         read_unicode_string(data, &mut offset)
     }
 
+    fn parse_sxfdb_field_index(data: &[u8], offset: usize) -> Option<usize> {
+        if data.len() < offset.saturating_add(2) {
+            return None;
+        }
+        let value = i16::from_le_bytes([data[offset], data[offset + 1]]);
+        (value >= 0).then_some(value as usize)
+    }
+
     fn parse_sxstring(data: &[u8]) -> XlsResult<PivotValue> {
         let mut offset = 0usize;
         let text = read_unicode_string(data, &mut offset)?;
@@ -1557,10 +1573,11 @@ impl XlsReader {
     fn attach_pending_pivot_grouping(
         current_field: &mut Option<XlsPivotCacheField>,
         pending_group_range: &mut Option<PendingPivotRangeGroup>,
+        fields: &[XlsPivotCacheField],
     ) {
-        let ready = pending_group_range
-            .as_ref()
-            .is_some_and(|pending| pending.numbers.len() >= 3);
+        let ready = pending_group_range.as_ref().is_some_and(|pending| {
+            xls_date_group_unit_from_flags(pending.flags).is_some() || pending.numbers.len() >= 3
+        });
         if !ready {
             return;
         }
@@ -1570,6 +1587,18 @@ impl XlsReader {
         let Some(field) = current_field else {
             return;
         };
+        if let Some(unit) = xls_date_group_unit_from_flags(pending.flags) {
+            let field_name = field
+                .group_base_field
+                .and_then(|index| fields.get(index))
+                .map(|field| field.name.clone())
+                .unwrap_or_else(|| field.name.clone());
+            field.grouping = Some(PivotGrouping::Date {
+                field: PivotFieldRef::new(field_name),
+                units: vec![unit],
+            });
+            return;
+        }
         if pending.flags & 0x001C != 0 {
             return;
         }
@@ -4330,6 +4359,19 @@ impl XlsReader {
         ws.add_data_validation(validation);
         Ok(())
     }
+}
+
+fn xls_date_group_unit_from_flags(flags: u16) -> Option<PivotDateGroupUnit> {
+    Some(match ((flags & 0x001C) >> 2) as u8 {
+        0x01 => PivotDateGroupUnit::Seconds,
+        0x02 => PivotDateGroupUnit::Minutes,
+        0x03 => PivotDateGroupUnit::Hours,
+        0x04 => PivotDateGroupUnit::Days,
+        0x05 => PivotDateGroupUnit::Months,
+        0x06 => PivotDateGroupUnit::Quarters,
+        0x07 => PivotDateGroupUnit::Years,
+        _ => return None,
+    })
 }
 
 /// Synthesise the 14-byte `BITMAPFILEHEADER` for a DIB body so the
