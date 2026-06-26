@@ -8541,25 +8541,23 @@ fn page_field_caption(
     field_index: usize,
     field_name: &str,
 ) -> String {
-    let Some(PivotFilter::FieldItems { allowed_items, .. }) = pivot.filters.iter().find(|filter| {
-        matches!(
-            filter,
-            PivotFilter::FieldItems { field, .. }
-                if field.name.eq_ignore_ascii_case(field_name)
-        )
-    }) else {
+    if !plan
+        .filters
+        .iter()
+        .any(|filter| filter.field_index() == field_index)
+    {
         return "(All)".to_string();
-    };
+    }
 
-    match allowed_items.as_slice() {
-        [] => "(All)".to_string(),
-        [item] => pivot_value_label(plan, item).into_owned(),
+    let allowed_item_ids = page_field_allowed_item_ids(snapshot, plan, field_index);
+    match allowed_item_ids.as_slice() {
+        [] => explicit_single_page_item_caption(pivot, plan, field_name)
+            .unwrap_or_else(|| "(All)".to_string()),
+        [item_id] => {
+            pivot_value_label(plan, snapshot.value_by_id(field_index, *item_id)).into_owned()
+        }
         _ => {
-            let selected_count = allowed_items
-                .iter()
-                .filter(|item| snapshot.columns[field_index].id_for_value(item).is_some())
-                .count();
-            if selected_count == snapshot.columns[field_index].dictionary.len() {
+            if allowed_item_ids.len() == snapshot.columns[field_index].dictionary.len() {
                 "(All)".to_string()
             } else if pivot.layout.show_multiple_label {
                 "(Multiple Items)".to_string()
@@ -8568,6 +8566,46 @@ fn page_field_caption(
             }
         }
     }
+}
+
+fn explicit_single_page_item_caption(
+    pivot: &PivotTable,
+    plan: &CompiledPivotPlan,
+    field_name: &str,
+) -> Option<String> {
+    pivot.filters.iter().find_map(|filter| {
+        let PivotFilter::FieldItems {
+            field,
+            allowed_items,
+        } = filter
+        else {
+            return None;
+        };
+        if field.name.eq_ignore_ascii_case(field_name) && allowed_items.len() == 1 {
+            Some(pivot_value_label(plan, &allowed_items[0]).into_owned())
+        } else {
+            None
+        }
+    })
+}
+
+fn page_field_allowed_item_ids(
+    snapshot: &SourceSnapshot,
+    plan: &CompiledPivotPlan,
+    field_index: usize,
+) -> Vec<u32> {
+    snapshot.columns[field_index]
+        .dictionary
+        .iter()
+        .enumerate()
+        .filter_map(|(item_id, _)| {
+            let item_id = item_id as u32;
+            plan.filters
+                .iter()
+                .all(|filter| filter.allows_item(snapshot, field_index, item_id))
+                .then_some(item_id)
+        })
+        .collect()
 }
 
 fn decode_key_cells(
@@ -13318,6 +13356,50 @@ mod tests {
         hidden.refresh_pivots().unwrap();
         assert_eq!(text(&hidden, "F1"), "(All)");
         assert_eq!(number(&hidden, "F4"), 30.0);
+    }
+
+    #[test]
+    fn refresh_applies_label_filter_to_page_field_caption() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Wholesale").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "North").unwrap();
+        sheet.set_cell_value("B4", "Online").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .page("Segment")
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .filter(PivotFilter::Label {
+                field: "Segment".into(),
+                operator: PivotFilterOperator::Contains,
+                value: "sale".to_string(),
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E1"), "Segment");
+        assert_eq!(text(&workbook, "F1"), "Wholesale");
+        assert_eq!(text(&workbook, "E3"), "Region");
+        assert_eq!(text(&workbook, "E4"), "West");
+        assert_eq!(number(&workbook, "F4"), 20.0);
+        assert_eq!(text(&workbook, "E5"), "Grand Total");
+        assert_eq!(number(&workbook, "F5"), 20.0);
     }
 
     #[test]
