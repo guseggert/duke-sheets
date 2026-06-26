@@ -2178,7 +2178,150 @@ fn compile_calculated_items(
         });
     }
 
-    Ok(compiled)
+    order_calculated_items(pivot_name, compiled, snapshot)
+}
+
+fn order_calculated_items(
+    pivot_name: &str,
+    items: Vec<CompiledCalculatedItem>,
+    snapshot: &SourceSnapshot,
+) -> Result<Vec<CompiledCalculatedItem>> {
+    if items.len() < 2 {
+        return Ok(items);
+    }
+
+    let target_indexes = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| ((axis_key(item.axis), item.position, item.item_id), index))
+        .collect::<AHashMap<_, _>>();
+    let dependencies = items
+        .iter()
+        .map(|item| calculated_item_dependency_indexes(item, snapshot, &target_indexes))
+        .collect::<Vec<_>>();
+    let mut visit_state = vec![CalculatedItemVisitState::Unvisited; items.len()];
+    let mut ordered = Vec::with_capacity(items.len());
+
+    for index in 0..items.len() {
+        visit_calculated_item(
+            pivot_name,
+            index,
+            &dependencies,
+            &mut visit_state,
+            &mut ordered,
+        )?;
+    }
+
+    Ok(ordered
+        .into_iter()
+        .map(|index| items[index].clone())
+        .collect())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CalculatedItemVisitState {
+    Unvisited,
+    Visiting,
+    Visited,
+}
+
+fn calculated_item_dependency_indexes(
+    item: &CompiledCalculatedItem,
+    snapshot: &SourceSnapshot,
+    target_indexes: &AHashMap<(u8, usize, u32), usize>,
+) -> Vec<usize> {
+    let mut item_ids = AHashSet::new();
+    collect_calculated_item_formula_references(
+        &item.ast,
+        snapshot,
+        item.field_index,
+        &mut item_ids,
+    );
+
+    let mut indexes = item_ids
+        .into_iter()
+        .filter_map(|item_id| {
+            target_indexes
+                .get(&(axis_key(item.axis), item.position, item_id))
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    indexes.sort_unstable();
+    indexes.dedup();
+    indexes
+}
+
+fn collect_calculated_item_formula_references(
+    expr: &FormulaExpr,
+    snapshot: &SourceSnapshot,
+    field_index: usize,
+    references: &mut AHashSet<u32>,
+) {
+    match expr {
+        FormulaExpr::NameRef(name) | FormulaExpr::String(name) => {
+            if let Some(item_id) = formula_reference_item_id(snapshot, field_index, name) {
+                references.insert(item_id);
+            }
+        }
+        FormulaExpr::BinaryOp { left, right, .. } => {
+            collect_calculated_item_formula_references(left, snapshot, field_index, references);
+            collect_calculated_item_formula_references(right, snapshot, field_index, references);
+        }
+        FormulaExpr::UnaryOp { operand, .. } => {
+            collect_calculated_item_formula_references(operand, snapshot, field_index, references);
+        }
+        FormulaExpr::Function { args, .. } | FormulaExpr::ExternalFunction { args, .. } => {
+            for arg in args {
+                collect_calculated_item_formula_references(arg, snapshot, field_index, references);
+            }
+        }
+        FormulaExpr::Array(rows) => {
+            for row in rows {
+                for arg in row {
+                    collect_calculated_item_formula_references(
+                        arg,
+                        snapshot,
+                        field_index,
+                        references,
+                    );
+                }
+            }
+        }
+        FormulaExpr::Number(_)
+        | FormulaExpr::Boolean(_)
+        | FormulaExpr::Error(_)
+        | FormulaExpr::Empty
+        | FormulaExpr::StructuredRef(_)
+        | FormulaExpr::CellRef(_)
+        | FormulaExpr::RangeRef(_)
+        | FormulaExpr::ExternalRef(_) => {}
+    }
+}
+
+fn visit_calculated_item(
+    pivot_name: &str,
+    index: usize,
+    dependencies: &[Vec<usize>],
+    visit_state: &mut [CalculatedItemVisitState],
+    ordered: &mut Vec<usize>,
+) -> Result<()> {
+    match visit_state[index] {
+        CalculatedItemVisitState::Visited => return Ok(()),
+        CalculatedItemVisitState::Visiting => {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} calculated items contain a circular reference"
+            )));
+        }
+        CalculatedItemVisitState::Unvisited => {}
+    }
+
+    visit_state[index] = CalculatedItemVisitState::Visiting;
+    for dependency in &dependencies[index] {
+        visit_calculated_item(pivot_name, *dependency, dependencies, visit_state, ordered)?;
+    }
+    visit_state[index] = CalculatedItemVisitState::Visited;
+    ordered.push(index);
+    Ok(())
 }
 
 fn calculated_item_axis(
@@ -6040,6 +6183,75 @@ mod tests {
         assert_eq!(number(&workbook, "F5"), 34.0);
         assert_eq!(number(&workbook, "G5"), 16.0);
         assert_eq!(number(&workbook, "H5"), 50.0);
+    }
+
+    #[test]
+    fn refreshes_dependent_calculated_items_out_of_order() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "Central").unwrap();
+        sheet.set_cell_value("B4", 5.0).unwrap();
+
+        let pivot = PivotTable::builder("DependentCalculatedItems")
+            .source_range(CellRange::parse("A1:B4").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .calculated_item("Region", "All Regions", "\"Combined\"+Central")
+            .calculated_item("Region", "Combined", "East+West")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D2"), "All Regions");
+        assert_eq!(number(&workbook, "E2"), 35.0);
+        assert_eq!(text(&workbook, "D3"), "Central");
+        assert_eq!(number(&workbook, "E3"), 5.0);
+        assert_eq!(text(&workbook, "D4"), "Combined");
+        assert_eq!(number(&workbook, "E4"), 30.0);
+        assert_eq!(text(&workbook, "D5"), "East");
+        assert_eq!(number(&workbook, "E5"), 10.0);
+        assert_eq!(text(&workbook, "D6"), "West");
+        assert_eq!(number(&workbook, "E6"), 20.0);
+        assert_eq!(text(&workbook, "D7"), "Grand Total");
+        assert_eq!(number(&workbook, "E7"), 100.0);
+    }
+
+    #[test]
+    fn refresh_rejects_circular_calculated_items() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+
+        let pivot = PivotTable::builder("CircularCalculatedItems")
+            .source_range(CellRange::parse("A1:B2").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .calculated_item("Region", "Calc One", "\"Calc Two\"+1")
+            .calculated_item("Region", "Calc Two", "\"Calc One\"+1")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let error = workbook.refresh_pivots().unwrap_err().to_string();
+        assert!(
+            error.contains("calculated items contain a circular reference"),
+            "{error}"
+        );
     }
 
     #[test]
