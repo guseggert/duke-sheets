@@ -3213,9 +3213,9 @@ mod tests {
     use crate::reader::XlsxReader;
     use duke_sheets_core::{
         CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotDateGroupUnit,
-        PivotField, PivotFilter, PivotGrouping, PivotLayout, PivotLayoutKind, PivotMeasure,
-        PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource, PivotSubtotal, PivotTable,
-        PivotValue, SplitPanes,
+        PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
+        PivotMeasure, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource, PivotSubtotal,
+        PivotTable, PivotValue, SplitPanes,
     };
     use std::io::Read;
 
@@ -4201,6 +4201,117 @@ mod tests {
                         .collect::<Vec<_>>(),
                     vec!["Retail".to_string(), "Public".to_string()]
                 );
+            }
+            other => panic!("unexpected pivot filter: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_advanced_filters() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "North").unwrap();
+        sheet.set_cell_value("B4", 30.0).unwrap();
+
+        let measure = PivotMeasure::new("Revenue", PivotAggregate::Sum).with_name("Revenue");
+        let pivot = PivotTable::builder("FilteredPivot")
+            .source_range(CellRange::parse("A1:B4").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .pivot_measure(measure.clone())
+            .filter(PivotFilter::Label {
+                field: "Region".into(),
+                operator: PivotFilterOperator::Contains,
+                value: "e".into(),
+            })
+            .filter(PivotFilter::Value {
+                field: "Region".into(),
+                measure: measure.clone(),
+                operator: PivotFilterOperator::GreaterThanOrEqual,
+                value: 20.0,
+            })
+            .filter(PivotFilter::TopN {
+                field: "Region".into(),
+                measure,
+                n: 2,
+                top: true,
+                percent: false,
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"<filters count="3">"#));
+        assert!(pivot_xml.contains(r#"type="captionContains""#));
+        assert!(pivot_xml.contains(r#"stringValue1="e""#));
+        assert!(pivot_xml.contains(r#"type="valueGreaterThanOrEqual""#));
+        assert!(pivot_xml.contains(r#"iMeasureFld="0""#));
+        assert!(pivot_xml.contains(r#"<customFilter operator="greaterThanOrEqual" val="20"/>"#));
+        assert!(pivot_xml.contains(r#"type="topCount""#));
+        assert!(pivot_xml.contains(r#"<top10 top="1" percent="0" val="2"/>"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("FilteredPivot")
+            .unwrap();
+        assert_eq!(pivot.filters.len(), 3);
+        match &pivot.filters[0] {
+            PivotFilter::Label {
+                field,
+                operator,
+                value,
+            } => {
+                assert_eq!(field.name, "Region");
+                assert_eq!(*operator, PivotFilterOperator::Contains);
+                assert_eq!(value, "e");
+            }
+            other => panic!("unexpected pivot filter: {other:?}"),
+        }
+        match &pivot.filters[1] {
+            PivotFilter::Value {
+                field,
+                measure,
+                operator,
+                value,
+            } => {
+                assert_eq!(field.name, "Region");
+                assert_eq!(measure.field.name, "Revenue");
+                assert_eq!(measure.aggregate, PivotAggregate::Sum);
+                assert_eq!(measure.name.as_deref(), Some("Revenue"));
+                assert_eq!(*operator, PivotFilterOperator::GreaterThanOrEqual);
+                assert_eq!(*value, 20.0);
+            }
+            other => panic!("unexpected pivot filter: {other:?}"),
+        }
+        match &pivot.filters[2] {
+            PivotFilter::TopN {
+                field,
+                measure,
+                n,
+                top,
+                percent,
+            } => {
+                assert_eq!(field.name, "Region");
+                assert_eq!(measure.field.name, "Revenue");
+                assert_eq!(measure.aggregate, PivotAggregate::Sum);
+                assert_eq!(measure.name.as_deref(), Some("Revenue"));
+                assert_eq!(*n, 2);
+                assert!(*top);
+                assert!(!*percent);
             }
             other => panic!("unexpected pivot filter: {other:?}"),
         }

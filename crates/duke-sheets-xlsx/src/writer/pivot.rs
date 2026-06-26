@@ -5,8 +5,8 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 
 use duke_sheets_core::{
     CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit, PivotFieldRef,
-    PivotFilter, PivotGrouping, PivotLayoutKind, PivotShowAs, PivotSort, PivotSource,
-    PivotSubtotal, PivotTable, PivotValue, Table, Workbook, Worksheet,
+    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotShowAs, PivotSort,
+    PivotSource, PivotSubtotal, PivotTable, PivotValue, Table, Workbook, Worksheet,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -184,22 +184,46 @@ fn validate_writable_pivot(pivot: &PivotTable) -> XlsxResult<()> {
         )));
     }
 
-    if pivot.filters.iter().any(|filter| {
-        !matches!(
-            filter,
-            PivotFilter::FieldItems {
-                field: _,
-                allowed_items: _
-            }
-        )
-    }) {
+    if pivot
+        .filters
+        .iter()
+        .any(|filter| !is_writable_filter(filter))
+    {
         return Err(XlsxError::InvalidFormat(format!(
             "pivot table {} uses a filter type that is not written yet",
             pivot.name
         )));
     }
 
+    for filter in &pivot.filters {
+        match filter {
+            PivotFilter::Value { value, .. } if !value.is_finite() => {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "pivot table {} uses a non-finite value filter operand",
+                    pivot.name
+                )));
+            }
+            PivotFilter::TopN { n, .. } if *n == 0 => {
+                return Err(XlsxError::InvalidFormat(format!(
+                    "pivot table {} uses a top-N filter with a zero threshold",
+                    pivot.name
+                )));
+            }
+            _ => {}
+        }
+    }
+
     Ok(())
+}
+
+fn is_writable_filter(filter: &PivotFilter) -> bool {
+    match filter {
+        PivotFilter::FieldItems { .. } | PivotFilter::Label { .. } | PivotFilter::TopN { .. } => {
+            true
+        }
+        PivotFilter::Value { operator, .. } => value_filter_type_name(*operator).is_some(),
+        PivotFilter::Unsupported { .. } => false,
+    }
 }
 
 fn validate_pivot_fields(pivot: &PivotTable, fields: &[CacheField]) -> XlsxResult<()> {
@@ -211,6 +235,7 @@ fn validate_pivot_fields(pivot: &PivotTable, fields: &[CacheField]) -> XlsxResul
         .chain(pivot.page_fields.iter().map(|field| &field.field))
         .chain(pivot.measures.iter().map(|measure| &measure.field))
         .chain(pivot.filters.iter().filter_map(filter_field_ref))
+        .chain(pivot.filters.iter().filter_map(filter_measure_field_ref))
         .chain(pivot.groupings.iter().map(grouping_field_ref))
     {
         if field_index(fields, &field.name).is_none() {
@@ -372,6 +397,17 @@ fn filter_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
         | PivotFilter::Value { field, .. }
         | PivotFilter::TopN { field, .. } => Some(field),
         PivotFilter::Unsupported { .. } => None,
+    }
+}
+
+fn filter_measure_field_ref(filter: &PivotFilter) -> Option<&PivotFieldRef> {
+    match filter {
+        PivotFilter::Value { measure, .. } | PivotFilter::TopN { measure, .. } => {
+            Some(&measure.field)
+        }
+        PivotFilter::FieldItems { .. }
+        | PivotFilter::Label { .. }
+        | PivotFilter::Unsupported { .. } => None,
     }
 }
 
@@ -847,6 +883,7 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         write_page_fields(w, pivot, &cache_part.fields)?;
         write_data_fields(w, pivot, &cache_part.fields)?;
         write_pivot_style(w, pivot)?;
+        write_pivot_filters(w, pivot, &cache_part.fields)?;
 
         w.write_event(Event::End(BytesEnd::new("pivotTableDefinition")))?;
         Ok(())
@@ -1169,6 +1206,263 @@ fn write_data_fields(
     }
     w.write_event(Event::End(BytesEnd::new("dataFields")))?;
     Ok(())
+}
+
+fn write_pivot_filters(
+    w: &mut XmlWriter,
+    pivot: &PivotTable,
+    fields: &[CacheField],
+) -> XlsxResult<()> {
+    let filters = pivot
+        .filters
+        .iter()
+        .filter(|filter| !matches!(filter, PivotFilter::FieldItems { .. }))
+        .collect::<Vec<_>>();
+    if filters.is_empty() {
+        return Ok(());
+    }
+
+    let count = filters.len().to_string();
+    let mut filters_el = BytesStart::new("filters");
+    filters_el.push_attribute(("count", count.as_str()));
+    w.write_event(Event::Start(filters_el))?;
+    for (index, filter) in filters.into_iter().enumerate() {
+        write_pivot_filter(w, pivot, fields, filter, index)?;
+    }
+    w.write_event(Event::End(BytesEnd::new("filters")))?;
+    Ok(())
+}
+
+fn write_pivot_filter(
+    w: &mut XmlWriter,
+    pivot: &PivotTable,
+    fields: &[CacheField],
+    filter: &PivotFilter,
+    index: usize,
+) -> XlsxResult<()> {
+    let field_name = filter_field_ref(filter)
+        .map(|field| field.name.as_str())
+        .ok_or_else(|| XlsxError::InvalidFormat("unsupported pivot filter".into()))?;
+    let field_index = field_index(fields, field_name).ok_or_else(|| {
+        XlsxError::InvalidFormat(format!("pivot filter field not found: {field_name}"))
+    })?;
+    let fld = field_index.to_string();
+    let eval_order = index.to_string();
+    let id = (index + 1).to_string();
+
+    let mut filter_el = BytesStart::new("filter");
+    filter_el.push_attribute(("fld", fld.as_str()));
+    filter_el.push_attribute(("evalOrder", eval_order.as_str()));
+    filter_el.push_attribute(("id", id.as_str()));
+
+    match filter {
+        PivotFilter::Label {
+            operator, value, ..
+        } => {
+            filter_el.push_attribute(("type", label_filter_type_name(*operator)));
+            filter_el.push_attribute(("stringValue1", value.as_str()));
+            w.write_event(Event::Start(filter_el))?;
+            let custom_value = label_custom_filter_value(*operator, value);
+            write_pivot_custom_filter(w, custom_filter_operator(*operator), &custom_value)?;
+            w.write_event(Event::End(BytesEnd::new("filter")))?;
+        }
+        PivotFilter::Value {
+            measure,
+            operator,
+            value,
+            ..
+        } => {
+            let filter_type = value_filter_type_name(*operator).ok_or_else(|| {
+                XlsxError::InvalidFormat("unsupported pivot value filter operator".into())
+            })?;
+            let measure_index = measure_index_for_filter(pivot, measure)?;
+            let i_measure_fld = measure_index.to_string();
+            let value = value.to_string();
+            filter_el.push_attribute(("type", filter_type));
+            filter_el.push_attribute(("iMeasureFld", i_measure_fld.as_str()));
+            filter_el.push_attribute(("stringValue1", value.as_str()));
+            w.write_event(Event::Start(filter_el))?;
+            write_pivot_custom_filter(w, custom_filter_operator(*operator), &value)?;
+            w.write_event(Event::End(BytesEnd::new("filter")))?;
+        }
+        PivotFilter::TopN {
+            measure,
+            n,
+            top,
+            percent,
+            ..
+        } => {
+            let measure_index = measure_index_for_filter(pivot, measure)?;
+            let i_measure_fld = measure_index.to_string();
+            filter_el.push_attribute(("type", top_n_filter_type_name(*top, *percent)));
+            filter_el.push_attribute(("iMeasureFld", i_measure_fld.as_str()));
+            w.write_event(Event::Start(filter_el))?;
+            write_pivot_top_filter(w, *n, *top, *percent)?;
+            w.write_event(Event::End(BytesEnd::new("filter")))?;
+        }
+        PivotFilter::FieldItems { .. } => {}
+        PivotFilter::Unsupported { kind, .. } => {
+            return Err(XlsxError::InvalidFormat(format!(
+                "unsupported pivot filter: {kind}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn write_pivot_custom_filter(
+    w: &mut XmlWriter,
+    operator: &'static str,
+    value: &str,
+) -> XlsxResult<()> {
+    write_pivot_auto_filter_start(w)?;
+
+    w.write_event(Event::Start(BytesStart::new("customFilters")))?;
+    let mut custom_filter = BytesStart::new("customFilter");
+    custom_filter.push_attribute(("operator", operator));
+    custom_filter.push_attribute(("val", value));
+    w.write_event(Event::Empty(custom_filter))?;
+    w.write_event(Event::End(BytesEnd::new("customFilters")))?;
+
+    write_pivot_auto_filter_end(w)?;
+    Ok(())
+}
+
+fn write_pivot_top_filter(w: &mut XmlWriter, n: u32, top: bool, percent: bool) -> XlsxResult<()> {
+    write_pivot_auto_filter_start(w)?;
+
+    let n = n.to_string();
+    let mut top10 = BytesStart::new("top10");
+    top10.push_attribute(("top", bool_attr(top)));
+    top10.push_attribute(("percent", bool_attr(percent)));
+    top10.push_attribute(("val", n.as_str()));
+    w.write_event(Event::Empty(top10))?;
+
+    write_pivot_auto_filter_end(w)?;
+    Ok(())
+}
+
+fn write_pivot_auto_filter_start(w: &mut XmlWriter) -> XlsxResult<()> {
+    let mut auto_filter = BytesStart::new("autoFilter");
+    auto_filter.push_attribute(("ref", "A1"));
+    w.write_event(Event::Start(auto_filter))?;
+
+    let mut filter_column = BytesStart::new("filterColumn");
+    filter_column.push_attribute(("colId", "0"));
+    w.write_event(Event::Start(filter_column))?;
+    Ok(())
+}
+
+fn write_pivot_auto_filter_end(w: &mut XmlWriter) -> XlsxResult<()> {
+    w.write_event(Event::End(BytesEnd::new("filterColumn")))?;
+    w.write_event(Event::End(BytesEnd::new("autoFilter")))?;
+    Ok(())
+}
+
+fn measure_index_for_filter(
+    pivot: &PivotTable,
+    filter_measure: &duke_sheets_core::PivotMeasure,
+) -> XlsxResult<usize> {
+    pivot
+        .measures
+        .iter()
+        .position(|measure| {
+            measure
+                .field
+                .name
+                .eq_ignore_ascii_case(&filter_measure.field.name)
+                && measure.aggregate == filter_measure.aggregate
+                && match filter_measure.name.as_ref() {
+                    Some(name) => measure
+                        .name
+                        .as_ref()
+                        .map(|candidate| candidate.eq_ignore_ascii_case(name))
+                        .unwrap_or_else(|| measure.caption().eq_ignore_ascii_case(name)),
+                    None => true,
+                }
+        })
+        .ok_or_else(|| {
+            XlsxError::InvalidFormat(format!(
+                "pivot filter measure not found: {}",
+                filter_measure.caption()
+            ))
+        })
+}
+
+fn label_filter_type_name(operator: PivotFilterOperator) -> &'static str {
+    match operator {
+        PivotFilterOperator::Equals => "captionEqual",
+        PivotFilterOperator::NotEquals => "captionNotEqual",
+        PivotFilterOperator::LessThan => "captionLessThan",
+        PivotFilterOperator::LessThanOrEqual => "captionLessThanOrEqual",
+        PivotFilterOperator::GreaterThan => "captionGreaterThan",
+        PivotFilterOperator::GreaterThanOrEqual => "captionGreaterThanOrEqual",
+        PivotFilterOperator::BeginsWith => "captionBeginsWith",
+        PivotFilterOperator::DoesNotBeginWith => "captionNotBeginsWith",
+        PivotFilterOperator::EndsWith => "captionEndsWith",
+        PivotFilterOperator::DoesNotEndWith => "captionNotEndsWith",
+        PivotFilterOperator::Contains => "captionContains",
+        PivotFilterOperator::DoesNotContain => "captionNotContains",
+    }
+}
+
+fn value_filter_type_name(operator: PivotFilterOperator) -> Option<&'static str> {
+    Some(match operator {
+        PivotFilterOperator::Equals => "valueEqual",
+        PivotFilterOperator::NotEquals => "valueNotEqual",
+        PivotFilterOperator::LessThan => "valueLessThan",
+        PivotFilterOperator::LessThanOrEqual => "valueLessThanOrEqual",
+        PivotFilterOperator::GreaterThan => "valueGreaterThan",
+        PivotFilterOperator::GreaterThanOrEqual => "valueGreaterThanOrEqual",
+        PivotFilterOperator::BeginsWith
+        | PivotFilterOperator::DoesNotBeginWith
+        | PivotFilterOperator::EndsWith
+        | PivotFilterOperator::DoesNotEndWith
+        | PivotFilterOperator::Contains
+        | PivotFilterOperator::DoesNotContain => return None,
+    })
+}
+
+fn top_n_filter_type_name(top: bool, percent: bool) -> &'static str {
+    match (top, percent) {
+        (true, true) => "topPercent",
+        (true, false) => "topCount",
+        (false, true) => "bottomPercent",
+        (false, false) => "bottomCount",
+    }
+}
+
+fn custom_filter_operator(operator: PivotFilterOperator) -> &'static str {
+    match operator {
+        PivotFilterOperator::Equals
+        | PivotFilterOperator::BeginsWith
+        | PivotFilterOperator::EndsWith
+        | PivotFilterOperator::Contains => "equal",
+        PivotFilterOperator::NotEquals
+        | PivotFilterOperator::DoesNotBeginWith
+        | PivotFilterOperator::DoesNotEndWith
+        | PivotFilterOperator::DoesNotContain => "notEqual",
+        PivotFilterOperator::LessThan => "lessThan",
+        PivotFilterOperator::LessThanOrEqual => "lessThanOrEqual",
+        PivotFilterOperator::GreaterThan => "greaterThan",
+        PivotFilterOperator::GreaterThanOrEqual => "greaterThanOrEqual",
+    }
+}
+
+fn label_custom_filter_value(operator: PivotFilterOperator, value: &str) -> String {
+    match operator {
+        PivotFilterOperator::BeginsWith | PivotFilterOperator::DoesNotBeginWith => {
+            format!("{value}*")
+        }
+        PivotFilterOperator::EndsWith | PivotFilterOperator::DoesNotEndWith => {
+            format!("*{value}")
+        }
+        PivotFilterOperator::Contains | PivotFilterOperator::DoesNotContain => {
+            format!("*{value}*")
+        }
+        _ => value.to_string(),
+    }
 }
 
 fn write_data_field_ext(w: &mut XmlWriter, pivot_show_as: &str) -> XlsxResult<()> {

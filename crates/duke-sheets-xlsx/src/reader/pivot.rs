@@ -8,9 +8,9 @@ use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
-    PivotCalculatedField, PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping,
-    PivotLayoutKind, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource,
-    PivotStyle, PivotSubtotal, PivotTable, PivotValue,
+    PivotCalculatedField, PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator,
+    PivotGrouping, PivotLayoutKind, PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort,
+    PivotSource, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
 };
 
 #[derive(Debug, Clone)]
@@ -260,6 +260,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut page_fields = Vec::new();
     let mut measures = Vec::new();
     let mut page_filters = Vec::new();
+    let mut advanced_filters = Vec::new();
     let mut style = PivotStyle::default();
     let mut row_grand_totals = true;
     let mut col_grand_totals = true;
@@ -271,6 +272,9 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut pivot_field_index = 0usize;
     let mut current_pivot_field: Option<(usize, Vec<u32>)> = None;
     let mut current_data_field: Option<CurrentDataField> = None;
+    let mut current_pivot_filter: Option<CurrentPivotFilter> = None;
+    let mut current_pivot_filter_depth = 0usize;
+    let mut in_pivot_filters = false;
     let mut sort_by_field: HashMap<usize, PivotSort> = HashMap::new();
     let mut subtotal_by_field: HashMap<usize, PivotSubtotal> = HashMap::new();
     let mut show_empty_by_field: HashMap<usize, bool> = HashMap::new();
@@ -322,6 +326,26 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                 b"colFields" => axis_context = Some(AxisContext::Columns),
                 b"pageFields" => axis_context = Some(AxisContext::Page),
                 b"dataFields" => axis_context = Some(AxisContext::Data),
+                b"filters" if current_pivot_filter.is_none() => in_pivot_filters = true,
+                b"filter" if in_pivot_filters && current_pivot_filter.is_none() => {
+                    current_pivot_filter = parse_current_pivot_filter(&e);
+                    current_pivot_filter_depth = usize::from(current_pivot_filter.is_some());
+                }
+                b"customFilter" => {
+                    if let Some(filter) = &mut current_pivot_filter {
+                        current_pivot_filter_depth += 1;
+                        parse_pivot_custom_filter_attrs(filter, &e);
+                    }
+                }
+                b"top10" => {
+                    if let Some(filter) = &mut current_pivot_filter {
+                        current_pivot_filter_depth += 1;
+                        parse_pivot_top_filter_attrs(filter, &e);
+                    }
+                }
+                _ if current_pivot_filter.is_some() => {
+                    current_pivot_filter_depth += 1;
+                }
                 _ => {}
             },
             Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
@@ -427,6 +451,27 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         measures.push(measure);
                     }
                 }
+                b"filter" if in_pivot_filters && current_pivot_filter.is_none() => {
+                    let Some(cache) = caches.get(&cache_id) else {
+                        buf.clear();
+                        continue;
+                    };
+                    if let Some(filter) = parse_current_pivot_filter(&e)
+                        .and_then(|filter| pivot_filter_from_context(filter, cache, &measures))
+                    {
+                        advanced_filters.push(filter);
+                    }
+                }
+                b"customFilter" => {
+                    if let Some(filter) = &mut current_pivot_filter {
+                        parse_pivot_custom_filter_attrs(filter, &e);
+                    }
+                }
+                b"top10" => {
+                    if let Some(filter) = &mut current_pivot_filter {
+                        parse_pivot_top_filter_attrs(filter, &e);
+                    }
+                }
                 b"pivotTableStyleInfo" => style = parse_pivot_style(&e),
                 _ => {}
             },
@@ -443,6 +488,25 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                     if e.name().as_ref() == b"dataField" {
                         current_data_field = None;
                     }
+                }
+                b"filter" if current_pivot_filter.is_some() && current_pivot_filter_depth == 1 => {
+                    let Some(cache) = caches.get(&cache_id) else {
+                        current_pivot_filter = None;
+                        current_pivot_filter_depth = 0;
+                        buf.clear();
+                        continue;
+                    };
+                    if let Some(filter) = current_pivot_filter
+                        .take()
+                        .and_then(|filter| pivot_filter_from_context(filter, cache, &measures))
+                    {
+                        advanced_filters.push(filter);
+                    }
+                    current_pivot_filter_depth = 0;
+                }
+                b"filters" if current_pivot_filter.is_none() => in_pivot_filters = false,
+                _ if current_pivot_filter.is_some() => {
+                    current_pivot_filter_depth = current_pivot_filter_depth.saturating_sub(1);
                 }
                 _ => {}
             },
@@ -513,6 +577,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
         .collect::<Vec<_>>();
     pivot.filters = page_filters;
     pivot.filters.extend(hidden_item_filters);
+    pivot.filters.extend(advanced_filters);
 
     Ok(Some(pivot))
 }
@@ -529,6 +594,18 @@ enum AxisContext {
 struct CurrentDataField {
     measure_index: usize,
     base_field_index: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentPivotFilter {
+    field_index: usize,
+    filter_type: String,
+    measure_index: Option<usize>,
+    string_value1: Option<String>,
+    custom_value: Option<String>,
+    top: Option<bool>,
+    percent: Option<bool>,
+    top_n: Option<u32>,
 }
 
 fn parse_pivot_table_attrs(
@@ -686,6 +763,134 @@ fn parse_data_field(e: &BytesStart<'_>, cache: &PivotCacheDefinition) -> Option<
         })
         .unwrap_or(PivotShowAs::Normal);
     Some(measure)
+}
+
+fn parse_current_pivot_filter(e: &BytesStart<'_>) -> Option<CurrentPivotFilter> {
+    Some(CurrentPivotFilter {
+        field_index: attr_u32(e, b"fld")? as usize,
+        filter_type: attr_string(e, b"type")?,
+        measure_index: attr_u32(e, b"iMeasureFld").map(|value| value as usize),
+        string_value1: attr_string(e, b"stringValue1"),
+        custom_value: None,
+        top: None,
+        percent: None,
+        top_n: None,
+    })
+}
+
+fn parse_pivot_custom_filter_attrs(filter: &mut CurrentPivotFilter, e: &BytesStart<'_>) {
+    if let Some(value) = attr_string(e, b"val") {
+        filter.custom_value = Some(value);
+    }
+}
+
+fn parse_pivot_top_filter_attrs(filter: &mut CurrentPivotFilter, e: &BytesStart<'_>) {
+    if let Some(value) = attr_bool(e, b"top") {
+        filter.top = Some(value);
+    }
+    if let Some(value) = attr_bool(e, b"percent") {
+        filter.percent = Some(value);
+    }
+    if let Some(value) = attr_u32(e, b"val") {
+        filter.top_n = Some(value);
+    }
+}
+
+fn pivot_filter_from_context(
+    filter: CurrentPivotFilter,
+    cache: &PivotCacheDefinition,
+    measures: &[PivotMeasure],
+) -> Option<PivotFilter> {
+    let field = cache.fields.get(filter.field_index)?;
+    if let Some(operator) = parse_label_filter_type(&filter.filter_type) {
+        let value = filter
+            .string_value1
+            .or(filter.custom_value)
+            .unwrap_or_default();
+        return Some(PivotFilter::Label {
+            field: duke_sheets_core::PivotFieldRef::new(field.name.clone()),
+            operator,
+            value,
+        });
+    }
+
+    if let Some(operator) = parse_value_filter_type(&filter.filter_type) {
+        let value = filter
+            .string_value1
+            .or(filter.custom_value)
+            .and_then(|value| value.parse::<f64>().ok())?;
+        let measure = measure_for_pivot_filter(filter.measure_index, measures)?.clone();
+        return Some(PivotFilter::Value {
+            field: duke_sheets_core::PivotFieldRef::new(field.name.clone()),
+            measure,
+            operator,
+            value,
+        });
+    }
+
+    if let Some((type_top, type_percent)) = parse_top_n_filter_type(&filter.filter_type) {
+        let measure = measure_for_pivot_filter(filter.measure_index, measures)?.clone();
+        return Some(PivotFilter::TopN {
+            field: duke_sheets_core::PivotFieldRef::new(field.name.clone()),
+            measure,
+            n: filter.top_n?,
+            top: filter.top.unwrap_or(type_top),
+            percent: filter.percent.unwrap_or(type_percent),
+        });
+    }
+
+    None
+}
+
+fn measure_for_pivot_filter(
+    measure_index: Option<usize>,
+    measures: &[PivotMeasure],
+) -> Option<&PivotMeasure> {
+    match measure_index {
+        Some(index) => measures.get(index),
+        None if measures.len() == 1 => measures.first(),
+        None => None,
+    }
+}
+
+fn parse_label_filter_type(value: &str) -> Option<PivotFilterOperator> {
+    Some(match value {
+        "captionEqual" => PivotFilterOperator::Equals,
+        "captionNotEqual" => PivotFilterOperator::NotEquals,
+        "captionLessThan" => PivotFilterOperator::LessThan,
+        "captionLessThanOrEqual" => PivotFilterOperator::LessThanOrEqual,
+        "captionGreaterThan" => PivotFilterOperator::GreaterThan,
+        "captionGreaterThanOrEqual" => PivotFilterOperator::GreaterThanOrEqual,
+        "captionBeginsWith" => PivotFilterOperator::BeginsWith,
+        "captionNotBeginsWith" => PivotFilterOperator::DoesNotBeginWith,
+        "captionEndsWith" => PivotFilterOperator::EndsWith,
+        "captionNotEndsWith" => PivotFilterOperator::DoesNotEndWith,
+        "captionContains" => PivotFilterOperator::Contains,
+        "captionNotContains" => PivotFilterOperator::DoesNotContain,
+        _ => return None,
+    })
+}
+
+fn parse_value_filter_type(value: &str) -> Option<PivotFilterOperator> {
+    Some(match value {
+        "valueEqual" => PivotFilterOperator::Equals,
+        "valueNotEqual" => PivotFilterOperator::NotEquals,
+        "valueLessThan" => PivotFilterOperator::LessThan,
+        "valueLessThanOrEqual" => PivotFilterOperator::LessThanOrEqual,
+        "valueGreaterThan" => PivotFilterOperator::GreaterThan,
+        "valueGreaterThanOrEqual" => PivotFilterOperator::GreaterThanOrEqual,
+        _ => return None,
+    })
+}
+
+fn parse_top_n_filter_type(value: &str) -> Option<(bool, bool)> {
+    Some(match value {
+        "topCount" => (true, false),
+        "topPercent" => (true, true),
+        "bottomCount" => (false, false),
+        "bottomPercent" => (false, true),
+        _ => return None,
+    })
 }
 
 fn parse_show_as(
