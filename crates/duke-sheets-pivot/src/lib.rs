@@ -150,7 +150,10 @@ fn refresh_pivots_inner(
         }
     }
 
+    let mut touched_ranges = Vec::new();
     for (job, output) in rendered {
+        let output_range = output.range;
+        let job_touched_ranges = pivot_write_touched_ranges(&job, output_range);
         if let Err(error) = write_rendered_pivot(workbook, &job, output) {
             mark_pivot_failed(
                 workbook,
@@ -160,7 +163,9 @@ fn refresh_pivots_inner(
             );
             return Err(error);
         }
+        touched_ranges.extend(job_touched_ranges);
     }
+    cache.rebase_untouched_sources(workbook, &touched_ranges);
 
     Ok(stats)
 }
@@ -223,20 +228,34 @@ fn refresh_pivot_inner(
         }
     };
     stats.add_rendered(&output);
-    if let Err(error) = write_rendered_pivot(
-        workbook,
-        &PivotJob {
-            sheet_index,
-            pivot_index,
-            pivot,
-        },
-        output,
-    ) {
+    let output_range = output.range;
+    let job = PivotJob {
+        sheet_index,
+        pivot_index,
+        pivot,
+    };
+    let touched_ranges = pivot_write_touched_ranges(&job, output_range);
+    if let Err(error) = write_rendered_pivot(workbook, &job, output) {
         mark_pivot_failed(workbook, sheet_index, pivot_index, error.to_string());
         return Err(error);
     }
+    cache.rebase_untouched_sources(workbook, &touched_ranges);
 
     Ok(stats)
+}
+
+fn pivot_write_touched_ranges(job: &PivotJob, output_range: CellRange) -> Vec<(usize, CellRange)> {
+    let mut ranges = Vec::with_capacity(2);
+    if matches!(
+        job.pivot.overwrite_policy,
+        PivotOverwritePolicy::ClearOwnedRange
+    ) {
+        if let Some(range) = job.pivot.rendered_range {
+            ranges.push((job.sheet_index, range));
+        }
+    }
+    ranges.push((job.sheet_index, output_range));
+    ranges
 }
 
 fn collect_pivot_jobs(workbook: &Workbook) -> Vec<PivotJob> {
@@ -415,6 +434,34 @@ impl PivotRuntimeCache {
             structural_generation: workbook.structural_generation(),
             snapshots: AHashMap::new(),
         }
+    }
+
+    fn rebase_untouched_sources(
+        &mut self,
+        workbook: &Workbook,
+        touched_ranges: &[(usize, CellRange)],
+    ) {
+        let mut snapshots = AHashMap::with_capacity(self.snapshots.len());
+        for (mut key, snapshot) in std::mem::take(&mut self.snapshots) {
+            let Some(worksheet) = workbook.worksheet(key.sheet_index) else {
+                continue;
+            };
+            let source_touched = touched_ranges.iter().any(|(sheet_index, range)| {
+                *sheet_index == key.sheet_index && range.overlaps(&key.range)
+            });
+            if !source_touched {
+                key.mutation_count = worksheet.mutation_count();
+                key.topology_generation = worksheet.topology_generation();
+            } else if worksheet.mutation_count() != key.mutation_count
+                || worksheet.topology_generation() != key.topology_generation
+            {
+                continue;
+            }
+            snapshots.insert(key, snapshot);
+        }
+        self.workbook_nonce = workbook.nonce();
+        self.structural_generation = workbook.structural_generation();
+        self.snapshots = snapshots;
     }
 }
 
@@ -6118,5 +6165,46 @@ mod tests {
         assert_eq!(stats.cache_hits, 1);
         assert_eq!(number(&workbook, "E2"), 10.0);
         assert_eq!(number(&workbook, "H2"), 10.0);
+    }
+
+    #[test]
+    fn internal_snapshot_cache_reuses_then_invalidates_on_source_mutation() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B2").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let first = workbook.refresh_pivots().unwrap();
+        assert_eq!(first.cache_misses, 1);
+        assert_eq!(first.cache_hits, 0);
+        assert_eq!(number(&workbook, "E2"), 10.0);
+
+        let second = workbook.refresh_pivots().unwrap();
+        assert_eq!(second.cache_misses, 0);
+        assert_eq!(second.cache_hits, 1);
+        assert_eq!(number(&workbook, "E2"), 10.0);
+
+        workbook
+            .worksheet_mut(0)
+            .unwrap()
+            .set_cell_value("B2", 15.0)
+            .unwrap();
+
+        let third = workbook.refresh_pivots().unwrap();
+        assert_eq!(third.cache_misses, 1);
+        assert_eq!(third.cache_hits, 0);
+        assert_eq!(number(&workbook, "E2"), 15.0);
     }
 }
