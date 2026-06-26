@@ -5,8 +5,8 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 
 use duke_sheets_core::{
     CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit, PivotFieldRef,
-    PivotFilter, PivotGrouping, PivotLayoutKind, PivotShowAs, PivotSort, PivotSource, PivotTable,
-    PivotValue, Table, Workbook, Worksheet,
+    PivotFilter, PivotGrouping, PivotLayoutKind, PivotShowAs, PivotSort, PivotSource,
+    PivotSubtotal, PivotTable, PivotValue, Table, Workbook, Worksheet,
 };
 use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
@@ -900,8 +900,9 @@ fn write_pivot_fields(
         if field_is_filtered(pivot, &field.name) {
             pivot_field.push_attribute(("multipleItemSelectionAllowed", "1"));
         }
-        if field_subtotal_is_none(pivot, &field.name) {
-            pivot_field.push_attribute(("defaultSubtotal", "0"));
+        if let Some(axis_field) = pivot_axis_field(pivot, &field.name) {
+            pivot_field.push_attribute(("showAll", bool_attr(axis_field.show_empty_items)));
+            push_subtotal_attrs(&mut pivot_field, axis_field.subtotal);
         }
 
         let hidden_items = hidden_item_indexes(pivot, fields, index)?;
@@ -982,16 +983,43 @@ fn field_is_filtered(pivot: &PivotTable, field_name: &str) -> bool {
     })
 }
 
-fn field_subtotal_is_none(pivot: &PivotTable, field_name: &str) -> bool {
+fn pivot_axis_field<'a>(
+    pivot: &'a PivotTable,
+    field_name: &str,
+) -> Option<&'a duke_sheets_core::PivotField> {
     pivot
         .rows
         .iter()
         .chain(pivot.columns.iter())
         .chain(pivot.page_fields.iter())
-        .any(|field| {
-            field.field.name.eq_ignore_ascii_case(field_name)
-                && matches!(field.subtotal, duke_sheets_core::PivotSubtotal::None)
-        })
+        .find(|field| field.field.name.eq_ignore_ascii_case(field_name))
+}
+
+fn push_subtotal_attrs(pivot_field: &mut BytesStart<'_>, subtotal: PivotSubtotal) {
+    match subtotal {
+        PivotSubtotal::Automatic => {}
+        PivotSubtotal::None => pivot_field.push_attribute(("defaultSubtotal", "0")),
+        PivotSubtotal::Sum => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("sumSubtotal", "1"));
+        }
+        PivotSubtotal::Count => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("countSubtotal", "1"));
+        }
+        PivotSubtotal::Average => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("avgSubtotal", "1"));
+        }
+        PivotSubtotal::Min => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("minSubtotal", "1"));
+        }
+        PivotSubtotal::Max => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("maxSubtotal", "1"));
+        }
+    }
 }
 
 fn hidden_item_indexes(
