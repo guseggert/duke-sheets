@@ -483,6 +483,23 @@ impl From<&core::PivotCalculatedField> for JsPivotCalculatedFieldDefinition {
 }
 
 #[napi(object)]
+pub struct JsPivotCalculatedItemDefinition {
+    pub field: String,
+    pub item: JsPivotValue,
+    pub formula: String,
+}
+
+impl From<&core::PivotCalculatedItem> for JsPivotCalculatedItemDefinition {
+    fn from(item: &core::PivotCalculatedItem) -> Self {
+        Self {
+            field: item.field.name.clone(),
+            item: JsPivotValue::from(&item.item),
+            formula: item.formula.clone(),
+        }
+    }
+}
+
+#[napi(object)]
 pub struct JsPivotManualGroupDefinition {
     pub name: String,
     pub members: Vec<JsPivotValue>,
@@ -669,6 +686,7 @@ pub struct JsPivotTableDefinition {
     pub page_fields: Vec<JsPivotFieldDefinition>,
     pub filters: Vec<JsPivotFilterDefinition>,
     pub calculated_fields: Vec<JsPivotCalculatedFieldDefinition>,
+    pub calculated_items: Vec<JsPivotCalculatedItemDefinition>,
     pub measures: Vec<JsPivotMeasureDefinition>,
     pub groupings: Vec<JsPivotGroupingDefinition>,
     pub layout: JsPivotLayoutDefinition,
@@ -692,6 +710,7 @@ impl From<&core::PivotTable> for JsPivotTableDefinition {
             page_fields: pivot.page_fields.iter().map(Into::into).collect(),
             filters: pivot.filters.iter().map(Into::into).collect(),
             calculated_fields: pivot.calculated_fields.iter().map(Into::into).collect(),
+            calculated_items: pivot.calculated_items.iter().map(Into::into).collect(),
             measures: pivot.measures.iter().map(Into::into).collect(),
             groupings: pivot.groupings.iter().map(Into::into).collect(),
             layout: JsPivotLayoutDefinition::from(&pivot.layout),

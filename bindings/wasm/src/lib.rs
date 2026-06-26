@@ -274,6 +274,12 @@ export interface PivotCalculatedFieldOptions {
 
 export type PivotValueInput = string | number | boolean;
 
+export interface PivotCalculatedItemOptions {
+  field: string;
+  item: PivotValueInput;
+  formula: string;
+}
+
 export interface PivotManualGroupOptions {
   name: string;
   members: PivotValueInput[];
@@ -388,6 +394,7 @@ export interface PivotTableOptions {
   measures: PivotMeasureOptions[];
   filters?: PivotFilterOptions[];
   calculatedFields?: PivotCalculatedFieldOptions[];
+  calculatedItems?: PivotCalculatedItemOptions[];
   groupings?: PivotGroupingOptions[];
   refreshPolicy?: PivotRefreshPolicyOptions;
   layout?: PivotLayoutOptions;
@@ -469,6 +476,12 @@ export interface PivotCalculatedFieldDefinition {
   formula: string;
 }
 
+export interface PivotCalculatedItemDefinition {
+  field: string;
+  item: PivotValue;
+  formula: string;
+}
+
 export interface PivotManualGroupDefinition {
   name: string;
   members: PivotValue[];
@@ -530,6 +543,7 @@ export interface PivotTableDefinition {
   pageFields: PivotFieldDefinition[];
   filters: PivotFilterDefinition[];
   calculatedFields: PivotCalculatedFieldDefinition[];
+  calculatedItems: PivotCalculatedItemDefinition[];
   measures: PivotMeasureDefinition[];
   groupings: PivotGroupingDefinition[];
   layout: PivotLayoutDefinition;
@@ -767,6 +781,13 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
     }
     for calculated_field in options.calculated_fields.unwrap_or_default() {
         builder = builder.calculated_field(calculated_field.name, calculated_field.formula);
+    }
+    for calculated_item in options.calculated_items.unwrap_or_default() {
+        builder = builder.calculated_item(
+            calculated_item.field,
+            pivot_value_from_wasm(calculated_item.item),
+            calculated_item.formula,
+        );
     }
     for grouping in options.groupings.unwrap_or_default() {
         builder = builder.grouping(build_pivot_grouping_from_wasm(grouping)?);

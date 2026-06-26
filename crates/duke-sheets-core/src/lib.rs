@@ -65,8 +65,9 @@ pub use hyperlink::Hyperlink;
 pub use locale::Locale;
 pub use pivot::{
     PivotAggregate, PivotAxis, PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField,
-    PivotDateGroupUnit, PivotExtension, PivotExtensions, PivotField, PivotFieldRef, PivotFilter,
-    PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup,
+    PivotCalculatedItem, PivotDateGroupUnit, PivotExtension, PivotExtensions, PivotField,
+    PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind,
+    PivotManualGroup,
     PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy, PivotRefreshStatus, PivotShowAs,
     PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
     PivotTableBuilder, PivotValue,

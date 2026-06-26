@@ -10,10 +10,10 @@ use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::style::NumberFormat;
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
-    PivotCalculatedField, PivotDateGroupUnit, PivotExtension, PivotField, PivotFilter,
-    PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure,
-    PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
-    PivotSubtotal, PivotTable, PivotValue, WorkbookConnection, WorkbookConnectionKind,
+    PivotCalculatedField, PivotCalculatedItem, PivotDateGroupUnit, PivotExtension, PivotField,
+    PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup,
+    PivotMeasure, PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
+    PivotStyle, PivotSubtotal, PivotTable, PivotValue, WorkbookConnection, WorkbookConnectionKind,
 };
 
 #[derive(Debug, Clone)]
@@ -22,6 +22,7 @@ pub(super) struct PivotCacheDefinition {
     pub(super) source_kind: PivotCacheSourceKind,
     pub(super) fields: Vec<PivotCacheField>,
     pub(super) calculated_fields: Vec<PivotCalculatedField>,
+    pub(super) calculated_items: Vec<PivotCalculatedItem>,
     pub(super) groupings: Vec<PivotGrouping>,
     pub(super) record_count: Option<u64>,
     pub(super) refreshed_version: Option<String>,
@@ -40,6 +41,14 @@ pub(super) struct PivotCacheField {
     group_parent: Option<usize>,
     discrete_item_indexes: Vec<u32>,
     group_items: Vec<PivotValue>,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentCalculatedItem {
+    field_index: Option<usize>,
+    formula: Option<String>,
+    item_index: Option<u32>,
+    reference_field_index: Option<usize>,
 }
 
 pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
@@ -63,6 +72,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     let mut connection_name = None;
     let mut connection_id = None;
     let mut fields = Vec::new();
+    let mut calculated_items = Vec::new();
     let mut record_count = None;
     let mut refreshed_version = None;
     let mut refresh_on_load = false;
@@ -72,6 +82,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     let mut consolidation_pages = Vec::new();
     let mut current_consolidation_page: Option<Vec<String>> = None;
     let mut current_field: Option<PivotCacheField> = None;
+    let mut current_calculated_item: Option<CurrentCalculatedItem> = None;
     let mut in_shared_items = false;
     let mut in_discrete_pr = false;
     let mut in_group_items = false;
@@ -120,6 +131,20 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"sharedItems" => in_shared_items = true,
                 b"discretePr" => in_discrete_pr = true,
                 b"groupItems" => in_group_items = true,
+                b"calculatedItem" => {
+                    current_calculated_item = Some(CurrentCalculatedItem {
+                        field_index: attr_u32(&e, b"field").map(|value| value as usize),
+                        formula: attr_string(&e, b"formula"),
+                        item_index: None,
+                        reference_field_index: None,
+                    });
+                }
+                b"reference" => {
+                    if let Some(item) = &mut current_calculated_item {
+                        item.reference_field_index =
+                            attr_u32(&e, b"field").map(|value| value as usize);
+                    }
+                }
                 b"fieldGroup" => {
                     if let Some(field) = &mut current_field {
                         parse_field_group_attrs(field, &e);
@@ -198,6 +223,19 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                         field.group_items.push(parse_shared_item(&e)?);
                     }
                 }
+                b"x" if current_calculated_item.is_some() => {
+                    if let Some(item) = &mut current_calculated_item {
+                        if let Some(index) = attr_u32(&e, b"v") {
+                            let reference_matches_field = match item.reference_field_index {
+                                Some(field) => Some(field) == item.field_index,
+                                None => true,
+                            };
+                            if item.item_index.is_none() || reference_matches_field {
+                                item.item_index = Some(index);
+                            }
+                        }
+                    }
+                }
                 _ => {}
             },
             Ok(Event::End(e)) => match e.name().local_name().as_ref() {
@@ -213,6 +251,18 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                 b"sharedItems" => in_shared_items = false,
                 b"discretePr" => in_discrete_pr = false,
                 b"groupItems" => in_group_items = false,
+                b"reference" => {
+                    if let Some(item) = &mut current_calculated_item {
+                        item.reference_field_index = None;
+                    }
+                }
+                b"calculatedItem" => {
+                    if let Some(item) = current_calculated_item.take() {
+                        if let Some(item) = pivot_calculated_item_from_context(item, &fields) {
+                            calculated_items.push(item);
+                        }
+                    }
+                }
                 _ => {}
             },
             Ok(Event::Eof) => break,
@@ -249,6 +299,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
         source_kind,
         fields,
         calculated_fields,
+        calculated_items,
         groupings,
         record_count,
         refreshed_version,
@@ -256,6 +307,21 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
         background_query,
         missing_items_limit,
     }))
+}
+
+fn pivot_calculated_item_from_context(
+    item: CurrentCalculatedItem,
+    fields: &[PivotCacheField],
+) -> Option<PivotCalculatedItem> {
+    let field_index = item.field_index?;
+    let item_index = item.item_index?;
+    let field = fields.get(field_index)?;
+    let value = field.shared_items.get(item_index as usize)?;
+    Some(PivotCalculatedItem::new(
+        field.name.clone(),
+        value.clone(),
+        item.formula?,
+    ))
 }
 
 fn parse_field_group_attrs(field: &mut PivotCacheField, e: &BytesStart<'_>) {
@@ -899,6 +965,7 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.filters = page_filters;
     pivot.filters.extend(hidden_item_filters);
     pivot.filters.extend(advanced_filters);
+    pivot.calculated_items = cache.calculated_items.clone();
 
     Ok(Some(pivot))
 }
@@ -1543,6 +1610,7 @@ mod tests {
                 group_items: Vec::new(),
             }],
             calculated_fields: Vec::new(),
+            calculated_items: Vec::new(),
             groupings: Vec::new(),
             record_count: None,
             refreshed_version: None,

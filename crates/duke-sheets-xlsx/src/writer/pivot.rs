@@ -5,10 +5,11 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 
 use crate::styles::XlsxStyleTable;
 use duke_sheets_core::{
-    CellAddress, CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotDateGroupUnit,
-    PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind,
-    PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
-    PivotSubtotal, PivotTable, PivotValue, Table, Workbook, WorkbookConnection,
+    CellAddress, CellError, CellRange, PivotAggregate, PivotCalculatedField, PivotCalculatedItem,
+    PivotDateGroupUnit, PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator,
+    PivotGrouping, PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotShowAs, PivotSort,
+    PivotSource, PivotSourceRange, PivotSubtotal, PivotTable, PivotValue, Table, Workbook,
+    WorkbookConnection,
     WorkbookConnectionKind, Worksheet,
 };
 use duke_sheets_formula::{
@@ -44,6 +45,7 @@ pub(super) struct PivotCachePart {
     source: PivotSource,
     source_sheet_index: usize,
     fields: Vec<CacheField>,
+    calculated_items: Vec<PivotCalculatedItem>,
     rows: Vec<Vec<Option<u32>>>,
     record_count: usize,
     save_data: bool,
@@ -152,6 +154,7 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
 
             let mut resolved = resolve_pivot_source(workbook, sheet_index, pivot)?;
             apply_calculated_cache_fields(&pivot.name, &mut resolved, &pivot.calculated_fields)?;
+            apply_calculated_cache_items(&pivot.name, &mut resolved, &pivot.calculated_items)?;
             validate_pivot_fields(pivot, &resolved.fields)?;
             validate_pivot_groupings(pivot, &resolved.fields)?;
             apply_grouped_cache_fields(
@@ -186,6 +189,7 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
                     source: resolved.source,
                     source_sheet_index: resolved.source_sheet_index,
                     fields: resolved.fields,
+                    calculated_items: pivot.calculated_items.clone(),
                     rows: resolved.rows,
                     record_count: resolved.record_count,
                     save_data: resolved.save_data,
@@ -697,6 +701,7 @@ fn grouping_field_ref(grouping: &PivotGrouping) -> &PivotFieldRef {
 fn cache_key_for_pivot(source_key: &str, pivot: &PivotTable) -> String {
     if pivot.groupings.is_empty()
         && pivot.calculated_fields.is_empty()
+        && pivot.calculated_items.is_empty()
         && !pivot.refresh_policy.refresh_on_open
         && !pivot.refresh_policy.background_query
         && pivot.refresh_policy.missing_items_limit.is_none()
@@ -716,8 +721,15 @@ fn cache_key_for_pivot(source_key: &str, pivot: &PivotTable) -> String {
         .map(calculated_field_signature)
         .collect::<Vec<_>>()
         .join(";");
+    let mut calculated_item_signatures = pivot
+        .calculated_items
+        .iter()
+        .map(calculated_item_signature)
+        .collect::<Vec<_>>();
+    calculated_item_signatures.sort();
     format!(
-        "{source_key}|calculated:{calculated_signatures}|groupings:{}|refreshOnLoad:{}|backgroundQuery:{}|missingItemsLimit:{}",
+        "{source_key}|calculated:{calculated_signatures}|calculatedItems:{}|groupings:{}|refreshOnLoad:{}|backgroundQuery:{}|missingItemsLimit:{}",
+        calculated_item_signatures.join(";"),
         grouping_signatures.join(";"),
         pivot.refresh_policy.refresh_on_open,
         pivot.refresh_policy.background_query,
@@ -735,6 +747,25 @@ fn calculated_field_signature(field: &PivotCalculatedField) -> String {
         field.name.to_lowercase(),
         normalized_formula_for_key(&field.formula)
     )
+}
+
+fn calculated_item_signature(item: &PivotCalculatedItem) -> String {
+    format!(
+        "{}:{}:{}",
+        item.field.name.to_lowercase(),
+        pivot_value_signature(&item.item),
+        normalized_formula_for_key(&item.formula)
+    )
+}
+
+fn pivot_value_signature(value: &PivotValue) -> String {
+    match value {
+        PivotValue::Blank => "blank".to_string(),
+        PivotValue::Boolean(value) => format!("bool:{value}"),
+        PivotValue::Number(value) => format!("num:{:016x}", value.to_bits()),
+        PivotValue::String(value) => format!("str:{value}"),
+        PivotValue::Error(value) => format!("err:{value}"),
+    }
 }
 
 fn normalized_formula_for_key(formula: &str) -> String {
@@ -1027,6 +1058,7 @@ fn non_refreshable_source_fields(pivot: &PivotTable) -> XlsxResult<Vec<CacheFiel
         .chain(pivot.filters.iter().filter_map(filter_measure_field_ref))
         .chain(pivot.groupings.iter().map(grouping_field_ref))
         .chain(pivot.measures.iter().filter_map(show_as_base_field_ref))
+        .chain(pivot.calculated_items.iter().map(|item| &item.field))
     {
         if calculated_names.contains(&field.name.to_lowercase()) {
             continue;
@@ -1244,6 +1276,42 @@ fn apply_calculated_cache_fields(
             row.push(Some(index));
         }
         resolved.fields.push(cache_field);
+    }
+
+    Ok(())
+}
+
+fn apply_calculated_cache_items(
+    pivot_name: &str,
+    resolved: &mut ResolvedPivotSource,
+    calculated_items: &[PivotCalculatedItem],
+) -> XlsxResult<()> {
+    for item in calculated_items {
+        if item.field.name.trim().is_empty() {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} has a calculated item with a blank field name"
+            )));
+        }
+        if item.formula.trim().is_empty() {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} calculated item for field {} has a blank formula",
+                item.field.name
+            )));
+        }
+        if item.item.is_blank() {
+            return Err(XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} calculated item for field {} has a blank item name",
+                item.field.name
+            )));
+        }
+
+        let field_index = field_index(&resolved.fields, &item.field.name).ok_or_else(|| {
+            XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} calculated item references unknown source field: {}",
+                item.field.name
+            ))
+        })?;
+        resolved.fields[field_index].intern(item.item.clone());
     }
 
     Ok(())
@@ -2672,6 +2740,8 @@ pub(super) fn write_pivot_cache_definition_part<W: Write + Seek>(
         }
         w.write_event(Event::End(BytesEnd::new("cacheFields")))?;
 
+        write_calculated_items(w, part)?;
+
         w.write_event(Event::End(BytesEnd::new("pivotCacheDefinition")))?;
         Ok(())
     })
@@ -2866,6 +2936,80 @@ fn write_worksheet_source(
         _ => {}
     }
     w.write_event(Event::Empty(source))?;
+    Ok(())
+}
+
+fn write_calculated_items(w: &mut XmlWriter, part: &PivotCachePart) -> XlsxResult<()> {
+    if part.calculated_items.is_empty() {
+        return Ok(());
+    }
+
+    let count = part.calculated_items.len().to_string();
+    let mut calculated_items = BytesStart::new("calculatedItems");
+    calculated_items.push_attribute(("count", count.as_str()));
+    w.write_event(Event::Start(calculated_items))?;
+
+    for item in &part.calculated_items {
+        write_calculated_item(w, &part.fields, item)?;
+    }
+
+    w.write_event(Event::End(BytesEnd::new("calculatedItems")))?;
+    Ok(())
+}
+
+fn write_calculated_item(
+    w: &mut XmlWriter,
+    fields: &[CacheField],
+    item: &PivotCalculatedItem,
+) -> XlsxResult<()> {
+    let field_index = field_index(fields, &item.field.name).ok_or_else(|| {
+        XlsxError::InvalidFormat(format!(
+            "pivot calculated item references unknown source field: {}",
+            item.field.name
+        ))
+    })?;
+    let item_index = fields[field_index]
+        .item_lookup
+        .get(&item.item)
+        .copied()
+        .ok_or_else(|| {
+            XlsxError::InvalidFormat(format!(
+                "pivot calculated item {} was not registered in field {}",
+                item.item, item.field.name
+            ))
+        })?;
+
+    let field_index = field_index.to_string();
+    let item_index = item_index.to_string();
+    let formula = formula_for_cache_attr(&item.formula);
+
+    let mut calculated_item = BytesStart::new("calculatedItem");
+    calculated_item.push_attribute(("field", field_index.as_str()));
+    calculated_item.push_attribute(("formula", formula.as_str()));
+    w.write_event(Event::Start(calculated_item))?;
+
+    let mut pivot_area = BytesStart::new("pivotArea");
+    pivot_area.push_attribute(("field", field_index.as_str()));
+    pivot_area.push_attribute(("cacheIndex", "1"));
+    w.write_event(Event::Start(pivot_area))?;
+
+    let mut references = BytesStart::new("references");
+    references.push_attribute(("count", "1"));
+    w.write_event(Event::Start(references))?;
+
+    let mut reference = BytesStart::new("reference");
+    reference.push_attribute(("field", field_index.as_str()));
+    reference.push_attribute(("count", "1"));
+    w.write_event(Event::Start(reference))?;
+
+    let mut x = BytesStart::new("x");
+    x.push_attribute(("v", item_index.as_str()));
+    w.write_event(Event::Empty(x))?;
+
+    w.write_event(Event::End(BytesEnd::new("reference")))?;
+    w.write_event(Event::End(BytesEnd::new("references")))?;
+    w.write_event(Event::End(BytesEnd::new("pivotArea")))?;
+    w.write_event(Event::End(BytesEnd::new("calculatedItem")))?;
     Ok(())
 }
 

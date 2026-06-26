@@ -99,6 +99,14 @@ pub struct WasmPivotCalculatedFieldOptions {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmPivotCalculatedItemOptions {
+    pub field: String,
+    pub item: WasmPivotValueInput,
+    pub formula: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmPivotManualGroupOptions {
     pub name: String,
     pub members: Vec<WasmPivotValueInput>,
@@ -198,6 +206,7 @@ pub struct WasmPivotTableOptions {
     pub measures: Vec<WasmPivotMeasureOptions>,
     pub filters: Option<Vec<WasmPivotFilterOptions>>,
     pub calculated_fields: Option<Vec<WasmPivotCalculatedFieldOptions>>,
+    pub calculated_items: Option<Vec<WasmPivotCalculatedItemOptions>>,
     pub groupings: Option<Vec<WasmPivotGroupingOptions>>,
     pub refresh_policy: Option<WasmPivotRefreshPolicyOptions>,
     pub layout: Option<WasmPivotLayoutOptions>,
@@ -649,6 +658,24 @@ impl From<&core::PivotCalculatedField> for WasmPivotCalculatedFieldDefinition {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmPivotCalculatedItemDefinition {
+    pub field: String,
+    pub item: WasmPivotValue,
+    pub formula: String,
+}
+
+impl From<&core::PivotCalculatedItem> for WasmPivotCalculatedItemDefinition {
+    fn from(item: &core::PivotCalculatedItem) -> Self {
+        Self {
+            field: item.field.name.clone(),
+            item: WasmPivotValue::from(&item.item),
+            formula: item.formula.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmPivotManualGroupDefinition {
     pub name: String,
     pub members: Vec<WasmPivotValue>,
@@ -849,6 +876,7 @@ pub struct WasmPivotTableDefinition {
     pub page_fields: Vec<WasmPivotFieldDefinition>,
     pub filters: Vec<WasmPivotFilterDefinition>,
     pub calculated_fields: Vec<WasmPivotCalculatedFieldDefinition>,
+    pub calculated_items: Vec<WasmPivotCalculatedItemDefinition>,
     pub measures: Vec<WasmPivotMeasureDefinition>,
     pub groupings: Vec<WasmPivotGroupingDefinition>,
     pub layout: WasmPivotLayoutDefinition,
@@ -873,6 +901,7 @@ impl From<&core::PivotTable> for WasmPivotTableDefinition {
             page_fields: pivot.page_fields.iter().map(Into::into).collect(),
             filters: pivot.filters.iter().map(Into::into).collect(),
             calculated_fields: pivot.calculated_fields.iter().map(Into::into).collect(),
+            calculated_items: pivot.calculated_items.iter().map(Into::into).collect(),
             measures: pivot.measures.iter().map(Into::into).collect(),
             groupings: pivot.groupings.iter().map(Into::into).collect(),
             layout: WasmPivotLayoutDefinition::from(&pivot.layout),

@@ -110,6 +110,7 @@ pub use duke_sheets_core::{
     PivotAxis,
     PivotCacheInfo,
     PivotCacheSourceKind,
+    PivotCalculatedItem,
     PivotDateGroupUnit,
     PivotExtension,
     PivotExtensions,

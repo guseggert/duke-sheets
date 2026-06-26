@@ -111,6 +111,12 @@ export interface JsPivotCalculatedFieldOptions {
 
 export type JsPivotValueInput = string | number | boolean
 
+export interface JsPivotCalculatedItemOptions {
+  field: string
+  item: JsPivotValueInput
+  formula: string
+}
+
 export interface JsPivotManualGroupOptions {
   name: string
   members: JsPivotValueInput[]
@@ -225,6 +231,7 @@ export interface JsPivotTableOptions {
   measures: JsPivotMeasureOptions[]
   filters?: JsPivotFilterOptions[]
   calculatedFields?: JsPivotCalculatedFieldOptions[]
+  calculatedItems?: JsPivotCalculatedItemOptions[]
   groupings?: JsPivotGroupingOptions[]
   refreshPolicy?: JsPivotRefreshPolicyOptions
   layout?: JsPivotLayoutOptions

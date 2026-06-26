@@ -245,6 +245,9 @@ class TestPivotTables:
                     }
                 ],
                 "calculated_fields": [{"name": "Margin", "formula": "=Revenue*0.2"}],
+                "calculated_items": [
+                    {"field": "Region", "item": "Combined", "formula": "East+West"}
+                ],
                 "refresh_policy": {"refresh_on_open": True, "missing_items_limit": 25},
                 "layout": {
                     "kind": "tabular",
@@ -283,6 +286,11 @@ class TestPivotTables:
         assert pivot["calculated_fields"][0] == {
             "name": "Margin",
             "formula": "=Revenue*0.2",
+        }
+        assert pivot["calculated_items"][0] == {
+            "field": "Region",
+            "item": {"kind": "string", "text": "Combined"},
+            "formula": "East+West",
         }
         assert pivot["layout"]["kind"] == "tabular"
         assert pivot["layout"]["repeat_item_labels"] is True

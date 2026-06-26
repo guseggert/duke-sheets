@@ -1409,6 +1409,18 @@ export interface JsPivotCalculatedFieldOptions {
   formula: string
 }
 
+export interface JsPivotCalculatedItemDefinition {
+  field: string
+  item: JsPivotValue
+  formula: string
+}
+
+export interface JsPivotCalculatedItemOptions {
+  field: string
+  item: number | string | boolean
+  formula: string
+}
+
 export interface JsPivotChartSource {
   name: string
   formatId: number
@@ -1634,6 +1646,7 @@ export interface JsPivotTableDefinition {
   pageFields: Array<JsPivotFieldDefinition>
   filters: Array<JsPivotFilterDefinition>
   calculatedFields: Array<JsPivotCalculatedFieldDefinition>
+  calculatedItems: Array<JsPivotCalculatedItemDefinition>
   measures: Array<JsPivotMeasureDefinition>
   groupings: Array<JsPivotGroupingDefinition>
   layout: JsPivotLayoutDefinition
@@ -1664,6 +1677,7 @@ export interface JsPivotTableOptions {
   measures: Array<JsPivotMeasureOptions>
   filters?: Array<JsPivotFilterOptions>
   calculatedFields?: Array<JsPivotCalculatedFieldOptions>
+  calculatedItems?: Array<JsPivotCalculatedItemOptions>
   groupings?: Array<JsPivotGroupingOptions>
   refreshPolicy?: JsPivotRefreshPolicyOptions
   layout?: JsPivotLayoutOptions

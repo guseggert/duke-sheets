@@ -5384,6 +5384,54 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_pivot_calculated_items() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let pivot = PivotTable::builder("CalculatedRegion")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .calculated_item("Region", "Combined", "East+West")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"<s v="Combined"/>"#));
+        assert!(cache_def.contains(r#"<calculatedItems count="1">"#));
+        assert!(cache_def.contains(r#"<calculatedItem field="0" formula="East+West">"#));
+        assert!(cache_def.contains(r#"<pivotArea field="0" cacheIndex="1">"#));
+        assert!(cache_def.contains(r#"<x v="2"/>"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("CalculatedRegion")
+            .unwrap();
+        assert_eq!(pivot.calculated_items.len(), 1);
+        assert_eq!(pivot.calculated_items[0].field.name, "Region");
+        assert_eq!(
+            pivot.calculated_items[0].item,
+            PivotValue::String("Combined".into())
+        );
+        assert_eq!(pivot.calculated_items[0].formula, "East+West");
+    }
+
+    #[test]
     fn test_writer_round_trips_pivot_grouping() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();

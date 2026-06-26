@@ -323,6 +323,13 @@ fn transformed_snapshot_for_pivot(
     date_1904: bool,
     cache: &mut PivotRuntimeCache,
 ) -> Result<Arc<SourceSnapshot>> {
+    if !pivot.calculated_items.is_empty() {
+        return Err(Error::other(format!(
+            "pivot table {} uses calculated items, which local refresh does not support yet",
+            pivot.name
+        )));
+    }
+
     if pivot.calculated_fields.is_empty() && pivot.groupings.is_empty() {
         return Ok(source_snapshot.snapshot);
     }
@@ -5179,6 +5186,32 @@ mod tests {
         assert_eq!(number(&workbook, "F3"), 21.0);
         assert_eq!(text(&workbook, "E4"), "Grand Total");
         assert_eq!(number(&workbook, "F4"), 71.0);
+    }
+
+    #[test]
+    fn calculated_items_are_rejected_by_local_refresh() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let pivot = PivotTable::builder("CalculatedRegion")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .calculated_item("Region", "Combined", "East+West")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let err = workbook.refresh_pivots().unwrap_err();
+        assert!(err.to_string().contains("calculated items"));
     }
 
     #[test]

@@ -16,6 +16,7 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotCalculatedField,
+    PivotCalculatedItem,
     PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
     PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
     PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
@@ -177,6 +178,26 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
             builder = builder.calculated_field(
                 required_string(calculated_field, &["name"])?,
                 required_string(calculated_field, &["formula"])?,
+            );
+        }
+    }
+    if let Some(calculated_items_value) =
+        optional_any(dict, &["calculated_items", "calculatedItems"])?
+    {
+        let calculated_items = calculated_items_value
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("pivot calculated_items must be a list"))?;
+        for calculated_item in calculated_items.iter() {
+            let calculated_item = calculated_item
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("pivot calculated item must be a dict"))?;
+            let item_value = calculated_item
+                .get_item("item")?
+                .ok_or_else(|| PyValueError::new_err("pivot calculated item requires item"))?;
+            builder = builder.calculated_item(
+                required_string(calculated_item, &["field"])?,
+                pivot_value_from_py(&item_value)?,
+                required_string(calculated_item, &["formula"])?,
             );
         }
     }
@@ -792,6 +813,10 @@ fn pivot_table_to_py(py: Python<'_>, pivot: &PivotTable) -> PyResult<PyObject> {
         "calculated_fields",
         pivot_calculated_fields_to_py(py, &pivot.calculated_fields)?,
     )?;
+    dict.set_item(
+        "calculated_items",
+        pivot_calculated_items_to_py(py, &pivot.calculated_items)?,
+    )?;
     dict.set_item("measures", pivot_measures_to_py(py, &pivot.measures)?)?;
     dict.set_item("groupings", pivot_groupings_to_py(py, &pivot.groupings)?)?;
     dict.set_item("layout", pivot_layout_to_py(py, &pivot.layout)?)?;
@@ -1068,6 +1093,21 @@ fn pivot_calculated_fields_to_py(
         let dict = PyDict::new_bound(py);
         dict.set_item("name", &field.name)?;
         dict.set_item("formula", &field.formula)?;
+        items.append(dict)?;
+    }
+    Ok(items.into_any().unbind())
+}
+
+fn pivot_calculated_items_to_py(
+    py: Python<'_>,
+    calculated_items: &[PivotCalculatedItem],
+) -> PyResult<PyObject> {
+    let items = PyList::empty_bound(py);
+    for item in calculated_items {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("field", &item.field.name)?;
+        dict.set_item("item", pivot_value_to_py(py, &item.item)?)?;
+        dict.set_item("formula", &item.formula)?;
         items.append(dict)?;
     }
     Ok(items.into_any().unbind())

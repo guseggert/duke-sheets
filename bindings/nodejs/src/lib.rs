@@ -363,6 +363,13 @@ pub struct JsPivotCalculatedFieldOptions {
 }
 
 #[napi(object)]
+pub struct JsPivotCalculatedItemOptions {
+    pub field: String,
+    pub item: Either3<f64, String, bool>,
+    pub formula: String,
+}
+
+#[napi(object)]
 pub struct JsPivotManualGroupOptions {
     pub name: String,
     pub members: Vec<Either3<f64, String, bool>>,
@@ -455,6 +462,7 @@ pub struct JsPivotTableOptions {
     pub measures: Vec<JsPivotMeasureOptions>,
     pub filters: Option<Vec<JsPivotFilterOptions>>,
     pub calculated_fields: Option<Vec<JsPivotCalculatedFieldOptions>>,
+    pub calculated_items: Option<Vec<JsPivotCalculatedItemOptions>>,
     pub groupings: Option<Vec<JsPivotGroupingOptions>>,
     pub refresh_policy: Option<JsPivotRefreshPolicyOptions>,
     pub layout: Option<JsPivotLayoutOptions>,
@@ -739,6 +747,13 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
     }
     for calculated_field in options.calculated_fields.unwrap_or_default() {
         builder = builder.calculated_field(calculated_field.name, calculated_field.formula);
+    }
+    for calculated_item in options.calculated_items.unwrap_or_default() {
+        builder = builder.calculated_item(
+            calculated_item.field,
+            pivot_value_from_js(calculated_item.item),
+            calculated_item.formula,
+        );
     }
     for grouping in options.groupings.unwrap_or_default() {
         builder = builder.grouping(build_pivot_grouping_from_js(grouping)?);

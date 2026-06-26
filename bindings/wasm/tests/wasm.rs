@@ -367,6 +367,11 @@ fn test_pivot_table_definitions_from_options() {
         ("name", JsValue::from_str("Margin")),
         ("formula", JsValue::from_str("=Revenue*0.2")),
     ]);
+    let calculated_item = make_options(&[
+        ("field", JsValue::from_str("Region")),
+        ("item", JsValue::from_str("Combined")),
+        ("formula", JsValue::from_str("East+West")),
+    ]);
     let refresh_policy = make_options(&[
         ("refreshOnOpen", JsValue::TRUE),
         ("missingItemsLimit", JsValue::from_f64(25.0)),
@@ -387,6 +392,7 @@ fn test_pivot_table_definitions_from_options() {
         ("measures", make_array(&[measure])),
         ("filters", make_array(&[filter])),
         ("calculatedFields", make_array(&[calculated])),
+        ("calculatedItems", make_array(&[calculated_item])),
         ("refreshPolicy", refresh_policy),
         ("layout", layout),
         ("overwritePolicy", JsValue::from_str("failOnOccupied")),
@@ -441,6 +447,15 @@ fn test_pivot_table_definitions_from_options() {
         get_string_field(&calculated.get(0), "formula"),
         "=Revenue*0.2"
     );
+
+    let calculated_items =
+        Array::from(&Reflect::get(&pivot, &JsValue::from_str("calculatedItems")).unwrap());
+    let calculated_item = calculated_items.get(0);
+    assert_eq!(get_string_field(&calculated_item, "field"), "Region");
+    assert_eq!(get_string_field(&calculated_item, "formula"), "East+West");
+    let item = Reflect::get(&calculated_item, &JsValue::from_str("item")).unwrap();
+    assert_eq!(get_string_field(&item, "kind"), "string");
+    assert_eq!(get_string_field(&item, "text"), "Combined");
 
     let pivot_layout = Reflect::get(&pivot, &JsValue::from_str("layout")).unwrap();
     assert_eq!(get_string_field(&pivot_layout, "kind"), "tabular");

@@ -497,6 +497,32 @@ impl PivotCalculatedField {
     }
 }
 
+/// A calculated item attached to a source field item.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PivotCalculatedItem {
+    /// Source field containing the virtual item.
+    pub field: PivotFieldRef,
+    /// Virtual item name/value within the source field.
+    pub item: PivotValue,
+    /// Formula text. The formula may reference other items in the field.
+    pub formula: String,
+}
+
+impl PivotCalculatedItem {
+    /// Create a calculated item.
+    pub fn new(
+        field: impl Into<PivotFieldRef>,
+        item: impl Into<PivotValue>,
+        formula: impl Into<String>,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            item: item.into(),
+            formula: formula.into(),
+        }
+    }
+}
+
 /// Post-aggregation display transformation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PivotShowAs {
@@ -933,6 +959,8 @@ pub struct PivotTable {
     pub filters: Vec<PivotFilter>,
     /// Calculated fields materialized before aggregation.
     pub calculated_fields: Vec<PivotCalculatedField>,
+    /// Calculated items preserved in the pivot cache definition.
+    pub calculated_items: Vec<PivotCalculatedItem>,
     /// Value fields.
     pub measures: Vec<PivotMeasure>,
     /// Grouping definitions.
@@ -967,6 +995,7 @@ impl PivotTable {
             page_fields: Vec::new(),
             filters: Vec::new(),
             calculated_fields: Vec::new(),
+            calculated_items: Vec::new(),
             measures: Vec::new(),
             groupings: Vec::new(),
             layout: PivotLayout::default(),
@@ -1021,6 +1050,7 @@ pub struct PivotTableBuilder {
     page_fields: Vec<PivotField>,
     filters: Vec<PivotFilter>,
     calculated_fields: Vec<PivotCalculatedField>,
+    calculated_items: Vec<PivotCalculatedItem>,
     measures: Vec<PivotMeasure>,
     groupings: Vec<PivotGrouping>,
     layout: PivotLayout,
@@ -1042,6 +1072,7 @@ impl PivotTableBuilder {
             page_fields: Vec::new(),
             filters: Vec::new(),
             calculated_fields: Vec::new(),
+            calculated_items: Vec::new(),
             measures: Vec::new(),
             groupings: Vec::new(),
             layout: PivotLayout::default(),
@@ -1154,6 +1185,24 @@ impl PivotTableBuilder {
         self
     }
 
+    /// Add a calculated item.
+    pub fn calculated_item(
+        mut self,
+        field: impl Into<PivotFieldRef>,
+        item: impl Into<PivotValue>,
+        formula: impl Into<String>,
+    ) -> Self {
+        self.calculated_items
+            .push(PivotCalculatedItem::new(field, item, formula));
+        self
+    }
+
+    /// Add a fully configured calculated item.
+    pub fn pivot_calculated_item(mut self, item: PivotCalculatedItem) -> Self {
+        self.calculated_items.push(item);
+        self
+    }
+
     /// Add a grouping definition.
     pub fn grouping(mut self, grouping: PivotGrouping) -> Self {
         self.groupings.push(grouping);
@@ -1208,6 +1257,7 @@ impl PivotTableBuilder {
         table.page_fields = self.page_fields;
         table.filters = self.filters;
         table.calculated_fields = self.calculated_fields;
+        table.calculated_items = self.calculated_items;
         table.measures = self.measures;
         table.groupings = self.groupings;
         table.layout = self.layout;

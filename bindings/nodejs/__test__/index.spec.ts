@@ -222,6 +222,7 @@ describe("PivotTables", () => {
       ],
       filters: [{ kind: "label", field: "Region", operator: "beginsWith", text: "E" }],
       calculatedFields: [{ name: "Margin", formula: "=Revenue*0.2" }],
+      calculatedItems: [{ field: "Region", item: "Combined", formula: "East+West" }],
       refreshPolicy: { refreshOnOpen: true, missingItemsLimit: 25 },
       layout: {
         kind: "tabular",
@@ -264,6 +265,11 @@ describe("PivotTables", () => {
       text: "E",
     });
     expect(pivot?.calculatedFields[0]).toEqual({ name: "Margin", formula: "=Revenue*0.2" });
+    expect(pivot?.calculatedItems[0]).toMatchObject({
+      field: "Region",
+      item: { kind: "string", text: "Combined" },
+      formula: "East+West",
+    });
     expect(pivot?.layout).toMatchObject({
       kind: "tabular",
       repeatItemLabels: true,
