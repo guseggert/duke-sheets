@@ -629,6 +629,7 @@ fn write_rendered_pivot(
         }
     }
     write_pivot_merged_ranges(worksheet, &rendered)?;
+    write_pivot_row_outline_levels(worksheet, &job.pivot, &rendered);
     write_pivot_row_page_breaks(worksheet, &job.pivot, &rendered);
 
     if let Some(pivot) = worksheet.pivot_tables_mut().get_mut(job.pivot_index) {
@@ -661,6 +662,32 @@ fn write_pivot_merged_ranges(worksheet: &mut Worksheet, rendered: &RenderedPivot
         worksheet.merge_cells(range)?;
     }
     Ok(())
+}
+
+fn write_pivot_row_outline_levels(
+    worksheet: &mut Worksheet,
+    pivot: &PivotTable,
+    rendered: &RenderedPivot,
+) {
+    clear_pivot_row_outline_levels(worksheet, pivot.rendered_range);
+    clear_pivot_row_outline_levels(worksheet, Some(rendered.range));
+
+    for (offset, level) in rendered.row_outline_levels.iter().copied().enumerate() {
+        if level == 0 {
+            continue;
+        }
+        worksheet.set_row_outline_level(pivot.target.row + offset as u32, level);
+    }
+}
+
+fn clear_pivot_row_outline_levels(worksheet: &mut Worksheet, range: Option<CellRange>) {
+    let Some(range) = range else {
+        return;
+    };
+    for row in range.start.row..=range.end.row {
+        worksheet.set_row_outline_level(row, 0);
+        worksheet.set_row_collapsed(row, false);
+    }
 }
 
 fn range_contains_range(outer: CellRange, inner: CellRange) -> bool {
@@ -5409,6 +5436,7 @@ struct RenderedPivot {
     column_number_formats: Vec<Option<String>>,
     cell_number_formats: Vec<Vec<Option<String>>>,
     data_start_row: usize,
+    row_outline_levels: Vec<u8>,
     row_page_break_offsets: Vec<u32>,
     merged_ranges: Vec<CellRange>,
 }
@@ -5536,6 +5564,9 @@ fn render_pivot(
     let mut column_number_formats = pivot_column_number_formats(pivot, plan, aggregation);
     column_number_formats.resize(width, None);
     let cell_number_formats = pivot_cell_number_formats(pivot, plan, &rendered_cells);
+    let mut row_outline_levels = pivot_row_outline_levels(pivot, plan, aggregation);
+    row_outline_levels.truncate(rendered_cells.cells.len());
+    row_outline_levels.resize(rendered_cells.cells.len(), 0);
     let data_start_row = pivot_data_start_row(pivot, plan);
 
     let range = output_range(pivot.target, rendered_cells.cells.len(), width)?;
@@ -5547,6 +5578,7 @@ fn render_pivot(
         column_number_formats,
         cell_number_formats,
         data_start_row,
+        row_outline_levels,
         row_page_break_offsets,
         merged_ranges,
     })
@@ -5620,6 +5652,111 @@ fn row_has_deeper_item_label(row: &[CellValue], start_col: usize, label_width: u
 
 fn pivot_data_start_row(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usize {
     (page_field_row_count(pivot, plan) + body_header_row_count(pivot)) as usize
+}
+
+fn pivot_row_outline_levels(
+    pivot: &PivotTable,
+    plan: &CompiledPivotPlan,
+    aggregation: &PivotAggregation,
+) -> Vec<u8> {
+    let mut levels = Vec::new();
+    if pivot.layout.show_field_headers {
+        levels.push(0);
+    }
+
+    let compact = compact_row_layout(pivot, plan);
+    let rows_per_body_item = rows_per_pivot_body_item(pivot, plan);
+    let outlines_enabled = pivot.layout.show_expand_collapse && plan.row_indexes.len() > 1;
+
+    for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
+        let previous_row_key = row_index
+            .checked_sub(1)
+            .and_then(|index| aggregation.row_order.get(index));
+        if compact {
+            for position in compact_group_header_positions(row_key, previous_row_key) {
+                push_outline_rows(
+                    &mut levels,
+                    1,
+                    pivot_row_outline_level(outlines_enabled, position),
+                );
+            }
+        } else {
+            for position in row_group_start_positions(row_key, previous_row_key) {
+                if row_subtotal_at_top(pivot, plan, position) {
+                    push_outline_rows(
+                        &mut levels,
+                        rows_per_body_item
+                            * row_subtotal_rendered_count(plan, aggregation, row_key, position),
+                        pivot_row_outline_level(outlines_enabled, position),
+                    );
+                }
+            }
+        }
+
+        push_outline_rows(
+            &mut levels,
+            rows_per_body_item,
+            pivot_row_outline_level(outlines_enabled, row_key.len().saturating_sub(1)),
+        );
+
+        let next_row_key = aggregation.row_order.get(row_index + 1);
+        for position in row_group_end_positions(row_key, next_row_key) {
+            if compact {
+                if is_row_subtotal_position(row_key, position)
+                    && row_subtotal_enabled(plan, position)
+                {
+                    push_outline_rows(
+                        &mut levels,
+                        rows_per_body_item
+                            * row_subtotal_rendered_count(plan, aggregation, row_key, position),
+                        pivot_row_outline_level(outlines_enabled, position),
+                    );
+                }
+            } else if !row_subtotal_at_top(pivot, plan, position) {
+                push_outline_rows(
+                    &mut levels,
+                    rows_per_body_item
+                        * row_subtotal_rendered_count(plan, aggregation, row_key, position),
+                    pivot_row_outline_level(outlines_enabled, position),
+                );
+            }
+            if row_field_inserts_blank_row(plan, position) {
+                levels.push(0);
+            }
+        }
+    }
+
+    if pivot.layout.show_row_grand_totals {
+        push_outline_rows(&mut levels, rows_per_body_item, 0);
+    }
+
+    let page_rows = page_field_row_count(pivot, plan) as usize;
+    if page_rows > 0 {
+        let mut prefixed = vec![0; page_rows];
+        prefixed.extend(levels);
+        levels = prefixed;
+    }
+    levels
+}
+
+fn rows_per_pivot_body_item(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usize {
+    if values_on_rows(pivot, plan) {
+        plan.measures.len()
+    } else {
+        1
+    }
+}
+
+fn push_outline_rows(levels: &mut Vec<u8>, count: usize, level: u8) {
+    levels.extend(std::iter::repeat(level).take(count));
+}
+
+fn pivot_row_outline_level(enabled: bool, depth: usize) -> u8 {
+    if enabled && depth > 0 {
+        depth.min(7) as u8
+    } else {
+        0
+    }
 }
 
 fn page_field_row_count(pivot: &PivotTable, plan: &CompiledPivotPlan) -> u32 {
@@ -9992,6 +10129,91 @@ mod tests {
         assert_eq!(number(&workbook, "G6"), 7.0);
         assert_eq!(text(&workbook, "E7"), "Grand Total");
         assert_eq!(number(&workbook, "G7"), 22.0);
+    }
+
+    #[test]
+    fn refresh_writes_row_outline_levels_for_outline_layout() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Retail").unwrap();
+        sheet.set_cell_value("C4", 7.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Outline;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C4").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        assert_eq!(sheet.row_outline_level(0), 0);
+        assert_eq!(sheet.row_outline_level(1), 0);
+        assert_eq!(sheet.row_outline_level(2), 1);
+        assert_eq!(sheet.row_outline_level(3), 1);
+        assert_eq!(sheet.row_outline_level(4), 0);
+        assert_eq!(sheet.row_outline_level(5), 1);
+        assert_eq!(sheet.row_outline_level(6), 0);
+    }
+
+    #[test]
+    fn refresh_clears_stale_pivot_row_outline_levels() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 5.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.kind = PivotLayoutKind::Outline;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+        assert_eq!(workbook.worksheet(0).unwrap().row_outline_level(2), 1);
+
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.pivot_tables_mut()[0].layout.show_expand_collapse = false;
+        workbook.refresh_pivots().unwrap();
+
+        let sheet = workbook.worksheet(0).unwrap();
+        for row in 0..=4 {
+            assert_eq!(sheet.row_outline_level(row), 0);
+            assert!(!sheet.is_row_collapsed(row));
+        }
     }
 
     #[test]
