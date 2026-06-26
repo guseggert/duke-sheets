@@ -2858,13 +2858,14 @@ fn render_with_column_fields(
                 row_key: Some(row_key),
                 column_key: column_context_key(slot),
             };
-            row.extend(finalize_states_with_context(
+            row.extend(finalize_states_with_context_and_aggregate(
                 leaf_row_slot_states(aggregation, row_key, slot),
                 &plan.measures,
                 aggregation.row_totals.get(row_key),
                 column_slot_total(aggregation, slot),
                 &aggregation.grand_totals,
                 &context,
+                column_slot_aggregate_override(plan, slot),
             ));
         }
         cells.push(row);
@@ -2891,13 +2892,14 @@ fn render_with_column_fields(
                 row_key: None,
                 column_key: column_context_key(slot),
             };
-            row.extend(finalize_states_with_context(
+            row.extend(finalize_states_with_context_and_aggregate(
                 grand_row_slot_states(aggregation, slot),
                 &plan.measures,
                 Some(&aggregation.grand_totals),
                 column_slot_total(aggregation, slot),
                 &aggregation.grand_totals,
                 &context,
+                column_slot_aggregate_override(plan, slot),
             ));
         }
         cells.push(row);
@@ -2952,6 +2954,21 @@ fn column_context_key(slot: &ColumnRenderSlot) -> Option<&Vec<u32>> {
     match slot {
         ColumnRenderSlot::Leaf(column_key) => Some(column_key),
         ColumnRenderSlot::Subtotal(_) | ColumnRenderSlot::GrandTotal => None,
+    }
+}
+
+fn column_slot_aggregate_override(
+    plan: &CompiledPivotPlan,
+    slot: &ColumnRenderSlot,
+) -> Option<PivotAggregate> {
+    match slot {
+        ColumnRenderSlot::Subtotal(prefix) => subtotal_aggregate_for_field(
+            plan.column_fields
+                .get(prefix.len().saturating_sub(1))
+                .map(|field| field.subtotal)
+                .unwrap_or(PivotSubtotal::Automatic),
+        ),
+        ColumnRenderSlot::Leaf(_) | ColumnRenderSlot::GrandTotal => None,
     }
 }
 
@@ -3048,7 +3065,7 @@ fn append_row_subtotals_without_column_fields(
             row_key: None,
             column_key: Some(empty_column_key),
         };
-        row.extend(finalize_state_slice_with_context(
+        row.extend(finalize_state_slice_with_context_and_aggregate(
             states,
             &plan.measures,
             states,
@@ -3059,6 +3076,7 @@ fn append_row_subtotals_without_column_fields(
                 .unwrap_or(&[]),
             &aggregation.grand_totals,
             &context,
+            row_subtotal_aggregate_override(plan, position),
         ));
         cells.push(row);
     }
@@ -3077,6 +3095,7 @@ fn append_row_subtotals_with_column_fields(
         let prefix = row_key[..=position].to_vec();
         let mut row = row_subtotal_label_cells(snapshot, &plan.row_indexes, &prefix);
         let row_total = aggregation.row_subtotals.get(&prefix);
+        let row_aggregate_override = row_subtotal_aggregate_override(plan, position);
 
         for slot in column_slots {
             let context = ShowAsContext {
@@ -3086,18 +3105,31 @@ fn append_row_subtotals_with_column_fields(
                 row_key: None,
                 column_key: column_context_key(slot),
             };
-            row.extend(finalize_states_with_context(
+            row.extend(finalize_states_with_context_and_aggregate(
                 subtotal_row_slot_states(aggregation, &prefix, slot),
                 &plan.measures,
                 row_total,
                 column_slot_total(aggregation, slot),
                 &aggregation.grand_totals,
                 &context,
+                row_aggregate_override.or_else(|| column_slot_aggregate_override(plan, slot)),
             ));
         }
 
         cells.push(row);
     }
+}
+
+fn row_subtotal_aggregate_override(
+    plan: &CompiledPivotPlan,
+    position: usize,
+) -> Option<PivotAggregate> {
+    subtotal_aggregate_for_field(
+        plan.row_fields
+            .get(position)
+            .map(|field| field.subtotal)
+            .unwrap_or(PivotSubtotal::Automatic),
+    )
 }
 
 fn row_subtotal_positions_to_emit(
@@ -3169,6 +3201,23 @@ fn column_subtotal_enabled(plan: &CompiledPivotPlan, position: usize) -> bool {
         .get(position)
         .map(|field| !matches!(field.subtotal, PivotSubtotal::None))
         .unwrap_or(false)
+}
+
+fn subtotal_aggregate_for_field(subtotal: PivotSubtotal) -> Option<PivotAggregate> {
+    match subtotal {
+        PivotSubtotal::Automatic | PivotSubtotal::None => None,
+        PivotSubtotal::Sum => Some(PivotAggregate::Sum),
+        PivotSubtotal::Count => Some(PivotAggregate::Count),
+        PivotSubtotal::CountNumbers => Some(PivotAggregate::CountNumbers),
+        PivotSubtotal::Average => Some(PivotAggregate::Average),
+        PivotSubtotal::Min => Some(PivotAggregate::Min),
+        PivotSubtotal::Max => Some(PivotAggregate::Max),
+        PivotSubtotal::Product => Some(PivotAggregate::Product),
+        PivotSubtotal::StdDev => Some(PivotAggregate::StdDev),
+        PivotSubtotal::StdDevP => Some(PivotAggregate::StdDevP),
+        PivotSubtotal::Var => Some(PivotAggregate::Var),
+        PivotSubtotal::VarP => Some(PivotAggregate::VarP),
+    }
 }
 
 fn row_subtotal_label_cells(
@@ -3313,15 +3362,36 @@ fn finalize_states_with_context(
     grand_total: &[AggregateState],
     context: &ShowAsContext<'_>,
 ) -> Vec<CellValue> {
+    finalize_states_with_context_and_aggregate(
+        states,
+        measures,
+        row_total,
+        column_total,
+        grand_total,
+        context,
+        None,
+    )
+}
+
+fn finalize_states_with_context_and_aggregate(
+    states: Option<&Vec<AggregateState>>,
+    measures: &[PivotMeasure],
+    row_total: Option<&Vec<AggregateState>>,
+    column_total: Option<&Vec<AggregateState>>,
+    grand_total: &[AggregateState],
+    context: &ShowAsContext<'_>,
+    aggregate_override: Option<PivotAggregate>,
+) -> Vec<CellValue> {
     states
         .map(|states| {
-            finalize_state_slice_with_context(
+            finalize_state_slice_with_context_and_aggregate(
                 states,
                 measures,
                 row_total.map(Vec::as_slice).unwrap_or(&[]),
                 column_total.map(Vec::as_slice).unwrap_or(&[]),
                 grand_total,
                 context,
+                aggregate_override,
             )
         })
         .unwrap_or_else(|| vec![CellValue::Empty; measures.len()])
@@ -3335,17 +3405,39 @@ fn finalize_state_slice_with_context(
     grand_total: &[AggregateState],
     context: &ShowAsContext<'_>,
 ) -> Vec<CellValue> {
+    finalize_state_slice_with_context_and_aggregate(
+        states,
+        measures,
+        row_total,
+        column_total,
+        grand_total,
+        context,
+        None,
+    )
+}
+
+fn finalize_state_slice_with_context_and_aggregate(
+    states: &[AggregateState],
+    measures: &[PivotMeasure],
+    row_total: &[AggregateState],
+    column_total: &[AggregateState],
+    grand_total: &[AggregateState],
+    context: &ShowAsContext<'_>,
+    aggregate_override: Option<PivotAggregate>,
+) -> Vec<CellValue> {
     states
         .iter()
         .enumerate()
         .zip(measures.iter())
         .map(|((index, state), measure)| {
+            let aggregate = aggregate_override.unwrap_or(measure.aggregate);
             finalize_measure_with_context(
                 state,
                 measure,
-                state_number(row_total, index, measure.aggregate),
-                state_number(column_total, index, measure.aggregate),
-                state_number(grand_total, index, measure.aggregate),
+                aggregate,
+                state_number(row_total, index, aggregate),
+                state_number(column_total, index, aggregate),
+                state_number(grand_total, index, aggregate),
                 index,
                 context,
             )
@@ -3356,6 +3448,7 @@ fn finalize_state_slice_with_context(
 fn finalize_measure_with_context(
     state: &AggregateState,
     measure: &PivotMeasure,
+    aggregate: PivotAggregate,
     row_total: Option<f64>,
     column_total: Option<f64>,
     grand_total: Option<f64>,
@@ -3363,18 +3456,18 @@ fn finalize_measure_with_context(
     context: &ShowAsContext<'_>,
 ) -> CellValue {
     match &measure.show_as {
-        PivotShowAs::Normal => state.finalize(measure.aggregate),
+        PivotShowAs::Normal => state.finalize(aggregate),
         PivotShowAs::PercentOfGrandTotal => {
-            percentage_cell(state.finalize_number(measure.aggregate), grand_total)
+            percentage_cell(state.finalize_number(aggregate), grand_total)
         }
         PivotShowAs::PercentOfRowTotal => {
-            percentage_cell(state.finalize_number(measure.aggregate), row_total)
+            percentage_cell(state.finalize_number(aggregate), row_total)
         }
         PivotShowAs::PercentOfColumnTotal => {
-            percentage_cell(state.finalize_number(measure.aggregate), column_total)
+            percentage_cell(state.finalize_number(aggregate), column_total)
         }
         PivotShowAs::Index => index_cell(
-            state.finalize_number(measure.aggregate),
+            state.finalize_number(aggregate),
             row_total,
             column_total,
             grand_total,
@@ -3383,19 +3476,19 @@ fn finalize_measure_with_context(
             context,
             base_field.name.as_str(),
             measure_index,
-            measure.aggregate,
+            aggregate,
         )),
         PivotShowAs::DifferenceFrom {
             base_field,
             base_item,
         } => {
-            let current = state.finalize_number(measure.aggregate);
+            let current = state.finalize_number(aggregate);
             let base = base_item_value(
                 context,
                 base_field.name.as_str(),
                 base_item,
                 measure_index,
-                measure.aggregate,
+                aggregate,
             );
             optional_number_cell(current.zip(base).map(|(current, base)| current - base))
         }
@@ -3403,13 +3496,13 @@ fn finalize_measure_with_context(
             base_field,
             base_item,
         } => {
-            let current = state.finalize_number(measure.aggregate);
+            let current = state.finalize_number(aggregate);
             let base = base_item_value(
                 context,
                 base_field.name.as_str(),
                 base_item,
                 measure_index,
-                measure.aggregate,
+                aggregate,
             );
             match current.zip(base) {
                 Some((current, base)) if base != 0.0 => CellValue::Number((current - base) / base),
@@ -3420,14 +3513,14 @@ fn finalize_measure_with_context(
             context,
             base_field.name.as_str(),
             measure_index,
-            measure.aggregate,
+            aggregate,
             true,
         )),
         PivotShowAs::RankDescending { base_field } => optional_number_cell(rank_value(
             context,
             base_field.name.as_str(),
             measure_index,
-            measure.aggregate,
+            aggregate,
             false,
         )),
     }
@@ -4090,6 +4183,47 @@ mod tests {
     }
 
     #[test]
+    fn refreshes_custom_row_subtotal_function() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Segment").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Retail").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Online").unwrap();
+        sheet.set_cell_value("C3", 20.0).unwrap();
+
+        let mut region = PivotField::new("Region");
+        region.subtotal = PivotSubtotal::Average;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row(region)
+            .row("Segment")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(text(&workbook, "F2"), "Online");
+        assert_eq!(number(&workbook, "G2"), 20.0);
+        assert_eq!(text(&workbook, "E3"), "East");
+        assert_eq!(text(&workbook, "F3"), "Retail");
+        assert_eq!(number(&workbook, "G3"), 10.0);
+        assert_eq!(text(&workbook, "E4"), "East Total");
+        assert_eq!(number(&workbook, "G4"), 15.0);
+        assert_eq!(text(&workbook, "E5"), "Grand Total");
+        assert_eq!(number(&workbook, "G5"), 30.0);
+    }
+
+    #[test]
     fn refreshes_row_field_subtotals_with_column_fields() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
@@ -4209,6 +4343,54 @@ mod tests {
         assert_eq!(number(&workbook, "J4"), 7.0);
         assert_eq!(number(&workbook, "K4"), 7.0);
         assert_eq!(number(&workbook, "L4"), 25.0);
+    }
+
+    #[test]
+    fn refreshes_custom_column_subtotal_function() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Year").unwrap();
+        sheet.set_cell_value("C1", "Quarter").unwrap();
+        sheet.set_cell_value("D1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "2024").unwrap();
+        sheet.set_cell_value("C2", "Q1").unwrap();
+        sheet.set_cell_value("D2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "2024").unwrap();
+        sheet.set_cell_value("C3", "Q2").unwrap();
+        sheet.set_cell_value("D3", 20.0).unwrap();
+
+        let mut year = PivotField::new("Year");
+        year.subtotal = PivotSubtotal::Average;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:D3").unwrap())
+            .target_address("F1")
+            .unwrap()
+            .row("Region")
+            .column(year)
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F1"), "Region");
+        assert_eq!(text(&workbook, "G1"), "2024 | Q1");
+        assert_eq!(text(&workbook, "H1"), "2024 | Q2");
+        assert_eq!(text(&workbook, "I1"), "2024 Total");
+        assert_eq!(text(&workbook, "J1"), "Grand Total");
+        assert_eq!(text(&workbook, "F2"), "East");
+        assert_eq!(number(&workbook, "G2"), 10.0);
+        assert_eq!(number(&workbook, "H2"), 20.0);
+        assert_eq!(number(&workbook, "I2"), 15.0);
+        assert_eq!(number(&workbook, "J2"), 30.0);
+        assert_eq!(text(&workbook, "F3"), "Grand Total");
+        assert_eq!(number(&workbook, "I3"), 15.0);
+        assert_eq!(number(&workbook, "J3"), 30.0);
     }
 
     #[test]
