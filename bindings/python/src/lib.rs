@@ -262,6 +262,7 @@ fn build_pivot_measure_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotMeas
         measure = measure.with_show_as(parse_pivot_show_as(
             &show_as,
             optional_string(dict, &["base_field", "baseField"])?,
+            optional_pivot_value(dict, &["base_item", "baseItem"])?,
         )?);
     }
     Ok(measure)
@@ -406,6 +407,27 @@ fn optional_u32(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Option<u32>
         .transpose()
 }
 
+fn optional_pivot_value(dict: &Bound<'_, PyDict>, keys: &[&str]) -> PyResult<Option<PivotValue>> {
+    optional_any(dict, keys)?
+        .map(|value| pivot_value_from_py(&value))
+        .transpose()
+}
+
+fn pivot_value_from_py(value: &Bound<'_, PyAny>) -> PyResult<PivotValue> {
+    if let Ok(value) = value.extract::<bool>() {
+        return Ok(PivotValue::Boolean(value));
+    }
+    if let Ok(value) = value.extract::<f64>() {
+        return Ok(PivotValue::Number(value));
+    }
+    if let Ok(value) = value.extract::<String>() {
+        return Ok(PivotValue::String(value));
+    }
+    Err(PyValueError::new_err(
+        "pivot value must be a string, number, or boolean",
+    ))
+}
+
 fn parse_pivot_layout_kind(value: &str) -> PyResult<PivotLayoutKind> {
     Ok(match value {
         "compact" => PivotLayoutKind::Compact,
@@ -539,13 +561,28 @@ fn parse_pivot_date_group_unit(value: &str) -> PyResult<PivotDateGroupUnit> {
     })
 }
 
-fn parse_pivot_show_as(value: &str, base_field: Option<String>) -> PyResult<PivotShowAs> {
+fn parse_pivot_show_as(
+    value: &str,
+    base_field: Option<String>,
+    base_item: Option<PivotValue>,
+) -> PyResult<PivotShowAs> {
     Ok(match value {
         "normal" => PivotShowAs::Normal,
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
         "index" => PivotShowAs::Index,
+        "runningTotal" | "runTotal" => PivotShowAs::RunningTotal {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "differenceFrom" | "difference" => PivotShowAs::DifferenceFrom {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+            base_item: require_pivot_base_item(value, base_item)?,
+        },
+        "percentDifferenceFrom" | "percentDiff" => PivotShowAs::PercentDifferenceFrom {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+            base_item: require_pivot_base_item(value, base_item)?,
+        },
         "rankAscending" => PivotShowAs::RankAscending {
             base_field: require_pivot_base_field(value, base_field)?.into(),
         },
@@ -563,6 +600,12 @@ fn parse_pivot_show_as(value: &str, base_field: Option<String>) -> PyResult<Pivo
 fn require_pivot_base_field(value: &str, base_field: Option<String>) -> PyResult<String> {
     base_field.ok_or_else(|| {
         PyValueError::new_err(format!("pivot show_as mode {value} requires base_field"))
+    })
+}
+
+fn require_pivot_base_item(value: &str, base_item: Option<PivotValue>) -> PyResult<PivotValue> {
+    base_item.ok_or_else(|| {
+        PyValueError::new_err(format!("pivot show_as mode {value} requires base_item"))
     })
 }
 

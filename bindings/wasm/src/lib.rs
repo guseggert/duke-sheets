@@ -199,8 +199,9 @@ export interface PivotMeasureOptions {
   field: string;
   aggregate?: "sum" | "count" | "countNumbers" | "average" | "max" | "min" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
   name?: string;
-  showAs?: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "index" | "rankAscending" | "rankDescending";
+  showAs?: "normal" | "percentOfGrandTotal" | "percentOfRowTotal" | "percentOfColumnTotal" | "index" | "runningTotal" | "runTotal" | "differenceFrom" | "difference" | "percentDifferenceFrom" | "percentDiff" | "rankAscending" | "rankDescending";
   baseField?: string;
+  baseItem?: string | number | boolean;
 }
 
 export interface PivotItemFilterOptions {
@@ -648,7 +649,11 @@ fn build_pivot_measure_from_wasm(
         measure = measure.with_name(name);
     }
     if let Some(show_as) = options.show_as {
-        measure = measure.with_show_as(parse_pivot_show_as(&show_as, options.base_field)?);
+        measure = measure.with_show_as(parse_pivot_show_as(
+            &show_as,
+            options.base_field,
+            options.base_item,
+        )?);
     }
     Ok(measure)
 }
@@ -803,13 +808,28 @@ fn parse_pivot_date_group_unit(value: &str) -> Result<PivotDateGroupUnit, JsErro
     })
 }
 
-fn parse_pivot_show_as(value: &str, base_field: Option<String>) -> Result<PivotShowAs, JsError> {
+fn parse_pivot_show_as(
+    value: &str,
+    base_field: Option<String>,
+    base_item: Option<WasmPivotValueInput>,
+) -> Result<PivotShowAs, JsError> {
     Ok(match value {
         "normal" => PivotShowAs::Normal,
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
         "index" => PivotShowAs::Index,
+        "runningTotal" | "runTotal" => PivotShowAs::RunningTotal {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "differenceFrom" | "difference" => PivotShowAs::DifferenceFrom {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+            base_item: require_pivot_base_item(value, base_item)?,
+        },
+        "percentDifferenceFrom" | "percentDiff" => PivotShowAs::PercentDifferenceFrom {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+            base_item: require_pivot_base_item(value, base_item)?,
+        },
         "rankAscending" => PivotShowAs::RankAscending {
             base_field: require_pivot_base_field(value, base_field)?.into(),
         },
@@ -826,6 +846,23 @@ fn parse_pivot_show_as(value: &str, base_field: Option<String>) -> Result<PivotS
 
 fn require_pivot_base_field(value: &str, base_field: Option<String>) -> Result<String, JsError> {
     base_field.ok_or_else(|| JsError::new(&format!("pivot showAs mode {value} requires baseField")))
+}
+
+fn require_pivot_base_item(
+    value: &str,
+    base_item: Option<WasmPivotValueInput>,
+) -> Result<PivotValue, JsError> {
+    base_item
+        .map(pivot_value_from_wasm)
+        .ok_or_else(|| JsError::new(&format!("pivot showAs mode {value} requires baseItem")))
+}
+
+fn pivot_value_from_wasm(value: WasmPivotValueInput) -> PivotValue {
+    match value {
+        WasmPivotValueInput::Number(number) => PivotValue::Number(number),
+        WasmPivotValueInput::String(string) => PivotValue::String(string),
+        WasmPivotValueInput::Boolean(boolean) => PivotValue::Boolean(boolean),
+    }
 }
 
 fn cell_error_to_string(e: &CellError) -> &'static str {

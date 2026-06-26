@@ -56,6 +56,14 @@ pub struct WasmRowsOptions {
 }
 
 #[derive(Deserialize)]
+#[serde(untagged)]
+pub enum WasmPivotValueInput {
+    Number(f64),
+    String(String),
+    Boolean(bool),
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmPivotMeasureOptions {
     pub field: String,
@@ -63,6 +71,7 @@ pub struct WasmPivotMeasureOptions {
     pub name: Option<String>,
     pub show_as: Option<String>,
     pub base_field: Option<String>,
+    pub base_item: Option<WasmPivotValueInput>,
 }
 
 #[derive(Deserialize)]

@@ -337,6 +337,7 @@ pub struct JsPivotMeasureOptions {
     pub name: Option<String>,
     pub show_as: Option<String>,
     pub base_field: Option<String>,
+    pub base_item: Option<Either3<f64, String, bool>>,
 }
 
 #[napi(object)]
@@ -671,7 +672,11 @@ fn build_pivot_measure_from_js(options: JsPivotMeasureOptions) -> Result<PivotMe
         measure = measure.with_name(name);
     }
     if let Some(show_as) = options.show_as {
-        measure = measure.with_show_as(parse_pivot_show_as(&show_as, options.base_field)?);
+        measure = measure.with_show_as(parse_pivot_show_as(
+            &show_as,
+            options.base_field,
+            options.base_item,
+        )?);
     }
     Ok(measure)
 }
@@ -824,13 +829,28 @@ fn parse_pivot_date_group_unit(value: &str) -> Result<PivotDateGroupUnit> {
     })
 }
 
-fn parse_pivot_show_as(value: &str, base_field: Option<String>) -> Result<PivotShowAs> {
+fn parse_pivot_show_as(
+    value: &str,
+    base_field: Option<String>,
+    base_item: Option<Either3<f64, String, bool>>,
+) -> Result<PivotShowAs> {
     Ok(match value {
         "normal" => PivotShowAs::Normal,
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
         "index" => PivotShowAs::Index,
+        "runningTotal" | "runTotal" => PivotShowAs::RunningTotal {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+        },
+        "differenceFrom" | "difference" => PivotShowAs::DifferenceFrom {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+            base_item: require_pivot_base_item(value, base_item)?,
+        },
+        "percentDifferenceFrom" | "percentDiff" => PivotShowAs::PercentDifferenceFrom {
+            base_field: require_pivot_base_field(value, base_field)?.into(),
+            base_item: require_pivot_base_item(value, base_item)?,
+        },
         "rankAscending" => PivotShowAs::RankAscending {
             base_field: require_pivot_base_field(value, base_field)?.into(),
         },
@@ -849,6 +869,23 @@ fn require_pivot_base_field(value: &str, base_field: Option<String>) -> Result<S
     base_field.ok_or_else(|| {
         napi::Error::from_reason(format!("pivot showAs mode {value} requires baseField"))
     })
+}
+
+fn require_pivot_base_item(
+    value: &str,
+    base_item: Option<Either3<f64, String, bool>>,
+) -> Result<PivotValue> {
+    base_item.map(pivot_value_from_js).ok_or_else(|| {
+        napi::Error::from_reason(format!("pivot showAs mode {value} requires baseItem"))
+    })
+}
+
+fn pivot_value_from_js(value: Either3<f64, String, bool>) -> PivotValue {
+    match value {
+        Either3::A(number) => PivotValue::Number(number),
+        Either3::B(string) => PivotValue::String(string),
+        Either3::C(boolean) => PivotValue::Boolean(boolean),
+    }
 }
 
 /// A worksheet within a workbook.

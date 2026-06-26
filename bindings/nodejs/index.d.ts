@@ -18,8 +18,22 @@ export interface JsPivotMeasureOptions {
   field: string
   aggregate?: 'sum' | 'count' | 'countNumbers' | 'average' | 'max' | 'min' | 'product' | 'stdDev' | 'stdDevP' | 'var' | 'varP'
   name?: string
-  showAs?: 'normal' | 'percentOfGrandTotal' | 'percentOfRowTotal' | 'percentOfColumnTotal' | 'index' | 'rankAscending' | 'rankDescending'
+  showAs?:
+    | 'normal'
+    | 'percentOfGrandTotal'
+    | 'percentOfRowTotal'
+    | 'percentOfColumnTotal'
+    | 'index'
+    | 'runningTotal'
+    | 'runTotal'
+    | 'differenceFrom'
+    | 'difference'
+    | 'percentDifferenceFrom'
+    | 'percentDiff'
+    | 'rankAscending'
+    | 'rankDescending'
   baseField?: string
+  baseItem?: string | number | boolean
 }
 
 export interface JsPivotItemFilterOptions {
