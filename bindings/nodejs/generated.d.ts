@@ -202,6 +202,18 @@ export declare class Workbook {
   get dataConnectionNames(): Array<string>
   /** Workbook-level data connection definitions. */
   get dataConnections(): Array<JsWorkbookConnectionDefinition>
+  /** Number of raw workbook extension elements preserved from the package. */
+  get workbookExtensionCount(): number
+  /** Raw workbook extension elements preserved from workbook.xml. */
+  get workbookExtensions(): Array<JsWorkbookExtension>
+  /** Number of raw workbook-related extension package parts. */
+  get workbookExtensionPartCount(): number
+  /** Raw workbook-related extension package parts. */
+  get workbookExtensionParts(): Array<JsWorkbookExtensionPart>
+  /** Get a raw workbook extension package part by package path. */
+  getWorkbookExtensionPart(path: string): JsWorkbookExtensionPart | null
+  /** Get a raw workbook extension package part by workbook relationship id. */
+  getWorkbookExtensionPartByRelationshipId(relationshipId: string): JsWorkbookExtensionPart | null
   /** Get a workbook-level data connection by name. */
   getDataConnection(name: string): JsWorkbookConnectionDefinition | null
   /** Get a workbook-level data connection by id. */
@@ -2020,6 +2032,19 @@ export interface JsWorkbookConnectionOptions {
   refreshOnLoad?: boolean
   background?: boolean
   saveData?: boolean
+}
+
+export interface JsWorkbookExtension {
+  uri: string
+  payload: Buffer
+}
+
+export interface JsWorkbookExtensionPart {
+  path: string
+  contentType: string
+  relationshipType: string
+  relationshipId?: string
+  payload: Buffer
 }
 
 /** Workbook-level settings. */

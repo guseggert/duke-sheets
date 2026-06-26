@@ -5,7 +5,7 @@
 
 use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -21,7 +21,7 @@ use duke_sheets_core::{
     PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
     PivotOverwritePolicy, PivotRefreshPolicy, PivotRefreshStatus, PivotShowAs, PivotSort,
     PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable, PivotValue,
-    WorkbookConnection, WorkbookConnectionKind,
+    WorkbookConnection, WorkbookConnectionKind, WorkbookExtension, WorkbookExtensionPart,
 };
 
 mod types;
@@ -1506,6 +1506,29 @@ fn workbook_connection_kind_to_python(kind: &WorkbookConnectionKind) -> &'static
     }
 }
 
+fn workbook_extension_to_py(
+    py: Python<'_>,
+    extension: &WorkbookExtension,
+) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("uri", &extension.uri)?;
+    dict.set_item("payload", PyBytes::new_bound(py, &extension.payload))?;
+    Ok(dict.into_any().unbind())
+}
+
+fn workbook_extension_part_to_py(
+    py: Python<'_>,
+    part: &WorkbookExtensionPart,
+) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("path", &part.path)?;
+    dict.set_item("content_type", &part.content_type)?;
+    dict.set_item("relationship_type", &part.relationship_type)?;
+    dict.set_item("relationship_id", &part.relationship_id)?;
+    dict.set_item("payload", PyBytes::new_bound(py, &part.payload))?;
+    Ok(dict.into_any().unbind())
+}
+
 fn build_workbook_connection_from_py(options: &Bound<'_, PyAny>) -> PyResult<WorkbookConnection> {
     let dict = options
         .downcast::<PyDict>()
@@ -2597,6 +2620,70 @@ impl PyWorkbook {
             .iter()
             .map(|connection| workbook_connection_to_py(py, connection))
             .collect()
+    }
+
+    /// Number of raw workbook extension elements preserved from the package.
+    #[getter]
+    fn workbook_extension_count(&self) -> PyResult<usize> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb.workbook_extensions().len())
+    }
+
+    /// Raw workbook extension elements preserved from workbook.xml.
+    #[getter]
+    fn workbook_extensions(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        wb.workbook_extensions()
+            .iter()
+            .map(|extension| workbook_extension_to_py(py, extension))
+            .collect()
+    }
+
+    /// Number of raw workbook-related extension package parts.
+    #[getter]
+    fn workbook_extension_part_count(&self) -> PyResult<usize> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        Ok(wb.workbook_extension_parts().len())
+    }
+
+    /// Raw workbook-related extension package parts.
+    #[getter]
+    fn workbook_extension_parts(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        wb.workbook_extension_parts()
+            .iter()
+            .map(|part| workbook_extension_part_to_py(py, part))
+            .collect()
+    }
+
+    /// Get a raw workbook extension package part by package path.
+    #[pyo3(signature = (path))]
+    fn get_workbook_extension_part(
+        &self,
+        path: &str,
+        py: Python<'_>,
+    ) -> PyResult<Option<PyObject>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        wb.workbook_extension_parts()
+            .iter()
+            .find(|part| part.path == path)
+            .map(|part| workbook_extension_part_to_py(py, part))
+            .transpose()
+    }
+
+    /// Get a raw workbook extension package part by workbook relationship id.
+    #[pyo3(signature = (relationship_id))]
+    fn get_workbook_extension_part_by_relationship_id(
+        &self,
+        relationship_id: &str,
+        py: Python<'_>,
+    ) -> PyResult<Option<PyObject>> {
+        let wb = self.inner.read().map_err(to_py_err)?;
+        wb.workbook_extension_parts()
+            .iter()
+            .find(|part| part.relationship_id.as_deref() == Some(relationship_id))
+            .map(|part| workbook_extension_part_to_py(py, part))
+            .transpose()
     }
 
     /// Get a workbook-level data connection by name.

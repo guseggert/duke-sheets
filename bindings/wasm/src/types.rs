@@ -1273,6 +1273,45 @@ fn workbook_connection_kind_name(kind: &core::WorkbookConnectionKind) -> &'stati
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookExtension {
+    pub uri: String,
+    pub payload: Vec<u8>,
+}
+
+impl From<&core::WorkbookExtension> for WasmWorkbookExtension {
+    fn from(extension: &core::WorkbookExtension) -> Self {
+        Self {
+            uri: extension.uri.clone(),
+            payload: extension.payload.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WasmWorkbookExtensionPart {
+    pub path: String,
+    pub content_type: String,
+    pub relationship_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relationship_id: Option<String>,
+    pub payload: Vec<u8>,
+}
+
+impl From<&core::WorkbookExtensionPart> for WasmWorkbookExtensionPart {
+    fn from(part: &core::WorkbookExtensionPart) -> Self {
+        Self {
+            path: part.path.clone(),
+            content_type: part.content_type.clone(),
+            relationship_type: part.relationship_type.clone(),
+            relationship_id: part.relationship_id.clone(),
+            payload: part.payload.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmPivotRefreshStats {
     pub pivot_count: usize,
     pub pivots_refreshed: usize,

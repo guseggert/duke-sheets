@@ -671,6 +671,19 @@ export interface DataConnectionDefinition {
   rowDrillCount?: number;
 }
 
+export interface WorkbookExtension {
+  uri: string;
+  payload: number[];
+}
+
+export interface WorkbookExtensionPart {
+  path: string;
+  contentType: string;
+  relationshipType: string;
+  relationshipId?: string;
+  payload: number[];
+}
+
 export interface PivotRefreshStats {
   pivotCount: number;
   pivotsRefreshed: number;
@@ -684,8 +697,14 @@ export interface Workbook {
   readonly dataConnectionCount: number;
   readonly dataConnectionNames: string[];
   readonly dataConnections: DataConnectionDefinition[];
+  readonly workbookExtensionCount: number;
+  readonly workbookExtensions: WorkbookExtension[];
+  readonly workbookExtensionPartCount: number;
+  readonly workbookExtensionParts: WorkbookExtensionPart[];
   getDataConnection(name: string): DataConnectionDefinition | null;
   getDataConnectionById(id: number): DataConnectionDefinition | null;
+  getWorkbookExtensionPart(path: string): WorkbookExtensionPart | null;
+  getWorkbookExtensionPartByRelationshipId(relationshipId: string): WorkbookExtensionPart | null;
   addDataConnection(options: DataConnectionOptions): void;
   refreshPivots(): PivotRefreshStats;
 }
@@ -2259,6 +2278,69 @@ impl Workbook {
             .map(WasmWorkbookConnectionDefinition::from)
             .collect::<Vec<_>>();
         to_js_value(&connections)
+    }
+
+    #[wasm_bindgen(getter, js_name = workbookExtensionCount)]
+    pub fn workbook_extension_count(&self) -> usize {
+        let wb = self.inner.borrow();
+        wb.workbook_extensions().len()
+    }
+
+    #[wasm_bindgen(getter, js_name = workbookExtensions)]
+    pub fn workbook_extensions(&self) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        let extensions = wb
+            .workbook_extensions()
+            .iter()
+            .map(WasmWorkbookExtension::from)
+            .collect::<Vec<_>>();
+        to_js_value(&extensions)
+    }
+
+    #[wasm_bindgen(getter, js_name = workbookExtensionPartCount)]
+    pub fn workbook_extension_part_count(&self) -> usize {
+        let wb = self.inner.borrow();
+        wb.workbook_extension_parts().len()
+    }
+
+    #[wasm_bindgen(getter, js_name = workbookExtensionParts)]
+    pub fn workbook_extension_parts(&self) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        let parts = wb
+            .workbook_extension_parts()
+            .iter()
+            .map(WasmWorkbookExtensionPart::from)
+            .collect::<Vec<_>>();
+        to_js_value(&parts)
+    }
+
+    #[wasm_bindgen(js_name = getWorkbookExtensionPart)]
+    pub fn get_workbook_extension_part(&self, path: &str) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        match wb
+            .workbook_extension_parts()
+            .iter()
+            .find(|part| part.path == path)
+        {
+            Some(part) => to_js_value(&WasmWorkbookExtensionPart::from(part)),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = getWorkbookExtensionPartByRelationshipId)]
+    pub fn get_workbook_extension_part_by_relationship_id(
+        &self,
+        relationship_id: &str,
+    ) -> Result<JsValue, JsError> {
+        let wb = self.inner.borrow();
+        match wb
+            .workbook_extension_parts()
+            .iter()
+            .find(|part| part.relationship_id.as_deref() == Some(relationship_id))
+        {
+            Some(part) => to_js_value(&WasmWorkbookExtensionPart::from(part)),
+            None => Ok(JsValue::NULL),
+        }
     }
 
     #[wasm_bindgen(js_name = getDataConnection)]

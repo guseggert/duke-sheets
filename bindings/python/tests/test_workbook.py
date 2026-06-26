@@ -468,6 +468,80 @@ class TestPivotTables:
         )
         assert roundtrip.get_data_connection_by_id(10)["send_locale"] is True
 
+    def test_workbook_extension_parts_roundtrip(self, temp_dir):
+        """Should expose preserved workbook extension package parts."""
+        import os
+        import zipfile
+
+        import duke_sheets
+
+        base_path = os.path.join(temp_dir, "base.xlsx")
+        path = os.path.join(temp_dir, "extensions.xlsx")
+        out_path = os.path.join(temp_dir, "extensions_roundtrip.xlsx")
+        slicer_payload = (
+            b'<x14:slicerCacheDefinition '
+            b'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" '
+            b'name="Slicer_Region"/>'
+        )
+        extension_uri = "{05C60535-1F16-4fd2-B633-F4F36F0B64E0}"
+
+        duke_sheets.Workbook().save(base_path)
+        with zipfile.ZipFile(base_path, "r") as src:
+            entries = {info.filename: src.read(info.filename) for info in src.infolist()}
+
+        workbook_xml = entries["xl/workbook.xml"].decode("utf-8")
+        workbook_ext = (
+            f'<extLst><ext uri="{extension_uri}" '
+            'xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main">'
+            '<x15:workbookPr chartTrackingRefBase="1"/></ext></extLst>'
+        )
+        entries["xl/workbook.xml"] = workbook_xml.replace(
+            "</workbook>",
+            f"{workbook_ext}</workbook>",
+        ).encode("utf-8")
+
+        rels_xml = entries["xl/_rels/workbook.xml.rels"].decode("utf-8")
+        entries["xl/_rels/workbook.xml.rels"] = rels_xml.replace(
+            "</Relationships>",
+            '<Relationship Id="rIdSlicer1" '
+            'Type="http://schemas.microsoft.com/office/2007/relationships/slicerCache" '
+            'Target="slicerCaches/slicerCache1.xml"/></Relationships>',
+        ).encode("utf-8")
+
+        content_types_xml = entries["[Content_Types].xml"].decode("utf-8")
+        entries["[Content_Types].xml"] = content_types_xml.replace(
+            "</Types>",
+            '<Override PartName="/xl/slicerCaches/slicerCache1.xml" '
+            'ContentType="application/vnd.ms-excel.slicerCache+xml"/></Types>',
+        ).encode("utf-8")
+        entries["xl/slicerCaches/slicerCache1.xml"] = slicer_payload
+
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as dst:
+            for name, payload in entries.items():
+                dst.writestr(name, payload)
+
+        wb = duke_sheets.Workbook.open(path)
+        assert wb.workbook_extension_count == 1
+        assert wb.workbook_extension_part_count == 1
+        assert wb.workbook_extensions[0]["uri"] == extension_uri
+        assert b"chartTrackingRefBase" in wb.workbook_extensions[0]["payload"]
+
+        part = wb.get_workbook_extension_part("xl/slicerCaches/slicerCache1.xml")
+        assert part == wb.get_workbook_extension_part_by_relationship_id("rIdSlicer1")
+        assert part["content_type"] == "application/vnd.ms-excel.slicerCache+xml"
+        assert part["relationship_id"] == "rIdSlicer1"
+        assert part["payload"] == slicer_payload
+        assert wb.get_workbook_extension_part("xl/slicerCaches/missing.xml") is None
+        assert wb.get_workbook_extension_part_by_relationship_id("rIdMissing") is None
+
+        wb.save(out_path)
+        roundtrip = duke_sheets.Workbook.open(out_path)
+        assert roundtrip.workbook_extension_count == 1
+        assert roundtrip.workbook_extension_part_count == 1
+        assert roundtrip.get_workbook_extension_part_by_relationship_id("rIdSlicer1")[
+            "payload"
+        ] == slicer_payload
+
     def test_olap_pivot_roundtrip(self, temp_dir):
         """Should save and read OLAP pivot source metadata."""
         import os

@@ -11,6 +11,8 @@ import type {
   JsRow,
   JsRowsOptions,
   JsWorkbookConnectionDefinition,
+  JsWorkbookExtension,
+  JsWorkbookExtensionPart,
   Worksheet as _Worksheet,
 } from './generated'
 
@@ -318,6 +320,24 @@ declare module './generated' {
 
     /** Workbook-level data connection definitions. */
     readonly dataConnections: JsWorkbookConnectionDefinition[]
+
+    /** Number of raw workbook extension elements preserved from the package. */
+    readonly workbookExtensionCount: number
+
+    /** Raw workbook extension elements preserved from workbook.xml. */
+    readonly workbookExtensions: JsWorkbookExtension[]
+
+    /** Number of raw workbook-related extension package parts. */
+    readonly workbookExtensionPartCount: number
+
+    /** Raw workbook-related extension package parts. */
+    readonly workbookExtensionParts: JsWorkbookExtensionPart[]
+
+    /** Get a raw workbook extension package part by package path. */
+    getWorkbookExtensionPart(path: string): JsWorkbookExtensionPart | null
+
+    /** Get a raw workbook extension package part by workbook relationship id. */
+    getWorkbookExtensionPartByRelationshipId(relationshipId: string): JsWorkbookExtensionPart | null
 
     /** Get a workbook-level data connection by name. */
     getDataConnection(name: string): JsWorkbookConnectionDefinition | null

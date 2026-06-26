@@ -21,6 +21,7 @@ use duke_sheets_core::{
     PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
     PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle, PivotSubtotal, PivotTable,
     PivotValue, Workbook as CoreWorkbook, WorkbookConnection, WorkbookConnectionKind,
+    WorkbookExtension, WorkbookExtensionPart,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -661,6 +662,42 @@ fn workbook_connection_kind_name(kind: &WorkbookConnectionKind) -> &'static str 
         WorkbookConnectionKind::Olap { .. } => "olap",
         WorkbookConnectionKind::Web { .. } => "web",
         WorkbookConnectionKind::Text { .. } => "text",
+    }
+}
+
+#[napi(object)]
+pub struct JsWorkbookExtension {
+    pub uri: String,
+    pub payload: Buffer,
+}
+
+impl From<&WorkbookExtension> for JsWorkbookExtension {
+    fn from(extension: &WorkbookExtension) -> Self {
+        Self {
+            uri: extension.uri.clone(),
+            payload: extension.payload.clone().into(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsWorkbookExtensionPart {
+    pub path: String,
+    pub content_type: String,
+    pub relationship_type: String,
+    pub relationship_id: Option<String>,
+    pub payload: Buffer,
+}
+
+impl From<&WorkbookExtensionPart> for JsWorkbookExtensionPart {
+    fn from(part: &WorkbookExtensionPart) -> Self {
+        Self {
+            path: part.path.clone(),
+            content_type: part.content_type.clone(),
+            relationship_type: part.relationship_type.clone(),
+            relationship_id: part.relationship_id.clone(),
+            payload: part.payload.clone().into(),
+        }
     }
 }
 
@@ -2179,6 +2216,74 @@ impl Workbook {
         catch_panic(|| {
             let wb = self.inner.read().map_err(to_napi_err)?;
             Ok(wb.data_connections().iter().map(Into::into).collect())
+        })
+    }
+
+    /// Number of raw workbook extension elements preserved from the package.
+    #[napi(getter)]
+    pub fn workbook_extension_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            u32::try_from(wb.workbook_extensions().len()).map_err(to_napi_err)
+        })
+    }
+
+    /// Raw workbook extension elements preserved from workbook.xml.
+    #[napi(getter)]
+    pub fn workbook_extensions(&self) -> Result<Vec<JsWorkbookExtension>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.workbook_extensions().iter().map(Into::into).collect())
+        })
+    }
+
+    /// Number of raw workbook-related extension package parts.
+    #[napi(getter)]
+    pub fn workbook_extension_part_count(&self) -> Result<u32> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            u32::try_from(wb.workbook_extension_parts().len()).map_err(to_napi_err)
+        })
+    }
+
+    /// Raw workbook-related extension package parts.
+    #[napi(getter)]
+    pub fn workbook_extension_parts(&self) -> Result<Vec<JsWorkbookExtensionPart>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb.workbook_extension_parts().iter().map(Into::into).collect())
+        })
+    }
+
+    /// Get a raw workbook extension package part by package path.
+    #[napi(js_name = "getWorkbookExtensionPart")]
+    pub fn get_workbook_extension_part(
+        &self,
+        path: String,
+    ) -> Result<Option<JsWorkbookExtensionPart>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .workbook_extension_parts()
+                .iter()
+                .find(|part| part.path == path)
+                .map(Into::into))
+        })
+    }
+
+    /// Get a raw workbook extension package part by workbook relationship id.
+    #[napi(js_name = "getWorkbookExtensionPartByRelationshipId")]
+    pub fn get_workbook_extension_part_by_relationship_id(
+        &self,
+        relationship_id: String,
+    ) -> Result<Option<JsWorkbookExtensionPart>> {
+        catch_panic(|| {
+            let wb = self.inner.read().map_err(to_napi_err)?;
+            Ok(wb
+                .workbook_extension_parts()
+                .iter()
+                .find(|part| part.relationship_id.as_deref() == Some(relationship_id.as_str()))
+                .map(Into::into))
         })
     }
 
