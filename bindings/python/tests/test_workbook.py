@@ -658,7 +658,7 @@ class TestPivotTables:
         assert sheet.pivot_count == 1
         assert sheet.pivot_table_names == ["ManualGroupedRegions"]
 
-        stats = wb.refresh_pivots()
+        stats = wb.refresh_pivots(max_threads=1)
 
         assert stats["pivot_count"] == 1
         assert stats["pivots_refreshed"] == 1

@@ -13,7 +13,7 @@ use std::sync::{Arc, RwLock};
 
 use duke_sheets::{
     CalculationOptions, CalculationStats as CoreCalculationStats, ChartType, FormulaValue,
-    ImageSizing, WorkbookCalculationExt, WorkbookExt, WorkbookPivotExt,
+    ImageSizing, PivotRefreshOptions, WorkbookCalculationExt, WorkbookExt, WorkbookPivotExt,
 };
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
@@ -697,6 +697,19 @@ impl From<&WorkbookExtensionPart> for JsWorkbookExtensionPart {
             relationship_type: part.relationship_type.clone(),
             relationship_id: part.relationship_id.clone(),
             payload: part.payload.clone().into(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct JsPivotRefreshOptions {
+    pub max_threads: Option<u32>,
+}
+
+impl From<JsPivotRefreshOptions> for PivotRefreshOptions {
+    fn from(options: JsPivotRefreshOptions) -> Self {
+        Self {
+            max_threads: options.max_threads.map(|threads| threads as usize),
         }
     }
 }
@@ -2169,10 +2182,14 @@ impl Workbook {
 
     /// Refresh all pivot tables in the workbook.
     #[napi]
-    pub fn refresh_pivots(&self) -> Result<JsPivotRefreshStats> {
+    pub fn refresh_pivots(
+        &self,
+        options: Option<JsPivotRefreshOptions>,
+    ) -> Result<JsPivotRefreshStats> {
         catch_panic(|| {
             let mut wb = self.inner.write().map_err(to_napi_err)?;
-            wb.refresh_pivots()
+            let options = options.map(Into::into).unwrap_or_default();
+            wb.refresh_pivots_with_options(&options)
                 .map_err(to_napi_err)
                 .and_then(JsPivotRefreshStats::try_from)
         })
@@ -2251,7 +2268,11 @@ impl Workbook {
     pub fn workbook_extension_parts(&self) -> Result<Vec<JsWorkbookExtensionPart>> {
         catch_panic(|| {
             let wb = self.inner.read().map_err(to_napi_err)?;
-            Ok(wb.workbook_extension_parts().iter().map(Into::into).collect())
+            Ok(wb
+                .workbook_extension_parts()
+                .iter()
+                .map(Into::into)
+                .collect())
         })
     }
 

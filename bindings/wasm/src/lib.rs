@@ -8,7 +8,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use duke_sheets::{
-    CalculationOptions, ChartType, FormulaValue, WorkbookCalculationExt, WorkbookPivotExt,
+    CalculationOptions, ChartType, FormulaValue, PivotRefreshOptions, WorkbookCalculationExt,
+    WorkbookPivotExt,
 };
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
@@ -693,6 +694,10 @@ export interface PivotRefreshStats {
   cacheMisses: number;
 }
 
+export interface PivotRefreshOptions {
+  maxThreads?: number;
+}
+
 export interface Workbook {
   readonly dataConnectionCount: number;
   readonly dataConnectionNames: string[];
@@ -706,7 +711,7 @@ export interface Workbook {
   getWorkbookExtensionPart(path: string): WorkbookExtensionPart | null;
   getWorkbookExtensionPartByRelationshipId(relationshipId: string): WorkbookExtensionPart | null;
   addDataConnection(options: DataConnectionOptions): void;
-  refreshPivots(): PivotRefreshStats;
+  refreshPivots(options?: PivotRefreshOptions): PivotRefreshStats;
 }
 
 export interface Worksheet {
@@ -731,6 +736,12 @@ struct JsCalculationOptions {
     force_full_calculation: Option<bool>,
     calculate_volatile: Option<bool>,
     sheets: Option<Vec<usize>>,
+    max_threads: Option<usize>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct JsPivotRefreshOptions {
     max_threads: Option<usize>,
 }
 
@@ -2239,9 +2250,20 @@ impl Workbook {
     }
 
     #[wasm_bindgen(js_name = refreshPivots)]
-    pub fn refresh_pivots(&self) -> Result<JsValue, JsError> {
+    pub fn refresh_pivots(&self, options: Option<JsValue>) -> Result<JsValue, JsError> {
+        let options = if let Some(options) = options {
+            let options: JsPivotRefreshOptions =
+                serde_wasm_bindgen::from_value(options).map_err(to_js_error)?;
+            PivotRefreshOptions {
+                max_threads: options.max_threads,
+            }
+        } else {
+            PivotRefreshOptions::default()
+        };
         let mut wb = self.inner.borrow_mut();
-        let stats = wb.refresh_pivots().map_err(to_js_error)?;
+        let stats = wb
+            .refresh_pivots_with_options(&options)
+            .map_err(to_js_error)?;
         to_js_value(&WasmPivotRefreshStats::from(stats))
     }
 

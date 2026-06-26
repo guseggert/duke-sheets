@@ -61,29 +61,93 @@ impl PivotRefreshStats {
     }
 }
 
+/// Options for refreshing pivot tables.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PivotRefreshOptions {
+    /// Maximum number of worker threads to use when the `parallel` feature is enabled.
+    ///
+    /// `None` uses the active Rayon pool. `Some(1)` confines parallel refresh work
+    /// to one worker thread. This option has no effect when the `parallel` feature
+    /// is disabled.
+    pub max_threads: Option<usize>,
+}
+
 /// Extension methods for refreshing pivot tables in a workbook.
 pub trait WorkbookPivotExt {
     /// Refresh all pivot tables in the workbook.
     fn refresh_pivots(&mut self) -> Result<PivotRefreshStats>;
 
+    /// Refresh all pivot tables in the workbook with custom options.
+    fn refresh_pivots_with_options(
+        &mut self,
+        options: &PivotRefreshOptions,
+    ) -> Result<PivotRefreshStats>;
+
     /// Refresh a single pivot table by worksheet index and pivot name.
     fn refresh_pivot(&mut self, sheet_index: usize, pivot_name: &str) -> Result<PivotRefreshStats>;
+
+    /// Refresh a single pivot table by worksheet index and pivot name with custom options.
+    fn refresh_pivot_with_options(
+        &mut self,
+        sheet_index: usize,
+        pivot_name: &str,
+        options: &PivotRefreshOptions,
+    ) -> Result<PivotRefreshStats>;
 }
 
 impl WorkbookPivotExt for Workbook {
     fn refresh_pivots(&mut self) -> Result<PivotRefreshStats> {
+        self.refresh_pivots_with_options(&PivotRefreshOptions::default())
+    }
+
+    fn refresh_pivots_with_options(
+        &mut self,
+        options: &PivotRefreshOptions,
+    ) -> Result<PivotRefreshStats> {
         let mut cache = take_runtime_cache(self);
-        let result = refresh_pivots_inner(self, &mut cache);
+        let result = with_pivot_refresh_pool(options, || refresh_pivots_inner(self, &mut cache));
         self.set_pivot_runtime_cache(Box::new(cache));
         result
     }
 
     fn refresh_pivot(&mut self, sheet_index: usize, pivot_name: &str) -> Result<PivotRefreshStats> {
+        self.refresh_pivot_with_options(sheet_index, pivot_name, &PivotRefreshOptions::default())
+    }
+
+    fn refresh_pivot_with_options(
+        &mut self,
+        sheet_index: usize,
+        pivot_name: &str,
+        options: &PivotRefreshOptions,
+    ) -> Result<PivotRefreshStats> {
         let mut cache = take_runtime_cache(self);
-        let result = refresh_pivot_inner(self, sheet_index, pivot_name, &mut cache);
+        let result = with_pivot_refresh_pool(options, || {
+            refresh_pivot_inner(self, sheet_index, pivot_name, &mut cache)
+        });
         self.set_pivot_runtime_cache(Box::new(cache));
         result
     }
+}
+
+#[cfg(feature = "parallel")]
+fn with_pivot_refresh_pool<T: Send>(
+    options: &PivotRefreshOptions,
+    refresh: impl FnOnce() -> T + Send,
+) -> T {
+    if let Some(max_threads) = options.max_threads {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(max_threads.max(1))
+            .build()
+            .expect("failed to build pivot refresh rayon thread pool");
+        pool.install(refresh)
+    } else {
+        refresh()
+    }
+}
+
+#[cfg(not(feature = "parallel"))]
+fn with_pivot_refresh_pool<T>(_options: &PivotRefreshOptions, refresh: impl FnOnce() -> T) -> T {
+    refresh()
 }
 
 #[derive(Debug, Clone)]
@@ -5928,7 +5992,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ssfmt::{date_serial::date_to_serial, DateSystem};
 
-    use super::WorkbookPivotExt;
+    use super::{PivotRefreshOptions, WorkbookPivotExt};
 
     fn number(workbook: &Workbook, address: &str) -> f64 {
         workbook
@@ -6027,6 +6091,41 @@ mod tests {
         assert_eq!(number(&workbook, "E3"), 20.0);
         assert_eq!(text(&workbook, "D4"), "Grand Total");
         assert_eq!(number(&workbook, "E4"), 45.0);
+    }
+
+    #[test]
+    fn refreshes_with_max_thread_option() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .measure("Revenue", PivotAggregate::Sum)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let stats = workbook
+            .refresh_pivots_with_options(&PivotRefreshOptions {
+                max_threads: Some(1),
+            })
+            .unwrap();
+
+        assert_eq!(stats.pivot_count, 1);
+        assert_eq!(stats.pivots_refreshed, 1);
+        assert_eq!(text(&workbook, "D2"), "East");
+        assert_eq!(number(&workbook, "E2"), 10.0);
+        assert_eq!(text(&workbook, "D3"), "West");
+        assert_eq!(number(&workbook, "E3"), 20.0);
     }
 
     #[test]

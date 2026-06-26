@@ -12,8 +12,8 @@ use std::sync::{Arc, RwLock};
 
 use duke_sheets::prelude::*;
 use duke_sheets::{
-    CalculationOptions, ChartType, FormulaValue, ImageSizing, WorkbookCalculationExt,
-    WorkbookPivotExt,
+    CalculationOptions, ChartType, FormulaValue, ImageSizing, PivotRefreshOptions,
+    WorkbookCalculationExt, WorkbookPivotExt,
 };
 use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotCalculatedField,
@@ -1506,10 +1506,7 @@ fn workbook_connection_kind_to_python(kind: &WorkbookConnectionKind) -> &'static
     }
 }
 
-fn workbook_extension_to_py(
-    py: Python<'_>,
-    extension: &WorkbookExtension,
-) -> PyResult<PyObject> {
+fn workbook_extension_to_py(py: Python<'_>, extension: &WorkbookExtension) -> PyResult<PyObject> {
     let dict = PyDict::new_bound(py);
     dict.set_item("uri", &extension.uri)?;
     dict.set_item("payload", PyBytes::new_bound(py, &extension.payload))?;
@@ -2581,9 +2578,15 @@ impl PyWorkbook {
     }
 
     /// Refresh all pivot tables in the workbook.
-    fn refresh_pivots(&self, py: Python<'_>) -> PyResult<PyObject> {
+    ///
+    /// Args:
+    ///     max_threads: Maximum worker threads for parallel refresh. None uses the active pool.
+    #[pyo3(signature = (*, max_threads=None))]
+    fn refresh_pivots(&self, py: Python<'_>, max_threads: Option<usize>) -> PyResult<PyObject> {
         let mut wb = self.inner.write().map_err(to_py_err)?;
-        let stats = wb.refresh_pivots().map_err(to_py_err)?;
+        let stats = wb
+            .refresh_pivots_with_options(&PivotRefreshOptions { max_threads })
+            .map_err(to_py_err)?;
         pivot_refresh_stats_to_py(py, stats)
     }
 

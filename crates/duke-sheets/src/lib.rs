@@ -51,7 +51,7 @@ pub mod prelude;
 pub use calculation::{CalculationOptions, CalculationStats, WorkbookCalculationExt};
 
 // Re-export pivot refresh types
-pub use duke_sheets_pivot::{PivotRefreshStats, WorkbookPivotExt};
+pub use duke_sheets_pivot::{PivotRefreshOptions, PivotRefreshStats, WorkbookPivotExt};
 
 // Re-export core types
 pub use duke_sheets_core::auto_filter::{ColorFilter, DynamicFilter, DynamicFilterType};

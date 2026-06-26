@@ -8,6 +8,7 @@ export * from './generated'
 
 import type {
   JsPivotTableDefinition,
+  JsPivotRefreshOptions,
   JsRow,
   JsRowsOptions,
   JsWorkbookConnectionDefinition,
@@ -349,7 +350,7 @@ declare module './generated' {
     addDataConnection(options: JsWorkbookConnectionOptions): void
 
     /** Refresh all pivot tables in the workbook. */
-    refreshPivots(): JsPivotRefreshStats
+    refreshPivots(options?: JsPivotRefreshOptions | null): JsPivotRefreshStats
   }
 
   interface Worksheet {

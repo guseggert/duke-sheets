@@ -555,7 +555,7 @@ describe("PivotTables", () => {
     expect(sheet.pivotCount).toBe(1);
     expect(sheet.pivotTableNames).toEqual(["ManualGroupedRegions"]);
 
-    const stats = wb.refreshPivots();
+    const stats = wb.refreshPivots({ maxThreads: 1 });
 
     expect(stats.pivotCount).toBe(1);
     expect(stats.pivotsRefreshed).toBe(1);

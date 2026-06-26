@@ -193,7 +193,7 @@ export declare class Workbook {
    */
   calculate(options?: JsCalculationOptions | undefined | null): CalculationStats
   /** Refresh all pivot tables in the workbook. */
-  refreshPivots(): JsPivotRefreshStats
+  refreshPivots(options?: JsPivotRefreshOptions | undefined | null): JsPivotRefreshStats
   /** Add a workbook-level database connection. */
   addDataConnection(options: JsWorkbookConnectionOptions): void
   /** Number of workbook-level data connections. */
@@ -1630,6 +1630,10 @@ export interface JsPivotMeasureOptions {
   baseField?: string
   baseItem?: number | string | boolean
   numberFormat?: string
+}
+
+export interface JsPivotRefreshOptions {
+  maxThreads?: number
 }
 
 export interface JsPivotRefreshPolicyDefinition {
