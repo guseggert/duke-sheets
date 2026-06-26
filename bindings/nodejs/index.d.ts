@@ -23,9 +23,65 @@ export interface JsPivotMeasureOptions {
 }
 
 export interface JsPivotItemFilterOptions {
+  kind?: 'item' | 'items' | 'fieldItems' | 'field_items'
   field: string
   items: string[]
 }
+
+export type JsPivotFilterOperator =
+  | 'equals'
+  | 'equal'
+  | 'eq'
+  | 'notEquals'
+  | 'notEqual'
+  | 'ne'
+  | 'lessThan'
+  | 'lt'
+  | 'lessThanOrEqual'
+  | 'lte'
+  | 'greaterThan'
+  | 'gt'
+  | 'greaterThanOrEqual'
+  | 'gte'
+  | 'beginsWith'
+  | 'doesNotBeginWith'
+  | 'notBeginsWith'
+  | 'endsWith'
+  | 'doesNotEndWith'
+  | 'notEndsWith'
+  | 'contains'
+  | 'doesNotContain'
+  | 'notContains'
+
+export interface JsPivotLabelFilterOptions {
+  kind: 'label'
+  field: string
+  operator: JsPivotFilterOperator
+  text: string
+}
+
+export interface JsPivotValueFilterOptions {
+  kind: 'value'
+  field: string
+  measure: JsPivotMeasureOptions
+  operator: JsPivotFilterOperator
+  value: number
+}
+
+export interface JsPivotTopNFilterOptions {
+  kind: 'topN' | 'top_n' | 'top'
+  field: string
+  measure: JsPivotMeasureOptions
+  n: number
+  top?: boolean
+  percent?: boolean
+}
+
+export type JsPivotFilterOptions =
+  | JsPivotItemFilterOptions
+  | JsPivotLabelFilterOptions
+  | JsPivotValueFilterOptions
+  | JsPivotTopNFilterOptions
 
 export interface JsPivotCalculatedFieldOptions {
   name: string
@@ -68,7 +124,7 @@ export interface JsPivotTableOptions {
   columnFields?: JsPivotFieldOptions[]
   pageFields?: JsPivotFieldOptions[]
   measures: JsPivotMeasureOptions[]
-  filters?: JsPivotItemFilterOptions[]
+  filters?: JsPivotFilterOptions[]
   calculatedFields?: JsPivotCalculatedFieldOptions[]
   groupings?: JsPivotGroupingOptions[]
   refreshPolicy?: JsPivotRefreshPolicyOptions

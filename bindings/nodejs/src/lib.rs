@@ -17,8 +17,9 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
-    PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshPolicy,
-    PivotShowAs, PivotSort, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
+    PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotMeasure,
+    PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSubtotal, PivotTable, PivotValue,
+    Workbook as CoreWorkbook,
 };
 
 fn to_napi_err(e: impl std::fmt::Display) -> napi::Error {
@@ -339,9 +340,17 @@ pub struct JsPivotMeasureOptions {
 }
 
 #[napi(object)]
-pub struct JsPivotItemFilterOptions {
+pub struct JsPivotFilterOptions {
+    pub kind: Option<String>,
     pub field: String,
-    pub items: Vec<String>,
+    pub items: Option<Vec<String>>,
+    pub operator: Option<String>,
+    pub text: Option<String>,
+    pub measure: Option<JsPivotMeasureOptions>,
+    pub value: Option<f64>,
+    pub n: Option<u32>,
+    pub top: Option<bool>,
+    pub percent: Option<bool>,
 }
 
 #[napi(object)]
@@ -390,7 +399,7 @@ pub struct JsPivotTableOptions {
     pub column_fields: Option<Vec<JsPivotFieldOptions>>,
     pub page_fields: Option<Vec<JsPivotFieldOptions>>,
     pub measures: Vec<JsPivotMeasureOptions>,
-    pub filters: Option<Vec<JsPivotItemFilterOptions>>,
+    pub filters: Option<Vec<JsPivotFilterOptions>>,
     pub calculated_fields: Option<Vec<JsPivotCalculatedFieldOptions>>,
     pub groupings: Option<Vec<JsPivotGroupingOptions>>,
     pub refresh_policy: Option<JsPivotRefreshPolicyOptions>,
@@ -474,14 +483,7 @@ fn build_pivot_table_from_js(options: JsPivotTableOptions) -> Result<PivotTable>
         builder = builder.pivot_measure(build_pivot_measure_from_js(measure)?);
     }
     for filter in options.filters.unwrap_or_default() {
-        builder = builder.filter(PivotFilter::field_items(
-            filter.field,
-            filter
-                .items
-                .into_iter()
-                .map(PivotValue::from)
-                .collect::<Vec<_>>(),
-        ));
+        builder = builder.filter(build_pivot_filter_from_js(filter)?);
     }
     for calculated_field in options.calculated_fields.unwrap_or_default() {
         builder = builder.calculated_field(calculated_field.name, calculated_field.formula);
@@ -567,6 +569,62 @@ fn build_pivot_measure_from_js(options: JsPivotMeasureOptions) -> Result<PivotMe
     Ok(measure)
 }
 
+fn build_pivot_filter_from_js(options: JsPivotFilterOptions) -> Result<PivotFilter> {
+    let kind = options.kind.unwrap_or_else(|| {
+        if options.items.is_some() {
+            "items".to_string()
+        } else {
+            "item".to_string()
+        }
+    });
+    match kind.as_str() {
+        "item" | "items" | "fieldItems" | "field_items" => {
+            let items = options
+                .items
+                .ok_or_else(|| napi::Error::from_reason("Pivot item filter requires items"))?;
+            Ok(PivotFilter::field_items(
+                options.field,
+                items.into_iter().map(PivotValue::from).collect::<Vec<_>>(),
+            ))
+        }
+        "label" => Ok(PivotFilter::Label {
+            field: options.field.into(),
+            operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+            value: options
+                .text
+                .ok_or_else(|| napi::Error::from_reason("Pivot label filter requires text"))?,
+        }),
+        "value" => {
+            Ok(PivotFilter::Value {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_js(options.measure.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot value filter requires measure")
+                })?)?,
+                operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+                value: options
+                    .value
+                    .ok_or_else(|| napi::Error::from_reason("Pivot value filter requires value"))?,
+            })
+        }
+        "topN" | "top_n" | "top" => {
+            Ok(PivotFilter::TopN {
+                field: options.field.into(),
+                measure: build_pivot_measure_from_js(options.measure.ok_or_else(|| {
+                    napi::Error::from_reason("Pivot top-N filter requires measure")
+                })?)?,
+                n: options
+                    .n
+                    .ok_or_else(|| napi::Error::from_reason("Pivot top-N filter requires n"))?,
+                top: options.top.unwrap_or(true),
+                percent: options.percent.unwrap_or(false),
+            })
+        }
+        other => Err(napi::Error::from_reason(format!(
+            "Unsupported pivot filter kind: {other}"
+        ))),
+    }
+}
+
 fn build_pivot_grouping_from_js(options: JsPivotGroupingOptions) -> Result<PivotGrouping> {
     match options.kind.as_str() {
         "number" | "numeric" => Ok(PivotGrouping::Number {
@@ -614,6 +672,29 @@ fn parse_pivot_aggregate(value: Option<&str>) -> Result<PivotAggregate> {
         other => {
             return Err(napi::Error::from_reason(format!(
                 "Unsupported pivot aggregate: {other}"
+            )));
+        }
+    })
+}
+
+fn parse_pivot_filter_operator(value: Option<&str>) -> Result<PivotFilterOperator> {
+    let value = value.ok_or_else(|| napi::Error::from_reason("Pivot filter requires operator"))?;
+    Ok(match value {
+        "equals" | "equal" | "eq" => PivotFilterOperator::Equals,
+        "notEquals" | "notEqual" | "ne" => PivotFilterOperator::NotEquals,
+        "lessThan" | "lt" => PivotFilterOperator::LessThan,
+        "lessThanOrEqual" | "lte" => PivotFilterOperator::LessThanOrEqual,
+        "greaterThan" | "gt" => PivotFilterOperator::GreaterThan,
+        "greaterThanOrEqual" | "gte" => PivotFilterOperator::GreaterThanOrEqual,
+        "beginsWith" => PivotFilterOperator::BeginsWith,
+        "doesNotBeginWith" | "notBeginsWith" => PivotFilterOperator::DoesNotBeginWith,
+        "endsWith" => PivotFilterOperator::EndsWith,
+        "doesNotEndWith" | "notEndsWith" => PivotFilterOperator::DoesNotEndWith,
+        "contains" => PivotFilterOperator::Contains,
+        "doesNotContain" | "notContains" => PivotFilterOperator::DoesNotContain,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "Unsupported pivot filter operator: {other}"
             )));
         }
     })

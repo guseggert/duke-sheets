@@ -10,8 +10,9 @@ use wasm_bindgen::JsCast;
 use duke_sheets::{CalculationOptions, FormulaValue, WorkbookCalculationExt, WorkbookPivotExt};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, CellValue as CoreCellValue, PivotAggregate,
-    PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshPolicy,
-    PivotShowAs, PivotSort, PivotSubtotal, PivotTable, PivotValue, Workbook as CoreWorkbook,
+    PivotDateGroupUnit, PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotMeasure,
+    PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSubtotal, PivotTable, PivotValue,
+    Workbook as CoreWorkbook,
 };
 use duke_sheets_xlsb::XlsbWriter;
 use duke_sheets_xlsx::XlsxWriter;
@@ -203,9 +204,65 @@ export interface PivotMeasureOptions {
 }
 
 export interface PivotItemFilterOptions {
+  kind?: "item" | "items" | "fieldItems" | "field_items";
   field: string;
   items: string[];
 }
+
+export type PivotFilterOperator =
+  | "equals"
+  | "equal"
+  | "eq"
+  | "notEquals"
+  | "notEqual"
+  | "ne"
+  | "lessThan"
+  | "lt"
+  | "lessThanOrEqual"
+  | "lte"
+  | "greaterThan"
+  | "gt"
+  | "greaterThanOrEqual"
+  | "gte"
+  | "beginsWith"
+  | "doesNotBeginWith"
+  | "notBeginsWith"
+  | "endsWith"
+  | "doesNotEndWith"
+  | "notEndsWith"
+  | "contains"
+  | "doesNotContain"
+  | "notContains";
+
+export interface PivotLabelFilterOptions {
+  kind: "label";
+  field: string;
+  operator: PivotFilterOperator;
+  text: string;
+}
+
+export interface PivotValueFilterOptions {
+  kind: "value";
+  field: string;
+  measure: PivotMeasureOptions;
+  operator: PivotFilterOperator;
+  value: number;
+}
+
+export interface PivotTopNFilterOptions {
+  kind: "topN" | "top_n" | "top";
+  field: string;
+  measure: PivotMeasureOptions;
+  n: number;
+  top?: boolean;
+  percent?: boolean;
+}
+
+export type PivotFilterOptions =
+  | PivotItemFilterOptions
+  | PivotLabelFilterOptions
+  | PivotValueFilterOptions
+  | PivotTopNFilterOptions;
 
 export interface PivotCalculatedFieldOptions {
   name: string;
@@ -248,7 +305,7 @@ export interface PivotTableOptions {
   columnFields?: PivotFieldOptions[];
   pageFields?: PivotFieldOptions[];
   measures: PivotMeasureOptions[];
-  filters?: PivotItemFilterOptions[];
+  filters?: PivotFilterOptions[];
   calculatedFields?: PivotCalculatedFieldOptions[];
   groupings?: PivotGroupingOptions[];
   refreshPolicy?: PivotRefreshPolicyOptions;
@@ -376,14 +433,7 @@ fn build_pivot_table_from_wasm(options: WasmPivotTableOptions) -> Result<PivotTa
         builder = builder.pivot_measure(build_pivot_measure_from_wasm(measure)?);
     }
     for filter in options.filters.unwrap_or_default() {
-        builder = builder.filter(PivotFilter::field_items(
-            filter.field,
-            filter
-                .items
-                .into_iter()
-                .map(PivotValue::from)
-                .collect::<Vec<_>>(),
-        ));
+        builder = builder.filter(build_pivot_filter_from_wasm(filter)?);
     }
     for calculated_field in options.calculated_fields.unwrap_or_default() {
         builder = builder.calculated_field(calculated_field.name, calculated_field.formula);
@@ -469,6 +519,62 @@ fn build_pivot_measure_from_wasm(
     Ok(measure)
 }
 
+fn build_pivot_filter_from_wasm(options: WasmPivotFilterOptions) -> Result<PivotFilter, JsError> {
+    let kind = options.kind.unwrap_or_else(|| {
+        if options.items.is_some() {
+            "items".to_string()
+        } else {
+            "item".to_string()
+        }
+    });
+    match kind.as_str() {
+        "item" | "items" | "fieldItems" | "field_items" => {
+            let items = options
+                .items
+                .ok_or_else(|| JsError::new("Pivot item filter requires items"))?;
+            Ok(PivotFilter::field_items(
+                options.field,
+                items.into_iter().map(PivotValue::from).collect::<Vec<_>>(),
+            ))
+        }
+        "label" => Ok(PivotFilter::Label {
+            field: options.field.into(),
+            operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+            value: options
+                .text
+                .ok_or_else(|| JsError::new("Pivot label filter requires text"))?,
+        }),
+        "value" => Ok(PivotFilter::Value {
+            field: options.field.into(),
+            measure: build_pivot_measure_from_wasm(
+                options
+                    .measure
+                    .ok_or_else(|| JsError::new("Pivot value filter requires measure"))?,
+            )?,
+            operator: parse_pivot_filter_operator(options.operator.as_deref())?,
+            value: options
+                .value
+                .ok_or_else(|| JsError::new("Pivot value filter requires value"))?,
+        }),
+        "topN" | "top_n" | "top" => Ok(PivotFilter::TopN {
+            field: options.field.into(),
+            measure: build_pivot_measure_from_wasm(
+                options
+                    .measure
+                    .ok_or_else(|| JsError::new("Pivot top-N filter requires measure"))?,
+            )?,
+            n: options
+                .n
+                .ok_or_else(|| JsError::new("Pivot top-N filter requires n"))?,
+            top: options.top.unwrap_or(true),
+            percent: options.percent.unwrap_or(false),
+        }),
+        other => Err(JsError::new(&format!(
+            "Unsupported pivot filter kind: {other}"
+        ))),
+    }
+}
+
 fn build_pivot_grouping_from_wasm(
     options: WasmPivotGroupingOptions,
 ) -> Result<PivotGrouping, JsError> {
@@ -519,6 +625,29 @@ fn parse_pivot_aggregate(value: Option<&str>) -> Result<PivotAggregate, JsError>
             return Err(JsError::new(&format!(
                 "Unsupported pivot aggregate: {other}"
             )))
+        }
+    })
+}
+
+fn parse_pivot_filter_operator(value: Option<&str>) -> Result<PivotFilterOperator, JsError> {
+    let value = value.ok_or_else(|| JsError::new("Pivot filter requires operator"))?;
+    Ok(match value {
+        "equals" | "equal" | "eq" => PivotFilterOperator::Equals,
+        "notEquals" | "notEqual" | "ne" => PivotFilterOperator::NotEquals,
+        "lessThan" | "lt" => PivotFilterOperator::LessThan,
+        "lessThanOrEqual" | "lte" => PivotFilterOperator::LessThanOrEqual,
+        "greaterThan" | "gt" => PivotFilterOperator::GreaterThan,
+        "greaterThanOrEqual" | "gte" => PivotFilterOperator::GreaterThanOrEqual,
+        "beginsWith" => PivotFilterOperator::BeginsWith,
+        "doesNotBeginWith" | "notBeginsWith" => PivotFilterOperator::DoesNotBeginWith,
+        "endsWith" => PivotFilterOperator::EndsWith,
+        "doesNotEndWith" | "notEndsWith" => PivotFilterOperator::DoesNotEndWith,
+        "contains" => PivotFilterOperator::Contains,
+        "doesNotContain" | "notContains" => PivotFilterOperator::DoesNotContain,
+        other => {
+            return Err(JsError::new(&format!(
+                "Unsupported pivot filter operator: {other}"
+            )));
         }
     })
 }

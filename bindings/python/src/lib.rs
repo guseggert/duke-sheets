@@ -16,8 +16,8 @@ use duke_sheets::{
 };
 use duke_sheets_core::{
     CellError, CellValue as CoreCellValue, PivotAggregate, PivotDateGroupUnit, PivotField,
-    PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshPolicy, PivotShowAs, PivotSort,
-    PivotSubtotal, PivotTable, PivotValue,
+    PivotFilter, PivotFilterOperator, PivotGrouping, PivotMeasure, PivotRefreshPolicy, PivotShowAs,
+    PivotSort, PivotSubtotal, PivotTable, PivotValue,
 };
 
 mod types;
@@ -118,7 +118,7 @@ fn build_pivot_table_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotTable>
             .downcast::<PyList>()
             .map_err(|_| PyValueError::new_err("pivot filters must be a list"))?;
         for filter in filters.iter() {
-            builder = builder.filter(build_pivot_item_filter_from_py(&filter)?);
+            builder = builder.filter(build_pivot_filter_from_py(&filter)?);
         }
     }
     if let Some(calculated_fields_value) =
@@ -205,15 +205,63 @@ fn build_pivot_measure_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotMeas
     Ok(measure)
 }
 
-fn build_pivot_item_filter_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotFilter> {
+fn build_pivot_filter_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotFilter> {
     let dict = options
         .downcast::<PyDict>()
         .map_err(|_| PyValueError::new_err("pivot filter must be a dict"))?;
-    let items = required_string_vec(dict, &["items"])?;
-    Ok(PivotFilter::field_items(
-        required_string(dict, &["field"])?,
-        items.into_iter().map(PivotValue::from).collect::<Vec<_>>(),
-    ))
+    let has_items = optional_any(dict, &["items"])?.is_some();
+    let kind = optional_string(dict, &["kind"])?.unwrap_or_else(|| {
+        if has_items {
+            "items".to_string()
+        } else {
+            "item".to_string()
+        }
+    });
+    let field = required_string(dict, &["field"])?;
+    match kind.as_str() {
+        "item" | "items" | "fieldItems" | "field_items" => {
+            let items = required_string_vec(dict, &["items"])?;
+            Ok(PivotFilter::field_items(
+                field,
+                items.into_iter().map(PivotValue::from).collect::<Vec<_>>(),
+            ))
+        }
+        "label" => Ok(PivotFilter::Label {
+            field: field.into(),
+            operator: parse_pivot_filter_operator(
+                optional_string(dict, &["operator"])?.as_deref(),
+            )?,
+            value: required_string(dict, &["text", "value"])?,
+        }),
+        "value" => {
+            let measure = optional_any(dict, &["measure"])?
+                .ok_or_else(|| PyValueError::new_err("pivot value filter requires measure"))?;
+            Ok(PivotFilter::Value {
+                field: field.into(),
+                measure: build_pivot_measure_from_py(&measure)?,
+                operator: parse_pivot_filter_operator(
+                    optional_string(dict, &["operator"])?.as_deref(),
+                )?,
+                value: optional_f64(dict, &["value"])?
+                    .ok_or_else(|| PyValueError::new_err("pivot value filter requires value"))?,
+            })
+        }
+        "topN" | "top_n" | "top" => {
+            let measure = optional_any(dict, &["measure"])?
+                .ok_or_else(|| PyValueError::new_err("pivot top-N filter requires measure"))?;
+            Ok(PivotFilter::TopN {
+                field: field.into(),
+                measure: build_pivot_measure_from_py(&measure)?,
+                n: optional_u32(dict, &["n"])?
+                    .ok_or_else(|| PyValueError::new_err("pivot top-N filter requires n"))?,
+                top: optional_bool(dict, &["top"])?.unwrap_or(true),
+                percent: optional_bool(dict, &["percent"])?.unwrap_or(false),
+            })
+        }
+        other => Err(PyValueError::new_err(format!(
+            "Unsupported pivot filter kind: {other}"
+        ))),
+    }
 }
 
 fn build_pivot_grouping_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotGrouping> {
@@ -315,6 +363,35 @@ fn parse_pivot_aggregate(value: Option<&str>) -> PyResult<PivotAggregate> {
         other => {
             return Err(PyValueError::new_err(format!(
                 "Unsupported pivot aggregate: {other}"
+            )))
+        }
+    })
+}
+
+fn parse_pivot_filter_operator(value: Option<&str>) -> PyResult<PivotFilterOperator> {
+    let value = value.ok_or_else(|| PyValueError::new_err("pivot filter requires operator"))?;
+    Ok(match value {
+        "equals" | "equal" | "eq" => PivotFilterOperator::Equals,
+        "notEquals" | "notEqual" | "ne" => PivotFilterOperator::NotEquals,
+        "lessThan" | "lt" => PivotFilterOperator::LessThan,
+        "lessThanOrEqual" | "lte" => PivotFilterOperator::LessThanOrEqual,
+        "greaterThan" | "gt" => PivotFilterOperator::GreaterThan,
+        "greaterThanOrEqual" | "gte" => PivotFilterOperator::GreaterThanOrEqual,
+        "beginsWith" | "begins_with" => PivotFilterOperator::BeginsWith,
+        "doesNotBeginWith" | "does_not_begin_with" | "notBeginsWith" | "not_begins_with" => {
+            PivotFilterOperator::DoesNotBeginWith
+        }
+        "endsWith" | "ends_with" => PivotFilterOperator::EndsWith,
+        "doesNotEndWith" | "does_not_end_with" | "notEndsWith" | "not_ends_with" => {
+            PivotFilterOperator::DoesNotEndWith
+        }
+        "contains" => PivotFilterOperator::Contains,
+        "doesNotContain" | "does_not_contain" | "notContains" | "not_contains" => {
+            PivotFilterOperator::DoesNotContain
+        }
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "Unsupported pivot filter operator: {other}"
             )))
         }
     })
