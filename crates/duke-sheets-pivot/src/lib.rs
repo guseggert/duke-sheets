@@ -5020,7 +5020,7 @@ fn compact_row_layout(pivot: &PivotTable, plan: &CompiledPivotPlan) -> bool {
 }
 
 fn pivot_data_start_row(pivot: &PivotTable, plan: &CompiledPivotPlan) -> usize {
-    page_field_row_count(pivot, plan) as usize + 1
+    (page_field_row_count(pivot, plan) + body_header_row_count(pivot)) as usize
 }
 
 fn page_field_row_count(pivot: &PivotTable, plan: &CompiledPivotPlan) -> u32 {
@@ -5047,6 +5047,10 @@ fn page_field_display_row_count(pivot: &PivotTable, plan: &CompiledPivotPlan) ->
     }
 }
 
+fn body_header_row_count(pivot: &PivotTable) -> u32 {
+    u32::from(pivot.layout.show_field_headers)
+}
+
 fn pivot_row_page_break_offsets(
     pivot: &PivotTable,
     plan: &CompiledPivotPlan,
@@ -5058,7 +5062,7 @@ fn pivot_row_page_break_offsets(
 
     let compact = compact_row_layout(pivot, plan);
     let mut offsets = Vec::new();
-    let mut row_offset = 1u32;
+    let mut row_offset = body_header_row_count(pivot);
     for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
         let previous_row_key = row_index
             .checked_sub(1)
@@ -5147,7 +5151,9 @@ fn render_without_column_fields(
             .iter()
             .map(|measure| CellValue::string(measure.caption())),
     );
-    cells.push(header);
+    if pivot.layout.show_field_headers {
+        cells.push(header);
+    }
 
     let empty_column_key = Vec::new();
     for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
@@ -5225,7 +5231,9 @@ fn render_compact_without_column_fields(
             .iter()
             .map(|measure| CellValue::string(measure.caption())),
     );
-    cells.push(header);
+    if pivot.layout.show_field_headers {
+        cells.push(header);
+    }
 
     let empty_column_key = Vec::new();
     for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
@@ -5330,7 +5338,9 @@ fn render_with_column_fields(
             header.push(CellValue::string(caption));
         }
     }
-    cells.push(header);
+    if pivot.layout.show_field_headers {
+        cells.push(header);
+    }
 
     for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
         let previous_row_key = row_index
@@ -5423,7 +5433,9 @@ fn render_compact_with_column_fields(
             header.push(CellValue::string(caption));
         }
     }
-    cells.push(header);
+    if pivot.layout.show_field_headers {
+        cells.push(header);
+    }
 
     let data_width = column_slots.len() * plan.measures.len();
     for (row_index, row_key) in aggregation.row_order.iter().enumerate() {
@@ -7251,6 +7263,40 @@ mod tests {
         assert_eq!(text(&workbook, "F3"), "-");
         assert_eq!(number(&workbook, "G3"), 7.0);
         assert_eq!(number(&workbook, "H3"), 7.0);
+    }
+
+    #[test]
+    fn refresh_respects_hidden_field_headers() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.show_field_headers = false;
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D1"), "East");
+        assert_eq!(number(&workbook, "E1"), 10.0);
+        assert_eq!(text(&workbook, "D2"), "West");
+        assert_eq!(number(&workbook, "E2"), 20.0);
+        assert_eq!(text(&workbook, "D3"), "Grand Total");
+        assert_eq!(number(&workbook, "E3"), 30.0);
     }
 
     #[cfg(feature = "parallel")]
