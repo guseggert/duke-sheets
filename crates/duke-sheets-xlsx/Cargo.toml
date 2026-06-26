@@ -20,6 +20,7 @@ quick-xml.workspace = true
 zip.workspace = true
 chrono.workspace = true
 log.workspace = true
+ssfmt.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

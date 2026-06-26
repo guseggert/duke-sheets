@@ -4784,6 +4784,72 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_multi_unit_date_grouping() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "SaleDate").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", 45292.0).unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", 45323.0).unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+        sheet.set_cell_value("A4", 45658.0).unwrap();
+        sheet.set_cell_value("B4", 30.0).unwrap();
+
+        let pivot = PivotTable::builder("GroupedDates")
+            .source_range(CellRange::parse("A1:B4").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("SaleDate")
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue")
+            .grouping(PivotGrouping::Date {
+                field: "SaleDate".into(),
+                units: vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months],
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
+        assert!(cache_def.contains(r#"<cacheFields count="4">"#));
+        assert!(cache_def.contains(r#"<cacheField name="SaleDate (Years)">"#));
+        assert!(cache_def.contains(r#"<cacheField name="SaleDate (Months)">"#));
+        assert!(
+            cache_def.contains(r#"<fieldGroup base="0"><rangePr groupBy="years"/></fieldGroup>"#)
+        );
+        assert!(cache_def
+            .contains(r#"<fieldGroup base="0" par="2"><rangePr groupBy="months"/></fieldGroup>"#));
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"<rowFields count="2">"#));
+        assert!(pivot_xml.contains(r#"<field x="2"/><field x="3"/>"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("GroupedDates")
+            .unwrap();
+        assert_eq!(pivot.rows.len(), 1);
+        assert_eq!(pivot.rows[0].field.name, "SaleDate");
+        assert_eq!(pivot.groupings.len(), 1);
+        match &pivot.groupings[0] {
+            PivotGrouping::Date { field, units } => {
+                assert_eq!(field.name, "SaleDate");
+                assert_eq!(
+                    *units,
+                    vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months]
+                );
+            }
+            other => panic!("unexpected grouping: {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_writer_emits_table_with_totals_row() {
         use duke_sheets_core::table::{Table, TableColumn, TotalsRowFunction};
 

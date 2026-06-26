@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufReader, Read, Seek};
 
 use quick_xml::events::{BytesStart, Event};
@@ -34,6 +34,8 @@ pub(super) struct PivotCacheField {
     formula: Option<String>,
     pub(super) shared_items: Vec<PivotValue>,
     grouping: Option<PivotGrouping>,
+    group_base: Option<usize>,
+    group_parent: Option<usize>,
 }
 
 pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
@@ -87,9 +89,16 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                         formula: attr_string(&e, b"formula"),
                         shared_items: Vec::new(),
                         grouping: None,
+                        group_base: None,
+                        group_parent: None,
                     });
                 }
                 b"sharedItems" => in_shared_items = true,
+                b"fieldGroup" => {
+                    if let Some(field) = &mut current_field {
+                        parse_field_group_attrs(field, &e);
+                    }
+                }
                 b"rangePr" => {
                     if let Some(field) = &mut current_field {
                         field.grouping = parse_range_grouping(&field.name, &e);
@@ -118,7 +127,14 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     formula: attr_string(&e, b"formula"),
                     shared_items: Vec::new(),
                     grouping: None,
+                    group_base: None,
+                    group_parent: None,
                 }),
+                b"fieldGroup" => {
+                    if let Some(field) = &mut current_field {
+                        parse_field_group_attrs(field, &e);
+                    }
+                }
                 b"rangePr" => {
                     if let Some(field) = &mut current_field {
                         field.grouping = parse_range_grouping(&field.name, &e);
@@ -149,10 +165,7 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
 
     let source =
         source.unwrap_or_else(|| placeholder_source_for_kind(source_kind, connection_name));
-    let groupings = fields
-        .iter()
-        .filter_map(|field| field.grouping.clone())
-        .collect();
+    let groupings = semantic_groupings_from_cache_fields(&fields);
     let calculated_fields = fields
         .iter()
         .filter_map(|field| {
@@ -175,6 +188,39 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
         background_query,
         missing_items_limit,
     }))
+}
+
+fn parse_field_group_attrs(field: &mut PivotCacheField, e: &BytesStart<'_>) {
+    field.group_base = attr_u32(e, b"base").map(|value| value as usize);
+    field.group_parent = attr_u32(e, b"par").map(|value| value as usize);
+}
+
+fn semantic_groupings_from_cache_fields(fields: &[PivotCacheField]) -> Vec<PivotGrouping> {
+    let mut groupings = Vec::new();
+    let mut date_units_by_base: BTreeMap<usize, Vec<PivotDateGroupUnit>> = BTreeMap::new();
+
+    for field in fields {
+        match &field.grouping {
+            Some(PivotGrouping::Date { units, .. }) if field.group_base.is_some() => {
+                if let (Some(base), Some(unit)) = (field.group_base, units.first().copied()) {
+                    date_units_by_base.entry(base).or_default().push(unit);
+                }
+            }
+            Some(grouping) => groupings.push(grouping.clone()),
+            None => {}
+        }
+    }
+
+    for (base, units) in date_units_by_base {
+        if let Some(field) = fields.get(base) {
+            groupings.push(PivotGrouping::Date {
+                field: field.name.clone().into(),
+                units,
+            });
+        }
+    }
+
+    groupings
 }
 
 fn parse_cache_source_kind(e: &BytesStart<'_>) -> PivotCacheSourceKind {
@@ -450,16 +496,16 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                     if let Some(field_index) =
                         attr_i32(&e, b"x").and_then(|v| usize::try_from(v).ok())
                     {
-                        if let Some(field) = cache.fields.get(field_index) {
-                            let field = pivot_axis_field(
-                                field,
-                                sort_by_field.get(&field_index).copied(),
-                                subtotal_by_field.get(&field_index).copied(),
-                                show_empty_by_field.get(&field_index).copied(),
-                            );
+                        if let Some(field) = pivot_axis_field(
+                            cache,
+                            field_index,
+                            sort_by_field.get(&field_index).copied(),
+                            subtotal_by_field.get(&field_index).copied(),
+                            show_empty_by_field.get(&field_index).copied(),
+                        ) {
                             match axis_context {
-                                Some(AxisContext::Rows) => rows.push(field),
-                                Some(AxisContext::Columns) => columns.push(field),
+                                Some(AxisContext::Rows) => push_axis_field(&mut rows, field),
+                                Some(AxisContext::Columns) => push_axis_field(&mut columns, field),
                                 _ => {}
                             }
                         }
@@ -473,21 +519,27 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                     if let Some(field_index) =
                         attr_i32(&e, b"fld").and_then(|v| usize::try_from(v).ok())
                     {
-                        if let Some(field) = cache.fields.get(field_index) {
-                            page_fields.push(pivot_axis_field(
-                                field,
-                                sort_by_field.get(&field_index).copied(),
-                                subtotal_by_field.get(&field_index).copied(),
-                                show_empty_by_field.get(&field_index).copied(),
-                            ));
+                        if let Some(field) = pivot_axis_field(
+                            cache,
+                            field_index,
+                            sort_by_field.get(&field_index).copied(),
+                            subtotal_by_field.get(&field_index).copied(),
+                            show_empty_by_field.get(&field_index).copied(),
+                        ) {
+                            push_axis_field(&mut page_fields, field);
                             if let Some(item_index) = attr_u32(&e, b"item") {
-                                if let Some(item) = field.shared_items.get(item_index as usize) {
-                                    page_filters.push(PivotFilter::FieldItems {
-                                        field: duke_sheets_core::PivotFieldRef::new(
-                                            field.name.clone(),
-                                        ),
-                                        allowed_items: vec![item.clone()],
-                                    });
+                                if let Some(cache_field) = cache.fields.get(field_index) {
+                                    if let Some(item) =
+                                        cache_field.shared_items.get(item_index as usize)
+                                    {
+                                        page_filters.push(PivotFilter::FieldItems {
+                                            field: duke_sheets_core::PivotFieldRef::new(
+                                                semantic_cache_field_name(cache, field_index)
+                                                    .unwrap_or_else(|| cache_field.name.clone()),
+                                            ),
+                                            allowed_items: vec![item.clone()],
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -801,16 +853,37 @@ fn parse_pivot_subtotal(e: &BytesStart<'_>) -> PivotSubtotal {
 }
 
 fn pivot_axis_field(
-    field: &PivotCacheField,
+    cache: &PivotCacheDefinition,
+    field_index: usize,
     sort: Option<PivotSort>,
     subtotal: Option<PivotSubtotal>,
     show_empty_items: Option<bool>,
-) -> PivotField {
-    let mut pivot_field = PivotField::new(field.name.clone());
+) -> Option<PivotField> {
+    let field_name = semantic_cache_field_name(cache, field_index)?;
+    let mut pivot_field = PivotField::new(field_name);
     pivot_field.sort = sort.unwrap_or(PivotSort::None);
     pivot_field.subtotal = subtotal.unwrap_or(PivotSubtotal::Automatic);
     pivot_field.show_empty_items = show_empty_items.unwrap_or(false);
-    pivot_field
+    Some(pivot_field)
+}
+
+fn semantic_cache_field_name(cache: &PivotCacheDefinition, field_index: usize) -> Option<String> {
+    let field = cache.fields.get(field_index)?;
+    field
+        .group_base
+        .and_then(|base| cache.fields.get(base))
+        .map(|field| field.name.clone())
+        .or_else(|| Some(field.name.clone()))
+}
+
+fn push_axis_field(fields: &mut Vec<PivotField>, field: PivotField) {
+    if fields
+        .last()
+        .is_some_and(|last| last.field.name.eq_ignore_ascii_case(&field.field.name))
+    {
+        return;
+    }
+    fields.push(field);
 }
 
 fn parse_aggregate(value: &str) -> Option<PivotAggregate> {
@@ -1115,6 +1188,8 @@ mod tests {
                 formula: None,
                 shared_items: Vec::new(),
                 grouping: None,
+                group_base: None,
+                group_parent: None,
             }],
             calculated_fields: Vec::new(),
             groupings: Vec::new(),

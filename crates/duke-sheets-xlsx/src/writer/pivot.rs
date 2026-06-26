@@ -13,6 +13,10 @@ use duke_sheets_formula::{
     evaluate, parse_formula, EvaluationContext, FormulaExpr, FormulaValue, StructuredRefSpecifier,
     StructuredReference,
 };
+use ssfmt::{
+    date_serial::{serial_to_date, serial_to_time},
+    DateSystem,
+};
 
 use super::{
     write_xml_part, XlsxError, XlsxResult, XmlWriter, NS_DOC_RELS, NS_RELATIONSHIPS,
@@ -34,7 +38,6 @@ pub(super) struct PivotCachePart {
     source: PivotSource,
     source_sheet_index: usize,
     fields: Vec<CacheField>,
-    groupings: Vec<PivotGrouping>,
     rows: Vec<Vec<Option<u32>>>,
     record_count: usize,
     refresh_on_load: bool,
@@ -65,8 +68,19 @@ struct CacheField {
     name: String,
     formula: Option<String>,
     database_field: bool,
+    group: Option<CacheFieldGroup>,
     shared_items: Vec<PivotValue>,
     item_lookup: HashMap<PivotValue, u32>,
+}
+
+#[derive(Debug, Clone)]
+enum CacheFieldGroup {
+    Range(PivotGrouping),
+    DateUnit {
+        base: usize,
+        parent: Option<usize>,
+        unit: PivotDateGroupUnit,
+    },
 }
 
 impl CacheField {
@@ -75,6 +89,7 @@ impl CacheField {
             name,
             formula: None,
             database_field: true,
+            group: None,
             shared_items: Vec::new(),
             item_lookup: HashMap::new(),
         }
@@ -85,6 +100,7 @@ impl CacheField {
             name,
             formula: Some(formula),
             database_field: false,
+            group: None,
             shared_items: Vec::new(),
             item_lookup: HashMap::new(),
         }
@@ -119,6 +135,12 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
             apply_calculated_cache_fields(&pivot.name, &mut resolved, &pivot.calculated_fields)?;
             validate_pivot_fields(pivot, &resolved.fields)?;
             validate_pivot_groupings(pivot, &resolved.fields)?;
+            apply_grouped_cache_fields(
+                &pivot.name,
+                &mut resolved,
+                &pivot.groupings,
+                workbook.settings().date_1904,
+            )?;
             let cache_key = cache_key_for_pivot(&resolved.key, pivot);
 
             let cache_num = if let Some(cache_num) = cache_by_source.get(&cache_key) {
@@ -141,7 +163,6 @@ pub(super) fn build_pivot_numbering(workbook: &Workbook) -> XlsxResult<PivotNumb
                     source: resolved.source,
                     source_sheet_index: resolved.source_sheet_index,
                     fields: resolved.fields,
-                    groupings: pivot.groupings.clone(),
                     rows: resolved.rows,
                     record_count: resolved.record_count,
                     refresh_on_load: pivot.refresh_policy.refresh_on_open,
@@ -290,9 +311,9 @@ fn validate_pivot_groupings(pivot: &PivotTable, fields: &[CacheField]) -> XlsxRe
                 }
             }
             PivotGrouping::Date { units, .. } => {
-                if units.len() != 1 {
+                if units.is_empty() {
                     return Err(XlsxError::InvalidFormat(format!(
-                        "pivot table {} uses multi-unit date grouping for field {}, which this XLSX writer does not emit yet",
+                        "pivot table {} has an empty date grouping for field {}",
                         pivot.name, field.name
                     )));
                 }
@@ -301,6 +322,147 @@ fn validate_pivot_groupings(pivot: &PivotTable, fields: &[CacheField]) -> XlsxRe
     }
 
     Ok(())
+}
+
+fn apply_grouped_cache_fields(
+    pivot_name: &str,
+    resolved: &mut ResolvedPivotSource,
+    groupings: &[PivotGrouping],
+    date_1904: bool,
+) -> XlsxResult<()> {
+    let date_system = if date_1904 {
+        DateSystem::Date1904
+    } else {
+        DateSystem::Date1900
+    };
+
+    for grouping in groupings {
+        let field_name = &grouping_field_ref(grouping).name;
+        let field_index = field_index(&resolved.fields, field_name).ok_or_else(|| {
+            XlsxError::InvalidFormat(format!(
+                "pivot table {pivot_name} references unknown grouped source field: {field_name}"
+            ))
+        })?;
+
+        match grouping {
+            PivotGrouping::Date { units, .. } if units.len() > 1 => {
+                let base_values = resolved
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        row.get(field_index)
+                            .and_then(|index| *index)
+                            .and_then(|index| {
+                                resolved.fields[field_index]
+                                    .shared_items
+                                    .get(index as usize)
+                                    .cloned()
+                            })
+                            .unwrap_or(PivotValue::Blank)
+                    })
+                    .collect::<Vec<_>>();
+
+                let mut parent = None;
+                for unit in units {
+                    let header = unique_grouped_header(&resolved.fields, field_name, *unit);
+                    let mut grouped = CacheField::new(header);
+                    grouped.group = Some(CacheFieldGroup::DateUnit {
+                        base: field_index,
+                        parent,
+                        unit: *unit,
+                    });
+
+                    let row_indexes = base_values
+                        .iter()
+                        .map(|value| {
+                            let grouped_value = group_date_value(value, *unit, date_system);
+                            grouped.intern(grouped_value)
+                        })
+                        .collect::<Vec<_>>();
+                    for (row, index) in resolved.rows.iter_mut().zip(row_indexes) {
+                        row.push(Some(index));
+                    }
+
+                    parent = Some(resolved.fields.len());
+                    resolved.fields.push(grouped);
+                }
+            }
+            _ => {
+                resolved.fields[field_index].group = Some(CacheFieldGroup::Range(grouping.clone()));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn unique_grouped_header(
+    fields: &[CacheField],
+    field_name: &str,
+    unit: PivotDateGroupUnit,
+) -> String {
+    let base = grouped_date_header(field_name, unit);
+    if fields
+        .iter()
+        .all(|field| !field.name.eq_ignore_ascii_case(&base))
+    {
+        return base;
+    }
+
+    for suffix in 2.. {
+        let candidate = format!("{base} {suffix}");
+        if fields
+            .iter()
+            .all(|field| !field.name.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded grouped header suffix search should return")
+}
+
+fn grouped_date_header(field_name: &str, unit: PivotDateGroupUnit) -> String {
+    format!("{field_name} ({})", date_group_unit_name(unit))
+}
+
+fn date_group_unit_name(unit: PivotDateGroupUnit) -> &'static str {
+    match unit {
+        PivotDateGroupUnit::Seconds => "Seconds",
+        PivotDateGroupUnit::Minutes => "Minutes",
+        PivotDateGroupUnit::Hours => "Hours",
+        PivotDateGroupUnit::Days => "Days",
+        PivotDateGroupUnit::Months => "Months",
+        PivotDateGroupUnit::Quarters => "Quarters",
+        PivotDateGroupUnit::Years => "Years",
+    }
+}
+
+fn group_date_value(
+    value: &PivotValue,
+    unit: PivotDateGroupUnit,
+    date_system: DateSystem,
+) -> PivotValue {
+    let PivotValue::Number(serial) = value else {
+        return value.clone();
+    };
+    if !serial.is_finite() {
+        return value.clone();
+    }
+    let Some((year, month, day)) = serial_to_date(*serial, date_system) else {
+        return value.clone();
+    };
+    let (hour, minute, second) = serial_to_time(*serial);
+
+    let value = match unit {
+        PivotDateGroupUnit::Years => year as f64,
+        PivotDateGroupUnit::Quarters => ((month - 1) / 3 + 1) as f64,
+        PivotDateGroupUnit::Months => month as f64,
+        PivotDateGroupUnit::Days => day as f64,
+        PivotDateGroupUnit::Hours => hour as f64,
+        PivotDateGroupUnit::Minutes => minute as f64,
+        PivotDateGroupUnit::Seconds => second as f64,
+    };
+    PivotValue::Number(value)
 }
 
 fn grouping_field_ref(grouping: &PivotGrouping) -> &PivotFieldRef {
@@ -884,7 +1046,7 @@ pub(super) fn write_pivot_table_part<W: Write + Seek>(
         tag.push_attribute(("outline", outline));
         w.write_event(Event::Start(tag))?;
 
-        write_location(w, pivot)?;
+        write_location(w, pivot, &cache_part.fields)?;
         write_pivot_fields(w, pivot, &cache_part.fields)?;
         write_axis_fields(w, "rowFields", &pivot.rows, &cache_part.fields)?;
         write_axis_fields(w, "colFields", &pivot.columns, &cache_part.fields)?;
@@ -907,12 +1069,14 @@ fn find_cache_part(workbook: &Workbook, table_part: &PivotTablePart) -> XlsxResu
         .ok_or_else(|| XlsxError::InvalidFormat("pivot cache part not found".into()))
 }
 
-fn write_location(w: &mut XmlWriter, pivot: &PivotTable) -> XlsxResult<()> {
+fn write_location(w: &mut XmlWriter, pivot: &PivotTable, fields: &[CacheField]) -> XlsxResult<()> {
     let range = pivot
         .rendered_range
         .unwrap_or_else(|| CellRange::single(pivot.target));
     let ref_str = range.to_a1_string();
-    let first_data_col = pivot.rows.len().max(1).to_string();
+    let first_data_col = expanded_axis_field_count(&pivot.rows, fields)
+        .max(1)
+        .to_string();
 
     let mut location = BytesStart::new("location");
     location.push_attribute(("ref", ref_str.as_str()));
@@ -935,17 +1099,17 @@ fn write_pivot_fields(
 
     for (index, field) in fields.iter().enumerate() {
         let mut pivot_field = BytesStart::new("pivotField");
-        if let Some(axis) = field_axis(pivot, &field.name) {
+        if let Some(axis) = field_axis(pivot, fields, index) {
             pivot_field.push_attribute(("axis", axis));
         }
-        let sort = field_sort(pivot, &field.name);
+        let sort = field_sort(pivot, fields, index);
         if sort != "manual" {
             pivot_field.push_attribute(("sortType", sort));
         }
         if field_is_filtered(pivot, &field.name) {
             pivot_field.push_attribute(("multipleItemSelectionAllowed", "1"));
         }
-        if let Some(axis_field) = pivot_axis_field(pivot, &field.name) {
+        if let Some(axis_field) = pivot_axis_field(pivot, fields, index) {
             pivot_field.push_attribute(("showAll", bool_attr(axis_field.show_empty_items)));
             push_subtotal_attrs(&mut pivot_field, axis_field.subtotal);
         }
@@ -977,23 +1141,28 @@ fn write_pivot_fields(
     Ok(())
 }
 
-fn field_axis(pivot: &PivotTable, field_name: &str) -> Option<&'static str> {
+fn field_axis(
+    pivot: &PivotTable,
+    fields: &[CacheField],
+    field_index: usize,
+) -> Option<&'static str> {
+    let field_name = axis_semantic_field_name(fields, field_index)?;
     if pivot
         .rows
         .iter()
-        .any(|field| field.field.name.eq_ignore_ascii_case(field_name))
+        .any(|field| field.field.name.eq_ignore_ascii_case(&field_name))
     {
         Some("axisRow")
     } else if pivot
         .columns
         .iter()
-        .any(|field| field.field.name.eq_ignore_ascii_case(field_name))
+        .any(|field| field.field.name.eq_ignore_ascii_case(&field_name))
     {
         Some("axisCol")
     } else if pivot
         .page_fields
         .iter()
-        .any(|field| field.field.name.eq_ignore_ascii_case(field_name))
+        .any(|field| field.field.name.eq_ignore_ascii_case(&field_name))
     {
         Some("axisPage")
     } else {
@@ -1001,13 +1170,16 @@ fn field_axis(pivot: &PivotTable, field_name: &str) -> Option<&'static str> {
     }
 }
 
-fn field_sort(pivot: &PivotTable, field_name: &str) -> &'static str {
+fn field_sort(pivot: &PivotTable, fields: &[CacheField], field_index: usize) -> &'static str {
+    let Some(field_name) = axis_semantic_field_name(fields, field_index) else {
+        return "manual";
+    };
     let sort = pivot
         .rows
         .iter()
         .chain(pivot.columns.iter())
         .chain(pivot.page_fields.iter())
-        .find(|field| field.field.name.eq_ignore_ascii_case(field_name))
+        .find(|field| field.field.name.eq_ignore_ascii_case(&field_name))
         .map(|field| field.sort)
         .unwrap_or(PivotSort::None);
 
@@ -1030,14 +1202,36 @@ fn field_is_filtered(pivot: &PivotTable, field_name: &str) -> bool {
 
 fn pivot_axis_field<'a>(
     pivot: &'a PivotTable,
-    field_name: &str,
+    fields: &'a [CacheField],
+    field_index: usize,
 ) -> Option<&'a duke_sheets_core::PivotField> {
+    let field_name = axis_semantic_field_name(fields, field_index)?;
     pivot
         .rows
         .iter()
         .chain(pivot.columns.iter())
         .chain(pivot.page_fields.iter())
-        .find(|field| field.field.name.eq_ignore_ascii_case(field_name))
+        .find(|field| field.field.name.eq_ignore_ascii_case(&field_name))
+}
+
+fn axis_semantic_field_name(fields: &[CacheField], field_index: usize) -> Option<String> {
+    let field = fields.get(field_index)?;
+    if let Some(CacheFieldGroup::DateUnit { base, .. }) = &field.group {
+        return fields.get(*base).map(|field| field.name.clone());
+    }
+    if has_grouped_children(fields, field_index) {
+        return None;
+    }
+    Some(field.name.clone())
+}
+
+fn has_grouped_children(fields: &[CacheField], field_index: usize) -> bool {
+    fields.iter().any(|field| {
+        matches!(
+            field.group,
+            Some(CacheFieldGroup::DateUnit { base, .. }) if base == field_index
+        )
+    })
 }
 
 fn push_subtotal_attrs(pivot_field: &mut BytesStart<'_>, subtotal: PivotSubtotal) {
@@ -1127,14 +1321,12 @@ fn write_axis_fields(
         return Ok(());
     }
 
-    let count = axis_fields.len().to_string();
+    let indexes = expanded_axis_field_indexes(axis_fields, fields)?;
+    let count = indexes.len().to_string();
     let mut tag = BytesStart::new(tag_name);
     tag.push_attribute(("count", count.as_str()));
     w.write_event(Event::Start(tag))?;
-    for field in axis_fields {
-        let index = field_index(fields, &field.field.name).ok_or_else(|| {
-            XlsxError::InvalidFormat(format!("pivot field not found: {}", field.field.name))
-        })?;
+    for index in indexes {
         let x = index.to_string();
         let mut el = BytesStart::new("field");
         el.push_attribute(("x", x.as_str()));
@@ -1142,6 +1334,54 @@ fn write_axis_fields(
     }
     w.write_event(Event::End(BytesEnd::new(tag_name)))?;
     Ok(())
+}
+
+fn expanded_axis_field_count(
+    axis_fields: &[duke_sheets_core::PivotField],
+    fields: &[CacheField],
+) -> usize {
+    axis_fields
+        .iter()
+        .map(|field| {
+            grouped_cache_field_indexes(fields, &field.field.name)
+                .map(|indexes| indexes.len())
+                .unwrap_or(1)
+        })
+        .sum()
+}
+
+fn expanded_axis_field_indexes(
+    axis_fields: &[duke_sheets_core::PivotField],
+    fields: &[CacheField],
+) -> XlsxResult<Vec<usize>> {
+    let mut indexes = Vec::new();
+    for field in axis_fields {
+        if let Some(grouped_indexes) = grouped_cache_field_indexes(fields, &field.field.name) {
+            indexes.extend(grouped_indexes);
+            continue;
+        }
+
+        let index = field_index(fields, &field.field.name).ok_or_else(|| {
+            XlsxError::InvalidFormat(format!("pivot field not found: {}", field.field.name))
+        })?;
+        indexes.push(index);
+    }
+    Ok(indexes)
+}
+
+fn grouped_cache_field_indexes(fields: &[CacheField], field_name: &str) -> Option<Vec<usize>> {
+    let base = field_index(fields, field_name)?;
+    let indexes = fields
+        .iter()
+        .enumerate()
+        .filter_map(|(index, field)| match field.group {
+            Some(CacheFieldGroup::DateUnit {
+                base: group_base, ..
+            }) if group_base == base => Some(index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    (!indexes.is_empty()).then_some(indexes)
 }
 
 fn write_page_fields(
@@ -1666,7 +1906,7 @@ pub(super) fn write_pivot_cache_definition_part<W: Write + Seek>(
         cache_fields.push_attribute(("count", count.as_str()));
         w.write_event(Event::Start(cache_fields))?;
         for field in &part.fields {
-            write_cache_field(w, field, grouping_for_field(&part.groupings, &field.name))?;
+            write_cache_field(w, field)?;
         }
         w.write_event(Event::End(BytesEnd::new("cacheFields")))?;
 
@@ -1710,11 +1950,7 @@ fn write_worksheet_source(
     Ok(())
 }
 
-fn write_cache_field(
-    w: &mut XmlWriter,
-    field: &CacheField,
-    grouping: Option<&PivotGrouping>,
-) -> XlsxResult<()> {
+fn write_cache_field(w: &mut XmlWriter, field: &CacheField) -> XlsxResult<()> {
     let mut cache_field = BytesStart::new("cacheField");
     cache_field.push_attribute(("name", field.name.as_str()));
     if let Some(formula) = &field.formula {
@@ -1738,7 +1974,7 @@ fn write_cache_field(
     }
     w.write_event(Event::End(BytesEnd::new("sharedItems")))?;
 
-    if let Some(grouping) = grouping {
+    if let Some(grouping) = &field.group {
         write_field_group(w, grouping)?;
     }
 
@@ -1746,28 +1982,35 @@ fn write_cache_field(
     Ok(())
 }
 
-fn grouping_for_field<'a>(
-    groupings: &'a [PivotGrouping],
-    field_name: &str,
-) -> Option<&'a PivotGrouping> {
-    groupings.iter().find(|grouping| {
-        grouping_field_ref(grouping)
-            .name
-            .eq_ignore_ascii_case(field_name)
-    })
-}
-
-fn write_field_group(w: &mut XmlWriter, grouping: &PivotGrouping) -> XlsxResult<()> {
-    w.write_event(Event::Start(BytesStart::new("fieldGroup")))?;
+fn write_field_group(w: &mut XmlWriter, grouping: &CacheFieldGroup) -> XlsxResult<()> {
+    let mut field_group = BytesStart::new("fieldGroup");
+    let base = match grouping {
+        CacheFieldGroup::DateUnit { base, .. } => Some(base.to_string()),
+        CacheFieldGroup::Range(_) => None,
+    };
+    let parent = match grouping {
+        CacheFieldGroup::DateUnit {
+            parent: Some(parent),
+            ..
+        } => Some(parent.to_string()),
+        _ => None,
+    };
+    if let Some(base) = base.as_deref() {
+        field_group.push_attribute(("base", base));
+    }
+    if let Some(parent) = parent.as_deref() {
+        field_group.push_attribute(("par", parent));
+    }
+    w.write_event(Event::Start(field_group))?;
 
     let mut range_pr = BytesStart::new("rangePr");
     match grouping {
-        PivotGrouping::Number {
+        CacheFieldGroup::Range(PivotGrouping::Number {
             start,
             end,
             interval,
             ..
-        } => {
+        }) => {
             let auto_start = bool_attr(start.is_none());
             let auto_end = bool_attr(end.is_none());
             let start_num = start.map(|value| value.to_string());
@@ -1785,8 +2028,11 @@ fn write_field_group(w: &mut XmlWriter, grouping: &PivotGrouping) -> XlsxResult<
             }
             range_pr.push_attribute(("groupInterval", group_interval.as_str()));
         }
-        PivotGrouping::Date { units, .. } => {
+        CacheFieldGroup::Range(PivotGrouping::Date { units, .. }) => {
             range_pr.push_attribute(("groupBy", date_group_by_name(units[0])));
+        }
+        CacheFieldGroup::DateUnit { unit, .. } => {
+            range_pr.push_attribute(("groupBy", date_group_by_name(*unit)));
         }
     }
     w.write_event(Event::Empty(range_pr))?;
