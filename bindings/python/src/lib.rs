@@ -274,6 +274,13 @@ fn build_pivot_field_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotField>
     if let Some(subtotal) = optional_string(dict, &["subtotal"])? {
         field.subtotal = parse_pivot_subtotal(&subtotal)?;
     }
+    if let Some(subtotals) = optional_string_vec(dict, &["subtotals"])? {
+        let subtotals = subtotals
+            .into_iter()
+            .map(|subtotal| parse_pivot_subtotal(&subtotal))
+            .collect::<PyResult<Vec<_>>>()?;
+        field = field.with_subtotals(subtotals);
+    }
     if let Some(show_empty_items) = optional_bool(dict, &["show_empty_items", "showEmptyItems"])? {
         field.show_empty_items = show_empty_items;
     }
@@ -1155,6 +1162,12 @@ fn pivot_field_to_py(py: Python<'_>, field: &PivotField) -> PyResult<PyObject> {
     dict.set_item("field", &field.field.name)?;
     dict.set_item("sort", pivot_sort_to_python(field.sort))?;
     dict.set_item("subtotal", pivot_subtotal_to_python(field.subtotal))?;
+    let subtotals = field
+        .subtotals
+        .iter()
+        .map(|subtotal| pivot_subtotal_to_python(*subtotal))
+        .collect::<Vec<_>>();
+    dict.set_item("subtotals", subtotals)?;
     dict.set_item("show_empty_items", field.show_empty_items)?;
     dict.set_item("show_drop_downs", field.show_drop_downs)?;
     dict.set_item("subtotal_top", field.subtotal_top)?;

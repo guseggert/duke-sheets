@@ -201,7 +201,8 @@ describe("PivotTables", () => {
         {
           field: "Region",
           sort: "descending",
-          subtotal: "none",
+          subtotal: "sum",
+          subtotals: ["sum", "average", "max"],
           showDropDowns: false,
           subtotalTop: false,
           insertBlankRow: true,
@@ -280,7 +281,8 @@ describe("PivotTables", () => {
     expect(pivot?.rows[0]).toMatchObject({
       field: "Region",
       sort: "descending",
-      subtotal: "none",
+      subtotal: "sum",
+      subtotals: ["sum", "average", "max"],
       showDropDowns: false,
       subtotalTop: false,
       insertBlankRow: true,

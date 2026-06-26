@@ -208,6 +208,7 @@ export interface JsPivotFieldOptions {
     | 'varp'
     | 'variance_p'
     | 'varianceP'
+  subtotals?: string[]
   showEmptyItems?: boolean
   showDropDowns?: boolean
   subtotalTop?: boolean

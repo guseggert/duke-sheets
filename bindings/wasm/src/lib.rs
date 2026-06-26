@@ -372,6 +372,7 @@ export interface PivotFieldOptions {
     | "varp"
     | "variance_p"
     | "varianceP";
+  subtotals?: string[];
   showEmptyItems?: boolean;
   showDropDowns?: boolean;
   subtotalTop?: boolean;
@@ -508,6 +509,7 @@ export interface PivotFieldDefinition {
   field: string;
   sort: "none" | "ascending" | "descending";
   subtotal: "automatic" | "none" | "sum" | "count" | "countNumbers" | "average" | "min" | "max" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
+  subtotals: string[];
   showEmptyItems: boolean;
   showDropDowns: boolean;
   subtotalTop: boolean;
@@ -1055,6 +1057,13 @@ fn build_pivot_field_from_wasm(options: WasmPivotFieldOptions) -> Result<PivotFi
     }
     if let Some(subtotal) = options.subtotal {
         field.subtotal = parse_pivot_subtotal(&subtotal)?;
+    }
+    if let Some(subtotals) = options.subtotals {
+        let subtotals = subtotals
+            .into_iter()
+            .map(|subtotal| parse_pivot_subtotal(&subtotal))
+            .collect::<Result<Vec<_>, _>>()?;
+        field = field.with_subtotals(subtotals);
     }
     if let Some(show_empty_items) = options.show_empty_items {
         field.show_empty_items = show_empty_items;

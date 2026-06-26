@@ -1456,6 +1456,7 @@ export interface JsPivotFieldDefinition {
   field: string
   sort: string
   subtotal: string
+  subtotals: Array<string>
   showEmptyItems: boolean
   showDropDowns: boolean
   subtotalTop: boolean
@@ -1469,6 +1470,7 @@ export interface JsPivotFieldOptions {
   field: string
   sort?: string
   subtotal?: string
+  subtotals?: Array<string>
   showEmptyItems?: boolean
   showDropDowns?: boolean
   subtotalTop?: boolean

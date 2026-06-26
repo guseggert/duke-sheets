@@ -342,7 +342,15 @@ fn test_pivot_table_definitions_from_options() {
     let row_field = make_options(&[
         ("field", JsValue::from_str("Region")),
         ("sort", JsValue::from_str("descending")),
-        ("subtotal", JsValue::from_str("none")),
+        ("subtotal", JsValue::from_str("sum")),
+        (
+            "subtotals",
+            make_array(&[
+                JsValue::from_str("sum"),
+                JsValue::from_str("average"),
+                JsValue::from_str("max"),
+            ]),
+        ),
         ("showDropDowns", JsValue::FALSE),
         ("subtotalTop", JsValue::FALSE),
         ("insertBlankRow", JsValue::TRUE),
@@ -479,7 +487,12 @@ fn test_pivot_table_definitions_from_options() {
     let row = rows.get(0);
     assert_eq!(get_string_field(&row, "field"), "Region");
     assert_eq!(get_string_field(&row, "sort"), "descending");
-    assert_eq!(get_string_field(&row, "subtotal"), "none");
+    assert_eq!(get_string_field(&row, "subtotal"), "sum");
+    let subtotals = Array::from(&Reflect::get(&row, &JsValue::from_str("subtotals")).unwrap());
+    assert_eq!(subtotals.length(), 3);
+    assert_eq!(subtotals.get(0).as_string().unwrap(), "sum");
+    assert_eq!(subtotals.get(1).as_string().unwrap(), "average");
+    assert_eq!(subtotals.get(2).as_string().unwrap(), "max");
     assert!(!get_bool_field(&row, "showDropDowns"));
     assert!(!get_bool_field(&row, "subtotalTop"));
     assert!(get_bool_field(&row, "insertBlankRow"));

@@ -135,6 +135,7 @@ pub struct WasmPivotFieldOptions {
     pub field: String,
     pub sort: Option<String>,
     pub subtotal: Option<String>,
+    pub subtotals: Option<Vec<String>>,
     pub show_empty_items: Option<bool>,
     pub show_drop_downs: Option<bool>,
     pub subtotal_top: Option<bool>,
@@ -437,6 +438,7 @@ pub struct WasmPivotFieldDefinition {
     pub field: String,
     pub sort: String,
     pub subtotal: String,
+    pub subtotals: Vec<String>,
     pub show_empty_items: bool,
     pub show_drop_downs: bool,
     pub subtotal_top: bool,
@@ -452,6 +454,11 @@ impl From<&core::PivotField> for WasmPivotFieldDefinition {
             field: field.field.name.clone(),
             sort: pivot_sort_to_string(field.sort).into(),
             subtotal: pivot_subtotal_to_string(field.subtotal).into(),
+            subtotals: field
+                .subtotals
+                .iter()
+                .map(|subtotal| pivot_subtotal_to_string(*subtotal).into())
+                .collect(),
             show_empty_items: field.show_empty_items,
             show_drop_downs: field.show_drop_downs,
             subtotal_top: field.subtotal_top,
