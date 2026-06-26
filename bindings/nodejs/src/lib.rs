@@ -546,9 +546,16 @@ fn parse_pivot_subtotal(value: &str) -> Result<PivotSubtotal> {
         "none" => PivotSubtotal::None,
         "sum" => PivotSubtotal::Sum,
         "count" => PivotSubtotal::Count,
+        "count_numbers" | "countNumbers" | "countnumbers" | "count_nums" | "countNums"
+        | "countnums" => PivotSubtotal::CountNumbers,
         "average" | "avg" => PivotSubtotal::Average,
         "min" => PivotSubtotal::Min,
         "max" => PivotSubtotal::Max,
+        "product" => PivotSubtotal::Product,
+        "std_dev" | "stdDev" | "stddev" => PivotSubtotal::StdDev,
+        "std_dev_p" | "stdDevP" | "stddevp" => PivotSubtotal::StdDevP,
+        "var" | "variance" => PivotSubtotal::Var,
+        "var_p" | "varP" | "varp" | "variance_p" | "varianceP" => PivotSubtotal::VarP,
         other => {
             return Err(napi::Error::from_reason(format!(
                 "Unsupported pivot subtotal: {other}"

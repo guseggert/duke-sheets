@@ -697,14 +697,26 @@ fn parse_pivot_sort(e: &BytesStart<'_>) -> PivotSort {
 fn parse_pivot_subtotal(e: &BytesStart<'_>) -> PivotSubtotal {
     if attr_bool(e, b"sumSubtotal").unwrap_or(false) {
         PivotSubtotal::Sum
-    } else if attr_bool(e, b"countSubtotal").unwrap_or(false) {
+    } else if attr_bool(e, b"countASubtotal").unwrap_or(false) {
         PivotSubtotal::Count
+    } else if attr_bool(e, b"countSubtotal").unwrap_or(false) {
+        PivotSubtotal::CountNumbers
     } else if attr_bool(e, b"avgSubtotal").unwrap_or(false) {
         PivotSubtotal::Average
     } else if attr_bool(e, b"minSubtotal").unwrap_or(false) {
         PivotSubtotal::Min
     } else if attr_bool(e, b"maxSubtotal").unwrap_or(false) {
         PivotSubtotal::Max
+    } else if attr_bool(e, b"productSubtotal").unwrap_or(false) {
+        PivotSubtotal::Product
+    } else if attr_bool(e, b"stdDevSubtotal").unwrap_or(false) {
+        PivotSubtotal::StdDev
+    } else if attr_bool(e, b"stdDevPSubtotal").unwrap_or(false) {
+        PivotSubtotal::StdDevP
+    } else if attr_bool(e, b"varSubtotal").unwrap_or(false) {
+        PivotSubtotal::Var
+    } else if attr_bool(e, b"varPSubtotal").unwrap_or(false) {
+        PivotSubtotal::VarP
     } else if attr_bool(e, b"defaultSubtotal").unwrap_or(true) {
         PivotSubtotal::Automatic
     } else {

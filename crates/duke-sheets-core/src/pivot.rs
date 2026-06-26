@@ -319,12 +319,24 @@ pub enum PivotSubtotal {
     Sum,
     /// Count subtotal.
     Count,
+    /// Count numeric values subtotal.
+    CountNumbers,
     /// Average subtotal.
     Average,
     /// Minimum subtotal.
     Min,
     /// Maximum subtotal.
     Max,
+    /// Product subtotal.
+    Product,
+    /// Sample standard deviation subtotal.
+    StdDev,
+    /// Population standard deviation subtotal.
+    StdDevP,
+    /// Sample variance subtotal.
+    Var,
+    /// Population variance subtotal.
+    VarP,
 }
 
 /// Aggregation function for a pivot measure.

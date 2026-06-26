@@ -1042,6 +1042,10 @@ fn push_subtotal_attrs(pivot_field: &mut BytesStart<'_>, subtotal: PivotSubtotal
         }
         PivotSubtotal::Count => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("countASubtotal", "1"));
+        }
+        PivotSubtotal::CountNumbers => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
             pivot_field.push_attribute(("countSubtotal", "1"));
         }
         PivotSubtotal::Average => {
@@ -1055,6 +1059,26 @@ fn push_subtotal_attrs(pivot_field: &mut BytesStart<'_>, subtotal: PivotSubtotal
         PivotSubtotal::Max => {
             pivot_field.push_attribute(("defaultSubtotal", "0"));
             pivot_field.push_attribute(("maxSubtotal", "1"));
+        }
+        PivotSubtotal::Product => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("productSubtotal", "1"));
+        }
+        PivotSubtotal::StdDev => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("stdDevSubtotal", "1"));
+        }
+        PivotSubtotal::StdDevP => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("stdDevPSubtotal", "1"));
+        }
+        PivotSubtotal::Var => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("varSubtotal", "1"));
+        }
+        PivotSubtotal::VarP => {
+            pivot_field.push_attribute(("defaultSubtotal", "0"));
+            pivot_field.push_attribute(("varPSubtotal", "1"));
         }
     }
 }

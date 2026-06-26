@@ -3933,6 +3933,71 @@ mod tests {
     }
 
     #[test]
+    fn test_writer_round_trips_pivot_subtotal_functions() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        let headers = [
+            "Region", "Segment", "Channel", "Bucket", "Group", "Class", "Tier", "Revenue",
+        ];
+        for (index, header) in headers.iter().enumerate() {
+            sheet.set_cell_value_at(0, index as u16, *header).unwrap();
+            sheet
+                .set_cell_value_at(1, index as u16, format!("{header} A"))
+                .unwrap();
+        }
+        sheet.set_cell_value("H2", 10.0).unwrap();
+
+        let subtotal_fields = [
+            ("Region", PivotSubtotal::Count),
+            ("Segment", PivotSubtotal::CountNumbers),
+            ("Channel", PivotSubtotal::Product),
+            ("Bucket", PivotSubtotal::StdDev),
+            ("Group", PivotSubtotal::StdDevP),
+            ("Class", PivotSubtotal::Var),
+            ("Tier", PivotSubtotal::VarP),
+        ];
+
+        let mut builder = PivotTable::builder("SubtotalFunctions")
+            .source_range(CellRange::parse("A1:H2").unwrap())
+            .target_address("J1")
+            .unwrap()
+            .named_measure("Revenue", PivotAggregate::Sum, "Revenue");
+        for (field_name, subtotal) in subtotal_fields {
+            let mut field = PivotField::new(field_name);
+            field.subtotal = subtotal;
+            builder = builder.row(field);
+        }
+        sheet.add_pivot_table(builder.build().unwrap()).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"countASubtotal="1""#));
+        assert!(pivot_xml.contains(r#"countSubtotal="1""#));
+        assert!(pivot_xml.contains(r#"productSubtotal="1""#));
+        assert!(pivot_xml.contains(r#"stdDevSubtotal="1""#));
+        assert!(pivot_xml.contains(r#"stdDevPSubtotal="1""#));
+        assert!(pivot_xml.contains(r#"varSubtotal="1""#));
+        assert!(pivot_xml.contains(r#"varPSubtotal="1""#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("SubtotalFunctions")
+            .unwrap();
+        assert_eq!(pivot.rows[0].subtotal, PivotSubtotal::Count);
+        assert_eq!(pivot.rows[1].subtotal, PivotSubtotal::CountNumbers);
+        assert_eq!(pivot.rows[2].subtotal, PivotSubtotal::Product);
+        assert_eq!(pivot.rows[3].subtotal, PivotSubtotal::StdDev);
+        assert_eq!(pivot.rows[4].subtotal, PivotSubtotal::StdDevP);
+        assert_eq!(pivot.rows[5].subtotal, PivotSubtotal::Var);
+        assert_eq!(pivot.rows[6].subtotal, PivotSubtotal::VarP);
+    }
+
+    #[test]
     fn test_writer_round_trips_pivot_layout_flags() {
         let mut wb = Workbook::new();
         let sheet = wb.worksheet_mut(0).unwrap();
