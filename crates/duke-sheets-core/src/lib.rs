@@ -75,8 +75,9 @@ pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
 pub use table::{Table, TableColumn, TableStyleInfo, TotalsRowFunction};
 pub use validation::{DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType};
 pub use workbook::{
-    ChartSheet, SheetSlot, Workbook, WorkbookConnection, WorkbookConnectionKind, WorkbookExtension,
-    WorkbookExtensionPart, WorkbookSettings,
+    ChartSheet, SheetSlot, Workbook, WorkbookConnection, WorkbookConnectionCredentials,
+    WorkbookConnectionKind, WorkbookConnectionParameter, WorkbookConnectionParameterType,
+    WorkbookConnectionParameterValue, WorkbookExtension, WorkbookExtensionPart, WorkbookSettings,
 };
 pub use worksheet::{
     FreezePanes, ImageInfo, ImageSizing, PageBreak, PageOrientation, PageSetup, Selection,

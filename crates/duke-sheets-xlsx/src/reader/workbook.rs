@@ -10,7 +10,9 @@ use quick_xml::Writer;
 use super::archive_by_name;
 use crate::error::{XlsxError, XlsxResult};
 use duke_sheets_core::{
-    SheetVisibility, WorkbookConnection, WorkbookConnectionKind, WorkbookExtension,
+    SheetVisibility, WorkbookConnection, WorkbookConnectionCredentials, WorkbookConnectionKind,
+    WorkbookConnectionParameter, WorkbookConnectionParameterType, WorkbookConnectionParameterValue,
+    WorkbookExtension,
 };
 
 /// Parsed workbook properties from workbook.xml
@@ -442,6 +444,11 @@ pub(super) fn read_workbook_connections<R: Read + Seek>(
                         connection.kind = Some(parse_text_pr(&e));
                     }
                 }
+                b"parameter" => {
+                    if let Some(connection) = &mut current {
+                        connection.parameters.push(parse_connection_parameter(&e));
+                    }
+                }
                 _ => {}
             },
             Ok(Event::Empty(e)) => match e.name().local_name().as_ref() {
@@ -470,6 +477,11 @@ pub(super) fn read_workbook_connections<R: Read + Seek>(
                         connection.kind = Some(parse_text_pr(&e));
                     }
                 }
+                b"parameter" => {
+                    if let Some(connection) = &mut current {
+                        connection.parameters.push(parse_connection_parameter(&e));
+                    }
+                }
                 _ => {}
             },
             Ok(Event::End(e)) => {
@@ -496,6 +508,8 @@ struct ParsedConnection {
     refresh_on_load: bool,
     background: bool,
     save_data: bool,
+    credentials: Option<WorkbookConnectionCredentials>,
+    parameters: Vec<WorkbookConnectionParameter>,
     kind: Option<WorkbookConnectionKind>,
 }
 
@@ -509,6 +523,8 @@ impl ParsedConnection {
             refresh_on_load: self.refresh_on_load,
             background: self.background,
             save_data: self.save_data,
+            credentials: self.credentials,
+            parameters: self.parameters,
         })
     }
 }
@@ -523,6 +539,14 @@ fn parse_connection_attrs(e: &quick_xml::events::BytesStart<'_>) -> Option<Parse
         refresh_on_load: attr_bool(e, b"refreshOnLoad").unwrap_or(false),
         background: attr_bool(e, b"background").unwrap_or(false),
         save_data: attr_bool(e, b"saveData").unwrap_or(false),
+        credentials: attr_string(e, b"credentials").and_then(|value| match value.as_str() {
+            "integrated" => Some(WorkbookConnectionCredentials::Integrated),
+            "none" => Some(WorkbookConnectionCredentials::None),
+            "stored" => Some(WorkbookConnectionCredentials::Stored),
+            "prompt" => Some(WorkbookConnectionCredentials::Prompt),
+            _ => None,
+        }),
+        parameters: Vec::new(),
         kind: None,
     })
 }
@@ -568,6 +592,44 @@ fn parse_text_pr(e: &quick_xml::events::BytesStart<'_>) -> WorkbookConnectionKin
     }
 }
 
+fn parse_connection_parameter(
+    e: &quick_xml::events::BytesStart<'_>,
+) -> WorkbookConnectionParameter {
+    WorkbookConnectionParameter {
+        name: attr_string(e, b"name"),
+        sql_type: attr_i32(e, b"sqlType").unwrap_or(0),
+        parameter_type: attr_string(e, b"parameterType")
+            .and_then(|value| match value.as_str() {
+                "value" => Some(WorkbookConnectionParameterType::Value),
+                "cell" => Some(WorkbookConnectionParameterType::Cell),
+                "prompt" => Some(WorkbookConnectionParameterType::Prompt),
+                _ => None,
+            })
+            .unwrap_or(WorkbookConnectionParameterType::Prompt),
+        refresh_on_change: attr_bool(e, b"refreshOnChange").unwrap_or(false),
+        prompt: attr_string(e, b"prompt"),
+        value: parse_connection_parameter_value(e),
+    }
+}
+
+fn parse_connection_parameter_value(
+    e: &quick_xml::events::BytesStart<'_>,
+) -> WorkbookConnectionParameterValue {
+    if let Some(value) = attr_bool(e, b"boolean") {
+        WorkbookConnectionParameterValue::Boolean(value)
+    } else if let Some(value) = attr_f64(e, b"double") {
+        WorkbookConnectionParameterValue::Double(value)
+    } else if let Some(value) = attr_i32(e, b"integer") {
+        WorkbookConnectionParameterValue::Integer(value)
+    } else if let Some(value) = attr_string(e, b"string") {
+        WorkbookConnectionParameterValue::String(value)
+    } else if let Some(value) = attr_string(e, b"cell") {
+        WorkbookConnectionParameterValue::Cell(value)
+    } else {
+        WorkbookConnectionParameterValue::None
+    }
+}
+
 fn attr_string(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
     e.attributes().flatten().find_map(|attr| {
         (attr.key.local_name().as_ref() == key)
@@ -577,6 +639,14 @@ fn attr_string(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<Stri
 }
 
 fn attr_u32(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<u32> {
+    attr_string(e, key).and_then(|value| value.parse().ok())
+}
+
+fn attr_i32(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<i32> {
+    attr_string(e, key).and_then(|value| value.parse().ok())
+}
+
+fn attr_f64(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<f64> {
     attr_string(e, key).and_then(|value| value.parse().ok())
 }
 

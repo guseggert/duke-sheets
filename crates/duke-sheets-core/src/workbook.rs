@@ -1,5 +1,6 @@
 //! Workbook type - the main document structure
 
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{Error, Result};
@@ -742,6 +743,10 @@ pub struct WorkbookConnection {
     pub background: bool,
     /// Whether refreshed data should be saved in the workbook package.
     pub save_data: bool,
+    /// Optional credential method for applications that refresh this connection.
+    pub credentials: Option<WorkbookConnectionCredentials>,
+    /// Query parameters associated with this connection.
+    pub parameters: Vec<WorkbookConnectionParameter>,
 }
 
 impl WorkbookConnection {
@@ -759,6 +764,8 @@ impl WorkbookConnection {
             refresh_on_load: false,
             background: false,
             save_data: false,
+            credentials: None,
+            parameters: Vec::new(),
         }
     }
 
@@ -780,6 +787,8 @@ impl WorkbookConnection {
             refresh_on_load: false,
             background: false,
             save_data: false,
+            credentials: None,
+            parameters: Vec::new(),
         }
     }
 
@@ -800,6 +809,8 @@ impl WorkbookConnection {
             refresh_on_load: false,
             background: false,
             save_data: false,
+            credentials: None,
+            parameters: Vec::new(),
         }
     }
 
@@ -819,6 +830,8 @@ impl WorkbookConnection {
             refresh_on_load: false,
             background: false,
             save_data: false,
+            credentials: None,
+            parameters: Vec::new(),
         }
     }
 
@@ -861,6 +874,143 @@ impl WorkbookConnection {
     pub fn with_save_data(mut self, save_data: bool) -> Self {
         self.save_data = save_data;
         self
+    }
+
+    /// Set the credential method used by host applications when refreshing.
+    pub fn with_credentials(mut self, credentials: WorkbookConnectionCredentials) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
+    /// Add a query parameter to this connection.
+    pub fn with_parameter(mut self, parameter: WorkbookConnectionParameter) -> Self {
+        self.parameters.push(parameter);
+        self
+    }
+}
+
+/// Credential method used by a workbook data connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorkbookConnectionCredentials {
+    /// Integrated authentication.
+    Integrated,
+    /// No credentials are used.
+    None,
+    /// Stored credentials.
+    Stored,
+    /// Prompt the user/application for credentials.
+    Prompt,
+}
+
+/// Query parameter associated with a workbook data connection.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkbookConnectionParameter {
+    /// Optional parameter name.
+    pub name: Option<String>,
+    /// Provider SQL type. SpreadsheetML defaults this to 0.
+    pub sql_type: i32,
+    /// How the parameter value is supplied.
+    pub parameter_type: WorkbookConnectionParameterType,
+    /// Whether changes to the parameter should trigger refresh.
+    pub refresh_on_change: bool,
+    /// Optional prompt text.
+    pub prompt: Option<String>,
+    /// Parameter value or cell binding.
+    pub value: WorkbookConnectionParameterValue,
+}
+
+impl WorkbookConnectionParameter {
+    /// Create a prompt parameter.
+    pub fn prompt(name: impl Into<String>, prompt: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            sql_type: 0,
+            parameter_type: WorkbookConnectionParameterType::Prompt,
+            refresh_on_change: false,
+            prompt: Some(prompt.into()),
+            value: WorkbookConnectionParameterValue::None,
+        }
+    }
+
+    /// Create a literal-value parameter.
+    pub fn value(name: impl Into<String>, value: WorkbookConnectionParameterValue) -> Self {
+        Self {
+            name: Some(name.into()),
+            sql_type: 0,
+            parameter_type: WorkbookConnectionParameterType::Value,
+            refresh_on_change: false,
+            prompt: None,
+            value,
+        }
+    }
+
+    /// Create a worksheet-cell parameter binding.
+    pub fn cell(name: impl Into<String>, cell: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            sql_type: 0,
+            parameter_type: WorkbookConnectionParameterType::Cell,
+            refresh_on_change: false,
+            prompt: None,
+            value: WorkbookConnectionParameterValue::Cell(cell.into()),
+        }
+    }
+}
+
+/// How a connection parameter obtains its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorkbookConnectionParameterType {
+    /// Prompt for the value.
+    Prompt,
+    /// Use a stored literal value.
+    Value,
+    /// Bind to a worksheet cell.
+    Cell,
+}
+
+/// Stored value for a workbook connection parameter.
+#[derive(Debug, Clone)]
+pub enum WorkbookConnectionParameterValue {
+    /// No stored value.
+    None,
+    /// Boolean value.
+    Boolean(bool),
+    /// Floating-point value.
+    Double(f64),
+    /// Integer value.
+    Integer(i32),
+    /// Text value.
+    String(String),
+    /// Worksheet cell reference.
+    Cell(String),
+}
+
+impl PartialEq for WorkbookConnectionParameterValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::None, Self::None) => true,
+            (Self::Boolean(a), Self::Boolean(b)) => a == b,
+            (Self::Double(a), Self::Double(b)) => a.to_bits() == b.to_bits(),
+            (Self::Integer(a), Self::Integer(b)) => a == b,
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Cell(a), Self::Cell(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for WorkbookConnectionParameterValue {}
+
+impl Hash for WorkbookConnectionParameterValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::None => {}
+            Self::Boolean(value) => value.hash(state),
+            Self::Double(value) => value.to_bits().hash(state),
+            Self::Integer(value) => value.hash(state),
+            Self::String(value) | Self::Cell(value) => value.hash(state),
+        }
     }
 }
 

@@ -11,7 +11,10 @@ use quick_xml::Writer;
 use crate::error::{XlsxError, XlsxResult};
 use crate::styles::{roundtrip_theme_data_for, XlsxStyleTable};
 use duke_sheets_core::style::Color;
-use duke_sheets_core::{CellAddress, CellRange, SheetSlot, Workbook};
+use duke_sheets_core::{
+    CellAddress, CellRange, SheetSlot, Workbook, WorkbookConnectionCredentials,
+    WorkbookConnectionParameter, WorkbookConnectionParameterType, WorkbookConnectionParameterValue,
+};
 
 mod chart;
 mod chart_ex;
@@ -386,6 +389,89 @@ fn bool_xml(value: bool) -> &'static str {
     } else {
         "0"
     }
+}
+
+fn connection_credentials_attr(credentials: WorkbookConnectionCredentials) -> &'static str {
+    match credentials {
+        WorkbookConnectionCredentials::Integrated => "integrated",
+        WorkbookConnectionCredentials::None => "none",
+        WorkbookConnectionCredentials::Stored => "stored",
+        WorkbookConnectionCredentials::Prompt => "prompt",
+    }
+}
+
+fn connection_parameter_type_attr(parameter_type: WorkbookConnectionParameterType) -> &'static str {
+    match parameter_type {
+        WorkbookConnectionParameterType::Prompt => "prompt",
+        WorkbookConnectionParameterType::Value => "value",
+        WorkbookConnectionParameterType::Cell => "cell",
+    }
+}
+
+fn write_connection_parameters(
+    w: &mut XmlWriter,
+    parameters: &[WorkbookConnectionParameter],
+) -> XlsxResult<()> {
+    if parameters.is_empty() {
+        return Ok(());
+    }
+
+    let count = parameters.len().to_string();
+    let mut tag = BytesStart::new("parameters");
+    tag.push_attribute(("count", count.as_str()));
+    w.write_event(Event::Start(tag))?;
+    for parameter in parameters {
+        write_connection_parameter(w, parameter)?;
+    }
+    w.write_event(Event::End(BytesEnd::new("parameters")))?;
+    Ok(())
+}
+
+fn write_connection_parameter(
+    w: &mut XmlWriter,
+    parameter: &WorkbookConnectionParameter,
+) -> XlsxResult<()> {
+    let sql_type = parameter.sql_type.to_string();
+    let parameter_type = connection_parameter_type_attr(parameter.parameter_type);
+    let refresh_on_change = bool_xml(parameter.refresh_on_change);
+    let mut tag = BytesStart::new("parameter");
+    if let Some(name) = &parameter.name {
+        tag.push_attribute(("name", name.as_str()));
+    }
+    tag.push_attribute(("sqlType", sql_type.as_str()));
+    tag.push_attribute(("parameterType", parameter_type));
+    tag.push_attribute(("refreshOnChange", refresh_on_change));
+    if let Some(prompt) = &parameter.prompt {
+        tag.push_attribute(("prompt", prompt.as_str()));
+    }
+
+    let bool_value;
+    let double_value;
+    let integer_value;
+    match &parameter.value {
+        WorkbookConnectionParameterValue::None => {}
+        WorkbookConnectionParameterValue::Boolean(value) => {
+            bool_value = bool_xml(*value);
+            tag.push_attribute(("boolean", bool_value));
+        }
+        WorkbookConnectionParameterValue::Double(value) => {
+            double_value = value.to_string();
+            tag.push_attribute(("double", double_value.as_str()));
+        }
+        WorkbookConnectionParameterValue::Integer(value) => {
+            integer_value = value.to_string();
+            tag.push_attribute(("integer", integer_value.as_str()));
+        }
+        WorkbookConnectionParameterValue::String(value) => {
+            tag.push_attribute(("string", value.as_str()));
+        }
+        WorkbookConnectionParameterValue::Cell(value) => {
+            tag.push_attribute(("cell", value.as_str()));
+        }
+    }
+
+    w.write_event(Event::Empty(tag))?;
+    Ok(())
 }
 
 /// Shared string table - maps string content to SST index.
@@ -1579,6 +1665,9 @@ impl XlsxWriter {
                 tag.push_attribute(("refreshOnLoad", refresh_on_load));
                 tag.push_attribute(("background", background));
                 tag.push_attribute(("saveData", save_data));
+                if let Some(credentials) = connection.credentials {
+                    tag.push_attribute(("credentials", connection_credentials_attr(credentials)));
+                }
                 w.write_event(Event::Start(tag))?;
 
                 match &connection.kind {
@@ -1680,6 +1769,7 @@ impl XlsxWriter {
                     }
                 }
 
+                write_connection_parameters(w, &connection.parameters)?;
                 w.write_event(Event::End(BytesEnd::new("connection")))?;
             }
 
@@ -3461,7 +3551,8 @@ mod tests {
         PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
         PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
         PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis, SplitPanes, WorkbookConnection,
-        WorkbookConnectionKind, WorkbookExtension, WorkbookExtensionPart,
+        WorkbookConnectionCredentials, WorkbookConnectionKind, WorkbookConnectionParameter,
+        WorkbookConnectionParameterValue, WorkbookExtension, WorkbookExtensionPart,
     };
     use ssfmt::{date_serial::date_to_serial, DateSystem};
     use std::io::Read;
@@ -4244,7 +4335,23 @@ mod tests {
         wb.add_data_connection(
             WorkbookConnection::database(7, "SalesConnection", "Provider=MSDASQL;DSN=Sales;")
                 .with_command(command)
-                .with_refresh_on_load(true),
+                .with_refresh_on_load(true)
+                .with_credentials(WorkbookConnectionCredentials::Stored)
+                .with_parameter({
+                    let mut parameter = WorkbookConnectionParameter::value(
+                        "RegionParam",
+                        WorkbookConnectionParameterValue::String("East".to_string()),
+                    );
+                    parameter.sql_type = 12;
+                    parameter
+                })
+                .with_parameter({
+                    let mut parameter =
+                        WorkbookConnectionParameter::cell("MinRevenue", "Sheet1!$A$1");
+                    parameter.sql_type = 8;
+                    parameter.refresh_on_change = true;
+                    parameter
+                }),
         )
         .unwrap();
         let sheet = wb.worksheet_mut(0).unwrap();
@@ -4276,7 +4383,11 @@ mod tests {
         let connections = read_zip_entry(bytes.clone(), "xl/connections.xml");
         assert!(connections.contains(r#"<connection id="7" name="SalesConnection""#));
         assert!(connections.contains(r#"refreshOnLoad="1""#));
+        assert!(connections.contains(r#"credentials="stored""#));
         assert!(connections.contains(r#"<dbPr connection="Provider=MSDASQL;DSN=Sales;" command="select Region, Revenue from Sales" commandType="2"/>"#));
+        assert!(connections.contains(r#"<parameters count="2">"#));
+        assert!(connections.contains(r#"<parameter name="RegionParam" sqlType="12" parameterType="value" refreshOnChange="0" string="East"/>"#));
+        assert!(connections.contains(r#"<parameter name="MinRevenue" sqlType="8" parameterType="cell" refreshOnChange="1" cell="Sheet1!$A$1"/>"#));
 
         let cache_def = read_zip_entry(bytes.clone(), "xl/pivotCache/pivotCacheDefinition1.xml");
         assert!(cache_def.contains(r#"<cacheSource type="external" connectionId="7"/>"#));
@@ -4286,6 +4397,27 @@ mod tests {
         let connection = &roundtrip.data_connections()[0];
         assert_eq!(connection.id, 7);
         assert_eq!(connection.name, "SalesConnection");
+        assert_eq!(
+            connection.credentials,
+            Some(WorkbookConnectionCredentials::Stored)
+        );
+        assert_eq!(connection.parameters.len(), 2);
+        assert_eq!(
+            connection.parameters[0].name.as_deref(),
+            Some("RegionParam")
+        );
+        assert_eq!(connection.parameters[0].sql_type, 12);
+        assert_eq!(
+            connection.parameters[0].value,
+            WorkbookConnectionParameterValue::String("East".to_string())
+        );
+        assert_eq!(connection.parameters[1].name.as_deref(), Some("MinRevenue"));
+        assert_eq!(connection.parameters[1].sql_type, 8);
+        assert!(connection.parameters[1].refresh_on_change);
+        assert_eq!(
+            connection.parameters[1].value,
+            WorkbookConnectionParameterValue::Cell("Sheet1!$A$1".to_string())
+        );
         match &connection.kind {
             WorkbookConnectionKind::Database {
                 connection,
