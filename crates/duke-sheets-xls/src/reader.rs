@@ -14,7 +14,9 @@ use duke_sheets_core::validation::{
 };
 use duke_sheets_core::worksheet::{Selection, SheetProtection};
 use duke_sheets_core::{
-    CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, Style, Workbook,
+    CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, PivotAggregate,
+    PivotCacheInfo, PivotCacheSourceKind, PivotField, PivotFilter, PivotMeasure,
+    PivotRefreshStatus, PivotSource, PivotTable, PivotValue, PivotValuesAxis, Style, Workbook,
 };
 
 use crate::biff::formula::token_parser::ParsedToken;
@@ -88,6 +90,32 @@ enum DoperValue {
     Error(u8),
     Blanks,
     NonBlanks,
+}
+
+#[derive(Debug, Clone)]
+struct XlsPivotCache {
+    cache_id: u16,
+    source: PivotSource,
+    fields: Vec<XlsPivotCacheField>,
+    record_count: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct XlsPivotCacheField {
+    name: String,
+    shared_items: Vec<PivotValue>,
+}
+
+#[derive(Debug, Clone)]
+struct XlsPivotViewBuilder {
+    name: String,
+    cache_id: u16,
+    target: CellAddress,
+    rendered_range: Option<CellRange>,
+    axis_declarations: Vec<Vec<i16>>,
+    page_fields: Vec<(usize, u16)>,
+    measures: Vec<PivotMeasure>,
+    layout: duke_sheets_core::PivotLayout,
 }
 
 /// Peek at a raw Workbook stream to tell whether it has a FilePass
@@ -229,6 +257,9 @@ impl XlsReader {
         let mut extern_sheet: Vec<ExternSheetEntry> = Vec::new();
         let mut extern_names: Vec<ExternName> = Vec::new();
         let mut names: Vec<NameRecord> = Vec::new();
+        let mut pivot_cache_sources: std::collections::HashMap<u16, PivotSource> =
+            std::collections::HashMap::new();
+        let mut pending_pivot_cache_num: Option<u16> = None;
         // Workbook-globals blip store, populated from MSODRAWINGGROUP
         // records. Indexed 1-based by the FOPT `pib` (picture blip id)
         // property referenced from picture SP_CONTAINERs.
@@ -335,6 +366,19 @@ impl XlsReader {
                         names.push(nr);
                     }
                 }
+                0x00D5 if in_globals => {
+                    if rec.data.len() >= 2 {
+                        pending_pivot_cache_num =
+                            Some(u16::from_le_bytes([rec.data[0], rec.data[1]]));
+                    }
+                }
+                0x0051 if in_globals => {
+                    if let Some(cache_num) = pending_pivot_cache_num.take() {
+                        if let Some(source) = Self::parse_dconref(&rec.data) {
+                            pivot_cache_sources.insert(cache_num.saturating_sub(1), source);
+                        }
+                    }
+                }
                 records::MSODRAWINGGROUP if in_globals => {
                     Self::parse_msodrawinggroup(&rec.data, &mut blip_store);
                 }
@@ -350,6 +394,7 @@ impl XlsReader {
 
         // Build the resolved style table (one Style per XF record)
         let style_table = style_ctx.build_style_table();
+        let pivot_caches = Self::read_pivot_caches(&cfb, &pivot_cache_sources)?;
 
         // Build the workbook
         let mut workbook = Workbook::empty();
@@ -449,6 +494,7 @@ impl XlsReader {
                     &formula_ctx,
                     af_range,
                     &blip_store,
+                    &pivot_caches,
                 )?;
             }
 
@@ -544,6 +590,7 @@ impl XlsReader {
         formula_ctx: &FormulaContext,
         auto_filter_range: Option<&CellRange>,
         blip_store: &[BlipData],
+        pivot_caches: &std::collections::HashMap<u16, XlsPivotCache>,
     ) -> XlsResult<()> {
         // We need to track the last FORMULA record to associate a STRING record
         let mut pending_formula_cell: Option<(u32, u16)> = None;
@@ -966,8 +1013,398 @@ impl XlsReader {
         // Walk the per-sheet Escher byte stream (concatenated MSODRAWING
         // bodies) for picture shapes and add them to the worksheet.
         Self::parse_escher_pictures(&escher_bytes, &obj_kinds, blip_store, ws);
+        Self::parse_sheet_pivot_tables(records, ws, pivot_caches)?;
 
         Ok(())
+    }
+
+    fn read_pivot_caches(
+        cfb: &crate::cfb::CompoundFile,
+        sources: &std::collections::HashMap<u16, PivotSource>,
+    ) -> XlsResult<std::collections::HashMap<u16, XlsPivotCache>> {
+        let mut caches = std::collections::HashMap::new();
+        for (cache_id, source) in sources {
+            let stream_path = format!("/_SX_DB_CUR/{:04}", cache_id.saturating_add(1));
+            let Ok(stream) = cfb.read_stream(&stream_path) else {
+                continue;
+            };
+            let records = biff::read_all_records(&mut Cursor::new(stream))?;
+            if let Some(cache) =
+                Self::parse_pivot_cache_stream(*cache_id, source.clone(), &records)?
+            {
+                caches.insert(*cache_id, cache);
+            }
+        }
+        Ok(caches)
+    }
+
+    fn parse_pivot_cache_stream(
+        cache_id: u16,
+        source: PivotSource,
+        records: &[BiffRecord],
+    ) -> XlsResult<Option<XlsPivotCache>> {
+        let mut fields = Vec::new();
+        let mut current_field: Option<XlsPivotCacheField> = None;
+        let mut record_count = None;
+
+        for rec in records {
+            match rec.record_type {
+                0x00C6 => {
+                    if rec.data.len() >= 4 {
+                        record_count = Some(u32::from_le_bytes([
+                            rec.data[0],
+                            rec.data[1],
+                            rec.data[2],
+                            rec.data[3],
+                        ]) as u64);
+                    }
+                }
+                0x00C7 => {
+                    if let Some(field) = current_field.take() {
+                        fields.push(field);
+                    }
+                    current_field = Some(XlsPivotCacheField {
+                        name: Self::parse_sxfdb_name(&rec.data)?,
+                        shared_items: Vec::new(),
+                    });
+                }
+                0x00CD => {
+                    if let Some(field) = &mut current_field {
+                        field.shared_items.push(Self::parse_sxstring(&rec.data)?);
+                    }
+                }
+                records::EOF => break,
+                _ => {}
+            }
+        }
+
+        if let Some(field) = current_field.take() {
+            fields.push(field);
+        }
+        if fields.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(XlsPivotCache {
+            cache_id,
+            source,
+            fields,
+            record_count,
+        }))
+    }
+
+    fn parse_sheet_pivot_tables(
+        records: &[&BiffRecord],
+        ws: &mut duke_sheets_core::Worksheet,
+        caches: &std::collections::HashMap<u16, XlsPivotCache>,
+    ) -> XlsResult<()> {
+        let mut current: Option<XlsPivotViewBuilder> = None;
+
+        for rec in records {
+            match rec.record_type {
+                0x00B0 => {
+                    if let Some(builder) = current.take() {
+                        if let Some(pivot) = Self::finish_pivot_view(builder, caches) {
+                            ws.add_pivot_table(pivot).map_err(|e| {
+                                XlsError::InvalidFormat(format!("invalid XLS pivot table: {e}"))
+                            })?;
+                        }
+                    }
+                    current = Self::parse_sxview(&rec.data)?;
+                }
+                0x00B4 => {
+                    if let Some(builder) = &mut current {
+                        builder.axis_declarations.push(Self::parse_sxivd(&rec.data));
+                    }
+                }
+                0x00B6 => {
+                    if let Some(builder) = &mut current {
+                        if let Some(page_field) = Self::parse_sxpi(&rec.data) {
+                            builder.page_fields.push(page_field);
+                        }
+                    }
+                }
+                0x00C5 => {
+                    if let Some(builder) = &mut current {
+                        if let Some(measure) =
+                            Self::parse_sxdi(&rec.data, caches, builder.cache_id)?
+                        {
+                            builder.measures.push(measure);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(builder) = current.take() {
+            if let Some(pivot) = Self::finish_pivot_view(builder, caches) {
+                ws.add_pivot_table(pivot).map_err(|e| {
+                    XlsError::InvalidFormat(format!("invalid XLS pivot table: {e}"))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_pivot_view(
+        builder: XlsPivotViewBuilder,
+        caches: &std::collections::HashMap<u16, XlsPivotCache>,
+    ) -> Option<PivotTable> {
+        let cache = caches.get(&builder.cache_id)?;
+        let mut layout = builder.layout;
+        let mut rows = Vec::new();
+        let mut columns = Vec::new();
+
+        if let Some(row_axis) = builder.axis_declarations.first() {
+            Self::push_pivot_axis_fields(
+                row_axis,
+                cache,
+                &mut rows,
+                PivotValuesAxis::Rows,
+                &mut layout,
+            );
+        }
+        if let Some(column_axis) = builder.axis_declarations.get(1) {
+            Self::push_pivot_axis_fields(
+                column_axis,
+                cache,
+                &mut columns,
+                PivotValuesAxis::Columns,
+                &mut layout,
+            );
+        }
+
+        let mut page_fields = Vec::new();
+        let mut filters = Vec::new();
+        for (field_index, selected_item) in builder.page_fields {
+            let Some(field) = cache.fields.get(field_index) else {
+                continue;
+            };
+            Self::push_axis_field(&mut page_fields, PivotField::new(field.name.clone()));
+            if selected_item != 0xFFFF {
+                if let Some(item) = field.shared_items.get(selected_item as usize) {
+                    filters.push(PivotFilter::FieldItems {
+                        field: duke_sheets_core::PivotFieldRef::new(field.name.clone()),
+                        allowed_items: vec![item.clone()],
+                    });
+                }
+            }
+        }
+
+        let mut pivot = PivotTable::new(0, builder.name, cache.source.clone(), builder.target);
+        pivot.rows = rows;
+        pivot.columns = columns;
+        pivot.page_fields = page_fields;
+        pivot.measures = builder.measures;
+        pivot.filters = filters;
+        pivot.layout = layout;
+        pivot.rendered_range = builder.rendered_range;
+        pivot.set_cache_info(Some(PivotCacheInfo {
+            cache_id: u32::from(cache.cache_id),
+            source_kind: PivotCacheSourceKind::Worksheet,
+            record_count: cache.record_count,
+            refreshed_version: None,
+            refresh_status: PivotRefreshStatus::NotRefreshed,
+        }));
+        Some(pivot)
+    }
+
+    fn push_pivot_axis_fields(
+        indexes: &[i16],
+        cache: &XlsPivotCache,
+        fields: &mut Vec<PivotField>,
+        axis: PivotValuesAxis,
+        layout: &mut duke_sheets_core::PivotLayout,
+    ) {
+        for index in indexes {
+            if *index == -2 {
+                layout.values_axis = axis;
+                layout
+                    .values_axis_position
+                    .get_or_insert(fields.len() as u32);
+            } else if *index >= 0 {
+                if let Some(field) = cache.fields.get(*index as usize) {
+                    Self::push_axis_field(fields, PivotField::new(field.name.clone()));
+                }
+            }
+        }
+    }
+
+    fn parse_sxview(data: &[u8]) -> XlsResult<Option<XlsPivotViewBuilder>> {
+        if data.len() < 44 {
+            return Ok(None);
+        }
+
+        let first_row = u16::from_le_bytes([data[0], data[1]]) as u32;
+        let last_row = u16::from_le_bytes([data[2], data[3]]) as u32;
+        let first_col = u16::from_le_bytes([data[4], data[5]]);
+        let last_col = u16::from_le_bytes([data[6], data[7]]);
+        let cache_id = u16::from_le_bytes([data[14], data[15]]);
+        let page_axis_count = u16::from_le_bytes([data[28], data[29]]);
+        let name_len = u16::from_le_bytes([data[40], data[41]]);
+        let data_caption_len = u16::from_le_bytes([data[42], data[43]]);
+        let mut offset = 44usize;
+        let name = Self::read_xlunicode_no_cch(data, &mut offset, name_len)
+            .unwrap_or_else(|_| format!("PivotTable{}", cache_id.saturating_add(1)));
+        if data_caption_len > 0 {
+            let _ = Self::read_xlunicode_no_cch(data, &mut offset, data_caption_len);
+        }
+
+        let target_row = if page_axis_count > 0 {
+            first_row.saturating_sub(u32::from(page_axis_count).saturating_add(1))
+        } else {
+            first_row
+        };
+
+        Ok(Some(XlsPivotViewBuilder {
+            name,
+            cache_id,
+            target: CellAddress::new(target_row, first_col),
+            rendered_range: Some(CellRange::from_indices(
+                first_row, first_col, last_row, last_col,
+            )),
+            axis_declarations: Vec::new(),
+            page_fields: Vec::new(),
+            measures: Vec::new(),
+            layout: duke_sheets_core::PivotLayout::default(),
+        }))
+    }
+
+    fn parse_sxivd(data: &[u8]) -> Vec<i16> {
+        data.chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect()
+    }
+
+    fn parse_sxpi(data: &[u8]) -> Option<(usize, u16)> {
+        if data.len() < 4 {
+            return None;
+        }
+        Some((
+            u16::from_le_bytes([data[0], data[1]]) as usize,
+            u16::from_le_bytes([data[2], data[3]]),
+        ))
+    }
+
+    fn parse_sxdi(
+        data: &[u8],
+        caches: &std::collections::HashMap<u16, XlsPivotCache>,
+        cache_id: u16,
+    ) -> XlsResult<Option<PivotMeasure>> {
+        if data.len() < 12 {
+            return Ok(None);
+        }
+        let field_index = u16::from_le_bytes([data[0], data[1]]) as usize;
+        let aggregate = Self::parse_pivot_aggregate(u16::from_le_bytes([data[2], data[3]]));
+        let cache = match caches.get(&cache_id) {
+            Some(cache) => cache,
+            None => return Ok(None),
+        };
+        let Some(field) = cache.fields.get(field_index) else {
+            return Ok(None);
+        };
+        let mut offset = 12usize;
+        let caption = read_unicode_string(data, &mut offset).unwrap_or_default();
+        let mut measure = PivotMeasure::new(field.name.clone(), aggregate);
+        if !caption.is_empty() {
+            measure.name = Some(caption);
+        }
+        Ok(Some(measure))
+    }
+
+    fn parse_pivot_aggregate(code: u16) -> PivotAggregate {
+        match code {
+            1 => PivotAggregate::Count,
+            2 => PivotAggregate::Average,
+            3 => PivotAggregate::Max,
+            4 => PivotAggregate::Min,
+            5 => PivotAggregate::Product,
+            6 => PivotAggregate::CountNumbers,
+            7 => PivotAggregate::StdDev,
+            8 => PivotAggregate::StdDevP,
+            9 => PivotAggregate::Var,
+            10 => PivotAggregate::VarP,
+            _ => PivotAggregate::Sum,
+        }
+    }
+
+    fn parse_sxfdb_name(data: &[u8]) -> XlsResult<String> {
+        if data.len() < 17 {
+            return Ok(String::new());
+        }
+        let mut offset = 14usize;
+        read_unicode_string(data, &mut offset)
+    }
+
+    fn parse_sxstring(data: &[u8]) -> XlsResult<PivotValue> {
+        let mut offset = 0usize;
+        let text = read_unicode_string(data, &mut offset)?;
+        if text.is_empty() {
+            Ok(PivotValue::Blank)
+        } else {
+            Ok(PivotValue::String(text))
+        }
+    }
+
+    fn parse_dconref(data: &[u8]) -> Option<PivotSource> {
+        if data.len() < 10 {
+            return None;
+        }
+        let start_row = u16::from_le_bytes([data[0], data[1]]) as u32;
+        let end_row = u16::from_le_bytes([data[2], data[3]]) as u32;
+        let start_col = u16::from(data[4]);
+        let end_col = u16::from(data[5]);
+        let encoded_len = u16::from_le_bytes([data[6], data[7]]) as usize;
+        if encoded_len == 0 {
+            return None;
+        }
+        let flags = data[8];
+        let sheet_len = encoded_len.saturating_sub(1);
+        let sheet_name = if flags & 0x01 == 0 {
+            let start = 10usize;
+            let end = start.saturating_add(sheet_len);
+            if end > data.len() {
+                return None;
+            }
+            String::from_utf8_lossy(&data[start..end]).into_owned()
+        } else {
+            let start = 11usize;
+            let byte_len = sheet_len.saturating_mul(2);
+            let end = start.saturating_add(byte_len);
+            if end > data.len() {
+                return None;
+            }
+            let units = data[start..end]
+                .chunks_exact(2)
+                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .collect::<Vec<_>>();
+            String::from_utf16_lossy(&units)
+        };
+
+        Some(PivotSource::range_on_sheet(
+            sheet_name,
+            CellRange::from_indices(start_row, start_col, end_row, end_col),
+        ))
+    }
+
+    fn read_xlunicode_no_cch(
+        data: &[u8],
+        offset: &mut usize,
+        char_count: u16,
+    ) -> XlsResult<String> {
+        let flags = read_u8(data, offset)?;
+        read_character_data(data, offset, char_count, flags)
+    }
+
+    fn push_axis_field(fields: &mut Vec<PivotField>, field: PivotField) {
+        if fields
+            .last()
+            .is_some_and(|last| last.field.name.eq_ignore_ascii_case(&field.field.name))
+        {
+            return;
+        }
+        fields.push(field);
     }
 
     // ── Style application helper ─────────────────────────────────────────
@@ -3532,6 +3969,7 @@ mod tests {
             &formula_ctx,
             None,
             &[],
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         ws
@@ -3839,6 +4277,7 @@ mod tests {
                 &formula_ctx,
                 None,
                 &[],
+                &std::collections::HashMap::new(),
             )
             .unwrap();
             ws

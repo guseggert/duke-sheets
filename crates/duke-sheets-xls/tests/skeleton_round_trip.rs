@@ -9,7 +9,8 @@
 use std::io::Cursor;
 
 use duke_sheets_core::{
-    CellRange, PivotAggregate, PivotFilter, PivotTable, PivotValuesAxis, Workbook,
+    CellRange, PivotAggregate, PivotFilter, PivotSource, PivotTable, PivotValue, PivotValuesAxis,
+    Workbook,
 };
 use duke_sheets_xls::{cfb::CompoundFile, XlsReader, XlsWriter};
 
@@ -128,6 +129,39 @@ fn add_multi_measure_pivot(wb: &mut Workbook) {
         .unwrap();
     pivot.layout.values_axis = PivotValuesAxis::Columns;
     pivot.layout.values_axis_position = Some(0);
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
+fn add_page_column_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Segment").unwrap();
+    ws.set_cell_value("B1", "Region").unwrap();
+    ws.set_cell_value("C1", "Quarter").unwrap();
+    ws.set_cell_value("D1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "Online").unwrap();
+    ws.set_cell_value("B2", "East").unwrap();
+    ws.set_cell_value("C2", "Q1").unwrap();
+    ws.set_cell_value("D2", 10.0).unwrap();
+    ws.set_cell_value("A3", "Retail").unwrap();
+    ws.set_cell_value("B3", "East").unwrap();
+    ws.set_cell_value("C3", "Q2").unwrap();
+    ws.set_cell_value("D3", 20.0).unwrap();
+    ws.set_cell_value("A4", "Online").unwrap();
+    ws.set_cell_value("B4", "West").unwrap();
+    ws.set_cell_value("C4", "Q1").unwrap();
+    ws.set_cell_value("D4", 30.0).unwrap();
+
+    let pivot = PivotTable::builder("ChannelPivot")
+        .source_range(CellRange::parse("A1:D4").unwrap())
+        .target_address("F2")
+        .unwrap()
+        .page("Segment")
+        .row("Region")
+        .column("Quarter")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .filter(PivotFilter::field_items("Segment", ["Online"]))
+        .build()
+        .unwrap();
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
 }
 
@@ -330,6 +364,72 @@ fn semantic_pivot_tables_emit_xls_multi_measure_values_axis_records() {
         .filter_map(|(record_type, payload)| (*record_type == 0x00B5).then_some(payload.len()))
         .collect::<Vec<_>>();
     assert_eq!(sxli_lengths, vec![30, 20]);
+}
+
+#[test]
+fn reads_writer_xls_pivot_table_semantics() {
+    let mut wb = Workbook::new();
+    add_page_column_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    assert_eq!(ws.pivot_tables().len(), 1);
+
+    let pivot = &ws.pivot_tables()[0];
+    assert_eq!(pivot.name, "ChannelPivot");
+    assert_eq!(pivot.target.to_a1_string(), "F2");
+    assert_eq!(
+        pivot.source,
+        PivotSource::range_on_sheet("Sheet1", CellRange::parse("A1:D4").unwrap())
+    );
+    assert_eq!(pivot.rows[0].field.name, "Region");
+    assert_eq!(pivot.columns[0].field.name, "Quarter");
+    assert_eq!(pivot.page_fields[0].field.name, "Segment");
+    assert_eq!(pivot.measures.len(), 1);
+    assert_eq!(pivot.measures[0].field.name, "Revenue");
+    assert_eq!(pivot.measures[0].aggregate, PivotAggregate::Sum);
+    assert_eq!(pivot.measures[0].name.as_deref(), Some("Total Revenue"));
+    assert!(pivot.filters.iter().any(|filter| matches!(
+        filter,
+        PivotFilter::FieldItems {
+            field,
+            allowed_items,
+        } if field.name == "Segment"
+            && allowed_items == &vec![PivotValue::String("Online".to_string())]
+    )));
+    let cache_info = pivot.cache_info().expect("cache diagnostics");
+    assert_eq!(
+        cache_info.source_kind,
+        duke_sheets_core::PivotCacheSourceKind::Worksheet
+    );
+    assert_eq!(cache_info.record_count, Some(3));
+}
+
+#[test]
+fn reads_writer_xls_multi_measure_values_axis_semantics() {
+    let mut wb = Workbook::new();
+    add_multi_measure_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    assert_eq!(ws.pivot_tables().len(), 1);
+
+    let pivot = &ws.pivot_tables()[0];
+    assert_eq!(pivot.name, "RevenueAndUnits");
+    assert_eq!(pivot.target.to_a1_string(), "E1");
+    assert_eq!(pivot.rows[0].field.name, "Region");
+    assert!(pivot.columns.is_empty());
+    assert_eq!(pivot.layout.values_axis, PivotValuesAxis::Columns);
+    assert_eq!(pivot.layout.values_axis_position, Some(0));
+    assert_eq!(pivot.measures.len(), 2);
+    assert_eq!(pivot.measures[0].field.name, "Revenue");
+    assert_eq!(pivot.measures[0].aggregate, PivotAggregate::Sum);
+    assert_eq!(pivot.measures[0].name.as_deref(), Some("Total Revenue"));
+    assert_eq!(pivot.measures[1].field.name, "Units");
+    assert_eq!(pivot.measures[1].aggregate, PivotAggregate::Average);
+    assert_eq!(pivot.measures[1].name.as_deref(), Some("Average Units"));
 }
 
 fn record_types(stream: &[u8]) -> Vec<u16> {
