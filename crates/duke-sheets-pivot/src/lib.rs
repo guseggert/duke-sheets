@@ -2120,6 +2120,7 @@ struct CompiledPivotPlan {
     filters: Vec<CompiledFilter>,
     aggregate_filters: Vec<CompiledAggregateFilter>,
     calculated_items: Vec<CompiledCalculatedItem>,
+    missing_caption: Option<String>,
 }
 
 impl CompiledPivotPlan {
@@ -2222,6 +2223,11 @@ impl CompiledPivotPlan {
             filters,
             aggregate_filters,
             calculated_items,
+            missing_caption: pivot
+                .layout
+                .show_missing
+                .then(|| pivot.layout.missing_caption.clone())
+                .flatten(),
         })
     }
 }
@@ -6234,7 +6240,7 @@ fn finalize_states_with_context_and_aggregate(
                 aggregate_override,
             )
         })
-        .unwrap_or_else(|| vec![CellValue::Empty; measures.len()])
+        .unwrap_or_else(|| vec![missing_value_cell(context.plan); measures.len()])
 }
 
 fn finalize_state_slice_with_context(
@@ -6295,7 +6301,7 @@ fn finalize_measure_with_context(
     measure_index: usize,
     context: &ShowAsContext<'_>,
 ) -> CellValue {
-    match &measure.show_as {
+    let cell = match &measure.show_as {
         PivotShowAs::Normal => state.finalize(aggregate),
         PivotShowAs::PercentOfGrandTotal => {
             percentage_cell(state.finalize_number(aggregate), grand_total)
@@ -6363,7 +6369,23 @@ fn finalize_measure_with_context(
             aggregate,
             false,
         )),
+    };
+    apply_missing_caption(cell, context.plan)
+}
+
+fn apply_missing_caption(cell: CellValue, plan: &CompiledPivotPlan) -> CellValue {
+    if cell.is_empty() {
+        missing_value_cell(plan)
+    } else {
+        cell
     }
+}
+
+fn missing_value_cell(plan: &CompiledPivotPlan) -> CellValue {
+    plan.missing_caption
+        .as_deref()
+        .map(CellValue::string)
+        .unwrap_or(CellValue::Empty)
 }
 
 fn state_number(states: &[AggregateState], index: usize, aggregate: PivotAggregate) -> Option<f64> {
@@ -7187,6 +7209,48 @@ mod tests {
         assert_eq!(text(&workbook, "H1"), "Overall");
         assert_eq!(text(&workbook, "E4"), "Overall");
         assert_eq!(number(&workbook, "H4"), 35.0);
+    }
+
+    #[test]
+    fn refresh_applies_missing_value_caption() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", 7.0).unwrap();
+
+        let mut layout = PivotLayout::default();
+        layout.missing_caption = Some("-".to_string());
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .measure("Revenue", PivotAggregate::Sum)
+            .layout(layout)
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F1"), "Q1");
+        assert_eq!(text(&workbook, "G1"), "Q2");
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(number(&workbook, "F2"), 10.0);
+        assert_eq!(text(&workbook, "G2"), "-");
+        assert_eq!(number(&workbook, "H2"), 10.0);
+        assert_eq!(text(&workbook, "E3"), "West");
+        assert_eq!(text(&workbook, "F3"), "-");
+        assert_eq!(number(&workbook, "G3"), 7.0);
+        assert_eq!(number(&workbook, "H3"), 7.0);
     }
 
     #[cfg(feature = "parallel")]
