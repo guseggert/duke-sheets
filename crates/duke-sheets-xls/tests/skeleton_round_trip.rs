@@ -9,8 +9,8 @@
 use std::io::Cursor;
 
 use duke_sheets_core::{
-    CellRange, PivotAggregate, PivotFilter, PivotSource, PivotTable, PivotValue, PivotValuesAxis,
-    Workbook,
+    CellRange, PivotAggregate, PivotFilter, PivotSource, PivotStyle, PivotTable, PivotValue,
+    PivotValuesAxis, Workbook,
 };
 use duke_sheets_xls::{cfb::CompoundFile, XlsReader, XlsWriter};
 
@@ -160,6 +160,38 @@ fn add_page_column_pivot(wb: &mut Workbook) {
         .column("Quarter")
         .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
         .filter(PivotFilter::field_items("Segment", ["Online"]))
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
+fn styled_pivot_style() -> PivotStyle {
+    PivotStyle {
+        name: Some("PivotStyleLight16".to_string()),
+        show_row_headers: false,
+        show_column_headers: true,
+        show_row_stripes: true,
+        show_column_stripes: true,
+        show_last_column: true,
+    }
+}
+
+fn add_styled_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+
+    let pivot = PivotTable::builder("StyledPivot")
+        .source_range(CellRange::parse("A1:B3").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .style(styled_pivot_style())
         .build()
         .unwrap();
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
@@ -367,6 +399,40 @@ fn semantic_pivot_tables_emit_xls_multi_measure_values_axis_records() {
 }
 
 #[test]
+fn semantic_pivot_tables_emit_xls_style_record() {
+    let mut wb = Workbook::new();
+    add_styled_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let workbook_records = records_with_payload(&workbook);
+    let style_record = workbook_records
+        .iter()
+        .find_map(|(record_type, payload)| {
+            if *record_type == 0x0864
+                && payload.len() >= 16
+                && matches!(
+                    u16::from_le_bytes(payload[4..6].try_into().unwrap()),
+                    0x001E | 0x1E00
+                )
+            {
+                Some(payload)
+            } else {
+                None
+            }
+        })
+        .expect("pivot style FRT record");
+
+    assert_eq!(
+        u16::from_le_bytes(style_record[12..14].try_into().unwrap()),
+        0x002E,
+        "style flags should encode last-column, row/column stripes, and column headers"
+    );
+    assert_eq!(utf16le_string(&style_record[16..]), "PivotStyleLight16");
+}
+
+#[test]
 fn reads_writer_xls_pivot_table_semantics() {
     let mut wb = Workbook::new();
     add_page_column_pivot(&mut wb);
@@ -432,6 +498,19 @@ fn reads_writer_xls_multi_measure_values_axis_semantics() {
     assert_eq!(pivot.measures[1].name.as_deref(), Some("Average Units"));
 }
 
+#[test]
+fn reads_writer_xls_pivot_style_semantics() {
+    let mut wb = Workbook::new();
+    add_styled_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    let pivot = &ws.pivot_tables()[0];
+
+    assert_eq!(pivot.style, styled_pivot_style());
+}
+
 fn record_types(stream: &[u8]) -> Vec<u16> {
     let mut out = Vec::new();
     let mut pos = 0usize;
@@ -463,6 +542,14 @@ fn record_position(records: &[u16], typ: u16) -> usize {
         .iter()
         .position(|&record| record == typ)
         .unwrap_or(usize::MAX)
+}
+
+fn utf16le_string(bytes: &[u8]) -> String {
+    let units = bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16_lossy(&units)
 }
 
 #[test]

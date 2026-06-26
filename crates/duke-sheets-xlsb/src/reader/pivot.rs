@@ -373,8 +373,14 @@ fn parse_pivot_style(payload: &[u8]) -> XlsbResult<PivotStyle> {
     if payload.len() < 6 {
         return Ok(PivotStyle::default());
     }
+    let flags = parser::read_u16(payload, 0);
     let (name, _) = parser::wide_str(payload, 2)?;
     let mut style = PivotStyle::default();
+    style.show_last_column = (flags & 0x02) != 0;
+    style.show_row_stripes = (flags & 0x04) != 0;
+    style.show_column_stripes = (flags & 0x08) != 0;
+    style.show_row_headers = (flags & 0x10) != 0;
+    style.show_column_headers = (flags & 0x20) != 0;
     if !name.is_empty() {
         style.name = Some(name);
     }

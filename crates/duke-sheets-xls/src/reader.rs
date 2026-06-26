@@ -16,7 +16,8 @@ use duke_sheets_core::worksheet::{Selection, SheetProtection};
 use duke_sheets_core::{
     CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, PivotAggregate,
     PivotCacheInfo, PivotCacheSourceKind, PivotField, PivotFilter, PivotMeasure,
-    PivotRefreshStatus, PivotSource, PivotTable, PivotValue, PivotValuesAxis, Style, Workbook,
+    PivotRefreshStatus, PivotSource, PivotStyle, PivotTable, PivotValue, PivotValuesAxis, Style,
+    Workbook,
 };
 
 use crate::biff::formula::token_parser::ParsedToken;
@@ -116,6 +117,7 @@ struct XlsPivotViewBuilder {
     page_fields: Vec<(usize, u16)>,
     measures: Vec<PivotMeasure>,
     layout: duke_sheets_core::PivotLayout,
+    style: PivotStyle,
 }
 
 /// Peek at a raw Workbook stream to tell whether it has a FilePass
@@ -1133,6 +1135,13 @@ impl XlsReader {
                         }
                     }
                 }
+                0x0864 => {
+                    if let Some(builder) = &mut current {
+                        if let Some(style) = Self::parse_pivot_frt0864_style(&rec.data) {
+                            builder.style = style;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1199,6 +1208,7 @@ impl XlsReader {
         pivot.measures = builder.measures;
         pivot.filters = filters;
         pivot.layout = layout;
+        pivot.style = builder.style;
         pivot.rendered_range = builder.rendered_range;
         pivot.set_cache_info(Some(PivotCacheInfo {
             cache_id: u32::from(cache.cache_id),
@@ -1268,6 +1278,7 @@ impl XlsReader {
             page_fields: Vec::new(),
             measures: Vec::new(),
             layout: duke_sheets_core::PivotLayout::default(),
+            style: PivotStyle::default(),
         }))
     }
 
@@ -1327,6 +1338,38 @@ impl XlsReader {
             10 => PivotAggregate::VarP,
             _ => PivotAggregate::Sum,
         }
+    }
+
+    fn parse_pivot_frt0864_style(data: &[u8]) -> Option<PivotStyle> {
+        if data.len() < 16 {
+            return None;
+        }
+        let subtype = u16::from_le_bytes([data[4], data[5]]);
+        if subtype != 0x001E && subtype != 0x1E00 {
+            return None;
+        }
+        let flags = u16::from_le_bytes([data[12], data[13]]);
+        let char_count = u16::from_le_bytes([data[14], data[15]]) as usize;
+        let byte_len = char_count.checked_mul(2)?;
+        let end = 16usize.checked_add(byte_len)?;
+        if end > data.len() {
+            return None;
+        }
+        let units = data[16..end]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        let name = String::from_utf16_lossy(&units);
+        let mut style = PivotStyle::default();
+        style.show_last_column = (flags & 0x02) != 0;
+        style.show_row_stripes = (flags & 0x04) != 0;
+        style.show_column_stripes = (flags & 0x08) != 0;
+        style.show_row_headers = (flags & 0x10) != 0;
+        style.show_column_headers = (flags & 0x20) != 0;
+        if !name.is_empty() {
+            style.name = Some(name);
+        }
+        Some(style)
     }
 
     fn parse_sxfdb_name(data: &[u8]) -> XlsResult<String> {

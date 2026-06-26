@@ -6,7 +6,8 @@ mod tests {
         BorderEdge, BorderLineStyle, Color, FillStyle, NumberFormat, Style,
     };
     use duke_sheets_core::{
-        CellRange, CellValue, PivotAggregate, PivotFilter, PivotTable, PivotValuesAxis, Workbook,
+        CellRange, CellValue, PivotAggregate, PivotFilter, PivotStyle, PivotTable, PivotValuesAxis,
+        Workbook,
     };
 
     use crate::reader::XlsbReader;
@@ -113,6 +114,38 @@ mod tests {
             .unwrap();
         pivot.layout.values_axis = PivotValuesAxis::Columns;
         pivot.layout.values_axis_position = Some(0);
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
+    fn styled_pivot_style() -> PivotStyle {
+        PivotStyle {
+            name: Some("PivotStyleLight16".to_string()),
+            show_row_headers: false,
+            show_column_headers: true,
+            show_row_stripes: true,
+            show_column_stripes: true,
+            show_last_column: true,
+        }
+    }
+
+    fn add_styled_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Region").unwrap();
+        ws.set_cell_value("B1", "Revenue").unwrap();
+        ws.set_cell_value("A2", "East").unwrap();
+        ws.set_cell_value("B2", 10.0).unwrap();
+        ws.set_cell_value("A3", "West").unwrap();
+        ws.set_cell_value("B3", 20.0).unwrap();
+
+        let pivot = PivotTable::builder("StyledPivot")
+            .source_range(CellRange::parse("A1:B3").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .style(styled_pivot_style())
+            .build()
+            .unwrap();
         wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
     }
 
@@ -351,6 +384,42 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(data_field_aggregates, vec![0x01, 0x04]);
+    }
+
+    #[test]
+    fn semantic_pivot_tables_emit_xlsb_style_record() {
+        let mut wb = Workbook::new();
+        add_styled_pivot(&mut wb);
+
+        let bytes = write_xlsb_bytes(&wb);
+        let pivot_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotTables/pivotTable1.bin",
+        ));
+        let style_payload = pivot_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_SX_VIEW_STYLE).then_some(payload)
+            })
+            .expect("pivot style record");
+
+        assert_eq!(
+            u16::from_le_bytes(style_payload[0..2].try_into().unwrap()),
+            0x002E,
+            "style flags should encode last-column, row/column stripes, and column headers"
+        );
+        assert_eq!(wide_string(&style_payload[2..]), "PivotStyleLight16");
+    }
+
+    #[test]
+    fn semantic_pivot_tables_round_trip_xlsb_style() {
+        let mut wb = Workbook::new();
+        add_styled_pivot(&mut wb);
+
+        let wb2 = round_trip(&wb);
+        let pivot = &wb2.worksheet(0).unwrap().pivot_tables()[0];
+
+        assert_eq!(pivot.style, styled_pivot_style());
     }
 
     #[test]
@@ -2760,6 +2829,16 @@ mod tests {
             buf.truncate(len);
         }
         out
+    }
+
+    fn wide_string(data: &[u8]) -> String {
+        let count = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
+        let end = 4 + count * 2;
+        let units = data[4..end]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        String::from_utf16_lossy(&units)
     }
 
     #[test]

@@ -1281,7 +1281,7 @@ fn write_pivot_frt_records(
         write_frt0864_raw(stream, &[0x17, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00]);
         write_frt0864_raw(stream, &[0x17, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
     }
-    write_frt0864_style(stream);
+    write_frt0864_style(stream, &pivot.style)?;
     write_frt0864_raw(stream, &[0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00]);
     write_frt0864_raw(stream, &[0x00, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00]);
     write_frt0864_raw(stream, &[0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
@@ -1298,17 +1298,48 @@ fn write_frt0864_name(stream: &mut Vec<u8>, subtype: u16, name: &str) -> XlsResu
     Ok(())
 }
 
-fn write_frt0864_style(stream: &mut Vec<u8>) {
+fn write_frt0864_style(
+    stream: &mut Vec<u8>,
+    style: &duke_sheets_core::PivotStyle,
+) -> XlsResult<()> {
+    let style_name = style
+        .name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("PivotStyleMedium9");
     let mut tail = Vec::new();
     tail.extend_from_slice(&0x1E00u16.to_le_bytes());
     tail.extend_from_slice(&0u32.to_le_bytes());
     tail.extend_from_slice(&0u16.to_le_bytes());
-    tail.extend_from_slice(&0x0030u16.to_le_bytes());
-    tail.extend_from_slice(&17u16.to_le_bytes());
-    for unit in "PivotStyleMedium9".encode_utf16() {
+    tail.extend_from_slice(&pivot_style_flags(style).to_le_bytes());
+    tail.extend_from_slice(
+        &checked_u16(style_name.encode_utf16().count(), "pivot style name length")?.to_le_bytes(),
+    );
+    for unit in style_name.encode_utf16() {
         tail.extend_from_slice(&unit.to_le_bytes());
     }
     write_frt0864_raw(stream, &tail);
+    Ok(())
+}
+
+fn pivot_style_flags(style: &duke_sheets_core::PivotStyle) -> u16 {
+    let mut flags = 0u16;
+    if style.show_last_column {
+        flags |= 0x02;
+    }
+    if style.show_row_stripes {
+        flags |= 0x04;
+    }
+    if style.show_column_stripes {
+        flags |= 0x08;
+    }
+    if style.show_row_headers {
+        flags |= 0x10;
+    }
+    if style.show_column_headers {
+        flags |= 0x20;
+    }
+    flags
 }
 
 fn write_frt0864_raw(stream: &mut Vec<u8>, tail: &[u8]) {

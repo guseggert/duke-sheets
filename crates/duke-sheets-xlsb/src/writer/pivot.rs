@@ -794,9 +794,29 @@ fn write_sx_style<W: Write>(rw: &mut RecordWriter<W>, pivot: &PivotTable) -> std
         .filter(|name| !name.trim().is_empty())
         .unwrap_or("PivotStyleMedium9");
     let mut payload = Vec::new();
-    payload.extend_from_slice(&0x0030u16.to_le_bytes());
+    payload.extend_from_slice(&pivot_style_flags(&pivot.style).to_le_bytes());
     payload.extend_from_slice(&encode_wide_str(style_name));
     rw.write_record(records::BRT_SX_VIEW_STYLE, &payload)
+}
+
+fn pivot_style_flags(style: &duke_sheets_core::PivotStyle) -> u16 {
+    let mut flags = 0u16;
+    if style.show_last_column {
+        flags |= 0x02;
+    }
+    if style.show_row_stripes {
+        flags |= 0x04;
+    }
+    if style.show_column_stripes {
+        flags |= 0x08;
+    }
+    if style.show_row_headers {
+        flags |= 0x10;
+    }
+    if style.show_column_headers {
+        flags |= 0x20;
+    }
+    flags
 }
 
 fn estimated_pivot_range(pivot: &PivotTable, cache: &FormatPivotCache) -> CellRange {
