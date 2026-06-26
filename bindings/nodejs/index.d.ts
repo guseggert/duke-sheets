@@ -179,6 +179,8 @@ export interface JsPivotLayoutOptions {
   printDrillIndicators?: boolean
   itemPrintTitles?: boolean
   fieldPrintTitles?: boolean
+  pageWrap?: number
+  pageOverThenDown?: boolean
 }
 
 export interface JsPivotStyleOptions {

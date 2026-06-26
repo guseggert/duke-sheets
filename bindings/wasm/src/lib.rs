@@ -342,6 +342,8 @@ export interface PivotLayoutOptions {
   printDrillIndicators?: boolean;
   itemPrintTitles?: boolean;
   fieldPrintTitles?: boolean;
+  pageWrap?: number;
+  pageOverThenDown?: boolean;
 }
 
 export interface PivotStyleOptions {
@@ -479,6 +481,8 @@ export interface PivotLayoutDefinition {
   printDrillIndicators: boolean;
   itemPrintTitles: boolean;
   fieldPrintTitles: boolean;
+  pageWrap: number;
+  pageOverThenDown: boolean;
 }
 
 export interface PivotStyleDefinition {
@@ -933,6 +937,12 @@ fn build_pivot_layout_from_wasm(options: WasmPivotLayoutOptions) -> Result<Pivot
     }
     if let Some(value) = options.field_print_titles {
         layout.field_print_titles = value;
+    }
+    if let Some(value) = options.page_wrap {
+        layout.page_wrap = value;
+    }
+    if let Some(value) = options.page_over_then_down {
+        layout.page_over_then_down = value;
     }
     Ok(layout)
 }

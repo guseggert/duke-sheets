@@ -535,6 +535,8 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut print_drill_indicators = false;
     let mut item_print_titles = false;
     let mut field_print_titles = false;
+    let mut page_wrap = 0;
+    let mut page_over_then_down = false;
     let mut layout_kind = PivotLayoutKind::Compact;
     let mut axis_context: Option<AxisContext> = None;
     let mut pivot_field_index = 0usize;
@@ -578,6 +580,8 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             &mut print_drill_indicators,
                             &mut item_print_titles,
                             &mut field_print_titles,
+                            &mut page_wrap,
+                            &mut page_over_then_down,
                             &mut layout_kind,
                         );
                     }
@@ -657,6 +661,8 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             &mut print_drill_indicators,
                             &mut item_print_titles,
                             &mut field_print_titles,
+                            &mut page_wrap,
+                            &mut page_over_then_down,
                             &mut layout_kind,
                         );
                     }
@@ -855,6 +861,8 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     pivot.layout.print_drill_indicators = print_drill_indicators;
     pivot.layout.item_print_titles = item_print_titles;
     pivot.layout.field_print_titles = field_print_titles;
+    pivot.layout.page_wrap = page_wrap;
+    pivot.layout.page_over_then_down = page_over_then_down;
     pivot.layout.kind = layout_kind;
     pivot.refresh_policy.refresh_on_open = cache.refresh_on_load;
     pivot.refresh_policy.preserve_formatting = preserve_formatting;
@@ -1026,6 +1034,8 @@ fn parse_pivot_table_attrs(
     print_drill_indicators: &mut bool,
     item_print_titles: &mut bool,
     field_print_titles: &mut bool,
+    page_wrap: &mut u32,
+    page_over_then_down: &mut bool,
     layout_kind: &mut PivotLayoutKind,
 ) {
     if let Some(value) = attr_string(e, b"name") {
@@ -1057,6 +1067,12 @@ fn parse_pivot_table_attrs(
     }
     if let Some(value) = attr_bool(e, b"fieldPrintTitles") {
         *field_print_titles = value;
+    }
+    if let Some(value) = attr_u32(e, b"pageWrap") {
+        *page_wrap = value;
+    }
+    if let Some(value) = attr_bool(e, b"pageOverThenDown") {
+        *page_over_then_down = value;
     }
 
     let compact = attr_bool(e, b"compact").unwrap_or(true);

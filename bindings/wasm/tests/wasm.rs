@@ -368,6 +368,8 @@ fn test_pivot_table_definitions_from_options() {
     let layout = make_options(&[
         ("kind", JsValue::from_str("tabular")),
         ("repeatItemLabels", JsValue::TRUE),
+        ("pageWrap", JsValue::from_f64(2.0)),
+        ("pageOverThenDown", JsValue::TRUE),
     ]);
     let pivot = make_options(&[
         ("name", JsValue::from_str("SalesPivot")),
@@ -430,6 +432,8 @@ fn test_pivot_table_definitions_from_options() {
     let pivot_layout = Reflect::get(&pivot, &JsValue::from_str("layout")).unwrap();
     assert_eq!(get_string_field(&pivot_layout, "kind"), "tabular");
     assert!(get_bool_field(&pivot_layout, "repeatItemLabels"));
+    assert_eq!(get_f64_field(&pivot_layout, "pageWrap"), 2.0);
+    assert!(get_bool_field(&pivot_layout, "pageOverThenDown"));
     let policy = Reflect::get(&pivot, &JsValue::from_str("refreshPolicy")).unwrap();
     assert!(get_bool_field(&policy, "refreshOnOpen"));
     assert_eq!(get_f64_field(&policy, "missingItemsLimit"), 25.0);

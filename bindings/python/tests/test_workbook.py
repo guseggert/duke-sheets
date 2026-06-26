@@ -236,7 +236,12 @@ class TestPivotTables:
                 ],
                 "calculated_fields": [{"name": "Margin", "formula": "=Revenue*0.2"}],
                 "refresh_policy": {"refresh_on_open": True, "missing_items_limit": 25},
-                "layout": {"kind": "tabular", "repeat_item_labels": True},
+                "layout": {
+                    "kind": "tabular",
+                    "repeat_item_labels": True,
+                    "page_wrap": 2,
+                    "page_over_then_down": True,
+                },
                 "overwrite_policy": "fail_on_occupied",
             }
         )
@@ -264,6 +269,8 @@ class TestPivotTables:
         }
         assert pivot["layout"]["kind"] == "tabular"
         assert pivot["layout"]["repeat_item_labels"] is True
+        assert pivot["layout"]["page_wrap"] == 2
+        assert pivot["layout"]["page_over_then_down"] is True
         assert pivot["refresh_policy"]["refresh_on_open"] is True
         assert pivot["refresh_policy"]["missing_items_limit"] == 25
         assert pivot["overwrite_policy"] == "fail_on_occupied"

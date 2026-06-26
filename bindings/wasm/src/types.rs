@@ -146,6 +146,8 @@ pub struct WasmPivotLayoutOptions {
     pub print_drill_indicators: Option<bool>,
     pub item_print_titles: Option<bool>,
     pub field_print_titles: Option<bool>,
+    pub page_wrap: Option<u32>,
+    pub page_over_then_down: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -715,6 +717,8 @@ pub struct WasmPivotLayoutDefinition {
     pub print_drill_indicators: bool,
     pub item_print_titles: bool,
     pub field_print_titles: bool,
+    pub page_wrap: u32,
+    pub page_over_then_down: bool,
 }
 
 impl From<&core::PivotLayout> for WasmPivotLayoutDefinition {
@@ -729,6 +733,8 @@ impl From<&core::PivotLayout> for WasmPivotLayoutDefinition {
             print_drill_indicators: layout.print_drill_indicators,
             item_print_titles: layout.item_print_titles,
             field_print_titles: layout.field_print_titles,
+            page_wrap: layout.page_wrap,
+            page_over_then_down: layout.page_over_then_down,
         }
     }
 }

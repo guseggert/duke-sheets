@@ -4581,6 +4581,8 @@ mod tests {
         layout.print_drill_indicators = true;
         layout.item_print_titles = true;
         layout.field_print_titles = true;
+        layout.page_wrap = 2;
+        layout.page_over_then_down = true;
         let pivot = PivotTable::builder("LayoutPivot")
             .source_range(CellRange::parse("A1:B3").unwrap())
             .target_address("D1")
@@ -4604,6 +4606,8 @@ mod tests {
         assert!(pivot_xml.contains(r#"printDrill="1""#));
         assert!(pivot_xml.contains(r#"itemPrintTitles="1""#));
         assert!(pivot_xml.contains(r#"fieldPrintTitles="1""#));
+        assert!(pivot_xml.contains(r#"pageWrap="2""#));
+        assert!(pivot_xml.contains(r#"pageOverThenDown="1""#));
         assert!(pivot_xml.contains(r#"compact="0""#));
         assert!(pivot_xml.contains(r#"outline="0""#));
 
@@ -4621,6 +4625,8 @@ mod tests {
         assert!(pivot.layout.print_drill_indicators);
         assert!(pivot.layout.item_print_titles);
         assert!(pivot.layout.field_print_titles);
+        assert_eq!(pivot.layout.page_wrap, 2);
+        assert!(pivot.layout.page_over_then_down);
     }
 
     #[test]

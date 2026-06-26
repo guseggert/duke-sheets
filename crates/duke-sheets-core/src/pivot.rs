@@ -712,6 +712,10 @@ pub struct PivotLayout {
     pub item_print_titles: bool,
     /// Repeat pivot field labels as print titles.
     pub field_print_titles: bool,
+    /// Number of report/page fields before wrapping the filter area. Zero means no wrapping.
+    pub page_wrap: u32,
+    /// Lay wrapped report/page fields across rows before columns.
+    pub page_over_then_down: bool,
 }
 
 impl Default for PivotLayout {
@@ -726,6 +730,8 @@ impl Default for PivotLayout {
             print_drill_indicators: false,
             item_print_titles: false,
             field_print_titles: false,
+            page_wrap: 0,
+            page_over_then_down: false,
         }
     }
 }

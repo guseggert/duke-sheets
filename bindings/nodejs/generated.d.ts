@@ -1492,6 +1492,8 @@ export interface JsPivotLayoutDefinition {
   printDrillIndicators: boolean
   itemPrintTitles: boolean
   fieldPrintTitles: boolean
+  pageWrap: number
+  pageOverThenDown: boolean
 }
 
 export interface JsPivotLayoutOptions {
@@ -1504,6 +1506,8 @@ export interface JsPivotLayoutOptions {
   printDrillIndicators?: boolean
   itemPrintTitles?: boolean
   fieldPrintTitles?: boolean
+  pageWrap?: number
+  pageOverThenDown?: boolean
 }
 
 export interface JsPivotManualGroupDefinition {

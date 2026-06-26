@@ -551,6 +551,8 @@ pub struct JsPivotLayoutDefinition {
     pub print_drill_indicators: bool,
     pub item_print_titles: bool,
     pub field_print_titles: bool,
+    pub page_wrap: u32,
+    pub page_over_then_down: bool,
 }
 
 impl From<&core::PivotLayout> for JsPivotLayoutDefinition {
@@ -565,6 +567,8 @@ impl From<&core::PivotLayout> for JsPivotLayoutDefinition {
             print_drill_indicators: layout.print_drill_indicators,
             item_print_titles: layout.item_print_titles,
             field_print_titles: layout.field_print_titles,
+            page_wrap: layout.page_wrap,
+            page_over_then_down: layout.page_over_then_down,
         }
     }
 }

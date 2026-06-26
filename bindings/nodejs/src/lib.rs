@@ -406,6 +406,8 @@ pub struct JsPivotLayoutOptions {
     pub print_drill_indicators: Option<bool>,
     pub item_print_titles: Option<bool>,
     pub field_print_titles: Option<bool>,
+    pub page_wrap: Option<u32>,
+    pub page_over_then_down: Option<bool>,
 }
 
 #[napi(object)]
@@ -913,6 +915,12 @@ fn build_pivot_layout_from_js(options: JsPivotLayoutOptions) -> Result<PivotLayo
     }
     if let Some(value) = options.field_print_titles {
         layout.field_print_titles = value;
+    }
+    if let Some(value) = options.page_wrap {
+        layout.page_wrap = value;
+    }
+    if let Some(value) = options.page_over_then_down {
+        layout.page_over_then_down = value;
     }
     Ok(layout)
 }
