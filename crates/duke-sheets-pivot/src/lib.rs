@@ -223,6 +223,7 @@ fn build_rendered_pivot(
     };
     let plan = CompiledPivotPlan::compile(pivot, &snapshot)?;
     let mut aggregation = PivotAggregation::aggregate(&snapshot, &plan);
+    aggregation.apply_aggregate_filters(&plan);
     aggregation.sort_orders(&snapshot, &plan);
     render_pivot(pivot, &snapshot, &plan, &aggregation)
 }
@@ -1163,6 +1164,7 @@ struct CompiledPivotPlan {
     measure_indexes: Vec<usize>,
     measures: Vec<PivotMeasure>,
     filters: Vec<CompiledFilter>,
+    aggregate_filters: Vec<CompiledAggregateFilter>,
 }
 
 impl CompiledPivotPlan {
@@ -1189,11 +1191,31 @@ impl CompiledPivotPlan {
             measure_indexes.push(field_index(snapshot, &measure.field.name, &pivot.name)?);
         }
 
-        let filters = pivot
-            .filters
-            .iter()
-            .map(|filter| CompiledFilter::compile(filter, snapshot, &pivot.name))
-            .collect::<Result<Vec<_>>>()?;
+        let mut filters = Vec::new();
+        let mut aggregate_filters = Vec::new();
+        for filter in &pivot.filters {
+            match filter {
+                PivotFilter::FieldItems { .. } | PivotFilter::Label { .. } => {
+                    filters.push(CompiledFilter::compile(filter, snapshot, &pivot.name)?);
+                }
+                PivotFilter::Value { .. } | PivotFilter::TopN { .. } => {
+                    aggregate_filters.push(CompiledAggregateFilter::compile(
+                        filter,
+                        snapshot,
+                        &pivot.name,
+                        &row_indexes,
+                        &column_indexes,
+                        &pivot.measures,
+                    )?);
+                }
+                PivotFilter::Unsupported { kind, .. } => {
+                    return Err(Error::other(format!(
+                        "pivot table {} contains unsupported filter: {kind}",
+                        pivot.name
+                    )));
+                }
+            }
+        }
 
         Ok(Self {
             row_indexes,
@@ -1205,6 +1227,7 @@ impl CompiledPivotPlan {
             measure_indexes,
             measures: pivot.measures.clone(),
             filters,
+            aggregate_filters,
         })
     }
 }
@@ -1344,11 +1367,8 @@ impl CompiledFilter {
                 operator: *operator,
                 value: value.clone(),
             }),
-            PivotFilter::Value { .. } => Err(Error::other(format!(
-                "pivot table {pivot_name} uses a value filter, which the local refresh engine does not support yet"
-            ))),
-            PivotFilter::TopN { .. } => Err(Error::other(format!(
-                "pivot table {pivot_name} uses a top-n filter, which the local refresh engine does not support yet"
+            PivotFilter::Value { .. } | PivotFilter::TopN { .. } => Err(Error::other(format!(
+                "pivot table {pivot_name} tried to compile an aggregate filter as a row filter"
             ))),
             PivotFilter::Unsupported { kind, .. } => Err(Error::other(format!(
                 "pivot table {pivot_name} contains unsupported filter: {kind}"
@@ -1374,6 +1394,200 @@ impl CompiledFilter {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum AggregateFilterAxis {
+    Row,
+    Column,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledAggregateFilter {
+    Value {
+        axis: AggregateFilterAxis,
+        field_position: usize,
+        measure_index: usize,
+        aggregate: PivotAggregate,
+        operator: PivotFilterOperator,
+        value: f64,
+    },
+    TopN {
+        axis: AggregateFilterAxis,
+        field_position: usize,
+        measure_index: usize,
+        aggregate: PivotAggregate,
+        n: u32,
+        top: bool,
+        percent: bool,
+    },
+}
+
+impl CompiledAggregateFilter {
+    fn compile(
+        filter: &PivotFilter,
+        snapshot: &SourceSnapshot,
+        pivot_name: &str,
+        row_indexes: &[usize],
+        column_indexes: &[usize],
+        measures: &[PivotMeasure],
+    ) -> Result<Self> {
+        match filter {
+            PivotFilter::Value {
+                field,
+                measure,
+                operator,
+                value,
+            } => {
+                let field_index = field_index(snapshot, &field.name, pivot_name)?;
+                let (axis, field_position) = aggregate_filter_axis(
+                    pivot_name,
+                    &field.name,
+                    field_index,
+                    row_indexes,
+                    column_indexes,
+                )?;
+                let measure_index = measure_index_for_filter(pivot_name, measures, measure)?;
+                Ok(Self::Value {
+                    axis,
+                    field_position,
+                    measure_index,
+                    aggregate: measure.aggregate,
+                    operator: *operator,
+                    value: *value,
+                })
+            }
+            PivotFilter::TopN {
+                field,
+                measure,
+                n,
+                top,
+                percent,
+            } => {
+                let field_index = field_index(snapshot, &field.name, pivot_name)?;
+                let (axis, field_position) = aggregate_filter_axis(
+                    pivot_name,
+                    &field.name,
+                    field_index,
+                    row_indexes,
+                    column_indexes,
+                )?;
+                let measure_index = measure_index_for_filter(pivot_name, measures, measure)?;
+                Ok(Self::TopN {
+                    axis,
+                    field_position,
+                    measure_index,
+                    aggregate: measure.aggregate,
+                    n: *n,
+                    top: *top,
+                    percent: *percent,
+                })
+            }
+            _ => Err(Error::other(format!(
+                "pivot table {pivot_name} tried to compile a row filter as an aggregate filter"
+            ))),
+        }
+    }
+
+    fn axis(&self) -> AggregateFilterAxis {
+        match self {
+            Self::Value { axis, .. } | Self::TopN { axis, .. } => *axis,
+        }
+    }
+
+    fn field_position(&self) -> usize {
+        match self {
+            Self::Value { field_position, .. } | Self::TopN { field_position, .. } => {
+                *field_position
+            }
+        }
+    }
+
+    fn allowed_item_ids(&self, aggregation: &PivotAggregation) -> AHashSet<u32> {
+        let item_states = aggregation.item_states_for_filter(
+            self.axis(),
+            self.field_position(),
+            self.measure_index(),
+            self.aggregate(),
+        );
+        match self {
+            Self::Value {
+                operator, value, ..
+            } => item_states
+                .into_iter()
+                .filter_map(|(item_id, state)| {
+                    let actual = state.finalize_number(self.aggregate())?;
+                    numeric_filter_matches(actual, *operator, *value).then_some(item_id)
+                })
+                .collect(),
+            Self::TopN {
+                n, top, percent, ..
+            } => top_n_item_ids(item_states, self.aggregate(), *n, *top, *percent),
+        }
+    }
+
+    fn measure_index(&self) -> usize {
+        match self {
+            Self::Value { measure_index, .. } | Self::TopN { measure_index, .. } => *measure_index,
+        }
+    }
+
+    fn aggregate(&self) -> PivotAggregate {
+        match self {
+            Self::Value { aggregate, .. } | Self::TopN { aggregate, .. } => *aggregate,
+        }
+    }
+}
+
+fn aggregate_filter_axis(
+    pivot_name: &str,
+    field_name: &str,
+    field_index: usize,
+    row_indexes: &[usize],
+    column_indexes: &[usize],
+) -> Result<(AggregateFilterAxis, usize)> {
+    row_indexes
+        .iter()
+        .position(|index| *index == field_index)
+        .map(|position| (AggregateFilterAxis::Row, position))
+        .or_else(|| {
+            column_indexes
+                .iter()
+                .position(|index| *index == field_index)
+                .map(|position| (AggregateFilterAxis::Column, position))
+        })
+        .ok_or_else(|| {
+            Error::other(format!(
+                "pivot table {pivot_name} uses aggregate filter field {field_name}, but that field is not on a row or column axis"
+            ))
+        })
+}
+
+fn measure_index_for_filter(
+    pivot_name: &str,
+    measures: &[PivotMeasure],
+    filter_measure: &PivotMeasure,
+) -> Result<usize> {
+    measures
+        .iter()
+        .position(|measure| {
+            measure.field.name.eq_ignore_ascii_case(&filter_measure.field.name)
+                && measure.aggregate == filter_measure.aggregate
+                && match filter_measure.name.as_ref() {
+                    Some(name) => measure
+                        .name
+                        .as_ref()
+                        .map(|candidate| candidate.eq_ignore_ascii_case(name))
+                        .unwrap_or_else(|| measure.caption().eq_ignore_ascii_case(name)),
+                    None => true,
+                }
+        })
+        .ok_or_else(|| {
+            Error::other(format!(
+                "pivot table {pivot_name} uses aggregate filter measure {}, but that measure is not in the pivot",
+                filter_measure.caption()
+            ))
+        })
+}
+
 fn label_filter_matches(actual: &str, operator: PivotFilterOperator, expected: &str) -> bool {
     let actual_folded = actual.to_lowercase();
     let expected_folded = expected.to_lowercase();
@@ -1391,6 +1605,65 @@ fn label_filter_matches(actual: &str, operator: PivotFilterOperator, expected: &
         PivotFilterOperator::Contains => actual_folded.contains(&expected_folded),
         PivotFilterOperator::DoesNotContain => !actual_folded.contains(&expected_folded),
     }
+}
+
+fn numeric_filter_matches(actual: f64, operator: PivotFilterOperator, expected: f64) -> bool {
+    match operator {
+        PivotFilterOperator::Equals => actual == expected,
+        PivotFilterOperator::NotEquals => actual != expected,
+        PivotFilterOperator::LessThan => actual < expected,
+        PivotFilterOperator::LessThanOrEqual => actual <= expected,
+        PivotFilterOperator::GreaterThan => actual > expected,
+        PivotFilterOperator::GreaterThanOrEqual => actual >= expected,
+        PivotFilterOperator::BeginsWith
+        | PivotFilterOperator::DoesNotBeginWith
+        | PivotFilterOperator::EndsWith
+        | PivotFilterOperator::DoesNotEndWith
+        | PivotFilterOperator::Contains
+        | PivotFilterOperator::DoesNotContain => false,
+    }
+}
+
+fn top_n_item_ids(
+    item_states: AHashMap<u32, AggregateState>,
+    aggregate: PivotAggregate,
+    n: u32,
+    top: bool,
+    percent: bool,
+) -> AHashSet<u32> {
+    if n == 0 {
+        return AHashSet::new();
+    }
+
+    let mut values = item_states
+        .into_iter()
+        .filter_map(|(item_id, state)| {
+            state
+                .finalize_number(aggregate)
+                .map(|value| (item_id, value))
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|(left_id, left), (right_id, right)| {
+        left.partial_cmp(right)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| left_id.cmp(right_id))
+    });
+    if top {
+        values.reverse();
+    }
+
+    let take = if percent {
+        ((values.len() as f64) * (n as f64 / 100.0)).ceil() as usize
+    } else {
+        n as usize
+    }
+    .min(values.len());
+
+    values
+        .into_iter()
+        .take(take)
+        .map(|(item_id, _)| item_id)
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1536,6 +1809,105 @@ impl PivotAggregation {
         update_states(&mut self.grand_totals, snapshot, plan, row);
     }
 
+    fn apply_aggregate_filters(&mut self, plan: &CompiledPivotPlan) {
+        for filter in &plan.aggregate_filters {
+            let allowed_item_ids = filter.allowed_item_ids(self);
+            self.retain_axis_items(
+                filter.axis(),
+                filter.field_position(),
+                &allowed_item_ids,
+                plan,
+            );
+        }
+    }
+
+    fn retain_axis_items(
+        &mut self,
+        axis: AggregateFilterAxis,
+        field_position: usize,
+        allowed_item_ids: &AHashSet<u32>,
+        plan: &CompiledPivotPlan,
+    ) {
+        match axis {
+            AggregateFilterAxis::Row => {
+                self.row_order
+                    .retain(|key| allowed_item_ids.contains(&key[field_position]));
+                self.group_order
+                    .retain(|key| allowed_item_ids.contains(&key.rows[field_position]));
+                self.groups
+                    .retain(|key, _| allowed_item_ids.contains(&key.rows[field_position]));
+            }
+            AggregateFilterAxis::Column => {
+                self.column_order
+                    .retain(|key| allowed_item_ids.contains(&key[field_position]));
+                self.group_order
+                    .retain(|key| allowed_item_ids.contains(&key.columns[field_position]));
+                self.groups
+                    .retain(|key, _| allowed_item_ids.contains(&key.columns[field_position]));
+            }
+        }
+        self.rebuild_totals_from_groups(plan);
+    }
+
+    fn item_states_for_filter(
+        &self,
+        axis: AggregateFilterAxis,
+        field_position: usize,
+        measure_index: usize,
+        aggregate: PivotAggregate,
+    ) -> AHashMap<u32, AggregateState> {
+        let mut item_states = AHashMap::new();
+        let (order, totals) = match axis {
+            AggregateFilterAxis::Row => (&self.row_order, &self.row_totals),
+            AggregateFilterAxis::Column => (&self.column_order, &self.column_totals),
+        };
+
+        for key in order {
+            let Some(states) = totals.get(key) else {
+                continue;
+            };
+            let Some(state) = states.get(measure_index) else {
+                continue;
+            };
+            item_states
+                .entry(key[field_position])
+                .or_insert_with(|| AggregateState::new(aggregate))
+                .merge(state);
+        }
+        item_states
+    }
+
+    fn rebuild_totals_from_groups(&mut self, plan: &CompiledPivotPlan) {
+        self.row_totals.clear();
+        self.column_totals.clear();
+        self.grand_totals = default_states(&plan.measures);
+
+        for key in &self.group_order {
+            let Some(states) = self.groups.get(key) else {
+                continue;
+            };
+
+            let row_states = self
+                .row_totals
+                .entry(key.rows.clone())
+                .or_insert_with(|| default_states(&plan.measures));
+            merge_state_slices(row_states, states);
+
+            let column_states = self
+                .column_totals
+                .entry(key.columns.clone())
+                .or_insert_with(|| default_states(&plan.measures));
+            merge_state_slices(column_states, states);
+
+            merge_state_slices(&mut self.grand_totals, states);
+        }
+
+        self.row_order
+            .retain(|key| self.row_totals.contains_key(key));
+        self.column_order
+            .retain(|key| self.column_totals.contains_key(key));
+    }
+
     fn sort_orders(&mut self, snapshot: &SourceSnapshot, plan: &CompiledPivotPlan) {
         sort_key_order(
             &mut self.row_order,
@@ -1620,7 +1992,6 @@ fn merge_ordered_bucket<K>(
     }
 }
 
-#[cfg(feature = "parallel")]
 fn merge_state_slices(target: &mut [AggregateState], source: &[AggregateState]) {
     for (target, source) in target.iter_mut().zip(source.iter()) {
         target.merge(source);
@@ -1755,7 +2126,6 @@ impl AggregateState {
         }
     }
 
-    #[cfg(feature = "parallel")]
     fn merge(&mut self, other: &Self) {
         self.count_non_blank += other.count_non_blank;
         self.count_numbers += other.count_numbers;
@@ -2604,9 +2974,9 @@ fn output_range(target: CellAddress, row_count: usize, col_count: usize) -> Resu
 #[cfg(test)]
 mod tests {
     use duke_sheets_core::{
-        CellRange, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter, PivotGrouping,
-        PivotMeasure, PivotShowAs, PivotSort, PivotSource, PivotTable, PivotValue, Table,
-        TableColumn, Workbook,
+        CellRange, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter,
+        PivotFilterOperator, PivotGrouping, PivotMeasure, PivotShowAs, PivotSort, PivotSource,
+        PivotTable, PivotValue, Table, TableColumn, Workbook,
     };
     use pretty_assertions::assert_eq;
     use ssfmt::{date_serial::date_to_serial, DateSystem};
@@ -3185,6 +3555,144 @@ mod tests {
         assert_eq!(text(&workbook, "D3"), "Grand Total");
         assert_eq!(number(&workbook, "E3"), 25.0);
         assert_eq!(text(&workbook, "D4"), "");
+    }
+
+    #[test]
+    fn refresh_applies_value_filters() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "East").unwrap();
+        sheet.set_cell_value("B4", 15.0).unwrap();
+        sheet.set_cell_value("A5", "North").unwrap();
+        sheet.set_cell_value("B5", 5.0).unwrap();
+
+        let measure = PivotMeasure::new("Revenue", PivotAggregate::Sum);
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B5").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .pivot_measure(measure.clone())
+            .filter(PivotFilter::Value {
+                field: "Region".into(),
+                measure,
+                operator: PivotFilterOperator::GreaterThanOrEqual,
+                value: 20.0,
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D2"), "East");
+        assert_eq!(number(&workbook, "E2"), 25.0);
+        assert_eq!(text(&workbook, "D3"), "West");
+        assert_eq!(number(&workbook, "E3"), 20.0);
+        assert_eq!(text(&workbook, "D4"), "Grand Total");
+        assert_eq!(number(&workbook, "E4"), 45.0);
+    }
+
+    #[test]
+    fn refresh_applies_top_n_filters() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", 20.0).unwrap();
+        sheet.set_cell_value("A4", "East").unwrap();
+        sheet.set_cell_value("B4", 15.0).unwrap();
+        sheet.set_cell_value("A5", "North").unwrap();
+        sheet.set_cell_value("B5", 5.0).unwrap();
+
+        let measure = PivotMeasure::new("Revenue", PivotAggregate::Sum);
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:B5").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .pivot_measure(measure.clone())
+            .filter(PivotFilter::TopN {
+                field: "Region".into(),
+                measure,
+                n: 2,
+                top: true,
+                percent: false,
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "D2"), "East");
+        assert_eq!(number(&workbook, "E2"), 25.0);
+        assert_eq!(text(&workbook, "D3"), "West");
+        assert_eq!(number(&workbook, "E3"), 20.0);
+        assert_eq!(text(&workbook, "D4"), "Grand Total");
+        assert_eq!(number(&workbook, "E4"), 45.0);
+    }
+
+    #[test]
+    fn refresh_applies_aggregate_filters_to_column_fields() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "East").unwrap();
+        sheet.set_cell_value("B3", "Q2").unwrap();
+        sheet.set_cell_value("C3", 30.0).unwrap();
+        sheet.set_cell_value("A4", "West").unwrap();
+        sheet.set_cell_value("B4", "Q1").unwrap();
+        sheet.set_cell_value("C4", 20.0).unwrap();
+        sheet.set_cell_value("A5", "West").unwrap();
+        sheet.set_cell_value("B5", "Q2").unwrap();
+        sheet.set_cell_value("C5", 5.0).unwrap();
+
+        let measure = PivotMeasure::new("Revenue", PivotAggregate::Sum);
+        let pivot = PivotTable::builder("SalesPivot")
+            .source_range(CellRange::parse("A1:C5").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row("Region")
+            .column("Quarter")
+            .pivot_measure(measure.clone())
+            .filter(PivotFilter::Value {
+                field: "Quarter".into(),
+                measure,
+                operator: PivotFilterOperator::GreaterThan,
+                value: 32.0,
+            })
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        workbook.refresh_pivots().unwrap();
+
+        assert_eq!(text(&workbook, "F1"), "Q2");
+        assert_eq!(text(&workbook, "G1"), "Grand Total");
+        assert_eq!(text(&workbook, "E2"), "East");
+        assert_eq!(number(&workbook, "F2"), 30.0);
+        assert_eq!(number(&workbook, "G2"), 30.0);
+        assert_eq!(text(&workbook, "E3"), "West");
+        assert_eq!(number(&workbook, "F3"), 5.0);
+        assert_eq!(number(&workbook, "G3"), 5.0);
+        assert_eq!(text(&workbook, "E4"), "Grand Total");
+        assert_eq!(number(&workbook, "F4"), 35.0);
+        assert_eq!(number(&workbook, "G4"), 35.0);
     }
 
     #[test]
