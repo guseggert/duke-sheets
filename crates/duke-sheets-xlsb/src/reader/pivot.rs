@@ -11,9 +11,11 @@ use crate::biff12::RecordIter;
 use crate::error::{XlsbError, XlsbResult};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
-    PivotCalculatedField, PivotField, PivotFieldRef, PivotFilter, PivotGrouping, PivotMeasure,
-    PivotRefreshStatus, PivotSource, PivotStyle, PivotTable, PivotValue, PivotValuesAxis,
+    PivotCalculatedField, PivotDateGroupUnit, PivotField, PivotFieldRef, PivotFilter,
+    PivotGrouping, PivotMeasure, PivotRefreshStatus, PivotSource, PivotStyle, PivotTable,
+    PivotValue, PivotValuesAxis,
 };
+use ssfmt::{date_serial::date_to_serial, DateSystem};
 
 #[derive(Debug, Clone)]
 struct PivotCacheDefinition {
@@ -242,6 +244,7 @@ fn read_pivot_cache_definition<R: Read + Seek>(
             records::BRT_PCDI_MISSING
             | records::BRT_PCDI_BOOLEAN
             | records::BRT_PCDI_ERROR
+            | records::BRT_PCDI_DATETIME
             | records::BRT_PCDI_NUMBER
             | records::BRT_PCDI_STRING => {
                 if in_shared_items {
@@ -496,7 +499,14 @@ fn parse_pivot_group_range(field_name: &str, payload: &[u8]) -> Option<PivotGrou
     }
     let group_by = payload[0];
     let flags = payload[1];
-    if group_by != 0x00 || flags & 0x04 != 0 {
+    if group_by != 0x00 {
+        let unit = xlsb_date_group_unit(group_by)?;
+        return Some(PivotGrouping::Date {
+            field: PivotFieldRef::new(field_name.to_string()),
+            units: vec![unit],
+        });
+    }
+    if flags & 0x04 != 0 {
         return None;
     }
     let start_value = parser::read_f64(payload, 2);
@@ -520,6 +530,19 @@ fn parse_pivot_group_range(field_name: &str, payload: &[u8]) -> Option<PivotGrou
         start,
         end,
         interval,
+    })
+}
+
+fn xlsb_date_group_unit(group_by: u8) -> Option<PivotDateGroupUnit> {
+    Some(match group_by {
+        0x01 => PivotDateGroupUnit::Seconds,
+        0x02 => PivotDateGroupUnit::Minutes,
+        0x03 => PivotDateGroupUnit::Hours,
+        0x04 => PivotDateGroupUnit::Days,
+        0x05 => PivotDateGroupUnit::Months,
+        0x06 => PivotDateGroupUnit::Quarters,
+        0x07 => PivotDateGroupUnit::Years,
+        _ => return None,
     })
 }
 
@@ -803,6 +826,17 @@ fn parse_shared_item(record_type: u16, payload: &[u8]) -> XlsbResult<PivotValue>
         }
         records::BRT_PCDI_NUMBER if payload.len() >= 8 => {
             PivotValue::Number(parser::read_f64(payload, 0))
+        }
+        records::BRT_PCDI_DATETIME if payload.len() >= 8 => {
+            let year = parser::read_u16(payload, 0) as i32;
+            let month = parser::read_u16(payload, 2) as u32;
+            let day = payload[4] as u32;
+            let hour = payload[5] as f64;
+            let minute = payload[6] as f64;
+            let second = payload[7] as f64;
+            let serial = date_to_serial(year, month, day, DateSystem::Date1900)
+                + ((hour * 3600.0) + (minute * 60.0) + second) / 86_400.0;
+            PivotValue::Number(serial)
         }
         records::BRT_PCDI_STRING => {
             let (value, _) = parser::wide_str(payload, 0)?;

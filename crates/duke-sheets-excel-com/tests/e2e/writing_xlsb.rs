@@ -18,8 +18,8 @@ use duke_sheets_core::table::{Table, TableColumn, TableStyleInfo};
 use duke_sheets_core::validation::{DataValidation, ValidationOperator, ValidationType};
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
 use duke_sheets_core::{
-    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotFilter, PivotTable,
-    PivotValuesAxis, Workbook,
+    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotDateGroupUnit, PivotFilter,
+    PivotGrouping, PivotTable, PivotValuesAxis, Workbook,
 };
 
 use crate::{
@@ -40,27 +40,27 @@ fn range(start: &str, end: &str) -> CellRange {
 /// reference-class function tokens. Verified byte-for-byte against Excel's
 /// native XLSB emission.
 const XLSB_FORMULA_FORMULAS: &[(&str, &str, f64)] = &[
-    ("B1", "=ABS(A1)", 2.0),           // value-class ref arg; PtgFunc
-    ("B2", "=SUM(A1,A2)", 5.0),        // R-class cell refs in aggregator
-    ("B3", "=SUM(A1:A3)", 9.0),        // single-arg SUM → PtgAttrSum, R-area
-    ("B4", "=VLOOKUP(A1,A1:A3,1)", 2.0), // not on allow-list → PtgFuncVar
-    ("B5", "=NOW()", 45000.0),         // volatile prefix
-    ("B6", "=IF(A1>0,1,2)", 1.0),      // PtgAttrIf 3-arg
-    ("B7", "=IF(A1>0,A1)", 2.0),       // PtgAttrIf 2-arg
-    ("B8", "=CHOOSE(A1,10,20)", 20.0), // PtgAttrChoose
-    ("B9", "=SUM(IF(A1>0,A1,A2))", 2.0), // nested IF R-class in SUM
-    ("B10", "=SUM(OFFSET(A1,0,0))", 2.0), // OFFSET R-class + volatile
-    ("B11", "=INDEX(A1:A3,1)", 2.0),   // INDEX arg0 R-class, V token
-    ("B12", "=+A1", 2.0),              // PtgUplus
-    ("B13", "=(A1+A2)*2", 10.0),       // PtgParen
-    ("B14", "=((A1))", 2.0),           // nested PtgParen
-    ("B15", "=SUM({1,2,3})", 6.0),     // array constant: PtgArray(A) + rgcb
-    ("B16", "=SUM({1,2;3,4})", 10.0),  // 2x2 array constant
+    ("B1", "=ABS(A1)", 2.0),                   // value-class ref arg; PtgFunc
+    ("B2", "=SUM(A1,A2)", 5.0),                // R-class cell refs in aggregator
+    ("B3", "=SUM(A1:A3)", 9.0),                // single-arg SUM → PtgAttrSum, R-area
+    ("B4", "=VLOOKUP(A1,A1:A3,1)", 2.0),       // not on allow-list → PtgFuncVar
+    ("B5", "=NOW()", 45000.0),                 // volatile prefix
+    ("B6", "=IF(A1>0,1,2)", 1.0),              // PtgAttrIf 3-arg
+    ("B7", "=IF(A1>0,A1)", 2.0),               // PtgAttrIf 2-arg
+    ("B8", "=CHOOSE(A1,10,20)", 20.0),         // PtgAttrChoose
+    ("B9", "=SUM(IF(A1>0,A1,A2))", 2.0),       // nested IF R-class in SUM
+    ("B10", "=SUM(OFFSET(A1,0,0))", 2.0),      // OFFSET R-class + volatile
+    ("B11", "=INDEX(A1:A3,1)", 2.0),           // INDEX arg0 R-class, V token
+    ("B12", "=+A1", 2.0),                      // PtgUplus
+    ("B13", "=(A1+A2)*2", 10.0),               // PtgParen
+    ("B14", "=((A1))", 2.0),                   // nested PtgParen
+    ("B15", "=SUM({1,2,3})", 6.0),             // array constant: PtgArray(A) + rgcb
+    ("B16", "=SUM({1,2;3,4})", 10.0),          // 2x2 array constant
     ("B17", "=COUNTA({\"ab\",\"cde\"})", 2.0), // SerAr string elements (u16 cch)
-    ("B18", "=COUNT({1,TRUE,3})", 2.0), // SerAr bool element (1 byte, no pad)
-    ("B19", "=COUNT({1,#N/A,3})", 2.0), // SerAr error element (1 byte + 3 reserved)
-    ("B20", "=SUM(-A1)", -2.0),        // unary operand class under R-forced arg
-    ("B21", "=-A1+A2", 1.0),           // unary minus on a ref at value position
+    ("B18", "=COUNT({1,TRUE,3})", 2.0),        // SerAr bool element (1 byte, no pad)
+    ("B19", "=COUNT({1,#N/A,3})", 2.0),        // SerAr error element (1 byte + 3 reserved)
+    ("B20", "=SUM(-A1)", -2.0),                // unary operand class under R-forced arg
+    ("B21", "=-A1+A2", 1.0),                   // unary minus on a ref at value position
 ];
 
 fn xlsb_formula_workbook() -> Workbook {
@@ -281,13 +281,78 @@ fn xlsb_multi_measure_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xlsb_numeric_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Age").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 5.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 12.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 23.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("A5", 41.0).unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+
+    let pivot = PivotTable::builder("GroupedAges")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Age")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Number {
+            field: "Age".into(),
+            start: Some(0.0),
+            end: Some(60.0),
+            interval: 10.0,
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
+fn xlsb_date_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Date").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 43831.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 43862.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 43891.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("A5", 43922.0).unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+
+    let pivot = PivotTable::builder("MonthlyRevenue")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Date")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Date {
+            field: "Date".into(),
+            units: vec![PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xlsb_with_native_pivot_table() {
     let (_result, _writer_bytes, excel_bytes) =
         roundtrip_through_excel_xlsb_bytes(&xlsb_basic_pivot_workbook());
 
-    assert!(zip_has_entry(&excel_bytes, "xl/pivotTables/pivotTable1.bin"));
+    assert!(zip_has_entry(
+        &excel_bytes,
+        "xl/pivotTables/pivotTable1.bin"
+    ));
     assert!(zip_has_entry(
         &excel_bytes,
         "xl/pivotCache/pivotCacheDefinition1.bin"
@@ -347,6 +412,53 @@ fn excel_preserves_xlsb_pivot_multi_measure_values_axis() {
             .count(),
         2
     );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_pivot_numeric_grouping() {
+    let (result, _writer_bytes, _excel_bytes) =
+        roundtrip_through_excel_xlsb_bytes(&xlsb_numeric_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("GroupedAges")
+        .unwrap();
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Number {
+            field,
+            start,
+            end,
+            interval,
+        } => {
+            assert_eq!(field.name, "Age");
+            assert_eq!(*start, Some(0.0));
+            assert_eq!(*end, Some(60.0));
+            assert_eq!(*interval, 10.0);
+        }
+        other => panic!("expected numeric grouping, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_pivot_date_grouping() {
+    let (result, _writer_bytes, _excel_bytes) =
+        roundtrip_through_excel_xlsb_bytes(&xlsb_date_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("MonthlyRevenue")
+        .unwrap();
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Date { field, units } => {
+            assert_eq!(field.name, "Date");
+            assert_eq!(*units, vec![PivotDateGroupUnit::Months]);
+        }
+        other => panic!("expected date grouping, got {other:?}"),
+    }
 }
 
 fn zip_has_entry(bytes: &[u8], name: &str) -> bool {
@@ -413,7 +525,8 @@ fn excel_preserves_external_udf_xlsb_we_emit() {
     ws.set_cell_value("A1", 7.0).unwrap();
     ws.set_cell_formula("B1", r#"=[1]!TBLink("acct",A1)"#)
         .unwrap();
-    ws.set_formula_result(0, 1, CellValue::Number(42.0)).unwrap();
+    ws.set_formula_result(0, 1, CellValue::Number(42.0))
+        .unwrap();
 
     let result = roundtrip_through_excel_xlsb(&wb);
     let ws = result.worksheet(0).unwrap();
@@ -498,7 +611,11 @@ fn excel_byte_parity_for_all_xlsb_atp_functions_we_emit() {
         rejected.len(),
         rejected
     );
-    assert_eq!(accepted.len(), formulas.len(), "all ATP formulas should be authored");
+    assert_eq!(
+        accepted.len(),
+        formulas.len(),
+        "all ATP formulas should be authored"
+    );
     assert_eq!(
         ours.len(),
         accepted.len(),

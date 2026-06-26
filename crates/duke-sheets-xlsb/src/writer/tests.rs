@@ -6,8 +6,8 @@ mod tests {
         BorderEdge, BorderLineStyle, Color, FillStyle, NumberFormat, Style,
     };
     use duke_sheets_core::{
-        CellRange, CellValue, PivotAggregate, PivotFieldRef, PivotFilter, PivotGrouping,
-        PivotStyle, PivotTable, PivotValuesAxis, Workbook,
+        CellRange, CellValue, PivotAggregate, PivotDateGroupUnit, PivotFieldRef, PivotFilter,
+        PivotGrouping, PivotStyle, PivotTable, PivotValuesAxis, Workbook,
     };
 
     use crate::reader::XlsbReader;
@@ -197,6 +197,34 @@ mod tests {
                 start: Some(0.0),
                 end: Some(60.0),
                 interval: 10.0,
+            })
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
+    fn add_date_grouped_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Date").unwrap();
+        ws.set_cell_value("B1", "Revenue").unwrap();
+        ws.set_cell_value("A2", 43831.0).unwrap();
+        ws.set_cell_value("B2", 10.0).unwrap();
+        ws.set_cell_value("A3", 43862.0).unwrap();
+        ws.set_cell_value("B3", 20.0).unwrap();
+        ws.set_cell_value("A4", 43891.0).unwrap();
+        ws.set_cell_value("B4", 30.0).unwrap();
+        ws.set_cell_value("A5", 43922.0).unwrap();
+        ws.set_cell_value("B5", 40.0).unwrap();
+
+        let pivot = PivotTable::builder("MonthlyRevenue")
+            .source_range(CellRange::parse("A1:B5").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Date")
+            .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .grouping(PivotGrouping::Date {
+                field: PivotFieldRef::new("Date"),
+                units: vec![PivotDateGroupUnit::Months],
             })
             .build()
             .unwrap();
@@ -585,6 +613,33 @@ mod tests {
         assert!(record_types.contains(&crate::biff12::records::BRT_BEGIN_PCDFG_ITEMS));
         assert!(record_types.contains(&crate::biff12::records::BRT_END_PCDF_GROUP));
 
+        let shared_items_payload = cache_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCD_SHARED_ITEMS)
+                    .then_some(payload)
+            })
+            .expect("BrtBeginPCDFAtbl payload");
+        let shared_items_flags = u16::from_le_bytes(shared_items_payload[0..2].try_into().unwrap());
+        assert_eq!(
+            shared_items_flags & 0x0001,
+            0,
+            "number-only shared items must not set fTextEtcField"
+        );
+        assert_eq!(
+            u32::from_le_bytes(shared_items_payload[2..6].try_into().unwrap()),
+            4,
+            "numeric grouped base field stores raw source items"
+        );
+        assert_eq!(
+            f64::from_le_bytes(shared_items_payload[6..14].try_into().unwrap()),
+            5.0
+        );
+        assert_eq!(
+            f64::from_le_bytes(shared_items_payload[14..22].try_into().unwrap()),
+            41.0
+        );
+
         let group_payload = cache_records
             .iter()
             .find_map(|(record_type, payload)| {
@@ -631,8 +686,8 @@ mod tests {
             .expect("BrtBeginPCDFGItems payload");
         assert_eq!(
             u32::from_le_bytes(items_payload[0..4].try_into().unwrap()),
-            4,
-            "grouping item collection mirrors the Age cache dictionary"
+            8,
+            "numeric grouping emits underflow, interval, and overflow group items"
         );
     }
 
@@ -657,6 +712,65 @@ mod tests {
                 assert_eq!(*start, Some(0.0));
                 assert_eq!(*end, Some(60.0));
                 assert_eq!(*interval, 10.0);
+            }
+            other => panic!("unexpected grouping: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn semantic_pivot_tables_emit_xlsb_date_grouping_records() {
+        let mut wb = Workbook::new();
+        add_date_grouped_pivot(&mut wb);
+
+        let bytes = write_xlsb_bytes(&wb);
+        let cache_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotCache/pivotCacheDefinition1.bin",
+        ));
+        assert!(
+            cache_records
+                .iter()
+                .any(|(record_type, _)| *record_type == crate::biff12::records::BRT_PCDI_DATETIME),
+            "date grouped cache field should store shared items as datetime records"
+        );
+        let range_payload = cache_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCDFG_RANGE).then_some(payload)
+            })
+            .expect("BrtBeginPCDFGRange payload");
+
+        assert_eq!(range_payload[0], 0x05, "month date grouping type");
+        assert_eq!(
+            range_payload[1] & 0x03,
+            0x03,
+            "date grouping uses automatic range bounds"
+        );
+        assert_eq!(
+            range_payload[1] & 0x04,
+            0x04,
+            "date grouping marks the range payload as dates"
+        );
+        assert_eq!(
+            f64::from_le_bytes(range_payload[18..26].try_into().unwrap()),
+            1.0
+        );
+    }
+
+    #[test]
+    fn semantic_pivot_tables_round_trip_xlsb_date_grouping() {
+        let mut wb = Workbook::new();
+        add_date_grouped_pivot(&mut wb);
+
+        let wb2 = round_trip(&wb);
+        let pivot = &wb2.worksheet(0).unwrap().pivot_tables()[0];
+
+        assert_eq!(pivot.name, "MonthlyRevenue");
+        assert_eq!(pivot.groupings.len(), 1);
+        match &pivot.groupings[0] {
+            PivotGrouping::Date { field, units } => {
+                assert_eq!(field.name, "Date");
+                assert_eq!(*units, vec![PivotDateGroupUnit::Months]);
             }
             other => panic!("unexpected grouping: {other:?}"),
         }

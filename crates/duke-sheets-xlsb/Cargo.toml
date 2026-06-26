@@ -12,6 +12,7 @@ duke-sheets-core.workspace = true
 duke-sheets-formula.workspace = true
 duke-sheets-pivot.workspace = true
 duke-sheets-chart = { workspace = true, features = ["parse"] }
+ssfmt.workspace = true
 zip.workspace = true
 quick-xml.workspace = true
 thiserror.workspace = true

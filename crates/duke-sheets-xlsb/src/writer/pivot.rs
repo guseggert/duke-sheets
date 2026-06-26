@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{Seek, Write};
 
 use zip::write::SimpleFileOptions;
@@ -7,13 +7,17 @@ use zip::ZipWriter;
 use crate::biff12::{encode_wide_str, ptg, records, RecordWriter};
 use crate::error::{XlsbError, XlsbResult};
 use duke_sheets_core::{
-    CellError, CellRange, PivotAggregate, PivotField, PivotFilter, PivotGrouping, PivotTable,
-    PivotValue, PivotValuesAxis, Workbook,
+    CellError, CellRange, CellValue, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter,
+    PivotGrouping, PivotTable, PivotValue, PivotValuesAxis, Workbook,
 };
 use duke_sheets_formula::ast::{BinaryOperator, UnaryOperator};
 use duke_sheets_formula::FormulaExpr;
 use duke_sheets_pivot::{
     FormatPivotCache, FormatPivotCacheField, FormatPivotPlan, FormatPivotSource, FormatPivotTable,
+};
+use ssfmt::{
+    date_serial::{serial_to_date, serial_to_time},
+    DateSystem,
 };
 
 pub(crate) const RT_PIVOT_TABLE: &str =
@@ -29,6 +33,16 @@ pub(crate) const CT_PIVOT_TABLE: &str = "application/vnd.ms-excel.pivotTable";
 pub(crate) const CT_PIVOT_CACHE_DEFINITION: &str = "application/vnd.ms-excel.pivotCacheDefinition";
 pub(crate) const CT_PIVOT_CACHE_RECORDS: &str = "application/vnd.ms-excel.pivotCacheRecords";
 pub(crate) const CT_BINARY_INDEX: &str = "application/vnd.ms-excel.binIndexWs";
+
+#[derive(Debug)]
+struct XlsbPivotGroupingInfo<'a> {
+    grouping: &'a PivotGrouping,
+    source_items: Vec<PivotValue>,
+    source_item_ids: Vec<u32>,
+    group_items: Vec<PivotValue>,
+    group_item_ids: Vec<u32>,
+    source_item_kind: PivotCacheItemKind,
+}
 
 pub(crate) fn sheet_has_pivots(plan: &FormatPivotPlan, sheet_index: usize) -> bool {
     plan.tables
@@ -85,6 +99,8 @@ fn write_pivot_cache_definition_part<W: Write + Seek>(
     let usage = cache_field_usage(workbook, plan, cache)?;
     let groupings = groupings_for_cache(workbook, plan, cache)?;
     validate_xlsb_pivot_groupings(cache, groupings)?;
+    let date_system = workbook_date_system(workbook.settings().date_1904);
+    let grouping_infos = xlsb_pivot_grouping_infos(workbook, cache, groupings, date_system)?;
     let mut buf = Vec::new();
     let mut rw = RecordWriter::new(&mut buf);
 
@@ -99,10 +115,25 @@ fn write_pivot_cache_definition_part<W: Write + Seek>(
     for (field_index, (field, store_items)) in
         cache.fields.iter().zip(&usage.store_items).enumerate()
     {
+        let grouping = grouping_for_field(groupings, &field.name);
+        let grouping_info = grouping_info_for_field(&grouping_infos, &field.name);
+        let item_kind = grouping_info
+            .map(|info| info.source_item_kind)
+            .unwrap_or(PivotCacheItemKind::Normal);
+        let shared_items = grouping_info
+            .map(|info| info.source_items.as_slice())
+            .unwrap_or(&field.shared_items);
         let pnames = write_pcd_field(&mut rw, field, cache)?;
-        write_pcd_shared_items(&mut rw, field, *store_items)?;
-        if let Some(grouping) = grouping_for_field(groupings, &field.name) {
-            write_pcd_field_group(&mut rw, field_index, field, grouping)?;
+        write_pcd_shared_items(&mut rw, shared_items, *store_items, item_kind, date_system)?;
+        if let Some(grouping) = grouping {
+            write_pcd_field_group(
+                &mut rw,
+                field_index,
+                field,
+                grouping,
+                grouping_info,
+                date_system,
+            )?;
         }
         write_pnames(&mut rw, &pnames)?;
         rw.write_record(records::BRT_END_PCD_FIELD, &[])?;
@@ -128,6 +159,10 @@ fn write_pivot_cache_records_part<W: Write + Seek>(
     zip.start_file(path, *options)?;
 
     let usage = cache_field_usage(workbook, plan, cache)?;
+    let groupings = groupings_for_cache(workbook, plan, cache)?;
+    validate_xlsb_pivot_groupings(cache, groupings)?;
+    let date_system = workbook_date_system(workbook.settings().date_1904);
+    let grouping_infos = xlsb_pivot_grouping_infos(workbook, cache, groupings, date_system)?;
     let mut buf = Vec::new();
     let mut rw = RecordWriter::new(&mut buf);
     rw.write_record(
@@ -139,11 +174,21 @@ fn write_pivot_cache_records_part<W: Write + Seek>(
         for row in 0..cache.row_count {
             let mut payload = Vec::new();
             for (field_index, field) in cache.fields.iter().enumerate() {
-                let item_id = field.item_ids.get(row).copied().unwrap_or(0);
-                let value = field
-                    .shared_items
-                    .get(item_id as usize)
-                    .unwrap_or(&PivotValue::Blank);
+                let grouping_info = grouping_info_for_field(&grouping_infos, &field.name);
+                let item_id = grouping_info
+                    .and_then(|info| info.source_item_ids.get(row).copied())
+                    .or_else(|| field.item_ids.get(row).copied())
+                    .unwrap_or(0);
+                let value = if let Some(info) = grouping_info {
+                    info.source_items
+                        .get(item_id as usize)
+                        .unwrap_or(&PivotValue::Blank)
+                } else {
+                    field
+                        .shared_items
+                        .get(item_id as usize)
+                        .unwrap_or(&PivotValue::Blank)
+                };
                 if usage.store_items[field_index] {
                     payload.extend_from_slice(&item_id.to_le_bytes());
                 } else {
@@ -176,6 +221,9 @@ fn write_pivot_table_part<W: Write + Seek>(
         .get(part.pivot_index)
         .ok_or_else(|| XlsbError::InvalidFormat("pivot table not found".into()))?;
     let usage = cache_field_usage(workbook, plan, cache)?;
+    let groupings = groupings_for_cache(workbook, plan, cache)?;
+    let date_system = workbook_date_system(workbook.settings().date_1904);
+    let grouping_infos = xlsb_pivot_grouping_infos(workbook, cache, groupings, date_system)?;
 
     let path = format!("xl/pivotTables/pivotTable{}.bin", part.table_num);
     zip.start_file(path, *options)?;
@@ -184,9 +232,9 @@ fn write_pivot_table_part<W: Write + Seek>(
 
     write_ac_block(&mut rw, 7, false)?;
     write_begin_sx_view(&mut rw, pivot)?;
-    write_sx_location(&mut rw, pivot, cache)?;
+    write_sx_location(&mut rw, pivot, cache, &grouping_infos)?;
     rw.write_record(records::BRT_END_SX_LOCATION, &[])?;
-    write_sx_fields(&mut rw, pivot, cache, &usage)?;
+    write_sx_fields(&mut rw, pivot, cache, &usage, &grouping_infos)?;
     let values_on_rows = values_field_on_axis(pivot, PivotValuesAxis::Rows);
     let values_on_columns = values_field_on_axis(pivot, PivotValuesAxis::Columns);
     write_axis_fields(
@@ -207,6 +255,7 @@ fn write_pivot_table_part<W: Write + Seek>(
         values_on_rows,
         pivot.layout.values_axis_position,
         pivot.measures.len(),
+        &grouping_infos,
     )?;
     write_axis_fields(
         &mut rw,
@@ -226,6 +275,7 @@ fn write_pivot_table_part<W: Write + Seek>(
         values_on_columns,
         pivot.layout.values_axis_position,
         pivot.measures.len(),
+        &grouping_infos,
     )?;
     write_page_fields(&mut rw, pivot, cache)?;
     write_data_fields(&mut rw, pivot, cache)?;
@@ -337,10 +387,24 @@ fn validate_xlsb_pivot_groupings(
                         "XLSB pivot grouping for field {field_name} has a non-finite bound"
                     )));
                 }
+                if let (Some(start), Some(end)) = (*start, *end) {
+                    if end < start {
+                        return Err(XlsbError::InvalidFormat(format!(
+                            "XLSB pivot grouping for field {field_name} has end before start"
+                        )));
+                    }
+                }
             }
-            PivotGrouping::Date { .. } | PivotGrouping::Manual { .. } => {
+            PivotGrouping::Date { units, .. } => {
+                if units.len() != 1 {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot date grouping currently supports exactly one date unit: {field_name}"
+                    )));
+                }
+            }
+            PivotGrouping::Manual { .. } => {
                 return Err(XlsbError::InvalidFormat(format!(
-                    "XLSB pivot grouping currently supports numeric range grouping only: {field_name}"
+                    "XLSB pivot grouping currently supports numeric and single-unit date grouping only: {field_name}"
                 )));
             }
         }
@@ -363,6 +427,303 @@ fn grouping_field_name(grouping: &PivotGrouping) -> &str {
         | PivotGrouping::Date { field, .. }
         | PivotGrouping::Manual { field, .. } => &field.name,
     }
+}
+
+fn xlsb_pivot_grouping_infos<'a>(
+    workbook: &Workbook,
+    cache: &FormatPivotCache,
+    groupings: &'a [PivotGrouping],
+    date_system: DateSystem,
+) -> XlsbResult<Vec<XlsbPivotGroupingInfo<'a>>> {
+    groupings
+        .iter()
+        .filter_map(|grouping| {
+            matches!(
+                grouping,
+                PivotGrouping::Number { .. } | PivotGrouping::Date { .. }
+            )
+            .then_some(grouping)
+        })
+        .map(|grouping| xlsb_pivot_grouping_info(workbook, cache, grouping, date_system))
+        .collect()
+}
+
+fn xlsb_pivot_grouping_info<'a>(
+    workbook: &Workbook,
+    cache: &FormatPivotCache,
+    grouping: &'a PivotGrouping,
+    date_system: DateSystem,
+) -> XlsbResult<XlsbPivotGroupingInfo<'a>> {
+    let field_name = grouping_field_name(grouping);
+    let field_index = cache.field_index(field_name).ok_or_else(|| {
+        XlsbError::InvalidFormat(format!(
+            "XLSB pivot grouping references unknown cache field: {field_name}"
+        ))
+    })?;
+    let (sheet_index, range, source_col) = grouping_source_range(cache, field_index, field_name)?;
+    let worksheet = workbook
+        .worksheet(sheet_index)
+        .ok_or_else(|| XlsbError::InvalidFormat("pivot source worksheet not found".into()))?;
+
+    let mut source_lookup: HashMap<u64, u32> = HashMap::new();
+    let mut source_items = Vec::new();
+    let mut source_item_ids = Vec::new();
+    let mut source_values = Vec::new();
+
+    for row in range.start.row.saturating_add(1)..=range.end.row {
+        let CellValue::Number(value) = worksheet.get_value_at(row, source_col) else {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot grouping for field {field_name} requires numeric source values"
+            )));
+        };
+        if !value.is_finite() {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot grouping for field {field_name} has non-finite source value: {value}"
+            )));
+        }
+        if matches!(grouping, PivotGrouping::Date { .. })
+            && !valid_pcdi_datetime(value, date_system)
+        {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot date grouping for field {field_name} has invalid date serial: {value}"
+            )));
+        }
+
+        let key = value.to_bits();
+        let item_id = if let Some(item_id) = source_lookup.get(&key) {
+            *item_id
+        } else {
+            let item_id = checked_u32(source_items.len(), "pivot grouped source item index")?;
+            source_lookup.insert(key, item_id);
+            source_items.push(PivotValue::Number(value));
+            item_id
+        };
+        source_item_ids.push(item_id);
+        source_values.push(value);
+    }
+
+    let (group_items, group_item_ids, source_item_kind) = match grouping {
+        PivotGrouping::Number {
+            start,
+            end,
+            interval,
+            ..
+        } => {
+            let (items, ids) =
+                numeric_group_items_and_ids(&source_values, *start, *end, *interval, field_name)?;
+            (items, ids, PivotCacheItemKind::Normal)
+        }
+        PivotGrouping::Date { units, .. } => {
+            let unit = units.first().copied().ok_or_else(|| {
+                XlsbError::InvalidFormat(format!(
+                    "XLSB pivot date grouping has no unit: {}",
+                    grouping_field_name(grouping)
+                ))
+            })?;
+            let (items, ids) =
+                date_group_items_and_ids(&source_values, unit, date_system, field_name)?;
+            (items, ids, PivotCacheItemKind::DateTime)
+        }
+        PivotGrouping::Manual { .. } => unreachable!("caller filters manual pivot groupings"),
+    };
+
+    Ok(XlsbPivotGroupingInfo {
+        grouping,
+        source_items,
+        source_item_ids,
+        group_items,
+        group_item_ids,
+        source_item_kind,
+    })
+}
+
+fn grouping_source_range(
+    cache: &FormatPivotCache,
+    field_index: usize,
+    field_name: &str,
+) -> XlsbResult<(usize, CellRange, u16)> {
+    let FormatPivotSource::Worksheet {
+        sheet_index, range, ..
+    } = &cache.source
+    else {
+        return Err(XlsbError::InvalidFormat(
+            "XLSB pivot grouping requires worksheet-range source data".into(),
+        ));
+    };
+    let source_col = u32::from(range.start.col)
+        .checked_add(field_index as u32)
+        .ok_or_else(|| {
+            XlsbError::InvalidFormat("XLSB pivot grouping field index overflow".into())
+        })?;
+    if source_col > u16::MAX as u32 || source_col > u32::from(range.end.col) {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB pivot grouping for field {field_name} must reference a source field"
+        )));
+    }
+    Ok((*sheet_index, *range, source_col as u16))
+}
+
+fn date_group_items_and_ids(
+    source_values: &[f64],
+    unit: PivotDateGroupUnit,
+    date_system: DateSystem,
+    field_name: &str,
+) -> XlsbResult<(Vec<PivotValue>, Vec<u32>)> {
+    let mut group_items = Vec::new();
+    let mut group_lookup = HashMap::new();
+    let mut group_item_ids = Vec::with_capacity(source_values.len());
+
+    for value in source_values {
+        let group_value = date_group_item_value(*value, unit, date_system)?;
+        let key = group_value.to_bits();
+        let item_id = if let Some(item_id) = group_lookup.get(&key) {
+            *item_id
+        } else {
+            let item_id = checked_u32(group_items.len(), "pivot date group item index")?;
+            group_lookup.insert(key, item_id);
+            group_items.push(PivotValue::Number(group_value));
+            item_id
+        };
+        group_item_ids.push(item_id);
+    }
+
+    if group_items.is_empty() {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB pivot date grouping for field {field_name} has no source dates"
+        )));
+    }
+    Ok((group_items, group_item_ids))
+}
+
+fn numeric_group_items_and_ids(
+    source_values: &[f64],
+    start: Option<f64>,
+    end: Option<f64>,
+    interval: f64,
+    field_name: &str,
+) -> XlsbResult<(Vec<PivotValue>, Vec<u32>)> {
+    let (source_min, source_max) = numeric_min_max(source_values).ok_or_else(|| {
+        XlsbError::InvalidFormat(format!(
+            "XLSB pivot numeric grouping for field {field_name} has no source values"
+        ))
+    })?;
+    let effective_start = start.unwrap_or(source_min);
+    let effective_end = end.unwrap_or(source_max);
+    if effective_end < effective_start {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB pivot numeric grouping for field {field_name} has end before start"
+        )));
+    }
+
+    let mut group_items = Vec::new();
+    let has_underflow = start.is_some();
+    let has_overflow = end.is_some();
+    if has_underflow {
+        group_items.push(PivotValue::String(format!(
+            "<{}",
+            format_group_number(effective_start)
+        )));
+    }
+
+    let all_integer_bins = is_integral_number(effective_start)
+        && is_integral_number(effective_end)
+        && is_integral_number(interval);
+    let mut current = effective_start;
+    let mut bin_count = 0usize;
+    while current <= effective_end {
+        if bin_count >= 1_048_576 {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot numeric grouping for field {field_name} has too many bins"
+            )));
+        }
+        let next = current + interval;
+        if !next.is_finite() || next <= current {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot numeric grouping for field {field_name} has an invalid interval"
+            )));
+        }
+        let upper = if next >= effective_end {
+            effective_end
+        } else if all_integer_bins {
+            next - 1.0
+        } else {
+            next
+        };
+        group_items.push(PivotValue::String(format!(
+            "{}-{}",
+            format_group_number(current),
+            format_group_number(upper)
+        )));
+        bin_count += 1;
+        if next >= effective_end {
+            break;
+        }
+        current = next;
+    }
+
+    if has_overflow {
+        group_items.push(PivotValue::String(format!(
+            ">{}",
+            format_group_number(effective_end)
+        )));
+    }
+
+    let mut group_item_ids = Vec::with_capacity(source_values.len());
+    let first_bin_index = if has_underflow { 1usize } else { 0usize };
+    let last_index = group_items.len().saturating_sub(1);
+    let last_bin_index = if has_overflow {
+        last_index.saturating_sub(1)
+    } else {
+        last_index
+    };
+    for value in source_values {
+        let item_id = if has_underflow && *value < effective_start {
+            0
+        } else if has_overflow && *value > effective_end {
+            last_index
+        } else {
+            let offset = ((*value - effective_start) / interval).floor();
+            let offset = if offset.is_finite() && offset >= 0.0 {
+                offset as usize
+            } else {
+                0
+            };
+            first_bin_index.saturating_add(offset).min(last_bin_index)
+        };
+        group_item_ids.push(checked_u32(item_id, "pivot numeric group item index")?);
+    }
+
+    Ok((group_items, group_item_ids))
+}
+
+fn numeric_min_max(values: &[f64]) -> Option<(f64, f64)> {
+    let mut min = None::<f64>;
+    let mut max = None::<f64>;
+    for value in values {
+        min = Some(min.map_or(*value, |current| current.min(*value)));
+        max = Some(max.map_or(*value, |current| current.max(*value)));
+    }
+    min.zip(max)
+}
+
+fn is_integral_number(value: f64) -> bool {
+    value.is_finite() && value.fract() == 0.0
+}
+
+fn format_group_number(value: f64) -> String {
+    if is_integral_number(value) && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+        return format!("{}", value as i64);
+    }
+    value.to_string()
+}
+
+fn grouping_info_for_field<'a, 'b>(
+    infos: &'a [XlsbPivotGroupingInfo<'b>],
+    field_name: &str,
+) -> Option<&'a XlsbPivotGroupingInfo<'b>> {
+    infos
+        .iter()
+        .find(|info| grouping_field_name(info.grouping).eq_ignore_ascii_case(field_name))
 }
 
 fn write_binary_index_part<W: Write + Seek>(
@@ -667,19 +1028,23 @@ fn emit_pivot_sxname(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PivotCacheItemKind {
+    Normal,
+    DateTime,
+}
+
 fn write_pcd_shared_items<W: Write>(
     rw: &mut RecordWriter<W>,
-    field: &FormatPivotCacheField,
+    values: &[PivotValue],
     store_items: bool,
-) -> std::io::Result<()> {
-    let stats = SharedItemStats::from_values(&field.shared_items);
+    item_kind: PivotCacheItemKind,
+    date_system: DateSystem,
+) -> XlsbResult<()> {
+    let stats = SharedItemStats::from_values(values);
     let mut payload = Vec::new();
-    payload.extend_from_slice(&stats.flags().to_le_bytes());
-    let stored_count = if store_items {
-        field.shared_items.len() as u32
-    } else {
-        0
-    };
+    payload.extend_from_slice(&stats.flags(item_kind).to_le_bytes());
+    let stored_count = if store_items { values.len() as u32 } else { 0 };
     payload.extend_from_slice(&stored_count.to_le_bytes());
     if stats.has_number {
         payload.extend_from_slice(&stats.min_number.unwrap_or(0.0).to_le_bytes());
@@ -687,11 +1052,12 @@ fn write_pcd_shared_items<W: Write>(
     }
     rw.write_record(records::BRT_BEGIN_PCD_SHARED_ITEMS, &payload)?;
     if store_items {
-        for item in &field.shared_items {
-            write_pcdi_item(rw, item)?;
+        for item in values {
+            write_pcdi_item(rw, item, item_kind, date_system)?;
         }
     }
-    rw.write_record(records::BRT_END_PCD_SHARED_ITEMS, &[])
+    rw.write_record(records::BRT_END_PCD_SHARED_ITEMS, &[])?;
+    Ok(())
 }
 
 fn write_pcd_field_group<W: Write>(
@@ -699,20 +1065,9 @@ fn write_pcd_field_group<W: Write>(
     field_index: usize,
     field: &FormatPivotCacheField,
     grouping: &PivotGrouping,
+    grouping_info: Option<&XlsbPivotGroupingInfo<'_>>,
+    date_system: DateSystem,
 ) -> XlsbResult<()> {
-    let PivotGrouping::Number {
-        start,
-        end,
-        interval,
-        ..
-    } = grouping
-    else {
-        return Err(XlsbError::InvalidFormat(format!(
-            "XLSB pivot grouping currently supports numeric range grouping only: {}",
-            grouping_field_name(grouping)
-        )));
-    };
-
     let field_index = checked_i32(field_index, "pivot grouped cache field index")?;
     let mut group_payload = Vec::with_capacity(8);
     group_payload.extend_from_slice(&(-1i32).to_le_bytes());
@@ -720,46 +1075,210 @@ fn write_pcd_field_group<W: Write>(
     rw.write_record(records::BRT_BEGIN_PCDF_GROUP, &group_payload)?;
 
     let mut range_payload = Vec::with_capacity(26);
-    range_payload.push(0x00);
-    let mut flags = 0u8;
-    if start.is_none() {
-        flags |= 0x01;
+    match grouping {
+        PivotGrouping::Number {
+            start,
+            end,
+            interval,
+            ..
+        } => {
+            range_payload.push(0x00);
+            let mut flags = 0u8;
+            if start.is_none() {
+                flags |= 0x01;
+            }
+            if end.is_none() {
+                flags |= 0x02;
+            }
+            range_payload.push(flags);
+            range_payload.extend_from_slice(&start.unwrap_or(0.0).to_le_bytes());
+            range_payload.extend_from_slice(&end.unwrap_or(0.0).to_le_bytes());
+            range_payload.extend_from_slice(&interval.to_le_bytes());
+        }
+        PivotGrouping::Date { units, .. } => {
+            let unit = units.first().copied().ok_or_else(|| {
+                XlsbError::InvalidFormat(format!(
+                    "XLSB pivot date grouping has no unit: {}",
+                    grouping_field_name(grouping)
+                ))
+            })?;
+            let info = grouping_info.ok_or_else(|| {
+                XlsbError::InvalidFormat(format!(
+                    "XLSB pivot date grouping info missing for field {}",
+                    grouping_field_name(grouping)
+                ))
+            })?;
+            let (start, end) = source_item_min_max(&info.source_items).ok_or_else(|| {
+                XlsbError::InvalidFormat(format!(
+                    "XLSB pivot date grouping for field {} has no source dates",
+                    grouping_field_name(grouping)
+                ))
+            })?;
+            range_payload.push(xlsb_date_group_by(unit));
+            range_payload.push(0x07);
+            range_payload.extend_from_slice(&start.to_le_bytes());
+            range_payload.extend_from_slice(&end.to_le_bytes());
+            range_payload.extend_from_slice(&1.0f64.to_le_bytes());
+        }
+        PivotGrouping::Manual { .. } => {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot grouping currently supports numeric and single-unit date grouping only: {}",
+                grouping_field_name(grouping)
+            )));
+        }
     }
-    if end.is_none() {
-        flags |= 0x02;
-    }
-    range_payload.push(flags);
-    range_payload.extend_from_slice(&start.unwrap_or(0.0).to_le_bytes());
-    range_payload.extend_from_slice(&end.unwrap_or(0.0).to_le_bytes());
-    range_payload.extend_from_slice(&interval.to_le_bytes());
     rw.write_record(records::BRT_BEGIN_PCDFG_RANGE, &range_payload)?;
     rw.write_record(records::BRT_END_PCDFG_RANGE, &[])?;
 
+    let group_items = pivot_group_items(field, grouping, grouping_info)?;
     rw.write_record(
         records::BRT_BEGIN_PCDFG_ITEMS,
-        &(field.shared_items.len() as u32).to_le_bytes(),
+        &(group_items.len() as u32).to_le_bytes(),
     )?;
-    for item in &field.shared_items {
-        write_pcdi_item(rw, item)?;
+    for item in &group_items {
+        write_pcdi_item(rw, item, PivotCacheItemKind::Normal, date_system)?;
     }
     rw.write_record(records::BRT_END_PCDFG_ITEMS, &[])?;
     rw.write_record(records::BRT_END_PCDF_GROUP, &[])?;
     Ok(())
 }
 
-fn write_pcdi_item<W: Write>(rw: &mut RecordWriter<W>, value: &PivotValue) -> std::io::Result<()> {
-    match value {
-        PivotValue::Blank => rw.write_record(records::BRT_PCDI_MISSING, &[]),
-        PivotValue::Boolean(value) => {
-            rw.write_record(records::BRT_PCDI_BOOLEAN, &[if *value { 1 } else { 0 }])
+fn xlsb_date_group_by(unit: PivotDateGroupUnit) -> u8 {
+    match unit {
+        PivotDateGroupUnit::Seconds => 0x01,
+        PivotDateGroupUnit::Minutes => 0x02,
+        PivotDateGroupUnit::Hours => 0x03,
+        PivotDateGroupUnit::Days => 0x04,
+        PivotDateGroupUnit::Months => 0x05,
+        PivotDateGroupUnit::Quarters => 0x06,
+        PivotDateGroupUnit::Years => 0x07,
+    }
+}
+
+fn source_item_min_max(items: &[PivotValue]) -> Option<(f64, f64)> {
+    let mut min = None::<f64>;
+    let mut max = None::<f64>;
+    for item in items {
+        let PivotValue::Number(value) = item else {
+            continue;
+        };
+        min = Some(min.map_or(*value, |current| current.min(*value)));
+        max = Some(max.map_or(*value, |current| current.max(*value)));
+    }
+    min.zip(max)
+}
+
+fn pivot_group_items(
+    field: &FormatPivotCacheField,
+    grouping: &PivotGrouping,
+    grouping_info: Option<&XlsbPivotGroupingInfo<'_>>,
+) -> XlsbResult<Vec<PivotValue>> {
+    match grouping {
+        PivotGrouping::Number { .. } | PivotGrouping::Date { .. } => grouping_info
+            .map(|info| info.group_items.clone())
+            .ok_or_else(|| {
+                XlsbError::InvalidFormat(format!(
+                    "XLSB pivot grouping info missing for field {}",
+                    grouping_field_name(grouping)
+                ))
+            }),
+        _ => Ok(field.shared_items.clone()),
+    }
+}
+
+fn date_group_item_value(
+    serial: f64,
+    unit: PivotDateGroupUnit,
+    date_system: DateSystem,
+) -> XlsbResult<f64> {
+    let Some((year, month, day)) = serial_to_date(serial, date_system) else {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB pivot date grouping has invalid serial: {serial}"
+        )));
+    };
+    let (hour, minute, second) = serial_to_time(serial);
+    Ok(match unit {
+        PivotDateGroupUnit::Years => year as f64,
+        PivotDateGroupUnit::Quarters => ((month - 1) / 3 + 1) as f64,
+        PivotDateGroupUnit::Months => month as f64,
+        PivotDateGroupUnit::Days => day as f64,
+        PivotDateGroupUnit::Hours => hour as f64,
+        PivotDateGroupUnit::Minutes => minute as f64,
+        PivotDateGroupUnit::Seconds => second as f64,
+    })
+}
+
+fn write_pcdi_item<W: Write>(
+    rw: &mut RecordWriter<W>,
+    value: &PivotValue,
+    item_kind: PivotCacheItemKind,
+    date_system: DateSystem,
+) -> XlsbResult<()> {
+    match (item_kind, value) {
+        (PivotCacheItemKind::DateTime, PivotValue::Number(serial)) => {
+            write_pcdi_datetime(rw, *serial, date_system)?;
         }
-        PivotValue::Number(value) => {
-            rw.write_record(records::BRT_PCDI_NUMBER, &value.to_le_bytes())
+        (PivotCacheItemKind::DateTime, _) => {
+            return Err(XlsbError::InvalidFormat(
+                "XLSB pivot datetime cache item requires a numeric serial".into(),
+            ));
         }
-        PivotValue::String(value) => {
-            rw.write_record(records::BRT_PCDI_STRING, &encode_wide_str(value))
+        (_, PivotValue::Blank) => rw.write_record(records::BRT_PCDI_MISSING, &[])?,
+        (_, PivotValue::Boolean(value)) => {
+            rw.write_record(records::BRT_PCDI_BOOLEAN, &[if *value { 1 } else { 0 }])?
         }
-        PivotValue::Error(value) => rw.write_record(records::BRT_PCDI_ERROR, &[error_code(*value)]),
+        (_, PivotValue::Number(value)) => {
+            rw.write_record(records::BRT_PCDI_NUMBER, &value.to_le_bytes())?
+        }
+        (_, PivotValue::String(value)) => {
+            rw.write_record(records::BRT_PCDI_STRING, &encode_wide_str(value))?
+        }
+        (_, PivotValue::Error(value)) => {
+            rw.write_record(records::BRT_PCDI_ERROR, &[error_code(*value)])?
+        }
+    }
+    Ok(())
+}
+
+fn write_pcdi_datetime<W: Write>(
+    rw: &mut RecordWriter<W>,
+    serial: f64,
+    date_system: DateSystem,
+) -> XlsbResult<()> {
+    let Some((year, month, day)) = serial_to_date(serial, date_system) else {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB pivot datetime cache item has invalid serial: {serial}"
+        )));
+    };
+    if !(1900..=9999).contains(&year) {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB pivot datetime cache item year is out of range: {year}"
+        )));
+    }
+    let (hour, minute, second) = serial_to_time(serial);
+    let mut payload = Vec::with_capacity(8);
+    payload.extend_from_slice(&(year as u16).to_le_bytes());
+    payload.extend_from_slice(&(month as u16).to_le_bytes());
+    payload.push(day as u8);
+    payload.push(hour as u8);
+    payload.push(minute as u8);
+    payload.push(second as u8);
+    rw.write_record(records::BRT_PCDI_DATETIME, &payload)?;
+    Ok(())
+}
+
+fn valid_pcdi_datetime(serial: f64, date_system: DateSystem) -> bool {
+    serial.is_finite()
+        && serial_to_date(serial, date_system).is_some_and(|(year, month, day)| {
+            (1900..=9999).contains(&year) && (1..=12).contains(&month) && day <= 31
+        })
+}
+
+fn workbook_date_system(date_1904: bool) -> DateSystem {
+    if date_1904 {
+        DateSystem::Date1904
+    } else {
+        DateSystem::Date1900
     }
 }
 
@@ -812,10 +1331,11 @@ fn write_sx_location<W: Write>(
     rw: &mut RecordWriter<W>,
     pivot: &PivotTable,
     cache: &FormatPivotCache,
+    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
 ) -> std::io::Result<()> {
     let range = pivot
         .rendered_range
-        .unwrap_or_else(|| estimated_pivot_range(pivot, cache));
+        .unwrap_or_else(|| estimated_pivot_range(pivot, cache, grouping_infos));
     let first_data_col = pivot.rows.len().max(1) as u32;
     let (page_rows, page_cols) = page_field_area_size(pivot);
     let mut payload = Vec::new();
@@ -836,6 +1356,7 @@ fn write_sx_fields<W: Write>(
     pivot: &PivotTable,
     cache: &FormatPivotCache,
     usage: &CacheFieldUsage,
+    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
 ) -> XlsbResult<()> {
     rw.write_record(
         records::BRT_BEGIN_SXVDS,
@@ -844,7 +1365,10 @@ fn write_sx_fields<W: Write>(
     for (index, field) in cache.fields.iter().enumerate() {
         write_sx_field(rw, pivot_field_axis(pivot, &field.name))?;
         if usage.store_items[index] {
-            write_sx_field_items(rw, field)?;
+            let item_count = grouping_info_for_field(grouping_infos, &field.name)
+                .map(|info| info.group_items.len())
+                .unwrap_or(field.shared_items.len());
+            write_sx_field_items(rw, item_count)?;
         }
         rw.write_record(records::BRT_END_SXVD, &[])?;
     }
@@ -870,11 +1394,11 @@ fn write_sx_field<W: Write>(rw: &mut RecordWriter<W>, axis: u8) -> std::io::Resu
 
 fn write_sx_field_items<W: Write>(
     rw: &mut RecordWriter<W>,
-    field: &FormatPivotCacheField,
+    item_count: usize,
 ) -> std::io::Result<()> {
-    let count = field.shared_items.len() as u32 + 1;
+    let count = item_count as u32 + 1;
     rw.write_record(records::BRT_BEGIN_SXVIS, &count.to_le_bytes())?;
-    for item_index in 0..field.shared_items.len() as u32 {
+    for item_index in 0..item_count as u32 {
         let mut payload = Vec::with_capacity(7);
         payload.extend_from_slice(&[0, 0, 0]);
         payload.extend_from_slice(&item_index.to_le_bytes());
@@ -939,6 +1463,7 @@ fn write_axis_items<W: Write>(
     include_values_field: bool,
     values_position: Option<u32>,
     measure_count: usize,
+    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
 ) -> XlsbResult<()> {
     let line_tuples = axis_line_tuples(
         cache,
@@ -946,6 +1471,7 @@ fn write_axis_items<W: Write>(
         include_values_field,
         values_position,
         measure_count,
+        grouping_infos,
     )?;
     let grand_tuples = axis_grand_total_tuples(
         fields.len(),
@@ -971,6 +1497,7 @@ fn axis_line_tuples(
     include_values_field: bool,
     values_position: Option<u32>,
     measure_count: usize,
+    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
 ) -> XlsbResult<Vec<(Vec<u32>, Option<u32>)>> {
     if fields.is_empty() {
         if include_values_field {
@@ -983,7 +1510,7 @@ fn axis_line_tuples(
         return Ok(vec![(Vec::new(), None)]);
     }
 
-    let tuples = axis_item_tuples(cache, fields)?;
+    let tuples = axis_item_tuples(cache, fields, grouping_infos)?;
     if include_values_field {
         Ok(tuples_with_data_items(
             tuples,
@@ -1149,7 +1676,11 @@ fn pivot_style_flags(style: &duke_sheets_core::PivotStyle) -> u16 {
     flags
 }
 
-fn estimated_pivot_range(pivot: &PivotTable, cache: &FormatPivotCache) -> CellRange {
+fn estimated_pivot_range(
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
+) -> CellRange {
     let (page_rows, _) = page_field_area_size(pivot);
     let body_start_row = pivot.target.row
         + if page_rows == 0 {
@@ -1157,11 +1688,11 @@ fn estimated_pivot_range(pivot: &PivotTable, cache: &FormatPivotCache) -> CellRa
         } else {
             page_rows.saturating_add(1)
         };
-    let row_item_count = axis_item_count(cache, &pivot.rows).max(1);
+    let row_item_count = axis_item_count(cache, &pivot.rows, grouping_infos).max(1);
     let row_header_count = pivot.columns.len() as u32 + 1;
     let row_count = row_header_count + row_item_count as u32 + 1;
 
-    let col_item_count = axis_item_count(cache, &pivot.columns).max(1);
+    let col_item_count = axis_item_count(cache, &pivot.columns, grouping_infos).max(1);
     let measure_count = pivot.measures.len().max(1);
     let value_col_count = col_item_count * measure_count;
     let col_count = pivot.rows.len().max(1) as u16 + value_col_count as u16;
@@ -1197,16 +1728,24 @@ fn page_field_area_size(pivot: &PivotTable) -> (u32, u32) {
     (row_count as u32, col_count as u32)
 }
 
-fn axis_item_count(cache: &FormatPivotCache, fields: &[PivotField]) -> usize {
+fn axis_item_count(
+    cache: &FormatPivotCache,
+    fields: &[PivotField],
+    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
+) -> usize {
     if fields.is_empty() {
         return 1;
     }
-    axis_item_tuples(cache, fields)
+    axis_item_tuples(cache, fields, grouping_infos)
         .map(|tuples| tuples.len())
         .unwrap_or(1)
 }
 
-fn axis_item_tuples(cache: &FormatPivotCache, fields: &[PivotField]) -> XlsbResult<Vec<Vec<u32>>> {
+fn axis_item_tuples(
+    cache: &FormatPivotCache,
+    fields: &[PivotField],
+    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
+) -> XlsbResult<Vec<Vec<u32>>> {
     if fields.is_empty() {
         return Ok(Vec::new());
     }
@@ -1227,7 +1766,13 @@ fn axis_item_tuples(cache: &FormatPivotCache, fields: &[PivotField]) -> XlsbResu
     for row in 0..cache.row_count {
         let tuple = indexes
             .iter()
-            .map(|index| cache.fields[*index].item_ids.get(row).copied().unwrap_or(0))
+            .map(|index| {
+                let field = &cache.fields[*index];
+                grouping_info_for_field(grouping_infos, &field.name)
+                    .and_then(|info| info.group_item_ids.get(row).copied())
+                    .or_else(|| field.item_ids.get(row).copied())
+                    .unwrap_or(0)
+            })
             .collect::<Vec<_>>();
         if seen.insert(tuple.clone()) {
             tuples.push(tuple);
@@ -1432,10 +1977,17 @@ impl SharedItemStats {
         stats
     }
 
-    fn flags(&self) -> u16 {
+    fn flags(&self, item_kind: PivotCacheItemKind) -> u16 {
         let mut flags = 0x0400u16;
+        if item_kind == PivotCacheItemKind::DateTime {
+            flags = 0;
+            if self.has_number {
+                flags |= 0x0004 | 0x0100;
+            }
+            return flags;
+        }
         if self.has_number {
-            flags |= 0x0001 | 0x0002 | 0x0040 | 0x0100;
+            flags |= 0x0002 | 0x0040 | 0x0100;
             if self.all_numbers_integer {
                 flags |= 0x0080;
             }
