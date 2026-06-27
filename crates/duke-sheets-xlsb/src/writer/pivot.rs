@@ -1887,13 +1887,14 @@ fn write_sx_fields<W: Write>(
         match field_layout {
             XlsbPivotCacheFieldLayout::Source { source_index, .. } => {
                 let field = &cache.fields[*source_index];
-                let axis = if layout.date_derived_by_base.contains_key(source_index) {
+                let has_date_derived = layout.date_derived_by_base.contains_key(source_index);
+                let axis = if has_date_derived {
                     0
                 } else {
                     pivot_field_axis(pivot, &field.name)
                 };
                 write_sx_field(rw, axis)?;
-                if usage.store_items[*source_index] {
+                if !has_date_derived && usage.store_items[*source_index] {
                     let item_count = grouping_info_for_field(grouping_infos, &field.name)
                         .map(|info| info.source_items.len())
                         .unwrap_or(field.shared_items.len());

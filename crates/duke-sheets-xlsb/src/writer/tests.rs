@@ -901,6 +901,22 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(row_field_indexes, vec![2, 3]);
 
+        let sxvd_item_list_counts = sxvd_item_list_counts(&pivot_records);
+        assert_eq!(
+            sxvd_item_list_counts.len(),
+            4,
+            "pivot view should include source fields plus one derived field per date unit"
+        );
+        assert_eq!(
+            sxvd_item_list_counts[0], 0,
+            "the hidden base date field should not emit view item records"
+        );
+        assert_eq!(
+            &sxvd_item_list_counts[2..],
+            &[1, 1],
+            "derived date unit fields should carry their visible item lists"
+        );
+
         let cache_rows = records_with_payload(read_zip_entry_bytes(
             &bytes,
             "xl/pivotCache/pivotCacheRecords1.bin",
@@ -3489,6 +3505,28 @@ mod tests {
             buf.truncate(len);
         }
         out
+    }
+
+    fn sxvd_item_list_counts(records: &[(u16, Vec<u8>)]) -> Vec<usize> {
+        let mut counts = Vec::new();
+        let mut current = None;
+        for (record_type, _) in records {
+            match *record_type {
+                crate::biff12::records::BRT_BEGIN_SXVD => current = Some(0usize),
+                crate::biff12::records::BRT_BEGIN_SXVIS => {
+                    if let Some(count) = current.as_mut() {
+                        *count += 1;
+                    }
+                }
+                crate::biff12::records::BRT_END_SXVD => {
+                    if let Some(count) = current.take() {
+                        counts.push(count);
+                    }
+                }
+                _ => {}
+            }
+        }
+        counts
     }
 
     fn wide_string(data: &[u8]) -> String {
