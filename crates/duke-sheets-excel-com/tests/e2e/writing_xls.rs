@@ -292,6 +292,51 @@ fn xls_manual_grouped_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xls_manual_column_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Quarter").unwrap();
+    ws.set_cell_value("C1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "Central").unwrap();
+    ws.set_cell_value("B2", "Q1").unwrap();
+    ws.set_cell_value("C2", 30.0).unwrap();
+    ws.set_cell_value("A3", "East").unwrap();
+    ws.set_cell_value("B3", "Q1").unwrap();
+    ws.set_cell_value("C3", 10.0).unwrap();
+    ws.set_cell_value("A4", "West").unwrap();
+    ws.set_cell_value("B4", "Q2").unwrap();
+    ws.set_cell_value("C4", 20.0).unwrap();
+    ws.set_cell_value("A5", "North").unwrap();
+    ws.set_cell_value("B5", "Q2").unwrap();
+    ws.set_cell_value("C5", 40.0).unwrap();
+    ws.set_cell_value("A6", "South").unwrap();
+    ws.set_cell_value("B6", "Q3").unwrap();
+    ws.set_cell_value("C6", 50.0).unwrap();
+    ws.set_cell_value("A7", "International").unwrap();
+    ws.set_cell_value("B7", "Q3").unwrap();
+    ws.set_cell_value("C7", 60.0).unwrap();
+
+    let pivot = PivotTable::builder("ManualColumnGroups")
+        .source_range(CellRange::parse("A1:C7").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Quarter")
+        .column("Region")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Manual {
+            field: "Region".into(),
+            groups: vec![
+                PivotManualGroup::new("Coastal", ["East", "West", "South"]),
+                PivotManualGroup::new("Interior", ["Central", "North"]),
+            ],
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xls_with_native_pivot_table() {
@@ -577,6 +622,57 @@ fn excel_preserves_xls_pivot_manual_grouping() {
         u16::from_le_bytes(derived[0..2].try_into().unwrap()),
         0x0001,
         "Excel should preserve the derived manual field flags"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_pivot_manual_column_grouping() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_manual_column_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("ManualColumnGroups")
+        .unwrap();
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "Quarter");
+    assert_eq!(pivot.columns.len(), 1);
+    assert_eq!(pivot.columns[0].field.name, "Region");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Manual { field, groups } => {
+            assert_eq!(field.name, "Region");
+            assert_eq!(groups.len(), 2);
+            assert_eq!(groups[0].name, "Coastal");
+            assert_eq!(
+                groups[0].members,
+                vec![
+                    PivotValue::String("East".to_string()),
+                    PivotValue::String("West".to_string()),
+                    PivotValue::String("South".to_string())
+                ]
+            );
+            assert_eq!(groups[1].name, "Interior");
+            assert_eq!(
+                groups[1].members,
+                vec![
+                    PivotValue::String("Central".to_string()),
+                    PivotValue::String("North".to_string())
+                ]
+            );
+        }
+        other => panic!("expected manual column grouping, got {other:?}"),
+    }
+
+    let workbook = xls_cfb_stream(&excel_bytes, "/Workbook");
+    let axis_fields = xls_record_payloads(&workbook)
+        .into_iter()
+        .filter_map(|(record_type, payload)| (record_type == 0x00B4).then_some(payload))
+        .collect::<Vec<_>>();
+    assert!(
+        axis_fields.iter().any(|payload| payload == &[3, 0, 0, 0]),
+        "Excel should preserve the expanded manual column axis declaration"
     );
 }
 

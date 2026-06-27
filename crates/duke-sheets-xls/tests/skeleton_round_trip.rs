@@ -400,6 +400,49 @@ fn add_manual_grouped_pivot(wb: &mut Workbook) {
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
 }
 
+fn add_manual_column_grouped_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Quarter").unwrap();
+    ws.set_cell_value("C1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "Central").unwrap();
+    ws.set_cell_value("B2", "Q1").unwrap();
+    ws.set_cell_value("C2", 30.0).unwrap();
+    ws.set_cell_value("A3", "East").unwrap();
+    ws.set_cell_value("B3", "Q1").unwrap();
+    ws.set_cell_value("C3", 10.0).unwrap();
+    ws.set_cell_value("A4", "West").unwrap();
+    ws.set_cell_value("B4", "Q2").unwrap();
+    ws.set_cell_value("C4", 20.0).unwrap();
+    ws.set_cell_value("A5", "North").unwrap();
+    ws.set_cell_value("B5", "Q2").unwrap();
+    ws.set_cell_value("C5", 40.0).unwrap();
+    ws.set_cell_value("A6", "South").unwrap();
+    ws.set_cell_value("B6", "Q3").unwrap();
+    ws.set_cell_value("C6", 50.0).unwrap();
+    ws.set_cell_value("A7", "International").unwrap();
+    ws.set_cell_value("B7", "Q3").unwrap();
+    ws.set_cell_value("C7", 60.0).unwrap();
+
+    let pivot = PivotTable::builder("ManualColumnGroups")
+        .source_range(CellRange::parse("A1:C7").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("Quarter")
+        .column("Region")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Manual {
+            field: PivotFieldRef::new("Region"),
+            groups: vec![
+                PivotManualGroup::new("Coastal", ["East", "West", "South"]),
+                PivotManualGroup::new("Interior", ["Central", "North"]),
+            ],
+        })
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
 #[test]
 fn empty_default_workbook_round_trips_via_reader() {
     let wb = Workbook::new();
@@ -1226,6 +1269,98 @@ fn semantic_pivot_tables_emit_xls_manual_grouping_records() {
 }
 
 #[test]
+fn semantic_pivot_tables_emit_xls_manual_column_grouping_records() {
+    let mut wb = Workbook::new();
+    add_manual_column_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = records_with_payload(&cache);
+
+    let region_sxfdb = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "Region")
+        .expect("Region SXFDB record");
+    assert_eq!(
+        u16::from_le_bytes(region_sxfdb[0..2].try_into().unwrap()),
+        0x0489,
+        "source manual column field should use grouped item flags"
+    );
+    assert_eq!(
+        i16::from_le_bytes(region_sxfdb[2..4].try_into().unwrap()),
+        3,
+        "source manual column field should point at the derived grouped field"
+    );
+
+    let quarter_sxfdb = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "Quarter")
+        .expect("Quarter SXFDB record");
+    assert_eq!(
+        u16::from_le_bytes(quarter_sxfdb[12..14].try_into().unwrap()),
+        3,
+        "regular text fields should count all emitted source atoms"
+    );
+
+    let derived_sxfdb = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "Region2")
+        .expect("derived manual column SXFDB record");
+    assert_eq!(
+        i16::from_le_bytes(derived_sxfdb[4..6].try_into().unwrap()),
+        0,
+        "derived manual column field should link back to Region"
+    );
+
+    let row_markers = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C8).then_some(payload.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        row_markers,
+        vec![
+            vec![0, 0],
+            vec![1, 0],
+            vec![2, 1],
+            vec![3, 1],
+            vec![4, 2],
+            vec![5, 2],
+        ],
+        "manual column grouping cache rows should include every text base field item id"
+    );
+
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let workbook_records = records_with_payload(&workbook);
+    let sxvd_axes = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00B1).then(|| u16::from_le_bytes(payload[0..2].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sxvd_axes,
+        vec![0x0002, 0x0001, 0x0008, 0x0002],
+        "manual column grouping should put source and derived fields on the column axis"
+    );
+
+    let axis_fields = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00B4).then_some(payload.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        axis_fields,
+        vec![vec![1, 0], vec![3, 0, 0, 0]],
+        "manual column grouping should expand the column axis to derived plus source"
+    );
+}
+
+#[test]
 fn semantic_pivot_tables_emit_xls_duplicate_date_cache_item_ids() {
     let mut wb = Workbook::new();
     add_duplicate_date_grouped_pivot(&mut wb);
@@ -1462,6 +1597,48 @@ fn reads_writer_xls_manual_grouping_semantics() {
 }
 
 #[test]
+fn reads_writer_xls_manual_column_grouping_semantics() {
+    let mut wb = Workbook::new();
+    add_manual_column_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    let pivot = &ws.pivot_tables()[0];
+
+    assert_eq!(pivot.name, "ManualColumnGroups");
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "Quarter");
+    assert_eq!(pivot.columns.len(), 1);
+    assert_eq!(pivot.columns[0].field.name, "Region");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Manual { field, groups } => {
+            assert_eq!(field.name, "Region");
+            assert_eq!(groups.len(), 2);
+            assert_eq!(groups[0].name, "Coastal");
+            assert_eq!(
+                groups[0].members,
+                vec![
+                    PivotValue::String("East".to_string()),
+                    PivotValue::String("West".to_string()),
+                    PivotValue::String("South".to_string())
+                ]
+            );
+            assert_eq!(groups[1].name, "Interior");
+            assert_eq!(
+                groups[1].members,
+                vec![
+                    PivotValue::String("Central".to_string()),
+                    PivotValue::String("North".to_string())
+                ]
+            );
+        }
+        other => panic!("expected manual column grouping, got {other:?}"),
+    }
+}
+
+#[test]
 fn xls_manual_grouping_rejects_non_text_items() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -1525,44 +1702,7 @@ fn xls_manual_grouping_rejects_page_axis_fields() {
     let err = XlsWriter::write_to_bytes(&wb).expect_err("page manual grouping should fail");
     assert!(
         err.to_string()
-            .contains("currently supports only row-axis fields"),
-        "{err}"
-    );
-}
-
-#[test]
-fn xls_manual_grouping_rejects_column_axis_fields() {
-    let mut wb = Workbook::new();
-    let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_cell_value("A1", "Region").unwrap();
-    ws.set_cell_value("B1", "Product").unwrap();
-    ws.set_cell_value("C1", "Revenue").unwrap();
-    ws.set_cell_value("A2", "East").unwrap();
-    ws.set_cell_value("B2", "A").unwrap();
-    ws.set_cell_value("C2", 10.0).unwrap();
-    ws.set_cell_value("A3", "West").unwrap();
-    ws.set_cell_value("B3", "A").unwrap();
-    ws.set_cell_value("C3", 20.0).unwrap();
-
-    let pivot = PivotTable::builder("ManualColumnRegions")
-        .source_range(CellRange::parse("A1:C3").unwrap())
-        .target_address("E1")
-        .unwrap()
-        .row("Product")
-        .column("Region")
-        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
-        .grouping(PivotGrouping::Manual {
-            field: PivotFieldRef::new("Region"),
-            groups: vec![PivotManualGroup::new("Coastal", ["East", "West"])],
-        })
-        .build()
-        .unwrap();
-    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
-
-    let err = XlsWriter::write_to_bytes(&wb).expect_err("column manual grouping should fail");
-    assert!(
-        err.to_string()
-            .contains("currently supports only row-axis fields"),
+            .contains("currently does not support page-axis fields"),
         "{err}"
     );
 }
@@ -2003,6 +2143,44 @@ fn lo_can_open_manual_grouped_pivot_workbook() {
     });
     let _ = std::fs::remove_file(&path);
     let count = outcome.expect("LO must open the manual-grouped pivot workbook");
+    assert_eq!(count, 1);
+}
+
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_open_manual_column_grouped_pivot_workbook() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    add_manual_column_grouped_pivot(&mut wb);
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    std::fs::create_dir_all("/tmp/duke-sheets-urp").expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("/tmp/duke-sheets-urp/duke_manual_column_grouped_pivot_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write to shared dir");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<i32, String> = rt.block_on(async {
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let count = wb
+            .sheet_count()
+            .await
+            .map_err(|e| format!("sheet_count: {e}"))?;
+        Ok(count)
+    });
+    let _ = std::fs::remove_file(&path);
+    let count = outcome.expect("LO must open the manual column-grouped pivot workbook");
     assert_eq!(count, 1);
 }
 

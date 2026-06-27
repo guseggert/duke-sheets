@@ -640,22 +640,29 @@ fn write_numeric_cache_records(
     stream: &mut Vec<u8>,
     layout: &XlsPivotCacheLayout,
 ) -> XlsResult<()> {
-    let row_marker_field = xls_cache_row_marker_field(layout);
+    let row_marker_fields = xls_cache_row_marker_fields(layout);
     let numeric_fields = layout
         .fields
         .iter()
         .filter(|field| field_is_numeric(field) && matches!(field.kind, XlsPivotFieldKind::Regular))
         .collect::<Vec<_>>();
-    if numeric_fields.is_empty() {
+    if row_marker_fields.is_empty() && numeric_fields.is_empty() {
         return Ok(());
     }
 
     for row in 0..layout.row_count {
-        let row_marker = row_marker_field
-            .and_then(|field| field.item_ids.get(row).copied())
-            .map(|item_id| checked_u8(item_id as usize, "pivot cache row item index"))
-            .unwrap_or_else(|| checked_u8(row, "pivot cache row index"))?;
-        write_biff_record(stream, PIVOT_SXDBB_RECORD, &[row_marker]);
+        let row_markers = if row_marker_fields.is_empty() {
+            vec![checked_u8(row, "pivot cache row index")?]
+        } else {
+            row_marker_fields
+                .iter()
+                .map(|field| {
+                    let item_id = field.item_ids.get(row).copied().unwrap_or(0);
+                    checked_u8(item_id as usize, "pivot cache row item index")
+                })
+                .collect::<XlsResult<Vec<_>>>()?
+        };
+        write_biff_record(stream, PIVOT_SXDBB_RECORD, &row_markers);
         for field in &numeric_fields {
             if let Some(number) = numeric_cache_value(field, row) {
                 write_biff_record(stream, PIVOT_SXNUM_RECORD, &number.to_le_bytes());
@@ -665,12 +672,15 @@ fn write_numeric_cache_records(
     Ok(())
 }
 
-fn xls_cache_row_marker_field(layout: &XlsPivotCacheLayout) -> Option<&XlsPivotFieldLayout> {
+fn xls_cache_row_marker_fields(layout: &XlsPivotCacheLayout) -> Vec<&XlsPivotFieldLayout> {
     layout
         .fields
         .iter()
         .take(layout.base_field_count)
-        .find(|field| !matches!(field.kind, XlsPivotFieldKind::Regular) || !field_is_numeric(field))
+        .filter(|field| {
+            !matches!(field.kind, XlsPivotFieldKind::Regular) || !field_is_numeric(field)
+        })
+        .collect()
 }
 
 fn numeric_cache_value(field: &XlsPivotFieldLayout, row: usize) -> Option<f64> {
@@ -771,9 +781,16 @@ fn validate_xls_pivot_grouping_axes(pivot: &duke_sheets_core::PivotTable) -> Xls
             continue;
         };
         let field_name = field.name.as_str();
-        if !pivot_axis_contains_field(&pivot.rows, field_name) {
+        if pivot_axis_contains_field(&pivot.page_fields, field_name) {
             return Err(XlsError::InvalidFormat(format!(
-                "XLS pivot manual grouping currently supports only row-axis fields: {field_name}"
+                "XLS pivot manual grouping currently does not support page-axis fields: {field_name}"
+            )));
+        }
+        if !pivot_axis_contains_field(&pivot.rows, field_name)
+            && !pivot_axis_contains_field(&pivot.columns, field_name)
+        {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS pivot manual grouping requires a row- or column-axis field: {field_name}"
             )));
         }
     }
@@ -1558,14 +1575,20 @@ fn write_sxfdb_record(stream: &mut Vec<u8>, field: &XlsPivotFieldLayout) -> XlsR
             body.extend_from_slice(&0u16.to_le_bytes());
         }
         XlsPivotFieldKind::Regular => {
+            let item_count = checked_u16(field.shared_items.len(), "pivot field item count")?;
             body.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-            body.extend_from_slice(&(field.shared_items.len() as u32).to_le_bytes());
+            body.extend_from_slice(
+                &checked_u32(field.shared_items.len(), "pivot field item count")?.to_le_bytes(),
+            );
             body.extend_from_slice(&0u16.to_le_bytes());
-            body.extend_from_slice(&if field_is_numeric(field) {
-                0u16.to_le_bytes()
-            } else {
-                2u16.to_le_bytes()
-            });
+            body.extend_from_slice(
+                &if field_is_numeric(field) {
+                    0u16
+                } else {
+                    item_count
+                }
+                .to_le_bytes(),
+            );
         }
     }
     push_xlunicode_string(&mut body, &field.name)?;
@@ -2241,8 +2264,10 @@ fn write_pivot_sheet_records(
         }
 
         write_classic_pivot_view_records(stream, pivot, cache, &layout)?;
-        let has_expanded_row_axis = expanded_axis_field_count(layout, &pivot.rows)?
-            > checked_u16(pivot.rows.len(), "pivot visible row field count")?;
+        let has_expanded_axis = expanded_axis_field_count(layout, &pivot.rows)?
+            > checked_u16(pivot.rows.len(), "pivot visible row field count")?
+            || expanded_axis_field_count(layout, &pivot.columns)?
+                > checked_u16(pivot.columns.len(), "pivot visible column field count")?;
         write_biff_record(
             stream,
             0x00F1,
@@ -2251,8 +2276,8 @@ fn write_pivot_sheet_records(
                 0x00, 0x02, 0x4F, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
             ],
         );
-        write_sxview_record(stream, pivot, cache, has_expanded_row_axis)?;
-        let sxview_ex_flags = if has_expanded_row_axis { 0x24 } else { 0x04 };
+        write_sxview_record(stream, pivot, cache, has_expanded_axis)?;
+        let sxview_ex_flags = if has_expanded_axis { 0x24 } else { 0x04 };
         write_biff_record(
             stream,
             0x0810,
@@ -2276,7 +2301,7 @@ fn write_pivot_sheet_records(
                 0x00,
             ],
         );
-        write_pivot_frt_records(stream, pivot, &layout, has_expanded_row_axis)?;
+        write_pivot_frt_records(stream, pivot, &layout, has_expanded_axis)?;
     }
     Ok(())
 }
