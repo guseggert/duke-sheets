@@ -281,6 +281,51 @@ fn xlsb_multi_measure_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xlsb_all_aggregate_cases() -> [(PivotAggregate, &'static str, u32); 11] {
+    [
+        (PivotAggregate::Sum, "Sum Revenue", 0x00),
+        (PivotAggregate::Count, "Count Revenue", 0x01),
+        (PivotAggregate::Average, "Average Revenue", 0x02),
+        (PivotAggregate::Max, "Max Revenue", 0x03),
+        (PivotAggregate::Min, "Min Revenue", 0x04),
+        (PivotAggregate::Product, "Product Revenue", 0x05),
+        (PivotAggregate::CountNumbers, "Count Numbers Revenue", 0x06),
+        (PivotAggregate::StdDev, "StdDev Revenue", 0x07),
+        (PivotAggregate::StdDevP, "StdDevP Revenue", 0x08),
+        (PivotAggregate::Var, "Var Revenue", 0x09),
+        (PivotAggregate::VarP, "VarP Revenue", 0x0A),
+    ]
+}
+
+fn xlsb_all_aggregate_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 2.0).unwrap();
+    ws.set_cell_value("A3", "East").unwrap();
+    ws.set_cell_value("B3", 3.0).unwrap();
+    ws.set_cell_value("A4", "West").unwrap();
+    ws.set_cell_value("B4", 5.0).unwrap();
+    ws.set_cell_value("A5", "West").unwrap();
+    ws.set_cell_value("B5", 7.0).unwrap();
+
+    let mut builder = PivotTable::builder("AllAggregatePivot")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region");
+    for (aggregate, caption, _) in xlsb_all_aggregate_cases() {
+        builder = builder.named_measure("Revenue", aggregate, caption);
+    }
+    let mut pivot = builder.build().unwrap();
+    pivot.layout.values_axis = PivotValuesAxis::Columns;
+    pivot.layout.values_axis_position = Some(0);
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 fn xlsb_numeric_grouped_pivot_workbook() -> Workbook {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -472,6 +517,47 @@ fn excel_preserves_xlsb_pivot_multi_measure_values_axis() {
 
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_pivot_all_aggregate_data_fields() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xlsb_bytes(&xlsb_all_aggregate_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("AllAggregatePivot")
+        .unwrap();
+    assert_eq!(pivot.layout.values_axis, PivotValuesAxis::Columns);
+    assert_eq!(pivot.layout.values_axis_position, Some(0));
+    assert_eq!(pivot.measures.len(), xlsb_all_aggregate_cases().len());
+    for (measure, (aggregate, caption, _)) in pivot.measures.iter().zip(xlsb_all_aggregate_cases())
+    {
+        assert_eq!(measure.field.name, "Revenue");
+        assert_eq!(measure.aggregate, aggregate);
+        assert_eq!(measure.name.as_deref(), Some(caption));
+    }
+
+    let pivot_records = xlsb_record_payloads(&zip_entry_bytes(
+        &excel_bytes,
+        "xl/pivotTables/pivotTable1.bin",
+    ));
+    let data_field_codes = pivot_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == duke_sheets_xlsb::biff12::records::BRT_BEGIN_SXDI)
+                .then(|| u32::from_le_bytes(payload[4..8].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    let expected_codes = xlsb_all_aggregate_cases()
+        .iter()
+        .map(|(_, _, code)| *code)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        data_field_codes, expected_codes,
+        "Excel should preserve every BIFF12 pivot aggregate function code"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_preserves_xlsb_pivot_numeric_grouping() {
     let (result, _writer_bytes, _excel_bytes) =
         roundtrip_through_excel_xlsb_bytes(&xlsb_numeric_grouped_pivot_workbook());
@@ -621,6 +707,17 @@ fn xlsb_record_types(data: &[u8]) -> Vec<u16> {
     while let Ok((record_type, len)) = iter.next_record(&mut buf) {
         out.push(record_type);
         buf.truncate(len);
+    }
+    out
+}
+
+fn xlsb_record_payloads(data: &[u8]) -> Vec<(u16, Vec<u8>)> {
+    let mut iter = duke_sheets_xlsb::biff12::RecordIter::new(std::io::Cursor::new(data));
+    let mut out = Vec::new();
+    let mut buf = Vec::new();
+    while let Ok((record_type, len)) = iter.next_record(&mut buf) {
+        buf.truncate(len);
+        out.push((record_type, buf.clone()));
     }
     out
 }

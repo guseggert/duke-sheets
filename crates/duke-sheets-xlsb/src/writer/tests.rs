@@ -118,6 +118,49 @@ mod tests {
         wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
     }
 
+    fn xlsb_all_aggregate_cases() -> [(PivotAggregate, &'static str, u32); 11] {
+        [
+            (PivotAggregate::Sum, "Sum Revenue", 0x00),
+            (PivotAggregate::Count, "Count Revenue", 0x01),
+            (PivotAggregate::Average, "Average Revenue", 0x02),
+            (PivotAggregate::Max, "Max Revenue", 0x03),
+            (PivotAggregate::Min, "Min Revenue", 0x04),
+            (PivotAggregate::Product, "Product Revenue", 0x05),
+            (PivotAggregate::CountNumbers, "Count Numbers Revenue", 0x06),
+            (PivotAggregate::StdDev, "StdDev Revenue", 0x07),
+            (PivotAggregate::StdDevP, "StdDevP Revenue", 0x08),
+            (PivotAggregate::Var, "Var Revenue", 0x09),
+            (PivotAggregate::VarP, "VarP Revenue", 0x0A),
+        ]
+    }
+
+    fn add_all_aggregate_column_values_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Region").unwrap();
+        ws.set_cell_value("B1", "Revenue").unwrap();
+        ws.set_cell_value("A2", "East").unwrap();
+        ws.set_cell_value("B2", 2.0).unwrap();
+        ws.set_cell_value("A3", "East").unwrap();
+        ws.set_cell_value("B3", 3.0).unwrap();
+        ws.set_cell_value("A4", "West").unwrap();
+        ws.set_cell_value("B4", 5.0).unwrap();
+        ws.set_cell_value("A5", "West").unwrap();
+        ws.set_cell_value("B5", 7.0).unwrap();
+
+        let mut builder = PivotTable::builder("AllAggregatePivot")
+            .source_range(CellRange::parse("A1:B5").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region");
+        for (aggregate, caption, _) in xlsb_all_aggregate_cases() {
+            builder = builder.named_measure("Revenue", aggregate, caption);
+        }
+        let mut pivot = builder.build().unwrap();
+        pivot.layout.values_axis = PivotValuesAxis::Columns;
+        pivot.layout.values_axis_position = Some(0);
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
     fn styled_pivot_style() -> PivotStyle {
         PivotStyle {
             name: Some("PivotStyleLight16".to_string()),
@@ -515,10 +558,69 @@ mod tests {
         let data_field_aggregates = pivot_records
             .iter()
             .filter_map(|(record_type, payload)| {
-                (*record_type == crate::biff12::records::BRT_BEGIN_SXDI).then(|| payload[24])
+                (*record_type == crate::biff12::records::BRT_BEGIN_SXDI)
+                    .then(|| u32::from_le_bytes(payload[4..8].try_into().unwrap()))
             })
             .collect::<Vec<_>>();
-        assert_eq!(data_field_aggregates, vec![0x01, 0x04]);
+        assert_eq!(data_field_aggregates, vec![0x00, 0x02]);
+    }
+
+    #[test]
+    fn semantic_pivot_tables_emit_xlsb_all_aggregate_data_field_records() {
+        let mut wb = Workbook::new();
+        add_all_aggregate_column_values_pivot(&mut wb);
+
+        let bytes = write_xlsb_bytes(&wb);
+        let pivot_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotTables/pivotTable1.bin",
+        ));
+
+        let data_field_aggregates = pivot_records
+            .iter()
+            .filter_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_SXDI)
+                    .then(|| u32::from_le_bytes(payload[4..8].try_into().unwrap()))
+            })
+            .collect::<Vec<_>>();
+        let expected_codes = xlsb_all_aggregate_cases()
+            .iter()
+            .map(|(_, _, code)| *code)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            data_field_aggregates, expected_codes,
+            "BIFF12 data-field records should preserve every pivot aggregate code"
+        );
+
+        let data_field_count = pivot_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_SXDIS)
+                    .then(|| u32::from_le_bytes(payload[0..4].try_into().unwrap()))
+            })
+            .expect("data-field collection record");
+        assert_eq!(data_field_count, xlsb_all_aggregate_cases().len() as u32);
+    }
+
+    #[test]
+    fn semantic_pivot_tables_round_trip_xlsb_all_aggregate_data_fields() {
+        let mut wb = Workbook::new();
+        add_all_aggregate_column_values_pivot(&mut wb);
+
+        let wb2 = round_trip(&wb);
+        let pivot = &wb2.worksheet(0).unwrap().pivot_tables()[0];
+
+        assert_eq!(pivot.name, "AllAggregatePivot");
+        assert_eq!(pivot.layout.values_axis, PivotValuesAxis::Columns);
+        assert_eq!(pivot.layout.values_axis_position, Some(0));
+        assert_eq!(pivot.measures.len(), xlsb_all_aggregate_cases().len());
+        for (measure, (aggregate, caption, _)) in
+            pivot.measures.iter().zip(xlsb_all_aggregate_cases())
+        {
+            assert_eq!(measure.field.name, "Revenue");
+            assert_eq!(measure.aggregate, aggregate);
+            assert_eq!(measure.name.as_deref(), Some(caption));
+        }
     }
 
     #[test]

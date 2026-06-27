@@ -133,6 +133,49 @@ fn add_multi_measure_pivot(wb: &mut Workbook) {
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
 }
 
+fn xls_all_aggregate_cases() -> [(PivotAggregate, &'static str, u16); 11] {
+    [
+        (PivotAggregate::Sum, "Sum Revenue", 0),
+        (PivotAggregate::Count, "Count Revenue", 1),
+        (PivotAggregate::Average, "Average Revenue", 2),
+        (PivotAggregate::Max, "Max Revenue", 3),
+        (PivotAggregate::Min, "Min Revenue", 4),
+        (PivotAggregate::Product, "Product Revenue", 5),
+        (PivotAggregate::CountNumbers, "Count Numbers Revenue", 6),
+        (PivotAggregate::StdDev, "StdDev Revenue", 7),
+        (PivotAggregate::StdDevP, "StdDevP Revenue", 8),
+        (PivotAggregate::Var, "Var Revenue", 9),
+        (PivotAggregate::VarP, "VarP Revenue", 10),
+    ]
+}
+
+fn add_all_aggregate_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 2.0).unwrap();
+    ws.set_cell_value("A3", "East").unwrap();
+    ws.set_cell_value("B3", 3.0).unwrap();
+    ws.set_cell_value("A4", "West").unwrap();
+    ws.set_cell_value("B4", 5.0).unwrap();
+    ws.set_cell_value("A5", "West").unwrap();
+    ws.set_cell_value("B5", 7.0).unwrap();
+
+    let mut builder = PivotTable::builder("AllAggregatePivot")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region");
+    for (aggregate, caption, _) in xls_all_aggregate_cases() {
+        builder = builder.named_measure("Revenue", aggregate, caption);
+    }
+    let mut pivot = builder.build().unwrap();
+    pivot.layout.values_axis = PivotValuesAxis::Columns;
+    pivot.layout.values_axis_position = Some(0);
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
 fn add_page_column_pivot(wb: &mut Workbook) {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "Segment").unwrap();
@@ -772,6 +815,42 @@ fn semantic_pivot_tables_emit_xls_multi_measure_values_axis_records() {
         .filter_map(|(record_type, payload)| (*record_type == 0x00B5).then_some(payload.len()))
         .collect::<Vec<_>>();
     assert_eq!(sxli_lengths, vec![30, 20]);
+}
+
+#[test]
+fn semantic_pivot_tables_emit_xls_all_aggregate_data_field_records() {
+    let mut wb = Workbook::new();
+    add_all_aggregate_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let workbook_records = records_with_payload(&workbook);
+
+    let data_field_codes = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00C5).then(|| u16::from_le_bytes(payload[2..4].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    let expected_codes = xls_all_aggregate_cases()
+        .iter()
+        .map(|(_, _, code)| *code)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        data_field_codes, expected_codes,
+        "BIFF8 SXDI records should preserve every pivot aggregate code"
+    );
+
+    let sxview = workbook_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00B0).then_some(payload))
+        .expect("SXVIEW record");
+    assert_eq!(
+        u16::from_le_bytes(sxview[30..32].try_into().unwrap()),
+        xls_all_aggregate_cases().len() as u16,
+        "SXVIEW should declare every aggregate as a data field"
+    );
 }
 
 #[test]
@@ -2238,6 +2317,27 @@ fn reads_writer_xls_multi_measure_values_axis_semantics() {
 }
 
 #[test]
+fn reads_writer_xls_all_aggregate_data_field_semantics() {
+    let mut wb = Workbook::new();
+    add_all_aggregate_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    let pivot = &ws.pivot_tables()[0];
+
+    assert_eq!(pivot.name, "AllAggregatePivot");
+    assert_eq!(pivot.layout.values_axis, PivotValuesAxis::Columns);
+    assert_eq!(pivot.layout.values_axis_position, Some(0));
+    assert_eq!(pivot.measures.len(), xls_all_aggregate_cases().len());
+    for (measure, (aggregate, caption, _)) in pivot.measures.iter().zip(xls_all_aggregate_cases()) {
+        assert_eq!(measure.field.name, "Revenue");
+        assert_eq!(measure.aggregate, aggregate);
+        assert_eq!(measure.name.as_deref(), Some(caption));
+    }
+}
+
+#[test]
 fn reads_writer_xls_pivot_style_semantics() {
     let mut wb = Workbook::new();
     add_styled_pivot(&mut wb);
@@ -2645,6 +2745,44 @@ fn lo_can_open_numeric_manual_grouped_pivot_workbook() {
     });
     let _ = std::fs::remove_file(&path);
     let count = outcome.expect("LO must open the numeric manual-grouped pivot workbook");
+    assert_eq!(count, 1);
+}
+
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_open_all_aggregate_pivot_workbook() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    add_all_aggregate_pivot(&mut wb);
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    std::fs::create_dir_all("/tmp/duke-sheets-urp").expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("/tmp/duke-sheets-urp/duke_all_aggregate_pivot_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write to shared dir");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<i32, String> = rt.block_on(async {
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let count = wb
+            .sheet_count()
+            .await
+            .map_err(|e| format!("sheet_count: {e}"))?;
+        Ok(count)
+    });
+    let _ = std::fs::remove_file(&path);
+    let count = outcome.expect("LO must open the all-aggregate pivot workbook");
     assert_eq!(count, 1);
 }
 

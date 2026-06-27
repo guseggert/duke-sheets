@@ -460,8 +460,12 @@ fn parse_data_field(
     let Some(field) = cache.fields.get(field_index) else {
         return Ok(None);
     };
-    let aggregate = parse_aggregate(payload[24]);
-    let (caption, _) = parser::wide_str(payload, 25)?;
+    let aggregate = parse_aggregate(parser::read_u32(payload, 4));
+    let caption = if payload[24] != 0 {
+        parser::wide_str(payload, 25)?.0
+    } else {
+        String::new()
+    };
     let mut measure = PivotMeasure::new(field.name.clone(), aggregate);
     if !caption.is_empty() {
         measure.name = Some(caption);
@@ -1010,18 +1014,18 @@ fn parse_shared_item(record_type: u16, payload: &[u8]) -> XlsbResult<PivotValue>
     })
 }
 
-fn parse_aggregate(code: u8) -> PivotAggregate {
+fn parse_aggregate(code: u32) -> PivotAggregate {
     match code {
-        0x02 => PivotAggregate::Count,
-        0x03 => PivotAggregate::CountNumbers,
-        0x04 => PivotAggregate::Average,
-        0x05 => PivotAggregate::Max,
-        0x06 => PivotAggregate::Min,
-        0x07 => PivotAggregate::Product,
-        0x08 => PivotAggregate::StdDev,
-        0x09 => PivotAggregate::StdDevP,
-        0x0A => PivotAggregate::Var,
-        0x0B => PivotAggregate::VarP,
+        0x01 => PivotAggregate::Count,
+        0x02 => PivotAggregate::Average,
+        0x03 => PivotAggregate::Max,
+        0x04 => PivotAggregate::Min,
+        0x05 => PivotAggregate::Product,
+        0x06 => PivotAggregate::CountNumbers,
+        0x07 => PivotAggregate::StdDev,
+        0x08 => PivotAggregate::StdDevP,
+        0x09 => PivotAggregate::Var,
+        0x0A => PivotAggregate::VarP,
         _ => PivotAggregate::Sum,
     }
 }

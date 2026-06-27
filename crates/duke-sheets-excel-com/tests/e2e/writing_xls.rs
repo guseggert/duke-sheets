@@ -166,6 +166,51 @@ fn xls_multi_measure_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xls_all_aggregate_cases() -> [(PivotAggregate, &'static str, u16); 11] {
+    [
+        (PivotAggregate::Sum, "Sum Revenue", 0),
+        (PivotAggregate::Count, "Count Revenue", 1),
+        (PivotAggregate::Average, "Average Revenue", 2),
+        (PivotAggregate::Max, "Max Revenue", 3),
+        (PivotAggregate::Min, "Min Revenue", 4),
+        (PivotAggregate::Product, "Product Revenue", 5),
+        (PivotAggregate::CountNumbers, "Count Numbers Revenue", 6),
+        (PivotAggregate::StdDev, "StdDev Revenue", 7),
+        (PivotAggregate::StdDevP, "StdDevP Revenue", 8),
+        (PivotAggregate::Var, "Var Revenue", 9),
+        (PivotAggregate::VarP, "VarP Revenue", 10),
+    ]
+}
+
+fn xls_all_aggregate_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 2.0).unwrap();
+    ws.set_cell_value("A3", "East").unwrap();
+    ws.set_cell_value("B3", 3.0).unwrap();
+    ws.set_cell_value("A4", "West").unwrap();
+    ws.set_cell_value("B4", 5.0).unwrap();
+    ws.set_cell_value("A5", "West").unwrap();
+    ws.set_cell_value("B5", 7.0).unwrap();
+
+    let mut builder = PivotTable::builder("AllAggregatePivot")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region");
+    for (aggregate, caption, _) in xls_all_aggregate_cases() {
+        builder = builder.named_measure("Revenue", aggregate, caption);
+    }
+    let mut pivot = builder.build().unwrap();
+    pivot.layout.values_axis = PivotValuesAxis::Columns;
+    pivot.layout.values_axis_position = Some(0);
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 fn xls_numeric_grouped_pivot_workbook() -> Workbook {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -566,6 +611,43 @@ fn excel_preserves_xls_pivot_multi_measure_values_axis() {
             .iter()
             .any(|(record_type, payload)| *record_type == 0x00B4 && payload == &[0xFE, 0xFF]),
         "Excel should preserve the synthetic Values column axis"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_pivot_all_aggregate_data_fields() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_all_aggregate_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("AllAggregatePivot")
+        .unwrap();
+    assert_eq!(pivot.layout.values_axis, PivotValuesAxis::Columns);
+    assert_eq!(pivot.layout.values_axis_position, Some(0));
+    assert_eq!(pivot.measures.len(), xls_all_aggregate_cases().len());
+    for (measure, (aggregate, caption, _)) in pivot.measures.iter().zip(xls_all_aggregate_cases()) {
+        assert_eq!(measure.field.name, "Revenue");
+        assert_eq!(measure.aggregate, aggregate);
+        assert_eq!(measure.name.as_deref(), Some(caption));
+    }
+
+    let workbook = xls_cfb_stream(&excel_bytes, "/Workbook");
+    let records = xls_record_payloads(&workbook);
+    let data_field_codes = records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00C5).then(|| u16::from_le_bytes(payload[2..4].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    let expected_codes = xls_all_aggregate_cases()
+        .iter()
+        .map(|(_, _, code)| *code)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        data_field_codes, expected_codes,
+        "Excel should preserve every BIFF8 pivot aggregate function code"
     );
 }
 

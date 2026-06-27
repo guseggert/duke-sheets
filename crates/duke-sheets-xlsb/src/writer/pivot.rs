@@ -2172,11 +2172,18 @@ fn write_data_fields<W: Write>(
                 measure.field.name
             ))
         })?;
+        let caption = measure.caption();
         let mut payload = Vec::new();
         payload.extend_from_slice(&(field_index as u32).to_le_bytes());
-        payload.extend_from_slice(&[0; 20]);
-        payload.push(aggregate_code(measure.aggregate));
-        payload.extend_from_slice(&encode_wide_str(&measure.caption()));
+        payload.extend_from_slice(&aggregate_code(measure.aggregate).to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&0i32.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.push(u8::from(!caption.is_empty()));
+        if !caption.is_empty() {
+            payload.extend_from_slice(&encode_wide_str(&caption));
+        }
         rw.write_record(records::BRT_BEGIN_SXDI, &payload)?;
         rw.write_record(records::BRT_END_SXDI, &[])?;
     }
@@ -2662,19 +2669,19 @@ impl SharedItemStats {
     }
 }
 
-fn aggregate_code(aggregate: PivotAggregate) -> u8 {
+fn aggregate_code(aggregate: PivotAggregate) -> u32 {
     match aggregate {
-        PivotAggregate::Sum => 0x01,
-        PivotAggregate::Count => 0x02,
-        PivotAggregate::CountNumbers => 0x03,
-        PivotAggregate::Average => 0x04,
-        PivotAggregate::Max => 0x05,
-        PivotAggregate::Min => 0x06,
-        PivotAggregate::Product => 0x07,
-        PivotAggregate::StdDev => 0x08,
-        PivotAggregate::StdDevP => 0x09,
-        PivotAggregate::Var => 0x0A,
-        PivotAggregate::VarP => 0x0B,
+        PivotAggregate::Sum => 0x00,
+        PivotAggregate::Count => 0x01,
+        PivotAggregate::Average => 0x02,
+        PivotAggregate::Max => 0x03,
+        PivotAggregate::Min => 0x04,
+        PivotAggregate::Product => 0x05,
+        PivotAggregate::CountNumbers => 0x06,
+        PivotAggregate::StdDev => 0x07,
+        PivotAggregate::StdDevP => 0x08,
+        PivotAggregate::Var => 0x09,
+        PivotAggregate::VarP => 0x0A,
     }
 }
 
