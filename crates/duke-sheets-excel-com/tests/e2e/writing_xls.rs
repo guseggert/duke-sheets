@@ -19,7 +19,7 @@ use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibil
 use duke_sheets_core::PivotValuesAxis;
 use duke_sheets_core::{
     CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotDateGroupUnit, PivotFilter,
-    PivotGrouping, PivotTable, Workbook,
+    PivotGrouping, PivotManualGroup, PivotTable, PivotValue, Workbook,
 };
 use duke_sheets_excel_com::{ChainStep, SheetRef};
 use excel_com_protocol::ResponseData;
@@ -227,6 +227,43 @@ fn xls_date_grouped_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xls_manual_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "Central").unwrap();
+    ws.set_cell_value("B2", 30.0).unwrap();
+    ws.set_cell_value("A3", "East").unwrap();
+    ws.set_cell_value("B3", 10.0).unwrap();
+    ws.set_cell_value("A4", "West").unwrap();
+    ws.set_cell_value("B4", 20.0).unwrap();
+    ws.set_cell_value("A5", "North").unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+    ws.set_cell_value("A6", "South").unwrap();
+    ws.set_cell_value("B6", 50.0).unwrap();
+    ws.set_cell_value("A7", "International").unwrap();
+    ws.set_cell_value("B7", 60.0).unwrap();
+
+    let pivot = PivotTable::builder("ManualGroupedRegions")
+        .source_range(CellRange::parse("A1:B7").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Manual {
+            field: "Region".into(),
+            groups: vec![
+                PivotManualGroup::new("Coastal", ["East", "West", "South"]),
+                PivotManualGroup::new("Interior", ["Central", "North"]),
+            ],
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xls_with_native_pivot_table() {
@@ -404,6 +441,67 @@ fn excel_preserves_xls_pivot_date_grouping() {
         u16::from_le_bytes(sxrng[0..2].try_into().unwrap()),
         0x0017,
         "Excel should preserve month date grouping flags"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_pivot_manual_grouping() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_manual_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("ManualGroupedRegions")
+        .unwrap();
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "Region");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Manual { field, groups } => {
+            assert_eq!(field.name, "Region");
+            assert_eq!(groups.len(), 2);
+            assert_eq!(groups[0].name, "Coastal");
+            assert_eq!(
+                groups[0].members,
+                vec![
+                    PivotValue::String("East".to_string()),
+                    PivotValue::String("West".to_string()),
+                    PivotValue::String("South".to_string())
+                ]
+            );
+            assert_eq!(groups[1].name, "Interior");
+            assert_eq!(
+                groups[1].members,
+                vec![
+                    PivotValue::String("Central".to_string()),
+                    PivotValue::String("North".to_string())
+                ]
+            );
+        }
+        other => panic!("expected manual grouping, got {other:?}"),
+    }
+
+    let workbook = xls_cfb_stream(&excel_bytes, "/Workbook");
+    let records = xls_record_payloads(&workbook);
+    assert!(
+        records
+            .iter()
+            .any(|(record_type, payload)| *record_type == 0x00B4 && payload == &[2, 0, 0, 0]),
+        "Excel should preserve the derived-plus-source row axis declaration"
+    );
+
+    let cache = xls_cfb_stream(&excel_bytes, "/_SX_DB_CUR/0001");
+    let cache_records = xls_record_payloads(&cache);
+    let derived = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| String::from_utf8_lossy(payload).contains("Region2"))
+        .expect("Excel should preserve the derived manual grouped field");
+    assert_eq!(
+        u16::from_le_bytes(derived[0..2].try_into().unwrap()),
+        0x0001,
+        "Excel should preserve the derived manual field flags"
     );
 }
 

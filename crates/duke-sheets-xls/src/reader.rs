@@ -3,6 +3,7 @@
 //! Opens a Compound File Binary (CFB/OLE2) container, reads the `Workbook`
 //! stream, parses BIFF8 records, and populates a `duke_sheets_core::Workbook`.
 
+use std::collections::{BTreeMap, HashSet};
 use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 
@@ -16,8 +17,8 @@ use duke_sheets_core::worksheet::{Selection, SheetProtection};
 use duke_sheets_core::{
     CellAddress, CellComment, CellError, CellRange, CellValue, Hyperlink, PivotAggregate,
     PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField, PivotDateGroupUnit, PivotField,
-    PivotFieldRef, PivotFilter, PivotGrouping, PivotMeasure, PivotRefreshStatus, PivotSource,
-    PivotStyle, PivotTable, PivotValue, PivotValuesAxis, Style, Workbook,
+    PivotFieldRef, PivotFilter, PivotGrouping, PivotManualGroup, PivotMeasure, PivotRefreshStatus,
+    PivotSource, PivotStyle, PivotTable, PivotValue, PivotValuesAxis, Style, Workbook,
 };
 
 use crate::biff::formula::token_parser::ParsedToken;
@@ -107,6 +108,8 @@ struct XlsPivotCacheField {
     formula: Option<String>,
     grouping: Option<PivotGrouping>,
     shared_items: Vec<PivotValue>,
+    manual_group_item_ids: Vec<u32>,
+    group_parent_field: Option<usize>,
     group_base_field: Option<usize>,
 }
 
@@ -1113,6 +1116,8 @@ impl XlsReader {
                         formula: None,
                         grouping: None,
                         shared_items: Vec::new(),
+                        manual_group_item_ids: Vec::new(),
+                        group_parent_field: Self::parse_sxfdb_field_index(&rec.data, 2),
                         group_base_field: Self::parse_sxfdb_field_index(&rec.data, 4),
                     });
                 }
@@ -1139,6 +1144,15 @@ impl XlsReader {
                 0x00CD => {
                     if let Some(field) = &mut current_field {
                         field.shared_items.push(Self::parse_sxstring(&rec.data)?);
+                    }
+                }
+                0x00D9 => {
+                    if let Some(field) = &mut current_field {
+                        field.manual_group_item_ids = rec
+                            .data
+                            .chunks_exact(2)
+                            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]) as u32)
+                            .collect();
                     }
                 }
                 0x00D8 => {
@@ -1275,7 +1289,7 @@ impl XlsReader {
             let Some(field) = cache.fields.get(field_index) else {
                 continue;
             };
-            let field_name = Self::pivot_cache_field_semantic_name(field);
+            let field_name = Self::pivot_cache_field_semantic_name_by_index(cache, field_index);
             Self::push_axis_field(&mut page_fields, PivotField::new(field_name.clone()));
             if selected_item != 0xFFFF {
                 if let Some(item) = field.shared_items.get(selected_item as usize) {
@@ -1302,11 +1316,7 @@ impl XlsReader {
                 ))
             })
             .collect();
-        pivot.groupings = cache
-            .fields
-            .iter()
-            .filter_map(|field| field.grouping.clone())
-            .collect();
+        pivot.groupings = Self::semantic_groupings_from_pivot_cache_fields(&cache.fields);
         pivot.filters = filters;
         pivot.layout = layout;
         pivot.style = builder.style;
@@ -1335,22 +1345,146 @@ impl XlsReader {
                     .values_axis_position
                     .get_or_insert(fields.len() as u32);
             } else if *index >= 0 {
-                if let Some(field) = cache.fields.get(*index as usize) {
+                let field_index = *index as usize;
+                if cache.fields.get(field_index).is_some() {
                     Self::push_axis_field(
                         fields,
-                        PivotField::new(Self::pivot_cache_field_semantic_name(field)),
+                        PivotField::new(Self::pivot_cache_field_semantic_name_by_index(
+                            cache,
+                            field_index,
+                        )),
                     );
                 }
             }
         }
     }
 
-    fn pivot_cache_field_semantic_name(field: &XlsPivotCacheField) -> String {
+    fn semantic_groupings_from_pivot_cache_fields(
+        fields: &[XlsPivotCacheField],
+    ) -> Vec<PivotGrouping> {
+        let mut groupings = Vec::new();
+        let mut manual_bases = HashSet::new();
+
+        for (index, field) in fields.iter().enumerate() {
+            if let Some(grouping) = Self::manual_grouping_from_cache_field(fields, index, field) {
+                if let PivotGrouping::Manual { field, .. } = &grouping {
+                    manual_bases.insert(field.name.to_lowercase());
+                }
+                groupings.push(grouping);
+                continue;
+            }
+
+            if let Some(grouping) = &field.grouping {
+                let field_name = pivot_grouping_field_name(grouping).to_lowercase();
+                if !manual_bases.contains(&field_name) {
+                    groupings.push(grouping.clone());
+                }
+            }
+        }
+
+        groupings
+    }
+
+    fn manual_grouping_from_cache_field(
+        fields: &[XlsPivotCacheField],
+        field_index: usize,
+        field: &XlsPivotCacheField,
+    ) -> Option<PivotGrouping> {
+        if field.grouping.is_some() || field.shared_items.is_empty() {
+            return None;
+        }
+        let base_index = field.group_base_field?;
+        let base_field = fields.get(base_index)?;
+        if base_field.group_parent_field != Some(field_index) || base_field.shared_items.is_empty()
+        {
+            return None;
+        }
+
+        let mut members_by_group: BTreeMap<u32, Vec<PivotValue>> = BTreeMap::new();
+        if field.manual_group_item_ids.is_empty() {
+            let source_items = base_field
+                .shared_items
+                .iter()
+                .cloned()
+                .collect::<HashSet<_>>();
+            let ungrouped_items = field
+                .shared_items
+                .iter()
+                .filter(|item| source_items.contains(*item))
+                .cloned()
+                .collect::<HashSet<_>>();
+            let group_names = field
+                .shared_items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| !source_items.contains(*item))
+                .map(|(index, _)| index as u32)
+                .collect::<Vec<_>>();
+            if let [group_index] = group_names.as_slice() {
+                for member in base_field
+                    .shared_items
+                    .iter()
+                    .filter(|item| !ungrouped_items.contains(*item))
+                    .cloned()
+                {
+                    members_by_group
+                        .entry(*group_index)
+                        .or_default()
+                        .push(member);
+                }
+            }
+        } else {
+            for (base_index, group_index) in field.manual_group_item_ids.iter().copied().enumerate()
+            {
+                let Some(member) = base_field.shared_items.get(base_index).cloned() else {
+                    continue;
+                };
+                members_by_group
+                    .entry(group_index)
+                    .or_default()
+                    .push(member);
+            }
+        }
+
+        let groups = members_by_group
+            .into_iter()
+            .filter_map(|(group_index, members)| {
+                let group_value = field.shared_items.get(group_index as usize)?;
+                let is_renamed_single_item = members
+                    .first()
+                    .is_some_and(|member| members.len() == 1 && member != group_value);
+                if members.len() <= 1 && !is_renamed_single_item {
+                    return None;
+                }
+
+                Some(PivotManualGroup {
+                    name: group_value.to_string(),
+                    members,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        (!groups.is_empty()).then(|| PivotGrouping::Manual {
+            field: PivotFieldRef::new(base_field.name.clone()),
+            groups,
+        })
+    }
+
+    fn pivot_cache_field_semantic_name_by_index(cache: &XlsPivotCache, index: usize) -> String {
+        let Some(field) = cache.fields.get(index) else {
+            return String::new();
+        };
         match &field.grouping {
             Some(PivotGrouping::Date {
                 field: source_field,
                 ..
             }) => source_field.name.clone(),
+            None => field
+                .group_base_field
+                .and_then(|base| cache.fields.get(base))
+                .filter(|_| field.group_parent_field.is_none())
+                .map(|source| source.name.clone())
+                .unwrap_or_else(|| field.name.clone()),
             _ => field.name.clone(),
         }
     }
@@ -4382,6 +4516,14 @@ fn xls_date_group_unit_from_flags(flags: u16) -> Option<PivotDateGroupUnit> {
         0x07 => PivotDateGroupUnit::Years,
         _ => return None,
     })
+}
+
+fn pivot_grouping_field_name(grouping: &PivotGrouping) -> &str {
+    match grouping {
+        PivotGrouping::Number { field, .. }
+        | PivotGrouping::Date { field, .. }
+        | PivotGrouping::Manual { field, .. } => &field.name,
+    }
 }
 
 /// Synthesise the 14-byte `BITMAPFILEHEADER` for a DIB body so the
