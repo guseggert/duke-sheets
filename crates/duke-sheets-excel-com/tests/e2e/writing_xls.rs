@@ -18,8 +18,8 @@ use duke_sheets_core::validation::{DataValidation, ValidationOperator, Validatio
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
 use duke_sheets_core::PivotValuesAxis;
 use duke_sheets_core::{
-    CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotDateGroupUnit, PivotFilter,
-    PivotGrouping, PivotManualGroup, PivotTable, PivotValue, Workbook,
+    CellAddress, CellError, CellRange, CellValue, Hyperlink, PivotAggregate, PivotDateGroupUnit,
+    PivotFilter, PivotGrouping, PivotManualGroup, PivotTable, PivotValue, Workbook,
 };
 use duke_sheets_excel_com::{ChainStep, SheetRef};
 use excel_com_protocol::ResponseData;
@@ -321,6 +321,48 @@ fn xls_numeric_manual_grouped_pivot_workbook() -> Workbook {
                 PivotManualGroup::new(
                     "Adult",
                     [PivotValue::Number(21.0), PivotValue::Number(34.0)],
+                ),
+            ],
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
+fn xls_bool_error_manual_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Flag").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", true).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", false).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", CellError::Na).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("A5", CellError::Div0).unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+
+    let pivot = PivotTable::builder("ManualBoolErrorGroups")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Flag")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Manual {
+            field: "Flag".into(),
+            groups: vec![
+                PivotManualGroup::new(
+                    "Booleans",
+                    [PivotValue::Boolean(true), PivotValue::Boolean(false)],
+                ),
+                PivotManualGroup::new(
+                    "Errors",
+                    [
+                        PivotValue::Error(CellError::Na),
+                        PivotValue::Error(CellError::Div0),
+                    ],
                 ),
             ],
         })
@@ -763,6 +805,72 @@ fn excel_preserves_xls_pivot_numeric_manual_grouping() {
         age_numbers,
         vec![7.0, 13.0, 21.0, 34.0, 55.0],
         "Excel should preserve numeric manual source items"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_pivot_bool_error_manual_grouping() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_bool_error_manual_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("ManualBoolErrorGroups")
+        .unwrap();
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "Flag");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Manual { field, groups } => {
+            assert_eq!(field.name, "Flag");
+            assert_eq!(groups.len(), 2);
+            assert_eq!(groups[0].name, "Booleans");
+            assert_eq!(
+                groups[0].members,
+                vec![PivotValue::Boolean(true), PivotValue::Boolean(false)]
+            );
+            assert_eq!(groups[1].name, "Errors");
+            assert_eq!(
+                groups[1].members,
+                vec![
+                    PivotValue::Error(CellError::Na),
+                    PivotValue::Error(CellError::Div0)
+                ]
+            );
+        }
+        other => panic!("expected bool/error manual grouping, got {other:?}"),
+    }
+
+    let cache = xls_cfb_stream(&excel_bytes, "/_SX_DB_CUR/0001");
+    let cache_records = xls_record_payloads(&cache);
+    let flag_index = cache_records
+        .iter()
+        .position(|(record_type, payload)| {
+            *record_type == 0x00C7 && String::from_utf8_lossy(payload).contains("Flag")
+        })
+        .expect("Excel should preserve Flag cache field");
+    let revenue_index = cache_records[flag_index + 1..]
+        .iter()
+        .position(|(record_type, _)| *record_type == 0x00C7)
+        .map(|offset| flag_index + 1 + offset)
+        .expect("Excel should preserve following cache field");
+    let flag_items = cache_records[flag_index + 1..revenue_index]
+        .iter()
+        .filter_map(|(record_type, payload)| match *record_type {
+            0x00CA | 0x00CB => Some((*record_type, payload.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        flag_items,
+        vec![
+            (0x00CA, vec![1, 0]),
+            (0x00CA, vec![0, 0]),
+            (0x00CB, vec![0x2A, 0]),
+            (0x00CB, vec![0x07, 0]),
+        ],
+        "Excel should preserve SXBool/SXErr source items"
     );
 }
 

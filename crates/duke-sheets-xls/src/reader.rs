@@ -1146,6 +1146,22 @@ impl XlsReader {
                         field.shared_items.push(Self::parse_sxstring(&rec.data)?);
                     }
                 }
+                0x00CA => {
+                    if let Some(field) = &mut current_field {
+                        field.shared_items.push(PivotValue::Boolean(
+                            rec.data.first().copied().unwrap_or(0) != 0,
+                        ));
+                    }
+                }
+                0x00CB => {
+                    if let Some(field) = &mut current_field {
+                        field.shared_items.push(PivotValue::Error(
+                            Self::cell_error_from_biff_code(
+                                rec.data.first().copied().unwrap_or(0x0F),
+                            ),
+                        ));
+                    }
+                }
                 0x00D9 => {
                     if let Some(field) = &mut current_field {
                         field.manual_group_item_ids = rec
@@ -1721,6 +1737,19 @@ impl XlsReader {
             Ok(PivotValue::Blank)
         } else {
             Ok(PivotValue::String(text))
+        }
+    }
+
+    fn cell_error_from_biff_code(code: u8) -> CellError {
+        match code {
+            0x00 => CellError::Null,
+            0x07 => CellError::Div0,
+            0x0F => CellError::Value,
+            0x17 => CellError::Ref,
+            0x1D => CellError::Name,
+            0x24 => CellError::Num,
+            0x2A => CellError::Na,
+            _ => CellError::Value,
         }
     }
 
@@ -2405,17 +2434,7 @@ impl XlsReader {
         let is_error = data.get(off).copied().unwrap_or(0);
 
         let cell_value = if is_error != 0 {
-            let err = match val {
-                0x00 => CellError::Null,
-                0x07 => CellError::Div0,
-                0x0F => CellError::Value,
-                0x17 => CellError::Ref,
-                0x1D => CellError::Name,
-                0x24 => CellError::Num,
-                0x2A => CellError::Na,
-                _ => CellError::Value,
-            };
-            CellValue::Error(err)
+            CellValue::Error(Self::cell_error_from_biff_code(val))
         } else {
             CellValue::Boolean(val != 0)
         };

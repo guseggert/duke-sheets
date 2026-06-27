@@ -106,6 +106,8 @@ const PIVOT_SXNAME_RECORD: u16 = 0x00F5;
 const PIVOT_SXFDB_RECORD: u16 = 0x00C7;
 const PIVOT_SXDBB_RECORD: u16 = 0x00C8;
 const PIVOT_SXNUM_RECORD: u16 = 0x00C9;
+const PIVOT_SXBOOL_RECORD: u16 = 0x00CA;
+const PIVOT_SXERR_RECORD: u16 = 0x00CB;
 const PIVOT_SXINT_RECORD: u16 = 0x00CC;
 const PIVOT_SXSTRING_RECORD: u16 = 0x00CD;
 const PIVOT_SXDTR_RECORD: u16 = 0x00CE;
@@ -1004,7 +1006,7 @@ fn manual_group_items_and_ids(
         .any(|item| !xls_manual_group_item_is_supported(item))
     {
         return Err(XlsError::InvalidFormat(format!(
-            "XLS pivot manual grouping for field {field_name} currently supports only text, blank, or numeric source items"
+            "XLS pivot manual grouping for field {field_name} currently supports only text, blank, finite numeric, boolean, or error source items"
         )));
     }
 
@@ -1068,8 +1070,10 @@ fn manual_group_items_and_ids(
 }
 
 fn xls_manual_group_item_is_supported(item: &PivotValue) -> bool {
-    matches!(item, PivotValue::Blank | PivotValue::String(_))
-        || matches!(item, PivotValue::Number(value) if value.is_finite())
+    matches!(
+        item,
+        PivotValue::Blank | PivotValue::String(_) | PivotValue::Boolean(_) | PivotValue::Error(_)
+    ) || matches!(item, PivotValue::Number(value) if value.is_finite())
 }
 
 fn xls_manual_group_source_items(
@@ -1703,11 +1707,7 @@ fn write_pivot_cache_field_items(
         }
         XlsPivotFieldKind::Regular if !field_is_numeric(field) => {
             for value in &field.shared_items {
-                write_biff_record(
-                    stream,
-                    PIVOT_SXSTRING_RECORD,
-                    &pivot_value_string_payload(value)?,
-                );
+                write_pivot_cache_shared_item(stream, value)?;
             }
         }
         XlsPivotFieldKind::Regular => {}
@@ -1732,10 +1732,11 @@ fn write_pivot_cache_shared_item(stream: &mut Vec<u8>, value: &PivotValue) -> Xl
                 &pivot_value_string_payload(value)?,
             );
         }
-        PivotValue::Boolean(_) | PivotValue::Error(_) => {
-            return Err(XlsError::InvalidFormat(format!(
-                "XLS pivot manual grouping currently does not support boolean or error item: {value}"
-            )));
+        PivotValue::Boolean(value) => {
+            write_biff_record(stream, PIVOT_SXBOOL_RECORD, &[u8::from(*value), 0]);
+        }
+        PivotValue::Error(value) => {
+            write_biff_record(stream, PIVOT_SXERR_RECORD, &[value.code(), 0]);
         }
     }
     Ok(())

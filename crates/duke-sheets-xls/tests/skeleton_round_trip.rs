@@ -9,8 +9,9 @@
 use std::io::Cursor;
 
 use duke_sheets_core::{
-    CellRange, PivotAggregate, PivotDateGroupUnit, PivotFieldRef, PivotFilter, PivotGrouping,
-    PivotManualGroup, PivotSource, PivotStyle, PivotTable, PivotValue, PivotValuesAxis, Workbook,
+    CellError, CellRange, PivotAggregate, PivotDateGroupUnit, PivotFieldRef, PivotFilter,
+    PivotGrouping, PivotManualGroup, PivotSource, PivotStyle, PivotTable, PivotValue,
+    PivotValuesAxis, Workbook,
 };
 use duke_sheets_xls::{cfb::CompoundFile, XlsReader, XlsWriter};
 
@@ -428,6 +429,46 @@ fn add_manual_numeric_grouped_pivot(wb: &mut Workbook) {
                 PivotManualGroup::new(
                     "Adult",
                     [PivotValue::Number(21.0), PivotValue::Number(34.0)],
+                ),
+            ],
+        })
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
+fn add_manual_bool_error_grouped_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Flag").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", true).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", false).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", CellError::Na).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("A5", CellError::Div0).unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+
+    let pivot = PivotTable::builder("ManualBoolErrorGroups")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Flag")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Manual {
+            field: PivotFieldRef::new("Flag"),
+            groups: vec![
+                PivotManualGroup::new(
+                    "Booleans",
+                    [PivotValue::Boolean(true), PivotValue::Boolean(false)],
+                ),
+                PivotManualGroup::new(
+                    "Errors",
+                    [
+                        PivotValue::Error(CellError::Na),
+                        PivotValue::Error(CellError::Div0),
+                    ],
                 ),
             ],
         })
@@ -1454,6 +1495,70 @@ fn semantic_pivot_tables_emit_xls_numeric_manual_grouping_records() {
 }
 
 #[test]
+fn semantic_pivot_tables_emit_xls_bool_error_manual_grouping_records() {
+    let mut wb = Workbook::new();
+    add_manual_bool_error_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = records_with_payload(&cache);
+
+    let flag_index = cache_records
+        .iter()
+        .position(|(record_type, payload)| {
+            *record_type == 0x00C7 && xls_unicode_string_at(payload, 14) == "Flag"
+        })
+        .expect("Flag SXFDB record");
+    let revenue_index = cache_records
+        .iter()
+        .position(|(record_type, payload)| {
+            *record_type == 0x00C7 && xls_unicode_string_at(payload, 14) == "Revenue"
+        })
+        .expect("Revenue SXFDB record");
+    let derived_index = cache_records
+        .iter()
+        .position(|(record_type, payload)| {
+            *record_type == 0x00C7 && xls_unicode_string_at(payload, 14) == "Flag2"
+        })
+        .expect("Flag2 SXFDB record");
+
+    let flag_items = cache_records[flag_index + 1..revenue_index]
+        .iter()
+        .filter_map(|(record_type, payload)| match *record_type {
+            0x00CA | 0x00CB => Some((*record_type, payload.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        flag_items,
+        vec![
+            (0x00CA, vec![1, 0]),
+            (0x00CA, vec![0, 0]),
+            (0x00CB, vec![0x2A, 0]),
+            (0x00CB, vec![0x07, 0]),
+        ],
+        "boolean and error manual source items should use Excel's SXBool/SXErr records"
+    );
+
+    let sxidstm = cache_records[derived_index + 1..]
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00D9).then_some(payload))
+        .expect("bool/error manual SXIDSTM record");
+    let item_map = sxidstm
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes(chunk.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        item_map,
+        vec![0, 0, 1, 1],
+        "bool/error manual grouping should map booleans and errors to group item indexes"
+    );
+}
+
+#[test]
 fn semantic_pivot_tables_emit_xls_manual_column_grouping_records() {
     let mut wb = Workbook::new();
     add_manual_column_grouped_pivot(&mut wb);
@@ -1946,39 +2051,39 @@ fn reads_writer_xls_numeric_manual_grouping_semantics() {
 }
 
 #[test]
-fn xls_manual_grouping_rejects_boolean_items() {
+fn reads_writer_xls_bool_error_manual_grouping_semantics() {
     let mut wb = Workbook::new();
-    let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_cell_value("A1", "Flag").unwrap();
-    ws.set_cell_value("B1", "Revenue").unwrap();
-    ws.set_cell_value("A2", true).unwrap();
-    ws.set_cell_value("B2", 10.0).unwrap();
-    ws.set_cell_value("A3", false).unwrap();
-    ws.set_cell_value("B3", 20.0).unwrap();
+    add_manual_bool_error_grouped_pivot(&mut wb);
 
-    let pivot = PivotTable::builder("ManualFlagGroups")
-        .source_range(CellRange::parse("A1:B3").unwrap())
-        .target_address("D1")
-        .unwrap()
-        .row("Flag")
-        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
-        .grouping(PivotGrouping::Manual {
-            field: PivotFieldRef::new("Flag"),
-            groups: vec![PivotManualGroup::new(
-                "Selected",
-                [PivotValue::Boolean(true), PivotValue::Boolean(false)],
-            )],
-        })
-        .build()
-        .unwrap();
-    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    let pivot = &ws.pivot_tables()[0];
 
-    let err = XlsWriter::write_to_bytes(&wb).expect_err("boolean manual grouping should fail");
-    assert!(
-        err.to_string()
-            .contains("currently supports only text, blank, or numeric source items"),
-        "{err}"
-    );
+    assert_eq!(pivot.name, "ManualBoolErrorGroups");
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "Flag");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Manual { field, groups } => {
+            assert_eq!(field.name, "Flag");
+            assert_eq!(groups.len(), 2);
+            assert_eq!(groups[0].name, "Booleans");
+            assert_eq!(
+                groups[0].members,
+                vec![PivotValue::Boolean(true), PivotValue::Boolean(false)]
+            );
+            assert_eq!(groups[1].name, "Errors");
+            assert_eq!(
+                groups[1].members,
+                vec![
+                    PivotValue::Error(CellError::Na),
+                    PivotValue::Error(CellError::Div0)
+                ]
+            );
+        }
+        other => panic!("expected bool/error manual grouping, got {other:?}"),
+    }
 }
 
 #[test]
@@ -2540,6 +2645,44 @@ fn lo_can_open_numeric_manual_grouped_pivot_workbook() {
     });
     let _ = std::fs::remove_file(&path);
     let count = outcome.expect("LO must open the numeric manual-grouped pivot workbook");
+    assert_eq!(count, 1);
+}
+
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_open_bool_error_manual_grouped_pivot_workbook() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    add_manual_bool_error_grouped_pivot(&mut wb);
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    std::fs::create_dir_all("/tmp/duke-sheets-urp").expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("/tmp/duke-sheets-urp/duke_bool_error_manual_grouped_pivot_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write to shared dir");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<i32, String> = rt.block_on(async {
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let count = wb
+            .sheet_count()
+            .await
+            .map_err(|e| format!("sheet_count: {e}"))?;
+        Ok(count)
+    });
+    let _ = std::fs::remove_file(&path);
+    let count = outcome.expect("LO must open the bool/error manual-grouped pivot workbook");
     assert_eq!(count, 1);
 }
 
