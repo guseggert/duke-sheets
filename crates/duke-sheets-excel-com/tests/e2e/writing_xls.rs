@@ -227,6 +227,34 @@ fn xls_date_grouped_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xls_multi_unit_date_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "SaleDate").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 45292.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 45323.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 45658.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+
+    let pivot = PivotTable::builder("GroupedDates")
+        .source_range(CellRange::parse("A1:B4").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("SaleDate")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Date {
+            field: "SaleDate".into(),
+            units: vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 fn xls_manual_grouped_pivot_workbook() -> Workbook {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -441,6 +469,53 @@ fn excel_preserves_xls_pivot_date_grouping() {
         u16::from_le_bytes(sxrng[0..2].try_into().unwrap()),
         0x0017,
         "Excel should preserve month date grouping flags"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_pivot_multi_unit_date_grouping() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_multi_unit_date_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("GroupedDates")
+        .unwrap();
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "SaleDate");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Date { field, units } => {
+            assert_eq!(field.name, "SaleDate");
+            assert_eq!(
+                *units,
+                vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months]
+            );
+        }
+        other => panic!("expected multi-unit date grouping, got {other:?}"),
+    }
+
+    let workbook = xls_cfb_stream(&excel_bytes, "/Workbook");
+    let records = xls_record_payloads(&workbook);
+    assert!(
+        records
+            .iter()
+            .any(|(record_type, payload)| *record_type == 0x00B4 && payload == &[3, 0, 2, 0]),
+        "Excel should preserve the year-plus-month row axis declaration"
+    );
+
+    let cache = xls_cfb_stream(&excel_bytes, "/_SX_DB_CUR/0001");
+    let range_group_flags = xls_record_payloads(&cache)
+        .into_iter()
+        .filter_map(|(record_type, payload)| {
+            (record_type == 0x00D8).then(|| u16::from_le_bytes(payload[0..2].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        range_group_flags,
+        vec![0x0017, 0x001F],
+        "Excel should preserve month and year date grouping flags"
     );
 }
 

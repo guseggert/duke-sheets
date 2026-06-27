@@ -193,7 +193,7 @@ enum XlsPivotFieldKind {
         source_numbers: Vec<f64>,
     },
     DateSource {
-        derived_field_index: usize,
+        derived_field_indexes: Vec<usize>,
         source_numbers: Vec<f64>,
     },
     DateGroup {
@@ -742,10 +742,19 @@ fn validate_xls_pivot_groupings(
                 }
             }
             PivotGrouping::Date { units, .. } => {
-                if units.len() != 1 {
+                if units.is_empty() {
                     return Err(XlsError::InvalidFormat(format!(
-                        "XLS pivot date grouping currently supports exactly one date unit: {field_name}"
+                        "XLS pivot date grouping has no date units: {field_name}"
                     )));
+                }
+                let mut seen_units = HashSet::new();
+                for unit in units {
+                    if !seen_units.insert(*unit) {
+                        return Err(XlsError::InvalidFormat(format!(
+                            "XLS pivot date grouping for field {field_name} repeats unit {}",
+                            xls_date_group_unit_name(*unit)
+                        )));
+                    }
                 }
             }
             PivotGrouping::Manual { groups, .. } => {
@@ -1091,14 +1100,21 @@ fn build_xls_pivot_cache_layout(
     grouping_infos: &[XlsPivotGroupingInfo<'_>],
     date_system: DateSystem,
 ) -> XlsResult<XlsPivotCacheLayout> {
+    let skipped_cache_fields =
+        xls_multi_unit_date_group_cache_field_indexes(cache, grouping_infos)?;
     let mut layout = XlsPivotCacheLayout {
         cache_num: cache.cache_num,
         row_count: cache.row_count,
-        base_field_count: cache.fields.len(),
+        base_field_count: cache
+            .fields
+            .len()
+            .saturating_sub(skipped_cache_fields.len()),
         fields: cache
             .fields
             .iter()
-            .map(|field| XlsPivotFieldLayout {
+            .enumerate()
+            .filter(|(index, _)| !skipped_cache_fields.contains(index))
+            .map(|(_, field)| XlsPivotFieldLayout {
                 name: field.name.clone(),
                 formula: field.formula.clone(),
                 shared_items: field.shared_items.clone(),
@@ -1110,9 +1126,14 @@ fn build_xls_pivot_cache_layout(
 
     for info in grouping_infos {
         let field_name = grouping_field_name(info.grouping);
-        let field_index = cache.field_index(field_name).ok_or_else(|| {
+        let cache_field_index = cache.field_index(field_name).ok_or_else(|| {
             XlsError::InvalidFormat(format!(
                 "XLS pivot grouping references unknown cache field: {field_name}"
+            ))
+        })?;
+        let field_index = layout.field_index(field_name).ok_or_else(|| {
+            XlsError::InvalidFormat(format!(
+                "XLS pivot grouping references skipped cache field: {field_name}"
             ))
         })?;
         match info.grouping {
@@ -1130,47 +1151,90 @@ fn build_xls_pivot_cache_layout(
                 };
             }
             PivotGrouping::Date { units, .. } => {
-                let unit = units.first().copied().ok_or_else(|| {
-                    XlsError::InvalidFormat(format!(
-                        "XLS pivot date grouping has no unit: {field_name}"
-                    ))
-                })?;
-                let source = xls_date_source_data(workbook, cache, field_index, date_system)?;
+                let source = xls_date_source_data(workbook, cache, cache_field_index, date_system)?;
                 let (start, end) =
                     source_number_min_max(&source.source_numbers).ok_or_else(|| {
                         XlsError::InvalidFormat(format!(
                             "XLS pivot date grouping for field {field_name} has no source dates"
                         ))
                     })?;
-                let derived_items = xls_date_group_shared_items(unit, start, end, date_system)?;
-                let derived_item_ids = source
-                    .row_numbers
-                    .iter()
-                    .map(|serial| xls_date_group_item_id(unit, *serial, start, end, date_system))
-                    .collect::<XlsResult<Vec<_>>>()?;
-                let derived_field_index = layout.fields.len();
                 layout.fields[field_index].shared_items = source.shared_items;
                 layout.fields[field_index].item_ids = source.item_ids;
+                let mut derived_field_indexes = Vec::with_capacity(units.len());
+                if units.len() == 1 {
+                    let unit = units[0];
+                    let derived_items = xls_date_group_shared_items(unit, start, end, date_system)?;
+                    let derived_item_ids = source
+                        .row_numbers
+                        .iter()
+                        .map(|serial| {
+                            xls_date_group_item_id(unit, *serial, start, end, date_system)
+                        })
+                        .collect::<XlsResult<Vec<_>>>()?;
+                    let derived_field_index = layout.fields.len();
+                    derived_field_indexes.push(derived_field_index);
+                    let derived_name = unique_xls_date_group_field_name(
+                        &layout.fields,
+                        &layout.fields[field_index].name,
+                        unit,
+                    );
+                    layout.fields.push(XlsPivotFieldLayout {
+                        name: derived_name,
+                        formula: None,
+                        shared_items: derived_items,
+                        item_ids: derived_item_ids,
+                        kind: XlsPivotFieldKind::DateGroup {
+                            source_field_index: field_index,
+                            unit,
+                            source_numbers: source.source_numbers.clone(),
+                        },
+                    });
+                } else {
+                    let mut indexes_by_unit = HashMap::new();
+                    for unit in units.iter().rev() {
+                        let derived_items =
+                            xls_date_group_shared_items(*unit, start, end, date_system)?;
+                        let derived_item_ids = source
+                            .row_numbers
+                            .iter()
+                            .map(|serial| {
+                                xls_date_group_item_id(*unit, *serial, start, end, date_system)
+                            })
+                            .collect::<XlsResult<Vec<_>>>()?;
+                        let derived_field_index = layout.fields.len();
+                        indexes_by_unit.insert(*unit, derived_field_index);
+                        let derived_name = unique_xls_date_group_field_name(
+                            &layout.fields,
+                            &layout.fields[field_index].name,
+                            *unit,
+                        );
+                        layout.fields.push(XlsPivotFieldLayout {
+                            name: derived_name,
+                            formula: None,
+                            shared_items: derived_items,
+                            item_ids: derived_item_ids,
+                            kind: XlsPivotFieldKind::DateGroup {
+                                source_field_index: field_index,
+                                unit: *unit,
+                                source_numbers: source.source_numbers.clone(),
+                            },
+                        });
+                    }
+                    for unit in units {
+                        let derived_field_index =
+                            indexes_by_unit.get(unit).copied().ok_or_else(|| {
+                                XlsError::InvalidFormat(format!(
+                                    "XLS pivot date grouping field missing for {field_name} {}",
+                                    xls_date_group_unit_name(*unit)
+                                ))
+                            })?;
+                        derived_field_indexes.push(derived_field_index);
+                    }
+                }
                 layout.fields[field_index].kind = XlsPivotFieldKind::DateSource {
-                    derived_field_index,
+                    derived_field_indexes,
                     source_numbers: source.source_numbers.clone(),
                 };
-                let derived_name = unique_xls_date_group_field_name(
-                    &layout.fields,
-                    &layout.fields[field_index].name,
-                    unit,
-                );
-                layout.fields.push(XlsPivotFieldLayout {
-                    name: derived_name,
-                    formula: None,
-                    shared_items: derived_items,
-                    item_ids: derived_item_ids,
-                    kind: XlsPivotFieldKind::DateGroup {
-                        source_field_index: field_index,
-                        unit,
-                        source_numbers: source.source_numbers,
-                    },
-                });
             }
             PivotGrouping::Manual { .. } => {
                 let derived_field_index = layout.fields.len();
@@ -1198,6 +1262,54 @@ fn build_xls_pivot_cache_layout(
     }
 
     Ok(layout)
+}
+
+fn xls_multi_unit_date_group_cache_field_indexes(
+    cache: &FormatPivotCache,
+    grouping_infos: &[XlsPivotGroupingInfo<'_>],
+) -> XlsResult<HashSet<usize>> {
+    let source_field_count = xls_pivot_source_field_count(cache)?;
+    let mut claimed = HashSet::new();
+    for info in grouping_infos {
+        let PivotGrouping::Date { field, units } = info.grouping else {
+            continue;
+        };
+        if units.len() <= 1 {
+            continue;
+        }
+
+        for unit in units {
+            let index = find_xls_multi_unit_date_group_cache_field_index(
+                cache,
+                &field.name,
+                *unit,
+                source_field_count,
+                &claimed,
+            )
+            .ok_or_else(|| {
+                XlsError::InvalidFormat(format!(
+                    "XLS pivot multi-unit date grouping could not find transformed cache field {} ({})",
+                    field.name,
+                    xls_date_group_unit_name(*unit)
+                ))
+            })?;
+            claimed.insert(index);
+        }
+    }
+    Ok(claimed)
+}
+
+fn xls_pivot_source_field_count(cache: &FormatPivotCache) -> XlsResult<usize> {
+    let FormatPivotSource::Worksheet { range, .. } = &cache.source else {
+        return Err(XlsError::InvalidFormat(
+            "XLS pivot cache writing requires worksheet-range source data".into(),
+        ));
+    };
+    let field_count = u32::from(range.end.col)
+        .saturating_sub(u32::from(range.start.col))
+        .saturating_add(1);
+    usize::try_from(field_count)
+        .map_err(|_| XlsError::InvalidFormat("pivot source field count exceeds usize".into()))
 }
 
 fn unique_xls_manual_grouped_field_name(
@@ -1319,6 +1431,34 @@ fn unique_xls_date_group_field_name(
     unreachable!("unbounded pivot date group name suffix search should return")
 }
 
+fn find_xls_multi_unit_date_group_cache_field_index(
+    cache: &FormatPivotCache,
+    source_name: &str,
+    unit: PivotDateGroupUnit,
+    start_index: usize,
+    claimed: &HashSet<usize>,
+) -> Option<usize> {
+    let base = format!("{source_name} ({})", xls_date_group_unit_name(unit));
+    (1usize..).find_map(|suffix| {
+        let candidate = if suffix == 1 {
+            base.clone()
+        } else {
+            format!("{base} {suffix}")
+        };
+        cache
+            .fields
+            .iter()
+            .enumerate()
+            .skip(start_index)
+            .find(|(index, field)| {
+                !claimed.contains(index)
+                    && field.formula.is_none()
+                    && field.name.eq_ignore_ascii_case(&candidate)
+            })
+            .map(|(index, _)| index)
+    })
+}
+
 fn write_sxfdb_record(stream: &mut Vec<u8>, field: &XlsPivotFieldLayout) -> XlsResult<()> {
     let mut body = Vec::new();
     let mut flags = match field.kind {
@@ -1348,11 +1488,17 @@ fn write_sxfdb_record(stream: &mut Vec<u8>, field: &XlsPivotFieldLayout) -> XlsR
             );
         }
         XlsPivotFieldKind::DateSource {
-            derived_field_index,
+            derived_field_indexes,
             source_numbers,
         } => {
+            let first_derived = derived_field_indexes.first().copied().ok_or_else(|| {
+                XlsError::InvalidFormat(format!(
+                    "XLS pivot date source field {} has no derived fields",
+                    field.name
+                ))
+            })?;
             body.extend_from_slice(
-                &checked_i16(*derived_field_index, "pivot date group field index")?.to_le_bytes(),
+                &checked_i16(first_derived, "pivot date group field index")?.to_le_bytes(),
             );
             body.extend_from_slice(&(-1i16).to_le_bytes());
             let item_count = checked_u16(field.shared_items.len(), "pivot date item count")?;
@@ -2183,7 +2329,7 @@ fn write_sxview_record_biff8(
         axis_line_count(pivot, layout, &pivot.columns)?
     };
     let row_axis_count = expanded_axis_field_count(layout, &pivot.rows)?;
-    let visible_row_axis_count = checked_u16(pivot.rows.len(), "pivot visible row field count")?;
+    let visible_row_axis_count = visible_axis_field_count(layout, &pivot.rows)?;
     let column_axis_count = expanded_axis_field_count(layout, &pivot.columns)?
         .saturating_add(if values_on_columns { 1 } else { 0 });
     let page_axis_count = checked_u16(pivot.page_fields.len(), "pivot page field count")?;
@@ -2530,17 +2676,20 @@ fn expanded_axis_field_indexes(
 ) -> XlsResult<Vec<usize>> {
     let mut indexes = Vec::new();
     for field in fields {
-        let field_index = layout.axis_field_index(&field.field.name).ok_or_else(|| {
-            XlsError::InvalidFormat(format!(
-                "pivot references unknown axis field {}",
-                field.field.name
-            ))
-        })?;
+        let field_index = layout
+            .field_index(&field.field.name)
+            .or_else(|| layout.axis_field_index(&field.field.name))
+            .ok_or_else(|| {
+                XlsError::InvalidFormat(format!(
+                    "pivot references unknown axis field {}",
+                    field.field.name
+                ))
+            })?;
         match layout.fields.get(field_index).map(|field| &field.kind) {
             Some(XlsPivotFieldKind::DateSource {
-                derived_field_index,
+                derived_field_indexes,
                 ..
-            }) => indexes.push(*derived_field_index),
+            }) => indexes.extend(derived_field_indexes.iter().copied()),
             Some(XlsPivotFieldKind::ManualSource {
                 derived_field_index,
             }) => {
@@ -2551,6 +2700,31 @@ fn expanded_axis_field_indexes(
         }
     }
     Ok(indexes)
+}
+
+fn visible_axis_field_count(layout: &XlsPivotCacheLayout, fields: &[PivotField]) -> XlsResult<u16> {
+    let mut count = 0usize;
+    for field in fields {
+        let field_index = layout
+            .field_index(&field.field.name)
+            .or_else(|| layout.axis_field_index(&field.field.name))
+            .ok_or_else(|| {
+                XlsError::InvalidFormat(format!(
+                    "pivot references unknown axis field {}",
+                    field.field.name
+                ))
+            })?;
+        count = count.saturating_add(
+            match layout.fields.get(field_index).map(|field| &field.kind) {
+                Some(XlsPivotFieldKind::DateSource {
+                    derived_field_indexes,
+                    ..
+                }) => derived_field_indexes.len(),
+                _ => 1,
+            },
+        );
+    }
+    checked_u16(count, "pivot visible axis field count")
 }
 
 fn row_matches_page_filters(

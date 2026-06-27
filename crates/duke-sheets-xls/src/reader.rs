@@ -1364,8 +1364,18 @@ impl XlsReader {
     ) -> Vec<PivotGrouping> {
         let mut groupings = Vec::new();
         let mut manual_bases = HashSet::new();
-
+        let date_units_by_base = Self::date_units_by_grouping_base(fields);
+        let mut emitted_date_bases = HashSet::new();
         for (index, field) in fields.iter().enumerate() {
+            if let Some(indexed_units) = date_units_by_base.get(&index) {
+                if let Some(grouping) =
+                    Self::date_grouping_from_indexed_units(fields, index, indexed_units)
+                {
+                    groupings.push(grouping);
+                    emitted_date_bases.insert(index);
+                }
+            }
+
             if let Some(grouping) = Self::manual_grouping_from_cache_field(fields, index, field) {
                 if let PivotGrouping::Manual { field, .. } = &grouping {
                     manual_bases.insert(field.name.to_lowercase());
@@ -1375,14 +1385,74 @@ impl XlsReader {
             }
 
             if let Some(grouping) = &field.grouping {
-                let field_name = pivot_grouping_field_name(grouping).to_lowercase();
-                if !manual_bases.contains(&field_name) {
-                    groupings.push(grouping.clone());
+                match grouping {
+                    PivotGrouping::Date { .. } => {
+                        let base = field.group_base_field.unwrap_or(index);
+                        if !emitted_date_bases.contains(&base) {
+                            if let Some(indexed_units) = date_units_by_base.get(&base) {
+                                if let Some(grouping) = Self::date_grouping_from_indexed_units(
+                                    fields,
+                                    base,
+                                    indexed_units,
+                                ) {
+                                    groupings.push(grouping);
+                                    emitted_date_bases.insert(base);
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        let field_name = pivot_grouping_field_name(grouping).to_lowercase();
+                        if !manual_bases.contains(&field_name) {
+                            groupings.push(grouping.clone());
+                        }
+                    }
                 }
             }
         }
 
         groupings
+    }
+
+    fn date_units_by_grouping_base(
+        fields: &[XlsPivotCacheField],
+    ) -> BTreeMap<usize, Vec<(usize, PivotDateGroupUnit)>> {
+        let mut date_units_by_base: BTreeMap<usize, Vec<(usize, PivotDateGroupUnit)>> =
+            BTreeMap::new();
+        for (index, field) in fields.iter().enumerate() {
+            if let Some(PivotGrouping::Date { units, .. }) = &field.grouping {
+                if let Some(unit) = units.first().copied() {
+                    date_units_by_base
+                        .entry(field.group_base_field.unwrap_or(index))
+                        .or_default()
+                        .push((index, unit));
+                }
+            }
+        }
+        date_units_by_base
+    }
+
+    fn date_grouping_from_indexed_units(
+        fields: &[XlsPivotCacheField],
+        base: usize,
+        indexed_units: &[(usize, PivotDateGroupUnit)],
+    ) -> Option<PivotGrouping> {
+        let field = fields.get(base)?;
+        let mut indexed_units = indexed_units.to_vec();
+        if let Some(parent_index) = field.group_parent_field {
+            indexed_units
+                .sort_by_key(|(index, _)| (*index != parent_index, std::cmp::Reverse(*index)));
+        } else {
+            indexed_units.sort_by_key(|(index, _)| std::cmp::Reverse(*index));
+        }
+        let units = indexed_units
+            .into_iter()
+            .map(|(_, unit)| unit)
+            .collect::<Vec<_>>();
+        Some(PivotGrouping::Date {
+            field: PivotFieldRef::new(field.name.clone()),
+            units,
+        })
     }
 
     fn manual_grouping_from_cache_field(

@@ -279,6 +279,32 @@ fn add_date_grouped_pivot(wb: &mut Workbook) {
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
 }
 
+fn add_multi_unit_date_grouped_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "SaleDate").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 45292.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 45323.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 45658.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+
+    let pivot = PivotTable::builder("GroupedDates")
+        .source_range(CellRange::parse("A1:B4").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("SaleDate")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Date {
+            field: PivotFieldRef::new("SaleDate"),
+            units: vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
 fn add_duplicate_date_grouped_pivot(wb: &mut Workbook) {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "Date").unwrap();
@@ -827,6 +853,259 @@ fn semantic_pivot_tables_emit_xls_date_grouping_records() {
 }
 
 #[test]
+fn semantic_pivot_tables_emit_xls_multi_unit_date_grouping_records() {
+    let mut wb = Workbook::new();
+    add_multi_unit_date_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = records_with_payload(&cache);
+
+    let sxdb = cache_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00C6).then_some(payload))
+        .expect("SXDB record");
+    assert_eq!(
+        u16::from_le_bytes(sxdb[10..12].try_into().unwrap()),
+        2,
+        "multi-unit date grouping should keep transformed snapshot fields out of the BIFF8 base cache"
+    );
+    assert_eq!(
+        u16::from_le_bytes(sxdb[12..14].try_into().unwrap()),
+        4,
+        "multi-unit date grouping should append one BIFF8 derived field per unit"
+    );
+
+    let sale_date_sxfdb = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "SaleDate")
+        .expect("SaleDate SXFDB record");
+    assert_eq!(
+        u16::from_le_bytes(sale_date_sxfdb[0..2].try_into().unwrap()),
+        0x0909,
+        "base date field should use grouped date source flags"
+    );
+    assert_eq!(
+        i16::from_le_bytes(sale_date_sxfdb[2..4].try_into().unwrap()),
+        3,
+        "base date field should point at the outer derived year field"
+    );
+    assert_eq!(
+        u16::from_le_bytes(sale_date_sxfdb[12..14].try_into().unwrap()),
+        3,
+        "base date field should count source date atoms"
+    );
+
+    let years_sxfdb = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "Years (SaleDate)")
+        .expect("derived year SXFDB record");
+    assert_eq!(
+        i16::from_le_bytes(years_sxfdb[4..6].try_into().unwrap()),
+        0,
+        "derived year field should link back to SaleDate"
+    );
+    assert_eq!(
+        u16::from_le_bytes(years_sxfdb[6..8].try_into().unwrap()),
+        4,
+        "derived year field should include boundary items plus 2024 and 2025"
+    );
+
+    let months_sxfdb = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "Months (SaleDate)")
+        .expect("derived month SXFDB record");
+    assert_eq!(
+        i16::from_le_bytes(months_sxfdb[4..6].try_into().unwrap()),
+        0,
+        "derived month field should link back to SaleDate"
+    );
+    assert_eq!(
+        u16::from_le_bytes(months_sxfdb[6..8].try_into().unwrap()),
+        14,
+        "derived month field should include boundary items plus twelve months"
+    );
+
+    let range_group_flags = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00D8).then(|| u16::from_le_bytes(payload[0..2].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        range_group_flags,
+        vec![0x0017, 0x001F],
+        "derived fields should encode the BIFF8 cache from inner to outer date unit"
+    );
+
+    let workbook = cfb.read_stream("/Workbook").expect("read workbook stream");
+    let workbook_records = records_with_payload(&workbook);
+    let sxvd_axes = workbook_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00B1).then(|| u16::from_le_bytes(payload[0..2].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sxvd_axes,
+        vec![0x0000, 0x0008, 0x0001, 0x0001],
+        "multi-unit date grouping should hide the base date field and put derived units on the row axis"
+    );
+    let row_fields = workbook_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00B4).then_some(payload))
+        .expect("row SXIVD record");
+    assert_eq!(
+        row_fields,
+        &vec![3, 0, 2, 0],
+        "multi-unit date grouping should expand the row axis to year plus month fields"
+    );
+}
+
+#[test]
+fn xls_multi_unit_date_grouping_keeps_source_name_collisions() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "SaleDate").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("C1", "SaleDate (Years)").unwrap();
+    ws.set_cell_value("D1", "SaleDate (Months)").unwrap();
+    ws.set_cell_value("A2", 45292.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("C2", "source years").unwrap();
+    ws.set_cell_value("D2", "source months").unwrap();
+    ws.set_cell_value("A3", 45323.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("C3", "source years").unwrap();
+    ws.set_cell_value("D3", "source months").unwrap();
+    ws.set_cell_value("A4", 45658.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("C4", "source years").unwrap();
+    ws.set_cell_value("D4", "source months").unwrap();
+
+    let pivot = PivotTable::builder("GroupedDates")
+        .source_range(CellRange::parse("A1:D4").unwrap())
+        .target_address("F1")
+        .unwrap()
+        .row("SaleDate")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Date {
+            field: PivotFieldRef::new("SaleDate"),
+            units: vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = records_with_payload(&cache);
+    let sxdb = cache_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00C6).then_some(payload))
+        .expect("SXDB record");
+    assert_eq!(
+        u16::from_le_bytes(sxdb[10..12].try_into().unwrap()),
+        4,
+        "real source columns named like transformed date fields must remain base fields"
+    );
+    assert_eq!(
+        u16::from_le_bytes(sxdb[12..14].try_into().unwrap()),
+        6,
+        "writer should skip only transformed snapshot date fields and then append BIFF8 date unit fields"
+    );
+
+    let sxfdb_names = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00C7).then(|| xls_unicode_string_at(payload, 14))
+        })
+        .collect::<Vec<_>>();
+    assert!(sxfdb_names.iter().any(|name| name == "SaleDate (Years)"));
+    assert!(sxfdb_names.iter().any(|name| name == "SaleDate (Months)"));
+    assert!(sxfdb_names.iter().any(|name| name == "Years (SaleDate)"));
+    assert!(sxfdb_names.iter().any(|name| name == "Months (SaleDate)"));
+}
+
+#[test]
+fn xls_multi_unit_date_grouping_keeps_calculated_name_collisions() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "SaleDate").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 45292.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 45323.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 45658.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+
+    let pivot = PivotTable::builder("GroupedDates")
+        .source_range(CellRange::parse("A1:B4").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("SaleDate")
+        .calculated_field("SaleDate (Years)", "=Revenue*1")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Date {
+            field: PivotFieldRef::new("SaleDate"),
+            units: vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = records_with_payload(&cache);
+    let sxdb = cache_records
+        .iter()
+        .find_map(|(record_type, payload)| (*record_type == 0x00C6).then_some(payload))
+        .expect("SXDB record");
+    assert_eq!(
+        u16::from_le_bytes(sxdb[10..12].try_into().unwrap()),
+        3,
+        "calculated fields named like transformed date fields must remain base cache fields"
+    );
+    assert_eq!(
+        u16::from_le_bytes(sxdb[12..14].try_into().unwrap()),
+        5,
+        "writer should skip transformed date fields without dropping calculated fields"
+    );
+
+    let calculated_years = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .find(|payload| xls_unicode_string_at(payload, 14) == "SaleDate (Years)")
+        .expect("calculated field with colliding name");
+    assert_ne!(
+        u16::from_le_bytes(calculated_years[0..2].try_into().unwrap()) & 0x8000,
+        0,
+        "calculated field should retain its formula flag"
+    );
+    assert!(cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .any(|payload| xls_unicode_string_at(payload, 14) == "Years (SaleDate)"));
+    assert!(cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C7).then_some(payload))
+        .any(|payload| xls_unicode_string_at(payload, 14) == "Months (SaleDate)"));
+}
+
+#[test]
 fn semantic_pivot_tables_emit_xls_manual_grouping_records() {
     let mut wb = Workbook::new();
     add_manual_grouped_pivot(&mut wb);
@@ -1015,6 +1294,100 @@ fn reads_writer_xls_date_grouping_semantics() {
             assert_eq!(*units, vec![PivotDateGroupUnit::Months]);
         }
         other => panic!("expected date grouping, got {other:?}"),
+    }
+}
+
+#[test]
+fn reads_writer_xls_multi_unit_date_grouping_semantics() {
+    let mut wb = Workbook::new();
+    add_multi_unit_date_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    let pivot = &ws.pivot_tables()[0];
+
+    assert_eq!(pivot.name, "GroupedDates");
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "SaleDate");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Date { field, units } => {
+            assert_eq!(field.name, "SaleDate");
+            assert_eq!(
+                *units,
+                vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months]
+            );
+        }
+        other => panic!("expected multi-unit date grouping, got {other:?}"),
+    }
+}
+
+#[test]
+fn reads_writer_xls_mixed_groupings_in_source_order() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "SaleDate").unwrap();
+    ws.set_cell_value("B1", "Bucket").unwrap();
+    ws.set_cell_value("C1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 45292.0).unwrap();
+    ws.set_cell_value("B2", 5.0).unwrap();
+    ws.set_cell_value("C2", 10.0).unwrap();
+    ws.set_cell_value("A3", 45323.0).unwrap();
+    ws.set_cell_value("B3", 15.0).unwrap();
+    ws.set_cell_value("C3", 20.0).unwrap();
+    ws.set_cell_value("A4", 45658.0).unwrap();
+    ws.set_cell_value("B4", 25.0).unwrap();
+    ws.set_cell_value("C4", 30.0).unwrap();
+
+    let pivot = PivotTable::builder("MixedGroups")
+        .source_range(CellRange::parse("A1:C4").unwrap())
+        .target_address("E1")
+        .unwrap()
+        .row("SaleDate")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Date {
+            field: PivotFieldRef::new("SaleDate"),
+            units: vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months],
+        })
+        .grouping(PivotGrouping::Number {
+            field: PivotFieldRef::new("Bucket"),
+            start: Some(0.0),
+            end: Some(30.0),
+            interval: 10.0,
+        })
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let pivot = &read.worksheet(0).unwrap().pivot_tables()[0];
+
+    assert_eq!(pivot.groupings.len(), 2);
+    match &pivot.groupings[0] {
+        PivotGrouping::Date { field, units } => {
+            assert_eq!(field.name, "SaleDate");
+            assert_eq!(
+                *units,
+                vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months]
+            );
+        }
+        other => panic!("expected first grouping to be date, got {other:?}"),
+    }
+    match &pivot.groupings[1] {
+        PivotGrouping::Number {
+            field,
+            start,
+            end,
+            interval,
+        } => {
+            assert_eq!(field.name, "Bucket");
+            assert_eq!(*start, Some(0.0));
+            assert_eq!(*end, Some(30.0));
+            assert_eq!(*interval, 10.0);
+        }
+        other => panic!("expected second grouping to be numeric, got {other:?}"),
     }
 }
 
@@ -1554,6 +1927,44 @@ fn lo_can_open_date_grouped_pivot_workbook() {
     });
     let _ = std::fs::remove_file(&path);
     let count = outcome.expect("LO must open the date-grouped pivot workbook");
+    assert_eq!(count, 1);
+}
+
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_open_multi_unit_date_grouped_pivot_workbook() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    add_multi_unit_date_grouped_pivot(&mut wb);
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    std::fs::create_dir_all("/tmp/duke-sheets-urp").expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("/tmp/duke-sheets-urp/duke_multi_unit_date_grouped_pivot_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write to shared dir");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<i32, String> = rt.block_on(async {
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let count = wb
+            .sheet_count()
+            .await
+            .map_err(|e| format!("sheet_count: {e}"))?;
+        Ok(count)
+    });
+    let _ = std::fs::remove_file(&path);
+    let count = outcome.expect("LO must open the multi-unit date-grouped pivot workbook");
     assert_eq!(count, 1);
 }
 
