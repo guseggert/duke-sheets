@@ -145,8 +145,13 @@ impl XlsPivotCacheLayout {
     fn axis_field_index(&self, name: &str) -> Option<usize> {
         self.fields.iter().position(|field| {
             let axis_name = match &field.kind {
-                XlsPivotFieldKind::DateSource { .. } => return false,
+                XlsPivotFieldKind::DateSource { .. } | XlsPivotFieldKind::ManualSource { .. } => {
+                    return false
+                }
                 XlsPivotFieldKind::DateGroup {
+                    source_field_index, ..
+                }
+                | XlsPivotFieldKind::ManualGroup {
                     source_field_index, ..
                 } => self
                     .fields
@@ -157,6 +162,10 @@ impl XlsPivotCacheLayout {
             };
             axis_name.eq_ignore_ascii_case(name)
         })
+    }
+
+    fn page_axis_field_index(&self, name: &str) -> Option<usize> {
+        self.axis_field_index(name)
     }
 }
 
@@ -781,16 +790,17 @@ fn validate_xls_pivot_grouping_axes(pivot: &duke_sheets_core::PivotTable) -> Xls
             continue;
         };
         let field_name = field.name.as_str();
-        if pivot_axis_contains_field(&pivot.page_fields, field_name) {
+        let on_rows = pivot_axis_contains_field(&pivot.rows, field_name);
+        let on_columns = pivot_axis_contains_field(&pivot.columns, field_name);
+        let on_pages = pivot_axis_contains_field(&pivot.page_fields, field_name);
+        if on_pages && (on_rows || on_columns) {
             return Err(XlsError::InvalidFormat(format!(
-                "XLS pivot manual grouping currently does not support page-axis fields: {field_name}"
+                "XLS pivot manual grouping does not support field {field_name} on the page axis and another axis"
             )));
         }
-        if !pivot_axis_contains_field(&pivot.rows, field_name)
-            && !pivot_axis_contains_field(&pivot.columns, field_name)
-        {
+        if !on_rows && !on_columns && !on_pages {
             return Err(XlsError::InvalidFormat(format!(
-                "XLS pivot manual grouping requires a row- or column-axis field: {field_name}"
+                "XLS pivot manual grouping requires a row-, column-, or page-axis field: {field_name}"
             )));
         }
     }
@@ -2287,7 +2297,8 @@ fn write_pivot_sheet_records(
         let has_expanded_axis = expanded_axis_field_count(layout, &pivot.rows)?
             > checked_u16(pivot.rows.len(), "pivot visible row field count")?
             || expanded_axis_field_count(layout, &pivot.columns)?
-                > checked_u16(pivot.columns.len(), "pivot visible column field count")?;
+                > checked_u16(pivot.columns.len(), "pivot visible column field count")?
+            || has_grouped_page_axis(layout, pivot);
         write_biff_record(
             stream,
             0x00F1,
@@ -2539,15 +2550,17 @@ fn write_sxpi_records(
     layout: &XlsPivotCacheLayout,
 ) -> XlsResult<()> {
     for field in &pivot.page_fields {
-        let field_index = layout.axis_field_index(&field.field.name).ok_or_else(|| {
-            XlsError::InvalidFormat(format!(
-                "pivot references unknown page field {}",
-                field.field.name
-            ))
-        })?;
+        let field_index = layout
+            .page_axis_field_index(&field.field.name)
+            .ok_or_else(|| {
+                XlsError::InvalidFormat(format!(
+                    "pivot references unknown page field {}",
+                    field.field.name
+                ))
+            })?;
         let selected_item =
             selected_page_item_index(pivot, &field.field.name, &layout.fields[field_index])
-                .unwrap_or(0xFFFF);
+                .unwrap_or_else(|| default_page_item_index(&layout.fields[field_index]));
         let mut body = Vec::new();
         body.extend_from_slice(&checked_u16(field_index, "pivot page field index")?.to_le_bytes());
         body.extend_from_slice(&selected_item.to_le_bytes());
@@ -2778,12 +2791,14 @@ fn row_matches_page_filters(
     row: usize,
 ) -> XlsResult<bool> {
     for field in &pivot.page_fields {
-        let field_index = layout.axis_field_index(&field.field.name).ok_or_else(|| {
-            XlsError::InvalidFormat(format!(
-                "pivot references unknown page field {}",
-                field.field.name
-            ))
-        })?;
+        let field_index = layout
+            .page_axis_field_index(&field.field.name)
+            .ok_or_else(|| {
+                XlsError::InvalidFormat(format!(
+                    "pivot references unknown page field {}",
+                    field.field.name
+                ))
+            })?;
         let Some(selected_item) =
             selected_page_item_index(pivot, &field.field.name, &layout.fields[field_index])
         else {
@@ -2827,6 +2842,13 @@ fn selected_page_item_index(
         .iter()
         .position(|candidate| candidate == item)
         .and_then(|index| u16::try_from(index).ok())
+}
+
+fn default_page_item_index(field: &XlsPivotFieldLayout) -> u16 {
+    match field.kind {
+        XlsPivotFieldKind::ManualGroup { .. } => 0x7FFD,
+        _ => 0xFFFF,
+    }
 }
 
 fn page_field_area_size(pivot: &duke_sheets_core::PivotTable) -> (u32, u32) {
@@ -2915,6 +2937,13 @@ fn xls_pivot_field_axis(
     let Some(field) = layout.fields.get(field_index) else {
         return 0x0000;
     };
+    if matches!(field.kind, XlsPivotFieldKind::ManualSource { .. })
+        && pivot_axis_contains_field(&pivot.page_fields, &field.name)
+        && !pivot_axis_contains_field(&pivot.rows, &field.name)
+        && !pivot_axis_contains_field(&pivot.columns, &field.name)
+    {
+        return 0x0000;
+    }
     let field_name = match field.kind {
         XlsPivotFieldKind::DateSource { .. } => return 0x0000,
         XlsPivotFieldKind::DateGroup {
@@ -2956,6 +2985,23 @@ fn xls_pivot_field_axis(
     } else {
         0x0000
     }
+}
+
+fn has_grouped_page_axis(
+    layout: &XlsPivotCacheLayout,
+    pivot: &duke_sheets_core::PivotTable,
+) -> bool {
+    pivot.page_fields.iter().any(|field| {
+        layout
+            .page_axis_field_index(&field.field.name)
+            .and_then(|index| layout.fields.get(index))
+            .is_some_and(|field| {
+                matches!(
+                    field.kind,
+                    XlsPivotFieldKind::DateGroup { .. } | XlsPivotFieldKind::ManualGroup { .. }
+                )
+            })
+    })
 }
 
 fn xls_values_field_on_columns(pivot: &duke_sheets_core::PivotTable) -> bool {
