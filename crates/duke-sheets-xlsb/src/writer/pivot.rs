@@ -8,7 +8,7 @@ use crate::biff12::{encode_wide_str, ptg, records, RecordWriter};
 use crate::error::{XlsbError, XlsbResult};
 use duke_sheets_core::{
     CellError, CellRange, CellValue, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter,
-    PivotGrouping, PivotTable, PivotValue, PivotValuesAxis, Workbook,
+    PivotGrouping, PivotManualGroup, PivotTable, PivotValue, PivotValuesAxis, Workbook,
 };
 use duke_sheets_formula::ast::{BinaryOperator, UnaryOperator};
 use duke_sheets_formula::FormulaExpr;
@@ -40,8 +40,29 @@ struct XlsbPivotGroupingInfo<'a> {
     source_items: Vec<PivotValue>,
     source_item_ids: Vec<u32>,
     group_items: Vec<PivotValue>,
+    base_item_group_ids: Vec<u32>,
     group_item_ids: Vec<u32>,
     source_item_kind: PivotCacheItemKind,
+}
+
+#[derive(Debug)]
+struct XlsbPivotCacheLayout {
+    fields: Vec<XlsbPivotCacheFieldLayout>,
+    source_to_layout: Vec<usize>,
+    manual_derived_by_base: HashMap<usize, usize>,
+}
+
+#[derive(Debug)]
+enum XlsbPivotCacheFieldLayout {
+    Source {
+        source_index: usize,
+        manual_parent: Option<usize>,
+    },
+    ManualDerived {
+        base_source_index: usize,
+        grouping_info_index: usize,
+        name: String,
+    },
 }
 
 pub(crate) fn sheet_has_pivots(plan: &FormatPivotPlan, sheet_index: usize) -> bool {
@@ -101,6 +122,7 @@ fn write_pivot_cache_definition_part<W: Write + Seek>(
     validate_xlsb_pivot_groupings(cache, groupings)?;
     let date_system = workbook_date_system(workbook.settings().date_1904);
     let grouping_infos = xlsb_pivot_grouping_infos(workbook, cache, groupings, date_system)?;
+    let layout = build_xlsb_pivot_cache_layout(cache, &grouping_infos)?;
     let mut buf = Vec::new();
     let mut rw = RecordWriter::new(&mut buf);
 
@@ -110,32 +132,64 @@ fn write_pivot_cache_definition_part<W: Write + Seek>(
 
     rw.write_record(
         records::BRT_BEGIN_PCD_FIELDS,
-        &(cache.fields.len() as u32).to_le_bytes(),
+        &(layout.fields.len() as u32).to_le_bytes(),
     )?;
-    for (field_index, (field, store_items)) in
-        cache.fields.iter().zip(&usage.store_items).enumerate()
-    {
-        let grouping = grouping_for_field(groupings, &field.name);
-        let grouping_info = grouping_info_for_field(&grouping_infos, &field.name);
-        let item_kind = grouping_info
-            .map(|info| info.source_item_kind)
-            .unwrap_or(PivotCacheItemKind::Normal);
-        let shared_items = grouping_info
-            .map(|info| info.source_items.as_slice())
-            .unwrap_or(&field.shared_items);
-        let pnames = write_pcd_field(&mut rw, field, cache)?;
-        write_pcd_shared_items(&mut rw, shared_items, *store_items, item_kind, date_system)?;
-        if let Some(grouping) = grouping {
-            write_pcd_field_group(
-                &mut rw,
-                field_index,
-                field,
-                grouping,
-                grouping_info,
-                date_system,
-            )?;
+    for (layout_index, field_layout) in layout.fields.iter().enumerate() {
+        match field_layout {
+            XlsbPivotCacheFieldLayout::Source {
+                source_index,
+                manual_parent,
+            } => {
+                let field = &cache.fields[*source_index];
+                let grouping = grouping_for_field(groupings, &field.name);
+                let grouping_info = grouping_info_for_field(&grouping_infos, &field.name);
+                let item_kind = grouping_info
+                    .map(|info| info.source_item_kind)
+                    .unwrap_or(PivotCacheItemKind::Normal);
+                let shared_items = grouping_info
+                    .map(|info| info.source_items.as_slice())
+                    .unwrap_or(&field.shared_items);
+                let pnames = write_pcd_field(&mut rw, field, cache)?;
+                write_pcd_shared_items(
+                    &mut rw,
+                    shared_items,
+                    usage.store_items[*source_index],
+                    item_kind,
+                    date_system,
+                )?;
+                if let Some(parent_index) = manual_parent {
+                    write_pcd_field_base_group(&mut rw, *parent_index)?;
+                } else if let Some(grouping) = grouping {
+                    write_pcd_field_group(
+                        &mut rw,
+                        None,
+                        Some(layout_index),
+                        grouping,
+                        grouping_info,
+                        date_system,
+                    )?;
+                }
+                write_pnames(&mut rw, &pnames)?;
+            }
+            XlsbPivotCacheFieldLayout::ManualDerived {
+                base_source_index,
+                grouping_info_index,
+                name,
+            } => {
+                let info = &grouping_infos[*grouping_info_index];
+                let base_layout_index = layout.source_to_layout[*base_source_index];
+                let pnames = write_pcd_field_header(&mut rw, name, false, None, cache)?;
+                write_pcd_field_group(
+                    &mut rw,
+                    None,
+                    Some(base_layout_index),
+                    info.grouping,
+                    Some(info),
+                    date_system,
+                )?;
+                write_pnames(&mut rw, &pnames)?;
+            }
         }
-        write_pnames(&mut rw, &pnames)?;
         rw.write_record(records::BRT_END_PCD_FIELD, &[])?;
     }
     rw.write_record(records::BRT_END_PCD_FIELDS, &[])?;
@@ -224,6 +278,7 @@ fn write_pivot_table_part<W: Write + Seek>(
     let groupings = groupings_for_cache(workbook, plan, cache)?;
     let date_system = workbook_date_system(workbook.settings().date_1904);
     let grouping_infos = xlsb_pivot_grouping_infos(workbook, cache, groupings, date_system)?;
+    let layout = build_xlsb_pivot_cache_layout(cache, &grouping_infos)?;
 
     let path = format!("xl/pivotTables/pivotTable{}.bin", part.table_num);
     zip.start_file(path, *options)?;
@@ -232,9 +287,9 @@ fn write_pivot_table_part<W: Write + Seek>(
 
     write_ac_block(&mut rw, 7, false)?;
     write_begin_sx_view(&mut rw, pivot)?;
-    write_sx_location(&mut rw, pivot, cache, &grouping_infos)?;
+    write_sx_location(&mut rw, pivot, cache, &layout, &grouping_infos)?;
     rw.write_record(records::BRT_END_SX_LOCATION, &[])?;
-    write_sx_fields(&mut rw, pivot, cache, &usage, &grouping_infos)?;
+    write_sx_fields(&mut rw, pivot, cache, &usage, &layout, &grouping_infos)?;
     let values_on_rows = values_field_on_axis(pivot, PivotValuesAxis::Rows);
     let values_on_columns = values_field_on_axis(pivot, PivotValuesAxis::Columns);
     write_axis_fields(
@@ -242,6 +297,7 @@ fn write_pivot_table_part<W: Write + Seek>(
         records::BRT_BEGIN_ISXVD_RWS,
         records::BRT_END_ISXVD_RWS,
         cache,
+        &layout,
         &pivot.rows,
         values_on_rows,
         pivot.layout.values_axis_position,
@@ -251,6 +307,7 @@ fn write_pivot_table_part<W: Write + Seek>(
         records::BRT_BEGIN_SX_ROW_ITEMS,
         records::BRT_END_SX_ROW_ITEMS,
         cache,
+        &layout,
         &pivot.rows,
         values_on_rows,
         pivot.layout.values_axis_position,
@@ -262,6 +319,7 @@ fn write_pivot_table_part<W: Write + Seek>(
         records::BRT_BEGIN_ISXVD_COLS,
         records::BRT_END_ISXVD_COLS,
         cache,
+        &layout,
         &pivot.columns,
         values_on_columns,
         pivot.layout.values_axis_position,
@@ -271,6 +329,7 @@ fn write_pivot_table_part<W: Write + Seek>(
         records::BRT_BEGIN_SX_COL_ITEMS,
         records::BRT_END_SX_COL_ITEMS,
         cache,
+        &layout,
         &pivot.columns,
         values_on_columns,
         pivot.layout.values_axis_position,
@@ -402,9 +461,45 @@ fn validate_xlsb_pivot_groupings(
                     )));
                 }
             }
-            PivotGrouping::Manual { .. } => {
+            PivotGrouping::Manual { groups, .. } => {
+                validate_xlsb_manual_grouping(field_name, groups)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_xlsb_manual_grouping(field_name: &str, groups: &[PivotManualGroup]) -> XlsbResult<()> {
+    if groups.is_empty() {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB pivot manual grouping for field {field_name} has no groups"
+        )));
+    }
+
+    let mut group_names = HashSet::new();
+    let mut members = HashSet::new();
+    for group in groups {
+        if group.name.trim().is_empty() {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot manual grouping for field {field_name} has a blank group name"
+            )));
+        }
+        if group.members.is_empty() {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot manual group {} has no members",
+                group.name
+            )));
+        }
+        if !group_names.insert(group.name.to_lowercase()) {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot manual grouping for field {field_name} has duplicate group name {}",
+                group.name
+            )));
+        }
+        for member in &group.members {
+            if !members.insert(member.clone()) {
                 return Err(XlsbError::InvalidFormat(format!(
-                    "XLSB pivot grouping currently supports numeric and single-unit date grouping only: {field_name}"
+                    "XLSB pivot manual grouping for field {field_name} assigns item {member} to more than one group"
                 )));
             }
         }
@@ -440,7 +535,9 @@ fn xlsb_pivot_grouping_infos<'a>(
         .filter_map(|grouping| {
             matches!(
                 grouping,
-                PivotGrouping::Number { .. } | PivotGrouping::Date { .. }
+                PivotGrouping::Number { .. }
+                    | PivotGrouping::Date { .. }
+                    | PivotGrouping::Manual { .. }
             )
             .then_some(grouping)
         })
@@ -464,6 +561,35 @@ fn xlsb_pivot_grouping_info<'a>(
     let worksheet = workbook
         .worksheet(sheet_index)
         .ok_or_else(|| XlsbError::InvalidFormat("pivot source worksheet not found".into()))?;
+
+    if let PivotGrouping::Manual { groups, .. } = grouping {
+        let (source_items, source_item_ids) =
+            manual_group_source_items(worksheet, range, source_col, field_name)?;
+        let (group_items, base_item_group_ids) =
+            manual_group_items_and_ids(field_name, &source_items, groups)?;
+        let group_item_ids = source_item_ids
+            .iter()
+            .map(|item_id| {
+                base_item_group_ids
+                    .get(*item_id as usize)
+                    .copied()
+                    .ok_or_else(|| {
+                        XlsbError::InvalidFormat(format!(
+                            "XLSB pivot manual grouping for field {field_name} has an out-of-range source item index"
+                        ))
+                    })
+            })
+            .collect::<XlsbResult<Vec<_>>>()?;
+        return Ok(XlsbPivotGroupingInfo {
+            grouping,
+            source_items,
+            source_item_ids,
+            group_items,
+            base_item_group_ids,
+            group_item_ids,
+            source_item_kind: PivotCacheItemKind::Normal,
+        });
+    }
 
     let mut source_lookup: HashMap<u64, u32> = HashMap::new();
     let mut source_items = Vec::new();
@@ -524,7 +650,7 @@ fn xlsb_pivot_grouping_info<'a>(
                 date_group_items_and_ids(&source_values, unit, date_system, field_name)?;
             (items, ids, PivotCacheItemKind::DateTime)
         }
-        PivotGrouping::Manual { .. } => unreachable!("caller filters manual pivot groupings"),
+        PivotGrouping::Manual { .. } => unreachable!("manual pivot groupings return early"),
     };
 
     Ok(XlsbPivotGroupingInfo {
@@ -532,9 +658,98 @@ fn xlsb_pivot_grouping_info<'a>(
         source_items,
         source_item_ids,
         group_items,
+        base_item_group_ids: Vec::new(),
         group_item_ids,
         source_item_kind,
     })
+}
+
+fn manual_group_items_and_ids(
+    field_name: &str,
+    source_items: &[PivotValue],
+    groups: &[PivotManualGroup],
+) -> XlsbResult<(Vec<PivotValue>, Vec<u32>)> {
+    let mut member_to_group = HashMap::new();
+    for group in groups {
+        for member in &group.members {
+            if !source_items.iter().any(|item| item == member) {
+                return Err(XlsbError::InvalidFormat(format!(
+                    "XLSB pivot manual group {} references item not found in field {field_name}: {member}",
+                    group.name
+                )));
+            }
+            member_to_group.insert(member.clone(), group.name.clone());
+        }
+    }
+
+    let mut group_items = Vec::new();
+    let mut ungrouped_item_indexes = HashMap::new();
+    for item in source_items {
+        if member_to_group.contains_key(item) {
+            continue;
+        }
+        let index = checked_u32(group_items.len(), "pivot manual ungrouped item index")?;
+        ungrouped_item_indexes.insert(item.clone(), index);
+        group_items.push(item.clone());
+    }
+
+    let mut group_name_indexes = HashMap::new();
+    for group in groups {
+        let index = checked_u32(group_items.len(), "pivot manual group item index")?;
+        group_name_indexes.insert(group.name.clone(), index);
+        group_items.push(PivotValue::String(group.name.clone()));
+    }
+
+    let base_item_group_ids = source_items
+        .iter()
+        .map(|item| {
+            if let Some(group_name) = member_to_group.get(item) {
+                group_name_indexes.get(group_name).copied().ok_or_else(|| {
+                    XlsbError::InvalidFormat(format!(
+                        "XLSB pivot manual grouping for field {field_name} could not map group {group_name}"
+                    ))
+                })
+            } else {
+                ungrouped_item_indexes.get(item).copied().ok_or_else(|| {
+                    XlsbError::InvalidFormat(format!(
+                        "XLSB pivot manual grouping for field {field_name} could not map ungrouped item {item}"
+                    ))
+                })
+            }
+        })
+        .collect::<XlsbResult<Vec<_>>>()?;
+
+    Ok((group_items, base_item_group_ids))
+}
+
+fn manual_group_source_items(
+    worksheet: &duke_sheets_core::worksheet::Worksheet,
+    range: CellRange,
+    source_col: u16,
+    field_name: &str,
+) -> XlsbResult<(Vec<PivotValue>, Vec<u32>)> {
+    let mut source_items = Vec::new();
+    let mut source_item_ids = Vec::new();
+    let mut lookup = HashMap::new();
+    for row in range.start.row.saturating_add(1)..=range.end.row {
+        let cell_value = worksheet.get_value_at(row, source_col);
+        let value = PivotValue::from_cell_value(&cell_value);
+        let item_id = if let Some(item_id) = lookup.get(&value) {
+            *item_id
+        } else {
+            let item_id = checked_u32(source_items.len(), "pivot manual source item index")?;
+            lookup.insert(value.clone(), item_id);
+            source_items.push(value);
+            item_id
+        };
+        source_item_ids.push(item_id);
+    }
+    if source_items.is_empty() {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB pivot manual grouping for field {field_name} has no source items"
+        )));
+    }
+    Ok((source_items, source_item_ids))
 }
 
 fn grouping_source_range(
@@ -726,6 +941,73 @@ fn grouping_info_for_field<'a, 'b>(
         .find(|info| grouping_field_name(info.grouping).eq_ignore_ascii_case(field_name))
 }
 
+fn build_xlsb_pivot_cache_layout(
+    cache: &FormatPivotCache,
+    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
+) -> XlsbResult<XlsbPivotCacheLayout> {
+    let mut fields = cache
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(source_index, _)| XlsbPivotCacheFieldLayout::Source {
+            source_index,
+            manual_parent: None,
+        })
+        .collect::<Vec<_>>();
+    let source_to_layout = (0..cache.fields.len()).collect::<Vec<_>>();
+    let mut manual_derived_by_base = HashMap::new();
+    let mut names = cache
+        .fields
+        .iter()
+        .map(|field| field.name.clone())
+        .collect::<Vec<_>>();
+
+    for (grouping_info_index, info) in grouping_infos.iter().enumerate() {
+        if !matches!(info.grouping, PivotGrouping::Manual { .. }) {
+            continue;
+        }
+        let field_name = grouping_field_name(info.grouping);
+        let base_source_index = cache.field_index(field_name).ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "XLSB pivot manual grouping references unknown cache field: {field_name}"
+            ))
+        })?;
+        let derived_index = fields.len();
+        if let Some(XlsbPivotCacheFieldLayout::Source { manual_parent, .. }) =
+            fields.get_mut(source_to_layout[base_source_index])
+        {
+            *manual_parent = Some(derived_index);
+        }
+        manual_derived_by_base.insert(base_source_index, derived_index);
+        let name = unique_manual_grouped_header(&names, field_name);
+        names.push(name.clone());
+        fields.push(XlsbPivotCacheFieldLayout::ManualDerived {
+            base_source_index,
+            grouping_info_index,
+            name,
+        });
+    }
+
+    Ok(XlsbPivotCacheLayout {
+        fields,
+        source_to_layout,
+        manual_derived_by_base,
+    })
+}
+
+fn unique_manual_grouped_header(existing_names: &[String], field_name: &str) -> String {
+    for suffix in 2usize.. {
+        let candidate = format!("{field_name}{suffix}");
+        if existing_names
+            .iter()
+            .all(|name| !name.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded suffix search should always return")
+}
+
 fn write_binary_index_part<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     options: &SimpleFileOptions,
@@ -836,9 +1118,25 @@ fn write_pcd_field<W: Write>(
     field: &FormatPivotCacheField,
     cache: &FormatPivotCache,
 ) -> XlsbResult<Vec<usize>> {
+    write_pcd_field_header(
+        rw,
+        &field.name,
+        field.database_field,
+        field.formula.as_deref(),
+        cache,
+    )
+}
+
+fn write_pcd_field_header<W: Write>(
+    rw: &mut RecordWriter<W>,
+    name: &str,
+    database_field: bool,
+    formula: Option<&str>,
+    cache: &FormatPivotCache,
+) -> XlsbResult<Vec<usize>> {
     let mut payload = Vec::new();
-    let mut flags: u16 = if field.database_field { 0x0004 } else { 0x0000 };
-    if field.formula.is_some() {
+    let mut flags: u16 = if database_field { 0x0004 } else { 0x0000 };
+    if formula.is_some() {
         flags |= 0x0100;
     }
     payload.extend_from_slice(&flags.to_le_bytes());
@@ -848,8 +1146,8 @@ fn write_pcd_field<W: Write>(
     payload.extend_from_slice(&0u32.to_le_bytes());
     payload.extend_from_slice(&0u32.to_le_bytes());
     payload.extend_from_slice(&0u16.to_le_bytes());
-    payload.extend_from_slice(&encode_wide_str(&field.name));
-    let pnames = if let Some(formula) = field.formula.as_deref() {
+    payload.extend_from_slice(&encode_wide_str(name));
+    let pnames = if let Some(formula) = formula {
         write_pivot_parsed_formula(&mut payload, formula, cache)?
     } else {
         Vec::new()
@@ -1062,19 +1360,19 @@ fn write_pcd_shared_items<W: Write>(
 
 fn write_pcd_field_group<W: Write>(
     rw: &mut RecordWriter<W>,
-    field_index: usize,
-    field: &FormatPivotCacheField,
+    parent_index: Option<usize>,
+    base_index: Option<usize>,
     grouping: &PivotGrouping,
     grouping_info: Option<&XlsbPivotGroupingInfo<'_>>,
     date_system: DateSystem,
 ) -> XlsbResult<()> {
-    let field_index = checked_i32(field_index, "pivot grouped cache field index")?;
+    let parent_index = checked_optional_i32(parent_index, "pivot grouped parent field index")?;
+    let base_index = checked_optional_i32(base_index, "pivot grouped base field index")?;
     let mut group_payload = Vec::with_capacity(8);
-    group_payload.extend_from_slice(&(-1i32).to_le_bytes());
-    group_payload.extend_from_slice(&field_index.to_le_bytes());
+    group_payload.extend_from_slice(&parent_index.to_le_bytes());
+    group_payload.extend_from_slice(&base_index.to_le_bytes());
     rw.write_record(records::BRT_BEGIN_PCDF_GROUP, &group_payload)?;
 
-    let mut range_payload = Vec::with_capacity(26);
     match grouping {
         PivotGrouping::Number {
             start,
@@ -1082,6 +1380,7 @@ fn write_pcd_field_group<W: Write>(
             interval,
             ..
         } => {
+            let mut range_payload = Vec::with_capacity(26);
             range_payload.push(0x00);
             let mut flags = 0u8;
             if start.is_none() {
@@ -1094,8 +1393,11 @@ fn write_pcd_field_group<W: Write>(
             range_payload.extend_from_slice(&start.unwrap_or(0.0).to_le_bytes());
             range_payload.extend_from_slice(&end.unwrap_or(0.0).to_le_bytes());
             range_payload.extend_from_slice(&interval.to_le_bytes());
+            rw.write_record(records::BRT_BEGIN_PCDFG_RANGE, &range_payload)?;
+            rw.write_record(records::BRT_END_PCDFG_RANGE, &[])?;
         }
         PivotGrouping::Date { units, .. } => {
+            let mut range_payload = Vec::with_capacity(26);
             let unit = units.first().copied().ok_or_else(|| {
                 XlsbError::InvalidFormat(format!(
                     "XLSB pivot date grouping has no unit: {}",
@@ -1119,18 +1421,32 @@ fn write_pcd_field_group<W: Write>(
             range_payload.extend_from_slice(&start.to_le_bytes());
             range_payload.extend_from_slice(&end.to_le_bytes());
             range_payload.extend_from_slice(&1.0f64.to_le_bytes());
+            rw.write_record(records::BRT_BEGIN_PCDFG_RANGE, &range_payload)?;
+            rw.write_record(records::BRT_END_PCDFG_RANGE, &[])?;
         }
         PivotGrouping::Manual { .. } => {
-            return Err(XlsbError::InvalidFormat(format!(
-                "XLSB pivot grouping currently supports numeric and single-unit date grouping only: {}",
-                grouping_field_name(grouping)
-            )));
+            let info = grouping_info.ok_or_else(|| {
+                XlsbError::InvalidFormat(format!(
+                    "XLSB pivot manual grouping info missing for field {}",
+                    grouping_field_name(grouping)
+                ))
+            })?;
+            let discrete_count = checked_u32(
+                info.base_item_group_ids.len(),
+                "pivot manual discrete item count",
+            )?;
+            rw.write_record(
+                records::BRT_BEGIN_PCDFG_DISCRETE,
+                &discrete_count.to_le_bytes(),
+            )?;
+            for item_id in &info.base_item_group_ids {
+                rw.write_record(records::BRT_PCDI_INDEX, &item_id.to_le_bytes())?;
+            }
+            rw.write_record(records::BRT_END_PCDFG_DISCRETE, &[])?;
         }
     }
-    rw.write_record(records::BRT_BEGIN_PCDFG_RANGE, &range_payload)?;
-    rw.write_record(records::BRT_END_PCDFG_RANGE, &[])?;
 
-    let group_items = pivot_group_items(field, grouping, grouping_info)?;
+    let group_items = pivot_group_items(grouping, grouping_info)?;
     rw.write_record(
         records::BRT_BEGIN_PCDFG_ITEMS,
         &(group_items.len() as u32).to_le_bytes(),
@@ -1141,6 +1457,23 @@ fn write_pcd_field_group<W: Write>(
     rw.write_record(records::BRT_END_PCDFG_ITEMS, &[])?;
     rw.write_record(records::BRT_END_PCDF_GROUP, &[])?;
     Ok(())
+}
+
+fn write_pcd_field_base_group<W: Write>(
+    rw: &mut RecordWriter<W>,
+    parent_index: usize,
+) -> XlsbResult<()> {
+    let parent_index = checked_i32(parent_index, "pivot manual parent field index")?;
+    let mut group_payload = Vec::with_capacity(8);
+    group_payload.extend_from_slice(&parent_index.to_le_bytes());
+    group_payload.extend_from_slice(&(-1i32).to_le_bytes());
+    rw.write_record(records::BRT_BEGIN_PCDF_GROUP, &group_payload)?;
+    rw.write_record(records::BRT_END_PCDF_GROUP, &[])?;
+    Ok(())
+}
+
+fn checked_optional_i32(value: Option<usize>, what: &str) -> XlsbResult<i32> {
+    value.map_or(Ok(-1), |value| checked_i32(value, what))
 }
 
 fn xlsb_date_group_by(unit: PivotDateGroupUnit) -> u8 {
@@ -1169,12 +1502,13 @@ fn source_item_min_max(items: &[PivotValue]) -> Option<(f64, f64)> {
 }
 
 fn pivot_group_items(
-    field: &FormatPivotCacheField,
     grouping: &PivotGrouping,
     grouping_info: Option<&XlsbPivotGroupingInfo<'_>>,
 ) -> XlsbResult<Vec<PivotValue>> {
     match grouping {
-        PivotGrouping::Number { .. } | PivotGrouping::Date { .. } => grouping_info
+        PivotGrouping::Number { .. }
+        | PivotGrouping::Date { .. }
+        | PivotGrouping::Manual { .. } => grouping_info
             .map(|info| info.group_items.clone())
             .ok_or_else(|| {
                 XlsbError::InvalidFormat(format!(
@@ -1182,7 +1516,6 @@ fn pivot_group_items(
                     grouping_field_name(grouping)
                 ))
             }),
-        _ => Ok(field.shared_items.clone()),
     }
 }
 
@@ -1331,12 +1664,13 @@ fn write_sx_location<W: Write>(
     rw: &mut RecordWriter<W>,
     pivot: &PivotTable,
     cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
     grouping_infos: &[XlsbPivotGroupingInfo<'_>],
 ) -> std::io::Result<()> {
     let range = pivot
         .rendered_range
-        .unwrap_or_else(|| estimated_pivot_range(pivot, cache, grouping_infos));
-    let first_data_col = pivot.rows.len().max(1) as u32;
+        .unwrap_or_else(|| estimated_pivot_range(pivot, cache, layout, grouping_infos));
+    let first_data_col = expanded_axis_field_count(cache, layout, &pivot.rows).max(1) as u32;
     let (page_rows, page_cols) = page_field_area_size(pivot);
     let mut payload = Vec::new();
     payload.extend_from_slice(&range.start.row.to_le_bytes());
@@ -1356,19 +1690,34 @@ fn write_sx_fields<W: Write>(
     pivot: &PivotTable,
     cache: &FormatPivotCache,
     usage: &CacheFieldUsage,
+    layout: &XlsbPivotCacheLayout,
     grouping_infos: &[XlsbPivotGroupingInfo<'_>],
 ) -> XlsbResult<()> {
     rw.write_record(
         records::BRT_BEGIN_SXVDS,
-        &(cache.fields.len() as u32).to_le_bytes(),
+        &(layout.fields.len() as u32).to_le_bytes(),
     )?;
-    for (index, field) in cache.fields.iter().enumerate() {
-        write_sx_field(rw, pivot_field_axis(pivot, &field.name))?;
-        if usage.store_items[index] {
-            let item_count = grouping_info_for_field(grouping_infos, &field.name)
-                .map(|info| info.group_items.len())
-                .unwrap_or(field.shared_items.len());
-            write_sx_field_items(rw, item_count)?;
+    for field_layout in &layout.fields {
+        match field_layout {
+            XlsbPivotCacheFieldLayout::Source { source_index, .. } => {
+                let field = &cache.fields[*source_index];
+                write_sx_field(rw, pivot_field_axis(pivot, &field.name))?;
+                if usage.store_items[*source_index] {
+                    let item_count = grouping_info_for_field(grouping_infos, &field.name)
+                        .map(|info| info.source_items.len())
+                        .unwrap_or(field.shared_items.len());
+                    write_sx_field_items(rw, item_count)?;
+                }
+            }
+            XlsbPivotCacheFieldLayout::ManualDerived {
+                base_source_index,
+                grouping_info_index,
+                ..
+            } => {
+                let base_field = &cache.fields[*base_source_index];
+                write_sx_field(rw, pivot_field_axis(pivot, &base_field.name))?;
+                write_sx_field_items(rw, grouping_infos[*grouping_info_index].group_items.len())?;
+            }
         }
         rw.write_record(records::BRT_END_SXVD, &[])?;
     }
@@ -1418,6 +1767,7 @@ fn write_axis_fields<W: Write>(
     begin_record: u16,
     end_record: u16,
     cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
     fields: &[PivotField],
     include_values_field: bool,
     values_position: Option<u32>,
@@ -1426,16 +1776,7 @@ fn write_axis_fields<W: Write>(
         return Ok(());
     }
 
-    let mut indexes = Vec::new();
-    for field in fields {
-        let index = cache.field_index(&field.field.name).ok_or_else(|| {
-            XlsbError::InvalidFormat(format!(
-                "pivot references unknown field {}",
-                field.field.name
-            ))
-        })?;
-        indexes.push(index as i32);
-    }
+    let mut indexes = expanded_axis_field_indexes(cache, layout, fields)?;
     if include_values_field {
         let position = values_position
             .map(|position| position as usize)
@@ -1459,6 +1800,7 @@ fn write_axis_items<W: Write>(
     begin_record: u16,
     end_record: u16,
     cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
     fields: &[PivotField],
     include_values_field: bool,
     values_position: Option<u32>,
@@ -1467,6 +1809,7 @@ fn write_axis_items<W: Write>(
 ) -> XlsbResult<()> {
     let line_tuples = axis_line_tuples(
         cache,
+        layout,
         fields,
         include_values_field,
         values_position,
@@ -1474,7 +1817,7 @@ fn write_axis_items<W: Write>(
         grouping_infos,
     )?;
     let grand_tuples = axis_grand_total_tuples(
-        fields.len(),
+        expanded_axis_field_count(cache, layout, fields),
         include_values_field,
         values_position,
         measure_count,
@@ -1493,6 +1836,7 @@ fn write_axis_items<W: Write>(
 
 fn axis_line_tuples(
     cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
     fields: &[PivotField],
     include_values_field: bool,
     values_position: Option<u32>,
@@ -1510,7 +1854,7 @@ fn axis_line_tuples(
         return Ok(vec![(Vec::new(), None)]);
     }
 
-    let tuples = axis_item_tuples(cache, fields, grouping_infos)?;
+    let tuples = axis_item_tuples(cache, layout, fields, grouping_infos)?;
     if include_values_field {
         Ok(tuples_with_data_items(
             tuples,
@@ -1679,6 +2023,7 @@ fn pivot_style_flags(style: &duke_sheets_core::PivotStyle) -> u16 {
 fn estimated_pivot_range(
     pivot: &PivotTable,
     cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
     grouping_infos: &[XlsbPivotGroupingInfo<'_>],
 ) -> CellRange {
     let (page_rows, _) = page_field_area_size(pivot);
@@ -1688,14 +2033,15 @@ fn estimated_pivot_range(
         } else {
             page_rows.saturating_add(1)
         };
-    let row_item_count = axis_item_count(cache, &pivot.rows, grouping_infos).max(1);
+    let row_item_count = axis_item_count(cache, layout, &pivot.rows, grouping_infos).max(1);
     let row_header_count = pivot.columns.len() as u32 + 1;
     let row_count = row_header_count + row_item_count as u32 + 1;
 
-    let col_item_count = axis_item_count(cache, &pivot.columns, grouping_infos).max(1);
+    let col_item_count = axis_item_count(cache, layout, &pivot.columns, grouping_infos).max(1);
     let measure_count = pivot.measures.len().max(1);
     let value_col_count = col_item_count * measure_count;
-    let col_count = pivot.rows.len().max(1) as u16 + value_col_count as u16;
+    let row_field_count = expanded_axis_field_count(cache, layout, &pivot.rows).max(1);
+    let col_count = row_field_count as u16 + value_col_count as u16;
     CellRange::from_indices(
         body_start_row,
         pivot.target.col,
@@ -1730,48 +2076,49 @@ fn page_field_area_size(pivot: &PivotTable) -> (u32, u32) {
 
 fn axis_item_count(
     cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
     fields: &[PivotField],
     grouping_infos: &[XlsbPivotGroupingInfo<'_>],
 ) -> usize {
     if fields.is_empty() {
         return 1;
     }
-    axis_item_tuples(cache, fields, grouping_infos)
+    axis_item_tuples(cache, layout, fields, grouping_infos)
         .map(|tuples| tuples.len())
         .unwrap_or(1)
 }
 
 fn axis_item_tuples(
     cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
     fields: &[PivotField],
     grouping_infos: &[XlsbPivotGroupingInfo<'_>],
 ) -> XlsbResult<Vec<Vec<u32>>> {
     if fields.is_empty() {
         return Ok(Vec::new());
     }
-    let indexes = fields
-        .iter()
-        .map(|field| {
-            cache.field_index(&field.field.name).ok_or_else(|| {
-                XlsbError::InvalidFormat(format!(
-                    "pivot references unknown axis field {}",
-                    field.field.name
-                ))
-            })
-        })
-        .collect::<XlsbResult<Vec<_>>>()?;
+    let indexes = expanded_axis_source_indexes(cache, layout, fields)?;
 
     let mut seen = HashSet::new();
     let mut tuples = Vec::new();
     for row in 0..cache.row_count {
         let tuple = indexes
             .iter()
-            .map(|index| {
-                let field = &cache.fields[*index];
-                grouping_info_for_field(grouping_infos, &field.name)
-                    .and_then(|info| info.group_item_ids.get(row).copied())
-                    .or_else(|| field.item_ids.get(row).copied())
-                    .unwrap_or(0)
+            .map(|index| match index {
+                ExpandedAxisSourceIndex::ManualDerived {
+                    grouping_info_index,
+                } => grouping_infos[*grouping_info_index]
+                    .group_item_ids
+                    .get(row)
+                    .copied()
+                    .unwrap_or(0),
+                ExpandedAxisSourceIndex::Source { source_index } => {
+                    let field = &cache.fields[*source_index];
+                    grouping_info_for_field(grouping_infos, &field.name)
+                        .and_then(|info| info.source_item_ids.get(row).copied())
+                        .or_else(|| field.item_ids.get(row).copied())
+                        .unwrap_or(0)
+                }
             })
             .collect::<Vec<_>>();
         if seen.insert(tuple.clone()) {
@@ -1779,6 +2126,88 @@ fn axis_item_tuples(
         }
     }
     Ok(tuples)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ExpandedAxisSourceIndex {
+    ManualDerived { grouping_info_index: usize },
+    Source { source_index: usize },
+}
+
+fn expanded_axis_field_indexes(
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    fields: &[PivotField],
+) -> XlsbResult<Vec<i32>> {
+    expanded_axis_source_indexes(cache, layout, fields)?
+        .into_iter()
+        .map(|index| {
+            let layout_index = match index {
+                ExpandedAxisSourceIndex::ManualDerived {
+                    grouping_info_index,
+                } => layout
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .find_map(|(layout_index, field)| match field {
+                        XlsbPivotCacheFieldLayout::ManualDerived {
+                            grouping_info_index: candidate,
+                            ..
+                        } if *candidate == grouping_info_index => Some(layout_index),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        XlsbError::InvalidFormat("pivot manual derived axis field not found".into())
+                    })?,
+                ExpandedAxisSourceIndex::Source { source_index } => {
+                    layout.source_to_layout[source_index]
+                }
+            };
+            checked_i32(layout_index, "pivot axis field index")
+        })
+        .collect()
+}
+
+fn expanded_axis_source_indexes(
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    fields: &[PivotField],
+) -> XlsbResult<Vec<ExpandedAxisSourceIndex>> {
+    let mut indexes = Vec::new();
+    for field in fields {
+        let source_index = cache.field_index(&field.field.name).ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "pivot references unknown axis field {}",
+                field.field.name
+            ))
+        })?;
+        if let Some(derived_index) = layout.manual_derived_by_base.get(&source_index) {
+            let Some(XlsbPivotCacheFieldLayout::ManualDerived {
+                grouping_info_index,
+                ..
+            }) = layout.fields.get(*derived_index)
+            else {
+                return Err(XlsbError::InvalidFormat(
+                    "pivot manual derived axis field has invalid layout".into(),
+                ));
+            };
+            indexes.push(ExpandedAxisSourceIndex::ManualDerived {
+                grouping_info_index: *grouping_info_index,
+            });
+        }
+        indexes.push(ExpandedAxisSourceIndex::Source { source_index });
+    }
+    Ok(indexes)
+}
+
+fn expanded_axis_field_count(
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    fields: &[PivotField],
+) -> usize {
+    expanded_axis_source_indexes(cache, layout, fields)
+        .map(|indexes| indexes.len())
+        .unwrap_or(fields.len())
 }
 
 fn cache_for_table<'a>(

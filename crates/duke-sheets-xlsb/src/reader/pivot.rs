@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufReader, Read, Seek};
 
 use quick_xml::events::Event;
@@ -12,8 +12,8 @@ use crate::error::{XlsbError, XlsbResult};
 use duke_sheets_core::{
     CellAddress, CellError, CellRange, PivotAggregate, PivotCacheInfo, PivotCacheSourceKind,
     PivotCalculatedField, PivotDateGroupUnit, PivotField, PivotFieldRef, PivotFilter,
-    PivotGrouping, PivotMeasure, PivotRefreshStatus, PivotSource, PivotStyle, PivotTable,
-    PivotValue, PivotValuesAxis,
+    PivotGrouping, PivotManualGroup, PivotMeasure, PivotRefreshStatus, PivotSource, PivotStyle,
+    PivotTable, PivotValue, PivotValuesAxis,
 };
 use ssfmt::{date_serial::date_to_serial, DateSystem};
 
@@ -23,6 +23,7 @@ struct PivotCacheDefinition {
     source: PivotSource,
     source_kind: PivotCacheSourceKind,
     fields: Vec<PivotCacheField>,
+    groupings: Vec<PivotGrouping>,
     record_count: Option<u64>,
     refresh_on_load: bool,
 }
@@ -34,7 +35,11 @@ struct PivotCacheField {
     formula_tokens: Option<Vec<u8>>,
     pname_field_indexes: Vec<usize>,
     grouping: Option<PivotGrouping>,
+    group_parent: Option<usize>,
+    group_base: Option<usize>,
     shared_items: Vec<PivotValue>,
+    group_items: Vec<PivotValue>,
+    discrete_item_indexes: Vec<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,11 +176,7 @@ fn read_pivot_table<R: Read + Seek>(
             ))
         })
         .collect();
-    pivot.groupings = cache
-        .fields
-        .iter()
-        .filter_map(|field| field.grouping.clone())
-        .collect();
+    pivot.groupings = cache.groupings.clone();
     pivot.filters = filters;
     pivot.layout = layout;
     pivot.style = style;
@@ -210,6 +211,8 @@ fn read_pivot_cache_definition<R: Read + Seek>(
     let mut record_count = None;
     let mut refresh_on_load = false;
     let mut in_shared_items = false;
+    let mut in_group_items = false;
+    let mut in_group_discrete = false;
 
     loop {
         let record = iter.next_record(&mut buf);
@@ -241,6 +244,30 @@ fn read_pivot_cache_definition<R: Read + Seek>(
             records::BRT_END_PCD_SHARED_ITEMS => {
                 in_shared_items = false;
             }
+            records::BRT_BEGIN_PCDFG_ITEMS => {
+                in_group_items = true;
+            }
+            records::BRT_END_PCDFG_ITEMS => {
+                in_group_items = false;
+            }
+            records::BRT_BEGIN_PCDFG_DISCRETE => {
+                in_group_discrete = true;
+                if let Some(field) = &mut current_field {
+                    field.discrete_item_indexes = parse_pivot_group_discrete(payload);
+                }
+            }
+            records::BRT_END_PCDFG_DISCRETE => {
+                in_group_discrete = false;
+            }
+            records::BRT_PCDI_INDEX => {
+                if in_group_discrete && payload.len() >= 4 {
+                    if let Some(field) = &mut current_field {
+                        field
+                            .discrete_item_indexes
+                            .push(parser::read_u32(payload, 0));
+                    }
+                }
+            }
             records::BRT_PCDI_MISSING
             | records::BRT_PCDI_BOOLEAN
             | records::BRT_PCDI_ERROR
@@ -251,6 +278,15 @@ fn read_pivot_cache_definition<R: Read + Seek>(
                     if let Some(field) = &mut current_field {
                         field.shared_items.push(parse_shared_item(typ, payload)?);
                     }
+                } else if in_group_items {
+                    if let Some(field) = &mut current_field {
+                        field.group_items.push(parse_shared_item(typ, payload)?);
+                    }
+                }
+            }
+            records::BRT_BEGIN_PCDF_GROUP => {
+                if let Some(field) = &mut current_field {
+                    parse_pivot_field_group(payload, field);
                 }
             }
             records::BRT_BEGIN_PCDFG_RANGE => {
@@ -279,12 +315,14 @@ fn read_pivot_cache_definition<R: Read + Seek>(
     let Some(source) = source else {
         return Ok(None);
     };
+    let groupings = semantic_groupings_from_cache_fields(&fields);
 
     Ok(Some(PivotCacheDefinition {
         cache_id,
         source,
         source_kind,
         fields,
+        groupings,
         record_count,
         refresh_on_load,
     }))
@@ -373,7 +411,7 @@ fn parse_axis_fields(
             if let Some(field) = cache
                 .fields
                 .get(index as usize)
-                .map(|field| PivotField::new(field.name.clone()))
+                .map(|_| PivotField::new(semantic_cache_field_name(cache, index as usize)))
             {
                 push_axis_field(fields, field);
             }
@@ -395,11 +433,17 @@ fn parse_page_field(
     let Some(field) = cache.fields.get(field_index) else {
         return;
     };
-    push_axis_field(page_fields, PivotField::new(field.name.clone()));
+    push_axis_field(
+        page_fields,
+        PivotField::new(semantic_cache_field_name(cache, field_index)),
+    );
 
     if let Some(item) = field.shared_items.get(selected_item as usize) {
         filters.push(PivotFilter::FieldItems {
-            field: duke_sheets_core::PivotFieldRef::new(field.name.clone()),
+            field: duke_sheets_core::PivotFieldRef::new(semantic_cache_field_name(
+                cache,
+                field_index,
+            )),
             allowed_items: vec![item.clone()],
         });
     }
@@ -472,7 +516,11 @@ fn parse_cache_field(payload: &[u8]) -> XlsbResult<PivotCacheField> {
             formula_tokens: None,
             pname_field_indexes: Vec::new(),
             grouping: None,
+            group_parent: None,
+            group_base: None,
             shared_items: Vec::new(),
+            group_items: Vec::new(),
+            discrete_item_indexes: Vec::new(),
         });
     }
     let flags = parser::read_u16(payload, 0);
@@ -489,7 +537,99 @@ fn parse_cache_field(payload: &[u8]) -> XlsbResult<PivotCacheField> {
         formula_tokens,
         pname_field_indexes: Vec::new(),
         grouping: None,
+        group_parent: None,
+        group_base: None,
         shared_items: Vec::new(),
+        group_items: Vec::new(),
+        discrete_item_indexes: Vec::new(),
+    })
+}
+
+fn parse_pivot_group_discrete(payload: &[u8]) -> Vec<u32> {
+    if payload.len() < 4 {
+        return Vec::new();
+    }
+    let count = parser::read_u32(payload, 0) as usize;
+    (0..count)
+        .filter_map(|index| {
+            let offset = 4 + index.saturating_mul(4);
+            (offset + 4 <= payload.len()).then(|| parser::read_u32(payload, offset))
+        })
+        .collect()
+}
+
+fn parse_pivot_field_group(payload: &[u8], field: &mut PivotCacheField) {
+    if payload.len() < 8 {
+        return;
+    }
+    let parent = parser::read_i32(payload, 0);
+    let base = parser::read_i32(payload, 4);
+    if parent >= 0 {
+        field.group_parent = Some(parent as usize);
+    }
+    if base >= 0 {
+        field.group_base = Some(base as usize);
+    }
+}
+
+fn semantic_groupings_from_cache_fields(fields: &[PivotCacheField]) -> Vec<PivotGrouping> {
+    let mut groupings = Vec::new();
+    for field in fields {
+        if let Some(grouping) = manual_grouping_from_cache_field(fields, field) {
+            groupings.push(grouping);
+            continue;
+        }
+        if let Some(grouping) = &field.grouping {
+            groupings.push(grouping.clone());
+        }
+    }
+    groupings
+}
+
+fn manual_grouping_from_cache_field(
+    fields: &[PivotCacheField],
+    field: &PivotCacheField,
+) -> Option<PivotGrouping> {
+    if field.discrete_item_indexes.is_empty() || field.group_items.is_empty() {
+        return None;
+    }
+    let base_field = field
+        .group_base
+        .and_then(|base| fields.get(base))
+        .unwrap_or(field);
+
+    let mut members_by_group: BTreeMap<u32, Vec<PivotValue>> = BTreeMap::new();
+    for (base_index, group_index) in field.discrete_item_indexes.iter().copied().enumerate() {
+        let Some(member) = base_field.shared_items.get(base_index).cloned() else {
+            continue;
+        };
+        members_by_group
+            .entry(group_index)
+            .or_default()
+            .push(member);
+    }
+
+    let groups = members_by_group
+        .into_iter()
+        .filter_map(|(group_index, members)| {
+            let group_value = field.group_items.get(group_index as usize)?;
+            let is_renamed_single_item = members
+                .first()
+                .is_some_and(|member| members.len() == 1 && member != group_value);
+            if members.len() <= 1 && !is_renamed_single_item {
+                return None;
+            }
+
+            Some(PivotManualGroup {
+                name: group_value.to_string(),
+                members,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    (!groups.is_empty()).then(|| PivotGrouping::Manual {
+        field: PivotFieldRef::new(base_field.name.clone()),
+        groups,
     })
 }
 
@@ -948,4 +1088,15 @@ fn push_axis_field(fields: &mut Vec<PivotField>, field: PivotField) {
         return;
     }
     fields.push(field);
+}
+
+fn semantic_cache_field_name(cache: &PivotCacheDefinition, field_index: usize) -> String {
+    let Some(field) = cache.fields.get(field_index) else {
+        return String::new();
+    };
+    field
+        .group_base
+        .and_then(|base| cache.fields.get(base))
+        .map(|field| field.name.clone())
+        .unwrap_or_else(|| field.name.clone())
 }

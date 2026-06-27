@@ -19,7 +19,7 @@ use duke_sheets_core::validation::{DataValidation, ValidationOperator, Validatio
 use duke_sheets_core::worksheet::{PageOrientation, SheetProtection, SheetVisibility};
 use duke_sheets_core::{
     CellAddress, CellRange, CellValue, Hyperlink, PivotAggregate, PivotDateGroupUnit, PivotFilter,
-    PivotGrouping, PivotTable, PivotValuesAxis, Workbook,
+    PivotGrouping, PivotManualGroup, PivotTable, PivotValue, PivotValuesAxis, Workbook,
 };
 
 use crate::{
@@ -343,6 +343,34 @@ fn xlsb_date_grouped_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xlsb_manual_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Region").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", "East").unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", "West").unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", "Central").unwrap();
+    ws.set_cell_value("B4", 5.0).unwrap();
+
+    let pivot = PivotTable::builder("ManualGroupedRegions")
+        .source_range(CellRange::parse("A1:B4").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Region")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Manual {
+            field: "Region".into(),
+            groups: vec![PivotManualGroup::new("Coastal", ["East", "West"])],
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 #[test]
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_opens_xlsb_with_native_pivot_table() {
@@ -459,6 +487,43 @@ fn excel_preserves_xlsb_pivot_date_grouping() {
         }
         other => panic!("expected date grouping, got {other:?}"),
     }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_pivot_manual_grouping() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xlsb_bytes(&xlsb_manual_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("ManualGroupedRegions")
+        .unwrap();
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Manual { field, groups } => {
+            assert_eq!(field.name, "Region");
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0].name, "Coastal");
+            assert_eq!(
+                groups[0].members,
+                vec![
+                    PivotValue::String("East".to_string()),
+                    PivotValue::String("West".to_string())
+                ]
+            );
+        }
+        other => panic!("expected manual grouping, got {other:?}"),
+    }
+
+    let cache_records = xlsb_record_types(&zip_entry_bytes(
+        &excel_bytes,
+        "xl/pivotCache/pivotCacheDefinition1.bin",
+    ));
+    assert!(
+        cache_records.contains(&duke_sheets_xlsb::biff12::records::BRT_BEGIN_PCDFG_DISCRETE),
+        "Excel should preserve a manual grouping discrete map"
+    );
 }
 
 fn zip_has_entry(bytes: &[u8], name: &str) -> bool {

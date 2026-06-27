@@ -7,7 +7,8 @@ mod tests {
     };
     use duke_sheets_core::{
         CellRange, CellValue, PivotAggregate, PivotDateGroupUnit, PivotFieldRef, PivotFilter,
-        PivotGrouping, PivotStyle, PivotTable, PivotValuesAxis, Workbook,
+        PivotGrouping, PivotManualGroup, PivotStyle, PivotTable, PivotValue, PivotValuesAxis,
+        Workbook,
     };
 
     use crate::reader::XlsbReader;
@@ -225,6 +226,32 @@ mod tests {
             .grouping(PivotGrouping::Date {
                 field: PivotFieldRef::new("Date"),
                 units: vec![PivotDateGroupUnit::Months],
+            })
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
+    fn add_manual_grouped_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "Region").unwrap();
+        ws.set_cell_value("B1", "Revenue").unwrap();
+        ws.set_cell_value("A2", "East").unwrap();
+        ws.set_cell_value("B2", 10.0).unwrap();
+        ws.set_cell_value("A3", "West").unwrap();
+        ws.set_cell_value("B3", 20.0).unwrap();
+        ws.set_cell_value("A4", "Central").unwrap();
+        ws.set_cell_value("B4", 5.0).unwrap();
+
+        let pivot = PivotTable::builder("ManualGroupedRegions")
+            .source_range(CellRange::parse("A1:B4").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("Region")
+            .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .grouping(PivotGrouping::Manual {
+                field: PivotFieldRef::new("Region"),
+                groups: vec![PivotManualGroup::new("Coastal", ["East", "West"])],
             })
             .build()
             .unwrap();
@@ -771,6 +798,147 @@ mod tests {
             PivotGrouping::Date { field, units } => {
                 assert_eq!(field.name, "Date");
                 assert_eq!(*units, vec![PivotDateGroupUnit::Months]);
+            }
+            other => panic!("unexpected grouping: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn semantic_pivot_tables_emit_xlsb_manual_grouping_records() {
+        let mut wb = Workbook::new();
+        add_manual_grouped_pivot(&mut wb);
+
+        let bytes = write_xlsb_bytes(&wb);
+        let cache_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotCache/pivotCacheDefinition1.bin",
+        ));
+        let field_count_payload = cache_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCD_FIELDS).then_some(payload)
+            })
+            .expect("BrtBeginPCDFields payload");
+        assert_eq!(
+            u32::from_le_bytes(field_count_payload[0..4].try_into().unwrap()),
+            3,
+            "manual grouping should add a derived cache field"
+        );
+
+        let field_groups = cache_records
+            .iter()
+            .filter_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCDF_GROUP).then(|| {
+                    (
+                        i32::from_le_bytes(payload[0..4].try_into().unwrap()),
+                        i32::from_le_bytes(payload[4..8].try_into().unwrap()),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            field_groups,
+            vec![(2, -1), (-1, 0)],
+            "base field should point at derived field and derived field should point back to base"
+        );
+
+        let discrete_payload = cache_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCDFG_DISCRETE)
+                    .then_some(payload)
+            })
+            .expect("BrtBeginPCDFGDiscrete payload");
+        assert_eq!(
+            u32::from_le_bytes(discrete_payload[0..4].try_into().unwrap()),
+            3,
+            "manual grouping should map each source shared item"
+        );
+        assert_eq!(
+            discrete_payload.len(),
+            4,
+            "discrete group begin record carries only the item count"
+        );
+        let discrete_indexes = cache_records
+            .iter()
+            .filter_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_PCDI_INDEX)
+                    .then(|| u32::from_le_bytes(payload[0..4].try_into().unwrap()))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            discrete_indexes,
+            vec![1, 1, 0],
+            "East and West should map to Coastal while Central remains ungrouped"
+        );
+
+        let group_items_payload = cache_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCDFG_ITEMS).then_some(payload)
+            })
+            .expect("BrtBeginPCDFGItems payload");
+        assert_eq!(
+            u32::from_le_bytes(group_items_payload[0..4].try_into().unwrap()),
+            2,
+            "manual grouping should emit Central plus the Coastal group item"
+        );
+
+        let pivot_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotTables/pivotTable1.bin",
+        ));
+        let view_field_count_payload = pivot_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_SXVDS).then_some(payload)
+            })
+            .expect("BrtBeginSXVDs payload");
+        assert_eq!(
+            u32::from_le_bytes(view_field_count_payload[0..4].try_into().unwrap()),
+            3,
+            "pivot view should include the derived cache field"
+        );
+        let row_fields_payload = pivot_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_ISXVD_RWS).then_some(payload)
+            })
+            .expect("BrtBeginISXVDRws payload");
+        assert_eq!(
+            u32::from_le_bytes(row_fields_payload[0..4].try_into().unwrap()),
+            2,
+            "manual grouping should expand the row axis to derived plus base"
+        );
+        let row_field_indexes = row_fields_payload[4..]
+            .chunks_exact(4)
+            .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(row_field_indexes, vec![2, 0]);
+    }
+
+    #[test]
+    fn semantic_pivot_tables_round_trip_xlsb_manual_grouping() {
+        let mut wb = Workbook::new();
+        add_manual_grouped_pivot(&mut wb);
+
+        let wb2 = round_trip(&wb);
+        let pivot = &wb2.worksheet(0).unwrap().pivot_tables()[0];
+
+        assert_eq!(pivot.name, "ManualGroupedRegions");
+        assert_eq!(pivot.groupings.len(), 1);
+        match &pivot.groupings[0] {
+            PivotGrouping::Manual { field, groups } => {
+                assert_eq!(field.name, "Region");
+                assert_eq!(groups.len(), 1);
+                assert_eq!(groups[0].name, "Coastal");
+                assert_eq!(
+                    groups[0].members,
+                    vec![
+                        PivotValue::String("East".to_string()),
+                        PivotValue::String("West".to_string())
+                    ]
+                );
             }
             other => panic!("unexpected grouping: {other:?}"),
         }
