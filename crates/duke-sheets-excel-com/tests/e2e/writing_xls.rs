@@ -205,12 +205,12 @@ fn xls_date_grouped_pivot_workbook() -> Workbook {
     ws.set_cell_value("B1", "Revenue").unwrap();
     ws.set_cell_value("A2", 43831.0).unwrap();
     ws.set_cell_value("B2", 10.0).unwrap();
-    ws.set_cell_value("A3", 43862.0).unwrap();
-    ws.set_cell_value("B3", 20.0).unwrap();
-    ws.set_cell_value("A4", 43891.0).unwrap();
-    ws.set_cell_value("B4", 30.0).unwrap();
-    ws.set_cell_value("A5", 43922.0).unwrap();
-    ws.set_cell_value("B5", 40.0).unwrap();
+    ws.set_cell_value("A3", 43831.0).unwrap();
+    ws.set_cell_value("B3", 15.0).unwrap();
+    ws.set_cell_value("A4", 43862.0).unwrap();
+    ws.set_cell_value("B4", 20.0).unwrap();
+    ws.set_cell_value("A5", 43862.0).unwrap();
+    ws.set_cell_value("B5", 25.0).unwrap();
     let pivot = PivotTable::builder("MonthlyRevenue")
         .source_range(CellRange::parse("A1:B5").unwrap())
         .target_address("D1")

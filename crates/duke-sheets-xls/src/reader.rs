@@ -1275,11 +1275,12 @@ impl XlsReader {
             let Some(field) = cache.fields.get(field_index) else {
                 continue;
             };
-            Self::push_axis_field(&mut page_fields, PivotField::new(field.name.clone()));
+            let field_name = Self::pivot_cache_field_semantic_name(field);
+            Self::push_axis_field(&mut page_fields, PivotField::new(field_name.clone()));
             if selected_item != 0xFFFF {
                 if let Some(item) = field.shared_items.get(selected_item as usize) {
                     filters.push(PivotFilter::FieldItems {
-                        field: duke_sheets_core::PivotFieldRef::new(field.name.clone()),
+                        field: duke_sheets_core::PivotFieldRef::new(field_name),
                         allowed_items: vec![item.clone()],
                     });
                 }
@@ -1335,13 +1336,22 @@ impl XlsReader {
                     .get_or_insert(fields.len() as u32);
             } else if *index >= 0 {
                 if let Some(field) = cache.fields.get(*index as usize) {
-                    let field_name = match &field.grouping {
-                        Some(PivotGrouping::Date { field, .. }) => field.name.clone(),
-                        _ => field.name.clone(),
-                    };
-                    Self::push_axis_field(fields, PivotField::new(field_name));
+                    Self::push_axis_field(
+                        fields,
+                        PivotField::new(Self::pivot_cache_field_semantic_name(field)),
+                    );
                 }
             }
+        }
+    }
+
+    fn pivot_cache_field_semantic_name(field: &XlsPivotCacheField) -> String {
+        match &field.grouping {
+            Some(PivotGrouping::Date {
+                field: source_field,
+                ..
+            }) => source_field.name.clone(),
+            _ => field.name.clone(),
         }
     }
 

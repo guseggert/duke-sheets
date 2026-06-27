@@ -155,6 +155,20 @@ impl XlsPivotCacheLayout {
 }
 
 #[derive(Debug, Clone)]
+struct XlsPivotCacheLayouts {
+    date_system: DateSystem,
+    by_cache_num: HashMap<usize, XlsPivotCacheLayout>,
+}
+
+impl XlsPivotCacheLayouts {
+    fn get(&self, cache_num: usize) -> XlsResult<&XlsPivotCacheLayout> {
+        self.by_cache_num.get(&cache_num).ok_or_else(|| {
+            XlsError::InvalidFormat(format!("pivot cache layout {cache_num} not found"))
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 struct XlsPivotFieldLayout {
     name: String,
     formula: Option<String>,
@@ -353,8 +367,9 @@ fn cfb_to_xls(err: crate::cfb::CfbError) -> XlsError {
 /// ```
 fn build_workbook_package(workbook: &Workbook) -> XlsResult<XlsWritePackage> {
     let pivot_plan = duke_sheets_pivot::plan_format_pivots(workbook)?;
-    let workbook_stream = build_workbook_stream_with_pivots(workbook, &pivot_plan)?;
-    let (extra_storages, extra_streams) = build_pivot_cache_streams(workbook, &pivot_plan)?;
+    let pivot_layouts = build_xls_pivot_cache_layouts(workbook, &pivot_plan)?;
+    let workbook_stream = build_workbook_stream_with_pivots(workbook, &pivot_plan, &pivot_layouts)?;
+    let (extra_storages, extra_streams) = build_pivot_cache_streams(&pivot_plan, &pivot_layouts)?;
     Ok(XlsWritePackage {
         workbook_stream,
         extra_storages,
@@ -370,6 +385,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
 fn build_workbook_stream_with_pivots(
     workbook: &Workbook,
     pivot_plan: &FormatPivotPlan,
+    pivot_layouts: &XlsPivotCacheLayouts,
 ) -> XlsResult<Vec<u8>> {
     if workbook.sheet_count() == 0 {
         return Err(XlsError::InvalidFormat(
@@ -459,7 +475,7 @@ fn build_workbook_stream_with_pivots(
             row_record_positions.values().next().copied(),
             dbcell_pos,
         );
-        write_pivot_sheet_records(&mut stream, workbook, pivot_plan, sheet_idx)?;
+        write_pivot_sheet_records(&mut stream, workbook, pivot_plan, pivot_layouts, sheet_idx)?;
         write_window2(&mut stream, sheet, has_pivot_tables);
         write_scl(&mut stream, sheet);
         write_pane(&mut stream, sheet);
@@ -506,8 +522,8 @@ fn sheet_has_pivot_tables(pivot_plan: &FormatPivotPlan, sheet_idx: usize) -> boo
 }
 
 fn build_pivot_cache_streams(
-    workbook: &Workbook,
     pivot_plan: &FormatPivotPlan,
+    layouts: &XlsPivotCacheLayouts,
 ) -> XlsResult<(Vec<String>, Vec<(String, Vec<u8>)>)> {
     if pivot_plan.caches.is_empty() {
         return Ok((Vec::new(), Vec::new()));
@@ -515,18 +531,33 @@ fn build_pivot_cache_streams(
 
     let storages = vec!["/_SX_DB_CUR".to_string()];
     let mut streams = Vec::with_capacity(pivot_plan.caches.len());
+    for cache in &pivot_plan.caches {
+        let layout = layouts.get(cache.cache_num)?;
+        streams.push((
+            format!("/_SX_DB_CUR/{:04}", cache.cache_num),
+            build_pivot_cache_stream(cache, layout, layouts.date_system)?,
+        ));
+    }
+    Ok((storages, streams))
+}
+
+fn build_xls_pivot_cache_layouts(
+    workbook: &Workbook,
+    pivot_plan: &FormatPivotPlan,
+) -> XlsResult<XlsPivotCacheLayouts> {
     let date_system = workbook_date_system(workbook.settings().date_1904);
+    let mut by_cache_num = HashMap::with_capacity(pivot_plan.caches.len());
     for cache in &pivot_plan.caches {
         let groupings = groupings_for_cache(workbook, pivot_plan, cache)?;
         validate_xls_pivot_groupings(cache, groupings)?;
         let grouping_infos = xls_pivot_grouping_infos(workbook, cache, groupings, date_system)?;
         let layout = build_xls_pivot_cache_layout(workbook, cache, &grouping_infos, date_system)?;
-        streams.push((
-            format!("/_SX_DB_CUR/{:04}", cache.cache_num),
-            build_pivot_cache_stream(cache, &layout, date_system)?,
-        ));
+        by_cache_num.insert(cache.cache_num, layout);
     }
-    Ok((storages, streams))
+    Ok(XlsPivotCacheLayouts {
+        date_system,
+        by_cache_num,
+    })
 }
 
 fn build_pivot_cache_stream(
@@ -594,6 +625,7 @@ fn write_numeric_cache_records(
     stream: &mut Vec<u8>,
     layout: &XlsPivotCacheLayout,
 ) -> XlsResult<()> {
+    let row_marker_field = xls_cache_row_marker_field(layout);
     let numeric_fields = layout
         .fields
         .iter()
@@ -604,7 +636,10 @@ fn write_numeric_cache_records(
     }
 
     for row in 0..layout.row_count {
-        let row_marker = checked_u8(row, "pivot cache row index")?;
+        let row_marker = row_marker_field
+            .and_then(|field| field.item_ids.get(row).copied())
+            .map(|item_id| checked_u8(item_id as usize, "pivot cache row item index"))
+            .unwrap_or_else(|| checked_u8(row, "pivot cache row index"))?;
         write_biff_record(stream, PIVOT_SXDBB_RECORD, &[row_marker]);
         for field in &numeric_fields {
             if let Some(number) = numeric_cache_value(field, row) {
@@ -613,6 +648,14 @@ fn write_numeric_cache_records(
         }
     }
     Ok(())
+}
+
+fn xls_cache_row_marker_field(layout: &XlsPivotCacheLayout) -> Option<&XlsPivotFieldLayout> {
+    layout
+        .fields
+        .iter()
+        .take(layout.base_field_count)
+        .find(|field| !matches!(field.kind, XlsPivotFieldKind::Regular) || !field_is_numeric(field))
 }
 
 fn numeric_cache_value(field: &XlsPivotFieldLayout, row: usize) -> Option<f64> {
@@ -1670,6 +1713,7 @@ fn write_pivot_sheet_records(
     stream: &mut Vec<u8>,
     workbook: &Workbook,
     pivot_plan: &FormatPivotPlan,
+    pivot_layouts: &XlsPivotCacheLayouts,
     sheet_idx: usize,
 ) -> XlsResult<()> {
     for part in pivot_plan
@@ -1689,11 +1733,8 @@ fn write_pivot_sheet_records(
             .pivot_tables()
             .get(part.pivot_index)
             .ok_or_else(|| XlsError::InvalidFormat("pivot table not found".into()))?;
-        let date_system = workbook_date_system(workbook.settings().date_1904);
         validate_xls_pivot_groupings(cache, &pivot.groupings)?;
-        let grouping_infos =
-            xls_pivot_grouping_infos(workbook, cache, &pivot.groupings, date_system)?;
-        let layout = build_xls_pivot_cache_layout(workbook, cache, &grouping_infos, date_system)?;
+        let layout = pivot_layouts.get(cache.cache_num)?;
 
         let multi_measure = pivot.measures.len() > 1;
         if pivot.rows.len() != 1

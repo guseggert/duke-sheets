@@ -279,6 +279,66 @@ fn add_date_grouped_pivot(wb: &mut Workbook) {
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
 }
 
+fn add_duplicate_date_grouped_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Date").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 43831.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 43831.0).unwrap();
+    ws.set_cell_value("B3", 15.0).unwrap();
+    ws.set_cell_value("A4", 43862.0).unwrap();
+    ws.set_cell_value("B4", 20.0).unwrap();
+    ws.set_cell_value("A5", 43862.0).unwrap();
+    ws.set_cell_value("B5", 25.0).unwrap();
+
+    let pivot = PivotTable::builder("DuplicateMonthlyRevenue")
+        .source_range(CellRange::parse("A1:B5").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Date")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Date {
+            field: PivotFieldRef::new("Date"),
+            units: vec![PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
+fn add_page_date_grouped_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Date").unwrap();
+    ws.set_cell_value("B1", "Region").unwrap();
+    ws.set_cell_value("C1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 43831.0).unwrap();
+    ws.set_cell_value("B2", "East").unwrap();
+    ws.set_cell_value("C2", 10.0).unwrap();
+    ws.set_cell_value("A3", 43862.0).unwrap();
+    ws.set_cell_value("B3", "West").unwrap();
+    ws.set_cell_value("C3", 20.0).unwrap();
+    ws.set_cell_value("A4", 43891.0).unwrap();
+    ws.set_cell_value("B4", "East").unwrap();
+    ws.set_cell_value("C4", 30.0).unwrap();
+
+    let pivot = PivotTable::builder("MonthlyPageFilter")
+        .source_range(CellRange::parse("A1:C4").unwrap())
+        .target_address("E2")
+        .unwrap()
+        .page("Date")
+        .row("Region")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .filter(PivotFilter::field_items("Date", ["Jan"]))
+        .grouping(PivotGrouping::Date {
+            field: PivotFieldRef::new("Date"),
+            units: vec![PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
 #[test]
 fn empty_default_workbook_round_trips_via_reader() {
     let wb = Workbook::new();
@@ -732,6 +792,29 @@ fn semantic_pivot_tables_emit_xls_date_grouping_records() {
 }
 
 #[test]
+fn semantic_pivot_tables_emit_xls_duplicate_date_cache_item_ids() {
+    let mut wb = Workbook::new();
+    add_duplicate_date_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = records_with_payload(&cache);
+
+    let row_markers = cache_records
+        .iter()
+        .filter_map(|(record_type, payload)| (*record_type == 0x00C8).then_some(payload.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        row_markers,
+        vec![vec![0], vec![0], vec![1], vec![1]],
+        "SXDBB rows should store source item ids, not source row ordinals"
+    );
+}
+
+#[test]
 fn reads_writer_xls_numeric_grouping_semantics() {
     let mut wb = Workbook::new();
     add_numeric_grouped_pivot(&mut wb);
@@ -778,6 +861,36 @@ fn reads_writer_xls_date_grouping_semantics() {
         }
         other => panic!("expected date grouping, got {other:?}"),
     }
+}
+
+#[test]
+fn reads_writer_xls_page_date_grouping_semantics() {
+    let mut wb = Workbook::new();
+    add_page_date_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    let pivot = &ws.pivot_tables()[0];
+
+    assert_eq!(pivot.name, "MonthlyPageFilter");
+    assert_eq!(pivot.rows[0].field.name, "Region");
+    assert_eq!(pivot.page_fields[0].field.name, "Date");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Date { field, units } => {
+            assert_eq!(field.name, "Date");
+            assert_eq!(*units, vec![PivotDateGroupUnit::Months]);
+        }
+        other => panic!("expected date grouping, got {other:?}"),
+    }
+    assert!(pivot.filters.iter().any(|filter| matches!(
+        filter,
+        PivotFilter::FieldItems {
+            field,
+            allowed_items,
+        } if field.name == "Date" && allowed_items == &vec![PivotValue::String("Jan".to_string())]
+    )));
 }
 
 #[test]
