@@ -991,19 +991,19 @@ fn manual_group_items_and_ids(
     }
     if source_items
         .iter()
-        .any(|item| !xls_manual_group_item_is_string_like(item))
+        .any(|item| !xls_manual_group_item_is_supported(item))
     {
         return Err(XlsError::InvalidFormat(format!(
-            "XLS pivot manual grouping for field {field_name} currently supports only text or blank source items"
+            "XLS pivot manual grouping for field {field_name} currently supports only text, blank, or numeric source items"
         )));
     }
 
     let mut member_to_group = HashMap::new();
     for group in groups {
         for member in &group.members {
-            if !xls_manual_group_item_is_string_like(member) {
+            if !xls_manual_group_item_is_supported(member) {
                 return Err(XlsError::InvalidFormat(format!(
-                    "XLS pivot manual group {} references a non-text item in field {field_name}: {member}",
+                    "XLS pivot manual group {} references an unsupported item in field {field_name}: {member}",
                     group.name
                 )));
             }
@@ -1057,8 +1057,9 @@ fn manual_group_items_and_ids(
     Ok((group_items, base_item_group_ids))
 }
 
-fn xls_manual_group_item_is_string_like(item: &PivotValue) -> bool {
+fn xls_manual_group_item_is_supported(item: &PivotValue) -> bool {
     matches!(item, PivotValue::Blank | PivotValue::String(_))
+        || matches!(item, PivotValue::Number(value) if value.is_finite())
 }
 
 fn xls_manual_group_source_items(
@@ -1482,6 +1483,7 @@ fn write_sxfdb_record(stream: &mut Vec<u8>, field: &XlsPivotFieldLayout) -> XlsR
         XlsPivotFieldKind::NumberGroup { .. } => 0x0571u16,
         XlsPivotFieldKind::DateSource { .. } => 0x0909u16,
         XlsPivotFieldKind::DateGroup { .. } => 0x0011u16,
+        XlsPivotFieldKind::ManualSource { .. } if field_is_numeric(field) => 0x0569u16,
         XlsPivotFieldKind::ManualSource { .. } => 0x0489u16,
         XlsPivotFieldKind::ManualGroup { .. } => 0x0001u16,
         XlsPivotFieldKind::Regular if field_is_numeric(field) => 0x0560u16,
@@ -1670,11 +1672,7 @@ fn write_pivot_cache_field_items(
         }
         XlsPivotFieldKind::ManualSource { .. } => {
             for value in &field.shared_items {
-                write_biff_record(
-                    stream,
-                    PIVOT_SXSTRING_RECORD,
-                    &pivot_value_string_payload(value)?,
-                );
+                write_pivot_cache_shared_item(stream, value)?;
             }
         }
         XlsPivotFieldKind::ManualGroup {
@@ -1682,11 +1680,7 @@ fn write_pivot_cache_field_items(
             ..
         } => {
             for value in &field.shared_items {
-                write_biff_record(
-                    stream,
-                    PIVOT_SXSTRING_RECORD,
-                    &pivot_value_string_payload(value)?,
-                );
+                write_pivot_cache_shared_item(stream, value)?;
             }
             let mut body = Vec::new();
             for item_id in source_item_group_ids {
@@ -1707,6 +1701,32 @@ fn write_pivot_cache_field_items(
             }
         }
         XlsPivotFieldKind::Regular => {}
+    }
+    Ok(())
+}
+
+fn write_pivot_cache_shared_item(stream: &mut Vec<u8>, value: &PivotValue) -> XlsResult<()> {
+    match value {
+        PivotValue::Number(value) if value.is_finite() => {
+            write_biff_record(stream, PIVOT_SXNUM_RECORD, &value.to_le_bytes());
+        }
+        PivotValue::Number(value) => {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS pivot cache item has a non-finite number: {value}"
+            )));
+        }
+        PivotValue::Blank | PivotValue::String(_) => {
+            write_biff_record(
+                stream,
+                PIVOT_SXSTRING_RECORD,
+                &pivot_value_string_payload(value)?,
+            );
+        }
+        PivotValue::Boolean(_) | PivotValue::Error(_) => {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS pivot manual grouping currently does not support boolean or error item: {value}"
+            )));
+        }
     }
     Ok(())
 }

@@ -1170,6 +1170,14 @@ impl XlsReader {
                             &mut pending_group_range,
                             &fields,
                         );
+                    } else if let Some(field) = &mut current_field {
+                        if rec.data.len() >= 8 {
+                            field
+                                .shared_items
+                                .push(PivotValue::Number(f64::from_le_bytes(
+                                    rec.data[0..8].try_into().unwrap(),
+                                )));
+                        }
                     }
                 }
                 records::EOF => break,

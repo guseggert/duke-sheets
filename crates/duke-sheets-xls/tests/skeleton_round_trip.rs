@@ -400,6 +400,42 @@ fn add_manual_grouped_pivot(wb: &mut Workbook) {
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
 }
 
+fn add_manual_numeric_grouped_pivot(wb: &mut Workbook) {
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Age").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 7.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 13.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 21.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("A5", 34.0).unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+    ws.set_cell_value("A6", 55.0).unwrap();
+    ws.set_cell_value("B6", 50.0).unwrap();
+
+    let pivot = PivotTable::builder("ManualAgeGroups")
+        .source_range(CellRange::parse("A1:B6").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Age")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Manual {
+            field: PivotFieldRef::new("Age"),
+            groups: vec![
+                PivotManualGroup::new("Young", [PivotValue::Number(7.0), PivotValue::Number(13.0)]),
+                PivotManualGroup::new(
+                    "Adult",
+                    [PivotValue::Number(21.0), PivotValue::Number(34.0)],
+                ),
+            ],
+        })
+        .build()
+        .unwrap();
+    wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+}
+
 fn add_manual_column_grouped_pivot(wb: &mut Workbook) {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "Region").unwrap();
@@ -1269,6 +1305,102 @@ fn semantic_pivot_tables_emit_xls_manual_grouping_records() {
 }
 
 #[test]
+fn semantic_pivot_tables_emit_xls_numeric_manual_grouping_records() {
+    let mut wb = Workbook::new();
+    add_manual_numeric_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let cache = cfb
+        .read_stream("/_SX_DB_CUR/0001")
+        .expect("read pivot cache stream");
+    let cache_records = records_with_payload(&cache);
+
+    let age_index = cache_records
+        .iter()
+        .position(|(record_type, payload)| {
+            *record_type == 0x00C7 && xls_unicode_string_at(payload, 14) == "Age"
+        })
+        .expect("Age SXFDB record");
+    let revenue_index = cache_records
+        .iter()
+        .position(|(record_type, payload)| {
+            *record_type == 0x00C7 && xls_unicode_string_at(payload, 14) == "Revenue"
+        })
+        .expect("Revenue SXFDB record");
+    let derived_index = cache_records
+        .iter()
+        .position(|(record_type, payload)| {
+            *record_type == 0x00C7 && xls_unicode_string_at(payload, 14) == "Age2"
+        })
+        .expect("Age2 SXFDB record");
+
+    let age_sxfdb = &cache_records[age_index].1;
+    assert_eq!(
+        u16::from_le_bytes(age_sxfdb[0..2].try_into().unwrap()),
+        0x0569,
+        "numeric manual source field should use Excel's numeric grouped item flags"
+    );
+    assert_eq!(
+        i16::from_le_bytes(age_sxfdb[2..4].try_into().unwrap()),
+        2,
+        "numeric manual source field should point at the derived grouped field"
+    );
+
+    let age_numbers = cache_records[age_index + 1..revenue_index]
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00C9).then(|| f64::from_le_bytes(payload[0..8].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        age_numbers,
+        vec![7.0, 13.0, 21.0, 34.0, 55.0],
+        "numeric manual source items should be emitted as SXNUM records"
+    );
+
+    let derived_sxfdb = &cache_records[derived_index].1;
+    assert_eq!(
+        i16::from_le_bytes(derived_sxfdb[4..6].try_into().unwrap()),
+        0,
+        "numeric manual derived field should link back to Age"
+    );
+    assert_eq!(
+        u16::from_le_bytes(derived_sxfdb[6..8].try_into().unwrap()),
+        3,
+        "derived numeric manual field should contain the ungrouped item plus group names"
+    );
+
+    let derived_until = cache_records[derived_index + 1..]
+        .iter()
+        .position(|(record_type, _)| *record_type == 0x00D9)
+        .map(|offset| derived_index + 1 + offset)
+        .expect("numeric manual SXIDSTM record");
+    let derived_numbers = cache_records[derived_index + 1..derived_until]
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00C9).then(|| f64::from_le_bytes(payload[0..8].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        derived_numbers,
+        vec![55.0],
+        "ungrouped numeric manual items should stay numeric in the derived field"
+    );
+
+    let sxidstm = &cache_records[derived_until].1;
+    let item_map = sxidstm
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes(chunk.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        item_map,
+        vec![1, 1, 2, 2, 0],
+        "numeric manual grouping should map source items to group/ungrouped item indexes"
+    );
+}
+
+#[test]
 fn semantic_pivot_tables_emit_xls_manual_column_grouping_records() {
     let mut wb = Workbook::new();
     add_manual_column_grouped_pivot(&mut wb);
@@ -1639,37 +1771,70 @@ fn reads_writer_xls_manual_column_grouping_semantics() {
 }
 
 #[test]
-fn xls_manual_grouping_rejects_non_text_items() {
+fn reads_writer_xls_numeric_manual_grouping_semantics() {
+    let mut wb = Workbook::new();
+    add_manual_numeric_grouped_pivot(&mut wb);
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize pivot workbook");
+    let read = XlsReader::read(Cursor::new(bytes)).expect("read pivot workbook");
+    let ws = read.worksheet(0).unwrap();
+    let pivot = &ws.pivot_tables()[0];
+
+    assert_eq!(pivot.name, "ManualAgeGroups");
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "Age");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Manual { field, groups } => {
+            assert_eq!(field.name, "Age");
+            assert_eq!(groups.len(), 2);
+            assert_eq!(groups[0].name, "Young");
+            assert_eq!(
+                groups[0].members,
+                vec![PivotValue::Number(7.0), PivotValue::Number(13.0)]
+            );
+            assert_eq!(groups[1].name, "Adult");
+            assert_eq!(
+                groups[1].members,
+                vec![PivotValue::Number(21.0), PivotValue::Number(34.0)]
+            );
+        }
+        other => panic!("expected numeric manual grouping, got {other:?}"),
+    }
+}
+
+#[test]
+fn xls_manual_grouping_rejects_boolean_items() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_cell_value("A1", "Age").unwrap();
+    ws.set_cell_value("A1", "Flag").unwrap();
     ws.set_cell_value("B1", "Revenue").unwrap();
-    ws.set_cell_value("A2", 7.0).unwrap();
+    ws.set_cell_value("A2", true).unwrap();
     ws.set_cell_value("B2", 10.0).unwrap();
-    ws.set_cell_value("A3", 13.0).unwrap();
+    ws.set_cell_value("A3", false).unwrap();
     ws.set_cell_value("B3", 20.0).unwrap();
 
-    let pivot = PivotTable::builder("ManualAgeBands")
+    let pivot = PivotTable::builder("ManualFlagGroups")
         .source_range(CellRange::parse("A1:B3").unwrap())
         .target_address("D1")
         .unwrap()
-        .row("Age")
+        .row("Flag")
         .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
         .grouping(PivotGrouping::Manual {
-            field: PivotFieldRef::new("Age"),
+            field: PivotFieldRef::new("Flag"),
             groups: vec![PivotManualGroup::new(
-                "Young",
-                [PivotValue::Number(7.0), PivotValue::Number(13.0)],
+                "Selected",
+                [PivotValue::Boolean(true), PivotValue::Boolean(false)],
             )],
         })
         .build()
         .unwrap();
     wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
 
-    let err = XlsWriter::write_to_bytes(&wb).expect_err("numeric manual grouping should fail");
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("boolean manual grouping should fail");
     assert!(
         err.to_string()
-            .contains("currently supports only text or blank source items"),
+            .contains("currently supports only text, blank, or numeric source items"),
         "{err}"
     );
 }
@@ -2143,6 +2308,44 @@ fn lo_can_open_manual_grouped_pivot_workbook() {
     });
     let _ = std::fs::remove_file(&path);
     let count = outcome.expect("LO must open the manual-grouped pivot workbook");
+    assert_eq!(count, 1);
+}
+
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_open_numeric_manual_grouped_pivot_workbook() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    let mut wb = Workbook::new();
+    add_manual_numeric_grouped_pivot(&mut wb);
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    std::fs::create_dir_all("/tmp/duke-sheets-urp").expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("/tmp/duke-sheets-urp/duke_numeric_manual_grouped_pivot_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write to shared dir");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<i32, String> = rt.block_on(async {
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+        let mut wb = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let count = wb
+            .sheet_count()
+            .await
+            .map_err(|e| format!("sheet_count: {e}"))?;
+        Ok(count)
+    });
+    let _ = std::fs::remove_file(&path);
+    let count = outcome.expect("LO must open the numeric manual-grouped pivot workbook");
     assert_eq!(count, 1);
 }
 

@@ -292,6 +292,44 @@ fn xls_manual_grouped_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xls_numeric_manual_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "Age").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 7.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 13.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 21.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+    ws.set_cell_value("A5", 34.0).unwrap();
+    ws.set_cell_value("B5", 40.0).unwrap();
+    ws.set_cell_value("A6", 55.0).unwrap();
+    ws.set_cell_value("B6", 50.0).unwrap();
+
+    let pivot = PivotTable::builder("ManualAgeGroups")
+        .source_range(CellRange::parse("A1:B6").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("Age")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Manual {
+            field: "Age".into(),
+            groups: vec![
+                PivotManualGroup::new("Young", [PivotValue::Number(7.0), PivotValue::Number(13.0)]),
+                PivotManualGroup::new(
+                    "Adult",
+                    [PivotValue::Number(21.0), PivotValue::Number(34.0)],
+                ),
+            ],
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 fn xls_manual_column_grouped_pivot_workbook() -> Workbook {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -622,6 +660,63 @@ fn excel_preserves_xls_pivot_manual_grouping() {
         u16::from_le_bytes(derived[0..2].try_into().unwrap()),
         0x0001,
         "Excel should preserve the derived manual field flags"
+    );
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xls_pivot_numeric_manual_grouping() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xls_bytes(&xls_numeric_manual_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("ManualAgeGroups")
+        .unwrap();
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "Age");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Manual { field, groups } => {
+            assert_eq!(field.name, "Age");
+            assert_eq!(groups.len(), 2);
+            assert_eq!(groups[0].name, "Young");
+            assert_eq!(
+                groups[0].members,
+                vec![PivotValue::Number(7.0), PivotValue::Number(13.0)]
+            );
+            assert_eq!(groups[1].name, "Adult");
+            assert_eq!(
+                groups[1].members,
+                vec![PivotValue::Number(21.0), PivotValue::Number(34.0)]
+            );
+        }
+        other => panic!("expected numeric manual grouping, got {other:?}"),
+    }
+
+    let cache = xls_cfb_stream(&excel_bytes, "/_SX_DB_CUR/0001");
+    let cache_records = xls_record_payloads(&cache);
+    let age_index = cache_records
+        .iter()
+        .position(|(record_type, payload)| {
+            *record_type == 0x00C7 && String::from_utf8_lossy(payload).contains("Age")
+        })
+        .expect("Excel should preserve Age cache field");
+    let revenue_index = cache_records[age_index + 1..]
+        .iter()
+        .position(|(record_type, _)| *record_type == 0x00C7)
+        .map(|offset| age_index + 1 + offset)
+        .expect("Excel should preserve following cache field");
+    let age_numbers = cache_records[age_index + 1..revenue_index]
+        .iter()
+        .filter_map(|(record_type, payload)| {
+            (*record_type == 0x00C9).then(|| f64::from_le_bytes(payload[0..8].try_into().unwrap()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        age_numbers,
+        vec![7.0, 13.0, 21.0, 34.0, 55.0],
+        "Excel should preserve numeric manual source items"
     );
 }
 
