@@ -232,6 +232,32 @@ mod tests {
         wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
     }
 
+    fn add_multi_unit_date_grouped_pivot(wb: &mut Workbook) {
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value("A1", "SaleDate").unwrap();
+        ws.set_cell_value("B1", "Revenue").unwrap();
+        ws.set_cell_value("A2", 45292.0).unwrap();
+        ws.set_cell_value("B2", 10.0).unwrap();
+        ws.set_cell_value("A3", 45323.0).unwrap();
+        ws.set_cell_value("B3", 20.0).unwrap();
+        ws.set_cell_value("A4", 45658.0).unwrap();
+        ws.set_cell_value("B4", 30.0).unwrap();
+
+        let pivot = PivotTable::builder("GroupedDates")
+            .source_range(CellRange::parse("A1:B4").unwrap())
+            .target_address("D1")
+            .unwrap()
+            .row("SaleDate")
+            .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+            .grouping(PivotGrouping::Date {
+                field: PivotFieldRef::new("SaleDate"),
+                units: vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months],
+            })
+            .build()
+            .unwrap();
+        wb.worksheet_mut(0).unwrap().add_pivot_table(pivot).unwrap();
+    }
+
     fn add_manual_grouped_pivot(wb: &mut Workbook) {
         let ws = wb.worksheet_mut(0).unwrap();
         ws.set_cell_value("A1", "Region").unwrap();
@@ -798,6 +824,118 @@ mod tests {
             PivotGrouping::Date { field, units } => {
                 assert_eq!(field.name, "Date");
                 assert_eq!(*units, vec![PivotDateGroupUnit::Months]);
+            }
+            other => panic!("unexpected grouping: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn semantic_pivot_tables_emit_xlsb_multi_unit_date_grouping_records() {
+        let mut wb = Workbook::new();
+        add_multi_unit_date_grouped_pivot(&mut wb);
+
+        let bytes = write_xlsb_bytes(&wb);
+        let cache_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotCache/pivotCacheDefinition1.bin",
+        ));
+        let field_count_payload = cache_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCD_FIELDS).then_some(payload)
+            })
+            .expect("BrtBeginPCDFields payload");
+        assert_eq!(
+            u32::from_le_bytes(field_count_payload[0..4].try_into().unwrap()),
+            4,
+            "multi-unit date grouping should add one derived cache field per unit"
+        );
+
+        let field_groups = cache_records
+            .iter()
+            .filter_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCDF_GROUP).then(|| {
+                    (
+                        i32::from_le_bytes(payload[0..4].try_into().unwrap()),
+                        i32::from_le_bytes(payload[4..8].try_into().unwrap()),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            field_groups,
+            vec![(2, -1), (-1, 0), (-1, 0)],
+            "base date field should point at the outer derived unit and derived date unit fields should point back to the base date field"
+        );
+
+        let range_group_bys = cache_records
+            .iter()
+            .filter_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_PCDFG_RANGE).then(|| payload[0])
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            range_group_bys,
+            vec![0x07, 0x05],
+            "derived fields should encode years then months"
+        );
+
+        let pivot_records = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotTables/pivotTable1.bin",
+        ));
+        let row_fields_payload = pivot_records
+            .iter()
+            .find_map(|(record_type, payload)| {
+                (*record_type == crate::biff12::records::BRT_BEGIN_ISXVD_RWS).then_some(payload)
+            })
+            .expect("BrtBeginISXVDRws payload");
+        assert_eq!(
+            u32::from_le_bytes(row_fields_payload[0..4].try_into().unwrap()),
+            2,
+            "multi-unit date grouping should expand the row axis to the unit fields"
+        );
+        let row_field_indexes = row_fields_payload[4..]
+            .chunks_exact(4)
+            .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(row_field_indexes, vec![2, 3]);
+
+        let cache_rows = records_with_payload(read_zip_entry_bytes(
+            &bytes,
+            "xl/pivotCache/pivotCacheRecords1.bin",
+        ))
+        .into_iter()
+        .filter_map(|(record_type, payload)| {
+            (record_type == crate::biff12::records::BRT_PCD_RECORD).then_some(payload)
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(cache_rows.len(), 3);
+        assert!(
+            cache_rows.iter().all(|payload| payload.len() == 12),
+            "BIFF12 date-unit derived fields should not widen cache record rows"
+        );
+    }
+
+    #[test]
+    fn semantic_pivot_tables_round_trip_xlsb_multi_unit_date_grouping() {
+        let mut wb = Workbook::new();
+        add_multi_unit_date_grouped_pivot(&mut wb);
+
+        let wb2 = round_trip(&wb);
+        let pivot = &wb2.worksheet(0).unwrap().pivot_tables()[0];
+
+        assert_eq!(pivot.name, "GroupedDates");
+        assert_eq!(pivot.rows.len(), 1);
+        assert_eq!(pivot.rows[0].field.name, "SaleDate");
+        assert_eq!(pivot.groupings.len(), 1);
+        match &pivot.groupings[0] {
+            PivotGrouping::Date { field, units } => {
+                assert_eq!(field.name, "SaleDate");
+                assert_eq!(
+                    *units,
+                    vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months]
+                );
             }
             other => panic!("unexpected grouping: {other:?}"),
         }

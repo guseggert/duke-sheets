@@ -343,6 +343,34 @@ fn xlsb_date_grouped_pivot_workbook() -> Workbook {
     wb
 }
 
+fn xlsb_multi_unit_date_grouped_pivot_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "SaleDate").unwrap();
+    ws.set_cell_value("B1", "Revenue").unwrap();
+    ws.set_cell_value("A2", 45292.0).unwrap();
+    ws.set_cell_value("B2", 10.0).unwrap();
+    ws.set_cell_value("A3", 45323.0).unwrap();
+    ws.set_cell_value("B3", 20.0).unwrap();
+    ws.set_cell_value("A4", 45658.0).unwrap();
+    ws.set_cell_value("B4", 30.0).unwrap();
+
+    let pivot = PivotTable::builder("GroupedDates")
+        .source_range(CellRange::parse("A1:B4").unwrap())
+        .target_address("D1")
+        .unwrap()
+        .row("SaleDate")
+        .named_measure("Revenue", PivotAggregate::Sum, "Total Revenue")
+        .grouping(PivotGrouping::Date {
+            field: "SaleDate".into(),
+            units: vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months],
+        })
+        .build()
+        .unwrap();
+    ws.add_pivot_table(pivot).unwrap();
+    wb
+}
+
 fn xlsb_manual_grouped_pivot_workbook() -> Workbook {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
@@ -487,6 +515,44 @@ fn excel_preserves_xlsb_pivot_date_grouping() {
         }
         other => panic!("expected date grouping, got {other:?}"),
     }
+}
+
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_preserves_xlsb_pivot_multi_unit_date_grouping() {
+    let (result, _writer_bytes, excel_bytes) =
+        roundtrip_through_excel_xlsb_bytes(&xlsb_multi_unit_date_grouped_pivot_workbook());
+    let pivot = result
+        .worksheet(0)
+        .unwrap()
+        .pivot_table_by_name("GroupedDates")
+        .unwrap();
+    assert_eq!(pivot.rows.len(), 1);
+    assert_eq!(pivot.rows[0].field.name, "SaleDate");
+    assert_eq!(pivot.groupings.len(), 1);
+    match &pivot.groupings[0] {
+        PivotGrouping::Date { field, units } => {
+            assert_eq!(field.name, "SaleDate");
+            assert_eq!(
+                *units,
+                vec![PivotDateGroupUnit::Years, PivotDateGroupUnit::Months]
+            );
+        }
+        other => panic!("expected date grouping, got {other:?}"),
+    }
+
+    let cache_records = xlsb_record_types(&zip_entry_bytes(
+        &excel_bytes,
+        "xl/pivotCache/pivotCacheDefinition1.bin",
+    ));
+    assert_eq!(
+        cache_records
+            .iter()
+            .filter(|&&record| record == duke_sheets_xlsb::biff12::records::BRT_BEGIN_PCDFG_RANGE)
+            .count(),
+        2,
+        "Excel should preserve both derived date grouping ranges"
+    );
 }
 
 #[test]

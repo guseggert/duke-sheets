@@ -574,15 +574,39 @@ fn parse_pivot_field_group(payload: &[u8], field: &mut PivotCacheField) {
 
 fn semantic_groupings_from_cache_fields(fields: &[PivotCacheField]) -> Vec<PivotGrouping> {
     let mut groupings = Vec::new();
-    for field in fields {
+    let mut date_units_by_base: BTreeMap<usize, Vec<PivotDateGroupUnit>> = BTreeMap::new();
+
+    for (index, field) in fields.iter().enumerate() {
         if let Some(grouping) = manual_grouping_from_cache_field(fields, field) {
             groupings.push(grouping);
             continue;
         }
-        if let Some(grouping) = &field.grouping {
-            groupings.push(grouping.clone());
+
+        match &field.grouping {
+            Some(PivotGrouping::Date { units, .. }) if field.group_base.is_some() => {
+                if let (Some(base), Some(unit)) = (field.group_base, units.first().copied()) {
+                    date_units_by_base.entry(base).or_default().push(unit);
+                }
+            }
+            Some(PivotGrouping::Date { units, .. }) => {
+                if let Some(unit) = units.first().copied() {
+                    date_units_by_base.entry(index).or_default().push(unit);
+                }
+            }
+            Some(grouping) => groupings.push(grouping.clone()),
+            None => {}
         }
     }
+
+    for (base, units) in date_units_by_base {
+        if let Some(field) = fields.get(base) {
+            groupings.push(PivotGrouping::Date {
+                field: PivotFieldRef::new(field.name.clone()),
+                units,
+            });
+        }
+    }
+
     groupings
 }
 
