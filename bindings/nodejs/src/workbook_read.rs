@@ -5,7 +5,9 @@ use napi_derive::napi;
 
 use duke_sheets_core::named_range::NameScope;
 
-use super::{catch_panic, to_napi_err, JsChartSheet, JsNamedRange, JsSheetSlot, JsWorkbookSettings, Workbook};
+use super::{
+    catch_panic, to_napi_err, JsChartSheet, JsNamedRange, JsSheetSlot, JsWorkbookSettings, Workbook,
+};
 
 #[napi]
 impl Workbook {

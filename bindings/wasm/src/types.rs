@@ -135,6 +135,7 @@ pub struct WasmPivotFieldOptions {
     pub field: String,
     pub caption: Option<String>,
     pub sort: Option<String>,
+    pub sort_by_measure: Option<WasmPivotMeasureOptions>,
     pub subtotal: Option<String>,
     pub subtotal_caption: Option<String>,
     pub subtotals: Option<Vec<String>>,
@@ -214,9 +215,11 @@ pub struct WasmPivotStyleOptions {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmPivotConsolidationRangeOptions {
-    pub sheet: String,
-    pub range: String,
+    pub sheet: Option<String>,
+    pub range: Option<String>,
     pub name: Option<String>,
+    pub external_relationship_id: Option<String>,
+    pub external_relationship_target: Option<String>,
     pub page_items: Option<Vec<String>>,
 }
 
@@ -315,10 +318,16 @@ impl From<&core::PivotValue> for WasmPivotValue {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmPivotSourceRangeDefinition {
-    pub sheet: String,
-    pub range: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_relationship_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_relationship_target: Option<String>,
     pub page_items: Vec<String>,
 }
 
@@ -326,8 +335,10 @@ impl From<&core::PivotSourceRange> for WasmPivotSourceRangeDefinition {
     fn from(range: &core::PivotSourceRange) -> Self {
         Self {
             sheet: range.sheet.clone(),
-            range: range.range.to_string(),
+            range: range.range.map(|range| range.to_string()),
             name: range.name.clone(),
+            external_relationship_id: range.external_relationship_id.clone(),
+            external_relationship_target: range.external_relationship_target.clone(),
             page_items: range.page_items.clone(),
         }
     }
@@ -441,6 +452,8 @@ pub struct WasmPivotFieldDefinition {
     pub field: String,
     pub caption: Option<String>,
     pub sort: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_by_measure: Option<WasmPivotMeasureDefinition>,
     pub subtotal: String,
     pub subtotal_caption: Option<String>,
     pub subtotals: Vec<String>,
@@ -460,6 +473,10 @@ impl From<&core::PivotField> for WasmPivotFieldDefinition {
             field: field.field.name.clone(),
             caption: field.caption.clone(),
             sort: pivot_sort_to_string(field.sort).into(),
+            sort_by_measure: field
+                .sort_by_measure
+                .as_ref()
+                .map(WasmPivotMeasureDefinition::from),
             subtotal: pivot_subtotal_to_string(field.subtotal).into(),
             subtotal_caption: field.subtotal_caption.clone(),
             subtotals: field
@@ -1462,12 +1479,18 @@ impl From<&core::WorkbookConnection> for WasmWorkbookConnectionDefinition {
                 definition.command_type = *command_type;
             }
             core::WorkbookConnectionKind::Olap {
+                connection,
+                command,
+                command_type,
                 local,
                 local_connection,
                 local_refresh,
                 send_locale,
                 row_drill_count,
             } => {
+                definition.connection = connection.clone();
+                definition.command = command.clone();
+                definition.command_type = *command_type;
                 definition.local = Some(*local);
                 definition.local_connection = local_connection.clone();
                 definition.local_refresh = Some(*local_refresh);

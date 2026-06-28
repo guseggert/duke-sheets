@@ -1446,16 +1446,21 @@ export interface JsPivotChartSource {
 }
 
 export interface JsPivotConsolidationRangeOptions {
-  sheet: string
-  range: string
+  sheet?: string
+  range?: string
   name?: string
+  externalRelationshipId?: string
+  externalRelationshipTarget?: string
   pageItems?: Array<string>
 }
 
 export interface JsPivotFieldDefinition {
   field: string
+  caption?: string
   sort: string
+  sortByMeasure?: JsPivotMeasureDefinition
   subtotal: string
+  subtotalCaption?: string
   subtotals: Array<string>
   collapsedItems: Array<JsPivotValue>
   showEmptyItems: boolean
@@ -1469,8 +1474,11 @@ export interface JsPivotFieldDefinition {
 
 export interface JsPivotFieldOptions {
   field: string
+  caption?: string
   sort?: string
+  sortByMeasure?: JsPivotMeasureOptions
   subtotal?: string
+  subtotalCaption?: string
   subtotals?: Array<string>
   collapsedItems?: Array<number | string | boolean>
   showEmptyItems?: boolean
@@ -1702,9 +1710,11 @@ export interface JsPivotSourceDefinition {
 }
 
 export interface JsPivotSourceRangeDefinition {
-  sheet: string
-  range: string
+  sheet?: string
+  range?: string
   name?: string
+  externalRelationshipId?: string
+  externalRelationshipTarget?: string
   pageItems: Array<string>
 }
 

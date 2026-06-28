@@ -6,11 +6,11 @@ use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 
 use crate::{
-    image_sizing_to_python, to_py_err, PyAutoFilter, PyCalculationImage, PyChart, PyColor,
-    PyComment, PyCommentEntry, PyConditionalFormatRule, PyDataValidation, PyFormulaCell,
-    PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergeSpan, PyMergedRegion, PyPageBreak,
-    PyPageSetup, PyRow, PyRowCell, PySelection, PySheetProtection, PySpillSource, PySplitPanes,
-    PyStyle, PyTable, PyChartEx, PyEmbeddedImage, PyWorksheet,
+    image_sizing_to_python, to_py_err, PyAutoFilter, PyCalculationImage, PyChart, PyChartEx,
+    PyColor, PyComment, PyCommentEntry, PyConditionalFormatRule, PyDataValidation, PyEmbeddedImage,
+    PyFormulaCell, PyFreezePanes, PyHyperlink, PyHyperlinkEntry, PyMergeSpan, PyMergedRegion,
+    PyPageBreak, PyPageSetup, PyRow, PyRowCell, PySelection, PySheetProtection, PySpillSource,
+    PySplitPanes, PyStyle, PyTable, PyWorksheet,
 };
 
 const ROW_ITER_BATCH_SIZE: u32 = 1000;

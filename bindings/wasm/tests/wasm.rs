@@ -339,9 +339,15 @@ fn test_pivot_table_definitions_from_options() {
     let wb = Workbook::new();
     let sheet = wb.get_sheet(0).unwrap();
 
+    let sort_measure = make_options(&[
+        ("field", JsValue::from_str("Revenue")),
+        ("aggregate", JsValue::from_str("sum")),
+        ("name", JsValue::from_str("Revenue")),
+    ]);
     let row_field = make_options(&[
         ("field", JsValue::from_str("Region")),
         ("sort", JsValue::from_str("descending")),
+        ("sortByMeasure", sort_measure),
         ("subtotal", JsValue::from_str("sum")),
         (
             "subtotals",
@@ -487,6 +493,10 @@ fn test_pivot_table_definitions_from_options() {
     let row = rows.get(0);
     assert_eq!(get_string_field(&row, "field"), "Region");
     assert_eq!(get_string_field(&row, "sort"), "descending");
+    let sort_by_measure = Reflect::get(&row, &JsValue::from_str("sortByMeasure")).unwrap();
+    assert_eq!(get_string_field(&sort_by_measure, "field"), "Revenue");
+    assert_eq!(get_string_field(&sort_by_measure, "aggregate"), "sum");
+    assert_eq!(get_string_field(&sort_by_measure, "caption"), "Revenue");
     assert_eq!(get_string_field(&row, "subtotal"), "sum");
     let subtotals = Array::from(&Reflect::get(&row, &JsValue::from_str("subtotals")).unwrap());
     assert_eq!(subtotals.length(), 3);
@@ -517,12 +527,18 @@ fn test_pivot_table_definitions_from_options() {
     assert_eq!(get_string_field(&filter, "kind"), "label");
     assert_eq!(get_string_field(&filter, "operator"), "beginsWith");
     let label_range_filter = filters.get(1);
-    assert_eq!(get_string_field(&label_range_filter, "kind"), "labelBetween");
+    assert_eq!(
+        get_string_field(&label_range_filter, "kind"),
+        "labelBetween"
+    );
     assert_eq!(get_string_field(&label_range_filter, "field"), "Region");
     assert_eq!(get_string_field(&label_range_filter, "startText"), "East");
     assert_eq!(get_string_field(&label_range_filter, "endText"), "North");
     let value_range_filter = filters.get(2);
-    assert_eq!(get_string_field(&value_range_filter, "kind"), "valueBetween");
+    assert_eq!(
+        get_string_field(&value_range_filter, "kind"),
+        "valueBetween"
+    );
     assert_eq!(get_string_field(&value_range_filter, "field"), "Region");
     assert_eq!(get_f64_field(&value_range_filter, "start"), 10.0);
     assert_eq!(get_f64_field(&value_range_filter, "end"), 30.0);

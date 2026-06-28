@@ -4,11 +4,11 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use super::{
-    catch_panic, to_napi_err, JsAutoFilter, JsColor, JsComment, JsCommentEntry,
-    JsConditionalFormatRule, JsDataValidation, JsFormulaCell, JsFreezePanes, JsHyperlink,
-    JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak, JsPageSetup, JsRow,
-    JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource, JsSplitPanes, JsStyle,
-    JsTable, JsChart, JsChartEx, JsEmbeddedImage, Worksheet,
+    catch_panic, to_napi_err, JsAutoFilter, JsChart, JsChartEx, JsColor, JsComment, JsCommentEntry,
+    JsConditionalFormatRule, JsDataValidation, JsEmbeddedImage, JsFormulaCell, JsFreezePanes,
+    JsHyperlink, JsHyperlinkEntry, JsImageInfo, JsMergeSpan, JsMergedRegion, JsPageBreak,
+    JsPageSetup, JsRow, JsRowCell, JsRowsOptions, JsSelection, JsSheetProtection, JsSpillSource,
+    JsSplitPanes, JsStyle, JsTable, Worksheet,
 };
 
 #[napi]

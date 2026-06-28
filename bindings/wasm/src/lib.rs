@@ -343,6 +343,7 @@ export interface PivotFieldOptions {
   field: string;
   caption?: string;
   sort?: "none" | "manual" | "ascending" | "asc" | "descending" | "desc";
+  sortByMeasure?: PivotMeasureOptions;
   subtotalCaption?: string;
   subtotal?:
     | "automatic"
@@ -443,9 +444,11 @@ export interface PivotStyleOptions {
 }
 
 export interface PivotConsolidationRangeOptions {
-  sheet: string;
-  range: string;
+  sheet?: string;
+  range?: string;
   name?: string;
+  externalRelationshipId?: string;
+  externalRelationshipTarget?: string;
   pageItems?: string[];
 }
 
@@ -490,9 +493,11 @@ export interface PivotValue {
 }
 
 export interface PivotSourceRangeDefinition {
-  sheet: string;
-  range: string;
+  sheet?: string;
+  range?: string;
   name?: string;
+  externalRelationshipId?: string;
+  externalRelationshipTarget?: string;
   pageItems: string[];
 }
 
@@ -512,6 +517,7 @@ export interface PivotFieldDefinition {
   field: string;
   caption?: string;
   sort: "none" | "ascending" | "descending";
+  sortByMeasure?: PivotMeasureDefinition;
   subtotal: "automatic" | "none" | "sum" | "count" | "countNumbers" | "average" | "min" | "max" | "product" | "stdDev" | "stdDevP" | "var" | "varP";
   subtotalCaption?: string;
   subtotals: string[];
@@ -962,12 +968,32 @@ fn build_pivot_consolidation_ranges_from_wasm(
     ranges
         .into_iter()
         .map(|range| {
-            let parsed = CellRange::parse(&range.range)
-                .map_err(|e| JsError::new(&format!("Invalid pivot consolidation range: {e}")))?;
-            let mut source_range = PivotSourceRange::new(range.sheet, parsed);
-            if let Some(name) = range.name {
-                source_range = source_range.with_name(name);
+            let parsed = range
+                .range
+                .as_deref()
+                .map(|range_ref| {
+                    CellRange::parse(range_ref).map_err(|e| {
+                        JsError::new(&format!("Invalid pivot consolidation range: {e}"))
+                    })
+                })
+                .transpose()?;
+            if parsed.is_none()
+                && range.name.is_none()
+                && range.external_relationship_id.is_none()
+                && range.external_relationship_target.is_none()
+            {
+                return Err(JsError::new(
+                    "Pivot consolidation range requires range, name, externalRelationshipId, or externalRelationshipTarget",
+                ));
             }
+            let mut source_range = PivotSourceRange {
+                sheet: range.sheet,
+                range: parsed,
+                name: range.name,
+                external_relationship_id: range.external_relationship_id,
+                external_relationship_target: range.external_relationship_target,
+                page_items: Vec::new(),
+            };
             if let Some(page_items) = range.page_items {
                 source_range = source_range.with_page_items(page_items);
             }
@@ -1024,6 +1050,9 @@ fn build_workbook_connection_from_wasm(
         "olap" => {
             let mut connection = WorkbookConnection::olap(options.id, options.name);
             connection.kind = WorkbookConnectionKind::Olap {
+                connection: options.connection,
+                command: None,
+                command_type: None,
                 local: options.local.unwrap_or(false),
                 local_connection: options.local_connection,
                 local_refresh: options.local_refresh.unwrap_or(true),
@@ -1061,6 +1090,9 @@ fn build_pivot_field_from_wasm(options: WasmPivotFieldOptions) -> Result<PivotFi
     field.caption = options.caption;
     if let Some(sort) = options.sort {
         field.sort = parse_pivot_sort(&sort)?;
+    }
+    if let Some(measure) = options.sort_by_measure {
+        field.sort_by_measure = Some(build_pivot_measure_from_wasm(measure)?);
     }
     if let Some(subtotal) = options.subtotal {
         field.subtotal = parse_pivot_subtotal(&subtotal)?;
@@ -1401,9 +1433,9 @@ fn build_pivot_filter_from_wasm(options: WasmPivotFilterOptions) -> Result<Pivot
                 start: options.start_text.or(options.text).ok_or_else(|| {
                     JsError::new("Pivot label-not-between filter requires startText")
                 })?,
-                end: options
-                    .end_text
-                    .ok_or_else(|| JsError::new("Pivot label-not-between filter requires endText"))?,
+                end: options.end_text.ok_or_else(|| {
+                    JsError::new("Pivot label-not-between filter requires endText")
+                })?,
                 not_between: true,
             })
         }
@@ -1423,9 +1455,9 @@ fn build_pivot_filter_from_wasm(options: WasmPivotFilterOptions) -> Result<Pivot
             Ok(PivotFilter::ValueBetween {
                 field: options.field.into(),
                 measure: build_pivot_measure_from_wasm(
-                    options
-                        .measure
-                        .ok_or_else(|| JsError::new("Pivot value-between filter requires measure"))?,
+                    options.measure.ok_or_else(|| {
+                        JsError::new("Pivot value-between filter requires measure")
+                    })?,
                 )?,
                 start: options
                     .start
@@ -1440,11 +1472,9 @@ fn build_pivot_filter_from_wasm(options: WasmPivotFilterOptions) -> Result<Pivot
         "valueNotBetween" | "value_not_between" | "valueNotRange" | "value_not_range" => {
             Ok(PivotFilter::ValueBetween {
                 field: options.field.into(),
-                measure: build_pivot_measure_from_wasm(
-                    options.measure.ok_or_else(|| {
-                        JsError::new("Pivot value-not-between filter requires measure")
-                    })?,
-                )?,
+                measure: build_pivot_measure_from_wasm(options.measure.ok_or_else(|| {
+                    JsError::new("Pivot value-not-between filter requires measure")
+                })?)?,
                 start: options
                     .start
                     .or(options.value)
@@ -1679,9 +1709,7 @@ fn parse_pivot_show_as(
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
-        "percentOfParentRowTotal" | "percentOfParentRow" => {
-            PivotShowAs::PercentOfParentRowTotal
-        }
+        "percentOfParentRowTotal" | "percentOfParentRow" => PivotShowAs::PercentOfParentRowTotal,
         "percentOfParentColumnTotal" | "percentOfParentCol" => {
             PivotShowAs::PercentOfParentColumnTotal
         }

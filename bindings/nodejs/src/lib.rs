@@ -398,6 +398,7 @@ pub struct JsPivotFieldOptions {
     pub field: String,
     pub caption: Option<String>,
     pub sort: Option<String>,
+    pub sort_by_measure: Option<JsPivotMeasureOptions>,
     pub subtotal: Option<String>,
     pub subtotal_caption: Option<String>,
     pub subtotals: Option<Vec<String>>,
@@ -473,9 +474,11 @@ pub struct JsPivotStyleOptions {
 
 #[napi(object)]
 pub struct JsPivotConsolidationRangeOptions {
-    pub sheet: String,
-    pub range: String,
+    pub sheet: Option<String>,
+    pub range: Option<String>,
     pub name: Option<String>,
+    pub external_relationship_id: Option<String>,
+    pub external_relationship_target: Option<String>,
     pub page_items: Option<Vec<String>>,
 }
 
@@ -619,12 +622,18 @@ impl From<&WorkbookConnection> for JsWorkbookConnectionDefinition {
                 definition.command_type = *command_type;
             }
             WorkbookConnectionKind::Olap {
+                connection,
+                command,
+                command_type,
                 local,
                 local_connection,
                 local_refresh,
                 send_locale,
                 row_drill_count,
             } => {
+                definition.connection = connection.clone();
+                definition.command = command.clone();
+                definition.command_type = *command_type;
                 definition.local = Some(*local);
                 definition.local_connection = local_connection.clone();
                 definition.local_refresh = Some(*local_refresh);
@@ -879,13 +888,34 @@ fn build_pivot_consolidation_ranges_from_js(
     ranges
         .into_iter()
         .map(|range| {
-            let parsed = CellRange::parse(&range.range).map_err(|e| {
-                napi::Error::from_reason(format!("Invalid pivot consolidation range: {e}"))
-            })?;
-            let mut source_range = PivotSourceRange::new(range.sheet, parsed);
-            if let Some(name) = range.name {
-                source_range = source_range.with_name(name);
+            let parsed = range
+                .range
+                .as_deref()
+                .map(|range_ref| {
+                    CellRange::parse(range_ref).map_err(|e| {
+                        napi::Error::from_reason(format!(
+                            "Invalid pivot consolidation range: {e}"
+                        ))
+                    })
+                })
+                .transpose()?;
+            if parsed.is_none()
+                && range.name.is_none()
+                && range.external_relationship_id.is_none()
+                && range.external_relationship_target.is_none()
+            {
+                return Err(napi::Error::from_reason(
+                    "Pivot consolidation range requires range, name, externalRelationshipId, or externalRelationshipTarget",
+                ));
             }
+            let mut source_range = PivotSourceRange {
+                sheet: range.sheet,
+                range: parsed,
+                name: range.name,
+                external_relationship_id: range.external_relationship_id,
+                external_relationship_target: range.external_relationship_target,
+                page_items: Vec::new(),
+            };
             if let Some(page_items) = range.page_items {
                 source_range = source_range.with_page_items(page_items);
             }
@@ -942,6 +972,9 @@ fn build_workbook_connection_from_js(
         "olap" => {
             let mut connection = WorkbookConnection::olap(options.id, options.name);
             connection.kind = WorkbookConnectionKind::Olap {
+                connection: options.connection,
+                command: None,
+                command_type: None,
                 local: options.local.unwrap_or(false),
                 local_connection: options.local_connection,
                 local_refresh: options.local_refresh.unwrap_or(true),
@@ -979,6 +1012,9 @@ fn build_pivot_field_from_js(options: JsPivotFieldOptions) -> Result<PivotField>
     field.caption = options.caption;
     if let Some(sort) = options.sort {
         field.sort = parse_pivot_sort(&sort)?;
+    }
+    if let Some(measure) = options.sort_by_measure {
+        field.sort_by_measure = Some(build_pivot_measure_from_js(measure)?);
     }
     if let Some(subtotal) = options.subtotal {
         field.subtotal = parse_pivot_subtotal(&subtotal)?;
@@ -1579,9 +1615,7 @@ fn parse_pivot_show_as(
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
-        "percentOfParentRowTotal" | "percentOfParentRow" => {
-            PivotShowAs::PercentOfParentRowTotal
-        }
+        "percentOfParentRowTotal" | "percentOfParentRow" => PivotShowAs::PercentOfParentRowTotal,
         "percentOfParentColumnTotal" | "percentOfParentCol" => {
             PivotShowAs::PercentOfParentColumnTotal
         }

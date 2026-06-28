@@ -217,6 +217,11 @@ class TestPivotTables:
                     {
                         "field": "Region",
                         "sort": "descending",
+                        "sort_by_measure": {
+                            "field": "Revenue",
+                            "aggregate": "sum",
+                            "name": "Revenue",
+                        },
                         "subtotal": "sum",
                         "subtotals": ["sum", "average", "max"],
                         "show_drop_downs": False,
@@ -323,6 +328,9 @@ class TestPivotTables:
         assert pivot["target"] == "E1"
         assert pivot["rows"][0]["field"] == "Region"
         assert pivot["rows"][0]["sort"] == "descending"
+        assert pivot["rows"][0]["sort_by_measure"]["field"] == "Revenue"
+        assert pivot["rows"][0]["sort_by_measure"]["aggregate"] == "sum"
+        assert pivot["rows"][0]["sort_by_measure"]["caption"] == "Revenue"
         assert pivot["rows"][0]["subtotal"] == "sum"
         assert pivot["rows"][0]["subtotals"] == ["sum", "average", "max"]
         assert pivot["rows"][0]["show_drop_downs"] is False

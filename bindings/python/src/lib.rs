@@ -246,15 +246,41 @@ fn build_pivot_consolidation_ranges_from_py(
             let dict = range
                 .downcast::<PyDict>()
                 .map_err(|_| PyValueError::new_err("pivot consolidation range must be a dict"))?;
-            let range_ref = required_string(dict, &["range"])?;
-            let parsed = CellRange::parse(&range_ref).map_err(|e| {
-                PyValueError::new_err(format!("Invalid pivot consolidation range: {e}"))
-            })?;
-            let mut source_range =
-                PivotSourceRange::new(required_string(dict, &["sheet"])?, parsed);
-            if let Some(name) = optional_string(dict, &["name"])? {
-                source_range = source_range.with_name(name);
+            let range_ref = optional_string(dict, &["range"])?;
+            let parsed = range_ref
+                .as_deref()
+                .map(|range_ref| {
+                    CellRange::parse(range_ref).map_err(|e| {
+                        PyValueError::new_err(format!(
+                            "Invalid pivot consolidation range: {e}"
+                        ))
+                    })
+                })
+                .transpose()?;
+            let name = optional_string(dict, &["name"])?;
+            let external_relationship_id =
+                optional_string(dict, &["external_relationship_id", "externalRelationshipId"])?;
+            let external_relationship_target = optional_string(
+                dict,
+                &["external_relationship_target", "externalRelationshipTarget"],
+            )?;
+            if parsed.is_none()
+                && name.is_none()
+                && external_relationship_id.is_none()
+                && external_relationship_target.is_none()
+            {
+                return Err(PyValueError::new_err(
+                    "pivot consolidation range requires range, name, external_relationship_id, or external_relationship_target",
+                ));
             }
+            let mut source_range = PivotSourceRange {
+                sheet: optional_string(dict, &["sheet"])?,
+                range: parsed,
+                name,
+                external_relationship_id,
+                external_relationship_target,
+                page_items: Vec::new(),
+            };
             if let Some(page_items) = optional_string_vec(dict, &["page_items", "pageItems"])? {
                 source_range = source_range.with_page_items(page_items);
             }
@@ -272,11 +298,13 @@ fn build_pivot_field_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotField>
     if let Some(sort) = optional_string(dict, &["sort"])? {
         field.sort = parse_pivot_sort(&sort)?;
     }
+    if let Some(measure) = optional_any(dict, &["sort_by_measure", "sortByMeasure"])? {
+        field.sort_by_measure = Some(build_pivot_measure_from_py(&measure)?);
+    }
     if let Some(subtotal) = optional_string(dict, &["subtotal"])? {
         field.subtotal = parse_pivot_subtotal(&subtotal)?;
     }
-    field.subtotal_caption =
-        optional_string(dict, &["subtotal_caption", "subtotalCaption"])?;
+    field.subtotal_caption = optional_string(dict, &["subtotal_caption", "subtotalCaption"])?;
     if let Some(subtotals) = optional_string_vec(dict, &["subtotals"])? {
         let subtotals = subtotals
             .into_iter()
@@ -539,10 +567,9 @@ fn build_pivot_filter_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotFilte
         "labelBetween" | "label_between" | "captionBetween" | "caption_between" => {
             Ok(PivotFilter::LabelBetween {
                 field: field.into(),
-                start: optional_string(dict, &["start_text", "startText", "text"])?
-                    .ok_or_else(|| {
-                        PyValueError::new_err("pivot label-between filter requires start_text")
-                    })?,
+                start: optional_string(dict, &["start_text", "startText", "text"])?.ok_or_else(
+                    || PyValueError::new_err("pivot label-between filter requires start_text"),
+                )?,
                 end: optional_string(dict, &["end_text", "endText"])?.ok_or_else(|| {
                     PyValueError::new_err("pivot label-between filter requires end_text")
                 })?,
@@ -552,10 +579,9 @@ fn build_pivot_filter_from_py(options: &Bound<'_, PyAny>) -> PyResult<PivotFilte
         "labelNotBetween" | "label_not_between" | "captionNotBetween" | "caption_not_between" => {
             Ok(PivotFilter::LabelBetween {
                 field: field.into(),
-                start: optional_string(dict, &["start_text", "startText", "text"])?
-                    .ok_or_else(|| {
-                        PyValueError::new_err("pivot label-not-between filter requires start_text")
-                    })?,
+                start: optional_string(dict, &["start_text", "startText", "text"])?.ok_or_else(
+                    || PyValueError::new_err("pivot label-not-between filter requires start_text"),
+                )?,
                 end: optional_string(dict, &["end_text", "endText"])?.ok_or_else(|| {
                     PyValueError::new_err("pivot label-not-between filter requires end_text")
                 })?,
@@ -1023,13 +1049,17 @@ fn parse_pivot_show_as(
         "percentOfGrandTotal" | "percentOfTotal" => PivotShowAs::PercentOfGrandTotal,
         "percentOfRowTotal" | "percentOfRow" => PivotShowAs::PercentOfRowTotal,
         "percentOfColumnTotal" | "percentOfCol" => PivotShowAs::PercentOfColumnTotal,
-        "percentOfParentRowTotal" | "percentOfParentRow" | "percent_of_parent_row_total"
+        "percentOfParentRowTotal"
+        | "percentOfParentRow"
+        | "percent_of_parent_row_total"
         | "percent_of_parent_row" => PivotShowAs::PercentOfParentRowTotal,
-        "percentOfParentColumnTotal" | "percentOfParentCol"
-        | "percent_of_parent_column_total" | "percent_of_parent_col" => {
-            PivotShowAs::PercentOfParentColumnTotal
-        }
-        "percentOfParentTotal" | "percentOfParent" | "percent_of_parent_total"
+        "percentOfParentColumnTotal"
+        | "percentOfParentCol"
+        | "percent_of_parent_column_total"
+        | "percent_of_parent_col" => PivotShowAs::PercentOfParentColumnTotal,
+        "percentOfParentTotal"
+        | "percentOfParent"
+        | "percent_of_parent_total"
         | "percent_of_parent" => PivotShowAs::PercentOfParentTotal {
             base_field: require_pivot_base_field(value, base_field)?.into(),
         },
@@ -1176,8 +1206,16 @@ fn pivot_source_to_py(py: Python<'_>, source: &PivotSource) -> PyResult<PyObject
 fn pivot_source_range_to_py(py: Python<'_>, range: &PivotSourceRange) -> PyResult<PyObject> {
     let dict = PyDict::new_bound(py);
     dict.set_item("sheet", &range.sheet)?;
-    dict.set_item("range", range.range.to_string())?;
+    dict.set_item("range", range.range.map(|range| range.to_string()))?;
     dict.set_item("name", &range.name)?;
+    dict.set_item(
+        "external_relationship_id",
+        &range.external_relationship_id,
+    )?;
+    dict.set_item(
+        "external_relationship_target",
+        &range.external_relationship_target,
+    )?;
     dict.set_item("page_items", &range.page_items)?;
     Ok(dict.into_any().unbind())
 }
@@ -1195,6 +1233,14 @@ fn pivot_field_to_py(py: Python<'_>, field: &PivotField) -> PyResult<PyObject> {
     dict.set_item("field", &field.field.name)?;
     dict.set_item("caption", &field.caption)?;
     dict.set_item("sort", pivot_sort_to_python(field.sort))?;
+    dict.set_item(
+        "sort_by_measure",
+        field
+            .sort_by_measure
+            .as_ref()
+            .map(|measure| pivot_measure_to_py(py, measure))
+            .transpose()?,
+    )?;
     dict.set_item("subtotal", pivot_subtotal_to_python(field.subtotal))?;
     dict.set_item("subtotal_caption", &field.subtotal_caption)?;
     let subtotals = field
@@ -1793,12 +1839,18 @@ fn workbook_connection_to_py(
             dict.set_item("command_type", command_type)?;
         }
         WorkbookConnectionKind::Olap {
+            connection,
+            command,
+            command_type,
             local,
             local_connection,
             local_refresh,
             send_locale,
             row_drill_count,
         } => {
+            dict.set_item("connection", connection)?;
+            dict.set_item("command", command)?;
+            dict.set_item("command_type", command_type)?;
             dict.set_item("local", local)?;
             dict.set_item("local_connection", local_connection)?;
             dict.set_item("local_refresh", local_refresh)?;
@@ -1918,6 +1970,9 @@ fn build_workbook_connection_from_py(options: &Bound<'_, PyAny>) -> PyResult<Wor
         "olap" => {
             let mut connection = WorkbookConnection::olap(id, name);
             connection.kind = WorkbookConnectionKind::Olap {
+                connection: optional_string(dict, &["connection"])?,
+                command: None,
+                command_type: None,
                 local: optional_bool(dict, &["local"])?.unwrap_or(false),
                 local_connection: optional_string(dict, &["local_connection", "localConnection"])?,
                 local_refresh: optional_bool(dict, &["local_refresh", "localRefresh"])?

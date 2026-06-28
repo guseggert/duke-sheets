@@ -548,8 +548,10 @@ dependencies = [
  "duke-sheets-core",
  "duke-sheets-crypto",
  "duke-sheets-formula",
+ "duke-sheets-pivot",
  "log",
  "md-5",
+ "ssfmt",
  "thiserror 1.0.69",
 ]
 
@@ -561,9 +563,11 @@ dependencies = [
  "duke-sheets-chart",
  "duke-sheets-core",
  "duke-sheets-formula",
+ "duke-sheets-pivot",
  "encoding_rs",
  "log",
  "quick-xml",
+ "ssfmt",
  "thiserror 1.0.69",
  "zip",
 ]

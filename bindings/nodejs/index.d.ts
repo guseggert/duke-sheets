@@ -185,6 +185,7 @@ export interface JsPivotFieldOptions {
   field: string
   caption?: string
   sort?: 'none' | 'manual' | 'ascending' | 'asc' | 'descending' | 'desc'
+  sortByMeasure?: JsPivotMeasureOptions
   subtotalCaption?: string
   subtotal?:
     | 'automatic'
@@ -285,9 +286,11 @@ export interface JsPivotStyleOptions {
 }
 
 export interface JsPivotConsolidationRangeOptions {
-  sheet: string
-  range: string
+  sheet?: string
+  range?: string
   name?: string
+  externalRelationshipId?: string
+  externalRelationshipTarget?: string
   pageItems?: string[]
 }
 
