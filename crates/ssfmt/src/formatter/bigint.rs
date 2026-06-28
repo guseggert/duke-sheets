@@ -227,7 +227,9 @@ mod tests {
         assert!(!is_safe_integer(&below_min));
 
         // Large values
-        assert!(!is_safe_integer(&BigInt::parse_bytes(b"123456822333333000", 10).unwrap()));
+        assert!(!is_safe_integer(
+            &BigInt::parse_bytes(b"123456822333333000", 10).unwrap()
+        ));
     }
 
     #[test]

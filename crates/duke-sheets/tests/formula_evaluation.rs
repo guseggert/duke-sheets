@@ -233,7 +233,10 @@ fn test_workbook_calculate_power_zero_zero() {
     ctx.eval_cache = Some(&cache);
     let ast = parse_formula(wb.worksheet(0).unwrap().get_formula_at(0, 0).unwrap()).unwrap();
     // Excel returns #NUM! for POWER(0,0)
-    assert_eq!(evaluate(&ast, &ctx).unwrap(), FormulaValue::Error(CellError::Num));
+    assert_eq!(
+        evaluate(&ast, &ctx).unwrap(),
+        FormulaValue::Error(CellError::Num)
+    );
 
     wb.calculate().unwrap();
 
@@ -308,9 +311,9 @@ fn test_loaded_parity_cells_recalculate() {
     wb.calculate().unwrap();
 
     let tests_sheet = wb.worksheet(tests_sheet_idx).unwrap();
+    assert_eq!(tests_sheet.get_value_at(441, 2), CellValue::Number(1.0));
     assert_eq!(
-        tests_sheet.get_value_at(441, 2),
-        CellValue::Number(1.0)
+        tests_sheet.get_value_at(456, 2),
+        CellValue::Error(CellError::Num)
     );
-    assert_eq!(tests_sheet.get_value_at(456, 2), CellValue::Error(CellError::Num));
 }

@@ -285,8 +285,7 @@ impl DataValidation {
 }
 
 /// Types of data validation
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum ValidationType {
     /// No validation (any value allowed)
     #[default]
@@ -339,7 +338,6 @@ pub enum ValidationType {
         formula: String,
     },
 }
-
 
 impl ValidationType {
     /// Get the XLSX type string for this validation type

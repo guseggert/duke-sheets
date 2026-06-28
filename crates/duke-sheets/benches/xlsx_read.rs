@@ -5,8 +5,8 @@ mod helpers;
 
 use std::io::Cursor;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use calamine::Reader;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_xlsx_read(c: &mut Criterion) {
     for &(label, rows, cols) in helpers::SIZES {
@@ -48,7 +48,6 @@ fn bench_xlsx_read(c: &mut Criterion) {
         group.finish();
     }
 }
-
 
 criterion_group! {
     name = benches;

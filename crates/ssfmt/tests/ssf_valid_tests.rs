@@ -4,8 +4,8 @@
 //! without crashing. They don't check the output, just that formatting
 //! doesn't fail.
 
-use ssfmt::format_default;
 use flate2::read::GzDecoder;
+use ssfmt::format_default;
 use std::io::Read;
 
 fn load_format_strings() -> Vec<String> {
@@ -64,9 +64,20 @@ fn test_ssf_valid_formats() {
     }
 
     println!("Total formats: {}", total);
-    println!("Passed:  {} ({:.1}%)", passed, (passed as f64 / total as f64) * 100.0);
-    println!("Failed:  {} ({:.1}%)", failed, (failed as f64 / total as f64) * 100.0);
+    println!(
+        "Passed:  {} ({:.1}%)",
+        passed,
+        (passed as f64 / total as f64) * 100.0
+    );
+    println!(
+        "Failed:  {} ({:.1}%)",
+        failed,
+        (failed as f64 / total as f64) * 100.0
+    );
 
     // We should be able to parse most formats
-    assert!(passed > total / 2, "More than half of formats should be valid");
+    assert!(
+        passed > total / 2,
+        "More than half of formats should be valid"
+    );
 }

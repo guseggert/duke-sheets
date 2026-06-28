@@ -136,7 +136,10 @@ async fn test_save_and_read_back_with_duke_sheets() {
     // Check that the formulas exist (they may be stored as computed values or formulas)
     // A3 = A1*10 = 31.4, row=2, col=0
     let a3 = sheet.get_value_at(2, 0);
-    assert!(sheet.get_formula_at(2, 0).is_some(), "A3 should retain its formula");
+    assert!(
+        sheet.get_formula_at(2, 0).is_some(),
+        "A3 should retain its formula"
+    );
     match &a3 {
         CellValue::Number(n) => {
             assert!(
@@ -151,7 +154,10 @@ async fn test_save_and_read_back_with_duke_sheets() {
 
     // B3 = SUM(B1:B2) = 300, row=2, col=1
     let b3 = sheet.get_value_at(2, 1);
-    assert!(sheet.get_formula_at(2, 1).is_some(), "B3 should retain its formula");
+    assert!(
+        sheet.get_formula_at(2, 1).is_some(),
+        "B3 should retain its formula"
+    );
     match &b3 {
         CellValue::Number(n) => {
             assert!(

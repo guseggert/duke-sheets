@@ -2831,7 +2831,10 @@ mod tests {
             external_fn: Some(Arc::new(|book, name, args| {
                 assert_eq!(book, "1");
                 assert_eq!(name, "TBLink");
-                assert_eq!(args, &["acct".to_string(), "7".to_string(), "3".to_string()]);
+                assert_eq!(
+                    args,
+                    &["acct".to_string(), "7".to_string(), "3".to_string()]
+                );
                 Some(FormulaValue::Number(99.0))
             })),
             ..Default::default()
@@ -2851,8 +2854,12 @@ mod tests {
     fn test_unresolved_external_function_preserves_cached_value() {
         let mut workbook = Workbook::new();
         let sheet = workbook.worksheet_mut(0).unwrap();
-        sheet.set_cell_formula("A1", r#"=[1]!TBLink("acct")"#).unwrap();
-        sheet.set_formula_result(0, 0, CellValue::Number(42.0)).unwrap();
+        sheet
+            .set_cell_formula("A1", r#"=[1]!TBLink("acct")"#)
+            .unwrap();
+        sheet
+            .set_formula_result(0, 0, CellValue::Number(42.0))
+            .unwrap();
 
         let stats = workbook.calculate().unwrap();
         assert_eq!(stats.errors, 0);

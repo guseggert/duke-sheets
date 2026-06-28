@@ -19,9 +19,18 @@ fn main() {
 
     eprintln!("=== Type Sizes ===");
     eprintln!("CellValue:    {} bytes", std::mem::size_of::<CellValue>());
-    eprintln!("FormulaExpr:  {} bytes", std::mem::size_of::<duke_sheets_formula::FormulaExpr>());
-    eprintln!("CellKey:      {} bytes", std::mem::size_of::<duke_sheets_formula::dependency::CellKey>());
-    eprintln!("FormulaValue: {} bytes", std::mem::size_of::<duke_sheets_formula::FormulaValue>());
+    eprintln!(
+        "FormulaExpr:  {} bytes",
+        std::mem::size_of::<duke_sheets_formula::FormulaExpr>()
+    );
+    eprintln!(
+        "CellKey:      {} bytes",
+        std::mem::size_of::<duke_sheets_formula::dependency::CellKey>()
+    );
+    eprintln!(
+        "FormulaValue: {} bytes",
+        std::mem::size_of::<duke_sheets_formula::FormulaValue>()
+    );
     eprintln!();
 
     let rss_before = rss_kb();
@@ -33,7 +42,11 @@ fn main() {
     let open_time = t0.elapsed();
     let rss_after_open = rss_kb();
     eprintln!("Opened in {:.2?}", open_time);
-    eprintln!("RSS after open: {} MB (+{} MB)", rss_after_open / 1024, (rss_after_open - rss_before) / 1024);
+    eprintln!(
+        "RSS after open: {} MB (+{} MB)",
+        rss_after_open / 1024,
+        (rss_after_open - rss_before) / 1024
+    );
 
     eprintln!("\n=== Per-Sheet Cell Analysis ===");
     let mut grand_cells = 0usize;
@@ -43,7 +56,9 @@ fn main() {
         if let Some(sheet) = workbook.worksheet(i) {
             let cell_count = sheet.cell_count();
             let formula_count = sheet.formula_cells().count();
-            if cell_count == 0 { continue; }
+            if cell_count == 0 {
+                continue;
+            }
 
             let mut numbers = 0usize;
             let mut strings = 0usize;
@@ -58,7 +73,9 @@ fn main() {
                 for row in range.start.row..=range.end.row {
                     for col in range.start.col..=range.end.col {
                         if let Some(cell) = sheet.cell_at(row, col) {
-                            if col > max_col { max_col = col; }
+                            if col > max_col {
+                                max_col = col;
+                            }
                             match &cell.value {
                                 CellValue::Empty => empty_styled += 1,
                                 CellValue::Number(_) => numbers += 1,
@@ -76,7 +93,12 @@ fn main() {
             let non_empty = numbers + strings + booleans + errors + richtext + spill;
             eprintln!("Sheet {}: \"{}\" - {} stored, {} non-empty, {} empty-styled, {} formulas, max_col={}",
                 i, sheet.name(), cell_count, non_empty, empty_styled, formula_count, max_col);
-            if max_col > 50 { eprintln!("  types: num={} str={} bool={} err={} rich={} spill={}", numbers, strings, booleans, errors, richtext, spill); }
+            if max_col > 50 {
+                eprintln!(
+                    "  types: num={} str={} bool={} err={} rich={} spill={}",
+                    numbers, strings, booleans, errors, richtext, spill
+                );
+            }
 
             grand_cells += cell_count;
             grand_formulas += formula_count;
@@ -91,30 +113,56 @@ fn main() {
     let cv_size = std::mem::size_of::<CellValue>();
     let overhead = 56usize; // AHashMap per-entry
     let per_cell = cv_size + 4 + 6 + overhead; // value + style_idx + key + hashmap
-    let per_formula = 48 + 6 + overhead;  // String(24) + Option<Vec>(24) + key + hashmap
+    let per_formula = 48 + 6 + overhead; // String(24) + Option<Vec>(24) + key + hashmap
     let est_cells = grand_cells * per_cell;
     let est_formulas = grand_formulas * per_formula;
     eprintln!("\n=== Pre-Calc Memory Estimates ===");
-    eprintln!("Cell grid:     ~{:.1} MB  ({} cells × {} bytes)", est_cells as f64 / 1e6, grand_cells, per_cell);
-    eprintln!("Formula table: ~{:.1} MB  ({} formulas × {} bytes)", est_formulas as f64 / 1e6, grand_formulas, per_formula);
-    eprintln!("Actual RSS growth from open: {} MB", (rss_after_open - rss_before) / 1024);
+    eprintln!(
+        "Cell grid:     ~{:.1} MB  ({} cells × {} bytes)",
+        est_cells as f64 / 1e6,
+        grand_cells,
+        per_cell
+    );
+    eprintln!(
+        "Formula table: ~{:.1} MB  ({} formulas × {} bytes)",
+        est_formulas as f64 / 1e6,
+        grand_formulas,
+        per_formula
+    );
+    eprintln!(
+        "Actual RSS growth from open: {} MB",
+        (rss_after_open - rss_before) / 1024
+    );
 
     // Calculate
     eprintln!("\nCalculating (serial)...");
     let rss_pre = rss_kb();
     let t1 = Instant::now();
-    let stats = workbook.calculate_with_options(&CalculationOptions {
-        force_full_calculation: true,
-        max_threads: Some(1),
-        ..Default::default()
-    }).expect("calc failed");
+    let stats = workbook
+        .calculate_with_options(&CalculationOptions {
+            force_full_calculation: true,
+            max_threads: Some(1),
+            ..Default::default()
+        })
+        .expect("calc failed");
     let calc_time = t1.elapsed();
     let rss_post = rss_kb();
 
-    eprintln!("Calculated {} formulas in {:.2?} ({} errors)", stats.cells_calculated, calc_time, stats.errors);
+    eprintln!(
+        "Calculated {} formulas in {:.2?} ({} errors)",
+        stats.cells_calculated, calc_time, stats.errors
+    );
     eprintln!("\n=== RSS Summary ===");
     eprintln!("Before open:  {:>5} MB", rss_before / 1024);
-    eprintln!("After open:   {:>5} MB  (+{} MB)", rss_after_open / 1024, (rss_after_open - rss_before) / 1024);
-    eprintln!("After calc:   {:>5} MB  (+{} MB from calc)", rss_post / 1024, (rss_post - rss_pre) / 1024);
+    eprintln!(
+        "After open:   {:>5} MB  (+{} MB)",
+        rss_after_open / 1024,
+        (rss_after_open - rss_before) / 1024
+    );
+    eprintln!(
+        "After calc:   {:>5} MB  (+{} MB from calc)",
+        rss_post / 1024,
+        (rss_post - rss_pre) / 1024
+    );
     eprintln!("Total growth: {:>5} MB", (rss_post - rss_before) / 1024);
 }

@@ -310,17 +310,30 @@ fn chart_corpus_chartex_read() {
     chartex_files.sort();
 
     println!("Found {} files with chartEx entries", chartex_files.len());
-    assert!(!chartex_files.is_empty(), "no chartEx files found in corpus");
+    assert!(
+        !chartex_files.is_empty(),
+        "no chartEx files found in corpus"
+    );
 
     let mut total_parsed = 0usize;
     let mut failures: Vec<(String, String)> = Vec::new();
 
     for path in &chartex_files {
-        let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let fname = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let wb = match std::panic::catch_unwind(|| XlsxReader::read_file(path)) {
             Ok(Ok(wb)) => wb,
-            Ok(Err(e)) => { failures.push((fname, format!("{e}"))); continue; }
-            Err(_) => { failures.push((fname, "PANIC".into())); continue; }
+            Ok(Err(e)) => {
+                failures.push((fname, format!("{e}")));
+                continue;
+            }
+            Err(_) => {
+                failures.push((fname, "PANIC".into()));
+                continue;
+            }
         };
 
         let mut file_ex_count = 0usize;
@@ -336,7 +349,8 @@ fn chart_corpus_chartex_read() {
                     }
                     for s in &cx.plot_area.series {
                         if matches!(s.layout, duke_sheets_chart::ChartExLayout::Unknown(_)) {
-                            failures.push((fname.clone(), format!("Unknown layout: {:?}", s.layout)));
+                            failures
+                                .push((fname.clone(), format!("Unknown layout: {:?}", s.layout)));
                         }
                     }
                 }
@@ -344,20 +358,30 @@ fn chart_corpus_chartex_read() {
         }
 
         if file_ex_count == 0 {
-            failures.push((fname, "no chartEx parsed despite chartEx zip entries".into()));
+            failures.push((
+                fname,
+                "no chartEx parsed despite chartEx zip entries".into(),
+            ));
         } else {
             total_parsed += file_ex_count;
         }
     }
 
-    println!("Parsed {total_parsed} chartEx charts from {} files", chartex_files.len());
+    println!(
+        "Parsed {total_parsed} chartEx charts from {} files",
+        chartex_files.len()
+    );
     if !failures.is_empty() {
         println!("Failures:");
         for (f, e) in &failures {
             println!("  {f}: {e}");
         }
     }
-    assert!(failures.is_empty(), "{} chartEx read failures", failures.len());
+    assert!(
+        failures.is_empty(),
+        "{} chartEx read failures",
+        failures.len()
+    );
 }
 
 #[test]
@@ -379,7 +403,11 @@ fn chart_corpus_chartex_roundtrip() {
     println!("Testing roundtrip on {} chartEx files", chartex_files.len());
 
     for path in &chartex_files {
-        let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let fname = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         eprintln!("  reading {fname}...");
         let wb1 = XlsxReader::read_file(path).unwrap();
         let ex1: Vec<_> = (0..wb1.sheet_count())
@@ -401,8 +429,11 @@ fn chart_corpus_chartex_roundtrip() {
             .collect();
 
         assert_eq!(
-            ex1.len(), ex2.len(),
-            "{fname}: chartEx count changed: {} -> {}", ex1.len(), ex2.len()
+            ex1.len(),
+            ex2.len(),
+            "{fname}: chartEx count changed: {} -> {}",
+            ex1.len(),
+            ex2.len()
         );
         for (i, (c1, c2)) in ex1.iter().zip(ex2.iter()).enumerate() {
             if c1 != c2 {
@@ -436,7 +467,11 @@ fn chart_corpus_roundtrip() {
         std::env::var("DUKE_CORPUS_DIR").unwrap_or_else(|_| DEFAULT_CORPUS_DIR.to_string());
 
     let dir = Path::new(&corpus_dir);
-    assert!(dir.is_dir(), "corpus directory not found: {}", dir.display());
+    assert!(
+        dir.is_dir(),
+        "corpus directory not found: {}",
+        dir.display()
+    );
 
     let mut xlsx_paths: Vec<PathBuf> = std::fs::read_dir(dir)
         .expect("read corpus dir")
@@ -455,7 +490,11 @@ fn chart_corpus_roundtrip() {
             chart_files.push(path.clone());
         }
     }
-    println!("\nFound {} chart files in {} xlsx files", chart_files.len(), xlsx_paths.len());
+    println!(
+        "\nFound {} chart files in {} xlsx files",
+        chart_files.len(),
+        xlsx_paths.len()
+    );
 
     // Phase 2: read → write → read, compare charts
     let start = Instant::now();
@@ -469,16 +508,25 @@ fn chart_corpus_roundtrip() {
         if (i + 1) % 100 == 0 {
             println!(
                 "  roundtrip {}/{} ({:.0}s elapsed)...",
-                i + 1, chart_files.len(), start.elapsed().as_secs_f64()
+                i + 1,
+                chart_files.len(),
+                start.elapsed().as_secs_f64()
             );
         }
 
-        let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let fname = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
 
         // Read original
         let wb1 = match std::panic::catch_unwind(|| XlsxReader::read_file(path)) {
             Ok(Ok(wb)) => wb,
-            _ => { skipped += 1; continue; }
+            _ => {
+                skipped += 1;
+                continue;
+            }
         };
 
         // Collect charts from read 1
@@ -582,7 +630,9 @@ fn chart_corpus_roundtrip() {
     }
 
     let total_compared = passed + chart_mismatches.len();
-    let pass_rate = if total_compared == 0 { 100.0 } else {
+    let pass_rate = if total_compared == 0 {
+        100.0
+    } else {
         (passed as f64 / total_compared as f64) * 100.0
     };
     println!("\n=== Summary ===");
@@ -622,16 +672,30 @@ fn collect_all_charts_ex(wb: &Workbook) -> Vec<&duke_sheets_chart::ChartEx> {
     charts
 }
 
-fn diff_charts(c1: &duke_sheets_chart::Chart, c2: &duke_sheets_chart::Chart, idx: usize) -> Vec<String> {
+fn diff_charts(
+    c1: &duke_sheets_chart::Chart,
+    c2: &duke_sheets_chart::Chart,
+    idx: usize,
+) -> Vec<String> {
     let mut diffs = Vec::new();
     if c1.chart_type != c2.chart_type {
-        diffs.push(format!("chart {idx} type: {:?} -> {:?}", c1.chart_type, c2.chart_type));
+        diffs.push(format!(
+            "chart {idx} type: {:?} -> {:?}",
+            c1.chart_type, c2.chart_type
+        ));
     }
     if c1.title != c2.title {
-        diffs.push(format!("chart {idx} title: {:?} -> {:?}", c1.title, c2.title));
+        diffs.push(format!(
+            "chart {idx} title: {:?} -> {:?}",
+            c1.title, c2.title
+        ));
     }
     if c1.series.len() != c2.series.len() {
-        diffs.push(format!("chart {idx} series count: {} -> {}", c1.series.len(), c2.series.len()));
+        diffs.push(format!(
+            "chart {idx} series count: {} -> {}",
+            c1.series.len(),
+            c2.series.len()
+        ));
     } else {
         for (si, (s1, s2)) in c1.series.iter().zip(c2.series.iter()).enumerate() {
             if s1.values != s2.values {
@@ -641,10 +705,16 @@ fn diff_charts(c1: &duke_sheets_chart::Chart, c2: &duke_sheets_chart::Chart, idx
                 diffs.push(format!("chart {idx} series {si} categories differ"));
             }
             if s1.name != s2.name {
-                diffs.push(format!("chart {idx} series {si} name: {:?} -> {:?}", s1.name, s2.name));
+                diffs.push(format!(
+                    "chart {idx} series {si} name: {:?} -> {:?}",
+                    s1.name, s2.name
+                ));
             }
             if s1.explosion != s2.explosion {
-                diffs.push(format!("chart {idx} series {si} explosion: {:?} -> {:?}", s1.explosion, s2.explosion));
+                diffs.push(format!(
+                    "chart {idx} series {si} explosion: {:?} -> {:?}",
+                    s1.explosion, s2.explosion
+                ));
             }
             if s1.trendline != s2.trendline {
                 diffs.push(format!("chart {idx} series {si} trendline differs"));
@@ -653,7 +723,10 @@ fn diff_charts(c1: &duke_sheets_chart::Chart, c2: &duke_sheets_chart::Chart, idx
                 diffs.push(format!("chart {idx} series {si} marker differs"));
             }
             if s1.smooth != s2.smooth {
-                diffs.push(format!("chart {idx} series {si} smooth: {:?} -> {:?}", s1.smooth, s2.smooth));
+                diffs.push(format!(
+                    "chart {idx} series {si} smooth: {:?} -> {:?}",
+                    s1.smooth, s2.smooth
+                ));
             }
             if s1.data_labels != s2.data_labels {
                 diffs.push(format!("chart {idx} series {si} data_labels differ"));
@@ -685,16 +758,28 @@ fn diff_charts(c1: &duke_sheets_chart::Chart, c2: &duke_sheets_chart::Chart, idx
         diffs.push(format!("chart {idx} data_labels differs"));
     }
     if c1.hole_size != c2.hole_size {
-        diffs.push(format!("chart {idx} hole_size: {:?} -> {:?}", c1.hole_size, c2.hole_size));
+        diffs.push(format!(
+            "chart {idx} hole_size: {:?} -> {:?}",
+            c1.hole_size, c2.hole_size
+        ));
     }
     if c1.gap_width != c2.gap_width {
-        diffs.push(format!("chart {idx} gap_width: {:?} -> {:?}", c1.gap_width, c2.gap_width));
+        diffs.push(format!(
+            "chart {idx} gap_width: {:?} -> {:?}",
+            c1.gap_width, c2.gap_width
+        ));
     }
     if c1.overlap != c2.overlap {
-        diffs.push(format!("chart {idx} overlap: {:?} -> {:?}", c1.overlap, c2.overlap));
+        diffs.push(format!(
+            "chart {idx} overlap: {:?} -> {:?}",
+            c1.overlap, c2.overlap
+        ));
     }
     if c1.vary_colors != c2.vary_colors {
-        diffs.push(format!("chart {idx} vary_colors: {:?} -> {:?}", c1.vary_colors, c2.vary_colors));
+        diffs.push(format!(
+            "chart {idx} vary_colors: {:?} -> {:?}",
+            c1.vary_colors, c2.vary_colors
+        ));
     }
     if c1.view_3d != c2.view_3d {
         diffs.push(format!("chart {idx} view_3d differs"));
@@ -717,21 +802,53 @@ fn diff_charts(c1: &duke_sheets_chart::Chart, c2: &duke_sheets_chart::Chart, idx
     diffs
 }
 
-fn diff_charts_ex(c1: &duke_sheets_chart::ChartEx, c2: &duke_sheets_chart::ChartEx, idx: usize) -> Vec<String> {
+fn diff_charts_ex(
+    c1: &duke_sheets_chart::ChartEx,
+    c2: &duke_sheets_chart::ChartEx,
+    idx: usize,
+) -> Vec<String> {
     let mut diffs = Vec::new();
-    if c1.title != c2.title { diffs.push(format!("chartEx {idx} title differs")); }
-    if c1.data != c2.data { diffs.push(format!("chartEx {idx} data differs")); }
-    if c1.plot_area.series != c2.plot_area.series { diffs.push(format!("chartEx {idx} series differs")); }
-    if c1.plot_area.axes != c2.plot_area.axes { diffs.push(format!("chartEx {idx} axes differs")); }
-    if c1.legend != c2.legend { diffs.push(format!("chartEx {idx} legend differs")); }
-    if c1.shape_properties != c2.shape_properties { diffs.push(format!("chartEx {idx} spPr differs")); }
-    if c1.text_properties != c2.text_properties { diffs.push(format!("chartEx {idx} txPr differs")); }
-    if c1.color_map_override != c2.color_map_override { diffs.push(format!("chartEx {idx} clrMapOvr differs")); }
-    if c1.format_overrides != c2.format_overrides { diffs.push(format!("chartEx {idx} fmtOvrs differs")); }
-    if c1.print_settings != c2.print_settings { diffs.push(format!("chartEx {idx} printSettings differs")); }
-    if c1.raw_chart_style != c2.raw_chart_style { diffs.push(format!("chartEx {idx} raw_chart_style differs")); }
-    if c1.raw_chart_color_style != c2.raw_chart_color_style { diffs.push(format!("chartEx {idx} raw_chart_color_style differs")); }
-    if c1.plot_area.shape_properties != c2.plot_area.shape_properties { diffs.push(format!("chartEx {idx} plotArea spPr differs")); }
-    if c1.plot_area.plot_surface != c2.plot_area.plot_surface { diffs.push(format!("chartEx {idx} plotSurface differs")); }
+    if c1.title != c2.title {
+        diffs.push(format!("chartEx {idx} title differs"));
+    }
+    if c1.data != c2.data {
+        diffs.push(format!("chartEx {idx} data differs"));
+    }
+    if c1.plot_area.series != c2.plot_area.series {
+        diffs.push(format!("chartEx {idx} series differs"));
+    }
+    if c1.plot_area.axes != c2.plot_area.axes {
+        diffs.push(format!("chartEx {idx} axes differs"));
+    }
+    if c1.legend != c2.legend {
+        diffs.push(format!("chartEx {idx} legend differs"));
+    }
+    if c1.shape_properties != c2.shape_properties {
+        diffs.push(format!("chartEx {idx} spPr differs"));
+    }
+    if c1.text_properties != c2.text_properties {
+        diffs.push(format!("chartEx {idx} txPr differs"));
+    }
+    if c1.color_map_override != c2.color_map_override {
+        diffs.push(format!("chartEx {idx} clrMapOvr differs"));
+    }
+    if c1.format_overrides != c2.format_overrides {
+        diffs.push(format!("chartEx {idx} fmtOvrs differs"));
+    }
+    if c1.print_settings != c2.print_settings {
+        diffs.push(format!("chartEx {idx} printSettings differs"));
+    }
+    if c1.raw_chart_style != c2.raw_chart_style {
+        diffs.push(format!("chartEx {idx} raw_chart_style differs"));
+    }
+    if c1.raw_chart_color_style != c2.raw_chart_color_style {
+        diffs.push(format!("chartEx {idx} raw_chart_color_style differs"));
+    }
+    if c1.plot_area.shape_properties != c2.plot_area.shape_properties {
+        diffs.push(format!("chartEx {idx} plotArea spPr differs"));
+    }
+    if c1.plot_area.plot_surface != c2.plot_area.plot_surface {
+        diffs.push(format!("chartEx {idx} plotSurface differs"));
+    }
     diffs
 }

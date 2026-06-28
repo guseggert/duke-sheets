@@ -27,13 +27,26 @@ pub fn format_fraction(
             space_after_slash,
         } = p
         {
-            Some((integer_digits, numerator_digits, denominator, space_before_slash, space_after_slash))
+            Some((
+                integer_digits,
+                numerator_digits,
+                denominator,
+                space_before_slash,
+                space_after_slash,
+            ))
         } else {
             None
         }
     });
 
-    let Some((integer_digits, numerator_digits, denominator, space_before_slash, space_after_slash)) = fraction_part else {
+    let Some((
+        integer_digits,
+        numerator_digits,
+        denominator,
+        space_before_slash,
+        space_after_slash,
+    )) = fraction_part
+    else {
         return Err(FormatError::TypeMismatch {
             expected: "fraction format",
             got: "no fraction part found",
@@ -140,7 +153,11 @@ pub fn format_fraction(
         let total_spaces = if matches!(denominator, FractionDenom::Fixed(_)) {
             // For fixed denominators, use numerator width + slash + denominator width + spaces
             let denom_width = format!("{}", denom).len();
-            numerator_digits.len() + 1 + denom_width + space_before_slash.len() + space_after_slash.len()
+            numerator_digits.len()
+                + 1
+                + denom_width
+                + space_before_slash.len()
+                + space_after_slash.len()
         } else {
             2 * padding_width as usize + 1 + space_before_slash.len() + space_after_slash.len()
         };

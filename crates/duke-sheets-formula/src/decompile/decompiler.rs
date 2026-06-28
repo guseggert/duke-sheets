@@ -638,9 +638,7 @@ fn resolve_namex(ctx: &FormulaContext, extern_sheet_idx: u16, name_idx: u32) -> 
                 SupBook::AddIn => {
                     // 1-based index into the AddIn SUPBOOK's EXTERNNAME list
                     // (Analysis-ToolPak add-in function names).
-                    if let Some(name) =
-                        nth_extern_name(ctx, entry.sup_book_idx, name_idx)
-                    {
+                    if let Some(name) = nth_extern_name(ctx, entry.sup_book_idx, name_idx) {
                         if function_table::function_index(&name)
                             .is_some_and(function_table::function_is_biff8_addin)
                         {

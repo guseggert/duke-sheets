@@ -242,11 +242,9 @@ impl ReaderState {
                 // Read from cache
                 let idx = cache_index as usize;
                 if idx < self.oid_cache.len() {
-                    self.oid_cache[idx]
-                        .clone()
-                        .ok_or_else(|| {
-                            UrpError::Cache(format!("OID cache miss at index {cache_index}"))
-                        })?
+                    self.oid_cache[idx].clone().ok_or_else(|| {
+                        UrpError::Cache(format!("OID cache miss at index {cache_index}"))
+                    })?
                 } else {
                     return Err(UrpError::Cache(format!(
                         "OID cache index {cache_index} out of bounds (max {})",

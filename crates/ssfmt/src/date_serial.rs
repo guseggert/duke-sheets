@@ -344,7 +344,7 @@ mod tests {
     fn test_roundtrip_1904() {
         // Test roundtrip for 1904 system
         for &(y, m, d) in &[
-            (1904, 1, 2), // Day 1
+            (1904, 1, 2),  // Day 1
             (1904, 2, 29), // Leap year
             (2024, 12, 31),
         ] {

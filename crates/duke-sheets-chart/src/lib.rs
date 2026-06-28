@@ -21,21 +21,14 @@ mod text_properties;
 mod trendline;
 mod types;
 
-pub use axis::{Axis, AxisCrosses, AxisPosition, AxisType, CrossBetween, TickLabelPosition, TickMark};
+pub use axis::{
+    Axis, AxisCrosses, AxisPosition, AxisType, CrossBetween, TickLabelPosition, TickMark,
+};
 pub use chart::{
     BarShape, CellMarker, Chart, ChartAxis, ChartLines, ChartType, ChartTypeGroup, DrawingAnchor,
     EditAs, EmbeddedImage, ImageFormat, OfPieType, PivotChartSource, SplitType, Surface,
     UpDownBars,
 };
-pub use config::{ChartDataTable, DisplayBlanksAs, Layout, ManualLayout, View3D};
-pub use data_labels::{DataLabel, DataLabelPosition, DataLabels, DataPoint};
-pub use error_bars::{ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType};
-pub use formatting::{ChartColor, ChartLine, ChartShapeProperties, NumberFormat, PictureOptions};
-pub use legend::{Legend, LegendEntry, LegendPosition};
-pub use marker::{Marker, MarkerSymbol};
-pub use series::{DataReference, DataSeries};
-pub use text_properties::{TextAnchor, TextProperties, TextVertical, TextWrap};
-pub use trendline::{Trendline, TrendlineLabel, TrendlineType};
 pub use chart_ex::{
     ChartEx, ChartExAxis, ChartExAxisTitle, ChartExAxisUnits, ChartExAxisUnitsLabel,
     ChartExBinning, ChartExColorPosition, ChartExData, ChartExDataLabel, ChartExDataLabels,
@@ -46,3 +39,12 @@ pub use chart_ex::{
     ChartExStatistics, ChartExStringLevel, ChartExText, ChartExTextData, ChartExTitle,
     ChartExValueColorPositions, ChartExValueColors, NumericDimType, StringDimType,
 };
+pub use config::{ChartDataTable, DisplayBlanksAs, Layout, ManualLayout, View3D};
+pub use data_labels::{DataLabel, DataLabelPosition, DataLabels, DataPoint};
+pub use error_bars::{ErrorBarDirection, ErrorBarType, ErrorBars, ErrorValueType};
+pub use formatting::{ChartColor, ChartLine, ChartShapeProperties, NumberFormat, PictureOptions};
+pub use legend::{Legend, LegendEntry, LegendPosition};
+pub use marker::{Marker, MarkerSymbol};
+pub use series::{DataReference, DataSeries};
+pub use text_properties::{TextAnchor, TextProperties, TextVertical, TextWrap};
+pub use trendline::{Trendline, TrendlineLabel, TrendlineType};

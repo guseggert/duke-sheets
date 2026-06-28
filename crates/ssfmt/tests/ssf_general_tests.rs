@@ -15,8 +15,8 @@ struct TestCase {
 
 fn load_test_cases() -> Vec<TestCase> {
     let json_data = include_str!("fixtures/ssf_general.json");
-    let tests: Vec<Value> = serde_json::from_str(json_data)
-        .expect("Failed to parse ssf_general.json");
+    let tests: Vec<Value> =
+        serde_json::from_str(json_data).expect("Failed to parse ssf_general.json");
 
     tests
         .iter()
@@ -92,14 +92,25 @@ fn test_ssf_general_suite() {
 
     println!("\n=== SSF General Test Results ===");
     println!("Total:   {}", total);
-    println!("Passed:  {} ({:.1}%)", passed, 100.0 * passed as f64 / total as f64);
-    println!("Failed:  {} ({:.1}%)", failed, 100.0 * failed as f64 / total as f64);
+    println!(
+        "Passed:  {} ({:.1}%)",
+        passed,
+        100.0 * passed as f64 / total as f64
+    );
+    println!(
+        "Failed:  {} ({:.1}%)",
+        failed,
+        100.0 * failed as f64 / total as f64
+    );
     println!("Skipped: {}", skipped);
 
     // For now, we'll allow failures and just report them
     // Once we fix the issues, we can make this assertion stricter
     if failed > 0 {
-        println!("\nNote: {} tests failed. This is expected during initial integration.", failed);
+        println!(
+            "\nNote: {} tests failed. This is expected during initial integration.",
+            failed
+        );
         println!("We'll work on fixing these failures to improve Excel compatibility.");
     }
 }

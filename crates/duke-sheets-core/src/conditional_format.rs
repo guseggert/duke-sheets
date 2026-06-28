@@ -64,7 +64,6 @@ impl ConditionalFormatRule {
         }
     }
 
-
     /// Highlight cells greater than a value
     pub fn cell_is_greater_than(value: impl Into<String>) -> Self {
         Self::new(CfRuleType::CellIs {
@@ -101,14 +100,12 @@ impl ConditionalFormatRule {
         })
     }
 
-
     /// Highlight cells where formula evaluates to TRUE
     pub fn expression(formula: impl Into<String>) -> Self {
         Self::new(CfRuleType::Expression {
             formula: formula.into(),
         })
     }
-
 
     /// Create a 2-color scale (min to max)
     pub fn color_scale_2(min_color: Color, max_color: Color) -> Self {
@@ -131,7 +128,6 @@ impl ConditionalFormatRule {
         })
     }
 
-
     /// Create a data bar
     pub fn data_bar(color: Color) -> Self {
         Self::new(CfRuleType::DataBar {
@@ -144,7 +140,6 @@ impl ConditionalFormatRule {
             negative_color: None,
         })
     }
-
 
     /// Create an icon set
     pub fn icon_set(style: IconSetStyle) -> Self {
@@ -228,7 +223,6 @@ impl ConditionalFormatRule {
         })
     }
 
-
     /// Highlight cells containing text
     pub fn contains_text(text: impl Into<String>) -> Self {
         Self::new(CfRuleType::ContainsText { text: text.into() })
@@ -267,7 +261,6 @@ impl ConditionalFormatRule {
     pub fn contains_errors() -> Self {
         Self::new(CfRuleType::ContainsErrors)
     }
-
 
     /// Add a cell range to this rule
     pub fn with_range(mut self, range: CellRange) -> Self {

@@ -221,7 +221,6 @@ impl Locale {
     }
 }
 
-
 fn arr_s<const N: usize>(src: [&str; N]) -> [String; N] {
     src.map(String::from)
 }

@@ -22,8 +22,7 @@
 ///
 /// Comments are annotations attached to cells that can contain
 /// author information and text content.
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CellComment {
     /// Author of the comment
     pub author: String,
@@ -74,7 +73,6 @@ impl CellComment {
         !self.author.is_empty()
     }
 }
-
 
 impl std::fmt::Display for CellComment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

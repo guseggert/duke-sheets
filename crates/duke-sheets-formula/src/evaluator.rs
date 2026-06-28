@@ -2136,9 +2136,8 @@ fn evaluate_external_function(
     }
 
     match ctx.external_fn {
-        Some(handler) => handler(book, name, &arg_strings).ok_or_else(|| {
-            FormulaError::ExternalFunctionUnresolved(format!("[{book}]!{name}"))
-        }),
+        Some(handler) => handler(book, name, &arg_strings)
+            .ok_or_else(|| FormulaError::ExternalFunctionUnresolved(format!("[{book}]!{name}"))),
         None => Err(FormulaError::ExternalFunctionUnresolved(format!(
             "[{book}]!{name}"
         ))),

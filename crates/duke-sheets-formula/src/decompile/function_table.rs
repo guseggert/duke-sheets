@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(function_arg_class(9, 0), OperandClass::R); // COLUMN
         assert_eq!(function_arg_class(75, 0), OperandClass::R); // AREAS
         assert_eq!(function_arg_class(78, 0), OperandClass::R); // OFFSET arg 0
-        // OFFSET arg 1..3 take values (rows, cols, height, width) — V-class.
+                                                                // OFFSET arg 1..3 take values (rows, cols, height, width) — V-class.
         assert_eq!(function_arg_class(78, 1), OperandClass::V);
         assert_eq!(function_arg_class(78, 2), OperandClass::V);
     }
@@ -347,9 +347,9 @@ mod tests {
         assert!(function_is_volatile(148)); // INDIRECT
         assert!(function_is_volatile(221)); // TODAY
         assert!(function_is_volatile(244)); // INFO
-        // RANDBETWEEN (464) is volatile in the runtime registry, so the
-        // writer also sees it as volatile via the unified table. Closes
-        // the drift bug between runtime and writer metadata.
+                                            // RANDBETWEEN (464) is volatile in the runtime registry, so the
+                                            // writer also sees it as volatile via the unified table. Closes
+                                            // the drift bug between runtime and writer metadata.
         assert!(function_is_volatile(464)); // RANDBETWEEN
     }
 
@@ -515,7 +515,7 @@ mod tests {
         assert!(function_is_biff8_addin(449)); // EDATE
         assert!(function_is_biff8_addin(472)); // NETWORKDAYS
         assert!(function_is_biff8_addin(476)); // FVSCHEDULE
-        // Just outside the range: native.
+                                               // Just outside the range: native.
         assert!(!function_is_biff8_addin(383)); // CUBERANKEDMEMBER
         assert!(!function_is_biff8_addin(477)); // CUBEKPIMEMBER
         assert!(!function_is_biff8_addin(480)); // IFERROR (2007 native)

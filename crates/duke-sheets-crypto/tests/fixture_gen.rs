@@ -189,7 +189,8 @@ fn generate_xls_rc4_cryptoapi_fixture() {
         .unwrap();
 
     let enc = move_into_fixtures(&shared_enc, "xls_rc4_cryptoapi.xls").expect("move enc");
-    let plain = move_into_fixtures(&shared_plain, "xls_rc4_cryptoapi.plain.xls").expect("move plain");
+    let plain =
+        move_into_fixtures(&shared_plain, "xls_rc4_cryptoapi.plain.xls").expect("move plain");
 
     // Both are CFB containers (XLS is always CFB, encrypted or not).
     for p in [&enc, &plain] {

@@ -81,7 +81,8 @@ pub fn format_date(
     // Get time components
     // Only round seconds when there's no subsecond display in the format
     let has_subseconds = section.metadata.max_subsecond_precision.is_some();
-    let (mut hour, mut minute, mut second) = crate::date_serial::serial_to_time_with_rounding(adjusted_value, !has_subseconds);
+    let (mut hour, mut minute, mut second) =
+        crate::date_serial::serial_to_time_with_rounding(adjusted_value, !has_subseconds);
 
     // Apply pre-rounding based on smallest displayed time unit
     // This ensures proper rounding behavior (e.g., 12:34:59.9 displayed as "hh:mm" shows "12:35")
@@ -497,7 +498,8 @@ fn format_elapsed(part: ElapsedPart, serial_value: f64) -> String {
         ElapsedPart::Seconds | ElapsedPart::Seconds2 => {
             // For seconds format: round S+u directly, no pre-rounding
             // Total elapsed seconds: ((D*24+H)*60+M)*60 + round(S+u)
-            let total_seconds = ((date * 24 + hours) * 60 + minutes) * 60 + (seconds as f64 + subseconds).round() as i64;
+            let total_seconds = ((date * 24 + hours) * 60 + minutes) * 60
+                + (seconds as f64 + subseconds).round() as i64;
             if matches!(part, ElapsedPart::Seconds2) {
                 format!("{:02}", total_seconds)
             } else {

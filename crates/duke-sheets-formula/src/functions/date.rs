@@ -1644,7 +1644,6 @@ mod tests {
         // Microsoft docs: DATEVALUE function
         // https://support.microsoft.com/en-us/office/datevalue-function-df8b07d4-7761-4a93-bc33-b7471bbff252
 
-
         // =DATEVALUE("8/22/2011") → 40777
         assert_eq!(
             eval("=DATEVALUE(\"8/22/2011\")").unwrap(),
@@ -1670,7 +1669,6 @@ mod tests {
             FormulaValue::Number(40850.0)
         );
 
-
         // =DATEVALUE("1/1/2008") returns 39448
         assert_eq!(
             eval("=DATEVALUE(\"1/1/2008\")").unwrap(),
@@ -1690,7 +1688,6 @@ mod tests {
             eval("=DATEVALUE(\"30-Jan-2008\")").unwrap(),
             FormulaValue::Number(39477.0)
         );
-
 
         // "January 1, 1900 is serial number 1"
         assert_eq!(

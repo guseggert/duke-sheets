@@ -164,7 +164,11 @@ fn to_csv(
             stats.iterations,
             if stats.iterations == 1 { "" } else { "es" },
             stats.errors,
-            if stats.converged { "" } else { ", did not converge" },
+            if stats.converged {
+                ""
+            } else {
+                ", did not converge"
+            },
         );
     }
 

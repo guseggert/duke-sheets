@@ -114,8 +114,8 @@ pub fn format_with_id(
     format_id: u32,
     opts: &FormatOptions,
 ) -> Result<String, ParseError> {
-    let format_code = format_code_from_id(format_id)
-        .ok_or(ParseError::InvalidFormatId(format_id))?;
+    let format_code =
+        format_code_from_id(format_id).ok_or(ParseError::InvalidFormatId(format_id))?;
     format(value, format_code, opts)
 }
 

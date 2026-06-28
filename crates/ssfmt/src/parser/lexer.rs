@@ -262,11 +262,7 @@ impl<'a> Lexer<'a> {
             self.position
         };
 
-        Ok(SpannedToken {
-            token,
-            start,
-            end,
-        })
+        Ok(SpannedToken { token, start, end })
     }
 
     /// Returns the character at the current position, if any.

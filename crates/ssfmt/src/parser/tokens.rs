@@ -34,11 +34,11 @@ pub enum Token {
     Slash, // /
 
     // Date/time
-    Year,   // y
-    Month,  // m
-    Day,    // d
-    Hour,   // h
-    Second, // s
+    Year,              // y
+    Month,             // m
+    Day,               // d
+    Hour,              // h
+    Second,            // s
     BuddhistYear,      // b (lowercase)
     BuddhistYearUpper, // B (uppercase)
 

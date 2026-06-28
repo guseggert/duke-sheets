@@ -1510,11 +1510,7 @@ impl<'a> Workbook<'a> {
     /// "SfxBaseModel::impl_store failed". See test script
     /// `crates/duke-sheets-crypto/tests/fixture_gen.rs` for the
     /// combinatorial survey that found this.
-    pub async fn save_with_password_xlsx(
-        &mut self,
-        path: &str,
-        password: &str,
-    ) -> Result<()> {
+    pub async fn save_with_password_xlsx(&mut self, path: &str, password: &str) -> Result<()> {
         let url = path_to_file_url(path);
         let storable_proxy = self.doc_qi(type_names::X_STORABLE).await?;
 
@@ -1556,11 +1552,7 @@ impl<'a> Workbook<'a> {
     ///
     /// LibreOffice encrypts `.xls` output using RC4 CryptoAPI (typically
     /// 128-bit key, SHA-1 KDF).
-    pub async fn save_with_password_xls(
-        &mut self,
-        path: &str,
-        password: &str,
-    ) -> Result<()> {
+    pub async fn save_with_password_xls(&mut self, path: &str, password: &str) -> Result<()> {
         let url = path_to_file_url(path);
         let storable_proxy = self.doc_qi(type_names::X_STORABLE).await?;
 

@@ -3,8 +3,8 @@
 //! These tests verify date formatting across various format codes and date values.
 //! The dates.tsv file contains comprehensive tests for date display in different styles.
 
-use ssfmt::format_default;
 use flate2::read::GzDecoder;
+use ssfmt::format_default;
 use std::io::Read;
 
 #[derive(Debug)]
@@ -117,10 +117,22 @@ fn test_ssf_dates() {
     }
 
     println!("Total:   {}", total);
-    println!("Passed:  {} ({:.1}%)", passed, (passed as f64 / total as f64) * 100.0);
-    println!("Failed:  {} ({:.1}%)", failed, (failed as f64 / total as f64) * 100.0);
+    println!(
+        "Passed:  {} ({:.1}%)",
+        passed,
+        (passed as f64 / total as f64) * 100.0
+    );
+    println!(
+        "Failed:  {} ({:.1}%)",
+        failed,
+        (failed as f64 / total as f64) * 100.0
+    );
     if skipped > 0 {
-        println!("Skipped: {} ({:.1}%)", skipped, (skipped as f64 / total as f64) * 100.0);
+        println!(
+            "Skipped: {} ({:.1}%)",
+            skipped,
+            (skipped as f64 / total as f64) * 100.0
+        );
     }
 
     // We should pass most tests

@@ -63,8 +63,14 @@ fn test_general_format_case_insensitive() {
 #[test]
 fn test_general_format_special_values() {
     assert_eq!(format_default(f64::NAN, "General").unwrap(), "NaN");
-    assert_eq!(format_default(f64::INFINITY, "General").unwrap(), "Infinity");
-    assert_eq!(format_default(f64::NEG_INFINITY, "General").unwrap(), "-Infinity");
+    assert_eq!(
+        format_default(f64::INFINITY, "General").unwrap(),
+        "Infinity"
+    );
+    assert_eq!(
+        format_default(f64::NEG_INFINITY, "General").unwrap(),
+        "-Infinity"
+    );
 }
 
 #[test]

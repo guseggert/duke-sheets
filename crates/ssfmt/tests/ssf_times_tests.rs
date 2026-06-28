@@ -4,8 +4,8 @@
 //! The times.tsv file contains comprehensive tests for time display including
 //! elapsed time formats ([h]:mm:ss), subsecond precision, and various time styles.
 
-use ssfmt::format_default;
 use flate2::read::GzDecoder;
+use ssfmt::format_default;
 use std::io::Read;
 
 #[derive(Debug)]
@@ -118,10 +118,22 @@ fn test_ssf_times() {
     }
 
     println!("Total:   {}", total);
-    println!("Passed:  {} ({:.1}%)", passed, (passed as f64 / total as f64) * 100.0);
-    println!("Failed:  {} ({:.1}%)", failed, (failed as f64 / total as f64) * 100.0);
+    println!(
+        "Passed:  {} ({:.1}%)",
+        passed,
+        (passed as f64 / total as f64) * 100.0
+    );
+    println!(
+        "Failed:  {} ({:.1}%)",
+        failed,
+        (failed as f64 / total as f64) * 100.0
+    );
     if skipped > 0 {
-        println!("Skipped: {} ({:.1}%)", skipped, (skipped as f64 / total as f64) * 100.0);
+        println!(
+            "Skipped: {} ({:.1}%)",
+            skipped,
+            (skipped as f64 / total as f64) * 100.0
+        );
     }
 
     // We should pass most tests

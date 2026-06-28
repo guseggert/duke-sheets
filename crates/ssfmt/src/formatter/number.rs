@@ -119,7 +119,11 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
 
     // Track which commas are trailing (to exclude from has_thousands_separator)
     let mut commas_seen = 0;
-    let total_commas = section.parts.iter().filter(|p| matches!(p, FormatPart::ThousandsSeparator)).count();
+    let total_commas = section
+        .parts
+        .iter()
+        .filter(|p| matches!(p, FormatPart::ThousandsSeparator))
+        .count();
     let non_trailing_comma_count = total_commas - trailing_comma_count;
 
     let mut seen_digit = false;
@@ -140,7 +144,7 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
             FormatPart::DecimalPoint => {
                 after_decimal = true;
                 seen_digit = true;
-                after_digits = true;  // Mark that integer digit sequence is complete
+                after_digits = true; // Mark that integer digit sequence is complete
             }
             FormatPart::ThousandsSeparator => {
                 commas_seen += 1;
@@ -159,7 +163,11 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
                     prefix_parts.push(part.clone());
                 }
             }
-            FormatPart::Literal(_) | FormatPart::EscapedLiteral(_) | FormatPart::Locale(crate::ast::LocaleCode { currency: Some(_), .. }) => {
+            FormatPart::Literal(_)
+            | FormatPart::EscapedLiteral(_)
+            | FormatPart::Locale(crate::ast::LocaleCode {
+                currency: Some(_), ..
+            }) => {
                 let literal_str = if let FormatPart::Literal(s) = part {
                     s.clone()
                 } else if let FormatPart::EscapedLiteral(s) = part {
@@ -644,11 +652,7 @@ fn format_decimal(
     // Find where trailing zeros start (for # placeholders)
     // If all zeros, start from position 0 (all Hash placeholders are skipped)
     // Otherwise, scan backwards to find trailing zeros
-    let mut trailing_zeros_start = if all_zeros {
-        0
-    } else {
-        placeholders.len()
-    };
+    let mut trailing_zeros_start = if all_zeros { 0 } else { placeholders.len() };
 
     // Only scan within effective_places to avoid index out of bounds
     if !all_zeros {
@@ -715,16 +719,15 @@ fn format_decimal(
 
 /// Calculate the exact character count for format parts (prefix/suffix).
 fn count_part_chars(parts: &[FormatPart]) -> usize {
-    parts.iter().map(|part| {
-        match part {
+    parts
+        .iter()
+        .map(|part| match part {
             FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => s.len(),
-            FormatPart::Locale(locale_code) => {
-                locale_code.currency.as_ref().map_or(0, |s| s.len())
-            }
+            FormatPart::Locale(locale_code) => locale_code.currency.as_ref().map_or(0, |s| s.len()),
             FormatPart::Percent => 1,
             _ => 0,
-        }
-    }).sum()
+        })
+        .sum()
 }
 
 /// Build the final result string with prefix and suffix parts.
@@ -854,7 +857,11 @@ fn format_scientific(
     // Format exponent
     let exp_char = if upper { 'E' } else { 'e' };
     let exp_sign = if exponent >= 0 {
-        if show_plus { "+" } else { "" }
+        if show_plus {
+            "+"
+        } else {
+            ""
+        }
     } else {
         "-"
     };
