@@ -200,12 +200,10 @@ fn lo_can_read_conditional_formats_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(f64, f64, f64), String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

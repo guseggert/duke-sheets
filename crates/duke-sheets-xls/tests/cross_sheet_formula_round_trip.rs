@@ -157,17 +157,32 @@ fn lo_can_evaluate_cross_sheet_formulas_we_emit() {
     wb.rename_worksheet(0, "Calc").expect("rename");
     wb.add_worksheet_with_name("Data").expect("add");
 
-    wb.worksheet_mut(1).unwrap().set_cell_value("A1", 10.0).expect("Data!A1");
-    wb.worksheet_mut(1).unwrap().set_cell_value("A2", 20.0).expect("Data!A2");
-    wb.worksheet_mut(1).unwrap().set_cell_value("A3", 30.0).expect("Data!A3");
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A1", 10.0)
+        .expect("Data!A1");
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A2", 20.0)
+        .expect("Data!A2");
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A3", 30.0)
+        .expect("Data!A3");
 
     let calc = wb.worksheet_mut(0).unwrap();
-    calc.set_cell_formula("B1", "=Data!A1").expect("3D cell ref");
-    calc.set_formula_result(0, 1, CellValue::Number(10.0)).expect("cache B1");
-    calc.set_cell_formula("B2", "=SUM(Data!A1:A3)").expect("3D area sum");
-    calc.set_formula_result(1, 1, CellValue::Number(60.0)).expect("cache B2");
-    calc.set_cell_formula("B3", "=Data!$A$1+Data!$A$3").expect("absolute mix");
-    calc.set_formula_result(2, 1, CellValue::Number(40.0)).expect("cache B3");
+    calc.set_cell_formula("B1", "=Data!A1")
+        .expect("3D cell ref");
+    calc.set_formula_result(0, 1, CellValue::Number(10.0))
+        .expect("cache B1");
+    calc.set_cell_formula("B2", "=SUM(Data!A1:A3)")
+        .expect("3D area sum");
+    calc.set_formula_result(1, 1, CellValue::Number(60.0))
+        .expect("cache B2");
+    calc.set_cell_formula("B3", "=Data!$A$1+Data!$A$3")
+        .expect("absolute mix");
+    calc.set_formula_result(2, 1, CellValue::Number(40.0))
+        .expect("cache B3");
 
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
     std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
@@ -180,12 +195,10 @@ fn lo_can_evaluate_cross_sheet_formulas_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(f64, f64, f64), String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

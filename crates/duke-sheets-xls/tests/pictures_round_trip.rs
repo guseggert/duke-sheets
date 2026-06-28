@@ -337,11 +337,7 @@ fn onecell_anchor_round_trips_with_visual_area_preserved() {
     let parsed = write_then_read(&wb);
     let img = &parsed.worksheet(0).unwrap().images()[0];
     match &img.anchor {
-        DrawingAnchor::TwoCell {
-            from,
-            to,
-            edit_as,
-        } => {
+        DrawingAnchor::TwoCell { from, to, edit_as } => {
             assert_eq!(from.col, 2);
             assert_eq!(from.row, 3);
             assert_eq!(to.col, 5, "OneCell width must extend by 3 cols");
@@ -376,11 +372,7 @@ fn absolute_anchor_round_trips_with_visual_area_preserved() {
     let parsed = write_then_read(&wb);
     let img = &parsed.worksheet(0).unwrap().images()[0];
     match &img.anchor {
-        DrawingAnchor::TwoCell {
-            from,
-            to,
-            edit_as,
-        } => {
+        DrawingAnchor::TwoCell { from, to, edit_as } => {
             assert_eq!(from.col, 4, "Absolute x must land in col 4");
             assert_eq!(from.row, 3, "Absolute y must land in row 3");
             assert_eq!(to.col, 6, "width extends from col 4 by 2");
@@ -439,7 +431,10 @@ fn picture_anchor_within_cell_offsets_round_trip() {
     // Synthesised width/height should reflect the cell span at
     // Excel's default cell sizes plus the within-cell delta.
     let img = &images[0];
-    assert!(img.width_emu > 0, "width_emu should be synthesised non-zero");
+    assert!(
+        img.width_emu > 0,
+        "width_emu should be synthesised non-zero"
+    );
     assert!(
         img.height_emu > 0,
         "height_emu should be synthesised non-zero"
@@ -514,15 +509,19 @@ const TEST_EMF_BYTES: &[u8] = &[
 /// Synthetic 1x1 TIFF (little-endian, 8-bit grayscale). 110 bytes,
 /// generated to be a structurally valid TIFF.
 const TEST_TIFF_BYTES: &[u8] = &[
-    0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x07, 0x00, // header + IFD offset + entry count
+    0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x07,
+    0x00, // header + IFD offset + entry count
     // IFD entries (each 12 bytes):
     0x00, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // ImageWidth=1
     0x01, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // ImageLength=1
     0x02, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, // BitsPerSample=8
     0x03, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // Compression=1
-    0x06, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // PhotometricInterp=1
-    0x11, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x6A, 0x00, 0x00, 0x00, // StripOffsets=106
-    0x17, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // StripByteCounts=1
+    0x06, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+    0x00, // PhotometricInterp=1
+    0x11, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x6A, 0x00, 0x00,
+    0x00, // StripOffsets=106
+    0x17, 0x01, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+    0x00, // StripByteCounts=1
     0x00, 0x00, 0x00, 0x00, // next IFD = none
     0xFF, // pixel data (1 byte)
 ];
@@ -592,7 +591,11 @@ fn gif_input_is_routed_through_png_blip_and_format_tag_flips() {
 
     let parsed = write_then_read(&wb);
     let images = parsed.worksheet(0).unwrap().images();
-    assert_eq!(images.len(), 1, "GIF input must produce one round-tripped image");
+    assert_eq!(
+        images.len(),
+        1,
+        "GIF input must produce one round-tripped image"
+    );
     let img = &images[0];
     assert_eq!(
         img.format,

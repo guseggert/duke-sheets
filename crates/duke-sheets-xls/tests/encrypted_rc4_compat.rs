@@ -90,9 +90,8 @@ fn lo_can_read(variant: XlsEncryptionVariant, suffix: &str) {
         Ok::<(String, f64), String>((a1, b1))
     });
     let _ = std::fs::remove_file(&path);
-    let (a1, b1) = result.unwrap_or_else(|e| {
-        panic!("LO must open file we encrypted with {variant:?}: {e}")
-    });
+    let (a1, b1) =
+        result.unwrap_or_else(|e| panic!("LO must open file we encrypted with {variant:?}: {e}"));
     assert_eq!(a1, "hello crypto");
     assert!((b1 - 42.0).abs() < 1e-9, "B1 = {b1}");
 }

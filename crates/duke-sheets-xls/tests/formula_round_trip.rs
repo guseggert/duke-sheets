@@ -56,7 +56,8 @@ fn literal_only_formula_round_trips() {
     ws.set_cell_formula("A1", "=42").expect("set formula");
     ws.set_formula_result(0, 0, CellValue::Number(42.0))
         .expect("cached");
-    ws.set_cell_formula("A2", "=\"hello\"").expect("set formula");
+    ws.set_cell_formula("A2", "=\"hello\"")
+        .expect("set formula");
     ws.set_formula_result(1, 0, CellValue::String("hello".into()))
         .expect("cached");
     ws.set_cell_formula("A3", "=TRUE").expect("set formula");
@@ -112,7 +113,8 @@ fn concat_operator_round_trips_via_formula_path() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "hello").expect("A1");
-    ws.set_cell_formula("B1", "=A1&\" world\"").expect("formula");
+    ws.set_cell_formula("B1", "=A1&\" world\"")
+        .expect("formula");
     ws.set_formula_result(0, 1, CellValue::String("hello world".into()))
         .expect("cached");
 
@@ -322,7 +324,8 @@ fn unknown_function_falls_back_to_static_value() {
 fn cached_string_result_includes_string_followup_record() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_cell_formula("A1", "=\"foo\"&\"bar\"").expect("formula");
+    ws.set_cell_formula("A1", "=\"foo\"&\"bar\"")
+        .expect("formula");
     ws.set_formula_result(0, 0, CellValue::String("foobar".into()))
         .expect("cached");
 
@@ -353,7 +356,10 @@ fn many_formulas_round_trip() {
     let sheet = parsed.worksheet(0).unwrap();
     for row in 0..count {
         let addr = format!("B{}", row + 1);
-        assert!(sheet.get_formula_at(row, 1).is_some(), "formula at row {row}");
+        assert!(
+            sheet.get_formula_at(row, 1).is_some(),
+            "formula at row {row}"
+        );
         let cached = sheet.get_value(&addr).expect("cached");
         assert_eq!(cached.as_number(), Some(row as f64 * 2.0));
     }
@@ -386,17 +392,17 @@ fn lo_can_evaluate_sum_function_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<f64, String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await
             .map_err(|e| format!("open: {e}"))?;
-        wb.get_cell_value("B1").await.map_err(|e| format!("B1: {e}"))
+        wb.get_cell_value("B1")
+            .await
+            .map_err(|e| format!("B1: {e}"))
     });
     let _ = std::fs::remove_file(&path);
     let b1 = outcome.expect("LO must compute SUM");
@@ -427,17 +433,17 @@ fn lo_can_evaluate_arithmetic_formula_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<f64, String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await
             .map_err(|e| format!("open: {e}"))?;
-        wb.get_cell_value("C1").await.map_err(|e| format!("C1: {e}"))
+        wb.get_cell_value("C1")
+            .await
+            .map_err(|e| format!("C1: {e}"))
     });
     let _ = std::fs::remove_file(&path);
     let c1 = outcome.expect("LO must read C1");

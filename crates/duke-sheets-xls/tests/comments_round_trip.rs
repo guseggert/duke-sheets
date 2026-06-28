@@ -240,7 +240,6 @@ fn empty_workbook_emits_no_drawing_records() {
 /// Extract the `/Workbook` stream from a CFB envelope using the
 /// crate's own CFB reader.
 fn extract_workbook_stream(cfb_bytes: &[u8]) -> Vec<u8> {
-    let comp = duke_sheets_xls::cfb::CompoundFile::open(Cursor::new(cfb_bytes))
-        .expect("CFB open");
+    let comp = duke_sheets_xls::cfb::CompoundFile::open(Cursor::new(cfb_bytes)).expect("CFB open");
     comp.read_stream("/Workbook").expect("Workbook stream")
 }

@@ -164,18 +164,29 @@ fn lo_can_evaluate_named_range_formulas_we_emit() {
     wb.rename_worksheet(0, "Calc").expect("rename");
     wb.add_worksheet_with_name("Data").expect("add");
 
-    wb.worksheet_mut(1).unwrap().set_cell_value("A1", 5.0).expect("Data!A1");
-    wb.worksheet_mut(1).unwrap().set_cell_value("A2", 10.0).expect("Data!A2");
-    wb.worksheet_mut(1).unwrap().set_cell_value("A3", 15.0).expect("Data!A3");
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A1", 5.0)
+        .expect("Data!A1");
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A2", 10.0)
+        .expect("Data!A2");
+    wb.worksheet_mut(1)
+        .unwrap()
+        .set_cell_value("A3", 15.0)
+        .expect("Data!A3");
 
     wb.define_name("Numbers", "Data!$A$1:$A$3").expect("name");
     wb.define_name("TaxRate", "0.1").expect("constant");
 
     let calc = wb.worksheet_mut(0).unwrap();
     calc.set_cell_formula("B1", "=SUM(Numbers)").expect("B1");
-    calc.set_formula_result(0, 1, CellValue::Number(30.0)).expect("cache B1");
+    calc.set_formula_result(0, 1, CellValue::Number(30.0))
+        .expect("cache B1");
     calc.set_cell_formula("B2", "=B1*TaxRate").expect("B2");
-    calc.set_formula_result(1, 1, CellValue::Number(3.0)).expect("cache B2");
+    calc.set_formula_result(1, 1, CellValue::Number(3.0))
+        .expect("cache B2");
 
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
     std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
@@ -188,12 +199,10 @@ fn lo_can_evaluate_named_range_formulas_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(f64, f64), String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await

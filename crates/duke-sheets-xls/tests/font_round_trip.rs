@@ -93,7 +93,8 @@ fn underline_round_trips() {
 fn double_underline_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_cell_value("A1", "double-underlined").expect("set A1");
+    ws.set_cell_value("A1", "double-underlined")
+        .expect("set A1");
     let mut style = Style::new();
     style.font.underline = Underline::Double;
     ws.set_cell_style("A1", &style).expect("set A1 style");
@@ -274,7 +275,8 @@ fn lo_can_read_styled_cells_we_emit() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "bold").expect("set A1");
     ws.set_cell_value("B1", 99.0).expect("set B1");
-    ws.set_cell_style("A1", &Style::new().bold(true)).expect("A1 style");
+    ws.set_cell_style("A1", &Style::new().bold(true))
+        .expect("A1 style");
     ws.set_cell_style("B1", &Style::new().italic(true).font_size(14.0))
         .expect("B1 style");
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
@@ -289,18 +291,22 @@ fn lo_can_read_styled_cells_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<(String, f64), String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await
             .map_err(|e| format!("open: {e}"))?;
-        let a1 = wb.get_cell_string("A1").await.map_err(|e| format!("A1: {e}"))?;
-        let b1 = wb.get_cell_value("B1").await.map_err(|e| format!("B1: {e}"))?;
+        let a1 = wb
+            .get_cell_string("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))?;
+        let b1 = wb
+            .get_cell_value("B1")
+            .await
+            .map_err(|e| format!("B1: {e}"))?;
         Ok((a1, b1))
     });
     let _ = std::fs::remove_file(&path);

@@ -24,7 +24,8 @@ fn horizontal_merge_round_trips() {
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "merged across columns")
         .expect("set A1");
-    ws.merge_cells(&merge_range("A1", "C1")).expect("merge A1:C1");
+    ws.merge_cells(&merge_range("A1", "C1"))
+        .expect("merge A1:C1");
 
     let parsed = write_then_read(&wb);
     let regions = parsed.worksheet(0).unwrap().merged_regions();
@@ -38,7 +39,8 @@ fn vertical_merge_round_trips() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("B2", "merged down").expect("set B2");
-    ws.merge_cells(&merge_range("B2", "B5")).expect("merge B2:B5");
+    ws.merge_cells(&merge_range("B2", "B5"))
+        .expect("merge B2:B5");
 
     let parsed = write_then_read(&wb);
     let regions = parsed.worksheet(0).unwrap().merged_regions();
@@ -102,11 +104,23 @@ fn merges_persist_across_multiple_sheets() {
     let first = parsed.worksheet_by_name("First").unwrap();
     let second = parsed.worksheet_by_name("Second").unwrap();
     assert_eq!(first.merged_regions().len(), 1);
-    assert_eq!(first.merged_regions()[0].start, CellAddress::parse("A1").unwrap());
-    assert_eq!(first.merged_regions()[0].end, CellAddress::parse("B2").unwrap());
+    assert_eq!(
+        first.merged_regions()[0].start,
+        CellAddress::parse("A1").unwrap()
+    );
+    assert_eq!(
+        first.merged_regions()[0].end,
+        CellAddress::parse("B2").unwrap()
+    );
     assert_eq!(second.merged_regions().len(), 1);
-    assert_eq!(second.merged_regions()[0].start, CellAddress::parse("C3").unwrap());
-    assert_eq!(second.merged_regions()[0].end, CellAddress::parse("D4").unwrap());
+    assert_eq!(
+        second.merged_regions()[0].start,
+        CellAddress::parse("C3").unwrap()
+    );
+    assert_eq!(
+        second.merged_regions()[0].end,
+        CellAddress::parse("D4").unwrap()
+    );
 }
 
 #[test]
@@ -126,7 +140,8 @@ fn lo_can_read_merged_cells_we_emit() {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
     ws.set_cell_value("A1", "merged").expect("set A1");
-    ws.merge_cells(&merge_range("A1", "C1")).expect("merge A1:C1");
+    ws.merge_cells(&merge_range("A1", "C1"))
+        .expect("merge A1:C1");
     let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
 
     std::fs::create_dir_all("/tmp/duke-sheets-urp").expect("shared dir");
@@ -139,17 +154,17 @@ fn lo_can_read_merged_cells_we_emit() {
         .build()
         .unwrap();
     let outcome: Result<String, String> = rt.block_on(async {
-        let mut bridge = duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect(
-            "127.0.0.1",
-            2002,
-        )
-        .await
-        .map_err(|e| format!("connect: {e}"))?;
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
         let mut wb = bridge
             .open_workbook(&path)
             .await
             .map_err(|e| format!("open: {e}"))?;
-        wb.get_cell_string("A1").await.map_err(|e| format!("A1: {e}"))
+        wb.get_cell_string("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))
     });
     let _ = std::fs::remove_file(&path);
     let a1 = outcome.expect("LO must read merged anchor");

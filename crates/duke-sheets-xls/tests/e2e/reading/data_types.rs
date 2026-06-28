@@ -132,10 +132,16 @@ fn test_xls_boolean_values() {
 
     // TRUE()/FALSE() formulas have boolean cached results
     let a1 = sheet.get_value_at(0, 0);
-    assert!(matches!(a1, CellValue::Boolean(true)), "A1 should be TRUE, got {a1:?}");
+    assert!(
+        matches!(a1, CellValue::Boolean(true)),
+        "A1 should be TRUE, got {a1:?}"
+    );
 
     let b1 = sheet.get_value_at(0, 1);
-    assert!(matches!(b1, CellValue::Boolean(false)), "B1 should be FALSE, got {b1:?}");
+    assert!(
+        matches!(b1, CellValue::Boolean(false)),
+        "B1 should be FALSE, got {b1:?}"
+    );
 
     cleanup_fixture(&path);
 }
