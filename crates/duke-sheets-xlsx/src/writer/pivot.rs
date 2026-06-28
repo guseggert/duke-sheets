@@ -29,6 +29,8 @@ use super::{
 
 const NS_SPREADSHEET_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 const EXT_URI_X14_DATA_FIELD: &str = "{2946ED86-A175-432a-8AC1-64E0C546D7DE}";
+const RT_EXTERNAL_LINK_PATH: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath";
 #[cfg(feature = "parallel")]
 const PARALLEL_CACHE_ROW_THRESHOLD: usize = 50_000;
 
@@ -1050,11 +1052,18 @@ fn non_refreshable_source_key(source: &PivotSource) -> String {
             let ranges = ranges
                 .iter()
                 .map(|range| {
+                    let sheet = range.sheet.as_deref().unwrap_or("");
+                    let range_ref = range
+                        .range
+                        .map(|range| range.to_a1_string())
+                        .unwrap_or_default();
                     format!(
-                        "{}!{}:{}:{}",
-                        range.sheet,
-                        range.range.to_a1_string(),
+                        "{}!{}:{}:{}:{}:{}",
+                        sheet,
+                        range_ref,
                         range.name.as_deref().unwrap_or(""),
+                        range.external_relationship_id.as_deref().unwrap_or(""),
+                        range.external_relationship_target.as_deref().unwrap_or(""),
                         range.page_items.join("/")
                     )
                 })
@@ -1937,6 +1946,7 @@ fn write_pivot_fields(
         if field_is_filtered(pivot, &field.name) {
             pivot_field.push_attribute(("multipleItemSelectionAllowed", "1"));
         }
+        let sort_measure_index = field_sort_measure_index(pivot, fields, index)?;
         let _item_page_count_attr = if let Some(axis_field) = pivot_axis_field(pivot, fields, index)
         {
             if let Some(caption) = &axis_field.caption {
@@ -1961,11 +1971,26 @@ fn write_pivot_fields(
         let hidden_items = hidden_item_indexes(pivot, fields, index)?;
         let collapsed_items = collapsed_item_indexes(pivot, fields, index)?;
         let include_default = should_write_pivot_field_items(pivot, fields, index);
-        if hidden_items.is_empty() && collapsed_items.is_empty() && !include_default {
+        if hidden_items.is_empty()
+            && collapsed_items.is_empty()
+            && !include_default
+            && sort_measure_index.is_none()
+        {
             w.write_event(Event::Empty(pivot_field))?;
         } else {
             w.write_event(Event::Start(pivot_field))?;
-            write_pivot_field_items(w, field, &hidden_items, &collapsed_items, include_default)?;
+            if include_default || !hidden_items.is_empty() || !collapsed_items.is_empty() {
+                write_pivot_field_items(
+                    w,
+                    field,
+                    &hidden_items,
+                    &collapsed_items,
+                    include_default,
+                )?;
+            }
+            if let Some(measure_index) = sort_measure_index {
+                write_auto_sort_scope(w, measure_index)?;
+            }
             w.write_event(Event::End(BytesEnd::new("pivotField")))?;
         }
     }
@@ -2082,6 +2107,84 @@ fn field_sort(pivot: &PivotTable, fields: &[CacheField], field_index: usize) -> 
         PivotSort::Ascending => "ascending",
         PivotSort::Descending => "descending",
     }
+}
+
+fn field_sort_measure_index(
+    pivot: &PivotTable,
+    fields: &[CacheField],
+    field_index: usize,
+) -> XlsxResult<Option<usize>> {
+    let Some(field_name) = axis_semantic_field_name(fields, field_index) else {
+        return Ok(None);
+    };
+    let Some(axis_field) = pivot
+        .rows
+        .iter()
+        .chain(pivot.columns.iter())
+        .chain(pivot.page_fields.iter())
+        .find(|field| field.field.name.eq_ignore_ascii_case(&field_name))
+    else {
+        return Ok(None);
+    };
+
+    if matches!(axis_field.sort, PivotSort::None) {
+        return Ok(None);
+    }
+
+    let Some(sort_measure) = axis_field.sort_by_measure.as_ref() else {
+        return Ok(None);
+    };
+    pivot
+        .measures
+        .iter()
+        .position(|measure| pivot_measure_matches_sort_target(measure, sort_measure))
+        .map(Some)
+        .ok_or_else(|| {
+            XlsxError::InvalidFormat(format!(
+                "pivot table {} sorts field {} by an unknown measure",
+                pivot.name, axis_field.field.name
+            ))
+        })
+}
+
+fn pivot_measure_matches_sort_target(measure: &PivotMeasure, target: &PivotMeasure) -> bool {
+    measure.field.name.eq_ignore_ascii_case(&target.field.name)
+        && measure.aggregate == target.aggregate
+        && target
+            .name
+            .as_ref()
+            .is_none_or(|name| measure.name.as_ref() == Some(name))
+}
+
+fn write_auto_sort_scope(w: &mut XmlWriter, measure_index: usize) -> XlsxResult<()> {
+    w.write_event(Event::Start(BytesStart::new("autoSortScope")))?;
+
+    let mut pivot_area = BytesStart::new("pivotArea");
+    pivot_area.push_attribute(("dataOnly", "0"));
+    pivot_area.push_attribute(("outline", "0"));
+    pivot_area.push_attribute(("fieldPosition", "0"));
+    w.write_event(Event::Start(pivot_area))?;
+
+    let mut references = BytesStart::new("references");
+    references.push_attribute(("count", "1"));
+    w.write_event(Event::Start(references))?;
+
+    let mut reference = BytesStart::new("reference");
+    reference.push_attribute(("field", "4294967294"));
+    reference.push_attribute(("count", "1"));
+    reference.push_attribute(("selected", "0"));
+    w.write_event(Event::Start(reference))?;
+
+    let v = measure_index.to_string();
+    let mut x = BytesStart::new("x");
+    x.push_attribute(("v", v.as_str()));
+    w.write_event(Event::Empty(x))?;
+
+    w.write_event(Event::End(BytesEnd::new("reference")))?;
+    w.write_event(Event::End(BytesEnd::new("references")))?;
+    w.write_event(Event::End(BytesEnd::new("pivotArea")))?;
+    w.write_event(Event::End(BytesEnd::new("autoSortScope")))?;
+    Ok(())
 }
 
 fn field_is_filtered(pivot: &PivotTable, field_name: &str) -> bool {
@@ -3044,12 +3147,10 @@ fn date_period_filter_type_name(period: PivotDatePeriod) -> Option<&'static str>
     })
 }
 
-fn top_n_filter_type_name(top: bool, percent: bool) -> &'static str {
-    match (top, percent) {
-        (true, true) => "topPercent",
-        (true, false) => "topCount",
-        (false, true) => "bottomPercent",
-        (false, false) => "bottomCount",
+fn top_n_filter_type_name(_top: bool, percent: bool) -> &'static str {
+    match percent {
+        true => "percent",
+        false => "count",
     }
 }
 
@@ -3402,13 +3503,41 @@ fn write_consolidation_source(w: &mut XmlWriter, ranges: &[PivotSourceRange]) ->
     let mut range_sets = BytesStart::new("rangeSets");
     range_sets.push_attribute(("count", count.as_str()));
     w.write_event(Event::Start(range_sets))?;
+    let mut external_index = 0usize;
     for range in ranges {
-        let ref_str = range.range.to_a1_string();
+        if range.external_relationship_id.is_some() && range.external_relationship_target.is_none()
+        {
+            return Err(XlsxError::InvalidFormat(
+                "XLSX external consolidation references require a relationship target".into(),
+            ));
+        }
+        if range.range.is_none() && range.name.is_none() {
+            return Err(XlsxError::InvalidFormat(
+                "XLSX consolidation rangeSet requires a range or name".into(),
+            ));
+        }
+        let ref_str = range.range.map(|range| range.to_a1_string());
         let mut range_set = BytesStart::new("rangeSet");
-        range_set.push_attribute(("ref", ref_str.as_str()));
-        range_set.push_attribute(("sheet", range.sheet.as_str()));
+        if let Some(ref_str) = ref_str.as_deref() {
+            range_set.push_attribute(("ref", ref_str));
+        }
+        if let Some(sheet) = &range.sheet {
+            range_set.push_attribute(("sheet", sheet.as_str()));
+        }
         if let Some(name) = &range.name {
             range_set.push_attribute(("name", name.as_str()));
+        }
+        let external_relationship_id = if range.external_relationship_target.is_some() {
+            external_index += 1;
+            Some(consolidation_external_relationship_id(
+                range,
+                external_index,
+            ))
+        } else {
+            None
+        };
+        if let Some(external_relationship_id) = external_relationship_id.as_deref() {
+            range_set.push_attribute(("r:id", external_relationship_id));
         }
         for (index, item) in range.page_items.iter().enumerate() {
             let page = pages.get(index).ok_or_else(|| {
@@ -3465,6 +3594,16 @@ fn consolidation_pages(ranges: &[PivotSourceRange]) -> XlsxResult<Vec<Vec<String
         }
     }
     Ok(pages)
+}
+
+fn consolidation_external_relationship_id(
+    range: &PivotSourceRange,
+    external_index: usize,
+) -> String {
+    range
+        .external_relationship_id
+        .clone()
+        .unwrap_or_else(|| format!("rIdExternal{external_index}"))
 }
 
 fn write_worksheet_source(
@@ -3832,27 +3971,57 @@ fn write_cache_record_value(
 
 pub(super) fn write_pivot_cache_definition_rels<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
-    cache_num: usize,
+    part: &PivotCachePart,
 ) -> XlsxResult<()> {
     let path = format!(
         "xl/pivotCache/_rels/pivotCacheDefinition{}.xml.rels",
-        cache_num
+        part.cache_num
     );
     write_xml_part(zip, &path, |w| {
         let mut relationships = BytesStart::new("Relationships");
         relationships.push_attribute(("xmlns", NS_RELATIONSHIPS));
         w.write_event(Event::Start(relationships))?;
 
-        let target = format!("pivotCacheRecords{}.xml", cache_num);
+        let target = format!("pivotCacheRecords{}.xml", part.cache_num);
         w.create_element("Relationship")
             .with_attribute(("Id", "rId1"))
             .with_attribute(("Type", RT_PIVOT_CACHE_RECORDS))
             .with_attribute(("Target", target.as_str()))
             .write_empty()?;
 
+        for (id, target) in consolidation_external_relationships(&part.source)? {
+            w.create_element("Relationship")
+                .with_attribute(("Id", id.as_str()))
+                .with_attribute(("Type", RT_EXTERNAL_LINK_PATH))
+                .with_attribute(("Target", target.as_str()))
+                .with_attribute(("TargetMode", "External"))
+                .write_empty()?;
+        }
+
         w.write_event(Event::End(BytesEnd::new("Relationships")))?;
         Ok(())
     })
+}
+
+fn consolidation_external_relationships(source: &PivotSource) -> XlsxResult<Vec<(String, String)>> {
+    let PivotSource::Consolidation { ranges } = source else {
+        return Ok(Vec::new());
+    };
+
+    let mut relationships = Vec::new();
+    for range in ranges {
+        let Some(target) = &range.external_relationship_target else {
+            continue;
+        };
+        if target.trim().is_empty() {
+            return Err(XlsxError::InvalidFormat(
+                "XLSX external consolidation relationship target cannot be blank".into(),
+            ));
+        }
+        let id = consolidation_external_relationship_id(range, relationships.len() + 1);
+        relationships.push((id, target.clone()));
+    }
+    Ok(relationships)
 }
 
 fn write_pivot_value(w: &mut XmlWriter, value: &PivotValue) -> XlsxResult<()> {

@@ -61,12 +61,18 @@ struct CurrentPivotFieldItems {
     collapsed_items: Vec<u32>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct PivotCacheRelationships {
+    external_targets: HashMap<String, String>,
+}
+
 pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     _cache_id: u32,
     path: &str,
     connections: &HashMap<u32, WorkbookConnection>,
 ) -> XlsxResult<Option<PivotCacheDefinition>> {
+    let relationships = read_pivot_cache_definition_relationships(archive, path)?;
     let file = match archive_by_name(archive, path) {
         Ok(file) => file,
         Err(_) => return Ok(None),
@@ -109,9 +115,13 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     missing_items_limit = attr_u32(&e, b"missingItemsLimit");
                 }
                 b"cacheSource" => {
-                    source_kind = parse_cache_source_kind(&e);
                     connection_name = attr_string(&e, b"connectionId");
                     connection_id = attr_u32(&e, b"connectionId");
+                    source_kind = refine_cache_source_kind(
+                        parse_cache_source_kind(&e),
+                        connection_id,
+                        connections,
+                    );
                 }
                 b"worksheetSource" => {
                     source = parse_cache_worksheet_source(&e, source_kind)?;
@@ -124,7 +134,9 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     current_consolidation_page = Some(Vec::new());
                 }
                 b"rangeSet" if in_consolidation => {
-                    if let Some(range) = parse_consolidation_range_set(&e, &consolidation_pages)? {
+                    if let Some(range) =
+                        parse_consolidation_range_set(&e, &consolidation_pages, &relationships)?
+                    {
                         consolidation_ranges.push(range);
                     }
                 }
@@ -178,9 +190,13 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     missing_items_limit = attr_u32(&e, b"missingItemsLimit");
                 }
                 b"cacheSource" => {
-                    source_kind = parse_cache_source_kind(&e);
                     connection_name = attr_string(&e, b"connectionId");
                     connection_id = attr_u32(&e, b"connectionId");
+                    source_kind = refine_cache_source_kind(
+                        parse_cache_source_kind(&e),
+                        connection_id,
+                        connections,
+                    );
                 }
                 b"worksheetSource" => {
                     source = parse_cache_worksheet_source(&e, source_kind)?;
@@ -189,7 +205,9 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
                     }
                 }
                 b"rangeSet" if in_consolidation => {
-                    if let Some(range) = parse_consolidation_range_set(&e, &consolidation_pages)? {
+                    if let Some(range) =
+                        parse_consolidation_range_set(&e, &consolidation_pages, &relationships)?
+                    {
                         consolidation_ranges.push(range);
                     }
                 }
@@ -323,6 +341,61 @@ pub(super) fn read_pivot_cache_definition<R: Read + Seek>(
     }))
 }
 
+fn read_pivot_cache_definition_relationships<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    cache_definition_path: &str,
+) -> XlsxResult<PivotCacheRelationships> {
+    let Some((dir, file_name)) = cache_definition_path.rsplit_once('/') else {
+        return Ok(PivotCacheRelationships::default());
+    };
+    let rels_path = format!("{dir}/_rels/{file_name}.rels");
+    let file = match archive_by_name(archive, &rels_path) {
+        Ok(file) => file,
+        Err(_) => return Ok(PivotCacheRelationships::default()),
+    };
+
+    let reader = BufReader::new(file);
+    let mut xml_reader = Reader::from_reader(reader);
+    xml_reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut relationships = PivotCacheRelationships::default();
+    loop {
+        match xml_reader.read_event_into(&mut buf) {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e))
+                if e.name().local_name().as_ref() == b"Relationship" =>
+            {
+                let mut id = None;
+                let mut target = None;
+                let mut rel_type = None;
+                for attr in e.attributes().flatten() {
+                    match attr.key.local_name().as_ref() {
+                        b"Id" => id = attr.unescape_value().ok().map(|value| value.to_string()),
+                        b"Target" => {
+                            target = attr.unescape_value().ok().map(|value| value.to_string())
+                        }
+                        b"Type" => {
+                            rel_type = attr.unescape_value().ok().map(|value| value.to_string())
+                        }
+                        _ => {}
+                    }
+                }
+                if let (Some(id), Some(target), Some(rel_type)) = (id, target, rel_type) {
+                    if rel_type.ends_with("/externalLinkPath") {
+                        relationships.external_targets.insert(id, target);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(XlsxError::Xml(e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(relationships)
+}
+
 fn pivot_calculated_item_from_context(
     item: CurrentCalculatedItem,
     fields: &[PivotCacheField],
@@ -430,6 +503,24 @@ fn parse_cache_source_kind(e: &BytesStart<'_>) -> PivotCacheSourceKind {
     }
 }
 
+fn refine_cache_source_kind(
+    kind: PivotCacheSourceKind,
+    connection_id: Option<u32>,
+    connections: &HashMap<u32, WorkbookConnection>,
+) -> PivotCacheSourceKind {
+    if matches!(
+        kind,
+        PivotCacheSourceKind::External | PivotCacheSourceKind::Unknown
+    ) && connection_id
+        .and_then(|id| connections.get(&id))
+        .is_some_and(|connection| matches!(&connection.kind, WorkbookConnectionKind::Olap { .. }))
+    {
+        PivotCacheSourceKind::Olap
+    } else {
+        kind
+    }
+}
+
 fn placeholder_source_for_kind(
     kind: PivotCacheSourceKind,
     connection_id: Option<u32>,
@@ -441,7 +532,8 @@ fn placeholder_source_for_kind(
         .map(|connection| connection.name.clone())
         .or(connection_name.clone())
         .unwrap_or_default();
-    let command_text = connection.and_then(database_connection_command);
+    let command_text = connection.and_then(connection_command);
+    let cube = connection.and_then(connection_cube);
     match kind {
         PivotCacheSourceKind::Consolidation => PivotSource::Consolidation { ranges: Vec::new() },
         PivotCacheSourceKind::Scenario => PivotSource::Scenario {
@@ -449,7 +541,7 @@ fn placeholder_source_for_kind(
         },
         PivotCacheSourceKind::Olap => PivotSource::Olap {
             connection_name: external_name,
-            cube: None,
+            cube,
             command_text,
         },
         PivotCacheSourceKind::External
@@ -461,9 +553,21 @@ fn placeholder_source_for_kind(
     }
 }
 
-fn database_connection_command(connection: &WorkbookConnection) -> Option<String> {
+fn connection_command(connection: &WorkbookConnection) -> Option<String> {
     match &connection.kind {
         WorkbookConnectionKind::Database { command, .. } => command.clone(),
+        WorkbookConnectionKind::Olap { command, .. } => command.clone(),
+        _ => None,
+    }
+}
+
+fn connection_cube(connection: &WorkbookConnection) -> Option<String> {
+    match &connection.kind {
+        WorkbookConnectionKind::Olap {
+            command,
+            command_type,
+            ..
+        } if *command_type == Some(1) => command.clone(),
         _ => None,
     }
 }
@@ -502,18 +606,33 @@ fn parse_worksheet_source(e: &BytesStart<'_>) -> XlsxResult<Option<PivotSource>>
 fn parse_consolidation_range_set(
     e: &BytesStart<'_>,
     pages: &[Vec<String>],
+    relationships: &PivotCacheRelationships,
 ) -> XlsxResult<Option<PivotSourceRange>> {
-    let Some(range_ref) = attr_string(e, b"ref") else {
+    let range = attr_string(e, b"ref")
+        .map(|range_ref| {
+            CellRange::parse(&range_ref).map_err(|_| {
+                XlsxError::InvalidFormat(format!(
+                    "bad pivot consolidation rangeSet ref: {range_ref}"
+                ))
+            })
+        })
+        .transpose()?;
+    let name = attr_string(e, b"name");
+    let external_relationship_id = attr_string(e, b"id");
+    let external_relationship_target = external_relationship_id
+        .as_ref()
+        .and_then(|id| relationships.external_targets.get(id).cloned());
+    if range.is_none() && name.is_none() && external_relationship_id.is_none() {
         return Ok(None);
-    };
-    let range = CellRange::parse(&range_ref).map_err(|_| {
-        XlsxError::InvalidFormat(format!("bad pivot consolidation rangeSet ref: {range_ref}"))
-    })?;
-    let mut source_range =
-        PivotSourceRange::new(attr_string(e, b"sheet").unwrap_or_default(), range);
-    source_range.name = attr_string(e, b"name");
-    source_range.page_items = consolidation_range_page_items(e, pages);
-    Ok(Some(source_range))
+    }
+    Ok(Some(PivotSourceRange {
+        sheet: attr_string(e, b"sheet"),
+        range,
+        name,
+        external_relationship_id,
+        external_relationship_target,
+        page_items: consolidation_range_page_items(e, pages),
+    }))
 }
 
 fn consolidation_range_page_items(e: &BytesStart<'_>, pages: &[Vec<String>]) -> Vec<String> {
@@ -629,6 +748,8 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let mut current_pivot_filter: Option<CurrentPivotFilter> = None;
     let mut current_pivot_filter_depth = 0usize;
     let mut in_pivot_filters = false;
+    let mut auto_sort_scope_depth = 0usize;
+    let mut auto_sort_data_field_reference = false;
     let mut options_by_field: HashMap<usize, PivotFieldOptions> = HashMap::new();
     let mut hidden_items_by_field: HashMap<usize, Vec<u32>> = HashMap::new();
     let mut element_stack = Vec::new();
@@ -648,6 +769,11 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                 }
 
                 element_stack.push(pivot_xml_element(local));
+                if auto_sort_scope_depth > 0 {
+                    auto_sort_scope_depth += 1;
+                } else if local == b"autoSortScope" && current_pivot_field.is_some() {
+                    auto_sort_scope_depth = 1;
+                }
                 match local {
                     b"pivotTableDefinition" => {
                         parse_pivot_table_attrs(
@@ -703,6 +829,12 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                             current_pivot_filter_depth += 1;
                             parse_pivot_top_filter_attrs(filter, &e);
                         }
+                    }
+                    b"reference"
+                        if auto_sort_scope_depth > 0
+                            && attr_u32(&e, b"field") == Some(u32::MAX - 1) =>
+                    {
+                        auto_sort_data_field_reference = true;
                     }
                     _ if current_pivot_filter.is_some() => {
                         current_pivot_filter_depth += 1;
@@ -827,11 +959,9 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                                 let source_field_index = attr_u32(&e, b"sourceField")
                                     .map(|value| value as usize)
                                     .or(current.base_field_index);
-                                if let Some(show_as) = parse_x14_show_as(
-                                    &pivot_show_as,
-                                    cache,
-                                    source_field_index,
-                                ) {
+                                if let Some(show_as) =
+                                    parse_x14_show_as(&pivot_show_as, cache, source_field_index)
+                                {
                                     if let Some(measure) = measures.get_mut(current.measure_index) {
                                         measure.show_as = show_as;
                                     }
@@ -860,6 +990,16 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                     b"top10" => {
                         if let Some(filter) = &mut current_pivot_filter {
                             parse_pivot_top_filter_attrs(filter, &e);
+                        }
+                    }
+                    b"x" if auto_sort_data_field_reference => {
+                        if let (Some(field_items), Some(measure_index)) =
+                            (&current_pivot_field, attr_u32(&e, b"v"))
+                        {
+                            options_by_field
+                                .entry(field_items.field_index)
+                                .or_default()
+                                .sort_by_measure_index = Some(measure_index as usize);
                         }
                     }
                     b"pivotTableStyleInfo" => style = parse_pivot_style(&e),
@@ -911,10 +1051,19 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
                         current_pivot_filter_depth = 0;
                     }
                     b"filters" if current_pivot_filter.is_none() => in_pivot_filters = false,
+                    b"reference" if auto_sort_data_field_reference => {
+                        auto_sort_data_field_reference = false;
+                    }
                     _ if current_pivot_filter.is_some() => {
                         current_pivot_filter_depth = current_pivot_filter_depth.saturating_sub(1);
                     }
                     _ => {}
+                }
+                if local == b"autoSortScope" {
+                    auto_sort_scope_depth = 0;
+                    auto_sort_data_field_reference = false;
+                } else {
+                    auto_sort_scope_depth = auto_sort_scope_depth.saturating_sub(1);
                 }
                 element_stack.pop();
             }
@@ -928,6 +1077,14 @@ pub(super) fn read_pivot_table<R: Read + Seek>(
     let Some(cache) = caches.get(&cache_id) else {
         return Ok(None);
     };
+    apply_sort_by_measure_options(
+        &mut rows,
+        &mut columns,
+        &mut page_fields,
+        cache,
+        &options_by_field,
+        &measures,
+    );
 
     let mut pivot = PivotTable::new(0, name, cache.source.clone(), target);
     pivot.rows = rows;
@@ -1304,6 +1461,7 @@ fn parse_pivot_sort(e: &BytesStart<'_>) -> PivotSort {
 struct PivotFieldOptions {
     caption: Option<String>,
     sort: PivotSort,
+    sort_by_measure_index: Option<usize>,
     subtotal: PivotSubtotal,
     subtotal_caption: Option<String>,
     subtotals: Vec<PivotSubtotal>,
@@ -1322,6 +1480,7 @@ impl Default for PivotFieldOptions {
         Self {
             caption: None,
             sort: PivotSort::None,
+            sort_by_measure_index: None,
             subtotal: PivotSubtotal::Automatic,
             subtotal_caption: None,
             subtotals: Vec::new(),
@@ -1341,6 +1500,7 @@ fn parse_pivot_field_options(e: &BytesStart<'_>) -> PivotFieldOptions {
     PivotFieldOptions {
         caption: attr_string(e, b"name"),
         sort: parse_pivot_sort(e),
+        sort_by_measure_index: None,
         subtotal: parse_pivot_subtotal(e),
         subtotal_caption: attr_string(e, b"subtotalCaption"),
         subtotals: parse_pivot_subtotals(e),
@@ -1428,6 +1588,35 @@ fn pivot_axis_field(
     pivot_field.collapsed_items =
         pivot_field_item_values(cache, field_index, &options.collapsed_item_indexes);
     Some(pivot_field)
+}
+
+fn apply_sort_by_measure_options(
+    rows: &mut [PivotField],
+    columns: &mut [PivotField],
+    page_fields: &mut [PivotField],
+    cache: &PivotCacheDefinition,
+    options_by_field: &HashMap<usize, PivotFieldOptions>,
+    measures: &[PivotMeasure],
+) {
+    for (field_index, options) in options_by_field {
+        let Some(measure_index) = options.sort_by_measure_index else {
+            continue;
+        };
+        let Some(measure) = measures.get(measure_index).cloned() else {
+            continue;
+        };
+        let Some(field_name) = semantic_cache_field_name(cache, *field_index) else {
+            continue;
+        };
+        for field in rows
+            .iter_mut()
+            .chain(columns.iter_mut())
+            .chain(page_fields.iter_mut())
+            .filter(|field| field.field.name.eq_ignore_ascii_case(&field_name))
+        {
+            field.sort_by_measure = Some(measure.clone());
+        }
+    }
 }
 
 fn pivot_field_item_values(
@@ -1806,6 +1995,8 @@ fn parse_pivot_filter_date_value(value: &str) -> Option<f64> {
 
 fn parse_top_n_filter_type(value: &str) -> Option<(bool, bool)> {
     Some(match value {
+        "count" => (true, false),
+        "percent" => (true, true),
         "topCount" => (true, false),
         "topPercent" => (true, true),
         "bottomCount" => (false, false),
@@ -1975,6 +2166,43 @@ mod tests {
         assert_eq!(
             parse_cache_source_kind(&cache_source_with_type("mystery")),
             PivotCacheSourceKind::Unknown
+        );
+    }
+
+    #[test]
+    fn parse_consolidation_range_set_preserves_name_and_external_relationship() {
+        let pages = vec![
+            vec!["North".to_string(), "South".to_string()],
+            vec!["FY24".to_string()],
+        ];
+        let mut element = BytesStart::new("rangeSet");
+        element.push_attribute(("name", "NamedSource"));
+        element.push_attribute(("r:id", "rIdExternal"));
+        element.push_attribute(("i1", "1"));
+        element.push_attribute(("i2", "0"));
+        let mut relationships = PivotCacheRelationships::default();
+        relationships.external_targets.insert(
+            "rIdExternal".to_string(),
+            "file:///C:/data/source.xlsx".to_string(),
+        );
+
+        let parsed = parse_consolidation_range_set(&element, &pages, &relationships)
+            .expect("parse rangeSet")
+            .expect("source");
+        assert_eq!(parsed.name.as_deref(), Some("NamedSource"));
+        assert_eq!(
+            parsed.external_relationship_id.as_deref(),
+            Some("rIdExternal")
+        );
+        assert_eq!(
+            parsed.external_relationship_target.as_deref(),
+            Some("file:///C:/data/source.xlsx")
+        );
+        assert_eq!(parsed.sheet, None);
+        assert_eq!(parsed.range, None);
+        assert_eq!(
+            parsed.page_items,
+            vec!["South".to_string(), "FY24".to_string()]
         );
     }
 

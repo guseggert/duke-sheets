@@ -889,6 +889,9 @@ impl WorkbookConnection {
             description: None,
             connection_type: None,
             kind: WorkbookConnectionKind::Olap {
+                connection: None,
+                command: None,
+                command_type: None,
                 local: false,
                 local_connection: None,
                 local_refresh: true,
@@ -913,25 +916,32 @@ impl WorkbookConnection {
         }
     }
 
-    /// Set the database command text.
+    /// Set the database or OLAP command text.
     pub fn with_command(mut self, command: impl Into<String>) -> Self {
-        if let WorkbookConnectionKind::Database {
-            command: existing, ..
-        } = &mut self.kind
-        {
-            *existing = Some(command.into());
+        match &mut self.kind {
+            WorkbookConnectionKind::Database {
+                command: existing, ..
+            }
+            | WorkbookConnectionKind::Olap {
+                command: existing, ..
+            } => *existing = Some(command.into()),
+            _ => {}
         }
         self
     }
 
-    /// Set the database command type.
+    /// Set the database or OLAP command type.
     pub fn with_command_type(mut self, command_type: u32) -> Self {
-        if let WorkbookConnectionKind::Database {
-            command_type: existing,
-            ..
-        } = &mut self.kind
-        {
-            *existing = Some(command_type);
+        match &mut self.kind {
+            WorkbookConnectionKind::Database {
+                command_type: existing,
+                ..
+            }
+            | WorkbookConnectionKind::Olap {
+                command_type: existing,
+                ..
+            } => *existing = Some(command_type),
+            _ => {}
         }
         self
     }
@@ -1166,6 +1176,12 @@ pub enum WorkbookConnectionKind {
     },
     /// OLAP connection represented by SpreadsheetML `olapPr`.
     Olap {
+        /// Optional OLAP provider connection string from the paired `dbPr`.
+        connection: Option<String>,
+        /// Optional cube/MDX command from the paired `dbPr`.
+        command: Option<String>,
+        /// SpreadsheetML command type from the paired `dbPr`.
+        command_type: Option<u32>,
         /// Whether this is a local cube connection.
         local: bool,
         /// Optional local cube connection string.

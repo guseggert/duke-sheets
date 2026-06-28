@@ -426,12 +426,12 @@ pub(super) fn read_workbook_connections<R: Read + Seek>(
                 b"connection" => current = parse_connection_attrs(&e),
                 b"dbPr" => {
                     if let Some(connection) = &mut current {
-                        connection.kind = parse_db_pr(&e);
+                        connection.apply_db_pr(&e);
                     }
                 }
                 b"olapPr" => {
                     if let Some(connection) = &mut current {
-                        connection.kind = Some(parse_olap_pr(&e));
+                        connection.apply_olap_pr(&e);
                     }
                 }
                 b"webPr" => {
@@ -459,12 +459,12 @@ pub(super) fn read_workbook_connections<R: Read + Seek>(
                 }
                 b"dbPr" => {
                     if let Some(connection) = &mut current {
-                        connection.kind = parse_db_pr(&e);
+                        connection.apply_db_pr(&e);
                     }
                 }
                 b"olapPr" => {
                     if let Some(connection) = &mut current {
-                        connection.kind = Some(parse_olap_pr(&e));
+                        connection.apply_olap_pr(&e);
                     }
                 }
                 b"webPr" => {
@@ -524,9 +524,38 @@ struct ParsedConnection {
     single_sign_on_id: Option<String>,
     parameters: Vec<WorkbookConnectionParameter>,
     kind: Option<WorkbookConnectionKind>,
+    db_props: Option<ConnectionDbProps>,
 }
 
 impl ParsedConnection {
+    fn apply_db_pr(&mut self, e: &quick_xml::events::BytesStart<'_>) {
+        let Some(db_props) = parse_db_pr(e) else {
+            return;
+        };
+        self.kind = Some(match self.kind.take() {
+            Some(WorkbookConnectionKind::Olap {
+                local,
+                local_connection,
+                local_refresh,
+                send_locale,
+                row_drill_count,
+                ..
+            }) => db_props.olap_kind(
+                local,
+                local_connection,
+                local_refresh,
+                send_locale,
+                row_drill_count,
+            ),
+            _ => db_props.database_kind(),
+        });
+        self.db_props = Some(db_props);
+    }
+
+    fn apply_olap_pr(&mut self, e: &quick_xml::events::BytesStart<'_>) {
+        self.kind = Some(parse_olap_pr(e, self.db_props.as_ref()));
+    }
+
     fn build(self) -> Option<WorkbookConnection> {
         Some(WorkbookConnection {
             id: self.id,
@@ -589,24 +618,83 @@ fn parse_connection_attrs(e: &quick_xml::events::BytesStart<'_>) -> Option<Parse
         single_sign_on_id: attr_string(e, b"singleSignOnId"),
         parameters: Vec::new(),
         kind: None,
+        db_props: None,
     })
 }
 
-fn parse_db_pr(e: &quick_xml::events::BytesStart<'_>) -> Option<WorkbookConnectionKind> {
-    Some(WorkbookConnectionKind::Database {
+#[derive(Clone)]
+struct ConnectionDbProps {
+    connection: String,
+    command: Option<String>,
+    command_type: Option<u32>,
+}
+
+impl ConnectionDbProps {
+    fn database_kind(&self) -> WorkbookConnectionKind {
+        WorkbookConnectionKind::Database {
+            connection: self.connection.clone(),
+            command: self.command.clone(),
+            command_type: self.command_type,
+        }
+    }
+
+    fn olap_kind(
+        &self,
+        local: bool,
+        local_connection: Option<String>,
+        local_refresh: bool,
+        send_locale: bool,
+        row_drill_count: Option<u32>,
+    ) -> WorkbookConnectionKind {
+        WorkbookConnectionKind::Olap {
+            connection: Some(self.connection.clone()),
+            command: self.command.clone(),
+            command_type: self.command_type,
+            local,
+            local_connection,
+            local_refresh,
+            send_locale,
+            row_drill_count,
+        }
+    }
+}
+
+fn parse_db_pr(e: &quick_xml::events::BytesStart<'_>) -> Option<ConnectionDbProps> {
+    Some(ConnectionDbProps {
         connection: attr_string(e, b"connection")?,
         command: attr_string(e, b"command"),
         command_type: attr_u32(e, b"commandType"),
     })
 }
 
-fn parse_olap_pr(e: &quick_xml::events::BytesStart<'_>) -> WorkbookConnectionKind {
-    WorkbookConnectionKind::Olap {
-        local: attr_bool(e, b"local").unwrap_or(false),
-        local_connection: attr_string(e, b"localConnection"),
-        local_refresh: attr_bool(e, b"localRefresh").unwrap_or(true),
-        send_locale: attr_bool(e, b"sendLocale").unwrap_or(false),
-        row_drill_count: attr_u32(e, b"rowDrillCount"),
+fn parse_olap_pr(
+    e: &quick_xml::events::BytesStart<'_>,
+    db_props: Option<&ConnectionDbProps>,
+) -> WorkbookConnectionKind {
+    let local = attr_bool(e, b"local").unwrap_or(false);
+    let local_connection = attr_string(e, b"localConnection");
+    let local_refresh = attr_bool(e, b"localRefresh").unwrap_or(true);
+    let send_locale = attr_bool(e, b"sendLocale").unwrap_or(false);
+    let row_drill_count = attr_u32(e, b"rowDrillCount");
+    if let Some(db_props) = db_props {
+        db_props.olap_kind(
+            local,
+            local_connection,
+            local_refresh,
+            send_locale,
+            row_drill_count,
+        )
+    } else {
+        WorkbookConnectionKind::Olap {
+            connection: None,
+            command: None,
+            command_type: None,
+            local,
+            local_connection,
+            local_refresh,
+            send_locale,
+            row_drill_count,
+        }
     }
 }
 

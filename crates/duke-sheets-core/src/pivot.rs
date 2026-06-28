@@ -196,15 +196,20 @@ impl PivotSource {
     }
 }
 
-/// A worksheet range used by a consolidated pivot source.
+/// A range, defined name, or external reference used by a consolidated pivot
+/// source.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PivotSourceRange {
-    /// Source sheet name.
-    pub sheet: String,
-    /// Source range.
-    pub range: CellRange,
-    /// Optional display name for the source range.
+    /// Source sheet name for worksheet-range consolidation sources.
+    pub sheet: Option<String>,
+    /// Source range for worksheet-range consolidation sources.
+    pub range: Option<CellRange>,
+    /// Defined name or display name for this source.
     pub name: Option<String>,
+    /// Relationship id for an external workbook reference.
+    pub external_relationship_id: Option<String>,
+    /// Relationship target for an external workbook reference.
+    pub external_relationship_target: Option<String>,
     /// Consolidation page-item labels for this range, ordered by page field.
     pub page_items: Vec<String>,
 }
@@ -213,16 +218,42 @@ impl PivotSourceRange {
     /// Create a source range.
     pub fn new(sheet: impl Into<String>, range: CellRange) -> Self {
         Self {
-            sheet: sheet.into(),
-            range,
+            sheet: Some(sheet.into()),
+            range: Some(range),
             name: None,
+            external_relationship_id: None,
+            external_relationship_target: None,
             page_items: Vec::new(),
         }
     }
 
-    /// Set the display name for this source range.
+    /// Create a source specified by a defined name.
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            sheet: None,
+            range: None,
+            name: Some(name.into()),
+            external_relationship_id: None,
+            external_relationship_target: None,
+            page_items: Vec::new(),
+        }
+    }
+
+    /// Set the defined name or display name for this source.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Set the relationship id for an external workbook reference.
+    pub fn with_external_relationship_id(mut self, relationship_id: impl Into<String>) -> Self {
+        self.external_relationship_id = Some(relationship_id.into());
+        self
+    }
+
+    /// Set the relationship target for an external workbook reference.
+    pub fn with_external_relationship_target(mut self, target: impl Into<String>) -> Self {
+        self.external_relationship_target = Some(target.into());
         self
     }
 
@@ -272,6 +303,11 @@ pub struct PivotField {
     pub caption: Option<String>,
     /// Sort behavior for this field.
     pub sort: PivotSort,
+    /// Optional value field used for sorting this axis field.
+    ///
+    /// When present, [`PivotField::sort`] supplies the direction and the
+    /// referenced measure supplies the aggregate value used for item order.
+    pub sort_by_measure: Option<PivotMeasure>,
     /// Subtotal behavior for this field.
     pub subtotal: PivotSubtotal,
     /// Optional subtotal label suffix for rendered subtotal captions.
@@ -310,6 +346,7 @@ impl PivotField {
             field: field.into(),
             caption: None,
             sort: PivotSort::Ascending,
+            sort_by_measure: None,
             subtotal: PivotSubtotal::Automatic,
             subtotal_caption: None,
             subtotals: Vec::new(),
@@ -333,6 +370,22 @@ impl PivotField {
     /// Set the subtotal label suffix for this axis field.
     pub fn with_subtotal_caption(mut self, caption: impl Into<String>) -> Self {
         self.subtotal_caption = Some(caption.into());
+        self
+    }
+
+    /// Sort this axis field by the aggregate values of a pivot measure.
+    pub fn with_sort_by_measure(mut self, measure: PivotMeasure) -> Self {
+        self.sort_by_measure = Some(measure);
+        self
+    }
+
+    /// Sort this axis field by the aggregate values of a source field.
+    pub fn with_sort_by(
+        mut self,
+        field: impl Into<PivotFieldRef>,
+        aggregate: PivotAggregate,
+    ) -> Self {
+        self.sort_by_measure = Some(PivotMeasure::new(field, aggregate));
         self
     }
 

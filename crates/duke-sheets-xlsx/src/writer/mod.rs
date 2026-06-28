@@ -1036,7 +1036,7 @@ impl XlsxWriter {
         for cache_part in &pivot_numbering.cache_parts {
             pivot::write_pivot_cache_definition_part(&mut zip, workbook, cache_part)?;
             pivot::write_pivot_cache_records_part(&mut zip, workbook, cache_part)?;
-            pivot::write_pivot_cache_definition_rels(&mut zip, cache_part.cache_num)?;
+            pivot::write_pivot_cache_definition_rels(&mut zip, cache_part)?;
         }
 
         for part in workbook.workbook_extension_parts() {
@@ -1733,6 +1733,9 @@ impl XlsxWriter {
                         w.write_event(Event::Empty(db_pr))?;
                     }
                     WorkbookConnectionKind::Olap {
+                        connection,
+                        command,
+                        command_type,
                         local,
                         local_connection,
                         local_refresh,
@@ -1743,6 +1746,20 @@ impl XlsxWriter {
                         let local_refresh = bool_xml(*local_refresh);
                         let send_locale = bool_xml(*send_locale);
                         let row_drill_count = row_drill_count.map(|value| value.to_string());
+                        let command_type = command_type.map(|value| value.to_string());
+                        if connection.is_some() || command.is_some() || command_type.is_some() {
+                            let mut db_pr = BytesStart::new("dbPr");
+                            if let Some(connection) = connection {
+                                db_pr.push_attribute(("connection", connection.as_str()));
+                            }
+                            if let Some(command) = command {
+                                db_pr.push_attribute(("command", command.as_str()));
+                            }
+                            if let Some(command_type) = command_type.as_deref() {
+                                db_pr.push_attribute(("commandType", command_type));
+                            }
+                            w.write_event(Event::Empty(db_pr))?;
+                        }
                         let mut olap_pr = BytesStart::new("olapPr");
                         olap_pr.push_attribute(("local", local));
                         olap_pr.push_attribute(("localRefresh", local_refresh));
@@ -3592,12 +3609,13 @@ mod tests {
     use crate::reader::XlsxReader;
     use duke_sheets_core::{
         CellRange, ConditionalFormatRule, Hyperlink, PivotAggregate, PivotDateGroupUnit,
-        PivotDatePeriod, PivotExtension, PivotField, PivotFilter, PivotFilterOperator,
-        PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup, PivotMeasure,
-        PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
-        PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis, SplitPanes, WorkbookConnection,
-        WorkbookConnectionCredentials, WorkbookConnectionKind, WorkbookConnectionParameter,
-        WorkbookConnectionParameterValue, WorkbookExtension, WorkbookExtensionPart,
+        PivotDatePeriod, PivotExtension, PivotField, PivotFieldRef, PivotFilter,
+        PivotFilterOperator, PivotGrouping, PivotLayout, PivotLayoutKind, PivotManualGroup,
+        PivotMeasure, PivotRefreshPolicy, PivotShowAs, PivotSort, PivotSource, PivotSourceRange,
+        PivotStyle, PivotSubtotal, PivotTable, PivotValue, PivotValuesAxis, SplitPanes,
+        WorkbookConnection, WorkbookConnectionCredentials, WorkbookConnectionKind,
+        WorkbookConnectionParameter, WorkbookConnectionParameterValue, WorkbookExtension,
+        WorkbookExtensionPart,
     };
     use ssfmt::{date_serial::date_to_serial, DateSystem};
     use std::io::Read;
@@ -4557,8 +4575,11 @@ mod tests {
         };
         wb.add_data_connection(text).unwrap();
 
-        let mut olap = WorkbookConnection::olap(10, "CubeSales");
+        let mut olap = WorkbookConnection::olap(10, "CubeSales").with_connection_type(5);
         olap.kind = WorkbookConnectionKind::Olap {
+            connection: Some("Provider=MSOLAP;Data Source=olapserver;".to_string()),
+            command: Some("SalesCube".to_string()),
+            command_type: Some(1),
             local: true,
             local_connection: Some("CubeFile=cube.cub".to_string()),
             local_refresh: false,
@@ -4574,6 +4595,7 @@ mod tests {
         let connections = read_zip_entry(bytes.clone(), "xl/connections.xml");
         assert!(connections.contains(r#"<webPr xml="0" sourceData="1" htmlTables="1" url="https://example.test/sales.html" htmlFormat="all" post="region=all"/>"#));
         assert!(connections.contains(r#"<textPr firstRow="2" delimited="1" sourceFile="/data/sales.csv" delimiter="|" decimal="." thousands=","/>"#));
+        assert!(connections.contains(r#"<dbPr connection="Provider=MSOLAP;Data Source=olapserver;" command="SalesCube" commandType="1"/>"#));
         assert!(connections.contains(r#"<olapPr local="1" localRefresh="0" sendLocale="1" localConnection="CubeFile=cube.cub" rowDrillCount="1000"/>"#));
 
         let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
@@ -4615,12 +4637,21 @@ mod tests {
         }
         match &roundtrip.data_connections()[2].kind {
             WorkbookConnectionKind::Olap {
+                connection,
+                command,
+                command_type,
                 local,
                 local_connection,
                 local_refresh,
                 send_locale,
                 row_drill_count,
             } => {
+                assert_eq!(
+                    connection.as_deref(),
+                    Some("Provider=MSOLAP;Data Source=olapserver;")
+                );
+                assert_eq!(command.as_deref(), Some("SalesCube"));
+                assert_eq!(*command_type, Some(1));
                 assert!(*local);
                 assert_eq!(local_connection.as_deref(), Some("CubeFile=cube.cub"));
                 assert!(!*local_refresh);
@@ -4634,14 +4665,24 @@ mod tests {
     #[test]
     fn test_writer_round_trips_olap_pivot_source_definition() {
         let mut wb = Workbook::new();
-        wb.add_data_connection(WorkbookConnection::olap(10, "CubeSales"))
-            .unwrap();
+        let mut connection = WorkbookConnection::olap(10, "CubeSales").with_connection_type(5);
+        connection.kind = WorkbookConnectionKind::Olap {
+            connection: Some("Provider=MSOLAP;Data Source=olapserver;".to_string()),
+            command: Some("SalesCube".to_string()),
+            command_type: Some(1),
+            local: false,
+            local_connection: None,
+            local_refresh: true,
+            send_locale: true,
+            row_drill_count: None,
+        };
+        wb.add_data_connection(connection).unwrap();
         let sheet = wb.worksheet_mut(0).unwrap();
         let pivot = PivotTable::builder("OlapSales")
             .source(PivotSource::Olap {
                 connection_name: "CubeSales".to_string(),
-                cube: None,
-                command_text: None,
+                cube: Some("SalesCube".to_string()),
+                command_text: Some("SalesCube".to_string()),
             })
             .target_address("A1")
             .unwrap()
@@ -4672,9 +4713,11 @@ mod tests {
             &pivot.source,
             PivotSource::Olap {
                 connection_name,
-                cube: None,
-                command_text: None
+                cube: Some(cube),
+                command_text: Some(command_text)
             } if connection_name == "CubeSales"
+                && cube == "SalesCube"
+                && command_text == "SalesCube"
         ));
         assert_eq!(pivot.rows[0].field.name, "Region");
         assert_eq!(pivot.measures[0].field.name, "Revenue");
@@ -4740,6 +4783,11 @@ mod tests {
                     PivotSourceRange::new("South", CellRange::parse("C1:D4").unwrap())
                         .with_name("SouthActual")
                         .with_page_items(["FY2025", "Actual"]),
+                    PivotSourceRange::named("GlobalNamedSource")
+                        .with_page_items(["FY2025", "Plan"]),
+                    PivotSourceRange::new("ExternalData", CellRange::parse("E1:F4").unwrap())
+                        .with_external_relationship_target("file:///C:/data/source.xlsx")
+                        .with_page_items(["FY2025", "Actual"]),
                 ],
             })
             .target_address("A1")
@@ -4761,12 +4809,26 @@ mod tests {
         assert!(cache_def.contains(
             r#"<page count="2"><pageItem name="Plan"/><pageItem name="Actual"/></page>"#
         ));
-        assert!(cache_def.contains(r#"<rangeSets count="2">"#));
+        assert!(cache_def.contains(r#"<rangeSets count="4">"#));
         assert!(cache_def
             .contains(r#"<rangeSet ref="A1:B4" sheet="North" name="NorthPlan" i1="0" i2="0"/>"#));
         assert!(cache_def
             .contains(r#"<rangeSet ref="C1:D4" sheet="South" name="SouthActual" i1="0" i2="1"/>"#));
+        assert!(cache_def.contains(r#"<rangeSet name="GlobalNamedSource" i1="0" i2="0"/>"#));
+        assert!(cache_def.contains(
+            r#"<rangeSet ref="E1:F4" sheet="ExternalData" r:id="rIdExternal1" i1="0" i2="1"/>"#
+        ));
         assert!(cache_def.contains(r#"saveData="0""#));
+        let cache_rels = read_zip_entry(
+            bytes.clone(),
+            "xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels",
+        );
+        assert!(cache_rels.contains(r#"Id="rIdExternal1""#));
+        assert!(cache_rels.contains(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath""#
+        ));
+        assert!(cache_rels.contains(r#"Target="file:///C:/data/source.xlsx""#));
+        assert!(cache_rels.contains(r#"TargetMode="External""#));
 
         let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
         let pivot = roundtrip
@@ -4776,15 +4838,39 @@ mod tests {
             .unwrap();
         match &pivot.source {
             PivotSource::Consolidation { ranges } => {
-                assert_eq!(ranges.len(), 2);
-                assert_eq!(ranges[0].sheet, "North");
-                assert_eq!(ranges[0].range.to_a1_string(), "A1:B4");
+                assert_eq!(ranges.len(), 4);
+                assert_eq!(ranges[0].sheet.as_deref(), Some("North"));
+                assert_eq!(
+                    ranges[0].range.map(|range| range.to_a1_string()).as_deref(),
+                    Some("A1:B4")
+                );
                 assert_eq!(ranges[0].name.as_deref(), Some("NorthPlan"));
                 assert_eq!(ranges[0].page_items, ["FY2025", "Plan"]);
-                assert_eq!(ranges[1].sheet, "South");
-                assert_eq!(ranges[1].range.to_a1_string(), "C1:D4");
+                assert_eq!(ranges[1].sheet.as_deref(), Some("South"));
+                assert_eq!(
+                    ranges[1].range.map(|range| range.to_a1_string()).as_deref(),
+                    Some("C1:D4")
+                );
                 assert_eq!(ranges[1].name.as_deref(), Some("SouthActual"));
                 assert_eq!(ranges[1].page_items, ["FY2025", "Actual"]);
+                assert_eq!(ranges[2].sheet, None);
+                assert_eq!(ranges[2].range, None);
+                assert_eq!(ranges[2].name.as_deref(), Some("GlobalNamedSource"));
+                assert_eq!(ranges[2].page_items, ["FY2025", "Plan"]);
+                assert_eq!(ranges[3].sheet.as_deref(), Some("ExternalData"));
+                assert_eq!(
+                    ranges[3].range.map(|range| range.to_a1_string()).as_deref(),
+                    Some("E1:F4")
+                );
+                assert_eq!(
+                    ranges[3].external_relationship_id.as_deref(),
+                    Some("rIdExternal1")
+                );
+                assert_eq!(
+                    ranges[3].external_relationship_target.as_deref(),
+                    Some("file:///C:/data/source.xlsx")
+                );
+                assert_eq!(ranges[3].page_items, ["FY2025", "Actual"]);
             }
             other => panic!("unexpected pivot source: {other:?}"),
         }
@@ -4840,6 +4926,60 @@ mod tests {
             .unwrap();
         assert_eq!(pivot.rows[0].sort, PivotSort::Descending);
         assert_eq!(pivot.columns[0].sort, PivotSort::None);
+    }
+
+    #[test]
+    fn test_writer_round_trips_pivot_field_sort_by_measure() {
+        let mut wb = Workbook::new();
+        let sheet = wb.worksheet_mut(0).unwrap();
+        sheet.set_cell_value("A1", "Region").unwrap();
+        sheet.set_cell_value("B1", "Quarter").unwrap();
+        sheet.set_cell_value("C1", "Revenue").unwrap();
+        sheet.set_cell_value("A2", "East").unwrap();
+        sheet.set_cell_value("B2", "Q1").unwrap();
+        sheet.set_cell_value("C2", 10.0).unwrap();
+        sheet.set_cell_value("A3", "West").unwrap();
+        sheet.set_cell_value("B3", "Q1").unwrap();
+        sheet.set_cell_value("C3", 50.0).unwrap();
+
+        let mut region = PivotField::new("Region")
+            .with_sort_by(PivotFieldRef::new("Revenue"), PivotAggregate::Sum);
+        region.sort = PivotSort::Descending;
+        let pivot = PivotTable::builder("ValueSortedPivot")
+            .source_range(CellRange::parse("A1:C3").unwrap())
+            .target_address("E1")
+            .unwrap()
+            .row(region)
+            .column("Quarter")
+            .named_measure("Revenue", PivotAggregate::Sum, "Sum of Revenue")
+            .build()
+            .unwrap();
+        sheet.add_pivot_table(pivot).unwrap();
+
+        let mut out = Cursor::new(Vec::new());
+        XlsxWriter::write(&wb, &mut out).expect("write workbook");
+        let bytes = out.into_inner();
+
+        let pivot_xml = read_zip_entry(bytes.clone(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pivot_xml.contains(r#"axis="axisRow" sortType="descending""#));
+        assert!(pivot_xml.contains("<autoSortScope>"));
+        assert!(pivot_xml.contains(r#"<reference field="4294967294" count="1" selected="0">"#));
+        assert!(pivot_xml.contains(r#"<x v="0"/>"#));
+
+        let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();
+        let pivot = roundtrip
+            .worksheet(0)
+            .unwrap()
+            .pivot_table_by_name("ValueSortedPivot")
+            .unwrap();
+        assert_eq!(pivot.rows[0].sort, PivotSort::Descending);
+        let measure = pivot.rows[0]
+            .sort_by_measure
+            .as_ref()
+            .expect("sort measure");
+        assert_eq!(measure.field.name, "Revenue");
+        assert_eq!(measure.aggregate, PivotAggregate::Sum);
+        assert_eq!(measure.name.as_deref(), Some("Sum of Revenue"));
     }
 
     #[test]
@@ -5591,7 +5731,7 @@ mod tests {
             r#"<customFilter operator="lessThanOrEqual" val="{date_end}"/>"#
         )));
         assert!(pivot_xml.contains(r#"type="M1""#));
-        assert!(pivot_xml.contains(r#"type="topCount""#));
+        assert!(pivot_xml.contains(r#"type="count""#));
         assert!(pivot_xml.contains(r#"<top10 top="1" percent="0" val="2"/>"#));
 
         let roundtrip = XlsxReader::read(Cursor::new(bytes)).unwrap();

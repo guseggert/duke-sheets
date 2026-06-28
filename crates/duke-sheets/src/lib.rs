@@ -42,8 +42,15 @@ pub mod calculation;
 pub mod pivot {
     //! Pivot table model and refresh API.
 
-    pub use duke_sheets_core::pivot::*;
-    pub use duke_sheets_pivot::*;
+    pub use duke_sheets_core::pivot::{
+        PivotAggregate, PivotAxis, PivotCacheInfo, PivotCacheSourceKind, PivotCalculatedField,
+        PivotCalculatedItem, PivotDateGroupUnit, PivotDatePeriod, PivotExtension, PivotExtensions,
+        PivotField, PivotFieldRef, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayout,
+        PivotLayoutKind, PivotManualGroup, PivotMeasure, PivotOverwritePolicy, PivotRefreshPolicy,
+        PivotRefreshStatus, PivotShowAs, PivotSort, PivotSource, PivotSourceRange, PivotStyle,
+        PivotSubtotal, PivotTable, PivotTableBuilder, PivotValue, PivotValuesAxis,
+    };
+    pub use duke_sheets_pivot::{PivotRefreshOptions, PivotRefreshStats, WorkbookPivotExt};
 }
 pub mod prelude;
 

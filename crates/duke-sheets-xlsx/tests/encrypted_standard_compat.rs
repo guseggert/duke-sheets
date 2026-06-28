@@ -18,7 +18,8 @@ fn require_lo() {
 fn build_wb() -> Workbook {
     let mut wb = Workbook::new();
     let ws = wb.worksheet_mut(0).unwrap();
-    ws.set_cell_value("A1", "standard compat round-trip").unwrap();
+    ws.set_cell_value("A1", "standard compat round-trip")
+        .unwrap();
     ws.set_cell_value("B1", 4242.5).unwrap();
     wb
 }

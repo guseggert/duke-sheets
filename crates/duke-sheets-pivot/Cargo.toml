@@ -19,4 +19,5 @@ pretty_assertions.workspace = true
 
 [features]
 default = []
+format-plan = []
 parallel = ["dep:rayon"]
