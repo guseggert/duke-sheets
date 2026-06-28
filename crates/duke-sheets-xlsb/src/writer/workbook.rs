@@ -71,6 +71,7 @@ pub(crate) fn write_workbook<W: Write + Seek>(
         ps.print_area.is_some() || ps.repeat_rows.is_some() || ps.repeat_cols.is_some()
     });
 
+    let sheet_ixti_offset = u16::from(!external_names.is_empty());
     if has_formulas || has_user_names || has_print_settings {
         write_extern_sheet(&mut rw, workbook.sheet_count(), external_names)?;
     }
@@ -80,11 +81,11 @@ pub(crate) fn write_workbook<W: Write + Seek>(
     }
 
     if has_user_names {
-        write_user_name_records(&mut rw, workbook, xlfn_names)?;
+        write_user_name_records(&mut rw, workbook, xlfn_names, sheet_ixti_offset)?;
     }
 
     if has_print_settings {
-        write_print_name_records(&mut rw, workbook, xlfn_names)?;
+        write_print_name_records(&mut rw, workbook, xlfn_names, sheet_ixti_offset)?;
     }
 
     write_pivot_cache_ids(&mut rw, pivot_plan, pivot_cache_rids)?;
@@ -175,6 +176,7 @@ fn write_user_name_records<W: Write>(
     rw: &mut RecordWriter<W>,
     workbook: &Workbook,
     xlfn_names: &HashMap<String, u32>,
+    sheet_ixti_offset: u16,
 ) -> std::io::Result<()> {
     let sheet_names: Vec<String> = (0..workbook.sheet_count())
         .map(|i| workbook.worksheet(i).unwrap().name().to_string())
@@ -184,6 +186,7 @@ fn write_user_name_records<W: Write>(
     // here would warn-and-skip.
     let compile_ctx = CompileContext {
         sheet_names,
+        sheet_ixti_offset,
         xlfn_names: xlfn_names.clone(),
         defined_names: Vec::new(),
         defined_name_classes: Vec::new(),
@@ -233,12 +236,14 @@ fn write_print_name_records<W: Write>(
     rw: &mut RecordWriter<W>,
     workbook: &Workbook,
     xlfn_names: &HashMap<String, u32>,
+    sheet_ixti_offset: u16,
 ) -> std::io::Result<()> {
     let sheet_names: Vec<String> = (0..workbook.sheet_count())
         .map(|i| workbook.worksheet(i).unwrap().name().to_string())
         .collect();
     let compile_ctx = CompileContext {
         sheet_names,
+        sheet_ixti_offset,
         xlfn_names: xlfn_names.clone(),
         defined_names: Vec::new(),
         defined_name_classes: Vec::new(),

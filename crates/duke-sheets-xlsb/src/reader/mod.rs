@@ -1,4 +1,5 @@
 mod comments;
+pub(crate) mod connections;
 mod drawing;
 mod pivot;
 pub(crate) mod shared_strings;
@@ -46,6 +47,15 @@ impl XlsbReader {
         let shared_strings = shared_strings::read_shared_strings(&mut archive, &styles_data.fonts)?;
         let relationships = workbook::read_relationships(&mut archive)?;
         let props = workbook::read_workbook(&mut archive, &relationships)?;
+        let data_connections = connections::read_connections(
+            &mut archive,
+            relationships.connections_path.as_deref(),
+            &props.formula_ctx,
+        )?;
+        let data_connections_by_id = data_connections
+            .iter()
+            .map(|connection| (connection.id, connection.clone()))
+            .collect::<HashMap<_, _>>();
 
         // Load theme palette from xl/theme/theme1.xml (XML even in XLSB)
         let theme_path = relationships
@@ -62,6 +72,9 @@ impl XlsbReader {
 
         let mut wb = Workbook::empty();
         wb.settings_mut().date_1904 = props.date_1904;
+        for connection in data_connections {
+            wb.add_data_connection(connection)?;
+        }
 
         for entry in &props.sheets {
             wb.add_worksheet_with_name_unchecked(&entry.name);
@@ -165,8 +178,19 @@ impl XlsbReader {
                 }
             }
 
-            for pivot in pivot::read_pivot_tables_for_sheet(&mut archive, &entry.path, &sheet_rels)?
-            {
+            let date_system = if props.date_1904 {
+                ssfmt::DateSystem::Date1904
+            } else {
+                ssfmt::DateSystem::Date1900
+            };
+            for pivot in pivot::read_pivot_tables_for_sheet(
+                &mut archive,
+                &entry.path,
+                &sheet_rels,
+                date_system,
+                &styles_data.numfmts,
+                &data_connections_by_id,
+            )? {
                 wb.worksheet_mut(i)
                     .unwrap()
                     .add_pivot_table(pivot)

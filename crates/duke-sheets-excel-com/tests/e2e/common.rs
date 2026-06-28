@@ -702,7 +702,8 @@ pub fn xlsb_formula_ptg_streams(bytes: &[u8]) -> Vec<XlsbFormulaPtgStream> {
                 | records::BRT_FMLA_BOOL
                 | records::BRT_FMLA_ERROR
                 | records::BRT_FMLA_STRING => {
-                    let Some((col, grbit_off)) = fmla_col_and_grbit_offset(rec_type, payload) else {
+                    let Some((col, grbit_off)) = fmla_col_and_grbit_offset(rec_type, payload)
+                    else {
                         continue;
                     };
                     let cce_off = grbit_off + 2;
@@ -764,9 +765,9 @@ fn fmla_col_and_grbit_offset(rec_type: u16, payload: &[u8]) -> Option<(u32, usiz
     }
     let col = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
     let grbit_off = match rec_type {
-        records::BRT_FMLA_NUM => 16,   // 8 + xnum(8)
-        records::BRT_FMLA_BOOL => 9,   // 8 + bool(1)
-        records::BRT_FMLA_ERROR => 9,  // 8 + err(1)
+        records::BRT_FMLA_NUM => 16,  // 8 + xnum(8)
+        records::BRT_FMLA_BOOL => 9,  // 8 + bool(1)
+        records::BRT_FMLA_ERROR => 9, // 8 + err(1)
         records::BRT_FMLA_STRING => {
             // 8 + XLWideString(cch u32 + UTF-16LE chars)
             if payload.len() < 12 {
@@ -812,8 +813,7 @@ fn normalize_xlsb_attr_reserved_bytes(tokens: &mut [u8]) {
                     break;
                 }
                 let flags = tokens[pos];
-                let attr_data =
-                    u16::from_le_bytes([tokens[pos + 1], tokens[pos + 2]]) as usize;
+                let attr_data = u16::from_le_bytes([tokens[pos + 1], tokens[pos + 2]]) as usize;
                 if (flags & (ptg::ATTR_SUM | ptg::ATTR_VOLATILE)) != 0 {
                     tokens[pos + 1] = 0;
                     tokens[pos + 2] = 0;
@@ -855,10 +855,25 @@ fn biff12_token_data_size(base: u8) -> Option<usize> {
     use duke_sheets_xlsb::biff12::ptg;
     Some(match base {
         // Operators / no-data tokens
-        ptg::PTG_ADD | ptg::PTG_SUB | ptg::PTG_MUL | ptg::PTG_DIV | ptg::PTG_POWER
-        | ptg::PTG_CONCAT | ptg::PTG_LT | ptg::PTG_LE | ptg::PTG_EQ | ptg::PTG_GE
-        | ptg::PTG_GT | ptg::PTG_NE | ptg::PTG_ISECT | ptg::PTG_LIST | ptg::PTG_RANGE
-        | ptg::PTG_UPLUS | ptg::PTG_UMINUS | ptg::PTG_PERCENT | ptg::PTG_PAREN
+        ptg::PTG_ADD
+        | ptg::PTG_SUB
+        | ptg::PTG_MUL
+        | ptg::PTG_DIV
+        | ptg::PTG_POWER
+        | ptg::PTG_CONCAT
+        | ptg::PTG_LT
+        | ptg::PTG_LE
+        | ptg::PTG_EQ
+        | ptg::PTG_GE
+        | ptg::PTG_GT
+        | ptg::PTG_NE
+        | ptg::PTG_ISECT
+        | ptg::PTG_LIST
+        | ptg::PTG_RANGE
+        | ptg::PTG_UPLUS
+        | ptg::PTG_UMINUS
+        | ptg::PTG_PERCENT
+        | ptg::PTG_PAREN
         | ptg::PTG_MISS_ARG => 0,
         ptg::PTG_ERR | ptg::PTG_BOOL => 1,
         ptg::PTG_INT => 2,

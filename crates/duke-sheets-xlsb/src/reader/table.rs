@@ -31,10 +31,8 @@ pub(crate) fn read_table<R: Read + Seek>(
 
         match typ {
             records::BRT_BEGIN_LIST => table = parse_table_header(&buf[..len]),
-            records::BRT_BEGIN_LIST_COLS => {
-            }
-            records::BRT_END_LIST_COLS => {
-            }
+            records::BRT_BEGIN_LIST_COLS => {}
+            records::BRT_END_LIST_COLS => {}
             records::BRT_BEGIN_LIST_COL => {
                 if let Some(col) = parse_table_column(&buf[..len]) {
                     columns.push(col);

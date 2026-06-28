@@ -7,6 +7,7 @@ use duke_sheets_formula::decompile::{
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+use super::resolve_rel_path;
 use crate::biff12::parser;
 use crate::biff12::records;
 use crate::biff12::token_parser;
@@ -38,6 +39,7 @@ pub(crate) struct WorkbookProps {
 pub(crate) struct WorkbookRelationships {
     pub targets: HashMap<String, String>,
     pub theme_path: Option<String>,
+    pub connections_path: Option<String>,
 }
 
 pub(crate) fn read_relationships<R: Read + Seek>(
@@ -49,6 +51,7 @@ pub(crate) fn read_relationships<R: Read + Seek>(
             return Ok(WorkbookRelationships {
                 targets: HashMap::new(),
                 theme_path: None,
+                connections_path: None,
             })
         }
     };
@@ -57,6 +60,7 @@ pub(crate) fn read_relationships<R: Read + Seek>(
     let mut buf = Vec::new();
     let mut targets = HashMap::new();
     let mut theme_path = None;
+    let mut connections_path = None;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -75,12 +79,9 @@ pub(crate) fn read_relationships<R: Read + Seek>(
                     }
                 }
                 if rel_type.ends_with("/theme") {
-                    let path = if target.starts_with("xl/") || target.starts_with("/xl/") {
-                        target.trim_start_matches('/').to_string()
-                    } else {
-                        format!("xl/{}", target)
-                    };
-                    theme_path = Some(path);
+                    theme_path = Some(resolve_rel_path("xl/workbook.bin", &target));
+                } else if rel_type.ends_with("/connections") {
+                    connections_path = Some(resolve_rel_path("xl/workbook.bin", &target));
                 }
                 if !id.is_empty() && !target.is_empty() {
                     targets.insert(id, target);
@@ -95,6 +96,7 @@ pub(crate) fn read_relationships<R: Read + Seek>(
     Ok(WorkbookRelationships {
         targets,
         theme_path,
+        connections_path,
     })
 }
 
@@ -115,8 +117,8 @@ pub(crate) fn read_workbook<R: Read + Seek>(
     let mut supbooks: Vec<SupBook> = Vec::new();
     let mut extern_names: Vec<ExternName> = Vec::new();
     let mut in_sup_book = false;
-        let mut current_sup_book: Option<SupBook> = None;
-        let mut last_sup_book_idx: Option<u16> = None;
+    let mut current_sup_book: Option<SupBook> = None;
+    let mut last_sup_book_idx: Option<u16> = None;
 
     let mut name_hidden_flags: Vec<bool> = Vec::new();
 

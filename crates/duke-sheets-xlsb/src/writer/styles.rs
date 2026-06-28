@@ -11,12 +11,12 @@ use duke_sheets_core::style::{
 };
 use duke_sheets_core::Workbook;
 
-
 use crate::biff12::{encode_wide_str, records, RecordWriter};
 use crate::error::XlsbResult;
 
 pub(crate) struct StyleMapping {
     sheet_maps: Vec<HashMap<u32, u32>>,
+    custom_numfmt_ids: HashMap<String, u16>,
     #[cfg(test)]
     xf_count: u32,
 }
@@ -28,6 +28,10 @@ impl StyleMapping {
             .and_then(|m| m.get(&local_style_index))
             .copied()
             .unwrap_or(0)
+    }
+
+    pub fn custom_numfmt_id(&self, code: &str) -> Option<u16> {
+        self.custom_numfmt_ids.get(code).copied()
     }
 
     #[cfg(test)]
@@ -193,6 +197,20 @@ pub(crate) fn build_style_table(
         .map(|f| intern_font(f, &mut fonts, &mut font_map))
         .collect();
 
+    for sheet in workbook.worksheets() {
+        for pivot in sheet.pivot_tables() {
+            for measure in &pivot.measures {
+                let Some(code) = measure.number_format.as_deref() else {
+                    continue;
+                };
+                if is_builtin_number_format_code(code) {
+                    continue;
+                }
+                intern_custom_numfmt_code(code, &mut numfmts, &mut numfmt_map, &mut next_numfmt_id);
+            }
+        }
+    }
+
     #[cfg(test)]
     let xf_count = xfs.len() as u32;
     let table = StyleTable {
@@ -203,10 +221,14 @@ pub(crate) fn build_style_table(
         xfs,
     };
     #[cfg(not(test))]
-    let mapping = StyleMapping { sheet_maps };
+    let mapping = StyleMapping {
+        sheet_maps,
+        custom_numfmt_ids: numfmt_map,
+    };
     #[cfg(test)]
     let mapping = StyleMapping {
         sheet_maps,
+        custom_numfmt_ids: numfmt_map,
         xf_count,
     };
     (table, mapping, extra_font_ids)
@@ -266,17 +288,29 @@ fn intern_numfmt(
     match nf {
         NumberFormat::General => 0,
         NumberFormat::BuiltIn(id) => *id as u16,
-        NumberFormat::Custom(code) => {
-            if let Some(&id) = map.get(code) {
-                return id;
-            }
-            let id = *next_id;
-            *next_id += 1;
-            numfmts.push((id, code.clone()));
-            map.insert(code.clone(), id);
-            id
-        }
+        NumberFormat::Custom(code) => intern_custom_numfmt_code(code, numfmts, map, next_id),
     }
+}
+
+fn intern_custom_numfmt_code(
+    code: &str,
+    numfmts: &mut Vec<(u16, String)>,
+    map: &mut HashMap<String, u16>,
+    next_id: &mut u16,
+) -> u16 {
+    if let Some(&id) = map.get(code) {
+        return id;
+    }
+    let id = *next_id;
+    *next_id += 1;
+    numfmts.push((id, code.to_string()));
+    map.insert(code.to_string(), id);
+    id
+}
+
+fn is_builtin_number_format_code(code: &str) -> bool {
+    code.eq_ignore_ascii_case("General")
+        || (1..=49).any(|id| NumberFormat::BuiltIn(id).format_string() == code)
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -520,7 +554,9 @@ fn build_dxf_mapping(workbook: &Workbook, dxf_styles: &[Style]) -> DxfMapping {
     }
 
     let color_filter_dxf_id = if workbook_has_color_filter(workbook) {
-        style_to_idx.get(&style_hash(&color_filter_dxf_style())).copied()
+        style_to_idx
+            .get(&style_hash(&color_filter_dxf_style()))
+            .copied()
     } else {
         None
     };

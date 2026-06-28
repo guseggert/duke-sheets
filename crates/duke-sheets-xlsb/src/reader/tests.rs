@@ -1817,7 +1817,10 @@ mod tests {
         fc.extend_from_slice(&0u32.to_le_bytes());
         fc.extend_from_slice(&0u16.to_le_bytes());
         stream.extend_from_slice(&build_record(records::BRT_BEGIN_FILTER_COLUMN, &fc));
-        stream.extend_from_slice(&build_record(records::BRT_BEGIN_FILTERS, &0u32.to_le_bytes()));
+        stream.extend_from_slice(&build_record(
+            records::BRT_BEGIN_FILTERS,
+            &0u32.to_le_bytes(),
+        ));
         // Malicious BrtFilter: cch claims 20 chars, carries one.
         let mut bad = Vec::new();
         bad.extend_from_slice(&20u32.to_le_bytes());

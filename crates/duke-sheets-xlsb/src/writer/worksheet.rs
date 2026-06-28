@@ -1255,7 +1255,9 @@ fn write_dv_parsed_formula(payload: &mut Vec<u8>, text: Option<&str>, ctx: &Comp
             };
             match duke_sheets_formula::parse_formula(&normalized) {
                 Ok(expr) if !dv_formula_allowed(&expr) => {
-                    log::warn!("DV formula '{t}' uses tokens forbidden in DVParsedFormula; dropping");
+                    log::warn!(
+                        "DV formula '{t}' uses tokens forbidden in DVParsedFormula; dropping"
+                    );
                     None
                 }
                 _ => match compiler::compile_formula(t, ctx) {

@@ -1,4 +1,5 @@
 mod comments;
+mod connections;
 mod drawing;
 mod pivot;
 mod shared_strings;
@@ -20,12 +21,12 @@ use zip::ZipWriter;
 use crate::biff12::compiler::CompileContext;
 use crate::error::XlsbResult;
 use duke_sheets_core::Workbook;
-use duke_sheets_pivot::FormatPivotPlan;
 use duke_sheets_formula::ast::FormulaExpr;
 use duke_sheets_formula::decompile::function_table::{
     function_index, name_body_operand_class, OperandClass,
 };
 use duke_sheets_formula::parse_formula;
+use duke_sheets_pivot::FormatPivotPlan;
 
 const DEFAULT_THEME_XML: &str = r#"<?xml version="1.0"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
@@ -123,8 +124,12 @@ impl XlsbWriter {
 
         let sst = shared_strings::build_sst(workbook);
         let pivot_plan = duke_sheets_pivot::plan_format_pivots(workbook)?;
-        let workbook_pivot_cache_rids =
-            workbook_pivot_cache_rids(workbook.sheet_count(), !sst.is_empty(), &pivot_plan);
+        let workbook_pivot_cache_rids = workbook_pivot_cache_rids(
+            workbook.sheet_count(),
+            !sst.is_empty(),
+            !workbook.data_connections().is_empty(),
+            &pivot_plan,
+        );
 
         let sheet_names: Vec<String> = (0..workbook.sheet_count())
             .map(|i| workbook.worksheet(i).unwrap().name().to_string())
@@ -144,6 +149,7 @@ impl XlsbWriter {
             .map(|(idx, name)| (name.to_ascii_uppercase(), (idx + 1) as u32))
             .collect();
         let external_ixti = (!external_names.is_empty()).then_some(0u16);
+        let sheet_ixti_offset = u16::from(!external_names.is_empty());
 
         // Names emitted to BrtName must be enumerable from the
         // CompileContext so PtgName can resolve text → ilbl. The list
@@ -152,6 +158,7 @@ impl XlsbWriter {
         // and including it here would shift every later PtgName index.
         let name_ctx = CompileContext {
             sheet_names: sheet_names.clone(),
+            sheet_ixti_offset,
             xlfn_names: xlfn_names.clone(),
             defined_names: Vec::new(),
             defined_name_classes: Vec::new(),
@@ -199,6 +206,7 @@ impl XlsbWriter {
             styles::write_styles(&mut zip, &options, workbook, &sst.rich_fonts)?;
         shared_strings::write_sst(&mut zip, &options, &sst, &rich_font_ids)?;
         Self::write_theme_xml(&mut zip, &options)?;
+        connections::write_connections(&mut zip, &options, workbook)?;
 
         let mut comment_sheet_indices = Vec::new();
         let mut all_drawing_overrides: Vec<(String, String)> = Vec::new();
@@ -220,6 +228,7 @@ impl XlsbWriter {
             let ws = workbook.worksheet(i).unwrap();
             let compile_ctx = CompileContext {
                 sheet_names: sheet_names.clone(),
+                sheet_ixti_offset,
                 xlfn_names: xlfn_names.clone(),
                 defined_names: defined_names.clone(),
                 defined_name_classes: defined_name_classes.clone(),
@@ -326,7 +335,7 @@ impl XlsbWriter {
             &all_drawing_overrides,
             &table_global_nums,
         )?;
-        pivot::write_pivot_parts(&mut zip, &options, workbook, &pivot_plan)?;
+        pivot::write_pivot_parts(&mut zip, &options, workbook, &pivot_plan, &style_mapping)?;
 
         zip.finish()?;
         Ok(())
@@ -388,11 +397,13 @@ impl XlsbWriter {
                 cache.cache_num,
                 pivot::CT_PIVOT_CACHE_DEFINITION
             ));
-            xml.push_str(&format!(
-                "<Override PartName=\"/xl/pivotCache/pivotCacheRecords{}.bin\" ContentType=\"{}\"/>",
-                cache.cache_num,
-                pivot::CT_PIVOT_CACHE_RECORDS
-            ));
+            if pivot::cache_has_records(cache) {
+                xml.push_str(&format!(
+                    "<Override PartName=\"/xl/pivotCache/pivotCacheRecords{}.bin\" ContentType=\"{}\"/>",
+                    cache.cache_num,
+                    pivot::CT_PIVOT_CACHE_RECORDS
+                ));
+            }
         }
         for i in 0..workbook.sheet_count() {
             if pivot::sheet_has_pivots(pivot_plan, i) {
@@ -402,6 +413,12 @@ impl XlsbWriter {
                     pivot::CT_BINARY_INDEX
                 ));
             }
+        }
+        if !workbook.data_connections().is_empty() {
+            xml.push_str(&format!(
+                "<Override PartName=\"/xl/connections.bin\" ContentType=\"{}\"/>",
+                connections::CT_CONNECTIONS
+            ));
         }
         let mut has_media_default = false;
         for (part_name, ct) in drawing_overrides {
@@ -508,6 +525,14 @@ impl XlsbWriter {
             "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>",
             rid
         ));
+        rid += 1;
+        if !workbook.data_connections().is_empty() {
+            xml.push_str(&format!(
+                "<Relationship Id=\"rId{}\" Type=\"{}\" Target=\"connections.bin\"/>",
+                rid,
+                connections::RT_CONNECTIONS
+            ));
+        }
         for (cache, rel_id) in pivot_plan.caches.iter().zip(workbook_pivot_cache_rids) {
             xml.push_str(&format!(
                 "<Relationship Id=\"{}\" Type=\"{}\" Target=\"pivotCache/pivotCacheDefinition{}.bin\"/>",
@@ -626,6 +651,7 @@ impl XlsbWriter {
 fn workbook_pivot_cache_rids(
     sheet_count: usize,
     has_shared_strings: bool,
+    has_connections: bool,
     pivot_plan: &FormatPivotPlan,
 ) -> Vec<String> {
     let mut rid = sheet_count + 1;
@@ -634,6 +660,9 @@ fn workbook_pivot_cache_rids(
         rid += 1;
     }
     rid += 1; // theme
+    if has_connections {
+        rid += 1;
+    }
     pivot_plan
         .caches
         .iter()

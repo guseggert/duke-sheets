@@ -1,22 +1,30 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Seek, Write};
 
+use chrono::Datelike;
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 use crate::biff12::{encode_wide_str, ptg, records, RecordWriter};
 use crate::error::{XlsbError, XlsbResult};
+use crate::writer::styles::StyleMapping;
+use duke_sheets_core::style::NumberFormat;
 use duke_sheets_core::{
-    CellError, CellRange, CellValue, PivotAggregate, PivotDateGroupUnit, PivotField, PivotFilter,
-    PivotGrouping, PivotManualGroup, PivotTable, PivotValue, PivotValuesAxis, Workbook,
+    CellError, CellRange, CellValue, PivotAggregate, PivotDateGroupUnit, PivotDatePeriod,
+    PivotField, PivotFilter, PivotFilterOperator, PivotGrouping, PivotLayoutKind, PivotManualGroup,
+    PivotMeasure, PivotShowAs, PivotSort, PivotSourceRange, PivotSubtotal, PivotTable, PivotValue,
+    PivotValuesAxis, Workbook, WorkbookConnection, WorkbookConnectionKind,
 };
-use duke_sheets_formula::ast::{BinaryOperator, UnaryOperator};
+use duke_sheets_formula::ast::{BinaryOperator, CellReference, UnaryOperator};
+use duke_sheets_formula::decompile::function_table::{
+    function_index, function_is_biff8_addin, function_is_fixed_arity,
+};
 use duke_sheets_formula::FormulaExpr;
 use duke_sheets_pivot::{
     FormatPivotCache, FormatPivotCacheField, FormatPivotPlan, FormatPivotSource, FormatPivotTable,
 };
 use ssfmt::{
-    date_serial::{serial_to_date, serial_to_time},
+    date_serial::{date_to_serial, serial_to_date, serial_to_time},
     DateSystem,
 };
 
@@ -28,6 +36,8 @@ pub(crate) const RT_PIVOT_CACHE_RECORDS: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords";
 pub(crate) const RT_BINARY_INDEX: &str =
     "http://schemas.microsoft.com/office/2006/relationships/xlBinaryIndex";
+pub(crate) const RT_EXTERNAL_LINK_PATH: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath";
 
 pub(crate) const CT_PIVOT_TABLE: &str = "application/vnd.ms-excel.pivotTable";
 pub(crate) const CT_PIVOT_CACHE_DEFINITION: &str = "application/vnd.ms-excel.pivotCacheDefinition";
@@ -52,6 +62,28 @@ struct XlsbPivotCacheLayout {
     source_to_layout: Vec<usize>,
     manual_derived_by_base: HashMap<usize, usize>,
     date_derived_by_base: HashMap<usize, Vec<usize>>,
+}
+
+#[derive(Debug)]
+struct XlsbPivotAxisTuples {
+    rows: Vec<Vec<u32>>,
+    columns: Vec<Vec<u32>>,
+}
+
+enum XlsbVisibleRowIter<'a> {
+    All(std::ops::Range<usize>),
+    Filtered(std::iter::Copied<std::slice::Iter<'a, usize>>),
+}
+
+impl Iterator for XlsbVisibleRowIter<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::All(rows) => rows.next(),
+            Self::Filtered(rows) => rows.next(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -87,21 +119,28 @@ pub(crate) fn sheet_pivot_parts(
         .filter(move |part| part.sheet_index == sheet_index)
 }
 
+pub(crate) fn cache_has_records(cache: &FormatPivotCache) -> bool {
+    !matches!(cache.source, FormatPivotSource::Olap { .. })
+}
+
 pub(crate) fn write_pivot_parts<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     options: &SimpleFileOptions,
     workbook: &Workbook,
     plan: &FormatPivotPlan,
+    styles: &StyleMapping,
 ) -> XlsbResult<()> {
     for cache in &plan.caches {
         write_pivot_cache_definition_part(zip, options, workbook, plan, cache)?;
-        write_pivot_cache_records_part(zip, options, workbook, plan, cache)?;
-        write_pivot_cache_definition_rels(zip, options, cache.cache_num)?;
+        if cache_has_records(cache) {
+            write_pivot_cache_records_part(zip, options, workbook, plan, cache)?;
+        }
+        write_pivot_cache_definition_rels(zip, options, cache)?;
     }
 
     for part in &plan.tables {
         let cache = cache_for_table(plan, part)?;
-        write_pivot_table_part(zip, options, workbook, plan, part, cache)?;
+        write_pivot_table_part(zip, options, workbook, plan, part, cache, styles)?;
         write_pivot_table_rels(zip, options, part)?;
     }
 
@@ -135,101 +174,115 @@ fn write_pivot_cache_definition_part<W: Write + Seek>(
 
     write_ac_block(&mut rw, 10, true)?;
     write_begin_pivot_cache_def(&mut rw, cache)?;
-    write_pivot_cache_source(&mut rw, cache)?;
+    write_pivot_cache_source(&mut rw, workbook, cache)?;
 
-    rw.write_record(
-        records::BRT_BEGIN_PCD_FIELDS,
-        &(layout.fields.len() as u32).to_le_bytes(),
-    )?;
-    for (layout_index, field_layout) in layout.fields.iter().enumerate() {
-        match field_layout {
-            XlsbPivotCacheFieldLayout::Source {
-                source_index,
-                manual_parent,
-            } => {
-                let field = &cache.fields[*source_index];
-                let grouping = grouping_for_field(groupings, &field.name);
-                let grouping_info = grouping_info_for_field(&grouping_infos, &field.name);
-                let item_kind = grouping_info
-                    .map(|info| info.source_item_kind)
-                    .unwrap_or(PivotCacheItemKind::Normal);
-                let shared_items = grouping_info
-                    .map(|info| info.source_items.as_slice())
-                    .unwrap_or(&field.shared_items);
-                let pnames = write_pcd_field(&mut rw, field, cache)?;
-                write_pcd_shared_items(
-                    &mut rw,
-                    shared_items,
-                    usage.store_items[*source_index],
-                    item_kind,
-                    date_system,
-                )?;
-                if let Some(parent_index) = manual_parent {
-                    write_pcd_field_base_group(&mut rw, *parent_index)?;
-                } else if let Some(parent_index) = layout
-                    .date_derived_by_base
-                    .get(source_index)
-                    .and_then(|derived| derived.first())
-                {
-                    write_pcd_field_base_group(&mut rw, *parent_index)?;
-                } else if let Some(grouping) =
-                    grouping.filter(|grouping| !is_multi_unit_date_grouping(Some(*grouping)))
-                {
+    if cache_has_records(cache) {
+        rw.write_record(
+            records::BRT_BEGIN_PCD_FIELDS,
+            &(layout.fields.len() as u32).to_le_bytes(),
+        )?;
+        for (layout_index, field_layout) in layout.fields.iter().enumerate() {
+            match field_layout {
+                XlsbPivotCacheFieldLayout::Source {
+                    source_index,
+                    manual_parent,
+                } => {
+                    let field = &cache.fields[*source_index];
+                    let grouping = grouping_for_field(groupings, &field.name);
+                    let grouping_info = grouping_info_for_field(&grouping_infos, &field.name);
+                    let item_kind = grouping_info
+                        .map(|info| info.source_item_kind)
+                        .unwrap_or(usage.item_kinds[*source_index]);
+                    let shared_items = grouping_info
+                        .map(|info| info.source_items.as_slice())
+                        .unwrap_or(&field.shared_items);
+                    let calculated_item_indexes =
+                        calculated_item_indexes_for_field(cache, *source_index, shared_items);
+                    let pnames = write_pcd_field(&mut rw, field, cache)?;
+                    if field.formula.is_none() {
+                        write_pcd_shared_items(
+                            &mut rw,
+                            shared_items,
+                            usage.store_items[*source_index],
+                            item_kind,
+                            date_system,
+                            &calculated_item_indexes,
+                        )?;
+                    }
+                    if let Some(parent_index) = manual_parent {
+                        write_pcd_field_base_group(&mut rw, *parent_index)?;
+                    } else if let Some(parent_index) = layout
+                        .date_derived_by_base
+                        .get(source_index)
+                        .and_then(|derived| derived.first())
+                    {
+                        write_pcd_field_base_group(&mut rw, *parent_index)?;
+                    } else if let Some(grouping) =
+                        grouping.filter(|grouping| !is_multi_unit_date_grouping(Some(*grouping)))
+                    {
+                        write_pcd_field_group(
+                            &mut rw,
+                            None,
+                            Some(layout_index),
+                            grouping,
+                            grouping_info,
+                            date_system,
+                            true,
+                        )?;
+                    }
+                    write_pnames(&mut rw, &pnames)?;
+                }
+                XlsbPivotCacheFieldLayout::ManualDerived {
+                    base_source_index,
+                    grouping_info_index,
+                    name,
+                } => {
+                    let info = &grouping_infos[*grouping_info_index];
+                    let base_layout_index = layout.source_to_layout[*base_source_index];
+                    let pnames = write_pcd_field_header(&mut rw, name, false, None, cache)?;
                     write_pcd_field_group(
                         &mut rw,
                         None,
-                        Some(layout_index),
-                        grouping,
-                        grouping_info,
+                        Some(base_layout_index),
+                        info.grouping,
+                        Some(info),
                         date_system,
                         true,
                     )?;
+                    write_pnames(&mut rw, &pnames)?;
                 }
-                write_pnames(&mut rw, &pnames)?;
+                XlsbPivotCacheFieldLayout::DateUnitDerived {
+                    base_source_index,
+                    grouping_info_index,
+                    name,
+                } => {
+                    let info = &grouping_infos[*grouping_info_index];
+                    let base_layout_index = layout.source_to_layout[*base_source_index];
+                    let pnames = write_pcd_field_header(&mut rw, name, false, None, cache)?;
+                    write_pcd_field_group(
+                        &mut rw,
+                        None,
+                        Some(base_layout_index),
+                        info.grouping,
+                        Some(info),
+                        date_system,
+                        true,
+                    )?;
+                    write_pnames(&mut rw, &pnames)?;
+                }
             }
-            XlsbPivotCacheFieldLayout::ManualDerived {
-                base_source_index,
-                grouping_info_index,
-                name,
-            } => {
-                let info = &grouping_infos[*grouping_info_index];
-                let base_layout_index = layout.source_to_layout[*base_source_index];
-                let pnames = write_pcd_field_header(&mut rw, name, false, None, cache)?;
-                write_pcd_field_group(
-                    &mut rw,
-                    None,
-                    Some(base_layout_index),
-                    info.grouping,
-                    Some(info),
-                    date_system,
-                    true,
-                )?;
-                write_pnames(&mut rw, &pnames)?;
-            }
-            XlsbPivotCacheFieldLayout::DateUnitDerived {
-                base_source_index,
-                grouping_info_index,
-                name,
-            } => {
-                let info = &grouping_infos[*grouping_info_index];
-                let base_layout_index = layout.source_to_layout[*base_source_index];
-                let pnames = write_pcd_field_header(&mut rw, name, false, None, cache)?;
-                write_pcd_field_group(
-                    &mut rw,
-                    None,
-                    Some(base_layout_index),
-                    info.grouping,
-                    Some(info),
-                    date_system,
-                    true,
-                )?;
-                write_pnames(&mut rw, &pnames)?;
-            }
+            rw.write_record(records::BRT_END_PCD_FIELD, &[])?;
         }
-        rw.write_record(records::BRT_END_PCD_FIELD, &[])?;
+        rw.write_record(records::BRT_END_PCD_FIELDS, &[])?;
+        write_pcd_calculated_items(&mut rw, cache)?;
+    } else {
+        let pivot = pivot_for_cache(workbook, plan, cache)?.ok_or_else(|| {
+            XlsbError::InvalidFormat("OLAP pivot cache has no pivot table".into())
+        })?;
+        write_olap_pcd_fields(&mut rw, pivot, cache, &layout)?;
+        write_olap_cache_hierarchies(&mut rw, pivot, cache, &layout)?;
+        write_olap_dimensions(&mut rw, pivot, cache, &layout)?;
     }
-    rw.write_record(records::BRT_END_PCD_FIELDS, &[])?;
-
     write_cache_definition_ext(&mut rw)?;
     rw.write_record(records::BRT_END_PIVOT_CACHE_DEF, &[])?;
 
@@ -265,6 +318,9 @@ fn write_pivot_cache_records_part<W: Write + Seek>(
         for row in 0..cache.row_count {
             let mut payload = Vec::new();
             for (field_index, field) in cache.fields.iter().enumerate() {
+                if field.formula.is_some() {
+                    continue;
+                }
                 if matches!(
                     layout.fields.get(field_index),
                     Some(XlsbPivotCacheFieldLayout::DateUnitDerived { .. })
@@ -310,6 +366,7 @@ fn write_pivot_table_part<W: Write + Seek>(
     plan: &FormatPivotPlan,
     part: &FormatPivotTable,
     cache: &FormatPivotCache,
+    styles: &StyleMapping,
 ) -> XlsbResult<()> {
     let worksheet = workbook
         .worksheet(part.sheet_index)
@@ -323,6 +380,17 @@ fn write_pivot_table_part<W: Write + Seek>(
     let date_system = workbook_date_system(workbook.settings().date_1904);
     let grouping_infos = xlsb_pivot_grouping_infos(workbook, cache, groupings, date_system)?;
     let layout = build_xlsb_pivot_cache_layout(cache, &grouping_infos)?;
+    let effective_columns = effective_column_fields(pivot, cache);
+    let axis_tuples = build_xlsb_axis_tuples(
+        part,
+        pivot,
+        cache,
+        &layout,
+        &grouping_infos,
+        &effective_columns,
+    )?;
+    validate_xlsb_pivot_axis_field_options(pivot)?;
+    validate_xlsb_pivot_filters(pivot, cache, &layout)?;
 
     let path = format!("xl/pivotTables/pivotTable{}.bin", part.table_num);
     zip.start_file(path, *options)?;
@@ -331,9 +399,12 @@ fn write_pivot_table_part<W: Write + Seek>(
 
     write_ac_block(&mut rw, 7, false)?;
     write_begin_sx_view(&mut rw, pivot)?;
-    write_sx_location(&mut rw, pivot, cache, &layout, &grouping_infos)?;
+    write_sx_location(&mut rw, pivot, cache, &layout, &axis_tuples)?;
     rw.write_record(records::BRT_END_SX_LOCATION, &[])?;
     write_sx_fields(&mut rw, pivot, cache, &usage, &layout, &grouping_infos)?;
+    if !cache_has_records(cache) {
+        write_olap_pivot_hierarchies(&mut rw, pivot, cache, &layout)?;
+    }
     let values_on_rows = values_field_on_axis(pivot, PivotValuesAxis::Rows);
     let values_on_columns = values_field_on_axis(pivot, PivotValuesAxis::Columns);
     write_axis_fields(
@@ -346,6 +417,18 @@ fn write_pivot_table_part<W: Write + Seek>(
         values_on_rows,
         pivot.layout.values_axis_position,
     )?;
+    if !cache_has_records(cache) {
+        write_olap_axis_hierarchies(
+            &mut rw,
+            records::BRT_BEGIN_ISXTH_RWS,
+            records::BRT_END_ISXTH_RWS,
+            cache,
+            &layout,
+            &pivot.rows,
+            values_on_rows,
+            pivot.layout.values_axis_position,
+        )?;
+    }
     write_axis_items(
         &mut rw,
         records::BRT_BEGIN_SX_ROW_ITEMS,
@@ -356,7 +439,7 @@ fn write_pivot_table_part<W: Write + Seek>(
         values_on_rows,
         pivot.layout.values_axis_position,
         pivot.measures.len(),
-        &grouping_infos,
+        &axis_tuples.rows,
     )?;
     write_axis_fields(
         &mut rw,
@@ -364,25 +447,38 @@ fn write_pivot_table_part<W: Write + Seek>(
         records::BRT_END_ISXVD_COLS,
         cache,
         &layout,
-        &pivot.columns,
+        &effective_columns,
         values_on_columns,
         pivot.layout.values_axis_position,
     )?;
+    if !cache_has_records(cache) {
+        write_olap_axis_hierarchies(
+            &mut rw,
+            records::BRT_BEGIN_ISXTH_COLS,
+            records::BRT_END_ISXTH_COLS,
+            cache,
+            &layout,
+            &effective_columns,
+            values_on_columns,
+            pivot.layout.values_axis_position,
+        )?;
+    }
     write_axis_items(
         &mut rw,
         records::BRT_BEGIN_SX_COL_ITEMS,
         records::BRT_END_SX_COL_ITEMS,
         cache,
         &layout,
-        &pivot.columns,
+        &effective_columns,
         values_on_columns,
         pivot.layout.values_axis_position,
         pivot.measures.len(),
-        &grouping_infos,
+        &axis_tuples.columns,
     )?;
-    write_page_fields(&mut rw, pivot, cache)?;
-    write_data_fields(&mut rw, pivot, cache)?;
+    write_page_fields(&mut rw, pivot, cache, &layout, &grouping_infos)?;
+    write_data_fields(&mut rw, pivot, cache, styles)?;
     write_sx_style(&mut rw, pivot)?;
+    write_pivot_filters(&mut rw, pivot, cache, &layout, date_system)?;
     rw.write_record(records::BRT_END_SXVIEW, &[])?;
 
     drop(rw);
@@ -412,23 +508,64 @@ fn write_pivot_table_rels<W: Write + Seek>(
 fn write_pivot_cache_definition_rels<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     options: &SimpleFileOptions,
-    cache_num: usize,
+    cache: &FormatPivotCache,
 ) -> XlsbResult<()> {
     let path = format!(
         "xl/pivotCache/_rels/pivotCacheDefinition{}.bin.rels",
-        cache_num
+        cache.cache_num
     );
     zip.start_file(path, *options)?;
-    let target = format!("pivotCacheRecords{}.bin", cache_num);
-    let xml = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
-         <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
-         <Relationship Id=\"rId1\" Type=\"{}\" Target=\"{}\"/>\
-         </Relationships>",
-        RT_PIVOT_CACHE_RECORDS, target
-    );
+    let mut xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+         <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        .to_string();
+    if cache_has_records(cache) {
+        let target = format!("pivotCacheRecords{}.bin", cache.cache_num);
+        xml.push_str(&format!(
+            "<Relationship Id=\"rId1\" Type=\"{}\" Target=\"{}\"/>",
+            RT_PIVOT_CACHE_RECORDS,
+            xml_attr_escape(&target)
+        ));
+    }
+    for (id, target) in consolidation_external_relationships(&cache.source)? {
+        xml.push_str(&format!(
+            "<Relationship Id=\"{}\" Type=\"{}\" Target=\"{}\" TargetMode=\"External\"/>",
+            xml_attr_escape(&id),
+            RT_EXTERNAL_LINK_PATH,
+            xml_attr_escape(&target)
+        ));
+    }
+    xml.push_str("</Relationships>");
     zip.write_all(xml.as_bytes())?;
     Ok(())
+}
+
+fn consolidation_external_relationships(
+    source: &FormatPivotSource,
+) -> XlsbResult<Vec<(String, String)>> {
+    let FormatPivotSource::Consolidation { ranges } = source else {
+        return Ok(Vec::new());
+    };
+
+    let mut relationships = Vec::new();
+    for range in ranges {
+        if range.external_relationship_id.is_some() && range.external_relationship_target.is_none()
+        {
+            return Err(XlsbError::InvalidFormat(
+                "XLSB external consolidation references require a relationship target".into(),
+            ));
+        }
+        let Some(target) = &range.external_relationship_target else {
+            continue;
+        };
+        if target.trim().is_empty() {
+            return Err(XlsbError::InvalidFormat(
+                "XLSB external consolidation relationship target cannot be blank".into(),
+            ));
+        }
+        let id = consolidation_external_relationship_id(range, relationships.len() + 1);
+        relationships.push((id, target.clone()));
+    }
+    Ok(relationships)
 }
 
 fn groupings_for_cache<'a>(
@@ -436,12 +573,22 @@ fn groupings_for_cache<'a>(
     plan: &'a FormatPivotPlan,
     cache: &FormatPivotCache,
 ) -> XlsbResult<&'a [PivotGrouping]> {
+    Ok(pivot_for_cache(workbook, plan, cache)?
+        .map(|pivot| pivot.groupings.as_slice())
+        .unwrap_or(&[]))
+}
+
+fn pivot_for_cache<'a>(
+    workbook: &'a Workbook,
+    plan: &FormatPivotPlan,
+    cache: &FormatPivotCache,
+) -> XlsbResult<Option<&'a PivotTable>> {
     let Some(part) = plan
         .tables
         .iter()
         .find(|part| part.cache_num == cache.cache_num)
     else {
-        return Ok(&[]);
+        return Ok(None);
     };
     let worksheet = workbook
         .worksheet(part.sheet_index)
@@ -450,7 +597,7 @@ fn groupings_for_cache<'a>(
         .pivot_tables()
         .get(part.pivot_index)
         .ok_or_else(|| XlsbError::InvalidFormat("pivot table not found".into()))?;
-    Ok(&pivot.groupings)
+    Ok(Some(pivot))
 }
 
 fn validate_xlsb_pivot_groupings(
@@ -1246,14 +1393,23 @@ fn write_ac_block<W: Write>(
 fn write_begin_pivot_cache_def<W: Write>(
     rw: &mut RecordWriter<W>,
     cache: &FormatPivotCache,
-) -> std::io::Result<()> {
+) -> XlsbResult<()> {
+    if cache.background_query && !matches!(cache.source, FormatPivotSource::External { .. }) {
+        return Err(XlsbError::InvalidFormat(
+            "XLSB pivot background query is only valid for external pivot cache sources".into(),
+        ));
+    }
     let mut payload = Vec::new();
     payload.push(8);
     payload.push(3);
     payload.push(8);
-    let mut flags = 0x11u8;
+    let has_records = cache_has_records(cache);
+    let mut flags = if has_records { 0x11u8 } else { 0x10u8 };
     if cache.refresh_on_load {
         flags |= 0x04;
+    }
+    if cache.background_query {
+        flags |= 0x20;
     }
     payload.push(flags);
     let ghost_limit = cache
@@ -1262,35 +1418,344 @@ fn write_begin_pivot_cache_def<W: Write>(
         .unwrap_or(-1);
     payload.extend_from_slice(&ghost_limit.to_le_bytes());
     payload.extend_from_slice(&0f64.to_le_bytes());
-    payload.push(0x02);
-    payload.extend_from_slice(&(cache.row_count as u32).to_le_bytes());
-    payload.extend_from_slice(&encode_wide_str("rId1"));
+    payload.push(if has_records { 0x02 } else { 0x00 });
+    payload
+        .extend_from_slice(&(if has_records { cache.row_count } else { 0 } as u32).to_le_bytes());
+    if has_records {
+        payload.extend_from_slice(&encode_wide_str("rId1"));
+    }
     payload.extend_from_slice(&0u32.to_le_bytes());
-    rw.write_record(records::BRT_BEGIN_PIVOT_CACHE_DEF, &payload)
+    rw.write_record(records::BRT_BEGIN_PIVOT_CACHE_DEF, &payload)?;
+    Ok(())
 }
 
 fn write_pivot_cache_source<W: Write>(
     rw: &mut RecordWriter<W>,
+    workbook: &Workbook,
     cache: &FormatPivotCache,
 ) -> XlsbResult<()> {
-    let FormatPivotSource::Worksheet {
-        sheet_name, range, ..
-    } = &cache.source
+    match &cache.source {
+        FormatPivotSource::Worksheet {
+            sheet_name,
+            range,
+            table_name,
+            ..
+        } => write_worksheet_pivot_cache_source(rw, sheet_name, *range, table_name.as_deref()),
+        FormatPivotSource::Consolidation { ranges } => {
+            write_consolidation_pivot_cache_source(rw, ranges)
+        }
+        FormatPivotSource::External {
+            connection_name, ..
+        } => write_external_pivot_cache_source(rw, workbook, connection_name),
+        FormatPivotSource::Olap {
+            connection_name,
+            cube,
+            command_text,
+        } => write_olap_pivot_cache_source(
+            rw,
+            workbook,
+            connection_name,
+            cube.as_deref(),
+            command_text.as_deref(),
+        ),
+        FormatPivotSource::Scenario { name } => write_scenario_pivot_cache_source(rw, name),
+    }
+}
+
+fn write_external_pivot_cache_source<W: Write>(
+    rw: &mut RecordWriter<W>,
+    workbook: &Workbook,
+    connection_name: &str,
+) -> XlsbResult<()> {
+    let connection = find_workbook_connection(workbook, connection_name).ok_or_else(|| {
+        XlsbError::InvalidFormat(format!(
+            "XLSB external pivot source references unknown connection: {connection_name}"
+        ))
+    })?;
+    if matches!(&connection.kind, WorkbookConnectionKind::Olap { .. }) {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB external pivot source requires a non-OLAP connection: {connection_name}"
+        )));
+    }
+    write_connection_pivot_cache_source(rw, connection.id)
+}
+
+fn write_olap_pivot_cache_source<W: Write>(
+    rw: &mut RecordWriter<W>,
+    workbook: &Workbook,
+    connection_name: &str,
+    cube: Option<&str>,
+    command_text: Option<&str>,
+) -> XlsbResult<()> {
+    let connection = find_workbook_connection(workbook, connection_name).ok_or_else(|| {
+        XlsbError::InvalidFormat(format!(
+            "XLSB OLAP pivot source references unknown connection: {connection_name}"
+        ))
+    })?;
+    let WorkbookConnectionKind::Olap {
+        command,
+        command_type,
+        ..
+    } = &connection.kind
     else {
-        return Err(XlsbError::InvalidFormat(
-            "XLSB pivot cache writing currently requires worksheet or table sources".into(),
-        ));
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB OLAP pivot source requires an OLAP connection: {connection_name}"
+        )));
     };
 
+    if let (Some(cube), Some(command)) = (cube, command.as_deref()) {
+        if *command_type == Some(1) && command != cube {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB OLAP pivot source cube does not match connection command: {connection_name}"
+            )));
+        }
+    }
+    if let (Some(command_text), Some(command)) = (command_text, command.as_deref()) {
+        if command != command_text {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB OLAP pivot source command text does not match connection command: {connection_name}"
+            )));
+        }
+    }
+
+    write_connection_pivot_cache_source(rw, connection.id)
+}
+
+fn find_workbook_connection<'a>(
+    workbook: &'a Workbook,
+    connection_name: &str,
+) -> Option<&'a WorkbookConnection> {
+    connection_name
+        .parse::<u32>()
+        .ok()
+        .and_then(|id| workbook.data_connection_by_id(id))
+        .or_else(|| workbook.data_connection_by_name(connection_name))
+}
+
+fn write_connection_pivot_cache_source<W: Write>(
+    rw: &mut RecordWriter<W>,
+    connection_id: u32,
+) -> XlsbResult<()> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&1u32.to_le_bytes());
+    payload.extend_from_slice(&connection_id.to_le_bytes());
+    rw.write_record(records::BRT_BEGIN_PCD_SOURCE, &payload)?;
+    rw.write_record(records::BRT_END_PCD_SOURCE, &[])?;
+    Ok(())
+}
+
+fn write_scenario_pivot_cache_source<W: Write>(
+    rw: &mut RecordWriter<W>,
+    name: &str,
+) -> XlsbResult<()> {
+    if !name.is_empty() {
+        return Err(XlsbError::InvalidFormat(
+            "XLSB named scenario pivot source authoring requires Scenario Manager records and is not implemented yet".into(),
+        ));
+    }
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&3u32.to_le_bytes());
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    rw.write_record(records::BRT_BEGIN_PCD_SOURCE, &payload)?;
+    rw.write_record(records::BRT_END_PCD_SOURCE, &[])?;
+    Ok(())
+}
+
+fn write_worksheet_pivot_cache_source<W: Write>(
+    rw: &mut RecordWriter<W>,
+    sheet_name: &str,
+    range: CellRange,
+    table_name: Option<&str>,
+) -> XlsbResult<()> {
     rw.write_record(records::BRT_BEGIN_PCD_SOURCE, &[0; 8])?;
     let mut payload = Vec::new();
-    payload.extend_from_slice(&[0x00, 0x00, 0x02]);
-    payload.extend_from_slice(&encode_wide_str(sheet_name));
-    write_unchecked_rfx(&mut payload, *range);
+    if let Some(table_name) = table_name {
+        // MS-XLSB 2.4.167: fName=1 means the source is specified by
+        // namedRange. Excel uses the same path for table-backed pivots.
+        payload.extend_from_slice(&[0x01, 0x00, 0x00]);
+        payload.extend_from_slice(&encode_wide_str(table_name));
+    } else {
+        payload.extend_from_slice(&[0x00, 0x00, 0x02]);
+        payload.extend_from_slice(&encode_wide_str(sheet_name));
+        write_unchecked_rfx(&mut payload, range);
+    }
     rw.write_record(records::BRT_BEGIN_PCDS_SHEET, &payload)?;
     rw.write_record(records::BRT_END_PCDS_SHEET, &[])?;
     rw.write_record(records::BRT_END_PCD_SOURCE, &[])?;
     Ok(())
+}
+
+fn write_consolidation_pivot_cache_source<W: Write>(
+    rw: &mut RecordWriter<W>,
+    ranges: &[PivotSourceRange],
+) -> XlsbResult<()> {
+    if ranges.is_empty() {
+        return Err(XlsbError::InvalidFormat(
+            "XLSB consolidation pivot sources require at least one range".into(),
+        ));
+    }
+    let pages = consolidation_pages(ranges)?;
+
+    let mut source_payload = Vec::new();
+    source_payload.extend_from_slice(&2u32.to_le_bytes());
+    source_payload.extend_from_slice(&0u32.to_le_bytes());
+    rw.write_record(records::BRT_BEGIN_PCD_SOURCE, &source_payload)?;
+    rw.write_record(records::BRT_BEGIN_PCDS_CONSOL, &0u16.to_le_bytes())?;
+
+    if !pages.is_empty() {
+        rw.write_record(
+            records::BRT_BEGIN_PCDSC_PAGES,
+            &checked_u32(pages.len(), "XLSB consolidation page count")?.to_le_bytes(),
+        )?;
+        for page in &pages {
+            rw.write_record(
+                records::BRT_BEGIN_PCDSC_PAGE,
+                &checked_u32(page.len(), "XLSB consolidation page item count")?.to_le_bytes(),
+            )?;
+            for item in page {
+                rw.write_record(records::BRT_BEGIN_PCDSC_PITEM, &encode_wide_str(item))?;
+                rw.write_record(records::BRT_END_PCDSC_PITEM, &[])?;
+            }
+            rw.write_record(records::BRT_END_PCDSC_PAGE, &[])?;
+        }
+        rw.write_record(records::BRT_END_PCDSC_PAGES, &[])?;
+    }
+
+    rw.write_record(
+        records::BRT_BEGIN_PCDSC_SETS,
+        &checked_u32(ranges.len(), "XLSB consolidation source-set count")?.to_le_bytes(),
+    )?;
+    let mut external_index = 0usize;
+    for range in ranges {
+        if range.external_relationship_id.is_some() && range.external_relationship_target.is_none()
+        {
+            return Err(XlsbError::InvalidFormat(
+                "XLSB external consolidation references require a relationship target".into(),
+            ));
+        }
+        let external_relationship_id = if range.external_relationship_target.is_some() {
+            external_index += 1;
+            Some(consolidation_external_relationship_id(
+                range,
+                external_index,
+            ))
+        } else {
+            None
+        };
+        let payload =
+            consolidation_source_set_payload(range, &pages, external_relationship_id.as_deref())?;
+        rw.write_record(records::BRT_BEGIN_PCDSC_SET, &payload)?;
+        rw.write_record(records::BRT_END_PCDSC_SET, &[])?;
+    }
+    rw.write_record(records::BRT_END_PCDSC_SETS, &[])?;
+    rw.write_record(records::BRT_END_PCDS_CONSOL, &[])?;
+    rw.write_record(records::BRT_END_PCD_SOURCE, &[])?;
+    Ok(())
+}
+
+fn consolidation_source_set_payload(
+    range: &PivotSourceRange,
+    pages: &[Vec<String>],
+    external_relationship_id: Option<&str>,
+) -> XlsbResult<Vec<u8>> {
+    if range.range.is_none() && range.name.is_none() {
+        return Err(XlsbError::InvalidFormat(
+            "XLSB consolidation source set requires a range or name".into(),
+        ));
+    }
+
+    let mut item_indexes = [u32::MAX; 4];
+    for (index, item) in range.page_items.iter().enumerate() {
+        let page = pages.get(index).ok_or_else(|| {
+            XlsbError::InvalidFormat(
+                "XLSB consolidation page item has no matching page field".into(),
+            )
+        })?;
+        let Some(item_index) = page.iter().position(|candidate| candidate == item) else {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB consolidation page item is not declared: {item}"
+            )));
+        };
+        item_indexes[index] = checked_u32(item_index, "XLSB consolidation page item index")?;
+    }
+
+    let source_is_name = range.range.is_none();
+    let mut payload = Vec::new();
+    for item_index in item_indexes {
+        payload.extend_from_slice(&item_index.to_le_bytes());
+    }
+    payload.push(u8::from(source_is_name));
+    payload.push(0);
+
+    let mut flags = 0u8;
+    if external_relationship_id.is_some() {
+        flags |= 0x01;
+    }
+    if range.sheet.is_some() {
+        flags |= 0x02;
+    }
+    payload.push(flags);
+
+    if let Some(sheet) = &range.sheet {
+        payload.extend_from_slice(&encode_wide_str(sheet));
+    }
+    if let Some(external_relationship_id) = external_relationship_id {
+        payload.extend_from_slice(&encode_wide_str(external_relationship_id));
+    }
+    if source_is_name {
+        let Some(name) = &range.name else {
+            return Err(XlsbError::InvalidFormat(
+                "XLSB named consolidation source requires a name".into(),
+            ));
+        };
+        payload.extend_from_slice(&encode_wide_str(name));
+    } else {
+        let Some(source_range) = range.range else {
+            return Err(XlsbError::InvalidFormat(
+                "XLSB consolidation source set requires a range".into(),
+            ));
+        };
+        write_unchecked_rfx(&mut payload, source_range);
+    }
+    Ok(payload)
+}
+
+fn consolidation_external_relationship_id(
+    range: &PivotSourceRange,
+    external_index: usize,
+) -> String {
+    range
+        .external_relationship_id
+        .clone()
+        .unwrap_or_else(|| format!("rIdExternal{external_index}"))
+}
+
+fn consolidation_pages(ranges: &[PivotSourceRange]) -> XlsbResult<Vec<Vec<String>>> {
+    let page_count = ranges
+        .iter()
+        .map(|range| range.page_items.len())
+        .max()
+        .unwrap_or(0);
+    if page_count > 4 {
+        return Err(XlsbError::InvalidFormat(
+            "XLSB consolidation pivot sources support at most four page fields".into(),
+        ));
+    }
+
+    let mut pages = vec![Vec::<String>::new(); page_count];
+    for range in ranges {
+        for (index, item) in range.page_items.iter().enumerate() {
+            if item.trim().is_empty() {
+                return Err(XlsbError::InvalidFormat(
+                    "XLSB consolidation page item names cannot be blank".into(),
+                ));
+            }
+            if !pages[index].iter().any(|candidate| candidate == item) {
+                pages[index].push(item.clone());
+            }
+        }
+    }
+    Ok(pages)
 }
 
 fn write_pcd_field<W: Write>(
@@ -1320,7 +1785,12 @@ fn write_pcd_field_header<W: Write>(
         flags |= 0x0100;
     }
     payload.extend_from_slice(&flags.to_le_bytes());
-    payload.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    let num_format_id = if matches!(cache.source, FormatPivotSource::Consolidation { .. }) {
+        0
+    } else {
+        u32::MAX
+    };
+    payload.extend_from_slice(&num_format_id.to_le_bytes());
     payload.extend_from_slice(&0u16.to_le_bytes());
     payload.extend_from_slice(&0u16.to_le_bytes());
     payload.extend_from_slice(&0u32.to_le_bytes());
@@ -1334,6 +1804,210 @@ fn write_pcd_field_header<W: Write>(
     };
     rw.write_record(records::BRT_BEGIN_PCD_FIELD, &payload)?;
     Ok(pnames)
+}
+
+fn write_olap_pcd_fields<W: Write>(
+    rw: &mut RecordWriter<W>,
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+) -> XlsbResult<()> {
+    validate_olap_metadata_cache(pivot, cache, layout)?;
+    rw.write_record(
+        records::BRT_BEGIN_PCD_FIELDS,
+        &(layout.fields.len() as u32).to_le_bytes(),
+    )?;
+    for (layout_index, field_layout) in layout.fields.iter().enumerate() {
+        let source_index = olap_source_index(field_layout)?;
+        let field = &cache.fields[source_index];
+        write_olap_pcd_field_header(rw, &field.name, layout_index)?;
+        rw.write_record(records::BRT_END_PCD_FIELD, &[])?;
+    }
+    rw.write_record(records::BRT_END_PCD_FIELDS, &[])?;
+    Ok(())
+}
+
+fn validate_olap_metadata_cache(
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+) -> XlsbResult<()> {
+    if !cache.calculated_items.is_empty()
+        || cache.fields.iter().any(|field| field.formula.is_some())
+    {
+        return Err(XlsbError::InvalidFormat(
+            "XLSB OLAP pivot source authoring does not support calculated fields or calculated items"
+                .into(),
+        ));
+    }
+    if pivot
+        .groupings
+        .iter()
+        .any(|grouping| cache.field_index(grouping_field_name(grouping)).is_some())
+    {
+        return Err(XlsbError::InvalidFormat(
+            "XLSB OLAP pivot source authoring does not support OLAP grouping metadata yet".into(),
+        ));
+    }
+    for field_layout in &layout.fields {
+        olap_source_index(field_layout)?;
+    }
+    Ok(())
+}
+
+fn write_olap_pcd_field_header<W: Write>(
+    rw: &mut RecordWriter<W>,
+    name: &str,
+    hierarchy_index: usize,
+) -> XlsbResult<()> {
+    let hierarchy_index = checked_u32(hierarchy_index, "OLAP cache hierarchy index")?;
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&0x0004u16.to_le_bytes());
+    payload.extend_from_slice(&u32::MAX.to_le_bytes());
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    payload.extend_from_slice(&hierarchy_index.to_le_bytes());
+    payload.extend_from_slice(&0x0000_7FFFu32.to_le_bytes());
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    payload.extend_from_slice(&encode_wide_str(name));
+    rw.write_record(records::BRT_BEGIN_PCD_FIELD, &payload)?;
+    Ok(())
+}
+
+fn write_olap_cache_hierarchies<W: Write>(
+    rw: &mut RecordWriter<W>,
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+) -> XlsbResult<()> {
+    rw.write_record(
+        records::BRT_BEGIN_PCD_HIERARCHIES,
+        &(layout.fields.len() as u32).to_le_bytes(),
+    )?;
+    for (layout_index, field_layout) in layout.fields.iter().enumerate() {
+        let source_index = olap_source_index(field_layout)?;
+        let field = &cache.fields[source_index];
+        let is_measure = pivot_measure_field(pivot, &field.name);
+        write_olap_cache_hierarchy(rw, &field.name, is_measure)?;
+
+        let field_index = checked_u32(layout_index, "OLAP cache hierarchy field index")?;
+        let mut usage = Vec::new();
+        usage.extend_from_slice(&1u32.to_le_bytes());
+        usage.extend_from_slice(&field_index.to_le_bytes());
+        rw.write_record(records::BRT_BEGIN_PCDH_FIELDS_USAGE, &usage)?;
+        rw.write_record(records::BRT_END_PCDH_FIELDS_USAGE, &[])?;
+        rw.write_record(records::BRT_END_PCD_HIERARCHY, &[])?;
+    }
+    rw.write_record(records::BRT_END_PCD_HIERARCHIES, &[])?;
+    Ok(())
+}
+
+fn write_olap_cache_hierarchy<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_name: &str,
+    is_measure: bool,
+) -> XlsbResult<()> {
+    let unique = if is_measure {
+        olap_measure_unique_name(field_name)
+    } else {
+        olap_unique_name(field_name)
+    };
+    let caption = field_name.trim();
+    let mut flags: u16 = 0x0010;
+    if is_measure {
+        flags |= 0x0001;
+    } else {
+        flags |= 0x0004;
+    }
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&flags.to_le_bytes());
+    payload.extend_from_slice(&1u32.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&0i32.to_le_bytes());
+    if is_measure {
+        payload.push(0);
+    } else {
+        payload.push(0x01);
+    }
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    payload.extend_from_slice(&encode_wide_str(&unique));
+    payload.extend_from_slice(&encode_wide_str(caption));
+    if !is_measure {
+        payload.extend_from_slice(&encode_wide_str(&unique));
+    }
+    rw.write_record(records::BRT_BEGIN_PCD_HIERARCHY, &payload)?;
+    Ok(())
+}
+
+fn write_olap_dimensions<W: Write>(
+    rw: &mut RecordWriter<W>,
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+) -> XlsbResult<()> {
+    let mut dims = Vec::new();
+    let mut has_measure_dim = false;
+    for field_layout in &layout.fields {
+        let source_index = olap_source_index(field_layout)?;
+        let field = &cache.fields[source_index];
+        if pivot_measure_field(pivot, &field.name) {
+            has_measure_dim = true;
+        } else {
+            let unique = olap_unique_name(&field.name);
+            dims.push((false, field.name.clone(), unique, field.name.clone()));
+        }
+    }
+    if has_measure_dim {
+        dims.push((
+            true,
+            "Measures".to_string(),
+            "[Measures]".to_string(),
+            "Measures".to_string(),
+        ));
+    }
+
+    rw.write_record(records::BRT_BEGIN_DIMS, &(dims.len() as u32).to_le_bytes())?;
+    for (is_measure, name, unique, display) in dims {
+        let mut payload = Vec::new();
+        payload.push(if is_measure { 0x01 } else { 0x00 });
+        payload.extend_from_slice(&encode_wide_str(&name));
+        payload.extend_from_slice(&encode_wide_str(&unique));
+        payload.extend_from_slice(&encode_wide_str(&display));
+        rw.write_record(records::BRT_BEGIN_DIM, &payload)?;
+        rw.write_record(records::BRT_END_DIM, &[])?;
+    }
+    rw.write_record(records::BRT_END_DIMS, &[])?;
+    Ok(())
+}
+
+fn olap_source_index(field_layout: &XlsbPivotCacheFieldLayout) -> XlsbResult<usize> {
+    match field_layout {
+        XlsbPivotCacheFieldLayout::Source { source_index, .. } => Ok(*source_index),
+        XlsbPivotCacheFieldLayout::ManualDerived { .. }
+        | XlsbPivotCacheFieldLayout::DateUnitDerived { .. } => Err(XlsbError::InvalidFormat(
+            "XLSB OLAP pivot source authoring does not support derived cache fields".into(),
+        )),
+    }
+}
+
+fn pivot_measure_field(pivot: &PivotTable, field_name: &str) -> bool {
+    pivot
+        .measures
+        .iter()
+        .any(|measure| measure.field.name.eq_ignore_ascii_case(field_name))
+}
+
+fn olap_unique_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.starts_with('[') {
+        trimmed.to_string()
+    } else {
+        format!("[{}]", trimmed.replace(']', "]]"))
+    }
+}
+
+fn olap_measure_unique_name(name: &str) -> String {
+    format!("[Measures].{}", olap_unique_name(name))
 }
 
 fn write_pivot_parsed_formula(
@@ -1367,6 +2041,146 @@ fn write_pivot_parsed_formula(
     Ok(pnames)
 }
 
+fn write_pcd_calculated_items<W: Write>(
+    rw: &mut RecordWriter<W>,
+    cache: &FormatPivotCache,
+) -> XlsbResult<()> {
+    if cache.calculated_items.is_empty() {
+        return Ok(());
+    }
+
+    rw.write_record(
+        records::BRT_BEGIN_PCD_CALC_ITEMS,
+        &checked_u32(cache.calculated_items.len(), "pivot calculated item count")?.to_le_bytes(),
+    )?;
+    for item in &cache.calculated_items {
+        let field_index = cache.field_index(&item.field.name).ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "XLSB pivot calculated item references unknown field: {}",
+                item.field.name
+            ))
+        })?;
+        let item_index = cache.fields[field_index]
+            .shared_items
+            .iter()
+            .position(|value| value == &item.item)
+            .ok_or_else(|| {
+                XlsbError::InvalidFormat(format!(
+                    "XLSB pivot calculated item {} was not registered in field {}",
+                    item.item, item.field.name
+                ))
+            })?;
+        let (rgce, pnames) =
+            compile_pivot_calculated_item_formula(&item.formula, cache, field_index)?;
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        payload.extend_from_slice(
+            &checked_u32(rgce.len(), "pivot calculated item formula token length")?.to_le_bytes(),
+        );
+        payload.extend_from_slice(&rgce);
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        rw.write_record(records::BRT_BEGIN_PCD_CALC_ITEM, &payload)?;
+        write_pivot_rule_for_calculated_item(rw, field_index, item_index)?;
+        write_calculated_item_pnames(rw, &pnames)?;
+        rw.write_record(records::BRT_END_PCD_CALC_ITEM, &[])?;
+    }
+    rw.write_record(records::BRT_END_PCD_CALC_ITEMS, &[])?;
+    Ok(())
+}
+
+fn compile_pivot_calculated_item_formula(
+    formula: &str,
+    cache: &FormatPivotCache,
+    field_index: usize,
+) -> XlsbResult<(Vec<u8>, Vec<(usize, usize)>)> {
+    let trimmed = formula.trim();
+    let parse_input = if trimmed.starts_with('=') {
+        trimmed.to_string()
+    } else {
+        format!("={trimmed}")
+    };
+    let expr = duke_sheets_formula::parse_formula(&parse_input).map_err(|err| {
+        XlsbError::InvalidFormat(format!(
+            "XLSB pivot calculated item formula could not be parsed: {err}"
+        ))
+    })?;
+
+    let mut rgce = Vec::new();
+    let mut pnames = Vec::new();
+    compile_pivot_item_formula_expr(&expr, &mut rgce, &mut pnames, cache, field_index).map_err(
+        |_| {
+            XlsbError::InvalidFormat(format!(
+                "XLSB pivot calculated item formula uses unsupported syntax: {formula}"
+            ))
+        },
+    )?;
+    Ok((rgce, pnames))
+}
+
+fn write_pivot_rule_for_calculated_item<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: usize,
+    item_index: usize,
+) -> XlsbResult<()> {
+    rw.write_record(
+        records::BRT_BEGIN_P_RULE,
+        &[0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x11, 0x00, 0x00],
+    )?;
+    rw.write_record(records::BRT_BEGIN_PR_FILTERS, &1u32.to_le_bytes())?;
+    let mut filter = Vec::with_capacity(11);
+    filter.extend_from_slice(
+        &checked_u32(field_index, "pivot calculated item target field index")?.to_le_bytes(),
+    );
+    filter.extend_from_slice(&1u32.to_le_bytes());
+    filter.extend_from_slice(&[0x01, 0x00, 0x01]);
+    rw.write_record(records::BRT_BEGIN_PR_FILTER, &filter)?;
+    rw.write_record(
+        records::BRT_BEGIN_PRF_ITEM,
+        &checked_u32(item_index, "pivot calculated item target item index")?.to_le_bytes(),
+    )?;
+    rw.write_record(records::BRT_END_PRF_ITEM, &[])?;
+    rw.write_record(records::BRT_END_PR_FILTER, &[])?;
+    rw.write_record(records::BRT_END_PR_FILTERS, &[])?;
+    rw.write_record(records::BRT_END_P_RULE, &[])?;
+    Ok(())
+}
+
+fn write_calculated_item_pnames<W: Write>(
+    rw: &mut RecordWriter<W>,
+    pnames: &[(usize, usize)],
+) -> XlsbResult<()> {
+    if pnames.is_empty() {
+        return Ok(());
+    }
+    rw.write_record(
+        records::BRT_BEGIN_PNAMES,
+        &checked_u32(pnames.len(), "pivot calculated item PName count")?.to_le_bytes(),
+    )?;
+    for (field_index, item_index) in pnames {
+        let mut payload = Vec::with_capacity(6);
+        payload.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        payload.push(0x01);
+        payload.push(0x00);
+        rw.write_record(records::BRT_BEGIN_PNAME, &payload)?;
+        rw.write_record(records::BRT_BEGIN_PNPAIRS, &1u32.to_le_bytes())?;
+        let mut pair = Vec::with_capacity(9);
+        pair.push(0x00);
+        pair.extend_from_slice(
+            &checked_u32(*field_index, "pivot calculated item formula field index")?.to_le_bytes(),
+        );
+        pair.extend_from_slice(
+            &checked_i32(*item_index, "pivot calculated item formula item index")?.to_le_bytes(),
+        );
+        rw.write_record(records::BRT_BEGIN_PNPAIR, &pair)?;
+        rw.write_record(records::BRT_END_PNPAIR, &[])?;
+        rw.write_record(records::BRT_END_PNPAIRS, &[])?;
+        rw.write_record(records::BRT_END_PNAME, &[])?;
+    }
+    rw.write_record(records::BRT_END_PNAMES, &[])?;
+    Ok(())
+}
+
 fn write_pnames<W: Write>(rw: &mut RecordWriter<W>, field_indexes: &[usize]) -> XlsbResult<()> {
     if field_indexes.is_empty() {
         return Ok(());
@@ -1379,7 +2193,7 @@ fn write_pnames<W: Write>(rw: &mut RecordWriter<W>, field_indexes: &[usize]) -> 
         let field_index = checked_u32(*field_index, "pivot calculated formula source field index")?;
         let mut payload = Vec::with_capacity(6);
         payload.extend_from_slice(&field_index.to_le_bytes());
-        payload.push(0xFF);
+        payload.push(0x01);
         payload.push(0x00);
         rw.write_record(records::BRT_BEGIN_PNAME, &payload)?;
         rw.write_record(records::BRT_END_PNAME, &[])?;
@@ -1449,14 +2263,132 @@ fn compile_pivot_formula_expr(
             });
             Ok(())
         }
+        FormulaExpr::Function { name, args } => {
+            compile_pivot_function_expr(name, args, out, |arg, out| {
+                compile_pivot_formula_expr(arg, out, pnames, cache)
+            })
+        }
         FormulaExpr::CellRef(_)
         | FormulaExpr::RangeRef(_)
-        | FormulaExpr::Function { .. }
         | FormulaExpr::ExternalFunction { .. }
         | FormulaExpr::Array(_)
         | FormulaExpr::ExternalRef(_)
         | FormulaExpr::Empty => Err(()),
     }
+}
+
+fn compile_pivot_item_formula_expr(
+    expr: &FormulaExpr,
+    out: &mut Vec<u8>,
+    pnames: &mut Vec<(usize, usize)>,
+    cache: &FormatPivotCache,
+    field_index: usize,
+) -> Result<(), ()> {
+    match expr {
+        FormulaExpr::Number(n) => emit_pivot_number(*n, out),
+        FormulaExpr::String(s) => {
+            if try_emit_pivot_item_sxname(s, out, pnames, cache, field_index)? {
+                Ok(())
+            } else {
+                emit_pivot_string(s, out)
+            }
+        }
+        FormulaExpr::Boolean(value) => {
+            out.push(ptg::PTG_BOOL);
+            out.push(if *value { 1 } else { 0 });
+            Ok(())
+        }
+        FormulaExpr::Error(error) => {
+            out.push(ptg::PTG_ERR);
+            out.push(error.code());
+            Ok(())
+        }
+        FormulaExpr::NameRef(name) => emit_pivot_item_sxname(name, out, pnames, cache, field_index),
+        FormulaExpr::BinaryOp { op, left, right } => {
+            compile_pivot_item_formula_expr(left, out, pnames, cache, field_index)?;
+            compile_pivot_item_formula_expr(right, out, pnames, cache, field_index)?;
+            out.push(match op {
+                BinaryOperator::Add => ptg::PTG_ADD,
+                BinaryOperator::Subtract => ptg::PTG_SUB,
+                BinaryOperator::Multiply => ptg::PTG_MUL,
+                BinaryOperator::Divide => ptg::PTG_DIV,
+                BinaryOperator::Power => ptg::PTG_POWER,
+                BinaryOperator::Concat => ptg::PTG_CONCAT,
+                BinaryOperator::LessThan => ptg::PTG_LT,
+                BinaryOperator::LessEqual => ptg::PTG_LE,
+                BinaryOperator::Equal => ptg::PTG_EQ,
+                BinaryOperator::GreaterEqual => ptg::PTG_GE,
+                BinaryOperator::GreaterThan => ptg::PTG_GT,
+                BinaryOperator::NotEqual => ptg::PTG_NE,
+                BinaryOperator::Range | BinaryOperator::Union | BinaryOperator::Intersect => {
+                    return Err(());
+                }
+            });
+            Ok(())
+        }
+        FormulaExpr::UnaryOp { op, operand } => {
+            compile_pivot_item_formula_expr(operand, out, pnames, cache, field_index)?;
+            out.push(match op {
+                UnaryOperator::Plus => ptg::PTG_UPLUS,
+                UnaryOperator::Negate => ptg::PTG_UMINUS,
+                UnaryOperator::Percent => ptg::PTG_PERCENT,
+                UnaryOperator::Paren => ptg::PTG_PAREN,
+                UnaryOperator::ImplicitIntersection | UnaryOperator::SpillRange => {
+                    return Err(());
+                }
+            });
+            Ok(())
+        }
+        FormulaExpr::Function { name, args } => {
+            compile_pivot_function_expr(name, args, out, |arg, out| {
+                compile_pivot_item_formula_expr(arg, out, pnames, cache, field_index)
+            })
+        }
+        FormulaExpr::CellRef(reference) => {
+            let Some(name) = pivot_calculated_item_cell_ref_name(reference) else {
+                return Err(());
+            };
+            emit_pivot_item_sxname(&name, out, pnames, cache, field_index)
+        }
+        FormulaExpr::StructuredRef(_)
+        | FormulaExpr::RangeRef(_)
+        | FormulaExpr::ExternalFunction { .. }
+        | FormulaExpr::Array(_)
+        | FormulaExpr::ExternalRef(_)
+        | FormulaExpr::Empty => Err(()),
+    }
+}
+
+fn compile_pivot_function_expr<F>(
+    name: &str,
+    args: &[FormulaExpr],
+    out: &mut Vec<u8>,
+    mut compile_arg: F,
+) -> Result<(), ()>
+where
+    F: FnMut(&FormulaExpr, &mut Vec<u8>) -> Result<(), ()>,
+{
+    let Some(func_idx) = function_index(name) else {
+        return Err(());
+    };
+    if function_is_biff8_addin(func_idx) || args.len() > u8::MAX as usize {
+        return Err(());
+    }
+    for arg in args {
+        if matches!(arg, FormulaExpr::Empty) {
+            return Err(());
+        }
+        compile_arg(arg, out)?;
+    }
+    if function_is_fixed_arity(func_idx, args.len()) {
+        out.push(ptg::v_class(ptg::PTG_FUNC));
+        out.extend_from_slice(&func_idx.to_le_bytes());
+    } else {
+        out.push(ptg::v_class(ptg::PTG_FUNC_VAR));
+        out.push(args.len() as u8);
+        out.extend_from_slice(&func_idx.to_le_bytes());
+    }
+    Ok(())
 }
 
 fn emit_pivot_number(value: f64, out: &mut Vec<u8>) -> Result<(), ()> {
@@ -1506,6 +2438,50 @@ fn emit_pivot_sxname(
     Ok(())
 }
 
+fn emit_pivot_item_sxname(
+    item_name: &str,
+    out: &mut Vec<u8>,
+    pnames: &mut Vec<(usize, usize)>,
+    cache: &FormatPivotCache,
+    field_index: usize,
+) -> Result<(), ()> {
+    if try_emit_pivot_item_sxname(item_name, out, pnames, cache, field_index)? {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+fn try_emit_pivot_item_sxname(
+    item_name: &str,
+    out: &mut Vec<u8>,
+    pnames: &mut Vec<(usize, usize)>,
+    cache: &FormatPivotCache,
+    field_index: usize,
+) -> Result<bool, ()> {
+    let item_value = PivotValue::String(item_name.to_string());
+    let Some(item_index) = cache.fields[field_index]
+        .shared_items
+        .iter()
+        .position(|value| value == &item_value)
+    else {
+        return Ok(false);
+    };
+    let pname_index =
+        checked_u32(pnames.len(), "pivot calculated item formula PName index").map_err(|_| ())?;
+    pnames.push((field_index, item_index));
+    out.extend_from_slice(&[0x18, 0x1D]);
+    out.extend_from_slice(&pname_index.to_le_bytes());
+    Ok(true)
+}
+
+fn pivot_calculated_item_cell_ref_name(reference: &CellReference) -> Option<String> {
+    reference
+        .sheet
+        .is_none()
+        .then(|| reference.address.to_a1_string())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PivotCacheItemKind {
     Normal,
@@ -1518,6 +2494,7 @@ fn write_pcd_shared_items<W: Write>(
     store_items: bool,
     item_kind: PivotCacheItemKind,
     date_system: DateSystem,
+    calculated_item_indexes: &HashSet<usize>,
 ) -> XlsbResult<()> {
     let stats = SharedItemStats::from_values(values);
     let mut payload = Vec::new();
@@ -1530,12 +2507,32 @@ fn write_pcd_shared_items<W: Write>(
     }
     rw.write_record(records::BRT_BEGIN_PCD_SHARED_ITEMS, &payload)?;
     if store_items {
-        for item in values {
-            write_pcdi_item(rw, item, item_kind, date_system)?;
+        for (index, item) in values.iter().enumerate() {
+            write_pcdi_item(
+                rw,
+                item,
+                item_kind,
+                date_system,
+                calculated_item_indexes.contains(&index),
+            )?;
         }
     }
     rw.write_record(records::BRT_END_PCD_SHARED_ITEMS, &[])?;
     Ok(())
+}
+
+fn calculated_item_indexes_for_field(
+    cache: &FormatPivotCache,
+    field_index: usize,
+    shared_items: &[PivotValue],
+) -> HashSet<usize> {
+    let field_name = &cache.fields[field_index].name;
+    cache
+        .calculated_items
+        .iter()
+        .filter(|item| item.field.name.eq_ignore_ascii_case(field_name))
+        .filter_map(|item| shared_items.iter().position(|value| value == &item.item))
+        .collect()
 }
 
 fn write_pcd_field_group<W: Write>(
@@ -1637,7 +2634,7 @@ fn write_pcd_field_group<W: Write>(
             &(group_items.len() as u32).to_le_bytes(),
         )?;
         for item in &group_items {
-            write_pcdi_item(rw, item, PivotCacheItemKind::Normal, date_system)?;
+            write_pcdi_item(rw, item, PivotCacheItemKind::Normal, date_system, false)?;
         }
         rw.write_record(records::BRT_END_PCDFG_ITEMS, &[])?;
     }
@@ -1732,7 +2729,12 @@ fn write_pcdi_item<W: Write>(
     value: &PivotValue,
     item_kind: PivotCacheItemKind,
     date_system: DateSystem,
+    calculated: bool,
 ) -> XlsbResult<()> {
+    if calculated {
+        return write_pcdia_item(rw, value, item_kind, date_system);
+    }
+
     match (item_kind, value) {
         (PivotCacheItemKind::DateTime, PivotValue::Number(serial)) => {
             write_pcdi_datetime(rw, *serial, date_system)?;
@@ -1759,8 +2761,60 @@ fn write_pcdi_item<W: Write>(
     Ok(())
 }
 
+fn write_pcdia_item<W: Write>(
+    rw: &mut RecordWriter<W>,
+    value: &PivotValue,
+    item_kind: PivotCacheItemKind,
+    date_system: DateSystem,
+) -> XlsbResult<()> {
+    let mut payload = Vec::new();
+    let record_type = match (item_kind, value) {
+        (PivotCacheItemKind::DateTime, PivotValue::Number(serial)) => {
+            append_pcdi_datetime_payload(&mut payload, *serial, date_system)?;
+            records::BRT_PCDIA_DATETIME
+        }
+        (PivotCacheItemKind::DateTime, _) => {
+            return Err(XlsbError::InvalidFormat(
+                "XLSB pivot calculated datetime cache item requires a numeric serial".into(),
+            ));
+        }
+        (_, PivotValue::Blank) => records::BRT_PCDIA_MISSING,
+        (_, PivotValue::Boolean(value)) => {
+            payload.push(if *value { 1 } else { 0 });
+            records::BRT_PCDIA_BOOLEAN
+        }
+        (_, PivotValue::Number(value)) => {
+            payload.extend_from_slice(&value.to_le_bytes());
+            records::BRT_PCDIA_NUMBER
+        }
+        (_, PivotValue::String(value)) => {
+            payload.extend_from_slice(&encode_wide_str(value));
+            records::BRT_PCDIA_STRING
+        }
+        (_, PivotValue::Error(value)) => {
+            payload.push(error_code(*value));
+            records::BRT_PCDIA_ERROR
+        }
+    };
+    payload.extend_from_slice(&0x0002u16.to_le_bytes());
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    rw.write_record(record_type, &payload)?;
+    Ok(())
+}
+
 fn write_pcdi_datetime<W: Write>(
     rw: &mut RecordWriter<W>,
+    serial: f64,
+    date_system: DateSystem,
+) -> XlsbResult<()> {
+    let mut payload = Vec::with_capacity(8);
+    append_pcdi_datetime_payload(&mut payload, serial, date_system)?;
+    rw.write_record(records::BRT_PCDI_DATETIME, &payload)?;
+    Ok(())
+}
+
+fn append_pcdi_datetime_payload(
+    payload: &mut Vec<u8>,
     serial: f64,
     date_system: DateSystem,
 ) -> XlsbResult<()> {
@@ -1775,14 +2829,12 @@ fn write_pcdi_datetime<W: Write>(
         )));
     }
     let (hour, minute, second) = serial_to_time(serial);
-    let mut payload = Vec::with_capacity(8);
     payload.extend_from_slice(&(year as u16).to_le_bytes());
     payload.extend_from_slice(&(month as u16).to_le_bytes());
     payload.push(day as u8);
     payload.push(hour as u8);
     payload.push(minute as u8);
     payload.push(second as u8);
-    rw.write_record(records::BRT_PCDI_DATETIME, &payload)?;
     Ok(())
 }
 
@@ -1828,7 +2880,9 @@ fn write_begin_sx_view<W: Write>(
         0x03, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00,
     ];
+    write_sx_view_layout_flags(&mut header, pivot);
     header[12] = values_axis_code(pivot.layout.values_axis);
+    header[13] = pivot.layout.page_wrap.min(u8::MAX as u32) as u8;
     let values_position = pivot
         .layout
         .values_axis_position
@@ -1843,7 +2897,93 @@ fn write_begin_sx_view<W: Write>(
         pivot.layout.data_caption.as_str()
     };
     payload.extend_from_slice(&encode_wide_str(data_caption));
+    if let Some(caption) = &pivot.layout.grand_total_caption {
+        payload.extend_from_slice(&encode_wide_str(caption));
+    }
+    if pivot.layout.show_error || pivot.layout.error_caption.is_some() {
+        payload.extend_from_slice(&encode_wide_str(
+            pivot.layout.error_caption.as_deref().unwrap_or(""),
+        ));
+    }
+    if let Some(caption) = &pivot.layout.missing_caption {
+        payload.extend_from_slice(&encode_wide_str(caption));
+    }
     rw.write_record(records::BRT_BEGIN_SXVIEW, &payload)
+}
+
+fn write_sx_view_layout_flags(header: &mut [u8; 32], pivot: &PivotTable) {
+    let layout = &pivot.layout;
+
+    header[1] = 0;
+    set_u8_bit(&mut header[1], 0, layout.show_items);
+    set_u8_bit(&mut header[1], 1, layout.edit_data);
+    set_u8_bit(&mut header[1], 2, layout.disable_field_list);
+    set_u8_bit(&mut header[1], 4, !layout.show_calculated_members);
+    set_u8_bit(&mut header[1], 5, !layout.visual_totals);
+    set_u8_bit(&mut header[1], 6, layout.show_multiple_label);
+
+    let mut flags = 0u16;
+    set_u16_bit(&mut flags, 0, !layout.show_data_drop_down);
+    set_u16_bit(&mut flags, 4, !layout.show_expand_collapse);
+    set_u16_bit(&mut flags, 5, layout.print_drill_indicators);
+    set_u16_bit(&mut flags, 6, layout.show_member_property_tips);
+    set_u16_bit(&mut flags, 7, !layout.show_data_tips);
+    flags |= ((layout.indent.min(127) as u16) & 0x7F) << 8;
+    set_u16_bit(&mut flags, 15, !layout.show_field_headers);
+    header[2..4].copy_from_slice(&flags.to_le_bytes());
+
+    set_sxview_flag(header, 2, layout.show_empty_rows);
+    set_sxview_flag(header, 3, layout.show_empty_columns);
+    set_sxview_flag(header, 4, layout.enable_wizard);
+    set_sxview_flag(header, 5, layout.enable_drill);
+    set_sxview_flag(header, 6, layout.enable_field_properties);
+    set_sxview_flag(header, 7, pivot.refresh_policy.preserve_formatting);
+    set_sxview_flag(header, 9, layout.show_error);
+    set_sxview_flag(header, 10, layout.show_missing);
+    set_sxview_flag(header, 11, layout.page_over_then_down);
+    set_sxview_flag(header, 13, layout.show_row_grand_totals);
+    set_sxview_flag(header, 14, layout.show_column_grand_totals);
+    set_sxview_flag(header, 15, layout.field_print_titles);
+    set_sxview_flag(header, 17, layout.item_print_titles);
+    set_sxview_flag(header, 18, layout.merge_item_labels);
+    set_sxview_flag(header, 19, true);
+    set_sxview_flag(header, 20, layout.grand_total_caption.is_some());
+    set_sxview_flag(header, 32, matches!(layout.kind, PivotLayoutKind::Compact));
+    set_sxview_flag(header, 33, matches!(layout.kind, PivotLayoutKind::Outline));
+    set_sxview_flag(header, 34, matches!(layout.kind, PivotLayoutKind::Outline));
+    set_sxview_flag(header, 35, matches!(layout.kind, PivotLayoutKind::Compact));
+    set_sxview_flag(
+        header,
+        38,
+        !(layout.show_error || layout.error_caption.is_some()),
+    );
+    set_sxview_flag(header, 39, layout.missing_caption.is_none());
+}
+
+fn set_u8_bit(value: &mut u8, bit: u8, enabled: bool) {
+    if enabled {
+        *value |= 1 << bit;
+    } else {
+        *value &= !(1 << bit);
+    }
+}
+
+fn set_u16_bit(value: &mut u16, bit: u8, enabled: bool) {
+    if enabled {
+        *value |= 1 << bit;
+    } else {
+        *value &= !(1 << bit);
+    }
+}
+
+fn set_sxview_flag(header: &mut [u8; 32], bit: usize, enabled: bool) {
+    let byte = 4 + bit / 8;
+    let mask = 1u8 << (bit % 8);
+    if enabled {
+        header[byte] |= mask;
+    } else {
+        header[byte] &= !mask;
+    }
 }
 
 fn write_sx_location<W: Write>(
@@ -1851,13 +2991,14 @@ fn write_sx_location<W: Write>(
     pivot: &PivotTable,
     cache: &FormatPivotCache,
     layout: &XlsbPivotCacheLayout,
-    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
+    axis_tuples: &XlsbPivotAxisTuples,
 ) -> std::io::Result<()> {
     let range = pivot
         .rendered_range
-        .unwrap_or_else(|| estimated_pivot_range(pivot, cache, layout, grouping_infos));
+        .unwrap_or_else(|| estimated_pivot_range(pivot, cache, layout, axis_tuples));
     let first_data_col = expanded_axis_field_count(cache, layout, &pivot.rows).max(1) as u32;
-    let (page_rows, page_cols) = page_field_area_size(pivot);
+    let page_field_count = effective_page_field_count(cache, layout, pivot);
+    let (page_rows, page_cols) = page_field_area_size(pivot, page_field_count);
     let mut payload = Vec::new();
     payload.extend_from_slice(&range.start.row.to_le_bytes());
     payload.extend_from_slice(&range.end.row.to_le_bytes());
@@ -1888,32 +3029,128 @@ fn write_sx_fields<W: Write>(
             XlsbPivotCacheFieldLayout::Source { source_index, .. } => {
                 let field = &cache.fields[*source_index];
                 let has_date_derived = layout.date_derived_by_base.contains_key(source_index);
-                let axis = if has_date_derived {
+                let has_manual_derived = layout.manual_derived_by_base.contains_key(source_index);
+                let semantic_axis = pivot_field_axis_for_source_index(pivot, cache, *source_index);
+                let hide_manual_source = has_manual_derived && semantic_axis == 0x04;
+                let axis = if has_date_derived || hide_manual_source {
                     0
                 } else {
-                    pivot_field_axis(pivot, &field.name)
+                    semantic_axis
                 };
-                write_sx_field(rw, axis)?;
-                if !has_date_derived && usage.store_items[*source_index] {
-                    let item_count = grouping_info_for_field(grouping_infos, &field.name)
-                        .map(|info| info.source_items.len())
-                        .unwrap_or(field.shared_items.len());
-                    write_sx_field_items(rw, item_count)?;
+                let axis_field = (!has_date_derived)
+                    .then(|| pivot_axis_field_for_source_index(pivot, cache, *source_index))
+                    .flatten();
+                let behavior_axis = if hide_manual_source {
+                    semantic_axis
+                } else {
+                    axis
+                };
+                write_sx_field(
+                    rw,
+                    axis,
+                    behavior_axis,
+                    axis_field,
+                    pivot_has_advanced_filter_for_source_index(pivot, cache, *source_index),
+                )?;
+                if !has_date_derived && usage.store_items[*source_index] && axis != 0x08 {
+                    let grouped_items = grouping_info_for_field(grouping_infos, &field.name);
+                    let view_items = if has_manual_derived {
+                        grouped_items
+                            .map(|info| info.source_items.as_slice())
+                            .unwrap_or(&field.shared_items)
+                    } else {
+                        grouped_items
+                            .map(|info| info.group_items.as_slice())
+                            .unwrap_or(&field.shared_items)
+                    };
+                    let hidden_items = if has_manual_derived {
+                        HashSet::new()
+                    } else {
+                        field_filter_hidden_item_indexes_for_source_index(
+                            pivot,
+                            cache,
+                            *source_index,
+                            view_items,
+                        )?
+                    };
+                    let calculated_items =
+                        calculated_item_indexes_for_field(cache, *source_index, view_items);
+                    write_sx_field_items(
+                        rw,
+                        view_items.len(),
+                        axis_field,
+                        &hidden_items,
+                        &calculated_items,
+                    )?;
+                }
+                if let Some(measure_index) = sxvd_sort_measure_index(pivot, axis_field)? {
+                    write_sxvd_auto_sort_scope(rw, measure_index)?;
                 }
             }
             XlsbPivotCacheFieldLayout::ManualDerived {
                 base_source_index,
                 grouping_info_index,
                 ..
+            } => {
+                let axis_field =
+                    pivot_axis_field_for_source_index(pivot, cache, *base_source_index);
+                let hidden_items = field_filter_hidden_item_indexes_for_source_index(
+                    pivot,
+                    cache,
+                    *base_source_index,
+                    &grouping_infos[*grouping_info_index].group_items,
+                )?;
+                let axis = pivot_field_axis_for_source_index(pivot, cache, *base_source_index);
+                write_sx_field(
+                    rw,
+                    axis,
+                    axis,
+                    axis_field,
+                    pivot_has_advanced_filter_for_source_index(pivot, cache, *base_source_index),
+                )?;
+                write_sx_field_items(
+                    rw,
+                    grouping_infos[*grouping_info_index].group_items.len(),
+                    axis_field,
+                    &hidden_items,
+                    &HashSet::new(),
+                )?;
+                if let Some(measure_index) = sxvd_sort_measure_index(pivot, axis_field)? {
+                    write_sxvd_auto_sort_scope(rw, measure_index)?;
+                }
             }
-            | XlsbPivotCacheFieldLayout::DateUnitDerived {
+            XlsbPivotCacheFieldLayout::DateUnitDerived {
                 base_source_index,
                 grouping_info_index,
-                ..
+                name,
             } => {
                 let base_field = &cache.fields[*base_source_index];
-                write_sx_field(rw, pivot_field_axis(pivot, &base_field.name))?;
-                write_sx_field_items(rw, grouping_infos[*grouping_info_index].group_items.len())?;
+                let axis_field =
+                    pivot_axis_field_for_source_index(pivot, cache, *base_source_index);
+                let hidden_items = field_filter_hidden_item_indexes_for_page_field(
+                    pivot,
+                    name,
+                    &grouping_infos[*grouping_info_index].group_items,
+                    &base_field.name,
+                )?;
+                let axis = pivot_field_axis_for_source_index(pivot, cache, *base_source_index);
+                write_sx_field(
+                    rw,
+                    axis,
+                    axis,
+                    axis_field,
+                    pivot_has_advanced_filter_for_source_index(pivot, cache, *base_source_index),
+                )?;
+                write_sx_field_items(
+                    rw,
+                    grouping_infos[*grouping_info_index].group_items.len(),
+                    axis_field,
+                    &hidden_items,
+                    &HashSet::new(),
+                )?;
+                if let Some(measure_index) = sxvd_sort_measure_index(pivot, axis_field)? {
+                    write_sxvd_auto_sort_scope(rw, measure_index)?;
+                }
             }
         }
         rw.write_record(records::BRT_END_SXVD, &[])?;
@@ -1922,41 +3159,845 @@ fn write_sx_fields<W: Write>(
     Ok(())
 }
 
-fn write_sx_field<W: Write>(rw: &mut RecordWriter<W>, axis: u8) -> std::io::Result<()> {
-    let mut payload: [u8; 20] = if axis & 0x07 != 0 {
-        [
-            0x00, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x5F, 0xB1, 0x04, 0x00, 0x0A, 0x00,
-            0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
-        ]
+fn write_olap_pivot_hierarchies<W: Write>(
+    rw: &mut RecordWriter<W>,
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+) -> XlsbResult<()> {
+    rw.write_record(
+        records::BRT_BEGIN_SXTHS,
+        &(layout.fields.len() as u32).to_le_bytes(),
+    )?;
+    for field_layout in &layout.fields {
+        let source_index = olap_source_index(field_layout)?;
+        let field = &cache.fields[source_index];
+        let is_measure = pivot_measure_field(pivot, &field.name);
+        let mut flags = 0x0200u32;
+        if is_measure {
+            flags |= 0x0080 | 0x0100;
+        } else {
+            flags |= 0x0010 | 0x0020 | 0x0040 | 0x0080;
+        }
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&flags.to_le_bytes());
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        rw.write_record(records::BRT_BEGIN_SXTH, &payload)?;
+        rw.write_record(records::BRT_END_SXTH, &[])?;
+    }
+    rw.write_record(records::BRT_END_SXTHS, &[])?;
+    Ok(())
+}
+
+fn write_sx_field<W: Write>(
+    rw: &mut RecordWriter<W>,
+    axis: u8,
+    behavior_axis: u8,
+    axis_field: Option<&PivotField>,
+    has_advanced_filter: bool,
+) -> std::io::Result<()> {
+    let mut payload = Vec::with_capacity(64);
+    payload.push(axis & 0x0F);
+    let subtotal_flags = if axis == 0x08 {
+        0
     } else {
-        [
-            0x00, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x7F, 0x81, 0x04, 0x00, 0x0A, 0x00,
-            0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
-        ]
+        sxvd_subtotal_flags(axis_field)
     };
-    payload[0] = axis & 0x0F;
+    payload.extend_from_slice(&subtotal_flags.to_le_bytes());
+
+    let mut field_flags = 0x10u8;
+    if axis_field.is_some_and(|field| !field.show_drop_downs) {
+        field_flags |= 0x02;
+    }
+    if axis_field
+        .and_then(|field| field.caption.as_ref())
+        .is_some()
+    {
+        field_flags |= 0x20;
+    }
+    if axis_field
+        .and_then(|field| field.subtotal_caption.as_ref())
+        .is_some()
+    {
+        field_flags |= 0x40;
+    }
+    payload.push(field_flags);
+
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    payload.extend_from_slice(
+        &sxvd_behavior_flags(behavior_axis, axis_field, has_advanced_filter).to_le_bytes(),
+    );
+    payload.extend_from_slice(&sxvd_item_page_count(axis_field, has_advanced_filter).to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+
+    if let Some(caption) = axis_field.and_then(|field| field.caption.as_ref()) {
+        payload.extend_from_slice(&encode_wide_str(caption));
+    }
+    if let Some(caption) = axis_field.and_then(|field| field.subtotal_caption.as_ref()) {
+        payload.extend_from_slice(&encode_wide_str(caption));
+    }
+
     rw.write_record(records::BRT_BEGIN_SXVD, &payload)
+}
+
+fn validate_xlsb_pivot_axis_field_options(pivot: &PivotTable) -> XlsbResult<()> {
+    for field in pivot
+        .rows
+        .iter()
+        .chain(pivot.columns.iter())
+        .chain(pivot.page_fields.iter())
+    {
+        if field.item_page_count == 0 {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot field {} uses item page count 0; BIFF12 SXVD requires a positive item-page count",
+                field.field.name
+            )));
+        }
+        if field.item_page_count != 10 && pivot_has_advanced_filter(pivot, &field.field.name) {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot field {} changes item page count while using an advanced filter; BIFF12 stores both in the SXVD AutoShow count slot",
+                field.field.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_xlsb_pivot_filters(
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+) -> XlsbResult<()> {
+    for filter in &pivot.filters {
+        match filter {
+            PivotFilter::FieldItems {
+                field,
+                allowed_items,
+            } if xlsb_layout_field_index_for_semantic_field(cache, layout, &field.name)
+                .is_some() =>
+            {
+                if xlsb_field_has_date_derived_axis(cache, layout, &field.name)
+                    && pivot_axis_contains_field(&pivot.page_fields, &field.name)
+                    && !pivot_axis_contains_field(&pivot.rows, &field.name)
+                    && !pivot_axis_contains_field(&pivot.columns, &field.name)
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} filters date-grouped page field {}, which this BIFF12 writer slice does not encode yet",
+                        pivot.name, field.name
+                    )));
+                }
+                if allowed_items.is_empty() {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot field {} requires at least one selected item",
+                        field.name
+                    )));
+                }
+            }
+            PivotFilter::FieldItems { field, .. } => {
+                return Err(XlsbError::InvalidFormat(format!(
+                    "XLSB pivot table {} filters field {} outside the row, column, or page axes, which this BIFF12 writer slice does not encode yet",
+                    pivot.name, field.name
+                )));
+            }
+            PivotFilter::TopN {
+                field, measure, n, ..
+            } => {
+                if *n == 0 {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} has a top-N filter on field {} with a zero threshold",
+                        pivot.name, field.name
+                    )));
+                }
+                if !pivot_axis_contains_field(&pivot.rows, &field.name)
+                    && !pivot_axis_contains_field(&pivot.columns, &field.name)
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} applies a top-N filter to field {} outside the row or column axes",
+                        pivot.name, field.name
+                    )));
+                }
+                if xlsb_layout_field_index_for_semantic_field(cache, layout, &field.name).is_none()
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} filters field {} that is not present in the native pivot field layout",
+                        pivot.name, field.name
+                    )));
+                }
+                xlsb_pivot_measure_index_for_filter(pivot, measure)?;
+            }
+            PivotFilter::Label {
+                field,
+                operator,
+                value,
+            } if xlsb_supported_label_filter_operator(*operator) => {
+                if value.is_empty() {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} has an empty label filter on field {}",
+                        pivot.name, field.name
+                    )));
+                }
+                if !pivot_axis_contains_field(&pivot.rows, &field.name)
+                    && !pivot_axis_contains_field(&pivot.columns, &field.name)
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} applies a label filter to field {} outside the row or column axes",
+                        pivot.name, field.name
+                    )));
+                }
+                if xlsb_layout_field_index_for_semantic_field(cache, layout, &field.name).is_none()
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} filters field {} that is not present in the native pivot field layout",
+                        pivot.name, field.name
+                    )));
+                }
+            }
+            PivotFilter::Label { field, .. } => {
+                return Err(XlsbError::InvalidFormat(format!(
+                    "XLSB pivot table {} uses a label filter operator for field {} that this BIFF12 writer slice does not encode yet",
+                    pivot.name, field.name
+                )));
+            }
+            PivotFilter::LabelBetween {
+                field, start, end, ..
+            } => {
+                if start.is_empty() || end.is_empty() {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} has an empty label range filter bound on field {}",
+                        pivot.name, field.name
+                    )));
+                }
+                if !pivot_axis_contains_field(&pivot.rows, &field.name)
+                    && !pivot_axis_contains_field(&pivot.columns, &field.name)
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} applies a label range filter to field {} outside the row or column axes",
+                        pivot.name, field.name
+                    )));
+                }
+                if xlsb_layout_field_index_for_semantic_field(cache, layout, &field.name).is_none()
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} filters field {} that is not present in the native pivot field layout",
+                        pivot.name, field.name
+                    )));
+                }
+            }
+            PivotFilter::Value {
+                field,
+                measure,
+                operator,
+                value,
+            } if xlsb_supported_value_filter_operator(*operator) => {
+                if !value.is_finite() {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} has a non-finite value filter threshold on field {}",
+                        pivot.name, field.name
+                    )));
+                }
+                if !pivot_axis_contains_field(&pivot.rows, &field.name)
+                    && !pivot_axis_contains_field(&pivot.columns, &field.name)
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} applies a value filter to field {} outside the row or column axes",
+                        pivot.name, field.name
+                    )));
+                }
+                if xlsb_layout_field_index_for_semantic_field(cache, layout, &field.name).is_none()
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} filters field {} that is not present in the native pivot field layout",
+                        pivot.name, field.name
+                    )));
+                }
+                xlsb_pivot_measure_index_for_filter(pivot, measure)?;
+            }
+            PivotFilter::Value { field, .. } => {
+                return Err(XlsbError::InvalidFormat(format!(
+                    "XLSB pivot table {} uses a value filter operator for field {} that this BIFF12 writer slice does not encode yet",
+                    pivot.name, field.name
+                )));
+            }
+            PivotFilter::ValueBetween {
+                field,
+                measure,
+                start,
+                end,
+                ..
+            } => {
+                if !start.is_finite() || !end.is_finite() {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} has a non-finite value range filter threshold on field {}",
+                        pivot.name, field.name
+                    )));
+                }
+                if !pivot_axis_contains_field(&pivot.rows, &field.name)
+                    && !pivot_axis_contains_field(&pivot.columns, &field.name)
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} applies a value range filter to field {} outside the row or column axes",
+                        pivot.name, field.name
+                    )));
+                }
+                if xlsb_layout_field_index_for_semantic_field(cache, layout, &field.name).is_none()
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} filters field {} that is not present in the native pivot field layout",
+                        pivot.name, field.name
+                    )));
+                }
+                xlsb_pivot_measure_index_for_filter(pivot, measure)?;
+            }
+            PivotFilter::Date {
+                field,
+                operator,
+                value,
+            } if xlsb_supported_date_filter_operator(*operator) => {
+                if !value.is_finite() {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} has a non-finite date filter operand on field {}",
+                        pivot.name, field.name
+                    )));
+                }
+                if !pivot_axis_contains_field(&pivot.rows, &field.name)
+                    && !pivot_axis_contains_field(&pivot.columns, &field.name)
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} applies a date filter to field {} outside the row or column axes",
+                        pivot.name, field.name
+                    )));
+                }
+                if xlsb_layout_field_index_for_semantic_field(cache, layout, &field.name).is_none()
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} filters field {} that is not present in the native pivot field layout",
+                        pivot.name, field.name
+                    )));
+                }
+            }
+            PivotFilter::Date { field, .. } => {
+                return Err(XlsbError::InvalidFormat(format!(
+                    "XLSB pivot table {} uses a date filter operator for field {} that this BIFF12 writer slice does not encode yet",
+                    pivot.name, field.name
+                )));
+            }
+            PivotFilter::DateBetween {
+                field, start, end, ..
+            } => {
+                if !start.is_finite() || !end.is_finite() {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} has a non-finite date range filter operand on field {}",
+                        pivot.name, field.name
+                    )));
+                }
+                if !pivot_axis_contains_field(&pivot.rows, &field.name)
+                    && !pivot_axis_contains_field(&pivot.columns, &field.name)
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} applies a date range filter to field {} outside the row or column axes",
+                        pivot.name, field.name
+                    )));
+                }
+                if xlsb_layout_field_index_for_semantic_field(cache, layout, &field.name).is_none()
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} filters field {} that is not present in the native pivot field layout",
+                        pivot.name, field.name
+                    )));
+                }
+            }
+            PivotFilter::DatePeriod { field, period } => {
+                if xlsb_date_period_filter_codes(*period).is_none() {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} uses a date-period filter for field {} that this BIFF12 writer slice does not encode yet",
+                        pivot.name, field.name
+                    )));
+                }
+                if !pivot_axis_contains_field(&pivot.rows, &field.name)
+                    && !pivot_axis_contains_field(&pivot.columns, &field.name)
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} applies a date-period filter to field {} outside the row or column axes",
+                        pivot.name, field.name
+                    )));
+                }
+                if xlsb_layout_field_index_for_semantic_field(cache, layout, &field.name).is_none()
+                {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot table {} filters field {} that is not present in the native pivot field layout",
+                        pivot.name, field.name
+                    )));
+                }
+            }
+            PivotFilter::Unsupported { kind, .. } => {
+                return Err(XlsbError::InvalidFormat(format!(
+                    "XLSB pivot table {} contains unsupported preserved filter {kind}, which this BIFF12 writer slice does not encode yet",
+                    pivot.name
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn xlsb_field_has_date_derived_axis(
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    field_name: &str,
+) -> bool {
+    let Some(source_index) = cache.field_index(field_name) else {
+        return false;
+    };
+    layout.date_derived_by_base.contains_key(&source_index)
+}
+
+fn pivot_axis_contains_field(fields: &[PivotField], field_name: &str) -> bool {
+    fields
+        .iter()
+        .any(|field| field.field.name.eq_ignore_ascii_case(field_name))
+}
+
+fn xlsb_layout_field_index_for_semantic_field(
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    field_name: &str,
+) -> Option<usize> {
+    if let Some(source_index) = cache.field_index(field_name) {
+        return layout.source_to_layout.get(source_index).copied();
+    }
+
+    layout
+        .fields
+        .iter()
+        .enumerate()
+        .find_map(|(layout_index, field_layout)| {
+            let name = match field_layout {
+                XlsbPivotCacheFieldLayout::Source { source_index, .. } => {
+                    cache.fields.get(*source_index)?.name.as_str()
+                }
+                XlsbPivotCacheFieldLayout::ManualDerived { name, .. }
+                | XlsbPivotCacheFieldLayout::DateUnitDerived { name, .. } => name.as_str(),
+            };
+            name.eq_ignore_ascii_case(field_name)
+                .then_some(layout_index)
+        })
+}
+
+fn xlsb_pivot_measure_index_for_filter(
+    pivot: &PivotTable,
+    target: &PivotMeasure,
+) -> XlsbResult<u32> {
+    pivot
+        .measures
+        .iter()
+        .position(|measure| pivot_measure_matches_sort_target(measure, target))
+        .map(|index| index as u32)
+        .ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "XLSB pivot table {} filters by an unknown measure {}",
+                pivot.name, target.field.name
+            ))
+        })
 }
 
 fn write_sx_field_items<W: Write>(
     rw: &mut RecordWriter<W>,
     item_count: usize,
+    axis_field: Option<&PivotField>,
+    hidden_items: &HashSet<u32>,
+    calculated_items: &HashSet<usize>,
 ) -> std::io::Result<()> {
-    let count = item_count as u32 + 1;
+    let subtotal_item_count = sxvd_subtotal_item_count(axis_field);
+    let count = item_count as u32 + subtotal_item_count as u32;
     rw.write_record(records::BRT_BEGIN_SXVIS, &count.to_le_bytes())?;
     for item_index in 0..item_count as u32 {
         let mut payload = Vec::with_capacity(7);
-        payload.extend_from_slice(&[0, 0, 0]);
+        payload.push(0);
+        let mut flags = u16::from(hidden_items.contains(&item_index));
+        if calculated_items.contains(&(item_index as usize)) {
+            flags |= 0x0008;
+        }
+        payload.extend_from_slice(&flags.to_le_bytes());
         payload.extend_from_slice(&item_index.to_le_bytes());
         rw.write_record(records::BRT_BEGIN_SXVI, &payload)?;
         rw.write_record(records::BRT_END_SXVI, &[])?;
     }
-    let mut default_payload = Vec::with_capacity(7);
-    default_payload.extend_from_slice(&[1, 0, 0]);
-    default_payload.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-    rw.write_record(records::BRT_BEGIN_SXVI, &default_payload)?;
-    rw.write_record(records::BRT_END_SXVI, &[])?;
+    write_sxvd_subtotal_items(rw, axis_field)?;
     rw.write_record(records::BRT_END_SXVIS, &[])
+}
+
+fn pivot_axis_field_for_source_index<'a>(
+    pivot: &'a PivotTable,
+    cache: &FormatPivotCache,
+    source_index: usize,
+) -> Option<&'a PivotField> {
+    pivot
+        .rows
+        .iter()
+        .chain(pivot.columns.iter())
+        .chain(pivot.page_fields.iter())
+        .find(|field| {
+            cache.field_index(&field.field.name) == Some(source_index)
+                || field.field.name.eq_ignore_ascii_case(
+                    cache
+                        .fields
+                        .get(source_index)
+                        .map(|field| field.name.as_str())
+                        .unwrap_or_default(),
+                )
+        })
+}
+
+fn sxvd_sort_measure_index(
+    pivot: &PivotTable,
+    axis_field: Option<&PivotField>,
+) -> XlsbResult<Option<u32>> {
+    let Some(axis_field) = axis_field else {
+        return Ok(None);
+    };
+    if matches!(axis_field.sort, PivotSort::None) {
+        return Ok(None);
+    }
+    let Some(sort_measure) = axis_field.sort_by_measure.as_ref() else {
+        return Ok(None);
+    };
+
+    pivot
+        .measures
+        .iter()
+        .position(|measure| pivot_measure_matches_sort_target(measure, sort_measure))
+        .map(|index| index as u32)
+        .map(Some)
+        .ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "XLSB pivot table {} sorts field {} by an unknown measure",
+                pivot.name, axis_field.field.name
+            ))
+        })
+}
+
+fn pivot_measure_matches_sort_target(measure: &PivotMeasure, target: &PivotMeasure) -> bool {
+    measure.field.name.eq_ignore_ascii_case(&target.field.name)
+        && measure.aggregate == target.aggregate
+        && target
+            .name
+            .as_ref()
+            .is_none_or(|name| measure.name.as_ref() == Some(name))
+}
+
+fn write_sxvd_auto_sort_scope<W: Write>(
+    rw: &mut RecordWriter<W>,
+    measure_index: u32,
+) -> std::io::Result<()> {
+    rw.write_record(records::BRT_BEGIN_SXVD14, &[])?;
+    rw.write_record(
+        records::BRT_BEGIN_PIVOT_AREA,
+        &[0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00],
+    )?;
+    rw.write_record(records::BRT_BEGIN_PIVOT_AREA_REFS, &1u32.to_le_bytes())?;
+
+    let mut reference = Vec::with_capacity(11);
+    reference.extend_from_slice(&(-2i32).to_le_bytes());
+    reference.extend_from_slice(&1u32.to_le_bytes());
+    reference.extend_from_slice(&[1, 0, 0]);
+    rw.write_record(records::BRT_BEGIN_PIVOT_AREA_REF, &reference)?;
+    rw.write_record(
+        records::BRT_PIVOT_AREA_REF_ITEM,
+        &measure_index.to_le_bytes(),
+    )?;
+    rw.write_record(records::BRT_END_PIVOT_AREA_REF_ITEM, &[])?;
+    rw.write_record(records::BRT_END_PIVOT_AREA_REF, &[])?;
+
+    rw.write_record(records::BRT_END_PIVOT_AREA_REFS, &[])?;
+    rw.write_record(records::BRT_END_PIVOT_AREA, &[])?;
+    rw.write_record(records::BRT_END_SXVD14, &[])?;
+    Ok(())
+}
+
+fn sxvd_subtotal_flags(axis_field: Option<&PivotField>) -> u16 {
+    let Some(field) = axis_field else {
+        return 0x0001;
+    };
+
+    sxvd_subtotal_items(field)
+        .into_iter()
+        .fold(0u16, |flags, subtotal| flags | sxvd_subtotal_flag(subtotal))
+}
+
+fn sxvd_subtotal_flag(subtotal: PivotSubtotal) -> u16 {
+    match subtotal {
+        PivotSubtotal::Automatic => 0x0001,
+        PivotSubtotal::Sum => 0x0002,
+        PivotSubtotal::Count => 0x0004,
+        PivotSubtotal::Average => 0x0008,
+        PivotSubtotal::Max => 0x0010,
+        PivotSubtotal::Min => 0x0020,
+        PivotSubtotal::Product => 0x0040,
+        PivotSubtotal::CountNumbers => 0x0080,
+        PivotSubtotal::StdDev => 0x0100,
+        PivotSubtotal::StdDevP => 0x0200,
+        PivotSubtotal::Var => 0x0400,
+        PivotSubtotal::VarP => 0x0800,
+        PivotSubtotal::None => 0x0000,
+    }
+}
+
+fn sxvd_behavior_flags(
+    axis: u8,
+    axis_field: Option<&PivotField>,
+    has_advanced_filter: bool,
+) -> u32 {
+    if axis == 0x08 {
+        return 0x0004_A158;
+    }
+
+    let mut flags = if axis & 0x07 != 0 {
+        0x0004_B15F
+    } else {
+        0x0004_817F
+    };
+
+    let Some(field) = axis_field else {
+        if axis & 0x07 != 0 {
+            flags &= !(1 << 12);
+        }
+        return flags;
+    };
+
+    set_flag(&mut flags, 5, field.show_empty_items);
+    set_flag(&mut flags, 7, field.insert_blank_row);
+    set_flag(&mut flags, 8, field.subtotal_top);
+    set_flag(&mut flags, 11, field.insert_page_break);
+    set_flag(&mut flags, 18, !field.include_new_items_in_filter);
+
+    match field.sort {
+        PivotSort::None => {
+            set_flag(&mut flags, 12, false);
+            set_flag(&mut flags, 13, true);
+        }
+        PivotSort::Ascending => {
+            set_flag(&mut flags, 12, true);
+            set_flag(&mut flags, 13, true);
+        }
+        PivotSort::Descending => {
+            set_flag(&mut flags, 12, true);
+            set_flag(&mut flags, 13, false);
+        }
+    }
+
+    set_flag(&mut flags, 17, has_advanced_filter);
+
+    flags
+}
+
+fn sxvd_item_page_count(axis_field: Option<&PivotField>, has_advanced_filter: bool) -> u32 {
+    if has_advanced_filter {
+        10
+    } else {
+        axis_field.map_or(10, |field| field.item_page_count)
+    }
+}
+
+fn pivot_has_advanced_filter(pivot: &PivotTable, field_name: &str) -> bool {
+    pivot.filters.iter().any(|filter| {
+        matches!(
+            filter,
+            PivotFilter::TopN { field, .. } if field.name.eq_ignore_ascii_case(field_name)
+        ) || matches!(
+            filter,
+            PivotFilter::Label {
+                field,
+                operator,
+                ..
+            } if field.name.eq_ignore_ascii_case(field_name)
+                && xlsb_supported_label_filter_operator(*operator)
+        ) || matches!(
+            filter,
+            PivotFilter::LabelBetween { field, .. }
+                if field.name.eq_ignore_ascii_case(field_name)
+        ) || matches!(
+            filter,
+            PivotFilter::Value {
+                field,
+                operator,
+                ..
+            } if field.name.eq_ignore_ascii_case(field_name)
+                && xlsb_supported_value_filter_operator(*operator)
+        ) || matches!(
+            filter,
+            PivotFilter::ValueBetween { field, .. }
+                if field.name.eq_ignore_ascii_case(field_name)
+        ) || matches!(
+            filter,
+            PivotFilter::Date {
+                field,
+                operator,
+                ..
+            } if field.name.eq_ignore_ascii_case(field_name)
+                && xlsb_supported_date_filter_operator(*operator)
+        ) || matches!(
+            filter,
+            PivotFilter::DateBetween { field, .. } | PivotFilter::DatePeriod { field, .. }
+                if field.name.eq_ignore_ascii_case(field_name)
+        )
+    })
+}
+
+fn pivot_has_advanced_filter_for_source_index(
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    source_index: usize,
+) -> bool {
+    pivot.filters.iter().any(|filter| {
+        let matches_source = filter_field_name(filter)
+            .is_some_and(|name| cache.field_index(name) == Some(source_index));
+        matches_source
+            && (matches!(filter, PivotFilter::TopN { .. })
+                || matches!(
+                    filter,
+                    PivotFilter::Label { operator, .. }
+                        if xlsb_supported_label_filter_operator(*operator)
+                )
+                || matches!(filter, PivotFilter::LabelBetween { .. })
+                || matches!(
+                    filter,
+                    PivotFilter::Value { operator, .. }
+                        if xlsb_supported_value_filter_operator(*operator)
+                )
+                || matches!(filter, PivotFilter::ValueBetween { .. })
+                || matches!(
+                    filter,
+                    PivotFilter::Date { operator, .. }
+                        if xlsb_supported_date_filter_operator(*operator)
+                )
+                || matches!(
+                    filter,
+                    PivotFilter::DateBetween { .. } | PivotFilter::DatePeriod { .. }
+                ))
+    })
+}
+
+fn xlsb_supported_label_filter_operator(operator: PivotFilterOperator) -> bool {
+    matches!(
+        operator,
+        PivotFilterOperator::Equals
+            | PivotFilterOperator::NotEquals
+            | PivotFilterOperator::LessThan
+            | PivotFilterOperator::LessThanOrEqual
+            | PivotFilterOperator::GreaterThan
+            | PivotFilterOperator::GreaterThanOrEqual
+            | PivotFilterOperator::BeginsWith
+            | PivotFilterOperator::DoesNotBeginWith
+            | PivotFilterOperator::EndsWith
+            | PivotFilterOperator::DoesNotEndWith
+            | PivotFilterOperator::Contains
+            | PivotFilterOperator::DoesNotContain
+    )
+}
+
+fn xlsb_supported_value_filter_operator(operator: PivotFilterOperator) -> bool {
+    matches!(
+        operator,
+        PivotFilterOperator::Equals
+            | PivotFilterOperator::NotEquals
+            | PivotFilterOperator::LessThan
+            | PivotFilterOperator::LessThanOrEqual
+            | PivotFilterOperator::GreaterThan
+            | PivotFilterOperator::GreaterThanOrEqual
+    )
+}
+
+fn xlsb_supported_date_filter_operator(operator: PivotFilterOperator) -> bool {
+    xlsb_date_filter_type_and_operator(operator).is_some()
+}
+
+fn set_flag(flags: &mut u32, bit: u8, value: bool) {
+    let mask = 1u32 << bit;
+    if value {
+        *flags |= mask;
+    } else {
+        *flags &= !mask;
+    }
+}
+
+fn sxvd_subtotal_item_count(axis_field: Option<&PivotField>) -> usize {
+    axis_field
+        .map(sxvd_subtotal_items)
+        .unwrap_or_else(|| vec![PivotSubtotal::Automatic])
+        .len()
+}
+
+fn write_sxvd_subtotal_items<W: Write>(
+    rw: &mut RecordWriter<W>,
+    axis_field: Option<&PivotField>,
+) -> std::io::Result<()> {
+    let Some(field) = axis_field else {
+        return write_sxvd_subtotal_item(rw, PivotSubtotal::Automatic);
+    };
+
+    for subtotal in sxvd_subtotal_items(field) {
+        write_sxvd_subtotal_item(rw, subtotal)?;
+    }
+    Ok(())
+}
+
+fn sxvd_subtotal_items(field: &PivotField) -> Vec<PivotSubtotal> {
+    if field.subtotals.is_empty() {
+        return match field.subtotal {
+            PivotSubtotal::None => Vec::new(),
+            subtotal => vec![subtotal],
+        };
+    }
+
+    let custom = field
+        .subtotals
+        .iter()
+        .copied()
+        .filter(|subtotal| subtotal.is_custom_function())
+        .collect::<Vec<_>>();
+    if !custom.is_empty() {
+        return custom;
+    }
+
+    if field
+        .subtotals
+        .iter()
+        .any(|subtotal| matches!(subtotal, PivotSubtotal::Automatic))
+    {
+        vec![PivotSubtotal::Automatic]
+    } else {
+        Vec::new()
+    }
+}
+
+fn write_sxvd_subtotal_item<W: Write>(
+    rw: &mut RecordWriter<W>,
+    subtotal: PivotSubtotal,
+) -> std::io::Result<()> {
+    let mut payload = Vec::with_capacity(7);
+    payload.push(sxvd_subtotal_item_type(subtotal));
+    payload.extend_from_slice(&[0, 0]);
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    rw.write_record(records::BRT_BEGIN_SXVI, &payload)?;
+    rw.write_record(records::BRT_END_SXVI, &[])
+}
+
+fn sxvd_subtotal_item_type(subtotal: PivotSubtotal) -> u8 {
+    match subtotal {
+        PivotSubtotal::Automatic => 0x01,
+        PivotSubtotal::Sum => 0x02,
+        PivotSubtotal::Count => 0x03,
+        PivotSubtotal::Average => 0x04,
+        PivotSubtotal::Max => 0x05,
+        PivotSubtotal::Min => 0x06,
+        PivotSubtotal::Product => 0x07,
+        PivotSubtotal::CountNumbers => 0x08,
+        PivotSubtotal::StdDev => 0x09,
+        PivotSubtotal::StdDevP => 0x0A,
+        PivotSubtotal::Var => 0x0B,
+        PivotSubtotal::VarP => 0x0C,
+        PivotSubtotal::None => 0x00,
+    }
 }
 
 fn write_axis_fields<W: Write>(
@@ -1992,6 +4033,66 @@ fn write_axis_fields<W: Write>(
     Ok(())
 }
 
+fn write_olap_axis_hierarchies<W: Write>(
+    rw: &mut RecordWriter<W>,
+    begin_record: u16,
+    end_record: u16,
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    fields: &[PivotField],
+    include_values_field: bool,
+    values_position: Option<u32>,
+) -> XlsbResult<()> {
+    if fields.is_empty() && !include_values_field {
+        return Ok(());
+    }
+
+    let mut indexes = olap_axis_hierarchy_indexes(cache, layout, fields)?;
+    if include_values_field {
+        let position = values_position
+            .map(|position| position as usize)
+            .unwrap_or(indexes.len())
+            .min(indexes.len());
+        indexes.insert(position, -2);
+    }
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&(indexes.len() as u32).to_le_bytes());
+    for index in indexes {
+        payload.extend_from_slice(&index.to_le_bytes());
+    }
+    rw.write_record(begin_record, &payload)?;
+    rw.write_record(end_record, &[])?;
+    Ok(())
+}
+
+fn olap_axis_hierarchy_indexes(
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    fields: &[PivotField],
+) -> XlsbResult<Vec<i32>> {
+    let mut indexes = Vec::with_capacity(fields.len());
+    for field in fields {
+        let source_index = cache.field_index(&field.field.name).ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "XLSB OLAP pivot axis references unknown cache field: {}",
+                field.field.name
+            ))
+        })?;
+        let hierarchy_index = *layout.source_to_layout.get(source_index).ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "XLSB OLAP pivot axis references unmapped cache field: {}",
+                field.field.name
+            ))
+        })?;
+        indexes.push(checked_i32(
+            hierarchy_index,
+            "OLAP pivot hierarchy axis index",
+        )?);
+    }
+    Ok(indexes)
+}
+
 fn write_axis_items<W: Write>(
     rw: &mut RecordWriter<W>,
     begin_record: u16,
@@ -2002,16 +4103,14 @@ fn write_axis_items<W: Write>(
     include_values_field: bool,
     values_position: Option<u32>,
     measure_count: usize,
-    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
+    base_tuples: &[Vec<u32>],
 ) -> XlsbResult<()> {
     let line_tuples = axis_line_tuples(
-        cache,
-        layout,
         fields,
         include_values_field,
         values_position,
         measure_count,
-        grouping_infos,
+        base_tuples,
     )?;
     let grand_tuples = axis_grand_total_tuples(
         expanded_axis_field_count(cache, layout, fields),
@@ -2032,13 +4131,11 @@ fn write_axis_items<W: Write>(
 }
 
 fn axis_line_tuples(
-    cache: &FormatPivotCache,
-    layout: &XlsbPivotCacheLayout,
     fields: &[PivotField],
     include_values_field: bool,
     values_position: Option<u32>,
     measure_count: usize,
-    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
+    base_tuples: &[Vec<u32>],
 ) -> XlsbResult<Vec<(Vec<u32>, Option<u32>)>> {
     if fields.is_empty() {
         if include_values_field {
@@ -2051,15 +4148,18 @@ fn axis_line_tuples(
         return Ok(vec![(Vec::new(), None)]);
     }
 
-    let tuples = axis_item_tuples(cache, layout, fields, grouping_infos)?;
     if include_values_field {
         Ok(tuples_with_data_items(
-            tuples,
+            base_tuples.to_vec(),
             values_position,
             measure_count,
         ))
     } else {
-        Ok(tuples.into_iter().map(|tuple| (tuple, None)).collect())
+        Ok(base_tuples
+            .iter()
+            .cloned()
+            .map(|tuple| (tuple, None))
+            .collect())
     }
 }
 
@@ -2106,27 +4206,29 @@ fn write_page_fields<W: Write>(
     rw: &mut RecordWriter<W>,
     pivot: &PivotTable,
     cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
 ) -> XlsbResult<()> {
-    if pivot.page_fields.is_empty() {
+    let page_field_selections =
+        expanded_page_field_selection_items(pivot, cache, layout, grouping_infos)?;
+    if page_field_selections.is_empty() {
         return Ok(());
     }
-
     rw.write_record(
         records::BRT_BEGIN_SXPIS,
-        &(pivot.page_fields.len() as u32).to_le_bytes(),
+        &(page_field_selections.len() as u32).to_le_bytes(),
     )?;
-    for field in &pivot.page_fields {
-        let index = cache.field_index(&field.field.name).ok_or_else(|| {
-            XlsbError::InvalidFormat(format!(
-                "pivot references unknown page field {}",
-                field.field.name
-            ))
-        })?;
-        let selected_item =
-            selected_page_item_index(pivot, &field.field.name, &cache.fields[index])
-                .unwrap_or(0x0010_00FE);
+    for selection in page_field_selections {
+        let selected_item = selected_page_item_index(
+            pivot,
+            cache,
+            &selection.field_name,
+            selection.source_index,
+            selection.items,
+        )?
+        .unwrap_or(0x0010_00FE);
         let mut payload = Vec::new();
-        payload.extend_from_slice(&(index as u32).to_le_bytes());
+        payload.extend_from_slice(&(selection.layout_index as u32).to_le_bytes());
         payload.extend_from_slice(&selected_item.to_le_bytes());
         payload.extend_from_slice(&(-1i32).to_le_bytes());
         payload.push(0);
@@ -2135,6 +4237,107 @@ fn write_page_fields<W: Write>(
     }
     rw.write_record(records::BRT_END_SXPIS, &[])?;
     Ok(())
+}
+
+struct PageFieldSelection<'a> {
+    field_name: String,
+    source_index: Option<usize>,
+    layout_index: usize,
+    items: &'a [PivotValue],
+}
+
+fn expanded_page_field_selection_items<'a>(
+    pivot: &PivotTable,
+    cache: &'a FormatPivotCache,
+    layout: &'a XlsbPivotCacheLayout,
+    grouping_infos: &'a [XlsbPivotGroupingInfo<'_>],
+) -> XlsbResult<Vec<PageFieldSelection<'a>>> {
+    let mut selections = Vec::new();
+    for field in &pivot.page_fields {
+        selections.extend(page_field_selection_items(
+            cache,
+            layout,
+            grouping_infos,
+            &field.field.name,
+        )?);
+    }
+    for source_index in synthetic_consolidation_page_source_indexes(pivot, cache) {
+        let field = &cache.fields[source_index];
+        selections.push(PageFieldSelection {
+            field_name: field.name.clone(),
+            source_index: Some(source_index),
+            layout_index: layout.source_to_layout[source_index],
+            items: &field.shared_items,
+        });
+    }
+    Ok(selections)
+}
+
+fn page_field_selection_items<'a>(
+    cache: &'a FormatPivotCache,
+    layout: &'a XlsbPivotCacheLayout,
+    grouping_infos: &'a [XlsbPivotGroupingInfo<'_>],
+    field_name: &str,
+) -> XlsbResult<Vec<PageFieldSelection<'a>>> {
+    let source_index = cache.field_index(field_name).ok_or_else(|| {
+        XlsbError::InvalidFormat(format!("pivot references unknown page field {field_name}"))
+    })?;
+    if let Some(derived_index) = layout.manual_derived_by_base.get(&source_index) {
+        let Some(XlsbPivotCacheFieldLayout::ManualDerived {
+            grouping_info_index,
+            ..
+        }) = layout.fields.get(*derived_index)
+        else {
+            return Err(XlsbError::InvalidFormat(
+                "pivot manual derived page field has invalid layout".into(),
+            ));
+        };
+        return Ok(vec![PageFieldSelection {
+            field_name: field_name.to_string(),
+            source_index: Some(source_index),
+            layout_index: *derived_index,
+            items: &grouping_infos[*grouping_info_index].group_items,
+        }]);
+    }
+    if let Some(derived_indexes) = layout.date_derived_by_base.get(&source_index) {
+        let mut selections = Vec::with_capacity(derived_indexes.len());
+        for derived_index in derived_indexes {
+            let Some(XlsbPivotCacheFieldLayout::DateUnitDerived {
+                grouping_info_index,
+                name,
+                ..
+            }) = layout.fields.get(*derived_index)
+            else {
+                return Err(XlsbError::InvalidFormat(
+                    "pivot date derived page field has invalid layout".into(),
+                ));
+            };
+            selections.push(PageFieldSelection {
+                field_name: name.clone(),
+                source_index: Some(source_index),
+                layout_index: *derived_index,
+                items: &grouping_infos[*grouping_info_index].group_items,
+            });
+        }
+        return Ok(selections);
+    }
+    if let Some(grouping_info) = grouping_info_for_field(grouping_infos, field_name) {
+        if !is_multi_unit_date_grouping(Some(grouping_info.grouping)) {
+            return Ok(vec![PageFieldSelection {
+                field_name: field_name.to_string(),
+                source_index: Some(source_index),
+                layout_index: layout.source_to_layout[source_index],
+                items: &grouping_info.group_items,
+            }]);
+        }
+    }
+
+    Ok(vec![PageFieldSelection {
+        field_name: field_name.to_string(),
+        source_index: Some(source_index),
+        layout_index: layout.source_to_layout[source_index],
+        items: &cache.fields[source_index].shared_items,
+    }])
 }
 
 fn write_sxli<W: Write>(
@@ -2160,6 +4363,7 @@ fn write_data_fields<W: Write>(
     rw: &mut RecordWriter<W>,
     pivot: &PivotTable,
     cache: &FormatPivotCache,
+    styles: &StyleMapping,
 ) -> XlsbResult<()> {
     rw.write_record(
         records::BRT_BEGIN_SXDIS,
@@ -2173,22 +4377,141 @@ fn write_data_fields<W: Write>(
             ))
         })?;
         let caption = measure.caption();
+        let data_field = xlsb_data_field_options(measure, cache, styles)?;
         let mut payload = Vec::new();
         payload.extend_from_slice(&(field_index as u32).to_le_bytes());
         payload.extend_from_slice(&aggregate_code(measure.aggregate).to_le_bytes());
-        payload.extend_from_slice(&0u32.to_le_bytes());
-        payload.extend_from_slice(&0i32.to_le_bytes());
-        payload.extend_from_slice(&0u32.to_le_bytes());
-        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&data_field.show_as.to_le_bytes());
+        payload.extend_from_slice(&data_field.base_field.to_le_bytes());
+        payload.extend_from_slice(&data_field.base_item.to_le_bytes());
+        payload.extend_from_slice(&data_field.num_format.to_le_bytes());
         payload.push(u8::from(!caption.is_empty()));
         if !caption.is_empty() {
             payload.extend_from_slice(&encode_wide_str(&caption));
         }
         rw.write_record(records::BRT_BEGIN_SXDI, &payload)?;
+        if let Some(show_as_ext) = data_field.show_as_ext {
+            write_data_field_ext(rw, show_as_ext)?;
+        }
         rw.write_record(records::BRT_END_SXDI, &[])?;
     }
     rw.write_record(records::BRT_END_SXDIS, &[])?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct XlsbDataFieldOptions {
+    show_as: u32,
+    show_as_ext: Option<u32>,
+    base_field: u32,
+    base_item: u32,
+    num_format: u32,
+}
+
+fn xlsb_data_field_options(
+    measure: &PivotMeasure,
+    cache: &FormatPivotCache,
+    styles: &StyleMapping,
+) -> XlsbResult<XlsbDataFieldOptions> {
+    let (show_as, show_as_ext, base_field, base_item) = match &measure.show_as {
+        PivotShowAs::Normal => (0, None, None, None),
+        PivotShowAs::DifferenceFrom {
+            base_field,
+            base_item,
+        } => (1, None, Some(base_field), Some(base_item)),
+        PivotShowAs::PercentDifferenceFrom {
+            base_field,
+            base_item,
+        } => (3, None, Some(base_field), Some(base_item)),
+        PivotShowAs::RunningTotal { base_field } => (4, None, Some(base_field), None),
+        PivotShowAs::PercentOfRowTotal => (5, None, None, None),
+        PivotShowAs::PercentOfColumnTotal => (6, None, None, None),
+        PivotShowAs::PercentOfGrandTotal => (7, None, None, None),
+        PivotShowAs::Index => (8, None, None, None),
+        PivotShowAs::PercentOfParentRowTotal => (0, Some(9), None, None),
+        PivotShowAs::PercentOfParentColumnTotal => (0, Some(10), None, None),
+        PivotShowAs::PercentOfParentTotal { base_field } => (0, Some(11), Some(base_field), None),
+        PivotShowAs::RankAscending { base_field } => (0, Some(13), Some(base_field), None),
+        PivotShowAs::RankDescending { base_field } => (0, Some(14), Some(base_field), None),
+    };
+    let base_field_index = if let Some(base_field) = base_field {
+        cache.field_index(&base_field.name).ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "pivot show-as base field not found: {}",
+                base_field.name
+            ))
+        })?
+    } else {
+        0
+    };
+    let base_item_index = if let Some(base_item) = base_item {
+        let field = cache.fields.get(base_field_index).ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "pivot show-as base field index out of range: {base_field_index}"
+            ))
+        })?;
+        field
+            .shared_items
+            .iter()
+            .position(|candidate| candidate == base_item)
+            .ok_or_else(|| {
+                XlsbError::InvalidFormat(format!(
+                    "pivot show-as base item not found in field {}: {base_item}",
+                    field.name
+                ))
+            })?
+    } else {
+        0
+    };
+
+    Ok(XlsbDataFieldOptions {
+        show_as,
+        show_as_ext,
+        base_field: checked_u32(base_field_index, "pivot show-as base field index")?,
+        base_item: checked_u32(base_item_index, "pivot show-as base item index")?,
+        num_format: pivot_measure_number_format_id(measure, styles)?,
+    })
+}
+
+fn write_data_field_ext<W: Write>(
+    rw: &mut RecordWriter<W>,
+    show_as_ext: u32,
+) -> std::io::Result<()> {
+    rw.write_record(records::BRT_BEGIN_FRT, &0x0000_0E02u32.to_le_bytes())?;
+    let mut payload = Vec::with_capacity(13);
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    payload.extend_from_slice(&show_as_ext.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.push(0);
+    rw.write_record(records::BRT_SXDI14, &payload)?;
+    rw.write_record(records::BRT_END_FRT, &[])
+}
+
+fn pivot_measure_number_format_id(
+    measure: &PivotMeasure,
+    styles: &StyleMapping,
+) -> XlsbResult<u32> {
+    let Some(number_format) = measure.number_format.as_deref() else {
+        return Ok(0);
+    };
+    if let Some(id) = builtin_number_format_id(number_format) {
+        return Ok(id);
+    }
+    styles
+        .custom_numfmt_id(number_format)
+        .map(u32::from)
+        .ok_or_else(|| {
+            XlsbError::InvalidFormat(format!(
+                "XLSB pivot measure number format was not registered: {number_format}"
+            ))
+        })
+}
+
+fn builtin_number_format_id(format_code: &str) -> Option<u32> {
+    if format_code.eq_ignore_ascii_case("General") {
+        return Some(NumberFormat::ID_GENERAL);
+    }
+    (1..=49).find(|id| NumberFormat::BuiltIn(*id).format_string() == format_code)
 }
 
 fn write_sx_style<W: Write>(rw: &mut RecordWriter<W>, pivot: &PivotTable) -> std::io::Result<()> {
@@ -2202,6 +4525,887 @@ fn write_sx_style<W: Write>(rw: &mut RecordWriter<W>, pivot: &PivotTable) -> std
     payload.extend_from_slice(&pivot_style_flags(&pivot.style).to_le_bytes());
     payload.extend_from_slice(&encode_wide_str(style_name));
     rw.write_record(records::BRT_SX_VIEW_STYLE, &payload)
+}
+
+fn write_pivot_filters<W: Write>(
+    rw: &mut RecordWriter<W>,
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    date_system: DateSystem,
+) -> XlsbResult<()> {
+    let writable_filters = pivot
+        .filters
+        .iter()
+        .filter_map(|filter| match filter {
+            PivotFilter::TopN {
+                field,
+                measure,
+                n,
+                top,
+                percent,
+            } => Some(XlsbWritablePivotFilter::TopN {
+                field_name: field.name.as_str(),
+                measure,
+                n: *n,
+                top: *top,
+                percent: *percent,
+            }),
+            PivotFilter::Label {
+                field,
+                operator,
+                value,
+            } if xlsb_supported_label_filter_operator(*operator) => {
+                Some(XlsbWritablePivotFilter::Label {
+                    field_name: field.name.as_str(),
+                    operator: *operator,
+                    value: value.as_str(),
+                })
+            }
+            PivotFilter::LabelBetween {
+                field,
+                start,
+                end,
+                not_between,
+            } => Some(XlsbWritablePivotFilter::LabelBetween {
+                field_name: field.name.as_str(),
+                start: start.as_str(),
+                end: end.as_str(),
+                not_between: *not_between,
+            }),
+            PivotFilter::Value {
+                field,
+                measure,
+                operator,
+                value,
+            } if xlsb_supported_value_filter_operator(*operator) => {
+                Some(XlsbWritablePivotFilter::Value {
+                    field_name: field.name.as_str(),
+                    measure,
+                    operator: *operator,
+                    value: *value,
+                })
+            }
+            PivotFilter::ValueBetween {
+                field,
+                measure,
+                start,
+                end,
+                not_between,
+            } => Some(XlsbWritablePivotFilter::ValueBetween {
+                field_name: field.name.as_str(),
+                measure,
+                start: *start,
+                end: *end,
+                not_between: *not_between,
+            }),
+            PivotFilter::Date {
+                field,
+                operator,
+                value,
+            } if xlsb_supported_date_filter_operator(*operator) => {
+                Some(XlsbWritablePivotFilter::Date {
+                    field_name: field.name.as_str(),
+                    operator: *operator,
+                    value: *value,
+                })
+            }
+            PivotFilter::DateBetween {
+                field,
+                start,
+                end,
+                not_between,
+            } => Some(XlsbWritablePivotFilter::DateBetween {
+                field_name: field.name.as_str(),
+                start: *start,
+                end: *end,
+                not_between: *not_between,
+            }),
+            PivotFilter::DatePeriod { field, period } => {
+                Some(XlsbWritablePivotFilter::DatePeriod {
+                    field_name: field.name.as_str(),
+                    period: *period,
+                })
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if writable_filters.is_empty() {
+        return Ok(());
+    }
+
+    rw.write_record(
+        records::BRT_BEGIN_SX_FILTERS,
+        &(writable_filters.len() as u32).to_le_bytes(),
+    )?;
+    for (index, filter) in writable_filters.into_iter().enumerate() {
+        let field_name = filter.field_name();
+        let field_index = xlsb_layout_field_index_for_semantic_field(cache, layout, field_name)
+            .ok_or_else(|| {
+                XlsbError::InvalidFormat(format!(
+                    "XLSB pivot table {} filters unknown field {}",
+                    pivot.name, field_name
+                ))
+            })? as u32;
+        match filter {
+            XlsbWritablePivotFilter::TopN {
+                measure,
+                n,
+                top,
+                percent,
+                ..
+            } => {
+                let measure_index = xlsb_pivot_measure_index_for_filter(pivot, measure)?;
+                write_pivot_top_n_filter(
+                    rw,
+                    field_index,
+                    measure_index,
+                    (index + 1) as u32,
+                    n,
+                    top,
+                    percent,
+                )?;
+            }
+            XlsbWritablePivotFilter::Label {
+                operator, value, ..
+            } => {
+                write_pivot_label_filter(rw, field_index, (index + 1) as u32, operator, value)?;
+            }
+            XlsbWritablePivotFilter::LabelBetween {
+                start,
+                end,
+                not_between,
+                ..
+            } => {
+                write_pivot_label_between_filter(
+                    rw,
+                    field_index,
+                    (index + 1) as u32,
+                    start,
+                    end,
+                    not_between,
+                )?;
+            }
+            XlsbWritablePivotFilter::Value {
+                measure,
+                operator,
+                value,
+                ..
+            } => {
+                let measure_index = xlsb_pivot_measure_index_for_filter(pivot, measure)?;
+                write_pivot_value_filter(
+                    rw,
+                    field_index,
+                    measure_index,
+                    (index + 1) as u32,
+                    operator,
+                    value,
+                )?;
+            }
+            XlsbWritablePivotFilter::ValueBetween {
+                measure,
+                start,
+                end,
+                not_between,
+                ..
+            } => {
+                let measure_index = xlsb_pivot_measure_index_for_filter(pivot, measure)?;
+                write_pivot_value_between_filter(
+                    rw,
+                    field_index,
+                    measure_index,
+                    (index + 1) as u32,
+                    start,
+                    end,
+                    not_between,
+                )?;
+            }
+            XlsbWritablePivotFilter::Date {
+                operator, value, ..
+            } => {
+                write_pivot_date_filter(rw, field_index, (index + 1) as u32, operator, value)?;
+            }
+            XlsbWritablePivotFilter::DateBetween {
+                start,
+                end,
+                not_between,
+                ..
+            } => {
+                write_pivot_date_between_filter(
+                    rw,
+                    field_index,
+                    (index + 1) as u32,
+                    start,
+                    end,
+                    not_between,
+                )?;
+            }
+            XlsbWritablePivotFilter::DatePeriod { period, .. } => {
+                write_pivot_date_period_filter(
+                    rw,
+                    field_index,
+                    (index + 1) as u32,
+                    period,
+                    date_system,
+                )?;
+            }
+        }
+    }
+    rw.write_record(records::BRT_END_SX_FILTERS, &[])?;
+    Ok(())
+}
+
+enum XlsbWritablePivotFilter<'a> {
+    TopN {
+        field_name: &'a str,
+        measure: &'a PivotMeasure,
+        n: u32,
+        top: bool,
+        percent: bool,
+    },
+    Label {
+        field_name: &'a str,
+        operator: PivotFilterOperator,
+        value: &'a str,
+    },
+    LabelBetween {
+        field_name: &'a str,
+        start: &'a str,
+        end: &'a str,
+        not_between: bool,
+    },
+    Value {
+        field_name: &'a str,
+        measure: &'a PivotMeasure,
+        operator: PivotFilterOperator,
+        value: f64,
+    },
+    ValueBetween {
+        field_name: &'a str,
+        measure: &'a PivotMeasure,
+        start: f64,
+        end: f64,
+        not_between: bool,
+    },
+    Date {
+        field_name: &'a str,
+        operator: PivotFilterOperator,
+        value: f64,
+    },
+    DateBetween {
+        field_name: &'a str,
+        start: f64,
+        end: f64,
+        not_between: bool,
+    },
+    DatePeriod {
+        field_name: &'a str,
+        period: PivotDatePeriod,
+    },
+}
+
+impl XlsbWritablePivotFilter<'_> {
+    fn field_name(&self) -> &str {
+        match self {
+            Self::TopN { field_name, .. }
+            | Self::Label { field_name, .. }
+            | Self::LabelBetween { field_name, .. }
+            | Self::Value { field_name, .. }
+            | Self::ValueBetween { field_name, .. }
+            | Self::Date { field_name, .. }
+            | Self::DateBetween { field_name, .. }
+            | Self::DatePeriod { field_name, .. } => field_name,
+        }
+    }
+}
+
+fn write_pivot_top_n_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: u32,
+    measure_index: u32,
+    filter_id: u32,
+    n: u32,
+    top: bool,
+    percent: bool,
+) -> std::io::Result<()> {
+    let mut payload = Vec::with_capacity(30);
+    payload.extend_from_slice(&field_index.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&(if percent { 2u32 } else { 1u32 }).to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&filter_id.to_le_bytes());
+    payload.extend_from_slice(&measure_index.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    rw.write_record(records::BRT_BEGIN_SX_FILTER, &payload)?;
+
+    write_ac_block(rw, 0, false)?;
+    rw.write_record(records::BRT_BEGIN_A_FILTER, &[0; 16])?;
+    rw.write_record(records::BRT_BEGIN_FILTER_COLUMN, &[0; 6])?;
+
+    let mut top_payload = Vec::with_capacity(17);
+    let mut flags = 0x04u8;
+    if top {
+        flags |= 0x01;
+    }
+    if percent {
+        flags |= 0x02;
+    }
+    let value = n as f64;
+    top_payload.push(flags);
+    top_payload.extend_from_slice(&value.to_le_bytes());
+    top_payload.extend_from_slice(&value.to_le_bytes());
+    rw.write_record(records::BRT_TOP10_FILTER, &top_payload)?;
+
+    rw.write_record(records::BRT_END_FILTER_COLUMN, &[])?;
+    rw.write_record(records::BRT_END_A_FILTER, &[])?;
+    rw.write_record(records::BRT_END_SX_FILTER, &[])?;
+    Ok(())
+}
+
+fn write_pivot_label_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: u32,
+    filter_id: u32,
+    operator: PivotFilterOperator,
+    value: &str,
+) -> std::io::Result<()> {
+    let filter_type = match operator {
+        PivotFilterOperator::Equals => 4u32,
+        PivotFilterOperator::NotEquals => 5u32,
+        PivotFilterOperator::BeginsWith => 6u32,
+        PivotFilterOperator::DoesNotBeginWith => 7u32,
+        PivotFilterOperator::EndsWith => 8u32,
+        PivotFilterOperator::DoesNotEndWith => 9u32,
+        PivotFilterOperator::Contains => 10u32,
+        PivotFilterOperator::DoesNotContain => 11u32,
+        PivotFilterOperator::GreaterThan => 12u32,
+        PivotFilterOperator::GreaterThanOrEqual => 13u32,
+        PivotFilterOperator::LessThan => 14u32,
+        PivotFilterOperator::LessThanOrEqual => 15u32,
+    };
+    let mut payload = Vec::with_capacity(30 + value.len() * 2);
+    payload.extend_from_slice(&field_index.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&filter_type.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&filter_id.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&4u16.to_le_bytes());
+    payload.extend_from_slice(&encode_wide_str(value));
+    rw.write_record(records::BRT_BEGIN_SX_FILTER, &payload)?;
+
+    write_ac_block(rw, 0, false)?;
+    rw.write_record(records::BRT_BEGIN_A_FILTER, &[0; 16])?;
+    rw.write_record(records::BRT_BEGIN_FILTER_COLUMN, &[0; 6])?;
+    if let Some(custom) = label_filter_custom_filter(operator, value) {
+        rw.write_record(records::BRT_BEGIN_CUSTOM_FILTERS, &0i32.to_le_bytes())?;
+
+        let mut custom_payload = Vec::with_capacity(10 + custom.value.len() * 2);
+        custom_payload.push(6u8);
+        custom_payload.push(custom.operator_code);
+        custom_payload.push(custom.discriminator);
+        custom_payload.push(0u8);
+        custom_payload.extend_from_slice(&[0u8; 6]);
+        custom_payload.extend_from_slice(&encode_wide_str(custom.value.as_str()));
+        rw.write_record(records::BRT_CUSTOM_FILTER, &custom_payload)?;
+
+        rw.write_record(records::BRT_END_CUSTOM_FILTERS, &[])?;
+    }
+    rw.write_record(records::BRT_END_FILTER_COLUMN, &[])?;
+    rw.write_record(records::BRT_END_A_FILTER, &[])?;
+    rw.write_record(records::BRT_END_SX_FILTER, &[])?;
+    Ok(())
+}
+
+fn write_pivot_label_between_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: u32,
+    filter_id: u32,
+    start: &str,
+    end: &str,
+    not_between: bool,
+) -> std::io::Result<()> {
+    let filter_type = if not_between { 17u32 } else { 16u32 };
+    let mut payload = Vec::with_capacity(30 + start.len() * 2);
+    payload.extend_from_slice(&field_index.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&filter_type.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&filter_id.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&4u16.to_le_bytes());
+    payload.extend_from_slice(&encode_wide_str(start));
+    rw.write_record(records::BRT_BEGIN_SX_FILTER, &payload)?;
+
+    write_ac_block(rw, 0, false)?;
+    rw.write_record(records::BRT_BEGIN_A_FILTER, &[0; 16])?;
+    rw.write_record(records::BRT_BEGIN_FILTER_COLUMN, &[0; 6])?;
+    rw.write_record(
+        records::BRT_BEGIN_CUSTOM_FILTERS,
+        &(if not_between { 0i32 } else { 1i32 }).to_le_bytes(),
+    )?;
+    if not_between {
+        write_xlsb_string_custom_filter(rw, 1, start)?;
+        write_xlsb_string_custom_filter(rw, 4, end)?;
+    } else {
+        write_xlsb_string_custom_filter(rw, 6, start)?;
+        write_xlsb_string_custom_filter(rw, 3, end)?;
+    }
+    rw.write_record(records::BRT_END_CUSTOM_FILTERS, &[])?;
+    rw.write_record(records::BRT_END_FILTER_COLUMN, &[])?;
+    rw.write_record(records::BRT_END_A_FILTER, &[])?;
+    rw.write_record(records::BRT_END_SX_FILTER, &[])?;
+    Ok(())
+}
+
+fn write_pivot_value_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: u32,
+    measure_index: u32,
+    filter_id: u32,
+    operator: PivotFilterOperator,
+    value: f64,
+) -> std::io::Result<()> {
+    let (filter_type, custom_operator) = value_filter_type_and_operator(operator);
+    write_pivot_value_filter_header(rw, field_index, measure_index, filter_id, filter_type)?;
+    write_ac_block(rw, 0, false)?;
+    rw.write_record(records::BRT_BEGIN_A_FILTER, &[0; 16])?;
+    rw.write_record(records::BRT_BEGIN_FILTER_COLUMN, &[0; 6])?;
+    rw.write_record(records::BRT_BEGIN_CUSTOM_FILTERS, &0i32.to_le_bytes())?;
+    write_xlsb_numeric_custom_filter(rw, custom_operator, value)?;
+    rw.write_record(records::BRT_END_CUSTOM_FILTERS, &[])?;
+    rw.write_record(records::BRT_END_FILTER_COLUMN, &[])?;
+    rw.write_record(records::BRT_END_A_FILTER, &[])?;
+    rw.write_record(records::BRT_END_SX_FILTER, &[])?;
+    Ok(())
+}
+
+fn write_pivot_value_between_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: u32,
+    measure_index: u32,
+    filter_id: u32,
+    start: f64,
+    end: f64,
+    not_between: bool,
+) -> std::io::Result<()> {
+    let filter_type = if not_between { 25 } else { 24 };
+    write_pivot_value_filter_header(rw, field_index, measure_index, filter_id, filter_type)?;
+    write_ac_block(rw, 0, false)?;
+    rw.write_record(records::BRT_BEGIN_A_FILTER, &[0; 16])?;
+    rw.write_record(records::BRT_BEGIN_FILTER_COLUMN, &[0; 6])?;
+    rw.write_record(
+        records::BRT_BEGIN_CUSTOM_FILTERS,
+        &(if not_between { 0i32 } else { 1i32 }).to_le_bytes(),
+    )?;
+    if not_between {
+        write_xlsb_numeric_custom_filter(rw, 1, start)?;
+        write_xlsb_numeric_custom_filter(rw, 4, end)?;
+    } else {
+        write_xlsb_numeric_custom_filter(rw, 6, start)?;
+        write_xlsb_numeric_custom_filter(rw, 3, end)?;
+    }
+    rw.write_record(records::BRT_END_CUSTOM_FILTERS, &[])?;
+    rw.write_record(records::BRT_END_FILTER_COLUMN, &[])?;
+    rw.write_record(records::BRT_END_A_FILTER, &[])?;
+    rw.write_record(records::BRT_END_SX_FILTER, &[])?;
+    Ok(())
+}
+
+fn write_pivot_date_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: u32,
+    filter_id: u32,
+    operator: PivotFilterOperator,
+    value: f64,
+) -> std::io::Result<()> {
+    let (filter_type, custom_operator) =
+        xlsb_date_filter_type_and_operator(operator).expect("validated date filter operator");
+    write_pivot_date_filter_header(rw, field_index, filter_id, filter_type)?;
+    write_ac_block(rw, 0, false)?;
+    rw.write_record(records::BRT_BEGIN_A_FILTER, &[0; 16])?;
+    rw.write_record(records::BRT_BEGIN_FILTER_COLUMN, &[0; 6])?;
+    rw.write_record(records::BRT_BEGIN_CUSTOM_FILTERS, &0i32.to_le_bytes())?;
+    write_xlsb_numeric_custom_filter(rw, custom_operator, value)?;
+    rw.write_record(records::BRT_END_CUSTOM_FILTERS, &[])?;
+    rw.write_record(records::BRT_END_FILTER_COLUMN, &[])?;
+    rw.write_record(records::BRT_END_A_FILTER, &[])?;
+    rw.write_record(records::BRT_END_SX_FILTER, &[])?;
+    Ok(())
+}
+
+fn write_pivot_date_between_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: u32,
+    filter_id: u32,
+    start: f64,
+    end: f64,
+    not_between: bool,
+) -> std::io::Result<()> {
+    let filter_type = if not_between { 65 } else { 29 };
+    write_pivot_date_filter_header(rw, field_index, filter_id, filter_type)?;
+    write_ac_block(rw, 0, false)?;
+    rw.write_record(records::BRT_BEGIN_A_FILTER, &[0; 16])?;
+    rw.write_record(records::BRT_BEGIN_FILTER_COLUMN, &[0; 6])?;
+    rw.write_record(
+        records::BRT_BEGIN_CUSTOM_FILTERS,
+        &(if not_between { 0i32 } else { 1i32 }).to_le_bytes(),
+    )?;
+    if not_between {
+        write_xlsb_numeric_custom_filter(rw, 1, start)?;
+        write_xlsb_numeric_custom_filter(rw, 4, end)?;
+    } else {
+        write_xlsb_numeric_custom_filter(rw, 6, start)?;
+        write_xlsb_numeric_custom_filter(rw, 3, end)?;
+    }
+    rw.write_record(records::BRT_END_CUSTOM_FILTERS, &[])?;
+    rw.write_record(records::BRT_END_FILTER_COLUMN, &[])?;
+    rw.write_record(records::BRT_END_A_FILTER, &[])?;
+    rw.write_record(records::BRT_END_SX_FILTER, &[])?;
+    Ok(())
+}
+
+fn write_pivot_date_period_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: u32,
+    filter_id: u32,
+    period: PivotDatePeriod,
+    date_system: DateSystem,
+) -> std::io::Result<()> {
+    let (filter_type, cft) =
+        xlsb_date_period_filter_codes(period).expect("validated date period filter");
+    write_pivot_date_filter_header(rw, field_index, filter_id, filter_type)?;
+    write_ac_block(rw, 0, false)?;
+    rw.write_record(records::BRT_BEGIN_A_FILTER, &[0; 16])?;
+    rw.write_record(records::BRT_BEGIN_FILTER_COLUMN, &[0; 6])?;
+
+    let (value, max_value) =
+        pivot_date_period_filter_bounds(period, date_system).unwrap_or((0.0, 0.0));
+    let mut payload = Vec::with_capacity(21);
+    payload.extend_from_slice(&cft.to_le_bytes());
+    payload.push(if value != 0.0 || max_value != 0.0 {
+        1
+    } else {
+        0
+    });
+    payload.extend_from_slice(&value.to_le_bytes());
+    payload.extend_from_slice(&max_value.to_le_bytes());
+    rw.write_record(records::BRT_DYNAMIC_FILTER, &payload)?;
+
+    rw.write_record(records::BRT_END_FILTER_COLUMN, &[])?;
+    rw.write_record(records::BRT_END_A_FILTER, &[])?;
+    rw.write_record(records::BRT_END_SX_FILTER, &[])?;
+    Ok(())
+}
+
+fn write_pivot_date_filter_header<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: u32,
+    filter_id: u32,
+    filter_type: u32,
+) -> std::io::Result<()> {
+    let mut payload = Vec::with_capacity(30);
+    payload.extend_from_slice(&field_index.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&filter_type.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&filter_id.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    rw.write_record(records::BRT_BEGIN_SX_FILTER, &payload)
+}
+
+fn write_pivot_value_filter_header<W: Write>(
+    rw: &mut RecordWriter<W>,
+    field_index: u32,
+    measure_index: u32,
+    filter_id: u32,
+    filter_type: u32,
+) -> std::io::Result<()> {
+    let mut payload = Vec::with_capacity(30);
+    payload.extend_from_slice(&field_index.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&filter_type.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&filter_id.to_le_bytes());
+    payload.extend_from_slice(&measure_index.to_le_bytes());
+    payload.extend_from_slice(&(-1i32).to_le_bytes());
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    rw.write_record(records::BRT_BEGIN_SX_FILTER, &payload)
+}
+
+fn value_filter_type_and_operator(operator: PivotFilterOperator) -> (u32, u8) {
+    match operator {
+        PivotFilterOperator::Equals => (18, 2),
+        PivotFilterOperator::NotEquals => (19, 5),
+        PivotFilterOperator::GreaterThan => (20, 4),
+        PivotFilterOperator::GreaterThanOrEqual => (21, 6),
+        PivotFilterOperator::LessThan => (22, 1),
+        PivotFilterOperator::LessThanOrEqual => (23, 3),
+        _ => unreachable!("unsupported XLSB value filter operator"),
+    }
+}
+
+fn xlsb_date_filter_type_and_operator(operator: PivotFilterOperator) -> Option<(u32, u8)> {
+    Some(match operator {
+        PivotFilterOperator::Equals => (26, 2),
+        PivotFilterOperator::NotEquals => (62, 5),
+        PivotFilterOperator::LessThan => (27, 1),
+        PivotFilterOperator::LessThanOrEqual => (63, 3),
+        PivotFilterOperator::GreaterThan => (28, 4),
+        PivotFilterOperator::GreaterThanOrEqual => (64, 6),
+        PivotFilterOperator::BeginsWith
+        | PivotFilterOperator::DoesNotBeginWith
+        | PivotFilterOperator::EndsWith
+        | PivotFilterOperator::DoesNotEndWith
+        | PivotFilterOperator::Contains
+        | PivotFilterOperator::DoesNotContain => return None,
+    })
+}
+
+fn xlsb_date_period_filter_codes(period: PivotDatePeriod) -> Option<(u32, u32)> {
+    let cft = match period {
+        PivotDatePeriod::Tomorrow => 0x08,
+        PivotDatePeriod::Today => 0x09,
+        PivotDatePeriod::Yesterday => 0x0A,
+        PivotDatePeriod::NextWeek => 0x0B,
+        PivotDatePeriod::ThisWeek => 0x0C,
+        PivotDatePeriod::LastWeek => 0x0D,
+        PivotDatePeriod::NextMonth => 0x0E,
+        PivotDatePeriod::ThisMonth => 0x0F,
+        PivotDatePeriod::LastMonth => 0x10,
+        PivotDatePeriod::NextQuarter => 0x11,
+        PivotDatePeriod::ThisQuarter => 0x12,
+        PivotDatePeriod::LastQuarter => 0x13,
+        PivotDatePeriod::NextYear => 0x14,
+        PivotDatePeriod::ThisYear => 0x15,
+        PivotDatePeriod::LastYear => 0x16,
+        PivotDatePeriod::YearToDate => 0x17,
+        PivotDatePeriod::Quarter(1) => 0x18,
+        PivotDatePeriod::Quarter(2) => 0x19,
+        PivotDatePeriod::Quarter(3) => 0x1A,
+        PivotDatePeriod::Quarter(4) => 0x1B,
+        PivotDatePeriod::Month(1) => 0x1C,
+        PivotDatePeriod::Month(2) => 0x1D,
+        PivotDatePeriod::Month(3) => 0x1E,
+        PivotDatePeriod::Month(4) => 0x1F,
+        PivotDatePeriod::Month(5) => 0x20,
+        PivotDatePeriod::Month(6) => 0x21,
+        PivotDatePeriod::Month(7) => 0x22,
+        PivotDatePeriod::Month(8) => 0x23,
+        PivotDatePeriod::Month(9) => 0x24,
+        PivotDatePeriod::Month(10) => 0x25,
+        PivotDatePeriod::Month(11) => 0x26,
+        PivotDatePeriod::Month(12) => 0x27,
+        PivotDatePeriod::Month(_) | PivotDatePeriod::Quarter(_) => return None,
+    };
+    Some((cft + 22, cft))
+}
+
+fn pivot_date_period_filter_bounds(
+    period: PivotDatePeriod,
+    date_system: DateSystem,
+) -> Option<(f64, f64)> {
+    let today = chrono::Local::now().date_naive();
+    let year = today.year();
+    let month = today.month();
+    let day = today.day();
+    match period {
+        PivotDatePeriod::Tomorrow => {
+            let date = today.checked_add_signed(chrono::Duration::days(1))?;
+            Some(exclusive_day_range(
+                date.year(),
+                date.month(),
+                date.day(),
+                date_system,
+            ))
+        }
+        PivotDatePeriod::Today => Some(exclusive_day_range(year, month, day, date_system)),
+        PivotDatePeriod::Yesterday => {
+            let date = today.checked_sub_signed(chrono::Duration::days(1))?;
+            Some(exclusive_day_range(
+                date.year(),
+                date.month(),
+                date.day(),
+                date_system,
+            ))
+        }
+        PivotDatePeriod::NextWeek => {
+            let date = today.checked_add_signed(chrono::Duration::days(7))?;
+            week_filter_bounds(date.year(), date.month(), date.day(), date_system)
+        }
+        PivotDatePeriod::ThisWeek => week_filter_bounds(year, month, day, date_system),
+        PivotDatePeriod::LastWeek => {
+            let date = today.checked_sub_signed(chrono::Duration::days(7))?;
+            week_filter_bounds(date.year(), date.month(), date.day(), date_system)
+        }
+        PivotDatePeriod::NextMonth => {
+            let (year, month) = shift_month(year, month, 1)?;
+            Some(exclusive_month_range(year, month, date_system))
+        }
+        PivotDatePeriod::ThisMonth => Some(exclusive_month_range(year, month, date_system)),
+        PivotDatePeriod::LastMonth => {
+            let (year, month) = shift_month(year, month, -1)?;
+            Some(exclusive_month_range(year, month, date_system))
+        }
+        PivotDatePeriod::NextQuarter => {
+            let (start_year, start_month) = quarter_start_for_shift(year, month, 1)?;
+            Some(exclusive_month_span(
+                start_year,
+                start_month,
+                3,
+                date_system,
+            )?)
+        }
+        PivotDatePeriod::ThisQuarter => {
+            let start_month = ((month - 1) / 3) * 3 + 1;
+            Some(exclusive_month_span(year, start_month, 3, date_system)?)
+        }
+        PivotDatePeriod::LastQuarter => {
+            let (start_year, start_month) = quarter_start_for_shift(year, month, -1)?;
+            Some(exclusive_month_span(
+                start_year,
+                start_month,
+                3,
+                date_system,
+            )?)
+        }
+        PivotDatePeriod::NextYear => Some(exclusive_year_range(year + 1, date_system)),
+        PivotDatePeriod::ThisYear => Some(exclusive_year_range(year, date_system)),
+        PivotDatePeriod::LastYear => Some(exclusive_year_range(year - 1, date_system)),
+        PivotDatePeriod::YearToDate => Some((
+            date_to_serial(year, 1, 1, date_system),
+            date_to_serial(year, month, day, date_system) + 1.0,
+        )),
+        PivotDatePeriod::Month(_) | PivotDatePeriod::Quarter(_) => None,
+    }
+}
+
+fn exclusive_day_range(year: i32, month: u32, day: u32, date_system: DateSystem) -> (f64, f64) {
+    let start = date_to_serial(year, month, day, date_system);
+    (start, start + 1.0)
+}
+
+fn week_filter_bounds(
+    year: i32,
+    month: u32,
+    day: u32,
+    date_system: DateSystem,
+) -> Option<(f64, f64)> {
+    let date = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
+    let start = date.checked_sub_signed(chrono::Duration::days(
+        date.weekday().num_days_from_monday() as i64,
+    ))?;
+    let end = start.checked_add_signed(chrono::Duration::days(7))?;
+    Some((
+        date_to_serial(start.year(), start.month(), start.day(), date_system),
+        date_to_serial(end.year(), end.month(), end.day(), date_system),
+    ))
+}
+
+fn exclusive_month_range(year: i32, month: u32, date_system: DateSystem) -> (f64, f64) {
+    let (end_year, end_month) = shift_month(year, month, 1).unwrap_or((year + 1, 1));
+    (
+        date_to_serial(year, month, 1, date_system),
+        date_to_serial(end_year, end_month, 1, date_system),
+    )
+}
+
+fn exclusive_month_span(
+    year: i32,
+    month: u32,
+    months: i32,
+    date_system: DateSystem,
+) -> Option<(f64, f64)> {
+    let (end_year, end_month) = shift_month(year, month, months)?;
+    Some((
+        date_to_serial(year, month, 1, date_system),
+        date_to_serial(end_year, end_month, 1, date_system),
+    ))
+}
+
+fn exclusive_year_range(year: i32, date_system: DateSystem) -> (f64, f64) {
+    (
+        date_to_serial(year, 1, 1, date_system),
+        date_to_serial(year + 1, 1, 1, date_system),
+    )
+}
+
+fn shift_month(year: i32, month: u32, delta: i32) -> Option<(i32, u32)> {
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    let zero_based = year.checked_mul(12)? + month as i32 - 1 + delta;
+    let shifted_year = zero_based.div_euclid(12);
+    let shifted_month = zero_based.rem_euclid(12) as u32 + 1;
+    Some((shifted_year, shifted_month))
+}
+
+fn quarter_start_for_shift(year: i32, month: u32, delta: i32) -> Option<(i32, u32)> {
+    let start_month = ((month - 1) / 3) * 3 + 1;
+    shift_month(year, start_month, delta * 3)
+}
+
+fn write_xlsb_numeric_custom_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    operator_code: u8,
+    value: f64,
+) -> std::io::Result<()> {
+    let mut payload = Vec::with_capacity(10);
+    payload.push(4u8);
+    payload.push(operator_code);
+    payload.extend_from_slice(&value.to_le_bytes());
+    rw.write_record(records::BRT_CUSTOM_FILTER, &payload)
+}
+
+fn write_xlsb_string_custom_filter<W: Write>(
+    rw: &mut RecordWriter<W>,
+    operator_code: u8,
+    value: &str,
+) -> std::io::Result<()> {
+    let mut payload = Vec::with_capacity(10 + value.len() * 2);
+    payload.push(6u8);
+    payload.push(operator_code);
+    payload.push(1u8);
+    payload.push(0u8);
+    payload.extend_from_slice(&[0u8; 6]);
+    payload.extend_from_slice(&encode_wide_str(value));
+    rw.write_record(records::BRT_CUSTOM_FILTER, &payload)
+}
+
+struct XlsbLabelCustomFilter {
+    operator_code: u8,
+    discriminator: u8,
+    value: String,
+}
+
+fn label_filter_custom_filter(
+    operator: PivotFilterOperator,
+    value: &str,
+) -> Option<XlsbLabelCustomFilter> {
+    let (operator_code, discriminator, value) = match operator {
+        PivotFilterOperator::BeginsWith => (2, 0, format!("{value}*")),
+        PivotFilterOperator::EndsWith => (2, 0, format!("*{value}")),
+        PivotFilterOperator::Contains => (2, 0, format!("*{value}*")),
+        PivotFilterOperator::NotEquals => (5, 1, value.to_string()),
+        PivotFilterOperator::DoesNotBeginWith => (5, 0, format!("{value}*")),
+        PivotFilterOperator::DoesNotEndWith => (5, 0, format!("*{value}")),
+        PivotFilterOperator::DoesNotContain => (5, 0, format!("*{value}*")),
+        PivotFilterOperator::LessThan => (1, 1, value.to_string()),
+        PivotFilterOperator::LessThanOrEqual => (3, 1, value.to_string()),
+        PivotFilterOperator::GreaterThan => (4, 1, value.to_string()),
+        PivotFilterOperator::GreaterThanOrEqual => (6, 1, value.to_string()),
+        _ => return None,
+    };
+    Some(XlsbLabelCustomFilter {
+        operator_code,
+        discriminator,
+        value,
+    })
 }
 
 fn pivot_style_flags(style: &duke_sheets_core::PivotStyle) -> u16 {
@@ -2228,20 +5432,22 @@ fn estimated_pivot_range(
     pivot: &PivotTable,
     cache: &FormatPivotCache,
     layout: &XlsbPivotCacheLayout,
-    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
+    axis_tuples: &XlsbPivotAxisTuples,
 ) -> CellRange {
-    let (page_rows, _) = page_field_area_size(pivot);
+    let page_field_count = effective_page_field_count(cache, layout, pivot);
+    let (page_rows, _) = page_field_area_size(pivot, page_field_count);
     let body_start_row = pivot.target.row
         + if page_rows == 0 {
             0
         } else {
             page_rows.saturating_add(1)
         };
-    let row_item_count = axis_item_count(cache, layout, &pivot.rows, grouping_infos).max(1);
-    let row_header_count = pivot.columns.len() as u32 + 1;
+    let row_item_count = axis_item_count(&pivot.rows, &axis_tuples.rows).max(1);
+    let effective_columns = effective_column_fields(pivot, cache);
+    let row_header_count = effective_columns.len() as u32 + 1;
     let row_count = row_header_count + row_item_count as u32 + 1;
 
-    let col_item_count = axis_item_count(cache, layout, &pivot.columns, grouping_infos).max(1);
+    let col_item_count = axis_item_count(&effective_columns, &axis_tuples.columns).max(1);
     let measure_count = pivot.measures.len().max(1);
     let value_col_count = col_item_count * measure_count;
     let row_field_count = expanded_axis_field_count(cache, layout, &pivot.rows).max(1);
@@ -2254,8 +5460,7 @@ fn estimated_pivot_range(
     )
 }
 
-fn page_field_area_size(pivot: &PivotTable) -> (u32, u32) {
-    let count = pivot.page_fields.len();
+fn page_field_area_size(pivot: &PivotTable, count: usize) -> (u32, u32) {
     if count == 0 {
         return (0, 0);
     }
@@ -2278,21 +5483,50 @@ fn page_field_area_size(pivot: &PivotTable) -> (u32, u32) {
     (row_count as u32, col_count as u32)
 }
 
-fn axis_item_count(
-    cache: &FormatPivotCache,
-    layout: &XlsbPivotCacheLayout,
-    fields: &[PivotField],
-    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
-) -> usize {
+fn axis_item_count(fields: &[PivotField], tuples: &[Vec<u32>]) -> usize {
     if fields.is_empty() {
         return 1;
     }
-    axis_item_tuples(cache, layout, fields, grouping_infos)
-        .map(|tuples| tuples.len())
-        .unwrap_or(1)
+    tuples.len()
+}
+
+fn build_xlsb_axis_tuples(
+    part: &FormatPivotTable,
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    grouping_infos: &[XlsbPivotGroupingInfo<'_>],
+    effective_columns: &[PivotField],
+) -> XlsbResult<XlsbPivotAxisTuples> {
+    let rows = if pivot.rows.is_empty() {
+        Vec::new()
+    } else if let Some(tuples) = &part.axis_tuples.rows {
+        tuples.clone()
+    } else {
+        axis_item_tuples(part, cache, layout, &pivot.rows, grouping_infos)?
+    };
+    let columns = if effective_columns.is_empty() {
+        Vec::new()
+    } else if let Some(tuples) = &part.axis_tuples.columns {
+        tuples.clone()
+    } else {
+        axis_item_tuples(part, cache, layout, effective_columns, grouping_infos)?
+    };
+    Ok(XlsbPivotAxisTuples { rows, columns })
+}
+
+fn effective_column_fields(pivot: &PivotTable, cache: &FormatPivotCache) -> Vec<PivotField> {
+    let mut fields = pivot.columns.clone();
+    if let Some(source_index) = synthetic_consolidation_column_source_index(pivot, cache) {
+        let mut field = PivotField::new(cache.fields[source_index].name.clone());
+        field.sort = PivotSort::None;
+        fields.push(field);
+    }
+    fields
 }
 
 fn axis_item_tuples(
+    part: &FormatPivotTable,
     cache: &FormatPivotCache,
     layout: &XlsbPivotCacheLayout,
     fields: &[PivotField],
@@ -2305,7 +5539,7 @@ fn axis_item_tuples(
 
     let mut seen = HashSet::new();
     let mut tuples = Vec::new();
-    for row in 0..cache.row_count {
+    for row in xlsb_visible_row_indexes(part, cache.row_count) {
         let tuple = indexes
             .iter()
             .map(|index| match index {
@@ -2335,6 +5569,13 @@ fn axis_item_tuples(
         }
     }
     Ok(tuples)
+}
+
+fn xlsb_visible_row_indexes(part: &FormatPivotTable, row_count: usize) -> XlsbVisibleRowIter<'_> {
+    match part.visible_rows.as_deref() {
+        Some(rows) => XlsbVisibleRowIter::Filtered(rows.iter().copied()),
+        None => XlsbVisibleRowIter::All(0..row_count),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2435,6 +5676,86 @@ fn expanded_axis_field_count(
         .unwrap_or(fields.len())
 }
 
+fn expanded_page_field_count(
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    fields: &[PivotField],
+) -> usize {
+    fields
+        .iter()
+        .map(|field| {
+            cache
+                .field_index(&field.field.name)
+                .and_then(|source_index| {
+                    layout
+                        .date_derived_by_base
+                        .get(&source_index)
+                        .map(|indexes| indexes.len())
+                        .or_else(|| {
+                            layout
+                                .manual_derived_by_base
+                                .contains_key(&source_index)
+                                .then_some(1)
+                        })
+                })
+                .unwrap_or(1)
+        })
+        .sum()
+}
+
+fn effective_page_field_count(
+    cache: &FormatPivotCache,
+    layout: &XlsbPivotCacheLayout,
+    pivot: &PivotTable,
+) -> usize {
+    expanded_page_field_count(cache, layout, &pivot.page_fields)
+        + synthetic_consolidation_page_source_indexes(pivot, cache).len()
+}
+
+fn synthetic_consolidation_page_source_indexes(
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+) -> Vec<usize> {
+    consolidation_page_source_indexes(cache)
+        .into_iter()
+        .filter(|index| !pivot_axis_contains_source_index(&pivot.page_fields, cache, *index))
+        .collect()
+}
+
+fn synthetic_consolidation_column_source_index(
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+) -> Option<usize> {
+    if !matches!(cache.source, FormatPivotSource::Consolidation { .. }) {
+        return None;
+    }
+    let source_index = cache.field_index("Column")?;
+    if pivot_axis_contains_source_index(&pivot.rows, cache, source_index)
+        || pivot_axis_contains_source_index(&pivot.columns, cache, source_index)
+        || pivot_axis_contains_source_index(&pivot.page_fields, cache, source_index)
+    {
+        return None;
+    }
+    Some(source_index)
+}
+
+fn consolidation_page_source_indexes(cache: &FormatPivotCache) -> Vec<usize> {
+    let FormatPivotSource::Consolidation { ranges } = &cache.source else {
+        return Vec::new();
+    };
+    let page_count = ranges
+        .iter()
+        .map(|range| range.page_items.len())
+        .max()
+        .unwrap_or(0);
+    (0..page_count)
+        .filter_map(|index| {
+            let name = format!("Page{}", index + 1);
+            cache.field_index(&name)
+        })
+        .collect()
+}
+
 fn cache_for_table<'a>(
     plan: &'a FormatPivotPlan,
     part: &FormatPivotTable,
@@ -2448,6 +5769,7 @@ fn cache_for_table<'a>(
 #[derive(Debug, Clone)]
 struct CacheFieldUsage {
     store_items: Vec<bool>,
+    item_kinds: Vec<PivotCacheItemKind>,
 }
 
 fn cache_field_usage(
@@ -2456,6 +5778,7 @@ fn cache_field_usage(
     cache: &FormatPivotCache,
 ) -> XlsbResult<CacheFieldUsage> {
     let mut axis_names = HashSet::new();
+    let mut date_filter_names = HashSet::new();
     for part in plan
         .tables
         .iter()
@@ -2474,39 +5797,168 @@ fn cache_field_usage(
             .chain(pivot.columns.iter())
             .chain(pivot.page_fields.iter())
         {
-            axis_names.insert(field.field.name.to_lowercase());
+            insert_cache_axis_name(&mut axis_names, cache, &field.field.name);
         }
         for filter in &pivot.filters {
             if let Some(name) = filter_field_name(filter) {
-                axis_names.insert(name.to_lowercase());
+                insert_cache_axis_name(&mut axis_names, cache, name);
+            }
+            match filter {
+                PivotFilter::Date { field, .. }
+                | PivotFilter::DateBetween { field, .. }
+                | PivotFilter::DatePeriod { field, .. } => {
+                    insert_cache_axis_name(&mut date_filter_names, cache, &field.name);
+                }
+                _ => {}
             }
         }
         for grouping in &pivot.groupings {
-            axis_names.insert(grouping_field_name(grouping).to_lowercase());
+            insert_cache_axis_name(&mut axis_names, cache, grouping_field_name(grouping));
         }
     }
 
-    let store_items = cache
-        .fields
-        .iter()
-        .map(|field| {
-            let used_on_axis = axis_names.contains(&field.name.to_lowercase());
+    let date_system = workbook_date_system(workbook.settings().date_1904);
+    let mut store_items = Vec::with_capacity(cache.fields.len());
+    let mut item_kinds = Vec::with_capacity(cache.fields.len());
+    for field in &cache.fields {
+        let field_key = field.name.to_lowercase();
+        let item_kind = if date_filter_names.contains(&field_key) {
+            for value in &field.shared_items {
+                let PivotValue::Number(serial) = value else {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot date filter for field {} requires numeric date source values",
+                        field.name
+                    )));
+                };
+                if !valid_pcdi_datetime(*serial, date_system) {
+                    return Err(XlsbError::InvalidFormat(format!(
+                        "XLSB pivot date filter for field {} has invalid date serial: {serial}",
+                        field.name
+                    )));
+                }
+            }
+            PivotCacheItemKind::DateTime
+        } else {
+            PivotCacheItemKind::Normal
+        };
+        let used_on_axis = axis_names.contains(&field_key)
+            || matches!(cache.source, FormatPivotSource::Consolidation { .. });
+        store_items.push(
             used_on_axis
                 || field
                     .shared_items
                     .iter()
-                    .any(|value| !matches!(value, PivotValue::Number(_)))
-        })
-        .collect();
-    Ok(CacheFieldUsage { store_items })
+                    .any(|value| !matches!(value, PivotValue::Number(_))),
+        );
+        item_kinds.push(item_kind);
+    }
+    Ok(CacheFieldUsage {
+        store_items,
+        item_kinds,
+    })
+}
+
+fn insert_cache_axis_name(names: &mut HashSet<String>, cache: &FormatPivotCache, field_name: &str) {
+    if let Some(index) = cache.field_index(field_name) {
+        names.insert(cache.fields[index].name.to_lowercase());
+    } else {
+        names.insert(field_name.to_lowercase());
+    }
 }
 
 fn selected_page_item_index(
     pivot: &PivotTable,
+    cache: &FormatPivotCache,
     field_name: &str,
-    field: &FormatPivotCacheField,
-) -> Option<u32> {
-    let PivotFilter::FieldItems { allowed_items, .. } = pivot.filters.iter().find(|filter| {
+    source_index: Option<usize>,
+    shared_items: &[PivotValue],
+) -> XlsbResult<Option<u32>> {
+    let Some(filter) = pivot.filters.iter().find(|filter| {
+        matches!(
+            filter,
+            PivotFilter::FieldItems {
+                field: filter_field,
+                ..
+            } if pivot_filter_field_matches(cache, &filter_field.name, field_name, source_index)
+        )
+    }) else {
+        return Ok(None);
+    };
+    let PivotFilter::FieldItems { allowed_items, .. } = filter else {
+        return Ok(None);
+    };
+
+    if allowed_items.is_empty() {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB pivot page field {field_name} requires at least one selected item"
+        )));
+    }
+
+    if allowed_items.len() > 1 {
+        field_filter_hidden_item_indexes_for_optional_source_index(
+            pivot,
+            cache,
+            field_name,
+            source_index,
+            shared_items,
+        )?;
+        return Ok(Some(0x0010_00FE));
+    }
+
+    let item = &allowed_items[0];
+    let Some(index) = shared_items.iter().position(|candidate| candidate == item) else {
+        return Err(XlsbError::InvalidFormat(format!(
+            "XLSB pivot page field {field_name} selected item is not present in the cache"
+        )));
+    };
+    Ok(Some(index as u32))
+}
+
+fn field_filter_hidden_item_indexes_for_source_index(
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    source_index: usize,
+    shared_items: &[PivotValue],
+) -> XlsbResult<HashSet<u32>> {
+    let field_name = cache
+        .fields
+        .get(source_index)
+        .map(|field| field.name.as_str())
+        .unwrap_or("");
+    field_filter_hidden_item_indexes_for_optional_source_index(
+        pivot,
+        cache,
+        field_name,
+        Some(source_index),
+        shared_items,
+    )
+}
+
+fn field_filter_hidden_item_indexes_for_optional_source_index(
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    field_name: &str,
+    source_index: Option<usize>,
+    shared_items: &[PivotValue],
+) -> XlsbResult<HashSet<u32>> {
+    field_filter_hidden_item_indexes_for_page_source_index(
+        pivot,
+        cache,
+        field_name,
+        source_index,
+        shared_items,
+        field_name,
+        source_index,
+    )
+}
+
+fn field_filter_hidden_item_indexes_for_page_field(
+    pivot: &PivotTable,
+    field_name: &str,
+    shared_items: &[PivotValue],
+    page_field_name: &str,
+) -> XlsbResult<HashSet<u32>> {
+    let Some(PivotFilter::FieldItems { allowed_items, .. }) = pivot.filters.iter().find(|filter| {
         matches!(
             filter,
             PivotFilter::FieldItems {
@@ -2514,44 +5966,102 @@ fn selected_page_item_index(
                 ..
             } if filter_field.name.eq_ignore_ascii_case(field_name)
         )
-    })?
-    else {
-        return None;
+    }) else {
+        return Ok(HashSet::new());
     };
 
-    let [item] = allowed_items.as_slice() else {
-        return None;
-    };
-    field
-        .shared_items
-        .iter()
-        .position(|candidate| candidate == item)
-        .map(|index| index as u32)
+    if pivot_axis_contains_field(&pivot.page_fields, page_field_name) && allowed_items.len() <= 1 {
+        return Ok(HashSet::new());
+    }
+
+    let mut allowed_indexes = HashSet::with_capacity(allowed_items.len());
+    for item in allowed_items {
+        let Some(index) = shared_items.iter().position(|candidate| candidate == item) else {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot field {field_name} selected item is not present in the cache"
+            )));
+        };
+        allowed_indexes.insert(index as u32);
+    }
+
+    Ok((0..shared_items.len() as u32)
+        .filter(|index| !allowed_indexes.contains(index))
+        .collect())
 }
 
-fn pivot_field_axis(pivot: &PivotTable, field_name: &str) -> u8 {
+fn field_filter_hidden_item_indexes_for_page_source_index(
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    field_name: &str,
+    source_index: Option<usize>,
+    shared_items: &[PivotValue],
+    page_field_name: &str,
+    page_source_index: Option<usize>,
+) -> XlsbResult<HashSet<u32>> {
+    let Some(PivotFilter::FieldItems { allowed_items, .. }) = pivot.filters.iter().find(|filter| {
+        matches!(
+            filter,
+            PivotFilter::FieldItems {
+                field: filter_field,
+                ..
+            } if pivot_filter_field_matches(cache, &filter_field.name, field_name, source_index)
+        )
+    }) else {
+        return Ok(HashSet::new());
+    };
+
+    let page_axis_contains = page_source_index.map_or_else(
+        || pivot_axis_contains_field(&pivot.page_fields, page_field_name),
+        |index| pivot_axis_contains_source_index(&pivot.page_fields, cache, index),
+    );
+    if page_axis_contains && allowed_items.len() <= 1 {
+        return Ok(HashSet::new());
+    }
+
+    let mut allowed_indexes = HashSet::with_capacity(allowed_items.len());
+    for item in allowed_items {
+        let Some(index) = shared_items.iter().position(|candidate| candidate == item) else {
+            return Err(XlsbError::InvalidFormat(format!(
+                "XLSB pivot field {field_name} selected item is not present in the cache"
+            )));
+        };
+        allowed_indexes.insert(index as u32);
+    }
+
+    Ok((0..shared_items.len() as u32)
+        .filter(|index| !allowed_indexes.contains(index))
+        .collect())
+}
+
+fn pivot_filter_field_matches(
+    cache: &FormatPivotCache,
+    candidate_name: &str,
+    field_name: &str,
+    source_index: Option<usize>,
+) -> bool {
+    candidate_name.eq_ignore_ascii_case(field_name)
+        || source_index.is_some_and(|index| cache.field_index(candidate_name) == Some(index))
+}
+
+fn pivot_field_axis_for_source_index(
+    pivot: &PivotTable,
+    cache: &FormatPivotCache,
+    source_index: usize,
+) -> u8 {
     const SX_AXIS_ROW: u8 = 0x01;
     const SX_AXIS_COL: u8 = 0x02;
     const SX_AXIS_PAGE: u8 = 0x04;
     const SX_AXIS_DATA: u8 = 0x08;
 
-    let mut axis = if pivot
-        .rows
-        .iter()
-        .any(|field| field.field.name.eq_ignore_ascii_case(field_name))
-    {
+    let mut axis = if pivot_axis_contains_source_index(&pivot.rows, cache, source_index) {
         SX_AXIS_ROW
-    } else if pivot
-        .columns
-        .iter()
-        .any(|field| field.field.name.eq_ignore_ascii_case(field_name))
-    {
+    } else if pivot_axis_contains_source_index(&pivot.columns, cache, source_index) {
         SX_AXIS_COL
-    } else if pivot
-        .page_fields
-        .iter()
-        .any(|field| field.field.name.eq_ignore_ascii_case(field_name))
-    {
+    } else if synthetic_consolidation_column_source_index(pivot, cache) == Some(source_index) {
+        SX_AXIS_COL
+    } else if pivot_axis_contains_source_index(&pivot.page_fields, cache, source_index) {
+        SX_AXIS_PAGE
+    } else if synthetic_consolidation_page_source_indexes(pivot, cache).contains(&source_index) {
         SX_AXIS_PAGE
     } else {
         0
@@ -2560,12 +6070,22 @@ fn pivot_field_axis(pivot: &PivotTable, field_name: &str) -> u8 {
     if pivot
         .measures
         .iter()
-        .any(|measure| measure.field.name.eq_ignore_ascii_case(field_name))
+        .any(|measure| cache.field_index(&measure.field.name) == Some(source_index))
     {
         axis |= SX_AXIS_DATA;
     }
 
     axis
+}
+
+fn pivot_axis_contains_source_index(
+    fields: &[PivotField],
+    cache: &FormatPivotCache,
+    source_index: usize,
+) -> bool {
+    fields
+        .iter()
+        .any(|field| cache.field_index(&field.field.name) == Some(source_index))
 }
 
 fn values_field_on_axis(pivot: &PivotTable, axis: PivotValuesAxis) -> bool {
@@ -2708,6 +6228,14 @@ fn write_unchecked_rfx(out: &mut Vec<u8>, range: CellRange) {
     out.extend_from_slice(&range.end.row.to_le_bytes());
     out.extend_from_slice(&(range.start.col as u32).to_le_bytes());
     out.extend_from_slice(&(range.end.col as u32).to_le_bytes());
+}
+
+fn xml_attr_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn error_code(error: CellError) -> u8 {
