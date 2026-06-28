@@ -5,7 +5,7 @@ use crate::transform::*;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SourceSnapshot {
-    pub(crate) source_name: Option<String>,
+    source_name: Option<String>,
     pub(crate) headers: Vec<String>,
     pub(crate) columns: Vec<EncodedColumn>,
     pub(crate) row_count: usize,
@@ -182,12 +182,12 @@ impl SourceSnapshot {
                 PivotGrouping::Date { units, .. } if units.len() > 1 => {
                     for unit in units {
                         headers.push(unique_grouped_header(&headers, field_name, *unit));
-                        columns.push(grouped_date_column(self, field_index, &[*unit], date_1904));
+                        columns.push(self.grouped_date_column(field_index, &[*unit], date_1904));
                     }
                 }
                 _ => {
                     columns[field_index] =
-                        grouped_column(self, field_index, grouping, date_1904, pivot_name)?;
+                        self.grouped_column(field_index, grouping, date_1904, pivot_name)?;
                 }
             }
         }
@@ -245,7 +245,7 @@ impl SourceSnapshot {
 pub(crate) struct EncodedColumn {
     pub(crate) values: Vec<u32>,
     pub(crate) dictionary: Vec<PivotValue>,
-    pub(crate) lookup: AHashMap<PivotValue, u32>,
+    lookup: AHashMap<PivotValue, u32>,
 }
 
 impl EncodedColumn {
@@ -301,7 +301,7 @@ impl EncodedColumn {
             id_map.push(id);
         }
 
-        let values = remap_column_ids(&self.values, &id_map);
+        let values = Self::remap_ids(&self.values, &id_map);
         Self {
             values,
             dictionary,
@@ -324,18 +324,18 @@ impl EncodedColumn {
     pub(crate) fn id_for_value(&self, value: &PivotValue) -> Option<u32> {
         self.lookup.get(value).copied()
     }
-}
 
-pub(crate) fn remap_column_ids(values: &[u32], id_map: &[u32]) -> Vec<u32> {
-    #[cfg(feature = "parallel")]
-    {
-        if values.len() >= PARALLEL_ROW_THRESHOLD {
-            return values
-                .par_iter()
-                .map(|id| id_map[*id as usize])
-                .collect::<Vec<_>>();
+    fn remap_ids(values: &[u32], id_map: &[u32]) -> Vec<u32> {
+        #[cfg(feature = "parallel")]
+        {
+            if values.len() >= PARALLEL_ROW_THRESHOLD {
+                return values
+                    .par_iter()
+                    .map(|id| id_map[*id as usize])
+                    .collect::<Vec<_>>();
+            }
         }
-    }
 
-    values.iter().map(|id| id_map[*id as usize]).collect()
+        values.iter().map(|id| id_map[*id as usize]).collect()
+    }
 }

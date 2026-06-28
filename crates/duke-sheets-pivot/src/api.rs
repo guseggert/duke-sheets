@@ -77,7 +77,7 @@ impl WorkbookPivotExt for Workbook {
         &mut self,
         options: &PivotRefreshOptions,
     ) -> Result<PivotRefreshStats> {
-        let mut cache = take_runtime_cache(self);
+        let mut cache = PivotRuntimeCache::take_from_workbook(self);
         let result =
             with_pivot_refresh_pool(options, || refresh_pivots_inner(self, &mut cache, options));
         self.set_pivot_runtime_cache(Box::new(cache));
@@ -94,7 +94,7 @@ impl WorkbookPivotExt for Workbook {
         pivot_name: &str,
         options: &PivotRefreshOptions,
     ) -> Result<PivotRefreshStats> {
-        let mut cache = take_runtime_cache(self);
+        let mut cache = PivotRuntimeCache::take_from_workbook(self);
         let result = with_pivot_refresh_pool(options, || {
             refresh_pivot_inner(self, sheet_index, pivot_name, &mut cache, options)
         });

@@ -1,6 +1,5 @@
 use crate::aggregate::*;
 use crate::api::*;
-use crate::compile::*;
 use crate::prelude::*;
 use crate::refresh::*;
 use crate::runtime_cache::*;
@@ -217,7 +216,7 @@ pub fn plan_format_pivots(workbook: &Workbook) -> Result<FormatPivotPlan> {
             let resolved = resolve_source(workbook, sheet_index, &pivot.source)?;
             let source = format_pivot_source(workbook, &resolved, &pivot.source)?;
             let source_snapshot =
-                snapshot_for_resolved_source(workbook, resolved, &mut cache, &mut stats)?;
+                cache.snapshot_for_resolved_source(workbook, resolved, &mut stats)?;
             let key = TransformedSnapshotCacheKey::new(
                 source_snapshot.key.clone(),
                 &pivot.calculated_fields,
@@ -814,7 +813,7 @@ pub(crate) fn format_axis_tuples_for_fields(
 
     let field_indexes = fields
         .iter()
-        .map(|field| field_index(snapshot, &field.field.name, &pivot.name))
+        .map(|field| snapshot.required_field_index(&field.field.name, &pivot.name))
         .collect::<Result<Vec<_>>>()?;
     let mut tuples = format_unique_axis_tuples(snapshot, &field_indexes, visible_rows);
     sort_format_axis_tuples_by_measure(
@@ -881,7 +880,7 @@ pub(crate) fn sort_format_axis_tuples_by_measure(
     let measure_indexes = pivot
         .measures
         .iter()
-        .map(|measure| field_index(snapshot, &measure.field.name, &pivot.name))
+        .map(|measure| snapshot.required_field_index(&measure.field.name, &pivot.name))
         .collect::<Result<Vec<_>>>()?;
     let sort_measure_indexes =
         compile_axis_sort_measure_indexes(&pivot.name, fields, &pivot.measures)?;

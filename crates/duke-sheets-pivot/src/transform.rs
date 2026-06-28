@@ -30,8 +30,8 @@ pub(crate) fn transformed_snapshot_for_pivot(
         )
     });
     if let Some(cache_key) = &cache_key {
-        if let Some(snapshot) = cache.transformed_snapshots.get(cache_key) {
-            return Ok(Arc::clone(snapshot));
+        if let Some(snapshot) = cache.transformed_snapshot(cache_key) {
+            return Ok(snapshot);
         }
     }
 
@@ -60,9 +60,7 @@ pub(crate) fn transformed_snapshot_for_pivot(
         Arc::new(grouped_snapshot.apply_calculated_items(&pivot.name, &pivot.calculated_items)?)
     };
     if let Some(cache_key) = cache_key {
-        cache
-            .transformed_snapshots
-            .insert(cache_key, Arc::clone(&snapshot));
+        cache.insert_transformed_snapshot(cache_key, Arc::clone(&snapshot));
     }
     Ok(snapshot)
 }
@@ -468,62 +466,103 @@ pub(crate) fn formula_value_to_pivot_value(value: FormulaValue) -> PivotValue {
     }
 }
 
-pub(crate) fn grouped_column(
-    snapshot: &SourceSnapshot,
-    field_index: usize,
-    grouping: &PivotGrouping,
-    date_1904: bool,
-    pivot_name: &str,
-) -> Result<EncodedColumn> {
-    match grouping {
-        PivotGrouping::Number {
-            start,
-            end,
-            interval,
-            ..
-        } => grouped_number_column(snapshot, field_index, *start, *end, *interval, pivot_name),
-        PivotGrouping::Date { units, .. } => {
-            Ok(grouped_date_column(snapshot, field_index, units, date_1904))
+impl SourceSnapshot {
+    pub(crate) fn grouped_column(
+        &self,
+        field_index: usize,
+        grouping: &PivotGrouping,
+        date_1904: bool,
+        pivot_name: &str,
+    ) -> Result<EncodedColumn> {
+        match grouping {
+            PivotGrouping::Number {
+                start,
+                end,
+                interval,
+                ..
+            } => self.grouped_number_column(field_index, *start, *end, *interval, pivot_name),
+            PivotGrouping::Date { units, .. } => {
+                Ok(self.grouped_date_column(field_index, units, date_1904))
+            }
+            PivotGrouping::Manual { groups, .. } => {
+                self.grouped_manual_column(field_index, groups, pivot_name)
+            }
         }
-        PivotGrouping::Manual { groups, .. } => {
-            grouped_manual_column(snapshot, field_index, groups, pivot_name)
+    }
+
+    pub(crate) fn grouped_number_column(
+        &self,
+        field_index: usize,
+        start: Option<f64>,
+        end: Option<f64>,
+        interval: f64,
+        pivot_name: &str,
+    ) -> Result<EncodedColumn> {
+        if !interval.is_finite() || interval <= 0.0 {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} uses an invalid numeric grouping interval"
+            )));
         }
-    }
-}
+        let effective_start =
+            start.unwrap_or_else(|| self.numeric_column_min(field_index).unwrap_or(0.0));
+        if !effective_start.is_finite() || end.is_some_and(|value| !value.is_finite()) {
+            return Err(Error::other(format!(
+                "pivot table {pivot_name} uses invalid numeric grouping bounds"
+            )));
+        }
 
-pub(crate) fn grouped_number_column(
-    snapshot: &SourceSnapshot,
-    field_index: usize,
-    start: Option<f64>,
-    end: Option<f64>,
-    interval: f64,
-    pivot_name: &str,
-) -> Result<EncodedColumn> {
-    if !interval.is_finite() || interval <= 0.0 {
-        return Err(Error::other(format!(
-            "pivot table {pivot_name} uses an invalid numeric grouping interval"
-        )));
-    }
-    let effective_start =
-        start.unwrap_or_else(|| numeric_column_min(snapshot, field_index).unwrap_or(0.0));
-    if !effective_start.is_finite() || end.is_some_and(|value| !value.is_finite()) {
-        return Err(Error::other(format!(
-            "pivot table {pivot_name} uses invalid numeric grouping bounds"
-        )));
+        Ok(self.remap_grouped_column(field_index, |value| {
+            group_number_value(value, effective_start, end, interval)
+        }))
     }
 
-    Ok(remap_grouped_column(snapshot, field_index, |value| {
-        group_number_value(value, effective_start, end, interval)
-    }))
-}
+    pub(crate) fn numeric_column_min(&self, field_index: usize) -> Option<f64> {
+        (0..self.row_count)
+            .filter_map(|row| match self.value(row, field_index) {
+                PivotValue::Number(value) if value.is_finite() => Some(*value),
+                _ => None,
+            })
+            .min_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal))
+    }
 
-pub(crate) fn numeric_column_min(snapshot: &SourceSnapshot, field_index: usize) -> Option<f64> {
-    (0..snapshot.row_count)
-        .filter_map(|row| match snapshot.value(row, field_index) {
-            PivotValue::Number(value) if value.is_finite() => Some(*value),
-            _ => None,
+    pub(crate) fn grouped_date_column(
+        &self,
+        field_index: usize,
+        units: &[duke_sheets_core::PivotDateGroupUnit],
+        date_1904: bool,
+    ) -> EncodedColumn {
+        let date_system = if date_1904 {
+            DateSystem::Date1904
+        } else {
+            DateSystem::Date1900
+        };
+
+        self.remap_grouped_column(field_index, |value| {
+            group_date_value(value, units, date_system)
         })
-        .min_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal))
+    }
+
+    pub(crate) fn grouped_manual_column(
+        &self,
+        field_index: usize,
+        groups: &[PivotManualGroup],
+        pivot_name: &str,
+    ) -> Result<EncodedColumn> {
+        let lookup = manual_group_lookup(groups, pivot_name)?;
+
+        Ok(self.remap_grouped_column(field_index, |value| group_manual_value(value, &lookup)))
+    }
+
+    pub(crate) fn remap_grouped_column<F>(
+        &self,
+        field_index: usize,
+        group_value: F,
+    ) -> EncodedColumn
+    where
+        F: Fn(&PivotValue) -> PivotValue,
+    {
+        self.columns[field_index].remap_dictionary(group_value)
+    }
 }
 
 pub(crate) fn group_number_value(
@@ -569,23 +608,6 @@ pub(crate) fn format_group_number(value: f64) -> String {
     }
 }
 
-pub(crate) fn grouped_date_column(
-    snapshot: &SourceSnapshot,
-    field_index: usize,
-    units: &[duke_sheets_core::PivotDateGroupUnit],
-    date_1904: bool,
-) -> EncodedColumn {
-    let date_system = if date_1904 {
-        DateSystem::Date1904
-    } else {
-        DateSystem::Date1900
-    };
-
-    remap_grouped_column(snapshot, field_index, |value| {
-        group_date_value(value, units, date_system)
-    })
-}
-
 pub(crate) fn group_date_value(
     value: &PivotValue,
     units: &[duke_sheets_core::PivotDateGroupUnit],
@@ -629,31 +651,6 @@ pub(crate) fn group_date_value(
         })
         .collect::<Vec<_>>();
     PivotValue::String(parts.join("-"))
-}
-
-pub(crate) fn grouped_manual_column(
-    snapshot: &SourceSnapshot,
-    field_index: usize,
-    groups: &[PivotManualGroup],
-    pivot_name: &str,
-) -> Result<EncodedColumn> {
-    let lookup = manual_group_lookup(groups, pivot_name)?;
-
-    Ok(remap_grouped_column(snapshot, field_index, |value| {
-        group_manual_value(value, &lookup)
-    }))
-}
-
-pub(crate) fn remap_grouped_column<F>(
-    snapshot: &SourceSnapshot,
-    field_index: usize,
-    group_value: F,
-) -> EncodedColumn
-where
-    F: Fn(&PivotValue) -> PivotValue,
-{
-    let source_column = &snapshot.columns[field_index];
-    source_column.remap_dictionary(group_value)
 }
 
 pub(crate) fn manual_group_lookup(

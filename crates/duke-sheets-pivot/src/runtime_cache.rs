@@ -5,11 +5,11 @@ use crate::source::*;
 
 #[derive(Default)]
 pub(crate) struct PivotRuntimeCache {
-    pub(crate) workbook_nonce: u64,
-    pub(crate) structural_generation: u64,
-    pub(crate) snapshots: AHashMap<SourceCacheKey, Arc<SourceSnapshot>>,
-    pub(crate) transformed_snapshots: AHashMap<TransformedSnapshotCacheKey, Arc<SourceSnapshot>>,
-    pub(crate) item_filter_baselines: AHashMap<PivotItemFilterBaselineKey, PivotItemFilterBaseline>,
+    workbook_nonce: u64,
+    structural_generation: u64,
+    snapshots: AHashMap<SourceCacheKey, Arc<SourceSnapshot>>,
+    transformed_snapshots: AHashMap<TransformedSnapshotCacheKey, Arc<SourceSnapshot>>,
+    item_filter_baselines: AHashMap<PivotItemFilterBaselineKey, PivotItemFilterBaseline>,
 }
 
 impl PivotRuntimeCache {
@@ -47,13 +47,139 @@ impl PivotRuntimeCache {
         self.snapshots = snapshots;
         self.transformed_snapshots = transformed_snapshots;
     }
+
+    pub(crate) fn take_from_workbook(workbook: &mut Workbook) -> Self {
+        let mut cache = workbook
+            .take_pivot_runtime_cache()
+            .and_then(|cache| {
+                let cache: Box<dyn Any + Send + Sync> = cache;
+                cache.downcast::<Self>().ok()
+            })
+            .map(|cache| *cache)
+            .unwrap_or_default();
+
+        if cache.workbook_nonce != workbook.nonce()
+            || cache.structural_generation != workbook.structural_generation()
+        {
+            cache = Self::for_workbook(workbook);
+        }
+
+        cache
+    }
+
+    pub(crate) fn filter_baselines_for_pivot(
+        &mut self,
+        sheet_index: usize,
+        pivot: &PivotTable,
+        snapshot: &SourceSnapshot,
+    ) -> PivotFilterBaselines {
+        let mut baselines = PivotFilterBaselines::default();
+        for filter in &pivot.filters {
+            let PivotFilter::FieldItems {
+                field,
+                allowed_items,
+            } = filter
+            else {
+                continue;
+            };
+            if !pivot_axis_field_includes_new_items(pivot, &field.name) {
+                continue;
+            }
+            let Some(field_index) = snapshot.field_index(&field.name) else {
+                continue;
+            };
+
+            let current_items = snapshot.columns[field_index]
+                .dictionary
+                .iter()
+                .cloned()
+                .collect::<AHashSet<_>>();
+            let allowed_items = allowed_items.iter().cloned().collect::<AHashSet<_>>();
+            let key = PivotItemFilterBaselineKey::new(sheet_index, pivot, &field.name);
+            let baseline =
+                self.item_filter_baselines
+                    .entry(key)
+                    .or_insert_with(|| PivotItemFilterBaseline {
+                        allowed_items: allowed_items.clone(),
+                        known_items: current_items.clone(),
+                    });
+            if baseline.allowed_items != allowed_items {
+                baseline.allowed_items = allowed_items;
+                baseline.known_items = current_items;
+            }
+            baselines.insert(&field.name, baseline.known_items.clone());
+        }
+        baselines
+    }
+
+    pub(crate) fn snapshot_for_source(
+        &mut self,
+        workbook: &Workbook,
+        pivot_sheet_index: usize,
+        source: &PivotSource,
+        stats: &mut PivotRefreshStats,
+    ) -> Result<CachedSourceSnapshot> {
+        let resolved = resolve_source(workbook, pivot_sheet_index, source)?;
+        self.snapshot_for_resolved_source(workbook, resolved, stats)
+    }
+
+    pub(crate) fn snapshot_for_resolved_source(
+        &mut self,
+        workbook: &Workbook,
+        resolved: ResolvedPivotSource,
+        stats: &mut PivotRefreshStats,
+    ) -> Result<CachedSourceSnapshot> {
+        let cache_key = resolved.cache_key();
+
+        if let Some(snapshot) = self.snapshots.get(&cache_key) {
+            stats.cache_hits += 1;
+            return Ok(CachedSourceSnapshot {
+                key: cache_key,
+                snapshot: Arc::clone(snapshot),
+            });
+        }
+
+        let snapshot = Arc::new(SourceSnapshot::from_resolved(workbook, &resolved)?);
+        self.snapshots
+            .insert(cache_key.clone(), Arc::clone(&snapshot));
+        stats.cache_misses += 1;
+        Ok(CachedSourceSnapshot {
+            key: cache_key,
+            snapshot,
+        })
+    }
+
+    pub(crate) fn transformed_snapshot(
+        &self,
+        key: &TransformedSnapshotCacheKey,
+    ) -> Option<Arc<SourceSnapshot>> {
+        self.transformed_snapshots.get(key).map(Arc::clone)
+    }
+
+    pub(crate) fn insert_transformed_snapshot(
+        &mut self,
+        key: TransformedSnapshotCacheKey,
+        snapshot: Arc<SourceSnapshot>,
+    ) {
+        self.transformed_snapshots.insert(key, snapshot);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snapshot_count(&self) -> usize {
+        self.snapshots.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transformed_snapshot_count(&self) -> usize {
+        self.transformed_snapshots.len()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PivotItemFilterBaselineKey {
-    pub(crate) sheet_index: usize,
-    pub(crate) pivot_name: String,
-    pub(crate) field_name: String,
+    sheet_index: usize,
+    pivot_name: String,
+    field_name: String,
 }
 
 impl PivotItemFilterBaselineKey {
@@ -68,13 +194,13 @@ impl PivotItemFilterBaselineKey {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PivotItemFilterBaseline {
-    pub(crate) allowed_items: AHashSet<PivotValue>,
-    pub(crate) known_items: AHashSet<PivotValue>,
+    allowed_items: AHashSet<PivotValue>,
+    known_items: AHashSet<PivotValue>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PivotFilterBaselines {
-    pub(crate) known_items_by_field: AHashMap<String, AHashSet<PivotValue>>,
+    known_items_by_field: AHashMap<String, AHashSet<PivotValue>>,
 }
 
 impl PivotFilterBaselines {
@@ -86,71 +212,6 @@ impl PivotFilterBaselines {
     pub(crate) fn known_items(&self, field_name: &str) -> Option<&AHashSet<PivotValue>> {
         self.known_items_by_field.get(&field_name.to_lowercase())
     }
-}
-
-pub(crate) fn take_runtime_cache(workbook: &mut Workbook) -> PivotRuntimeCache {
-    let mut cache = workbook
-        .take_pivot_runtime_cache()
-        .and_then(|cache| {
-            let cache: Box<dyn Any + Send + Sync> = cache;
-            cache.downcast::<PivotRuntimeCache>().ok()
-        })
-        .map(|cache| *cache)
-        .unwrap_or_default();
-
-    if cache.workbook_nonce != workbook.nonce()
-        || cache.structural_generation != workbook.structural_generation()
-    {
-        cache = PivotRuntimeCache::for_workbook(workbook);
-    }
-
-    cache
-}
-
-pub(crate) fn filter_baselines_for_pivot(
-    sheet_index: usize,
-    pivot: &PivotTable,
-    snapshot: &SourceSnapshot,
-    cache: &mut PivotRuntimeCache,
-) -> PivotFilterBaselines {
-    let mut baselines = PivotFilterBaselines::default();
-    for filter in &pivot.filters {
-        let PivotFilter::FieldItems {
-            field,
-            allowed_items,
-        } = filter
-        else {
-            continue;
-        };
-        if !pivot_axis_field_includes_new_items(pivot, &field.name) {
-            continue;
-        }
-        let Some(field_index) = snapshot.field_index(&field.name) else {
-            continue;
-        };
-
-        let current_items = snapshot.columns[field_index]
-            .dictionary
-            .iter()
-            .cloned()
-            .collect::<AHashSet<_>>();
-        let allowed_items = allowed_items.iter().cloned().collect::<AHashSet<_>>();
-        let key = PivotItemFilterBaselineKey::new(sheet_index, pivot, &field.name);
-        let baseline =
-            cache
-                .item_filter_baselines
-                .entry(key)
-                .or_insert_with(|| PivotItemFilterBaseline {
-                    allowed_items: allowed_items.clone(),
-                    known_items: current_items.clone(),
-                });
-        if baseline.allowed_items != allowed_items {
-            baseline.allowed_items = allowed_items;
-            baseline.known_items = current_items;
-        }
-        baselines.insert(&field.name, baseline.known_items.clone());
-    }
-    baselines
 }
 
 pub(crate) fn pivot_axis_field_includes_new_items(pivot: &PivotTable, field_name: &str) -> bool {
@@ -187,11 +248,11 @@ impl SourceCacheKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct TransformedSnapshotCacheKey {
-    pub(crate) source: SourceCacheKey,
-    pub(crate) calculated_fields: Vec<PivotCalculatedField>,
-    pub(crate) groupings: Vec<PivotGroupingCacheKey>,
-    pub(crate) calculated_items: Vec<PivotCalculatedItem>,
-    pub(crate) date_1904: bool,
+    source: SourceCacheKey,
+    calculated_fields: Vec<PivotCalculatedField>,
+    groupings: Vec<PivotGroupingCacheKey>,
+    calculated_items: Vec<PivotCalculatedItem>,
+    date_1904: bool,
 }
 
 impl TransformedSnapshotCacheKey {
@@ -266,8 +327,8 @@ impl From<&PivotGrouping> for PivotGroupingCacheKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PivotManualGroupCacheKey {
-    pub(crate) name: String,
-    pub(crate) members: Vec<PivotValue>,
+    name: String,
+    members: Vec<PivotValue>,
 }
 
 impl From<&PivotManualGroup> for PivotManualGroupCacheKey {
@@ -285,12 +346,12 @@ pub(crate) fn f64_cache_key(value: f64) -> u64 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct SourceRangeCacheKey {
-    pub(crate) kind: SourceCacheKind,
-    pub(crate) sheet_index: usize,
-    pub(crate) range: CellRange,
-    pub(crate) source_name: Option<String>,
-    pub(crate) mutation_count: u64,
-    pub(crate) topology_generation: u64,
+    kind: SourceCacheKind,
+    sheet_index: usize,
+    range: CellRange,
+    source_name: Option<String>,
+    mutation_count: u64,
+    topology_generation: u64,
 }
 
 impl SourceRangeCacheKey {
@@ -353,42 +414,4 @@ impl ResolvedSource {
 pub(crate) struct CachedSourceSnapshot {
     pub(crate) key: SourceCacheKey,
     pub(crate) snapshot: Arc<SourceSnapshot>,
-}
-
-pub(crate) fn snapshot_for_source(
-    workbook: &Workbook,
-    pivot_sheet_index: usize,
-    source: &PivotSource,
-    cache: &mut PivotRuntimeCache,
-    stats: &mut PivotRefreshStats,
-) -> Result<CachedSourceSnapshot> {
-    let resolved = resolve_source(workbook, pivot_sheet_index, source)?;
-    snapshot_for_resolved_source(workbook, resolved, cache, stats)
-}
-
-pub(crate) fn snapshot_for_resolved_source(
-    workbook: &Workbook,
-    resolved: ResolvedPivotSource,
-    cache: &mut PivotRuntimeCache,
-    stats: &mut PivotRefreshStats,
-) -> Result<CachedSourceSnapshot> {
-    let cache_key = resolved.cache_key();
-
-    if let Some(snapshot) = cache.snapshots.get(&cache_key) {
-        stats.cache_hits += 1;
-        return Ok(CachedSourceSnapshot {
-            key: cache_key,
-            snapshot: Arc::clone(snapshot),
-        });
-    }
-
-    let snapshot = Arc::new(SourceSnapshot::from_resolved(workbook, &resolved)?);
-    cache
-        .snapshots
-        .insert(cache_key.clone(), Arc::clone(&snapshot));
-    stats.cache_misses += 1;
-    Ok(CachedSourceSnapshot {
-        key: cache_key,
-        snapshot,
-    })
 }

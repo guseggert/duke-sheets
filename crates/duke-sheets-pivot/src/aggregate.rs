@@ -192,6 +192,48 @@ impl PivotAggregation {
         }
     }
 
+    pub(crate) fn total_source(&self) -> &Self {
+        self.total_source.as_deref().unwrap_or(self)
+    }
+
+    pub(crate) fn subtotal_source(&self) -> &Self {
+        self.subtotal_source.as_deref().unwrap_or(self)
+    }
+
+    pub(crate) fn row_total_states(&self, row_key: &[u32]) -> Option<&Vec<AggregateState>> {
+        self.total_source().row_totals.get(row_key)
+    }
+
+    pub(crate) fn row_subtotal_states(&self, row_prefix: &[u32]) -> Option<&Vec<AggregateState>> {
+        self.subtotal_source().row_subtotals.get(row_prefix)
+    }
+
+    pub(crate) fn column_total_states(&self, column_key: &[u32]) -> Option<&Vec<AggregateState>> {
+        self.total_source().column_totals.get(column_key)
+    }
+
+    pub(crate) fn column_subtotal_states(
+        &self,
+        column_prefix: &[u32],
+    ) -> Option<&Vec<AggregateState>> {
+        self.subtotal_source().column_subtotals.get(column_prefix)
+    }
+
+    pub(crate) fn subtotal_group_states(
+        &self,
+        row_key: &[u32],
+        column_key: &[u32],
+    ) -> Option<&Vec<AggregateState>> {
+        self.subtotal_source().subtotal_groups.get(&GroupKey {
+            rows: row_key.to_vec(),
+            columns: column_key.to_vec(),
+        })
+    }
+
+    pub(crate) fn grand_total_states(&self) -> &Vec<AggregateState> {
+        &self.total_source().grand_totals
+    }
+
     pub(crate) fn ingest_row(
         &mut self,
         snapshot: &SourceSnapshot,
@@ -866,7 +908,11 @@ pub(crate) fn materialize_calculated_item_expr(
     Ok(match expr {
         FormulaExpr::Number(value) => FormulaExpr::Number(*value),
         FormulaExpr::String(value) => {
-            if formula_reference_item_id(context.snapshot, item.field_index, value).is_some() {
+            if context
+                .snapshot
+                .formula_reference_item_id(item.field_index, value)
+                .is_some()
+            {
                 calculated_item_reference_expr(pivot_name, item, value, context)?
             } else {
                 FormulaExpr::String(value.clone())
@@ -886,7 +932,11 @@ pub(crate) fn materialize_calculated_item_expr(
         }
         FormulaExpr::CellRef(reference) => {
             if let Some(name) = calculated_item_cell_reference_name(reference) {
-                if formula_reference_item_id(context.snapshot, item.field_index, &name).is_some() {
+                if context
+                    .snapshot
+                    .formula_reference_item_id(item.field_index, &name)
+                    .is_some()
+                {
                     calculated_item_reference_expr(pivot_name, item, &name, context)?
                 } else {
                     return Err(Error::other(format!(
@@ -960,7 +1010,9 @@ pub(crate) fn calculated_item_reference_expr(
     reference: &str,
     context: &CalculatedItemEvalContext<'_>,
 ) -> Result<FormulaExpr> {
-    let reference_id = formula_reference_item_id(context.snapshot, item.field_index, reference)
+    let reference_id = context
+        .snapshot
+        .formula_reference_item_id(item.field_index, reference)
         .ok_or_else(|| {
             Error::other(format!(
                 "pivot table {pivot_name} calculated item {} references unknown item: {reference}",
@@ -1324,31 +1376,39 @@ impl AggregateState {
                 if self.count_numbers < 2 {
                     None
                 } else {
-                    Some(sample_variance(self).sqrt())
+                    Some(self.sample_variance().sqrt())
                 }
             }
             PivotAggregate::StdDevP => {
                 if self.count_numbers == 0 {
                     None
                 } else {
-                    Some(population_variance(self).sqrt())
+                    Some(self.population_variance().sqrt())
                 }
             }
             PivotAggregate::Var => {
                 if self.count_numbers < 2 {
                     None
                 } else {
-                    Some(sample_variance(self))
+                    Some(self.sample_variance())
                 }
             }
             PivotAggregate::VarP => {
                 if self.count_numbers == 0 {
                     None
                 } else {
-                    Some(population_variance(self))
+                    Some(self.population_variance())
                 }
             }
         }
+    }
+
+    pub(crate) fn population_variance(&self) -> f64 {
+        population_variance_from_parts(self.sum, self.sum_sq, self.count_numbers)
+    }
+
+    pub(crate) fn sample_variance(&self) -> f64 {
+        sample_variance_from_parts(self.sum, self.sum_sq, self.count_numbers)
     }
 
     pub(crate) fn merge(&mut self, other: &Self, aggregate: PivotAggregate) {
@@ -1513,14 +1573,6 @@ pub(crate) fn pivot_number(value: &PivotValue) -> Option<f64> {
         PivotValue::Number(value) => Some(*value),
         _ => None,
     }
-}
-
-pub(crate) fn population_variance(state: &AggregateState) -> f64 {
-    population_variance_from_parts(state.sum, state.sum_sq, state.count_numbers)
-}
-
-pub(crate) fn sample_variance(state: &AggregateState) -> f64 {
-    sample_variance_from_parts(state.sum, state.sum_sq, state.count_numbers)
 }
 
 pub(crate) fn population_variance_from_parts(sum: f64, sum_sq: f64, count: u64) -> f64 {

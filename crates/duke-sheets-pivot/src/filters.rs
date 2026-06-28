@@ -1,6 +1,5 @@
 use crate::aggregate::*;
 use crate::api::*;
-use crate::compile::*;
 use crate::prelude::*;
 use crate::runtime_cache::*;
 use crate::snapshot::*;
@@ -69,7 +68,7 @@ impl CompiledFilter {
                 field,
                 allowed_items,
             } => {
-                let field_index = field_index(snapshot, &field.name, pivot_name)?;
+                let field_index = snapshot.required_field_index(&field.name, pivot_name)?;
                 let allowed_ids = allowed_items
                     .iter()
                     .filter_map(|value| snapshot.columns[field_index].id_for_value(value))
@@ -90,7 +89,7 @@ impl CompiledFilter {
                 operator,
                 value,
             } => Ok(Self::Label {
-                field_index: field_index(snapshot, &field.name, pivot_name)?,
+                field_index: snapshot.required_field_index(&field.name, pivot_name)?,
                 operator: *operator,
                 value: value.to_lowercase(),
             }),
@@ -108,7 +107,7 @@ impl CompiledFilter {
                     (end, start)
                 };
                 Ok(Self::LabelBetween {
-                    field_index: field_index(snapshot, &field.name, pivot_name)?,
+                    field_index: snapshot.required_field_index(&field.name, pivot_name)?,
                     lower,
                     upper,
                     not_between: *not_between,
@@ -119,7 +118,7 @@ impl CompiledFilter {
                 operator,
                 value,
             } => Ok(Self::Date {
-                field_index: field_index(snapshot, &field.name, pivot_name)?,
+                field_index: snapshot.required_field_index(&field.name, pivot_name)?,
                 operator: *operator,
                 value: *value,
             }),
@@ -129,13 +128,13 @@ impl CompiledFilter {
                 end,
                 not_between,
             } => Ok(Self::DateBetween {
-                field_index: field_index(snapshot, &field.name, pivot_name)?,
+                field_index: snapshot.required_field_index(&field.name, pivot_name)?,
                 start: *start,
                 end: *end,
                 not_between: *not_between,
             }),
             PivotFilter::DatePeriod { field, period } => Ok(Self::DatePeriod {
-                field_index: field_index(snapshot, &field.name, pivot_name)?,
+                field_index: snapshot.required_field_index(&field.name, pivot_name)?,
                 period: compile_date_period(*period, options, date_system, pivot_name)?,
             }),
             PivotFilter::Value { .. }
@@ -378,7 +377,7 @@ impl CompiledAggregateFilter {
                 operator,
                 value,
             } => {
-                let field_index = field_index(snapshot, &field.name, pivot_name)?;
+                let field_index = snapshot.required_field_index(&field.name, pivot_name)?;
                 let (axis, field_position) = aggregate_filter_axis(
                     pivot_name,
                     &field.name,
@@ -403,7 +402,7 @@ impl CompiledAggregateFilter {
                 end,
                 not_between,
             } => {
-                let field_index = field_index(snapshot, &field.name, pivot_name)?;
+                let field_index = snapshot.required_field_index(&field.name, pivot_name)?;
                 let (axis, field_position) = aggregate_filter_axis(
                     pivot_name,
                     &field.name,
@@ -429,7 +428,7 @@ impl CompiledAggregateFilter {
                 top,
                 percent,
             } => {
-                let field_index = field_index(snapshot, &field.name, pivot_name)?;
+                let field_index = snapshot.required_field_index(&field.name, pivot_name)?;
                 let (axis, field_position) = aggregate_filter_axis(
                     pivot_name,
                     &field.name,

@@ -252,8 +252,8 @@ fn shared_transforms_hit_the_internal_snapshot_cache() {
         .unwrap()
         .downcast::<PivotRuntimeCache>()
         .unwrap();
-    assert_eq!(cache.snapshots.len(), 1);
-    assert_eq!(cache.transformed_snapshots.len(), 1);
+    assert_eq!(cache.snapshot_count(), 1);
+    assert_eq!(cache.transformed_snapshot_count(), 1);
 }
 
 #[test]

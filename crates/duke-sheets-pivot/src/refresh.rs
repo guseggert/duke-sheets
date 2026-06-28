@@ -66,11 +66,10 @@ pub(crate) fn refresh_pivots_inner(
             mark_pivot_external(workbook, job.sheet_index, job.pivot_index);
             continue;
         }
-        let source_snapshot = match snapshot_for_source(
+        let source_snapshot = match cache.snapshot_for_source(
             workbook,
             job.sheet_index,
             &job.pivot.source,
-            cache,
             &mut stats,
         ) {
             Ok(snapshot) => snapshot,
@@ -104,7 +103,7 @@ pub(crate) fn refresh_pivots_inner(
             }
         };
         let filter_baselines =
-            filter_baselines_for_pivot(job.sheet_index, &job.pivot, &snapshot, cache);
+            cache.filter_baselines_for_pivot(job.sheet_index, &job.pivot, &snapshot);
         prepared.push(PreparedPivotJob {
             job,
             snapshot,
@@ -301,7 +300,7 @@ pub(crate) fn build_rendered_pivot(
     options: &PivotRefreshOptions,
 ) -> Result<RenderedPivot> {
     let source_snapshot =
-        snapshot_for_source(workbook, pivot_sheet_index, &pivot.source, cache, stats)?;
+        cache.snapshot_for_source(workbook, pivot_sheet_index, &pivot.source, stats)?;
     let snapshot = transformed_snapshot_for_pivot(
         workbook,
         pivot_sheet_index,
@@ -310,7 +309,7 @@ pub(crate) fn build_rendered_pivot(
         workbook.settings().date_1904,
         cache,
     )?;
-    let filter_baselines = filter_baselines_for_pivot(pivot_sheet_index, pivot, &snapshot, cache);
+    let filter_baselines = cache.filter_baselines_for_pivot(pivot_sheet_index, pivot, &snapshot);
     build_rendered_pivot_from_snapshot(
         pivot,
         snapshot,

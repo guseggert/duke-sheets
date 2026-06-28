@@ -1,7 +1,6 @@
 use crate::aggregate::*;
 use crate::compile::*;
 use crate::prelude::*;
-use crate::render::*;
 use crate::snapshot::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -181,16 +180,15 @@ pub(crate) fn finalize_measure_with_context(
         }
         PivotShowAs::PercentOfParentRowTotal => percentage_cell(
             state.finalize_number(aggregate),
-            parent_row_total_value(context, measure_index, aggregate),
+            context.parent_row_total_value(measure_index, aggregate),
         ),
         PivotShowAs::PercentOfParentColumnTotal => percentage_cell(
             state.finalize_number(aggregate),
-            parent_column_total_value(context, measure_index, aggregate),
+            context.parent_column_total_value(measure_index, aggregate),
         ),
         PivotShowAs::PercentOfParentTotal { base_field } => percentage_cell(
             state.finalize_number(aggregate),
-            parent_base_field_total_value(
-                context,
+            context.parent_base_field_total_value(
                 base_field.name.as_str(),
                 measure_index,
                 aggregate,
@@ -202,19 +200,15 @@ pub(crate) fn finalize_measure_with_context(
             column_total,
             grand_total,
         ),
-        PivotShowAs::RunningTotal { base_field } => optional_number_cell(running_total_value(
-            context,
-            base_field.name.as_str(),
-            measure_index,
-            aggregate,
-        )),
+        PivotShowAs::RunningTotal { base_field } => optional_number_cell(
+            context.running_total_value(base_field.name.as_str(), measure_index, aggregate),
+        ),
         PivotShowAs::DifferenceFrom {
             base_field,
             base_item,
         } => {
             let current = state.finalize_number(aggregate);
-            let base = base_item_value(
-                context,
+            let base = context.base_item_value(
                 base_field.name.as_str(),
                 base_item,
                 measure_index,
@@ -227,8 +221,7 @@ pub(crate) fn finalize_measure_with_context(
             base_item,
         } => {
             let current = state.finalize_number(aggregate);
-            let base = base_item_value(
-                context,
+            let base = context.base_item_value(
                 base_field.name.as_str(),
                 base_item,
                 measure_index,
@@ -239,15 +232,13 @@ pub(crate) fn finalize_measure_with_context(
                 _ => CellValue::Empty,
             }
         }
-        PivotShowAs::RankAscending { base_field } => optional_number_cell(rank_value(
-            context,
+        PivotShowAs::RankAscending { base_field } => optional_number_cell(context.rank_value(
             base_field.name.as_str(),
             measure_index,
             aggregate,
             true,
         )),
-        PivotShowAs::RankDescending { base_field } => optional_number_cell(rank_value(
-            context,
+        PivotShowAs::RankDescending { base_field } => optional_number_cell(context.rank_value(
             base_field.name.as_str(),
             measure_index,
             aggregate,
@@ -313,283 +304,284 @@ pub(crate) fn optional_number_cell(value: Option<f64>) -> CellValue {
     value.map(CellValue::Number).unwrap_or(CellValue::Empty)
 }
 
-pub(crate) fn parent_row_total_value(
-    context: &ShowAsContext<'_>,
-    measure_index: usize,
-    aggregate: PivotAggregate,
-) -> Option<f64> {
-    let Some(row_key) = context.row_key else {
-        return state_number(
-            grand_total_states(context.aggregation),
-            measure_index,
-            aggregate,
-        );
-    };
-    let states = if row_key.len() <= 1 {
-        match context.column_key {
-            Some(column_key) if !column_key.is_empty() => {
-                column_total_states(context.aggregation, column_key)
-            }
-            None => Some(grand_total_states(context.aggregation)),
-            Some(_) => Some(grand_total_states(context.aggregation)),
-        }
-    } else {
-        parent_row_prefix_states(context, &row_key[..row_key.len() - 1])
-    }?;
-    state_number(states, measure_index, aggregate)
-}
-
-pub(crate) fn parent_column_total_value(
-    context: &ShowAsContext<'_>,
-    measure_index: usize,
-    aggregate: PivotAggregate,
-) -> Option<f64> {
-    let Some(column_key) = context.column_key else {
-        return state_number(
-            grand_total_states(context.aggregation),
-            measure_index,
-            aggregate,
-        );
-    };
-    let states = if column_key.len() <= 1 {
-        match context.row_key {
-            Some(row_key) if !row_key.is_empty() => row_total_states(context.aggregation, row_key),
-            None => Some(grand_total_states(context.aggregation)),
-            Some(_) => Some(grand_total_states(context.aggregation)),
-        }
-    } else {
-        parent_column_prefix_states(context, &column_key[..column_key.len() - 1])
-    }?;
-    state_number(states, measure_index, aggregate)
-}
-
-pub(crate) fn parent_base_field_total_value(
-    context: &ShowAsContext<'_>,
-    base_field: &str,
-    measure_index: usize,
-    aggregate: PivotAggregate,
-) -> Option<f64> {
-    match show_as_axis(context, base_field)? {
-        ShowAsAxis::Row(position) => {
-            let row_key = context.row_key?;
-            let prefix = row_key.get(..=position)?;
-            let states = if prefix.len() == row_key.len() {
-                states_for_row_axis_key(context, row_key)
-            } else {
-                parent_row_prefix_states(context, prefix)
-            }?;
-            state_number(states, measure_index, aggregate)
-        }
-        ShowAsAxis::Column(position) => {
-            let column_key = context.column_key?;
-            let prefix = column_key.get(..=position)?;
-            let states = if prefix.len() == column_key.len() {
-                states_for_column_axis_key(context, column_key)
-            } else {
-                parent_column_prefix_states(context, prefix)
-            }?;
-            state_number(states, measure_index, aggregate)
-        }
-    }
-}
-
-pub(crate) fn parent_row_prefix_states<'a>(
-    context: &'a ShowAsContext<'_>,
-    row_prefix: &[u32],
-) -> Option<&'a Vec<AggregateState>> {
-    match context.column_key {
-        Some(column_key) if !column_key.is_empty() => {
-            subtotal_group_states(context.aggregation, row_prefix, column_key)
-        }
-        None => row_subtotal_states(context.aggregation, row_prefix),
-        Some(_) => row_subtotal_states(context.aggregation, row_prefix),
-    }
-}
-
-pub(crate) fn parent_column_prefix_states<'a>(
-    context: &'a ShowAsContext<'_>,
-    column_prefix: &[u32],
-) -> Option<&'a Vec<AggregateState>> {
-    match context.row_key {
-        Some(row_key) if !row_key.is_empty() => {
-            subtotal_group_states(context.aggregation, row_key, column_prefix)
-        }
-        None => column_subtotal_states(context.aggregation, column_prefix),
-        Some(_) => column_subtotal_states(context.aggregation, column_prefix),
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ShowAsAxis {
     Row(usize),
     Column(usize),
 }
 
-pub(crate) fn show_as_axis(context: &ShowAsContext<'_>, base_field: &str) -> Option<ShowAsAxis> {
-    let field_index = context.snapshot.field_index(base_field)?;
-    context
-        .plan
-        .row_indexes
-        .iter()
-        .position(|index| *index == field_index)
-        .map(ShowAsAxis::Row)
-        .or_else(|| {
-            context
-                .plan
-                .column_indexes
-                .iter()
-                .position(|index| *index == field_index)
-                .map(ShowAsAxis::Column)
-        })
-}
-
-pub(crate) fn base_item_value(
-    context: &ShowAsContext<'_>,
-    base_field: &str,
-    base_item: &PivotValue,
-    measure_index: usize,
-    aggregate: PivotAggregate,
-) -> Option<f64> {
-    let field_index = context.snapshot.field_index(base_field)?;
-    let base_id = context.snapshot.columns[field_index].id_for_value(base_item)?;
-    let state = match show_as_axis(context, base_field)? {
-        ShowAsAxis::Row(position) => {
-            let mut key = context.row_key?.clone();
-            *key.get_mut(position)? = base_id;
-            states_for_row_axis_key(context, &key)?
-        }
-        ShowAsAxis::Column(position) => {
-            let mut key = context.column_key?.clone();
-            *key.get_mut(position)? = base_id;
-            states_for_column_axis_key(context, &key)?
-        }
-    };
-    state_number(state, measure_index, aggregate)
-}
-
-pub(crate) fn running_total_value(
-    context: &ShowAsContext<'_>,
-    base_field: &str,
-    measure_index: usize,
-    aggregate: PivotAggregate,
-) -> Option<f64> {
-    let axis = show_as_axis(context, base_field)?;
-    let mut total = 0.0;
-    let mut found = false;
-    match axis {
-        ShowAsAxis::Row(position) => {
-            let current = context.row_key?;
-            for key in &context.aggregation.row_order {
-                if !same_peer_key(key, current, position) {
-                    continue;
+impl ShowAsContext<'_> {
+    pub(crate) fn parent_row_total_value(
+        &self,
+        measure_index: usize,
+        aggregate: PivotAggregate,
+    ) -> Option<f64> {
+        let Some(row_key) = self.row_key else {
+            return state_number(
+                self.aggregation.grand_total_states(),
+                measure_index,
+                aggregate,
+            );
+        };
+        let states = if row_key.len() <= 1 {
+            match self.column_key {
+                Some(column_key) if !column_key.is_empty() => {
+                    self.aggregation.column_total_states(column_key)
                 }
-                if let Some(value) = states_for_row_axis_key(context, key)
-                    .and_then(|states| state_number(states, measure_index, aggregate))
-                {
-                    total += value;
-                }
-                if key == current {
-                    found = true;
-                    break;
-                }
+                None => Some(self.aggregation.grand_total_states()),
+                Some(_) => Some(self.aggregation.grand_total_states()),
             }
-        }
-        ShowAsAxis::Column(position) => {
-            let current = context.column_key?;
-            for key in &context.aggregation.column_order {
-                if !same_peer_key(key, current, position) {
-                    continue;
-                }
-                if let Some(value) = states_for_column_axis_key(context, key)
-                    .and_then(|states| state_number(states, measure_index, aggregate))
-                {
-                    total += value;
-                }
-                if key == current {
-                    found = true;
-                    break;
-                }
+        } else {
+            self.parent_row_prefix_states(&row_key[..row_key.len() - 1])
+        }?;
+        state_number(states, measure_index, aggregate)
+    }
+
+    pub(crate) fn parent_column_total_value(
+        &self,
+        measure_index: usize,
+        aggregate: PivotAggregate,
+    ) -> Option<f64> {
+        let Some(column_key) = self.column_key else {
+            return state_number(
+                self.aggregation.grand_total_states(),
+                measure_index,
+                aggregate,
+            );
+        };
+        let states = if column_key.len() <= 1 {
+            match self.row_key {
+                Some(row_key) if !row_key.is_empty() => self.aggregation.row_total_states(row_key),
+                None => Some(self.aggregation.grand_total_states()),
+                Some(_) => Some(self.aggregation.grand_total_states()),
+            }
+        } else {
+            self.parent_column_prefix_states(&column_key[..column_key.len() - 1])
+        }?;
+        state_number(states, measure_index, aggregate)
+    }
+
+    pub(crate) fn parent_base_field_total_value(
+        &self,
+        base_field: &str,
+        measure_index: usize,
+        aggregate: PivotAggregate,
+    ) -> Option<f64> {
+        match self.show_as_axis(base_field)? {
+            ShowAsAxis::Row(position) => {
+                let row_key = self.row_key?;
+                let prefix = row_key.get(..=position)?;
+                let states = if prefix.len() == row_key.len() {
+                    self.states_for_row_axis_key(row_key)
+                } else {
+                    self.parent_row_prefix_states(prefix)
+                }?;
+                state_number(states, measure_index, aggregate)
+            }
+            ShowAsAxis::Column(position) => {
+                let column_key = self.column_key?;
+                let prefix = column_key.get(..=position)?;
+                let states = if prefix.len() == column_key.len() {
+                    self.states_for_column_axis_key(column_key)
+                } else {
+                    self.parent_column_prefix_states(prefix)
+                }?;
+                state_number(states, measure_index, aggregate)
             }
         }
     }
-    found.then_some(total)
-}
 
-pub(crate) fn rank_value(
-    context: &ShowAsContext<'_>,
-    base_field: &str,
-    measure_index: usize,
-    aggregate: PivotAggregate,
-    ascending: bool,
-) -> Option<f64> {
-    let axis = show_as_axis(context, base_field)?;
-    let current_value = match axis {
-        ShowAsAxis::Row(_) => states_for_row_axis_key(context, context.row_key?)?,
-        ShowAsAxis::Column(_) => states_for_column_axis_key(context, context.column_key?)?,
-    };
-    let current_value = state_number(current_value, measure_index, aggregate)?;
+    pub(crate) fn parent_row_prefix_states(
+        &self,
+        row_prefix: &[u32],
+    ) -> Option<&Vec<AggregateState>> {
+        match self.column_key {
+            Some(column_key) if !column_key.is_empty() => self
+                .aggregation
+                .subtotal_group_states(row_prefix, column_key),
+            None => self.aggregation.row_subtotal_states(row_prefix),
+            Some(_) => self.aggregation.row_subtotal_states(row_prefix),
+        }
+    }
 
-    let mut rank = 1u64;
-    match axis {
-        ShowAsAxis::Row(position) => {
-            let current = context.row_key?;
-            for key in &context.aggregation.row_order {
-                if !same_peer_key(key, current, position) {
-                    continue;
+    pub(crate) fn parent_column_prefix_states(
+        &self,
+        column_prefix: &[u32],
+    ) -> Option<&Vec<AggregateState>> {
+        match self.row_key {
+            Some(row_key) if !row_key.is_empty() => self
+                .aggregation
+                .subtotal_group_states(row_key, column_prefix),
+            None => self.aggregation.column_subtotal_states(column_prefix),
+            Some(_) => self.aggregation.column_subtotal_states(column_prefix),
+        }
+    }
+
+    pub(crate) fn show_as_axis(&self, base_field: &str) -> Option<ShowAsAxis> {
+        let field_index = self.snapshot.field_index(base_field)?;
+        self.plan
+            .row_indexes
+            .iter()
+            .position(|index| *index == field_index)
+            .map(ShowAsAxis::Row)
+            .or_else(|| {
+                self.plan
+                    .column_indexes
+                    .iter()
+                    .position(|index| *index == field_index)
+                    .map(ShowAsAxis::Column)
+            })
+    }
+
+    pub(crate) fn base_item_value(
+        &self,
+        base_field: &str,
+        base_item: &PivotValue,
+        measure_index: usize,
+        aggregate: PivotAggregate,
+    ) -> Option<f64> {
+        let field_index = self.snapshot.field_index(base_field)?;
+        let base_id = self.snapshot.columns[field_index].id_for_value(base_item)?;
+        let state = match self.show_as_axis(base_field)? {
+            ShowAsAxis::Row(position) => {
+                let mut key = self.row_key?.clone();
+                *key.get_mut(position)? = base_id;
+                self.states_for_row_axis_key(&key)?
+            }
+            ShowAsAxis::Column(position) => {
+                let mut key = self.column_key?.clone();
+                *key.get_mut(position)? = base_id;
+                self.states_for_column_axis_key(&key)?
+            }
+        };
+        state_number(state, measure_index, aggregate)
+    }
+
+    pub(crate) fn running_total_value(
+        &self,
+        base_field: &str,
+        measure_index: usize,
+        aggregate: PivotAggregate,
+    ) -> Option<f64> {
+        let axis = self.show_as_axis(base_field)?;
+        let mut total = 0.0;
+        let mut found = false;
+        match axis {
+            ShowAsAxis::Row(position) => {
+                let current = self.row_key?;
+                for key in &self.aggregation.row_order {
+                    if !same_peer_key(key, current, position) {
+                        continue;
+                    }
+                    if let Some(value) = self
+                        .states_for_row_axis_key(key)
+                        .and_then(|states| state_number(states, measure_index, aggregate))
+                    {
+                        total += value;
+                    }
+                    if key == current {
+                        found = true;
+                        break;
+                    }
                 }
-                let Some(value) = states_for_row_axis_key(context, key)
-                    .and_then(|states| state_number(states, measure_index, aggregate))
-                else {
-                    continue;
-                };
-                if rank_precedes(value, current_value, ascending) {
-                    rank += 1;
+            }
+            ShowAsAxis::Column(position) => {
+                let current = self.column_key?;
+                for key in &self.aggregation.column_order {
+                    if !same_peer_key(key, current, position) {
+                        continue;
+                    }
+                    if let Some(value) = self
+                        .states_for_column_axis_key(key)
+                        .and_then(|states| state_number(states, measure_index, aggregate))
+                    {
+                        total += value;
+                    }
+                    if key == current {
+                        found = true;
+                        break;
+                    }
                 }
             }
         }
-        ShowAsAxis::Column(position) => {
-            let current = context.column_key?;
-            for key in &context.aggregation.column_order {
-                if !same_peer_key(key, current, position) {
-                    continue;
+        found.then_some(total)
+    }
+
+    pub(crate) fn rank_value(
+        &self,
+        base_field: &str,
+        measure_index: usize,
+        aggregate: PivotAggregate,
+        ascending: bool,
+    ) -> Option<f64> {
+        let axis = self.show_as_axis(base_field)?;
+        let current_value = match axis {
+            ShowAsAxis::Row(_) => self.states_for_row_axis_key(self.row_key?)?,
+            ShowAsAxis::Column(_) => self.states_for_column_axis_key(self.column_key?)?,
+        };
+        let current_value = state_number(current_value, measure_index, aggregate)?;
+
+        let mut rank = 1u64;
+        match axis {
+            ShowAsAxis::Row(position) => {
+                let current = self.row_key?;
+                for key in &self.aggregation.row_order {
+                    if !same_peer_key(key, current, position) {
+                        continue;
+                    }
+                    let Some(value) = self
+                        .states_for_row_axis_key(key)
+                        .and_then(|states| state_number(states, measure_index, aggregate))
+                    else {
+                        continue;
+                    };
+                    if rank_precedes(value, current_value, ascending) {
+                        rank += 1;
+                    }
                 }
-                let Some(value) = states_for_column_axis_key(context, key)
-                    .and_then(|states| state_number(states, measure_index, aggregate))
-                else {
-                    continue;
-                };
-                if rank_precedes(value, current_value, ascending) {
-                    rank += 1;
+            }
+            ShowAsAxis::Column(position) => {
+                let current = self.column_key?;
+                for key in &self.aggregation.column_order {
+                    if !same_peer_key(key, current, position) {
+                        continue;
+                    }
+                    let Some(value) = self
+                        .states_for_column_axis_key(key)
+                        .and_then(|states| state_number(states, measure_index, aggregate))
+                    else {
+                        continue;
+                    };
+                    if rank_precedes(value, current_value, ascending) {
+                        rank += 1;
+                    }
                 }
             }
         }
+        Some(rank as f64)
     }
-    Some(rank as f64)
-}
 
-pub(crate) fn states_for_row_axis_key<'a>(
-    context: &'a ShowAsContext<'_>,
-    row_key: &[u32],
-) -> Option<&'a Vec<AggregateState>> {
-    match context.column_key {
-        Some(column_key) => context.aggregation.groups.get(&GroupKey {
-            rows: row_key.to_vec(),
-            columns: column_key.clone(),
-        }),
-        None => row_total_states(context.aggregation, row_key),
+    pub(crate) fn states_for_row_axis_key(&self, row_key: &[u32]) -> Option<&Vec<AggregateState>> {
+        match self.column_key {
+            Some(column_key) => self.aggregation.groups.get(&GroupKey {
+                rows: row_key.to_vec(),
+                columns: column_key.clone(),
+            }),
+            None => self.aggregation.row_total_states(row_key),
+        }
     }
-}
 
-pub(crate) fn states_for_column_axis_key<'a>(
-    context: &'a ShowAsContext<'_>,
-    column_key: &[u32],
-) -> Option<&'a Vec<AggregateState>> {
-    match context.row_key {
-        Some(row_key) => context.aggregation.groups.get(&GroupKey {
-            rows: row_key.clone(),
-            columns: column_key.to_vec(),
-        }),
-        None => column_total_states(context.aggregation, column_key),
+    pub(crate) fn states_for_column_axis_key(
+        &self,
+        column_key: &[u32],
+    ) -> Option<&Vec<AggregateState>> {
+        match self.row_key {
+            Some(row_key) => self.aggregation.groups.get(&GroupKey {
+                rows: row_key.clone(),
+                columns: column_key.to_vec(),
+            }),
+            None => self.aggregation.column_total_states(column_key),
+        }
     }
 }
 

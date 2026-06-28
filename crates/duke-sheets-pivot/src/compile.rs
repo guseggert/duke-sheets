@@ -82,7 +82,7 @@ impl CompiledPivotPlan {
                 &column_indexes,
                 &measure.show_as,
             )?;
-            measure_indexes.push(field_index(snapshot, &measure.field.name, &pivot.name)?);
+            measure_indexes.push(snapshot.required_field_index(&measure.field.name, &pivot.name)?);
         }
         let row_sort_measure_indexes =
             compile_axis_sort_measure_indexes(&pivot.name, &row_fields, &pivot.measures)?;
@@ -189,6 +189,58 @@ impl CompiledPivotPlan {
     }
 }
 
+impl SourceSnapshot {
+    pub(crate) fn required_field_index(&self, field_name: &str, pivot_name: &str) -> Result<usize> {
+        self.field_index(field_name).ok_or_else(|| {
+            Error::other(format!(
+                "pivot table {pivot_name} references unknown source field: {field_name}"
+            ))
+        })
+    }
+
+    pub(crate) fn formula_reference_item_id(
+        &self,
+        field_index: usize,
+        reference: &str,
+    ) -> Option<u32> {
+        let reference = reference.trim();
+        if reference.is_empty() {
+            return None;
+        }
+
+        let candidate = PivotValue::String(reference.to_string());
+        if let Some(id) = self.columns[field_index].id_for_value(&candidate) {
+            return Some(id);
+        }
+
+        self.columns[field_index]
+            .dictionary
+            .iter()
+            .enumerate()
+            .find_map(|(index, value)| match value {
+                PivotValue::String(text) if text.eq_ignore_ascii_case(reference) => {
+                    Some(index as u32)
+                }
+                _ if value.to_string().eq_ignore_ascii_case(reference) => Some(index as u32),
+                _ => None,
+            })
+    }
+
+    pub(crate) fn grouped_date_field_index(
+        &self,
+        field_name: &str,
+        unit: duke_sheets_core::PivotDateGroupUnit,
+    ) -> Option<(usize, String)> {
+        let base = grouped_date_header(field_name, unit);
+        self.headers
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, header)| grouped_header_matches(header, &base))
+            .map(|(index, header)| (index, header.clone()))
+    }
+}
+
 pub(crate) fn compile_collapsed_item_ids(
     axis_name: &str,
     pivot_name: &str,
@@ -228,27 +280,28 @@ pub(crate) fn compile_axis_fields(
     for field in fields {
         if let Some(units) = multi_unit_date_grouping_units(groupings, &field.field.name) {
             for unit in units {
-                let (index, header) =
-                    grouped_date_field_index(snapshot, &field.field.name, *unit).ok_or_else(
-                        || {
-                            Error::other(format!(
-                                "pivot table {pivot_name} references unknown grouped {axis_name} field: {}",
-                                grouped_date_header(&field.field.name, *unit)
-                            ))
-                        },
-                    )?;
+                let (index, header) = snapshot
+                    .grouped_date_field_index(&field.field.name, *unit)
+                    .ok_or_else(|| {
+                        Error::other(format!(
+                            "pivot table {pivot_name} references unknown grouped {axis_name} field: {}",
+                            grouped_date_header(&field.field.name, *unit)
+                        ))
+                    })?;
                 let mut grouped_field = field.clone();
                 grouped_field.field.name = header;
                 indexes.push(index);
                 compiled_fields.push(grouped_field);
             }
         } else {
-            let index = field_index(snapshot, &field.field.name, pivot_name).map_err(|_| {
-                Error::other(format!(
-                    "pivot table {pivot_name} references unknown {axis_name} field: {}",
-                    field.field.name
-                ))
-            })?;
+            let index = snapshot
+                .required_field_index(&field.field.name, pivot_name)
+                .map_err(|_| {
+                    Error::other(format!(
+                        "pivot table {pivot_name} references unknown {axis_name} field: {}",
+                        field.field.name
+                    ))
+                })?;
             indexes.push(index);
             compiled_fields.push(field.clone());
         }
@@ -277,7 +330,7 @@ pub(crate) fn compile_calculated_items(
     let mut targets = AHashSet::new();
 
     for item in calculated_items {
-        let field_index = field_index(snapshot, &item.field.name, pivot_name)?;
+        let field_index = snapshot.required_field_index(&item.field.name, pivot_name)?;
         let (axis, position) = calculated_item_axis(
             pivot_name,
             &item.field.name,
@@ -400,13 +453,13 @@ pub(crate) fn collect_calculated_item_formula_references(
 ) {
     match expr {
         FormulaExpr::NameRef(name) | FormulaExpr::String(name) => {
-            if let Some(item_id) = formula_reference_item_id(snapshot, field_index, name) {
+            if let Some(item_id) = snapshot.formula_reference_item_id(field_index, name) {
                 references.insert(item_id);
             }
         }
         FormulaExpr::CellRef(reference) => {
             if let Some(name) = calculated_item_cell_reference_name(reference) {
-                if let Some(item_id) = formula_reference_item_id(snapshot, field_index, &name) {
+                if let Some(item_id) = snapshot.formula_reference_item_id(field_index, &name) {
                     references.insert(item_id);
                 }
             }
@@ -510,12 +563,12 @@ pub(crate) fn calculated_item_formula_references_item(
 ) -> bool {
     match expr {
         FormulaExpr::NameRef(name) | FormulaExpr::String(name) => {
-            formula_reference_item_id(snapshot, field_index, name) == Some(item_id)
+            snapshot.formula_reference_item_id(field_index, name) == Some(item_id)
         }
         FormulaExpr::CellRef(reference) => {
             calculated_item_cell_reference_name(reference)
                 .as_deref()
-                .and_then(|name| formula_reference_item_id(snapshot, field_index, name))
+                .and_then(|name| snapshot.formula_reference_item_id(field_index, name))
                 == Some(item_id)
         }
         FormulaExpr::BinaryOp { left, right, .. } => {
@@ -545,52 +598,11 @@ pub(crate) fn calculated_item_formula_references_item(
     }
 }
 
-pub(crate) fn formula_reference_item_id(
-    snapshot: &SourceSnapshot,
-    field_index: usize,
-    reference: &str,
-) -> Option<u32> {
-    let reference = reference.trim();
-    if reference.is_empty() {
-        return None;
-    }
-
-    let candidate = PivotValue::String(reference.to_string());
-    if let Some(id) = snapshot.columns[field_index].id_for_value(&candidate) {
-        return Some(id);
-    }
-
-    snapshot.columns[field_index]
-        .dictionary
-        .iter()
-        .enumerate()
-        .find_map(|(index, value)| match value {
-            PivotValue::String(text) if text.eq_ignore_ascii_case(reference) => Some(index as u32),
-            _ if value.to_string().eq_ignore_ascii_case(reference) => Some(index as u32),
-            _ => None,
-        })
-}
-
 pub(crate) fn calculated_item_cell_reference_name(reference: &CellReference) -> Option<String> {
     reference
         .sheet
         .is_none()
         .then(|| reference.address.to_a1_string())
-}
-
-pub(crate) fn grouped_date_field_index(
-    snapshot: &SourceSnapshot,
-    field_name: &str,
-    unit: duke_sheets_core::PivotDateGroupUnit,
-) -> Option<(usize, String)> {
-    let base = grouped_date_header(field_name, unit);
-    snapshot
-        .headers
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, header)| grouped_header_matches(header, &base))
-        .map(|(index, header)| (index, header.clone()))
 }
 
 pub(crate) fn grouped_header_matches(header: &str, base: &str) -> bool {
@@ -691,7 +703,7 @@ pub(crate) fn parent_total_subtotal_positions(
                 column_positions.extend(0..column_indexes.len().saturating_sub(1));
             }
             PivotShowAs::PercentOfParentTotal { base_field } => {
-                let field_index = field_index(snapshot, &base_field.name, pivot_name)?;
+                let field_index = snapshot.required_field_index(&base_field.name, pivot_name)?;
                 if let Some(position) = row_indexes.iter().position(|index| *index == field_index) {
                     row_positions.insert(position);
                 } else if let Some(position) = column_indexes
@@ -724,7 +736,7 @@ pub(crate) fn validate_base_field(
     column_indexes: &[usize],
     base_field: &str,
 ) -> Result<usize> {
-    let field_index = field_index(snapshot, base_field, pivot_name)?;
+    let field_index = snapshot.required_field_index(base_field, pivot_name)?;
     if row_indexes.contains(&field_index) || column_indexes.contains(&field_index) {
         Ok(field_index)
     } else {
@@ -732,16 +744,4 @@ pub(crate) fn validate_base_field(
             "pivot table {pivot_name} uses show-as base field {base_field}, but that field is not on a row or column axis"
         )))
     }
-}
-
-pub(crate) fn field_index(
-    snapshot: &SourceSnapshot,
-    field_name: &str,
-    pivot_name: &str,
-) -> Result<usize> {
-    snapshot.field_index(field_name).ok_or_else(|| {
-        Error::other(format!(
-            "pivot table {pivot_name} references unknown source field: {field_name}"
-        ))
-    })
 }
