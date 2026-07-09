@@ -162,25 +162,39 @@ impl FtCmo {
 }
 
 /// Append a generic `ft`-framed subrecord.
-pub fn push_subrecord(out: &mut Vec<u8>, ft_id: u16, payload: &[u8]) {
+pub fn push_subrecord(out: &mut Vec<u8>, ft_id: u16, payload: &[u8]) -> XlsResult<()> {
+    let payload_len = u16::try_from(payload.len()).map_err(|_| {
+        XlsError::InvalidFormat(format!(
+            "Obj subrecord 0x{ft_id:04X} payload is {} bytes; maximum is {}",
+            payload.len(),
+            u16::MAX
+        ))
+    })?;
     out.extend_from_slice(&ft_id.to_le_bytes());
-    out.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+    out.extend_from_slice(&payload_len.to_le_bytes());
     out.extend_from_slice(payload);
+    Ok(())
 }
 
 /// Append the 4-byte Obj terminator (ftEnd). Present for every object
 /// type except list boxes and dropdowns (MS-XLS 2.4.181 `reserved`).
-pub fn push_end(out: &mut Vec<u8>) {
-    push_subrecord(out, ft::END, &[]);
+pub fn push_end(out: &mut Vec<u8>) -> XlsResult<()> {
+    push_subrecord(out, ft::END, &[])
 }
 
 /// Serialize `ObjFmla` content (everything after the leading cbFmla
 /// field): an `ObjectParsedFormula` (cce + 4 unused bytes + rgce)
 /// padded to an even byte count. Empty rgce yields empty content
 /// (cbFmla = 0).
-fn obj_fmla_content(rgce: &[u8]) -> Vec<u8> {
+fn obj_fmla_content(rgce: &[u8]) -> XlsResult<Vec<u8>> {
     if rgce.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
+    }
+    if rgce.len() > 0x7FFF {
+        return Err(XlsError::InvalidFormat(format!(
+            "ObjectParsedFormula rgce is {} bytes; maximum is 32767",
+            rgce.len()
+        )));
     }
     let mut content = Vec::with_capacity(8 + rgce.len());
     content.extend_from_slice(&(rgce.len() as u16).to_le_bytes());
@@ -189,39 +203,47 @@ fn obj_fmla_content(rgce: &[u8]) -> Vec<u8> {
     if content.len() % 2 != 0 {
         content.push(0);
     }
-    content
+    Ok(content)
 }
 
 /// Append an ObjFmla with a leading cbFmla field (the layout of
 /// `FtLbsData.fmla`).
-pub fn push_obj_fmla(out: &mut Vec<u8>, rgce: &[u8]) {
-    let content = obj_fmla_content(rgce);
-    out.extend_from_slice(&(content.len() as u16).to_le_bytes());
+pub fn push_obj_fmla(out: &mut Vec<u8>, rgce: &[u8]) -> XlsResult<()> {
+    let content = obj_fmla_content(rgce)?;
+    let content_len = u16::try_from(content.len()).map_err(|_| {
+        XlsError::InvalidFormat("ObjFmla content exceeds u16 length".into())
+    })?;
+    out.extend_from_slice(&content_len.to_le_bytes());
     out.extend_from_slice(&content);
+    Ok(())
 }
 
 /// Append an `ObjLinkFmla`/`FtMacro`-style subrecord: `ft` followed by
 /// an ObjFmla whose cbFmla doubles as the subrecord length field.
-pub fn push_fmla_subrecord(out: &mut Vec<u8>, ft_id: u16, rgce: &[u8]) {
+pub fn push_fmla_subrecord(out: &mut Vec<u8>, ft_id: u16, rgce: &[u8]) -> XlsResult<()> {
     out.extend_from_slice(&ft_id.to_le_bytes());
-    push_obj_fmla(out, rgce);
+    push_obj_fmla(out, rgce)
 }
 
 /// Parse ObjFmla content at `pos` (pointing at cbFmla) and return the
 /// rgce bytes. Advances `pos` past the whole ObjFmla.
 pub fn read_obj_fmla(data: &[u8], pos: &mut usize) -> XlsResult<Vec<u8>> {
     let cb_fmla = read_u16(data, pos)? as usize;
-    if *pos + cb_fmla > data.len() {
+    let Some(end) = pos.checked_add(cb_fmla) else {
+        return Err(XlsError::Parse("ObjFmla length overflow".into()));
+    };
+    if end > data.len() {
         return Err(XlsError::Parse("ObjFmla truncated".into()));
     }
-    let end = *pos + cb_fmla;
     if cb_fmla == 0 {
         return Ok(Vec::new());
     }
     let mut p = *pos;
     let cce = (read_u16(data, &mut p)? & 0x7FFF) as usize;
-    p += 4; // ObjectParsedFormula unused bytes
-    if p + cce > end {
+    p = p
+        .checked_add(4)
+        .ok_or_else(|| XlsError::Parse("ObjectParsedFormula offset overflow".into()))?;
+    if p.checked_add(cce).is_none_or(|rgce_end| rgce_end > end) {
         *pos = end;
         return Err(XlsError::Parse("ObjectParsedFormula rgce truncated".into()));
     }
@@ -265,7 +287,7 @@ pub struct SbsData {
 }
 
 impl SbsData {
-    pub fn write_to(&self, out: &mut Vec<u8>) {
+    pub fn write_to(&self, out: &mut Vec<u8>) -> XlsResult<()> {
         let mut payload = Vec::with_capacity(20);
         payload.extend_from_slice(&[0u8; 4]); // unused1
         payload.extend_from_slice(&self.val.to_le_bytes());
@@ -276,7 +298,7 @@ impl SbsData {
         payload.extend_from_slice(&(self.horizontal as u16).to_le_bytes());
         payload.extend_from_slice(&self.dx_scroll.to_le_bytes());
         payload.extend_from_slice(&self.flags.to_le_bytes());
-        push_subrecord(out, ft::SBS, &payload);
+        push_subrecord(out, ft::SBS, &payload)
     }
 
     /// Parse from subrecord payload bytes (after ft/cb).
@@ -349,9 +371,38 @@ impl LbsData {
     /// Serialize as a complete ftLbsData subrecord. `cbFContinued` is
     /// written as the actual content size, which satisfies the MS-XLS
     /// 2.5.147 requirement for structures contained in a single record.
-    pub fn write_to(&self, out: &mut Vec<u8>) {
+    pub fn write_to(&self, out: &mut Vec<u8>) -> XlsResult<()> {
+        if self.lines > 0x7FFF {
+            return Err(XlsError::InvalidFormat(format!(
+                "FtLbsData cLines {} exceeds 32767",
+                self.lines
+            )));
+        }
+        if self.sel > self.lines {
+            return Err(XlsError::InvalidFormat(format!(
+                "FtLbsData iSel {} exceeds cLines {}",
+                self.sel, self.lines
+            )));
+        }
+        if self.sel_type > 2 {
+            return Err(XlsError::InvalidFormat(format!(
+                "FtLbsData selection type {} is reserved",
+                self.sel_type
+            )));
+        }
+        if self.sel_type == 0 && !self.multi_sel.is_empty() {
+            return Err(XlsError::InvalidFormat(
+                "single-select FtLbsData cannot contain bsels".into(),
+            ));
+        }
+        if self.sel_type != 0 && self.multi_sel.len() != self.lines as usize {
+            return Err(XlsError::InvalidFormat(format!(
+                "FtLbsData bsels has {} entries but cLines is {}",
+                self.multi_sel.len(), self.lines
+            )));
+        }
         let mut content = Vec::new();
-        push_obj_fmla(&mut content, &self.input_rgce);
+        push_obj_fmla(&mut content, &self.input_rgce)?;
         content.extend_from_slice(&self.lines.to_le_bytes());
         content.extend_from_slice(&self.sel.to_le_bytes());
         let flags: u16 = (self.use_cb as u16)
@@ -373,7 +424,7 @@ impl LbsData {
                 content.push(b as u8);
             }
         }
-        push_subrecord(out, ft::LBS_DATA, &content);
+        push_subrecord(out, ft::LBS_DATA, &content)
     }
 
     /// Parse ftLbsData given the bytes following the ft field. The
@@ -449,48 +500,48 @@ impl LbsData {
 /// Append an FtCbls subrecord. The 12 payload bytes are reserved per
 /// MS-XLS 2.5.140; Excel mirrors the checked state into the first u16
 /// and writes 0x0003 in the last, so we do the same.
-pub fn push_cbls(out: &mut Vec<u8>, state: u16) {
+pub fn push_cbls(out: &mut Vec<u8>, state: u16) -> XlsResult<()> {
     let mut payload = [0u8; 12];
     payload[..2].copy_from_slice(&state.to_le_bytes());
     payload[10..].copy_from_slice(&0x0003u16.to_le_bytes());
-    push_subrecord(out, ft::CBLS, &payload);
+    push_subrecord(out, ft::CBLS, &payload)
 }
 
 /// Append an FtRbo subrecord. The 6 payload bytes are reserved per
 /// MS-XLS 2.5.152; Excel mirrors the checked state into the last u16.
-pub fn push_rbo(out: &mut Vec<u8>, state: u16) {
+pub fn push_rbo(out: &mut Vec<u8>, state: u16) -> XlsResult<()> {
     let mut payload = [0u8; 6];
     payload[4..].copy_from_slice(&state.to_le_bytes());
-    push_subrecord(out, ft::RBO, &payload);
+    push_subrecord(out, ft::RBO, &payload)
 }
 
 /// Append an FtCblsData subrecord (MS-XLS 2.5.141): fChecked, accel,
 /// reserved, flags. Excel sets undefined flag bit 1 unconditionally;
 /// mirrored for byte parity.
-pub fn push_cbls_data(out: &mut Vec<u8>, state: u16, no_3d: bool) {
+pub fn push_cbls_data(out: &mut Vec<u8>, state: u16, no_3d: bool) -> XlsResult<()> {
     let mut payload = Vec::with_capacity(8);
     payload.extend_from_slice(&state.to_le_bytes());
     payload.extend_from_slice(&0u16.to_le_bytes()); // accel
     payload.extend_from_slice(&0u16.to_le_bytes()); // reserved
     payload.extend_from_slice(&(0x0002u16 | no_3d as u16).to_le_bytes());
-    push_subrecord(out, ft::CBLS_DATA, &payload);
+    push_subrecord(out, ft::CBLS_DATA, &payload)
 }
 
 /// Append an FtRboData subrecord (MS-XLS 2.5.153).
-pub fn push_rbo_data(out: &mut Vec<u8>, id_rad_next: u16, first_btn: bool) {
+pub fn push_rbo_data(out: &mut Vec<u8>, id_rad_next: u16, first_btn: bool) -> XlsResult<()> {
     let mut payload = Vec::with_capacity(4);
     payload.extend_from_slice(&id_rad_next.to_le_bytes());
     payload.extend_from_slice(&(first_btn as u16).to_le_bytes());
-    push_subrecord(out, ft::RBO_DATA, &payload);
+    push_subrecord(out, ft::RBO_DATA, &payload)
 }
 
 /// Append an FtGboData subrecord (MS-XLS 2.5.145).
-pub fn push_gbo_data(out: &mut Vec<u8>, no_3d: bool) {
+pub fn push_gbo_data(out: &mut Vec<u8>, no_3d: bool) -> XlsResult<()> {
     let mut payload = Vec::with_capacity(6);
     payload.extend_from_slice(&0u16.to_le_bytes()); // accel
     payload.extend_from_slice(&0u16.to_le_bytes()); // reserved
     payload.extend_from_slice(&(no_3d as u16).to_le_bytes());
-    push_subrecord(out, ft::GBO_DATA, &payload);
+    push_subrecord(out, ft::GBO_DATA, &payload)
 }
 
 /// Everything extracted from one Obj record body.
@@ -685,7 +736,7 @@ mod tests {
         // PtgRef is 5 bytes -> content 11 -> padded to 12.
         let rgce = [0x24, 0x01, 0x00, 0x03, 0x00];
         let mut out = Vec::new();
-        push_obj_fmla(&mut out, &rgce);
+        push_obj_fmla(&mut out, &rgce).unwrap();
         assert_eq!(out.len(), 2 + 12);
         assert_eq!(u16::from_le_bytes([out[0], out[1]]), 12);
         let mut pos = 0;
@@ -695,7 +746,7 @@ mod tests {
 
         // Empty rgce -> cbFmla = 0, no content.
         let mut out = Vec::new();
-        push_obj_fmla(&mut out, &[]);
+        push_obj_fmla(&mut out, &[]).unwrap();
         assert_eq!(out, vec![0x00, 0x00]);
         let mut pos = 0;
         assert!(read_obj_fmla(&out, &mut pos).unwrap().is_empty());
@@ -714,7 +765,7 @@ mod tests {
             flags: 0x0001,
         };
         let mut out = Vec::new();
-        sbs.write_to(&mut out);
+        sbs.write_to(&mut out).unwrap();
         assert_eq!(out.len(), 24);
         let back = SbsData::from_payload(&out[4..]).unwrap();
         assert_eq!(back, sbs);
@@ -738,7 +789,7 @@ mod tests {
             }),
         };
         let mut out = Vec::new();
-        lbs.write_to(&mut out);
+        lbs.write_to(&mut out).unwrap();
         let back = LbsData::parse(&out[2..], ot::DROPDOWN).unwrap();
         assert_eq!(back, lbs);
     }
@@ -757,7 +808,7 @@ mod tests {
             drop: None,
         };
         let mut out = Vec::new();
-        lbs.write_to(&mut out);
+        lbs.write_to(&mut out).unwrap();
         let back = LbsData::parse(&out[2..], ot::LIST_BOX).unwrap();
         assert_eq!(back, lbs);
     }
@@ -860,8 +911,9 @@ mod tests {
             grbit: 0x4001,
         }
         .write_to(&mut body);
-        push_fmla_subrecord(&mut body, ft::MACRO, &[0x23, 0x01, 0x00, 0x00, 0x00]);
-        push_end(&mut body);
+        push_fmla_subrecord(&mut body, ft::MACRO, &[0x23, 0x01, 0x00, 0x00, 0x00])
+            .unwrap();
+        push_end(&mut body).unwrap();
         let parsed = parse_obj(&body).unwrap();
         assert_eq!(parsed.ot, ot::BUTTON);
         assert!(parsed.link_rgce.is_none());
@@ -870,7 +922,7 @@ mod tests {
     #[test]
     fn cbls_writers_mirror_excel_layout() {
         let mut out = Vec::new();
-        push_cbls(&mut out, 1);
+        push_cbls(&mut out, 1).unwrap();
         assert_eq!(
             out,
             vec![
@@ -880,31 +932,59 @@ mod tests {
         );
 
         let mut out = Vec::new();
-        push_cbls_data(&mut out, 2, true);
+        push_cbls_data(&mut out, 2, true).unwrap();
         assert_eq!(
             out,
             vec![0x12, 0x00, 0x08, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00]
         );
 
         let mut out = Vec::new();
-        push_rbo(&mut out, 1);
+        push_rbo(&mut out, 1).unwrap();
         assert_eq!(
             out,
             vec![0x0B, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00]
         );
 
         let mut out = Vec::new();
-        push_rbo_data(&mut out, 9, true);
+        push_rbo_data(&mut out, 9, true).unwrap();
         assert_eq!(
             out,
             vec![0x11, 0x00, 0x04, 0x00, 0x09, 0x00, 0x01, 0x00]
         );
 
         let mut out = Vec::new();
-        push_gbo_data(&mut out, true);
+        push_gbo_data(&mut out, true).unwrap();
         assert_eq!(
             out,
             vec![0x0F, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00]
         );
+    }
+
+    #[test]
+    fn encoder_rejects_overflowing_length_fields() {
+        let mut out = Vec::new();
+        let err = push_subrecord(&mut out, ft::LBS_DATA, &vec![0u8; 65_536]).unwrap_err();
+        assert!(err.to_string().contains("maximum is 65535"));
+        assert!(out.is_empty(), "failed framing must not mutate output");
+
+        let err = push_obj_fmla(&mut out, &vec![0u8; 32_768]).unwrap_err();
+        assert!(err.to_string().contains("maximum is 32767"));
+        assert!(out.is_empty(), "failed formula framing must not mutate output");
+    }
+
+    #[test]
+    fn lbs_writer_validates_selection_shape() {
+        let mut out = Vec::new();
+        let err = LbsData {
+            lines: 3,
+            sel: 0,
+            sel_type: 1,
+            multi_sel: vec![true, false],
+            ..Default::default()
+        }
+        .write_to(&mut out)
+        .unwrap_err();
+        assert!(err.to_string().contains("2 entries but cLines is 3"));
+        assert!(out.is_empty());
     }
 }

@@ -292,7 +292,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
             &addin_table,
         );
         if let Some(sheet_drawing) = drawing_state.sheets.get(&sheet_idx) {
-            write_sheet_drawing_records(&mut stream, sheet_drawing);
+            write_sheet_drawing_records(&mut stream, sheet_drawing)?;
         }
         write_eof(&mut stream);
         sheet_bof_offsets.push(bof_pos);
@@ -4724,7 +4724,7 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
 /// across the entire concatenated drawing stream. Readers
 /// concatenate the bodies of all `MSODRAWING` records for a sheet,
 /// then walk the resulting Escher tree.
-fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
+fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> XlsResult<()> {
     use crate::biff::escher::{
         comment_fopt, fsp_flags, rec_type as er, shape_type, write_client_data,
         write_client_textbox, write_patriarch_sp_container, OfficeArtClientAnchor, OfficeArtFdg,
@@ -4809,7 +4809,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
         }
     }
 
-    fn control_record(control: &ControlShape) -> ShapeRecord {
+    fn control_record(control: &ControlShape) -> XlsResult<ShapeRecord> {
         let mut pre = Vec::new();
         OfficeArtFsp {
             spid: control.spid,
@@ -4830,14 +4830,14 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
         }
 
         let mut obj = Vec::new();
-        write_control_obj_to_vec(&mut obj, control);
+        write_control_obj_to_vec(&mut obj, control)?;
 
-        ShapeRecord {
+        Ok(ShapeRecord {
             sp_payload: pre,
             post_obj: post,
             obj,
             post_txo,
-        }
+        })
     }
 
     // Build ShapeRecord for every shape in canonical order:
@@ -4855,7 +4855,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
         shape_records.push(comment_record(comment));
     }
     for control in &drawing.controls {
-        shape_records.push(control_record(control));
+        shape_records.push(control_record(control)?);
     }
 
     // The patriarch SP_CONTAINER (FSPGR + FSP) is always emitted
@@ -4936,6 +4936,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) {
     for comment in &drawing.comments {
         write_comment_note(stream, comment);
     }
+    Ok(())
 }
 
 /// One EMU unit of the ClientAnchor `dxL`/`dxR` field, in EMUs.
@@ -5372,7 +5373,7 @@ fn control_fopt(
 /// Emit a form control's `OBJ` record bytes into `out`. Subrecord
 /// presence and order follow MS-XLS 2.4.181; list boxes and
 /// dropdowns omit the trailing ftEnd.
-fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
+fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsResult<()> {
     use crate::biff::obj::{self, ot};
     use duke_sheets_core::{CheckState, FormControlKind, ListSelection};
 
@@ -5422,28 +5423,29 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
     .write_to(&mut body);
 
     let mut needs_end = true;
+    let mut lbs_start = None;
     match kind {
         FormControlKind::Button { .. } | FormControlKind::Label { .. } => {}
         FormControlKind::Checkbox { state, no_3d, .. } => {
             let s = state_u16(state);
-            obj::push_cbls(&mut body, s);
+            obj::push_cbls(&mut body, s)?;
             if !control.link_rgce.is_empty() {
-                obj::push_fmla_subrecord(&mut body, obj::ft::CBLS_FMLA, &control.link_rgce);
+                obj::push_fmla_subrecord(&mut body, obj::ft::CBLS_FMLA, &control.link_rgce)?;
             }
-            obj::push_cbls_data(&mut body, s, *no_3d);
+            obj::push_cbls_data(&mut body, s, *no_3d)?;
         }
         FormControlKind::OptionButton { state, no_3d, .. } => {
             let s = state_u16(state).min(1);
-            obj::push_cbls(&mut body, s);
-            obj::push_rbo(&mut body, s);
+            obj::push_cbls(&mut body, s)?;
+            obj::push_rbo(&mut body, s)?;
             if !control.link_rgce.is_empty() {
-                obj::push_fmla_subrecord(&mut body, obj::ft::CBLS_FMLA, &control.link_rgce);
+                obj::push_fmla_subrecord(&mut body, obj::ft::CBLS_FMLA, &control.link_rgce)?;
             }
-            obj::push_cbls_data(&mut body, s, *no_3d);
-            obj::push_rbo_data(&mut body, control.radio_next_id, control.radio_first);
+            obj::push_cbls_data(&mut body, s, *no_3d)?;
+            obj::push_rbo_data(&mut body, control.radio_next_id, control.radio_first)?;
         }
         FormControlKind::GroupBox { no_3d, .. } => {
-            obj::push_gbo_data(&mut body, *no_3d);
+            obj::push_gbo_data(&mut body, *no_3d)?;
         }
         FormControlKind::Scrollbar {
             value,
@@ -5467,9 +5469,9 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
                 dx_scroll: 22,
                 flags: 0x0001, // fDraw
             }
-            .write_to(&mut body);
+            .write_to(&mut body)?;
             if !control.link_rgce.is_empty() {
-                obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce);
+                obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
         }
         FormControlKind::Spinner {
@@ -5490,12 +5492,13 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
                 dx_scroll: 22,
                 flags: 0x0001, // fDraw
             }
-            .write_to(&mut body);
+            .write_to(&mut body)?;
             if !control.link_rgce.is_empty() {
-                obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce);
+                obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
         }
         FormControlKind::ListBox {
+            input_range,
             selection,
             selected,
             no_3d,
@@ -5511,24 +5514,31 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
                 dx_scroll: 16,
                 flags: 0x0001,
             }
-            .write_to(&mut body);
+            .write_to(&mut body)?;
             if !control.link_rgce.is_empty() {
-                obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce);
+                obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
             let sel_type: u16 = match selection {
                 ListSelection::Single => 0,
                 ListSelection::Multi => 1,
                 ListSelection::Extend => 2,
             };
-            let max_selected = selected.iter().copied().max().unwrap_or(0);
-            let lines = area_row_count(&control.input_rgce)
-                .unwrap_or(0)
-                .max(max_selected);
+            if input_range.is_some() && control.input_rgce.is_empty() {
+                return Err(XlsError::InvalidFormat(
+                    "XLS list box input range is not a supported single reference".into(),
+                ));
+            }
+            let lines = validated_list_selection_count(
+                &control.input_rgce,
+                selected,
+                matches!(selection, ListSelection::Single),
+            )?;
             let multi_sel = if sel_type != 0 {
                 (1..=lines).map(|i| selected.contains(&i)).collect()
             } else {
                 Vec::new()
             };
+            lbs_start = Some(body.len());
             obj::LbsData {
                 input_rgce: control.input_rgce.clone(),
                 lines,
@@ -5540,10 +5550,11 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
                 multi_sel,
                 drop: None,
             }
-            .write_to(&mut body);
+            .write_to(&mut body)?;
             needs_end = false;
         }
         FormControlKind::Dropdown {
+            input_range,
             selected,
             lines,
             no_3d,
@@ -5559,13 +5570,22 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
                 dx_scroll: 16,
                 flags: 0x0000,
             }
-            .write_to(&mut body);
+            .write_to(&mut body)?;
             if !control.link_rgce.is_empty() {
-                obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce);
+                obj::push_fmla_subrecord(&mut body, obj::ft::SBS_FMLA, &control.link_rgce)?;
             }
-            let item_count = area_row_count(&control.input_rgce)
-                .unwrap_or(0)
-                .max(selected.unwrap_or(0));
+            if input_range.is_some() && control.input_rgce.is_empty() {
+                return Err(XlsError::InvalidFormat(
+                    "XLS dropdown input range is not a supported single reference".into(),
+                ));
+            }
+            let selections: Vec<u16> = selected.iter().copied().collect();
+            let item_count = validated_list_selection_count(
+                &control.input_rgce,
+                &selections,
+                true,
+            )?;
+            lbs_start = Some(body.len());
             obj::LbsData {
                 input_rgce: control.input_rgce.clone(),
                 lines: item_count,
@@ -5581,14 +5601,86 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
                     min_width: 0,
                 }),
             }
-            .write_to(&mut body);
+            .write_to(&mut body)?;
             needs_end = false;
         }
     }
     if needs_end {
-        obj::push_end(&mut body);
+        obj::push_end(&mut body)?;
     }
-    write_biff_record(out, OBJ_RECORD, &body);
+    write_control_obj_records(out, &mut body, lbs_start)?;
+    Ok(())
+}
+
+/// Emit an OBJ record, continuing an oversized trailing FtLbsData
+/// structure through BIFF CONTINUE records. Our form-control writer
+/// never emits rgLines, so only the final `bsels` array can cross a
+/// record boundary.
+fn write_control_obj_records(
+    out: &mut Vec<u8>,
+    body: &mut [u8],
+    lbs_start: Option<usize>,
+) -> XlsResult<()> {
+    if body.len() <= BIFF_MAX_RECORD_BODY {
+        write_biff_record(out, OBJ_RECORD, body);
+        return Ok(());
+    }
+
+    let Some(lbs_start) = lbs_start else {
+        return Err(XlsError::InvalidFormat(format!(
+            "XLS OBJ body is {} bytes; only FtLbsData may use CONTINUE records",
+            body.len()
+        )));
+    };
+    let fields_start = lbs_start.checked_add(4).ok_or_else(|| {
+        XlsError::InvalidFormat("XLS FtLbsData continuation offset overflow".into())
+    })?;
+    if fields_start >= BIFF_MAX_RECORD_BODY || body.get(lbs_start..lbs_start + 2) != Some(&[0x13, 0x00]) {
+        return Err(XlsError::InvalidFormat(
+            "XLS FtLbsData cannot be continued from this OBJ layout".into(),
+        ));
+    }
+
+    // MS-XLS §2.5.147: when fields continue, cbFContinued is the
+    // number of bytes of this structure in the current record minus
+    // one (excluding ft/cbFContinued themselves).
+    let current_fields = BIFF_MAX_RECORD_BODY - fields_start;
+    let cb_f_continued = u16::try_from(current_fields - 1).map_err(|_| {
+        XlsError::InvalidFormat("XLS FtLbsData continuation length overflow".into())
+    })?;
+    body[lbs_start + 2..lbs_start + 4].copy_from_slice(&cb_f_continued.to_le_bytes());
+
+    write_biff_record(out, OBJ_RECORD, &body[..BIFF_MAX_RECORD_BODY]);
+    for chunk in body[BIFF_MAX_RECORD_BODY..].chunks(BIFF_MAX_RECORD_BODY) {
+        write_biff_record(out, CONTINUE_RECORD, chunk);
+    }
+    Ok(())
+}
+
+fn validated_list_selection_count(
+    input_rgce: &[u8],
+    selected: &[u16],
+    single_select: bool,
+) -> XlsResult<u16> {
+    let item_count = area_row_count(input_rgce).unwrap_or(0);
+    if item_count > 0x7FFF {
+        return Err(XlsError::InvalidFormat(format!(
+            "XLS list controls support at most 32767 items, got {item_count}"
+        )));
+    }
+    if single_select && selected.len() > 1 {
+        return Err(XlsError::InvalidFormat(
+            "XLS single-select list control has multiple selected items".into(),
+        ));
+    }
+    for &index in selected {
+        if index == 0 || u32::from(index) > item_count {
+            return Err(XlsError::InvalidFormat(format!(
+                "XLS list selection index {index} is outside the 1..={item_count} item range"
+            )));
+        }
+    }
+    Ok(item_count as u16)
 }
 
 /// Compile a cell-link / input-range formula to a reference-class
@@ -5652,19 +5744,19 @@ fn is_single_ref_ptg(rgce: &[u8]) -> bool {
 /// Number of rows spanned by a compiled single-ptg reference rgce.
 /// Used to derive `FtLbsData.cLines` (list item count) from the
 /// input range.
-fn area_row_count(rgce: &[u8]) -> Option<u16> {
+fn area_row_count(rgce: &[u8]) -> Option<u32> {
     let &first = rgce.first()?;
     match first & 0x1F {
         0x04 | 0x1A => Some(1), // PtgRef / PtgRef3d: single cell
         0x05 if rgce.len() >= 5 => {
             let rw_first = u16::from_le_bytes([rgce[1], rgce[2]]);
             let rw_last = u16::from_le_bytes([rgce[3], rgce[4]]);
-            Some(rw_last.saturating_sub(rw_first) + 1)
+            Some(u32::from(rw_last).saturating_sub(u32::from(rw_first)) + 1)
         }
         0x1B if rgce.len() >= 7 => {
             let rw_first = u16::from_le_bytes([rgce[3], rgce[4]]);
             let rw_last = u16::from_le_bytes([rgce[5], rgce[6]]);
-            Some(rw_last.saturating_sub(rw_first) + 1)
+            Some(u32::from(rw_last).saturating_sub(u32::from(rw_first)) + 1)
         }
         _ => None,
     }

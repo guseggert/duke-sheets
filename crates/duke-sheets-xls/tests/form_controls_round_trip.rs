@@ -733,6 +733,70 @@ fn scrollbar_values_above_i16_max_clamp() {
     }
 }
 
+#[test]
+fn large_multi_select_list_uses_continue_records() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$10000".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![1, 5_000, 10_000],
+            no_3d: false,
+        },
+        anchor(0, 0, 2, 10),
+    ));
+
+    let parsed = write_then_read(&wb);
+    match &parsed.worksheet(0).unwrap().form_controls()[0].kind {
+        FormControlKind::ListBox { selected, .. } => {
+            assert_eq!(selected, &vec![1, 5_000, 10_000]);
+        }
+        other => panic!("expected ListBox, got {other:?}"),
+    }
+}
+
+#[test]
+fn full_column_list_range_returns_a_clean_error() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::ListBox {
+                input_range: Some("$H$1:$H$65536".to_string()),
+                cell_link: None,
+                selection: ListSelection::Single,
+                selected: Vec::new(),
+                no_3d: false,
+            },
+            anchor(0, 0, 2, 10),
+        ));
+
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("cLines exceeds the BIFF8 limit");
+    assert!(err.to_string().contains("32767"));
+}
+
+#[test]
+fn list_selection_outside_input_range_returns_a_clean_error() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::ListBox {
+                input_range: Some("$H$1:$H$4".to_string()),
+                cell_link: None,
+                selection: ListSelection::Single,
+                selected: vec![5],
+                no_3d: false,
+            },
+            anchor(0, 0, 2, 4),
+        ));
+
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("selection exceeds cLines");
+    assert!(err.to_string().contains("selection index 5"));
+}
+
 /// LibreOffice envelope check: write an XLS carrying one of every
 /// control kind, open via URP, read the anchor cell's value back.
 ///
