@@ -9,6 +9,7 @@
 
 pub mod escher;
 pub mod formula;
+pub mod obj;
 pub mod parser;
 pub mod records;
 pub mod strings;
