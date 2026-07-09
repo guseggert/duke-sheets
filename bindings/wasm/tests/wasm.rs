@@ -4,7 +4,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use js_sys::{Function, Object, Reflect};
+use js_sys::{Array, Function, Object, Reflect};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
@@ -323,6 +323,64 @@ fn make_options(entries: &[(&str, JsValue)]) -> JsValue {
         Reflect::set(&obj, &JsValue::from_str(key), val).unwrap();
     }
     obj.into()
+}
+
+fn control_anchor() -> JsValue {
+    make_options(&[
+        ("fromCol", JsValue::from_f64(1.0)),
+        ("fromRow", JsValue::from_f64(1.0)),
+        ("fromColOffset", JsValue::from_f64(0.0)),
+        ("fromRowOffset", JsValue::from_f64(0.0)),
+        ("toCol", JsValue::from_f64(3.0)),
+        ("toRow", JsValue::from_f64(2.0)),
+        ("toColOffset", JsValue::from_f64(0.0)),
+        ("toRowOffset", JsValue::from_f64(0.0)),
+        ("editAs", JsValue::from_str("twoCell")),
+    ])
+}
+
+fn form_control(kind: JsValue) -> JsValue {
+    make_options(&[("anchor", control_anchor()), ("kind", kind)])
+}
+
+#[wasm_bindgen_test]
+fn test_form_control_mutations_and_roundtrip() {
+    let wb = Workbook::new();
+    let sheet = wb.get_sheet(0).unwrap();
+    let selected = Array::new();
+    selected.push(&JsValue::from_f64(1.0));
+    selected.push(&JsValue::from_f64(3.0));
+    let kinds = vec![
+        make_options(&[("kind", JsValue::from_str("button")), ("caption", JsValue::from_str("Run"))]),
+        make_options(&[("kind", JsValue::from_str("checkbox")), ("caption", JsValue::from_str("Check")), ("state", JsValue::from_str("checked")), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("optionButton")), ("caption", JsValue::from_str("Option")), ("state", JsValue::from_str("unchecked")), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("label")), ("caption", JsValue::from_str("Label"))]),
+        make_options(&[("kind", JsValue::from_str("groupBox")), ("caption", JsValue::from_str("Group")), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("listBox")), ("inputRange", JsValue::from_str("$A$1:$A$3")), ("selection", JsValue::from_str("multi")), ("selected", selected.into()), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("dropdown")), ("inputRange", JsValue::from_str("$A$1:$A$3")), ("selected", JsValue::from_f64(2.0)), ("lines", JsValue::from_f64(8.0)), ("no3D", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("scrollbar")), ("value", JsValue::from_f64(5.0)), ("min", JsValue::from_f64(0.0)), ("max", JsValue::from_f64(10.0)), ("increment", JsValue::from_f64(1.0)), ("page", JsValue::from_f64(2.0)), ("horizontal", JsValue::FALSE)]),
+        make_options(&[("kind", JsValue::from_str("spinner")), ("value", JsValue::from_f64(2.0)), ("min", JsValue::from_f64(0.0)), ("max", JsValue::from_f64(10.0)), ("increment", JsValue::from_f64(1.0))]),
+    ];
+    for kind in kinds {
+        sheet.add_form_control(form_control(kind)).unwrap();
+    }
+    assert_eq!(sheet.form_control_count().unwrap(), 9);
+    let controls = Array::from(&sheet.form_controls().unwrap());
+    assert_eq!(controls.length(), 9);
+
+    sheet
+        .set_form_control(
+            0,
+            form_control(make_options(&[("kind", JsValue::from_str("label")), ("caption", JsValue::from_str("Replaced"))])),
+        )
+        .unwrap();
+    sheet.remove_form_control(0).unwrap();
+    assert_eq!(sheet.form_control_count().unwrap(), 8);
+
+    for bytes in [wb.save_xlsx_bytes().unwrap(), wb.save_xlsb_bytes().unwrap()] {
+        let reopened = Workbook::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.get_sheet(0).unwrap().form_control_count().unwrap(), 8);
+    }
 }
 
 #[wasm_bindgen_test]
