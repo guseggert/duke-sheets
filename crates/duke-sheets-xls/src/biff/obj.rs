@@ -447,6 +447,9 @@ impl LbsData {
         let sel_type = (flags_lct >> 4) & 0x3;
         let valid_plex = flags_lct & 0x0002 != 0;
         let lct = (flags_lct >> 8) as u8;
+        if lines > 0x7FFF || (!use_cb && sel > lines) || sel_type > 2 {
+            return Err(XlsError::Parse("invalid FtLbsData list metadata".into()));
+        }
 
         let mut drop = None;
         if obj_ot == ot::DROPDOWN {
@@ -457,10 +460,28 @@ impl LbsData {
             // alignment byte when the string's byte size is odd.
             let cch = read_u16(data, &mut pos)? as usize;
             let grbit = read_u8(data, &mut pos)?;
-            let str_bytes = 3 + if grbit & 0x01 != 0 { cch * 2 } else { cch };
-            pos += str_bytes - 3;
+            let char_bytes = if grbit & 0x01 != 0 {
+                cch.checked_mul(2)
+            } else {
+                Some(cch)
+            }
+            .ok_or_else(|| XlsError::Parse("FtLbsData string length overflow".into()))?;
+            pos = pos
+                .checked_add(char_bytes)
+                .ok_or_else(|| XlsError::Parse("FtLbsData string offset overflow".into()))?;
+            if pos > data.len() {
+                return Err(XlsError::Parse("FtLbsData dropdown string truncated".into()));
+            }
+            let str_bytes = 3usize
+                .checked_add(char_bytes)
+                .ok_or_else(|| XlsError::Parse("FtLbsData string size overflow".into()))?;
             if str_bytes % 2 != 0 {
-                pos += 1;
+                pos = pos
+                    .checked_add(1)
+                    .ok_or_else(|| XlsError::Parse("FtLbsData padding overflow".into()))?;
+                if pos > data.len() {
+                    return Err(XlsError::Parse("FtLbsData dropdown padding truncated".into()));
+                }
             }
             drop = Some(DropData {
                 style,
@@ -474,13 +495,28 @@ impl LbsData {
             for _ in 0..lines {
                 let cch = read_u16(data, &mut pos)? as usize;
                 let grbit = read_u8(data, &mut pos)?;
-                pos += if grbit & 0x01 != 0 { cch * 2 } else { cch };
+                let byte_len = if grbit & 0x01 != 0 {
+                    cch.checked_mul(2)
+                } else {
+                    Some(cch)
+                }
+                .ok_or_else(|| XlsError::Parse("FtLbsData rgLines length overflow".into()))?;
+                pos = pos
+                    .checked_add(byte_len)
+                    .ok_or_else(|| XlsError::Parse("FtLbsData rgLines offset overflow".into()))?;
+                if pos > data.len() {
+                    return Err(XlsError::Parse("FtLbsData rgLines truncated".into()));
+                }
             }
         }
         let mut multi_sel = Vec::new();
         if sel_type != 0 {
             for _ in 0..lines {
-                multi_sel.push(read_u8(data, &mut pos)? != 0);
+                match read_u8(data, &mut pos)? {
+                    0 => multi_sel.push(false),
+                    1 => multi_sel.push(true),
+                    _ => return Err(XlsError::Parse("FtLbsData bsels value is not Boolean".into())),
+                }
             }
         }
         Ok(LbsData {
@@ -565,6 +601,8 @@ pub struct ParsedObj {
     pub link_rgce: Option<Vec<u8>>,
     /// List/dropdown data from FtLbsData.
     pub lbs: Option<LbsData>,
+    /// Mandatory FtLbsData existed but was malformed.
+    pub lbs_malformed: bool,
     /// fNo3d from FtGboData (group box only).
     pub gbo_no_3d: Option<bool>,
 }
@@ -589,8 +627,9 @@ pub fn parse_obj(body: &[u8]) -> XlsResult<ParsedObj> {
     while pos + 4 <= body.len() {
         let ft_id = u16::from_le_bytes([body[pos], body[pos + 1]]);
         if ft_id == ft::LBS_DATA {
-            if let Ok(lbs) = LbsData::parse(&body[pos + 2..], parsed.ot) {
-                parsed.lbs = Some(lbs);
+            match LbsData::parse(&body[pos + 2..], parsed.ot) {
+                Ok(lbs) => parsed.lbs = Some(lbs),
+                Err(_) => parsed.lbs_malformed = true,
             }
             break;
         }
@@ -892,6 +931,24 @@ mod tests {
         assert!(lbs.use_cb);
         assert_eq!(lbs.lct, 0x03, "lct = autofilter behavior class");
         assert!(lbs.input_rgce.is_empty());
+    }
+
+    #[test]
+    fn malformed_mandatory_lbs_data_is_flagged() {
+        let mut body = Vec::new();
+        FtCmo {
+            ot: ot::DROPDOWN,
+            id: 1,
+            grbit: cmo_flags::LOCKED,
+        }
+        .write_to(&mut body);
+        body.extend_from_slice(&ft::LBS_DATA.to_le_bytes());
+        body.extend_from_slice(&8u16.to_le_bytes()); // cbFContinued
+        body.extend_from_slice(&[0x02, 0x00]); // truncated ObjFmla
+
+        let parsed = parse_obj(&body).unwrap();
+        assert!(parsed.lbs.is_none());
+        assert!(parsed.lbs_malformed);
     }
 
     #[test]

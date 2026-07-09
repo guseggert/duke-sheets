@@ -2609,6 +2609,9 @@ impl XlsReader {
             }
             let mut shape_type: u16 = 0;
             let mut patriarch = false;
+            let mut deleted = false;
+            let mut has_fsp = false;
+            let mut has_client_data = false;
             let mut anchor: Option<OfficeArtClientAnchor> = None;
             let mut c = 0usize;
             while c.saturating_add(HEADER_LEN) <= inner.len() {
@@ -2621,8 +2624,10 @@ impl XlsReader {
                 match ih.rec_type {
                     er::FSP => {
                         if let Ok((fsp, st, _)) = OfficeArtFsp::read_from(&inner[c..]) {
+                            has_fsp = true;
                             shape_type = st;
                             patriarch = fsp.grf_persistence & fsp_flags::PATRIARCH != 0;
+                            deleted = fsp.grf_persistence & fsp_flags::DELETED != 0;
                         }
                     }
                     er::CLIENT_ANCHOR => {
@@ -2630,11 +2635,12 @@ impl XlsReader {
                             anchor = Some(a);
                         }
                     }
+                    er::CLIENT_DATA => has_client_data = true,
                     _ => {}
                 }
                 c = end;
             }
-            if !patriarch {
+            if has_fsp && has_client_data && !patriarch && !deleted {
                 shapes.push(EscherShapeInfo { shape_type, anchor });
             }
             false
@@ -2787,6 +2793,11 @@ impl XlsReader {
                     | ot::SPINNER
             );
             if !is_control {
+                continue;
+            }
+            if matches!(parsed.ot, ot::LIST_BOX | ot::DROPDOWN)
+                && (parsed.lbs_malformed || parsed.lbs.is_none())
+            {
                 continue;
             }
             // Excel persists auxiliary UI dropdowns (one ot=0x14 OBJ
@@ -3070,7 +3081,9 @@ impl XlsReader {
             return Some(String::new());
         }
 
-        // Text lives in the first CONTINUE block
+        // Text starts in the first CONTINUE block. Every subsequent
+        // text continuation starts with its own encoding grbit; the
+        // final `cbRuns` bytes are formatting data, not text.
         let text_start = if !continue_offsets.is_empty() {
             continue_offsets[0]
         } else if data.len() > 18 {
@@ -3083,32 +3096,47 @@ impl XlsReader {
             return None;
         }
 
-        let grbit = data[text_start];
-        let char_data_start = text_start + 1;
-
-        if (grbit & 0x01) != 0 {
-            // UTF-16LE
-            let byte_len = text_len * 2;
-            if char_data_start + byte_len > data.len() {
-                return None;
-            }
-            let chars: Vec<u16> = data[char_data_start..char_data_start + byte_len]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect();
-            Some(String::from_utf16_lossy(&chars))
+        let cb_runs = u16::from_le_bytes([data[12], data[13]]) as usize;
+        let text_end = data.len().saturating_sub(cb_runs).max(text_start);
+        let mut starts: Vec<usize> = if continue_offsets.is_empty() {
+            vec![text_start]
         } else {
-            // Compressed Latin-1
-            if char_data_start + text_len > data.len() {
-                return None;
-            }
-            Some(
-                data[char_data_start..char_data_start + text_len]
-                    .iter()
-                    .map(|&b| b as char)
-                    .collect(),
-            )
+            continue_offsets
+                .iter()
+                .copied()
+                .filter(|&offset| offset >= text_start && offset < text_end)
+                .collect()
+        };
+        if starts.first().copied() != Some(text_start) {
+            starts.insert(0, text_start);
         }
+
+        let mut chars = Vec::with_capacity(text_len);
+        for (index, &segment_start) in starts.iter().enumerate() {
+            if chars.len() >= text_len || segment_start >= text_end {
+                break;
+            }
+            let segment_end = starts
+                .get(index + 1)
+                .copied()
+                .unwrap_or(text_end)
+                .min(text_end);
+            let Some((&grbit, encoded)) = data
+                .get(segment_start..segment_end)
+                .and_then(|segment| segment.split_first())
+            else {
+                continue;
+            };
+            let remaining = text_len - chars.len();
+            if grbit & 0x01 != 0 {
+                for pair in encoded.chunks_exact(2).take(remaining) {
+                    chars.push(u16::from_le_bytes([pair[0], pair[1]]));
+                }
+            } else {
+                chars.extend(encoded.iter().take(remaining).map(|&byte| byte as u16));
+            }
+        }
+        (!chars.is_empty()).then(|| String::from_utf16_lossy(&chars))
     }
 
     /// Parse a NOTE record to create a cell comment.
@@ -4056,6 +4084,25 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_txo_text_across_encoding_switch_continues() {
+        let mut data = vec![0u8; 18];
+        data[10..12].copy_from_slice(&5u16.to_le_bytes()); // cchText
+        data[12..14].copy_from_slice(&16u16.to_le_bytes()); // cbRuns
+
+        let first = data.len();
+        data.extend_from_slice(&[0x00, b'A', b'B', b'C']);
+        let second = data.len();
+        data.push(0x01);
+        data.extend_from_slice(&(b'D' as u16).to_le_bytes());
+        data.extend_from_slice(&(b'E' as u16).to_le_bytes());
+        let runs = data.len();
+        data.extend_from_slice(&[0u8; 16]);
+
+        let text = XlsReader::parse_txo_text(&data, &[first, second, runs]);
+        assert_eq!(text, Some("ABCDE".to_string()));
+    }
+
+    #[test]
     fn test_parse_note_with_comment() {
         // Build OBJ record with id=7
         let mut obj_data = vec![0u8; 22];
@@ -4172,6 +4219,23 @@ mod tests {
     }
 
     #[test]
+    fn malformed_dropdown_obj_is_not_a_form_control() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&0x0015u16.to_le_bytes()); // ftCmo
+        body.extend_from_slice(&0x0012u16.to_le_bytes());
+        body.extend_from_slice(&0x0014u16.to_le_bytes()); // ot = dropdown
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&0x0011u16.to_le_bytes());
+        body.extend_from_slice(&[0u8; 12]);
+        body.extend_from_slice(&0x0013u16.to_le_bytes()); // ftLbsData
+        body.extend_from_slice(&8u16.to_le_bytes());
+        body.extend_from_slice(&[0x02, 0x00]); // truncated ObjFmla
+
+        let ws = parse(vec![rec(records::OBJ, body)]);
+        assert_eq!(ws.form_control_count(), 0);
+    }
+
+    #[test]
     fn control_without_escher_shape_gets_default_anchor() {
         // OBJ present but no MSODRAWING stream: the count mismatch
         // degrades to a default anchor, not a dropped control.
@@ -4254,6 +4318,51 @@ mod tests {
             true
         });
         assert!(!visited, "invalid record body is rejected before visiting");
+    }
+
+    #[test]
+    fn escher_shape_pairing_skips_deleted_and_clientless_shapes() {
+        use crate::biff::escher::{
+            fsp_flags, rec_type, shape_type, write_client_data, OfficeArtFsp,
+            OfficeArtRecordHeader,
+        };
+
+        let shape = |spid: u32, flags: u32, has_client_data: bool| {
+            let mut body = Vec::new();
+            OfficeArtFsp {
+                spid,
+                grf_persistence: flags,
+            }
+            .write_to(shape_type::HOST_CONTROL, &mut body);
+            if has_client_data {
+                write_client_data(&mut body);
+            }
+            let mut out = Vec::new();
+            OfficeArtRecordHeader::container(rec_type::SP_CONTAINER, 0, body.len() as u32)
+                .write_to(&mut out);
+            out.extend_from_slice(&body);
+            out
+        };
+
+        let mut bytes = shape(
+            1025,
+            fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT | fsp_flags::DELETED,
+            true,
+        );
+        bytes.extend_from_slice(&shape(
+            1026,
+            fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+            false,
+        ));
+        bytes.extend_from_slice(&shape(
+            1027,
+            fsp_flags::HAVE_ANCHOR | fsp_flags::HAVE_SPT,
+            true,
+        ));
+
+        let shapes = XlsReader::collect_escher_shapes(&bytes);
+        assert_eq!(shapes.len(), 1);
+        assert_eq!(shapes[0].shape_type, shape_type::HOST_CONTROL);
     }
 
     // ── Hyperlink tests ───────────────────────────────────────────────

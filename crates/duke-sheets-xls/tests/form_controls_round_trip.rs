@@ -686,29 +686,24 @@ fn cross_sheet_input_range_round_trips() {
 }
 
 #[test]
-fn uncompilable_cell_link_is_dropped_not_corrupted() {
+fn uncompilable_cell_link_returns_a_clean_error() {
     // A cell link that isn't a single reference cannot be encoded in
     // an ObjectParsedFormula; the writer drops it rather than emit an
     // out-of-spec record.
-    let kind = single_control_round_trip(FormControlKind::Checkbox {
-        caption: "bad link".to_string(),
-        state: CheckState::Checked,
-        cell_link: Some("SUM(A1:A3)".to_string()),
-        no_3d: false,
-    });
-    match kind {
-        FormControlKind::Checkbox {
-            caption,
-            state,
-            cell_link,
-            ..
-        } => {
-            assert_eq!(caption, "bad link");
-            assert_eq!(state, CheckState::Checked);
-            assert_eq!(cell_link, None, "non-reference link must be dropped");
-        }
-        other => panic!("expected Checkbox, got {other:?}"),
-    }
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::Checkbox {
+                caption: "bad link".to_string(),
+                state: CheckState::Checked,
+                cell_link: Some("SUM(A1:A3)".to_string()),
+                no_3d: false,
+            },
+            anchor(0, 0, 2, 2),
+        ));
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("non-reference link is invalid");
+    assert!(err.to_string().contains("must be one BIFF8"));
 }
 
 #[test]
@@ -795,6 +790,94 @@ fn list_selection_outside_input_range_returns_a_clean_error() {
 
     let err = XlsWriter::write_to_bytes(&wb).expect_err("selection exceeds cLines");
     assert!(err.to_string().contains("selection index 5"));
+}
+
+#[test]
+fn control_anchor_outside_biff8_grid_returns_a_clean_error() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::Button {
+                caption: "outside".to_string(),
+            },
+            anchor(256, 0, 257, 1),
+        ));
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("column 256 is outside XLS");
+    assert!(err.to_string().contains("BIFF8 sheet grid"));
+}
+
+#[test]
+fn reversed_control_anchor_returns_a_clean_error() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::Button {
+                caption: "reversed".to_string(),
+            },
+            anchor(4, 4, 2, 2),
+        ));
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("reversed anchor is invalid");
+    assert!(err.to_string().contains("endpoints are reversed"));
+}
+
+#[test]
+fn out_of_grid_control_formula_returns_a_clean_error() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::Checkbox {
+                caption: "link".to_string(),
+                state: CheckState::Checked,
+                cell_link: Some("$IW$1".to_string()),
+                no_3d: false,
+            },
+            anchor(0, 0, 2, 2),
+        ));
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("column IW is outside XLS");
+    assert!(err.to_string().contains("must be one BIFF8"));
+}
+
+#[test]
+fn invalid_scrollbar_tuple_returns_a_clean_error() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::Scrollbar {
+                value: 50,
+                min: 100,
+                max: 10,
+                increment: 1,
+                page: 10,
+                horizontal: false,
+                cell_link: None,
+            },
+            anchor(0, 0, 1, 5),
+        ));
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("invalid scrollbar bounds");
+    assert!(err.to_string().contains("min <= value <= max"));
+}
+
+#[test]
+fn mixed_option_button_returns_a_clean_error() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::OptionButton {
+                caption: "mixed".to_string(),
+                state: CheckState::Mixed,
+                cell_link: None,
+                first_in_group: true,
+                no_3d: false,
+            },
+            anchor(0, 0, 2, 2),
+        ));
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("Mixed is checkbox-only");
+    assert!(err.to_string().contains("cannot use the Mixed state"));
 }
 
 /// LibreOffice envelope check: write an XLS carrying one of every

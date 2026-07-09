@@ -4037,7 +4037,7 @@ fn push_ref_payload(
     out: &mut Vec<u8>,
     addr: &duke_sheets_core::CellAddress,
 ) -> Result<(), UnsupportedToken> {
-    if addr.row > u16::MAX as u32 {
+    if addr.row > u16::MAX as u32 || addr.col > 0xFF {
         return Err(UnsupportedToken);
     }
     out.extend_from_slice(&(addr.row as u16).to_le_bytes());
@@ -4091,7 +4091,7 @@ fn push_area_payload(
 ) -> Result<(), UnsupportedToken> {
     let start = &range.start;
     let end = &range.end;
-    if start.row > u16::MAX as u32 {
+    if start.row > u16::MAX as u32 || start.col > 0xFF || end.col > 0xFF {
         return Err(UnsupportedToken);
     }
     // Clamp end.row to BIFF8's row limit. The XLSX-style parser
@@ -4509,12 +4509,14 @@ fn compute_drawing_state(
             let link_rgce = control
                 .cell_link()
                 .map(|f| encode_control_ref_formula(f, externsheet, names, addins))
+                .transpose()?
                 .unwrap_or_default();
             let input_rgce = match &control.kind {
                 FormControlKind::ListBox { input_range, .. }
                 | FormControlKind::Dropdown { input_range, .. } => input_range
                     .as_deref()
                     .map(|f| encode_control_ref_formula(f, externsheet, names, addins))
+                    .transpose()?
                     .unwrap_or_default(),
                 _ => Vec::new(),
             };
@@ -4817,7 +4819,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> 
         }
         .write_to(shape_type::HOST_CONTROL, &mut pre);
         control_fopt(&control.control.kind, control.text_id).write_to(&mut pre);
-        client_anchor_from_drawing_anchor(&control.control.anchor).write_to(&mut pre);
+        client_anchor_from_drawing_anchor(&control.control.anchor)?.write_to(&mut pre);
         write_client_data(&mut pre);
 
         // Captioned controls carry their text like comments do: a
@@ -4848,7 +4850,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> 
     let mut shape_records: Vec<ShapeRecord> = Vec::new();
     for picture in &drawing.pictures {
         let mut anchor = Vec::new();
-        client_anchor_from_drawing_anchor(&picture.anchor).write_to(&mut anchor);
+        client_anchor_from_drawing_anchor(&picture.anchor)?.write_to(&mut anchor);
         shape_records.push(picture_record(picture, anchor));
     }
     for comment in &drawing.comments {
@@ -4950,14 +4952,12 @@ pub(crate) const ANCHOR_DX_EMU_PER_UNIT: i64 = 595;
 /// (190,500 EMU) one `dyT` unit equals 744 EMU.
 pub(crate) const ANCHOR_DY_EMU_PER_UNIT: i64 = 744;
 
-fn emu_to_dx_units(emu: i64) -> u16 {
-    let units = (emu / ANCHOR_DX_EMU_PER_UNIT).clamp(0, 1023);
-    units as u16
+fn emu_to_dx_units(emu: i64) -> i16 {
+    (emu / ANCHOR_DX_EMU_PER_UNIT).clamp(i16::MIN as i64, 1023) as i16
 }
 
-fn emu_to_dy_units(emu: i64) -> u16 {
-    let units = (emu / ANCHOR_DY_EMU_PER_UNIT).clamp(0, 255);
-    units as u16
+fn emu_to_dy_units(emu: i64) -> i16 {
+    (emu / ANCHOR_DY_EMU_PER_UNIT).clamp(i16::MIN as i64, 255) as i16
 }
 
 /// Translate a `duke_sheets_chart::DrawingAnchor` to the
@@ -4981,7 +4981,7 @@ fn emu_to_dy_units(emu: i64) -> u16 {
 /// nearest unit boundary.
 fn client_anchor_from_drawing_anchor(
     anchor: &duke_sheets_chart::DrawingAnchor,
-) -> crate::biff::escher::OfficeArtClientAnchor {
+) -> XlsResult<crate::biff::escher::OfficeArtClientAnchor> {
     use crate::biff::escher::OfficeArtClientAnchor;
     use duke_sheets_chart::{DrawingAnchor, EditAs};
 
@@ -5009,33 +5009,78 @@ fn client_anchor_from_drawing_anchor(
         start_row: u32,
         start_off_y: i64,
         height: i64,
-    ) -> (u16, i64, u32, i64) {
-        let total_x = start_col as i64 * DEFAULT_COL_EMU + start_off_x + width;
-        let end_col = (total_x / DEFAULT_COL_EMU).max(0) as u16;
-        let end_off_x = total_x - end_col as i64 * DEFAULT_COL_EMU;
-        let total_y = start_row as i64 * DEFAULT_ROW_EMU + start_off_y + height;
-        let end_row = (total_y / DEFAULT_ROW_EMU).max(0) as u32;
-        let end_off_y = total_y - end_row as i64 * DEFAULT_ROW_EMU;
-        (end_col, end_off_x, end_row, end_off_y)
+    ) -> XlsResult<(u16, i64, u32, i64)> {
+        if width < 0 || height < 0 {
+            return Err(XlsError::InvalidFormat(
+                "XLS drawing anchor width/height cannot be negative".into(),
+            ));
+        }
+        let total_x = start_col as i128 * DEFAULT_COL_EMU as i128
+            + start_off_x as i128
+            + width as i128;
+        let total_y = start_row as i128 * DEFAULT_ROW_EMU as i128
+            + start_off_y as i128
+            + height as i128;
+        if total_x < 0 || total_y < 0 {
+            return Err(XlsError::InvalidFormat(
+                "XLS drawing anchor coordinates cannot be negative".into(),
+            ));
+        }
+        let end_col = total_x / DEFAULT_COL_EMU as i128;
+        let end_row = total_y / DEFAULT_ROW_EMU as i128;
+        if end_col > 0xFF || end_row > u16::MAX as i128 {
+            return Err(XlsError::InvalidFormat(
+                "XLS drawing anchor exceeds the BIFF8 sheet grid".into(),
+            ));
+        }
+        let end_off_x = total_x - end_col * DEFAULT_COL_EMU as i128;
+        let end_off_y = total_y - end_row * DEFAULT_ROW_EMU as i128;
+        Ok((
+            end_col as u16,
+            end_off_x as i64,
+            end_row as u32,
+            end_off_y as i64,
+        ))
     }
 
-    match anchor {
-        DrawingAnchor::TwoCell { from, to, edit_as } => OfficeArtClientAnchor {
-            flag: edit_as_to_flag(edit_as),
-            col_l: from.col,
-            dx_l: emu_to_dx_units(from.col_offset_emu),
-            row_t: from.row as u16,
-            dy_t: emu_to_dy_units(from.row_offset_emu),
-            col_r: to.col,
-            dx_r: emu_to_dx_units(to.col_offset_emu),
-            row_b: to.row as u16,
-            dy_b: emu_to_dy_units(to.row_offset_emu),
-        },
+    let validate_marker = |marker: &duke_sheets_chart::CellMarker| -> XlsResult<()> {
+        if marker.col > 0xFF || marker.row > u16::MAX as u32 {
+            return Err(XlsError::InvalidFormat(
+                "XLS drawing anchor exceeds the BIFF8 sheet grid".into(),
+            ));
+        }
+        Ok(())
+    };
+
+    let result = match anchor {
+        DrawingAnchor::TwoCell { from, to, edit_as } => {
+            validate_marker(from)?;
+            validate_marker(to)?;
+            if (to.col, to.col_offset_emu) < (from.col, from.col_offset_emu)
+                || (to.row, to.row_offset_emu) < (from.row, from.row_offset_emu)
+            {
+                return Err(XlsError::InvalidFormat(
+                    "XLS drawing anchor endpoints are reversed".into(),
+                ));
+            }
+            OfficeArtClientAnchor {
+                flag: edit_as_to_flag(edit_as),
+                col_l: from.col,
+                dx_l: emu_to_dx_units(from.col_offset_emu),
+                row_t: from.row as u16,
+                dy_t: emu_to_dy_units(from.row_offset_emu),
+                col_r: to.col,
+                dx_r: emu_to_dx_units(to.col_offset_emu),
+                row_b: to.row as u16,
+                dy_b: emu_to_dy_units(to.row_offset_emu),
+            }
+        }
         DrawingAnchor::OneCell {
             from,
             width_emu,
             height_emu,
         } => {
+            validate_marker(from)?;
             let (col_r, off_r, row_b, off_b) = extend_anchor(
                 from.col,
                 from.col_offset_emu,
@@ -5043,7 +5088,7 @@ fn client_anchor_from_drawing_anchor(
                 from.row,
                 from.row_offset_emu,
                 *height_emu,
-            );
+            )?;
             OfficeArtClientAnchor {
                 flag: 2,
                 col_l: from.col,
@@ -5062,11 +5107,17 @@ fn client_anchor_from_drawing_anchor(
             width_emu,
             height_emu,
         } => {
+            if *x_emu < 0 || *y_emu < 0 {
+                return Err(XlsError::InvalidFormat(
+                    "XLS absolute drawing anchor cannot start at a negative position".into(),
+                ));
+            }
             // Absolute coordinates are relative to (0, 0); position
             // the from cell at the origin with the x/y offsets.
-            let (col_l, off_l, row_t, off_t) = extend_anchor(0, 0, *x_emu, 0, 0, *y_emu);
+            let (col_l, off_l, row_t, off_t) =
+                extend_anchor(0, 0, *x_emu, 0, 0, *y_emu)?;
             let (col_r, off_r, row_b, off_b) =
-                extend_anchor(col_l, off_l, *width_emu, row_t, off_t, *height_emu);
+                extend_anchor(col_l, off_l, *width_emu, row_t, off_t, *height_emu)?;
             OfficeArtClientAnchor {
                 flag: 3,
                 col_l,
@@ -5079,7 +5130,8 @@ fn client_anchor_from_drawing_anchor(
                 dy_b: emu_to_dy_units(off_b),
             }
         }
-    }
+    };
+    Ok(result)
 }
 
 /// Emit an `OBJ` record (BIFF 0x005D) for a picture shape. Carries
@@ -5435,7 +5487,12 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             obj::push_cbls_data(&mut body, s, *no_3d)?;
         }
         FormControlKind::OptionButton { state, no_3d, .. } => {
-            let s = state_u16(state).min(1);
+            if *state == CheckState::Mixed {
+                return Err(XlsError::InvalidFormat(
+                    "XLS option buttons cannot use the Mixed state".into(),
+                ));
+            }
+            let s = state_u16(state);
             obj::push_cbls(&mut body, s)?;
             obj::push_rbo(&mut body, s)?;
             if !control.link_rgce.is_empty() {
@@ -5456,15 +5513,14 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             horizontal,
             ..
         } => {
-            // FtSbs fields are signed; clamp the model's u16 values so
-            // out-of-range input cannot wrap negative.
-            let c = |v: u16| v.min(i16::MAX as u16) as i16;
+            let (val, min, max, inc, page) =
+                validated_sbs_values(*value, *min, *max, *increment, *page)?;
             obj::SbsData {
-                val: c(*value),
-                min: c(*min),
-                max: c(*max),
-                inc: c(*increment),
-                page: c(*page),
+                val,
+                min,
+                max,
+                inc,
+                page,
                 horizontal: *horizontal,
                 dx_scroll: 22,
                 flags: 0x0001, // fDraw
@@ -5481,12 +5537,13 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) -> XlsRes
             increment,
             ..
         } => {
-            let c = |v: u16| v.min(i16::MAX as u16) as i16;
+            let (val, min, max, inc, _) =
+                validated_sbs_values(*value, *min, *max, *increment, 10)?;
             obj::SbsData {
-                val: c(*value),
-                min: c(*min),
-                max: c(*max),
-                inc: c(*increment),
+                val,
+                min,
+                max,
+                inc,
                 page: 10,
                 horizontal: false,
                 dx_scroll: 22,
@@ -5683,6 +5740,28 @@ fn validated_list_selection_count(
     Ok(item_count as u16)
 }
 
+fn validated_sbs_values(
+    value: u16,
+    min: u16,
+    max: u16,
+    increment: u16,
+    page: u16,
+) -> XlsResult<(i16, i16, i16, i16, i16)> {
+    if min > max || value < min || value > max {
+        return Err(XlsError::InvalidFormat(format!(
+            "XLS scroll control requires min <= value <= max, got {min} <= {value} <= {max}"
+        )));
+    }
+    let clamp = |v: u16| v.min(i16::MAX as u16) as i16;
+    Ok((
+        clamp(value),
+        clamp(min),
+        clamp(max),
+        clamp(increment),
+        clamp(page),
+    ))
+}
+
 /// Compile a cell-link / input-range formula to a reference-class
 /// rgce. Returns an empty vec when the text does not compile to a
 /// single reference-type ptg (MS-XLS 2.5.198.22 permits exactly one).
@@ -5691,9 +5770,9 @@ fn encode_control_ref_formula(
     externsheet: &ExternSheetTable,
     names: &NameTable,
     addins: &AddinTable,
-) -> Vec<u8> {
+) -> XlsResult<Vec<u8>> {
     if value.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let to_parse = if value.starts_with('=') {
         value.to_string()
@@ -5701,7 +5780,9 @@ fn encode_control_ref_formula(
         format!("={value}")
     };
     let Ok(expr) = duke_sheets_formula::parse_formula(&to_parse) else {
-        return Vec::new();
+        return Err(XlsError::InvalidFormat(format!(
+            "XLS control formula {value:?} is invalid"
+        )));
     };
     let mut bytes = Vec::new();
     let mut extra = Vec::new();
@@ -5718,9 +5799,11 @@ fn encode_control_ref_formula(
         || !extra.is_empty()
         || !is_single_ref_ptg(&bytes)
     {
-        return Vec::new();
+        return Err(XlsError::InvalidFormat(format!(
+            "XLS control formula {value:?} must be one BIFF8 cell/range/name reference"
+        )));
     }
-    bytes
+    Ok(bytes)
 }
 
 /// Whether `rgce` is exactly one reference-type ptg of the kinds an
