@@ -116,11 +116,15 @@ pub(super) fn parse_ctrl_prop(bytes: &[u8]) -> Option<CtrlProp> {
                         b"fmlaRange" => pr.fmla_range = Some(value),
                         b"sel" => pr.sel = num,
                         b"multiSel" => {
+                            // Excel's emit order is not stable
+                            // ("3, 1"); normalize to sorted indices.
                             pr.multi_sel = value
                                 .split(|c: char| !c.is_ascii_digit())
                                 .filter(|s| !s.is_empty())
                                 .filter_map(|s| s.parse().ok())
                                 .collect();
+                            pr.multi_sel.sort_unstable();
+                            pr.multi_sel.dedup();
                         }
                         b"seltype" => pr.sel_type = value,
                         b"dropLines" => pr.drop_lines = num,

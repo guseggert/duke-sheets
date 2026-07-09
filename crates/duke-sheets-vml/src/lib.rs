@@ -815,11 +815,15 @@ fn apply_client_data_text(ctrl: &mut VmlControl, elem: &str, text: &str) {
         "Inc" => ctrl.inc = num(),
         "Page" => ctrl.page = num(),
         "MultiSel" => {
+            // Excel's emit order is not stable ("3, 1"); selection is
+            // a set, so normalize to sorted indices.
             ctrl.multi_sel = text
                 .split(|c: char| !c.is_ascii_digit())
                 .filter(|s| !s.is_empty())
                 .filter_map(|s| s.parse().ok())
                 .collect();
+            ctrl.multi_sel.sort_unstable();
+            ctrl.multi_sel.dedup();
         }
         "Horiz" => ctrl.horiz = blank_true(text),
         "NoThreeD" | "NoThreeD2" => ctrl.no_3d = blank_true(text),
