@@ -239,9 +239,124 @@ impl FormControl {
     }
 }
 
+/// Partition a sheet's option buttons into radio groups, mirroring
+/// Excel's grouping semantics: each radio belongs to the innermost
+/// group box whose rectangle contains the radio's center point, and
+/// radios outside every box form the sheet-level group.
+///
+/// Returns groups of indices into `controls`, in insertion order
+/// (both across groups and within each group). Non-radio controls
+/// never appear in the result.
+///
+/// Containment is evaluated in EMU at Excel's default cell metrics
+/// (609,600 EMU per column, 190,500 EMU per row), matching the
+/// quantisation used by the binary anchor encodings; custom row and
+/// column sizes that visually move a radio across a box edge are not
+/// accounted for.
+pub fn radio_groups(controls: &[FormControl]) -> Vec<Vec<usize>> {
+    let box_rects: Vec<(i64, i64, i64, i64)> = controls
+        .iter()
+        .filter(|c| matches!(c.kind, FormControlKind::GroupBox { .. }))
+        .map(|c| anchor_rect_emu(&c.anchor))
+        .collect();
+
+    let containing_box = |anchor: &DrawingAnchor| -> Option<usize> {
+        let (x1, y1, x2, y2) = anchor_rect_emu(anchor);
+        let (cx, cy) = ((x1 + x2) / 2, (y1 + y2) / 2);
+        box_rects
+            .iter()
+            .enumerate()
+            .filter(|(_, (bx1, by1, bx2, by2))| {
+                (*bx1..=*bx2).contains(&cx) && (*by1..=*by2).contains(&cy)
+            })
+            .min_by_key(|(_, (bx1, by1, bx2, by2))| (bx2 - bx1).max(0) * (by2 - by1).max(0))
+            .map(|(i, _)| i)
+    };
+
+    let mut groups: Vec<(Option<usize>, Vec<usize>)> = Vec::new();
+    for (idx, control) in controls.iter().enumerate() {
+        if !matches!(control.kind, FormControlKind::OptionButton { .. }) {
+            continue;
+        }
+        let key = containing_box(&control.anchor);
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, members)) => members.push(idx),
+            None => groups.push((key, vec![idx])),
+        }
+    }
+    groups.into_iter().map(|(_, members)| members).collect()
+}
+
+/// Absolute EMU rectangle (x1, y1, x2, y2) for a drawing anchor at
+/// Excel's default cell metrics.
+fn anchor_rect_emu(anchor: &DrawingAnchor) -> (i64, i64, i64, i64) {
+    const COL_EMU: i64 = 609_600;
+    const ROW_EMU: i64 = 190_500;
+    match anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => (
+            from.col as i64 * COL_EMU + from.col_offset_emu,
+            from.row as i64 * ROW_EMU + from.row_offset_emu,
+            to.col as i64 * COL_EMU + to.col_offset_emu,
+            to.row as i64 * ROW_EMU + to.row_offset_emu,
+        ),
+        DrawingAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            let x1 = from.col as i64 * COL_EMU + from.col_offset_emu;
+            let y1 = from.row as i64 * ROW_EMU + from.row_offset_emu;
+            (x1, y1, x1 + (*width_emu).max(0), y1 + (*height_emu).max(0))
+        }
+        DrawingAnchor::Absolute {
+            x_emu,
+            y_emu,
+            width_emu,
+            height_emu,
+        } => (
+            *x_emu,
+            *y_emu,
+            *x_emu + (*width_emu).max(0),
+            *y_emu + (*height_emu).max(0),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use duke_sheets_chart::CellMarker;
+
+    fn two_cell(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> DrawingAnchor {
+        DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: from_col,
+                col_offset_emu: 0,
+                row: from_row,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: to_col,
+                col_offset_emu: 0,
+                row: to_row,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        }
+    }
+
+    fn radio(anchor: DrawingAnchor) -> FormControl {
+        FormControl::with_anchor(
+            FormControlKind::OptionButton {
+                caption: String::new(),
+                state: CheckState::Unchecked,
+                cell_link: None,
+                first_in_group: false,
+                no_3d: false,
+            },
+            anchor,
+        )
+    }
 
     #[test]
     fn new_control_defaults() {
@@ -274,5 +389,55 @@ mod tests {
         })
         .with_name("Label 7");
         assert_eq!(ctrl.name.as_deref(), Some("Label 7"));
+    }
+
+    #[test]
+    fn radio_groups_by_enclosing_box() {
+        let controls = vec![
+            FormControl::with_anchor(
+                FormControlKind::GroupBox {
+                    caption: "A".to_string(),
+                    no_3d: false,
+                },
+                two_cell(0, 0, 2, 6),
+            ),
+            FormControl::with_anchor(
+                FormControlKind::GroupBox {
+                    caption: "B".to_string(),
+                    no_3d: false,
+                },
+                two_cell(4, 0, 6, 6),
+            ),
+            radio(two_cell(1, 1, 2, 2)), // in A
+            radio(two_cell(5, 1, 6, 2)), // in B
+            radio(two_cell(1, 3, 2, 4)), // in A
+            radio(two_cell(8, 1, 9, 2)), // loose
+        ];
+        let groups = radio_groups(&controls);
+        assert_eq!(groups, vec![vec![2, 4], vec![3], vec![5]]);
+    }
+
+    #[test]
+    fn radio_groups_nested_boxes_pick_innermost() {
+        let controls = vec![
+            FormControl::with_anchor(
+                FormControlKind::GroupBox {
+                    caption: "outer".to_string(),
+                    no_3d: false,
+                },
+                two_cell(0, 0, 10, 20),
+            ),
+            FormControl::with_anchor(
+                FormControlKind::GroupBox {
+                    caption: "inner".to_string(),
+                    no_3d: false,
+                },
+                two_cell(1, 1, 4, 6),
+            ),
+            radio(two_cell(2, 2, 3, 3)), // inner box
+            radio(two_cell(6, 10, 7, 11)), // outer box only
+        ];
+        let groups = radio_groups(&controls);
+        assert_eq!(groups, vec![vec![2], vec![3]]);
     }
 }

@@ -60,7 +60,7 @@ pub use conditional_format::{
     IconSetStyle, TimePeriod,
 };
 pub use error::{Error, Result};
-pub use form_control::{CheckState, FormControl, FormControlKind, ListSelection};
+pub use form_control::{radio_groups, CheckState, FormControl, FormControlKind, ListSelection};
 pub use hyperlink::Hyperlink;
 pub use locale::Locale;
 pub use rich_text::{rich_text_to_plain, RichTextRun, RunFont};
