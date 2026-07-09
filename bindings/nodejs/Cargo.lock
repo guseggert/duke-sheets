@@ -528,6 +528,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "duke-sheets-vml"
+version = "0.1.0"
+dependencies = [
+ "duke-sheets-chart",
+ "duke-sheets-core",
+ "quick-xml",
+]
+
+[[package]]
 name = "duke-sheets-xls"
 version = "0.1.0"
 dependencies = [
@@ -549,6 +558,7 @@ dependencies = [
  "duke-sheets-chart",
  "duke-sheets-core",
  "duke-sheets-formula",
+ "duke-sheets-vml",
  "encoding_rs",
  "log",
  "quick-xml",
@@ -565,6 +575,7 @@ dependencies = [
  "duke-sheets-core",
  "duke-sheets-crypto",
  "duke-sheets-formula",
+ "duke-sheets-vml",
  "duke-sheets-xls",
  "log",
  "quick-xml",
