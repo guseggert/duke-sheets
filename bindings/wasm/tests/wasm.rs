@@ -381,6 +381,11 @@ fn test_form_control_mutations_and_roundtrip() {
         let reopened = Workbook::from_bytes(&bytes).unwrap();
         assert_eq!(reopened.get_sheet(0).unwrap().form_control_count().unwrap(), 8);
     }
+    let xls = wb
+        .save_xls_bytes_encrypted("password", None, None)
+        .unwrap();
+    let reopened = Workbook::from_bytes_with_password(&xls, "password", None).unwrap();
+    assert_eq!(reopened.get_sheet(0).unwrap().form_control_count().unwrap(), 8);
 }
 
 #[wasm_bindgen_test]
