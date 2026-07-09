@@ -14,6 +14,7 @@ pub use crate::{
     CalculationOptions,
     CalculationStats,
     CellAddress,
+    CheckState,
     // Comments
     CellComment,
     CellError,
@@ -54,6 +55,7 @@ pub use crate::{
 
     ImageInfo,
     ImageSizing,
+    ListSelection,
     NumberFormat,
     Result,
 

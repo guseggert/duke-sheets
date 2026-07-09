@@ -124,6 +124,9 @@ pub(crate) fn read_drawing_contents<R: Read + Seek>(
                         let _ = w.write_event(Event::Start(e.clone().into_owned()));
                     }
                 }
+                if capture.is_some() && e.name().local_name().as_ref() == b"compatExt" {
+                    saw_compat_ext = true;
+                }
 
                 match e.name().local_name().as_ref() {
                     b"twoCellAnchor" => {

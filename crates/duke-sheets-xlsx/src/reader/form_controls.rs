@@ -116,7 +116,7 @@ pub(super) fn parse_ctrl_prop(bytes: &[u8]) -> Option<CtrlProp> {
                 };
                 for attr in e.attributes().flatten() {
                     let value = String::from_utf8_lossy(&attr.value).into_owned();
-                    let num = value.parse::<u16>().unwrap_or(0);
+                    let num = value.parse::<u16>().ok();
                     let truthy = value == "1" || value.eq_ignore_ascii_case("true");
                     match attr.key.local_name().as_ref() {
                         b"objectType" => pr.object_type = value,
@@ -129,7 +129,7 @@ pub(super) fn parse_ctrl_prop(bytes: &[u8]) -> Option<CtrlProp> {
                         }
                         b"fmlaLink" => pr.fmla_link = Some(value),
                         b"fmlaRange" => pr.fmla_range = Some(value),
-                        b"sel" => pr.sel = num,
+                        b"sel" => pr.sel = num.unwrap_or(0),
                         b"multiSel" => {
                             // Excel's emit order is not stable
                             // ("3, 1"); normalize to sorted indices.
@@ -142,12 +142,24 @@ pub(super) fn parse_ctrl_prop(bytes: &[u8]) -> Option<CtrlProp> {
                             pr.multi_sel.dedup();
                         }
                         b"seltype" => pr.sel_type = value,
-                        b"dropLines" => pr.drop_lines = num,
-                        b"inc" => pr.inc = num,
-                        b"min" => pr.min = num,
-                        b"max" => pr.max = num,
-                        b"page" => pr.page = num,
-                        b"val" => pr.val = num,
+                        b"dropLines" => {
+                            if let Some(num) = num {
+                                pr.drop_lines = num;
+                            }
+                        }
+                        b"inc" => {
+                            if let Some(num) = num {
+                                pr.inc = num;
+                            }
+                        }
+                        b"min" => pr.min = num.unwrap_or(0),
+                        b"max" => pr.max = num.unwrap_or(0),
+                        b"page" => {
+                            if let Some(num) = num {
+                                pr.page = num;
+                            }
+                        }
+                        b"val" => pr.val = num.unwrap_or(0),
                         b"horiz" => pr.horiz = truthy,
                         b"firstButton" => pr.first_button = truthy,
                         b"noThreeD" | b"noThreeD2" => pr.no_3d = pr.no_3d || truthy,
@@ -261,6 +273,21 @@ pub(super) fn assemble(
     Some(control)
 }
 
+pub(super) fn assemble_with_vml(
+    pending: &PendingControl,
+    pr: &CtrlProp,
+    vml: Option<&duke_sheets_vml::VmlControl>,
+) -> Option<FormControl> {
+    let caption = vml.map(|shape| shape.caption.clone()).unwrap_or_default();
+    let mut control = assemble(pending, pr, caption)?;
+    if pending.anchor.is_none() {
+        if let Some(vml_control) = vml.and_then(|shape| shape.to_form_control()) {
+            control.anchor = vml_control.anchor;
+        }
+    }
+    Some(control)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,5 +349,31 @@ mod tests {
         assert_eq!(deduped.len(), 2);
         assert_eq!(deduped[0].shape_id, 1025);
         assert_eq!(deduped[1].rid, "rId4");
+    }
+
+    #[test]
+    fn missing_control_pr_anchor_falls_back_to_vml_anchor() {
+        let mut pending = PendingControl::new();
+        pending.rid = "rId3".to_string();
+        let pr = CtrlProp {
+            object_type: "CheckBox".to_string(),
+            ..Default::default()
+        };
+        let vml = duke_sheets_vml::VmlControl {
+            object_type: "Checkbox".to_string(),
+            anchor_px: Some([1, 2, 3, 4, 5, 6, 7, 8]),
+            move_with_cells: true,
+            size_with_cells: false,
+            ..Default::default()
+        };
+        let control = assemble_with_vml(&pending, &pr, Some(&vml)).unwrap();
+        match control.anchor {
+            DrawingAnchor::TwoCell { from, to, edit_as } => {
+                assert_eq!((from.col, from.row), (1, 3));
+                assert_eq!((to.col, to.row), (5, 7));
+                assert_eq!(edit_as, Some(EditAs::OneCell));
+            }
+            other => panic!("expected TwoCell anchor, got {other:?}"),
+        }
     }
 }

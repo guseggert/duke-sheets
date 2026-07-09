@@ -265,10 +265,13 @@ pub fn write_control_shape(
             _ => ("left", 160),
         };
         xml.push_str("  <v:textbox style='mso-direction-alt:auto' o:singleclick=\"f\">\n");
-        xml.push_str(&format!(
-            "   <div style='text-align:{align}'><font face=\"Segoe UI\" size=\"{size}\" color=\"auto\">{}</font></div>\n",
-            xml_escape(caption)
-        ));
+        for line in caption.split('\n') {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            xml.push_str(&format!(
+                "   <div style='text-align:{align}'><font face=\"Segoe UI\" size=\"{size}\" color=\"auto\">{}</font></div>\n",
+                xml_escape(line)
+            ));
+        }
         xml.push_str("  </v:textbox>\n");
     }
 
@@ -687,7 +690,9 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
     let mut current: Option<VmlControl> = None;
     let mut in_client_data = false;
     let mut in_textbox = false;
-    let mut caption = String::new();
+    let mut in_caption_div = false;
+    let mut caption_line = String::new();
+    let mut caption_lines: Vec<String> = Vec::new();
     let mut element_text: Option<(String, String)> = None; // (name, text)
 
     loop {
@@ -705,12 +710,18 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
                                 }
                             }
                         }
-                        caption.clear();
+                        caption_line.clear();
+                        caption_lines.clear();
                         in_client_data = false;
                         in_textbox = false;
+                        in_caption_div = false;
                         current = Some(ctrl);
                     }
                     b"textbox" => in_textbox = true,
+                    b"div" if in_textbox => {
+                        in_caption_div = true;
+                        caption_line.clear();
+                    }
                     b"ClientData" => {
                         in_client_data = true;
                         if let Some(ctrl) = current.as_mut() {
@@ -748,8 +759,8 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
                     .unescape()
                     .map(|c| c.into_owned())
                     .unwrap_or_else(|_| String::from_utf8_lossy(t.as_ref()).into_owned());
-                if in_textbox {
-                    caption.push_str(&text);
+                if in_textbox && in_caption_div {
+                    caption_line.push_str(&text);
                 } else if let Some((_, buf_text)) = element_text.as_mut() {
                     buf_text.push_str(&text);
                 }
@@ -759,13 +770,20 @@ pub fn parse_vml_controls(bytes: &[u8]) -> Vec<VmlControl> {
                 match name.as_slice() {
                     b"shape" => {
                         if let Some(mut ctrl) = current.take() {
-                            ctrl.caption = normalize_caption(&caption);
+                            ctrl.caption = caption_lines.join("\n");
                             if !ctrl.object_type.is_empty() {
                                 out.push(ctrl);
                             }
                         }
                     }
                     b"textbox" => in_textbox = false,
+                    b"div" => {
+                        if in_caption_div {
+                            caption_lines.push(normalize_caption(&caption_line));
+                            caption_line.clear();
+                        }
+                        in_caption_div = false;
+                    }
                     b"ClientData" => in_client_data = false,
                     _ => {
                         if let Some((elem, text)) = element_text.take() {
@@ -1042,6 +1060,20 @@ mod tests {
         let back = parsed[0].to_form_control().expect("control");
         assert!(!back.locked);
         assert!(!back.printable);
+    }
+
+    #[test]
+    fn multiline_caption_round_trips_as_multiple_divs() {
+        let mut control = checkbox(None);
+        if let FormControlKind::Checkbox { caption, .. } = &mut control.kind {
+            *caption = "Line one\nLine two\n".to_string();
+        }
+        let mut xml = String::new();
+        write_control_shape(&mut xml, 1025, 1, &control, false);
+        assert_eq!(xml.matches("<div ").count(), 3);
+
+        let parsed = parse_vml_controls(wrap(&xml).as_bytes());
+        assert_eq!(parsed[0].caption, "Line one\nLine two\n");
     }
 
     #[test]

@@ -316,7 +316,14 @@ pub(super) fn controls_block(entries: &[ControlEntry<'_>]) -> String {
                 marker.col, marker.col_offset_emu, marker.row, marker.row_offset_emu
             ));
         }
-        xml.push_str("</anchor></controlPr></control></mc:Choice></mc:AlternateContent>");
+        xml.push_str("</anchor></controlPr></control></mc:Choice><mc:Fallback>");
+        xml.push_str(&format!(
+            "<control shapeId=\"{}\" r:id=\"{}\" name=\"{}\"/>",
+            entry.shape_id,
+            entry.rid,
+            escape_attr(&entry.name)
+        ));
+        xml.push_str("</mc:Fallback></mc:AlternateContent>");
     }
     xml.push_str("</controls></mc:Choice></mc:AlternateContent>");
     xml

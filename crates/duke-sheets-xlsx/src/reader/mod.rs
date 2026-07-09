@@ -408,9 +408,9 @@ impl XlsxReader {
                         })
                         .map(|bytes| duke_sheets_vml::parse_vml_controls(&bytes))
                         .unwrap_or_default();
-                    let captions: HashMap<u32, String> = vml_shapes
+                    let vml_shapes: HashMap<u32, duke_sheets_vml::VmlControl> = vml_shapes
                         .into_iter()
-                        .map(|s| (s.shape_num, s.caption))
+                        .map(|shape| (shape.shape_num, shape))
                         .collect();
 
                     let ws = workbook.worksheet_mut(sheet_idx).unwrap();
@@ -431,11 +431,11 @@ impl XlsxReader {
                         let Some(pr) = form_controls::parse_ctrl_prop(&bytes) else {
                             continue;
                         };
-                        let caption = captions
-                            .get(&pending.shape_id)
-                            .cloned()
-                            .unwrap_or_default();
-                        if let Some(control) = form_controls::assemble(pending, &pr, caption) {
+                        if let Some(control) = form_controls::assemble_with_vml(
+                            pending,
+                            &pr,
+                            vml_shapes.get(&pending.shape_id),
+                        ) {
                             ws.add_form_control(control);
                         }
                     }

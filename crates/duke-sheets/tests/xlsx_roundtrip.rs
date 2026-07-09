@@ -6088,7 +6088,7 @@ fn xlsx_images_round_trip_across_multiple_sheets() {
     }
 }
 
-// ── Form controls ─────────────────────────────────────────────────
+// Form controls
 
 fn control_anchor_2c(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> DrawingAnchor {
     DrawingAnchor::TwoCell {

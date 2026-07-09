@@ -82,9 +82,9 @@ pub enum FormControlKind {
         /// in the group (A1-style, optional sheet prefix).
         cell_link: Option<String>,
         /// Whether this is the first button of its group. Read-side
-        /// information; the XLS writer chains all option buttons on a
-        /// sheet into a single group in insertion order and recomputes
-        /// this flag.
+        /// information; writers recompute groups from the innermost
+        /// enclosing group box (or the sheet-level group) and mark the
+        /// first radio in insertion order.
         first_in_group: bool,
         /// Render without 3D shading.
         no_3d: bool,
