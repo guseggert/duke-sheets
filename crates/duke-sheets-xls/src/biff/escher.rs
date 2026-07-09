@@ -320,7 +320,7 @@ impl OfficeArtRecordHeader {
 
     /// Total on-disk size of this record (8-byte header + payload).
     pub fn total_len(&self) -> usize {
-        HEADER_LEN + self.rec_len as usize
+        HEADER_LEN.saturating_add(self.rec_len as usize)
     }
 
     /// Serialise to the 8-byte on-disk header. Panics if `rec_ver`

@@ -75,17 +75,28 @@ pub fn anchor_to_px(anchor: &DrawingAnchor) -> [i64; 8] {
 /// Resolve any anchor variant to concrete from/to cell markers at
 /// default cell metrics.
 pub fn anchor_cell_markers(anchor: &DrawingAnchor) -> (CellMarker, CellMarker) {
-    const COL_EMU: i64 = DEFAULT_COL_PX * EMU_PER_PX;
-    const ROW_EMU: i64 = DEFAULT_ROW_PX * EMU_PER_PX;
-    let extend = |from: &CellMarker, width_emu: i64, height_emu: i64| -> CellMarker {
-        let total_x = from.col as i64 * COL_EMU + from.col_offset_emu + width_emu.max(0);
-        let total_y = from.row as i64 * ROW_EMU + from.row_offset_emu + height_emu.max(0);
+    const COL_EMU: i128 = (DEFAULT_COL_PX * EMU_PER_PX) as i128;
+    const ROW_EMU: i128 = (DEFAULT_ROW_PX * EMU_PER_PX) as i128;
+    let marker_at = |x: i128, y: i128| -> CellMarker {
+        let max_x = u16::MAX as i128 * COL_EMU + COL_EMU - 1;
+        let max_y = u32::MAX as i128 * ROW_EMU + ROW_EMU - 1;
+        let x = x.clamp(0, max_x);
+        let y = y.clamp(0, max_y);
         CellMarker {
-            col: (total_x / COL_EMU).max(0) as u16,
-            col_offset_emu: total_x % COL_EMU,
-            row: (total_y / ROW_EMU).max(0) as u32,
-            row_offset_emu: total_y % ROW_EMU,
+            col: (x / COL_EMU) as u16,
+            col_offset_emu: (x % COL_EMU) as i64,
+            row: (y / ROW_EMU) as u32,
+            row_offset_emu: (y % ROW_EMU) as i64,
         }
+    };
+    let extend = |from: &CellMarker, width_emu: i64, height_emu: i64| -> CellMarker {
+        let total_x = from.col as i128 * COL_EMU
+            + from.col_offset_emu as i128
+            + width_emu.max(0) as i128;
+        let total_y = from.row as i128 * ROW_EMU
+            + from.row_offset_emu as i128
+            + height_emu.max(0) as i128;
+        marker_at(total_x, total_y)
     };
     match anchor {
         DrawingAnchor::TwoCell { from, to, .. } => (from.clone(), to.clone()),
@@ -100,12 +111,7 @@ pub fn anchor_cell_markers(anchor: &DrawingAnchor) -> (CellMarker, CellMarker) {
             width_emu,
             height_emu,
         } => {
-            let from = CellMarker {
-                col: (*x_emu / COL_EMU).max(0) as u16,
-                col_offset_emu: *x_emu % COL_EMU,
-                row: (*y_emu / ROW_EMU).max(0) as u32,
-                row_offset_emu: *y_emu % ROW_EMU,
-            };
+            let from = marker_at(*x_emu as i128, *y_emu as i128);
             let to = extend(&from, *width_emu, *height_emu);
             (from, to)
         }
@@ -123,15 +129,15 @@ pub fn px_to_anchor(a: &[i64; 8], move_with_cells: bool, size_with_cells: bool) 
     DrawingAnchor::TwoCell {
         from: CellMarker {
             col: a[0].clamp(0, u16::MAX as i64) as u16,
-            col_offset_emu: a[1] * EMU_PER_PX,
+            col_offset_emu: a[1].saturating_mul(EMU_PER_PX),
             row: a[2].clamp(0, u32::MAX as i64) as u32,
-            row_offset_emu: a[3] * EMU_PER_PX,
+            row_offset_emu: a[3].saturating_mul(EMU_PER_PX),
         },
         to: CellMarker {
             col: a[4].clamp(0, u16::MAX as i64) as u16,
-            col_offset_emu: a[5] * EMU_PER_PX,
+            col_offset_emu: a[5].saturating_mul(EMU_PER_PX),
             row: a[6].clamp(0, u32::MAX as i64) as u32,
-            row_offset_emu: a[7] * EMU_PER_PX,
+            row_offset_emu: a[7].saturating_mul(EMU_PER_PX),
         },
         edit_as,
     }
@@ -1081,5 +1087,49 @@ mod tests {
         vml.object_type = "Drop".to_string();
         vml.lct = "AutoFilter".to_string();
         assert!(vml.to_form_control().is_none());
+    }
+
+    #[test]
+    fn hostile_anchor_values_saturate_without_panicking() {
+        let anchor = px_to_anchor(
+            &[
+                i64::MAX,
+                i64::MAX,
+                i64::MAX,
+                i64::MIN,
+                i64::MAX,
+                i64::MIN,
+                i64::MAX,
+                i64::MAX,
+            ],
+            true,
+            false,
+        );
+        match anchor {
+            DrawingAnchor::TwoCell { from, to, .. } => {
+                assert_eq!(from.col, u16::MAX);
+                assert_eq!(from.row, u32::MAX);
+                assert_eq!(from.col_offset_emu, i64::MAX);
+                assert_eq!(from.row_offset_emu, i64::MIN);
+                assert_eq!(to.col_offset_emu, i64::MIN);
+                assert_eq!(to.row_offset_emu, i64::MAX);
+            }
+            other => panic!("expected TwoCell anchor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn anchor_cell_markers_clamp_extreme_absolute_anchor() {
+        let anchor = DrawingAnchor::Absolute {
+            x_emu: i64::MAX,
+            y_emu: i64::MAX,
+            width_emu: i64::MAX,
+            height_emu: i64::MAX,
+        };
+        let (from, to) = anchor_cell_markers(&anchor);
+        assert_eq!(from.col, u16::MAX);
+        assert_eq!(from.row, u32::MAX);
+        assert_eq!(to.col, u16::MAX);
+        assert_eq!(to.row, u32::MAX);
     }
 }

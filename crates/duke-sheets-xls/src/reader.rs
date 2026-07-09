@@ -2422,59 +2422,15 @@ impl XlsReader {
         blip_store: &[BlipData],
         ws: &mut duke_sheets_core::Worksheet,
     ) {
-        use crate::biff::escher::{OfficeArtRecordHeader, HEADER_LEN};
-        if escher_bytes.is_empty() {
-            return;
-        }
-        // Walk top-level records. Most files emit one DG_CONTAINER,
-        // optionally followed by trailing fragments (Excel splits
-        // SP_CONTAINERs across MSODRAWING boundaries for textboxes).
-        let mut cursor = 0;
-        while cursor + HEADER_LEN <= escher_bytes.len() {
-            let Ok(h) = OfficeArtRecordHeader::read_from(&escher_bytes[cursor..]) else {
-                return;
-            };
-            let body_start = cursor + HEADER_LEN;
-            let body_end = body_start + h.rec_len as usize;
-            if body_end > escher_bytes.len() {
-                return;
+        use crate::biff::escher::rec_type as er;
+        Self::walk_escher_records(escher_bytes, |h, body| {
+            if h.rec_type == er::SP_CONTAINER {
+                Self::extract_picture(body, blip_store, ws);
+                false
+            } else {
+                true
             }
-            if h.is_container() {
-                Self::walk_escher_for_pictures(&escher_bytes[body_start..body_end], blip_store, ws);
-            }
-            cursor = body_end;
-        }
-    }
-
-    /// Recurse into Escher container payloads, calling
-    /// `extract_picture` whenever we land on an `SP_CONTAINER` whose
-    /// FSP shape type is `PICTURE_FRAME`.
-    fn walk_escher_for_pictures(
-        body: &[u8],
-        blip_store: &[BlipData],
-        ws: &mut duke_sheets_core::Worksheet,
-    ) {
-        use crate::biff::escher::{rec_type as er, OfficeArtRecordHeader, HEADER_LEN};
-        let mut cursor = 0;
-        while cursor + HEADER_LEN <= body.len() {
-            let Ok(h) = OfficeArtRecordHeader::read_from(&body[cursor..]) else {
-                return;
-            };
-            let inner_start = cursor + HEADER_LEN;
-            let inner_end = inner_start + h.rec_len as usize;
-            if inner_end > body.len() {
-                return;
-            }
-            if h.is_container() {
-                let inner = &body[inner_start..inner_end];
-                if h.rec_type == er::SP_CONTAINER {
-                    Self::extract_picture(inner, blip_store, ws);
-                } else {
-                    Self::walk_escher_for_pictures(inner, blip_store, ws);
-                }
-            }
-            cursor = inner_end;
-        }
+        });
     }
 
     /// Inspect an `SP_CONTAINER` body. If its FSP shape type is
@@ -2505,10 +2461,10 @@ impl XlsReader {
             let Ok(h) = OfficeArtRecordHeader::read_from(&sp_body[cursor..]) else {
                 return;
             };
-            let body_end = cursor + HEADER_LEN + h.rec_len as usize;
-            if body_end > sp_body.len() {
+            let Some((_, body_end)) = Self::escher_record_bounds(cursor, sp_body.len(), h.rec_len)
+            else {
                 return;
-            }
+            };
             match h.rec_type {
                 er::FSP => {
                     if let Ok((fsp, st, _)) = OfficeArtFsp::read_from(&sp_body[cursor..]) {
@@ -2643,68 +2599,96 @@ impl XlsReader {
     /// Nth OBJ record.
     fn collect_escher_shapes(escher_bytes: &[u8]) -> Vec<EscherShapeInfo> {
         let mut shapes = Vec::new();
-        Self::walk_escher_for_shapes(escher_bytes, &mut shapes);
-        shapes
-    }
-
-    fn walk_escher_for_shapes(body: &[u8], out: &mut Vec<EscherShapeInfo>) {
         use crate::biff::escher::{
             fsp_flags, rec_type as er, OfficeArtClientAnchor, OfficeArtFsp,
             OfficeArtRecordHeader, HEADER_LEN,
         };
-        let mut cursor = 0;
-        while cursor + HEADER_LEN <= body.len() {
-            let Ok(h) = OfficeArtRecordHeader::read_from(&body[cursor..]) else {
-                return;
-            };
-            let inner_start = cursor + HEADER_LEN;
-            let inner_end = inner_start + h.rec_len as usize;
-            if inner_end > body.len() {
-                return;
+        Self::walk_escher_records(escher_bytes, |h, inner| {
+            if h.rec_type != er::SP_CONTAINER {
+                return true;
             }
-            if h.is_container() {
-                let inner = &body[inner_start..inner_end];
-                if h.rec_type == er::SP_CONTAINER {
-                    let mut shape_type: u16 = 0;
-                    let mut patriarch = false;
-                    let mut anchor: Option<OfficeArtClientAnchor> = None;
-                    let mut c = 0;
-                    while c + HEADER_LEN <= inner.len() {
-                        let Ok(ih) = OfficeArtRecordHeader::read_from(&inner[c..]) else {
-                            break;
-                        };
-                        let end = c + HEADER_LEN + ih.rec_len as usize;
-                        if end > inner.len() {
-                            break;
+            let mut shape_type: u16 = 0;
+            let mut patriarch = false;
+            let mut anchor: Option<OfficeArtClientAnchor> = None;
+            let mut c = 0usize;
+            while c.saturating_add(HEADER_LEN) <= inner.len() {
+                let Ok(ih) = OfficeArtRecordHeader::read_from(&inner[c..]) else {
+                    break;
+                };
+                let Some((_, end)) = Self::escher_record_bounds(c, inner.len(), ih.rec_len) else {
+                    break;
+                };
+                match ih.rec_type {
+                    er::FSP => {
+                        if let Ok((fsp, st, _)) = OfficeArtFsp::read_from(&inner[c..]) {
+                            shape_type = st;
+                            patriarch = fsp.grf_persistence & fsp_flags::PATRIARCH != 0;
                         }
-                        match ih.rec_type {
-                            er::FSP => {
-                                if let Ok((fsp, st, _)) = OfficeArtFsp::read_from(&inner[c..]) {
-                                    shape_type = st;
-                                    patriarch =
-                                        fsp.grf_persistence & fsp_flags::PATRIARCH != 0;
-                                }
-                            }
-                            er::CLIENT_ANCHOR => {
-                                if let Ok((a, _)) =
-                                    OfficeArtClientAnchor::read_from(&inner[c..])
-                                {
-                                    anchor = Some(a);
-                                }
-                            }
-                            _ => {}
+                    }
+                    er::CLIENT_ANCHOR => {
+                        if let Ok((a, _)) = OfficeArtClientAnchor::read_from(&inner[c..]) {
+                            anchor = Some(a);
                         }
-                        c = end;
                     }
-                    if !patriarch {
-                        out.push(EscherShapeInfo { shape_type, anchor });
-                    }
-                } else {
-                    Self::walk_escher_for_shapes(inner, out);
+                    _ => {}
                 }
+                c = end;
             }
-            cursor = inner_end;
+            if !patriarch {
+                shapes.push(EscherShapeInfo { shape_type, anchor });
+            }
+            false
+        });
+        shapes
+    }
+
+    /// Iteratively walk OfficeArt records. A record budget prevents
+    /// adversarial streams from consuming unbounded CPU/memory; an
+    /// explicit stack avoids process-aborting recursion over deeply
+    /// nested containers. The callback returns whether to descend
+    /// into a container's body.
+    fn walk_escher_records<'a, F>(root: &'a [u8], mut visit: F)
+    where
+        F: FnMut(&crate::biff::escher::OfficeArtRecordHeader, &'a [u8]) -> bool,
+    {
+        use crate::biff::escher::{OfficeArtRecordHeader, HEADER_LEN};
+        const MAX_RECORDS: usize = 1_000_000;
+
+        let mut stack = vec![root];
+        let mut seen = 0usize;
+        while let Some(body) = stack.pop() {
+            let mut cursor = 0usize;
+            while cursor.saturating_add(HEADER_LEN) <= body.len() {
+                if seen >= MAX_RECORDS {
+                    return;
+                }
+                seen += 1;
+                let Ok(h) = OfficeArtRecordHeader::read_from(&body[cursor..]) else {
+                    break;
+                };
+                let Some((body_start, body_end)) =
+                    Self::escher_record_bounds(cursor, body.len(), h.rec_len)
+                else {
+                    break;
+                };
+                let inner = &body[body_start..body_end];
+                if h.is_container() && visit(&h, inner) {
+                    stack.push(inner);
+                }
+                cursor = body_end;
+            }
         }
+    }
+
+    fn escher_record_bounds(
+        cursor: usize,
+        enclosing_len: usize,
+        rec_len: u32,
+    ) -> Option<(usize, usize)> {
+        let body_start = cursor.checked_add(crate::biff::escher::HEADER_LEN)?;
+        let payload_len = usize::try_from(rec_len).ok()?;
+        let body_end = body_start.checked_add(payload_len)?;
+        (body_end <= enclosing_len).then_some((body_start, body_end))
     }
 
     /// Convert an Escher client anchor into the model's two-cell
@@ -2950,32 +2934,15 @@ impl XlsReader {
     /// the reader is intentionally permissive so a malformed drawing
     /// group cannot prevent reading the rest of the workbook.
     fn parse_msodrawinggroup(data: &[u8], blip_store: &mut Vec<BlipData>) {
-        use crate::biff::escher::{rec_type as er, OfficeArtRecordHeader, HEADER_LEN};
-
-        // The MSODRAWINGGROUP body wraps a single `DggContainer` whose
-        // children include `BStoreContainer` (if any images exist).
-        let mut cursor = 0;
-        while cursor + HEADER_LEN <= data.len() {
-            let Ok(h) = OfficeArtRecordHeader::read_from(&data[cursor..]) else {
-                return;
-            };
-            let body_start = cursor + HEADER_LEN;
-            let body_end = body_start + h.rec_len as usize;
-            if body_end > data.len() {
-                return;
+        use crate::biff::escher::rec_type as er;
+        Self::walk_escher_records(data, |h, body| {
+            if h.rec_type == er::BSTORE_CONTAINER {
+                Self::parse_bstore_container(body, blip_store);
+                false
+            } else {
+                true
             }
-            let body = &data[body_start..body_end];
-            if h.is_container() {
-                if h.rec_type == er::BSTORE_CONTAINER {
-                    Self::parse_bstore_container(body, blip_store);
-                } else {
-                    // Recurse into other containers (e.g. DggContainer
-                    // wrapping a BStoreContainer).
-                    Self::parse_msodrawinggroup(body, blip_store);
-                }
-            }
-            cursor = body_end;
-        }
+        });
     }
 
     /// Walk a `BSTORE_CONTAINER` body, decoding each `FBSE` child to
@@ -2987,11 +2954,11 @@ impl XlsReader {
             let Ok(h) = OfficeArtRecordHeader::read_from(&body[cursor..]) else {
                 return;
             };
-            let entry_start = cursor + HEADER_LEN;
-            let entry_end = entry_start + h.rec_len as usize;
-            if entry_end > body.len() {
+            let Some((entry_start, entry_end)) =
+                Self::escher_record_bounds(cursor, body.len(), h.rec_len)
+            else {
                 return;
-            }
+            };
             if h.rec_type == er::FBSE {
                 if let Some(blip) = Self::parse_fbse_entry(&body[entry_start..entry_end]) {
                     blip_store.push(blip);
@@ -3015,16 +2982,13 @@ impl XlsReader {
             return None;
         }
         let cb_name = body[33] as usize;
-        let blip_start = 36 + cb_name;
-        if blip_start + HEADER_LEN > body.len() {
+        let blip_start = 36usize.checked_add(cb_name)?;
+        if blip_start.checked_add(HEADER_LEN)? > body.len() {
             return None;
         }
         let h = OfficeArtRecordHeader::read_from(&body[blip_start..]).ok()?;
-        let blip_body_start = blip_start + HEADER_LEN;
-        let blip_body_end = blip_body_start + h.rec_len as usize;
-        if blip_body_end > body.len() {
-            return None;
-        }
+        let (blip_body_start, blip_body_end) =
+            Self::escher_record_bounds(blip_start, body.len(), h.rec_len)?;
         let format = match h.rec_type {
             er::BLIP_PNG => duke_sheets_chart::ImageFormat::Png,
             er::BLIP_JPEG => duke_sheets_chart::ImageFormat::Jpeg,
@@ -4253,6 +4217,43 @@ mod tests {
             }
             other => panic!("expected OptionButton, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn escher_walk_handles_deep_nesting_and_oversized_lengths() {
+        use crate::biff::escher::{rec_type, OfficeArtRecordHeader};
+
+        let mut nested = Vec::new();
+        OfficeArtRecordHeader::container(rec_type::DG_CONTAINER, 0, 0)
+            .write_to(&mut nested);
+        for _ in 0..20_000 {
+            let mut outer = Vec::with_capacity(nested.len() + 8);
+            OfficeArtRecordHeader::container(
+                rec_type::DG_CONTAINER,
+                0,
+                nested.len() as u32,
+            )
+            .write_to(&mut outer);
+            outer.extend_from_slice(&nested);
+            nested = outer;
+        }
+
+        let mut count = 0usize;
+        XlsReader::walk_escher_records(&nested, |_, _| {
+            count += 1;
+            true
+        });
+        assert_eq!(count, 20_001);
+
+        let mut oversized = Vec::new();
+        OfficeArtRecordHeader::container(rec_type::DG_CONTAINER, 0, u32::MAX)
+            .write_to(&mut oversized);
+        let mut visited = false;
+        XlsReader::walk_escher_records(&oversized, |_, _| {
+            visited = true;
+            true
+        });
+        assert!(!visited, "invalid record body is rejected before visiting");
     }
 
     // ── Hyperlink tests ───────────────────────────────────────────────

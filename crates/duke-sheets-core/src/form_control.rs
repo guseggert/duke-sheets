@@ -254,7 +254,7 @@ impl FormControl {
 /// column sizes that visually move a radio across a box edge are not
 /// accounted for.
 pub fn radio_groups(controls: &[FormControl]) -> Vec<Vec<usize>> {
-    let box_rects: Vec<(i64, i64, i64, i64)> = controls
+    let box_rects: Vec<(i128, i128, i128, i128)> = controls
         .iter()
         .filter(|c| matches!(c.kind, FormControlKind::GroupBox { .. }))
         .map(|c| anchor_rect_emu(&c.anchor))
@@ -262,14 +262,21 @@ pub fn radio_groups(controls: &[FormControl]) -> Vec<Vec<usize>> {
 
     let containing_box = |anchor: &DrawingAnchor| -> Option<usize> {
         let (x1, y1, x2, y2) = anchor_rect_emu(anchor);
-        let (cx, cy) = ((x1 + x2) / 2, (y1 + y2) / 2);
+        let (cx, cy) = (
+            x1.saturating_add(x2) / 2,
+            y1.saturating_add(y2) / 2,
+        );
         box_rects
             .iter()
             .enumerate()
             .filter(|(_, (bx1, by1, bx2, by2))| {
                 (*bx1..=*bx2).contains(&cx) && (*by1..=*by2).contains(&cy)
             })
-            .min_by_key(|(_, (bx1, by1, bx2, by2))| (bx2 - bx1).max(0) * (by2 - by1).max(0))
+            .min_by_key(|(_, (bx1, by1, bx2, by2))| {
+                (bx2 - bx1)
+                    .max(0)
+                    .saturating_mul((by2 - by1).max(0))
+            })
             .map(|(i, _)| i)
     };
 
@@ -289,24 +296,29 @@ pub fn radio_groups(controls: &[FormControl]) -> Vec<Vec<usize>> {
 
 /// Absolute EMU rectangle (x1, y1, x2, y2) for a drawing anchor at
 /// Excel's default cell metrics.
-fn anchor_rect_emu(anchor: &DrawingAnchor) -> (i64, i64, i64, i64) {
-    const COL_EMU: i64 = 609_600;
-    const ROW_EMU: i64 = 190_500;
+fn anchor_rect_emu(anchor: &DrawingAnchor) -> (i128, i128, i128, i128) {
+    const COL_EMU: i128 = 609_600;
+    const ROW_EMU: i128 = 190_500;
     match anchor {
         DrawingAnchor::TwoCell { from, to, .. } => (
-            from.col as i64 * COL_EMU + from.col_offset_emu,
-            from.row as i64 * ROW_EMU + from.row_offset_emu,
-            to.col as i64 * COL_EMU + to.col_offset_emu,
-            to.row as i64 * ROW_EMU + to.row_offset_emu,
+            from.col as i128 * COL_EMU + from.col_offset_emu as i128,
+            from.row as i128 * ROW_EMU + from.row_offset_emu as i128,
+            to.col as i128 * COL_EMU + to.col_offset_emu as i128,
+            to.row as i128 * ROW_EMU + to.row_offset_emu as i128,
         ),
         DrawingAnchor::OneCell {
             from,
             width_emu,
             height_emu,
         } => {
-            let x1 = from.col as i64 * COL_EMU + from.col_offset_emu;
-            let y1 = from.row as i64 * ROW_EMU + from.row_offset_emu;
-            (x1, y1, x1 + (*width_emu).max(0), y1 + (*height_emu).max(0))
+            let x1 = from.col as i128 * COL_EMU + from.col_offset_emu as i128;
+            let y1 = from.row as i128 * ROW_EMU + from.row_offset_emu as i128;
+            (
+                x1,
+                y1,
+                x1 + (*width_emu).max(0) as i128,
+                y1 + (*height_emu).max(0) as i128,
+            )
         }
         DrawingAnchor::Absolute {
             x_emu,
@@ -314,10 +326,10 @@ fn anchor_rect_emu(anchor: &DrawingAnchor) -> (i64, i64, i64, i64) {
             width_emu,
             height_emu,
         } => (
-            *x_emu,
-            *y_emu,
-            *x_emu + (*width_emu).max(0),
-            *y_emu + (*height_emu).max(0),
+            *x_emu as i128,
+            *y_emu as i128,
+            *x_emu as i128 + (*width_emu).max(0) as i128,
+            *y_emu as i128 + (*height_emu).max(0) as i128,
         ),
     }
 }
@@ -439,5 +451,30 @@ mod tests {
         ];
         let groups = radio_groups(&controls);
         assert_eq!(groups, vec![vec![2], vec![3]]);
+    }
+
+    #[test]
+    fn radio_groups_handles_extreme_anchor_offsets() {
+        let controls = vec![
+            FormControl::with_anchor(
+                FormControlKind::GroupBox {
+                    caption: "huge".to_string(),
+                    no_3d: false,
+                },
+                DrawingAnchor::Absolute {
+                    x_emu: i64::MIN,
+                    y_emu: i64::MIN,
+                    width_emu: i64::MAX,
+                    height_emu: i64::MAX,
+                },
+            ),
+            radio(DrawingAnchor::Absolute {
+                x_emu: i64::MAX,
+                y_emu: i64::MAX,
+                width_emu: i64::MAX,
+                height_emu: i64::MAX,
+            }),
+        ];
+        assert_eq!(radio_groups(&controls), vec![vec![1]]);
     }
 }
