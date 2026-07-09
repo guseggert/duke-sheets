@@ -1317,6 +1317,14 @@ impl Worksheet {
         self.form_controls.push(control);
     }
 
+    /// Validate and append a form control, returning its zero-based index.
+    pub fn try_add_form_control(&mut self, control: FormControl) -> Result<usize> {
+        control.validate()?;
+        let index = self.form_controls.len();
+        self.form_controls.push(control);
+        Ok(index)
+    }
+
     /// Get all form controls.
     pub fn form_controls(&self) -> &[FormControl] {
         &self.form_controls
@@ -1325,6 +1333,35 @@ impl Worksheet {
     /// Get mutable access to the form controls.
     pub fn form_controls_mut(&mut self) -> &mut Vec<FormControl> {
         &mut self.form_controls
+    }
+
+    /// Get a form control by zero-based index.
+    pub fn form_control(&self, index: usize) -> Option<&FormControl> {
+        self.form_controls.get(index)
+    }
+
+    /// Replace a form control by zero-based index.
+    pub fn set_form_control(&mut self, index: usize, control: FormControl) -> Result<()> {
+        control.validate()?;
+        let count = self.form_controls.len();
+        let slot = self.form_controls.get_mut(index).ok_or_else(|| {
+            Error::other(format!(
+                "form control index {index} out of bounds (count: {count})"
+            ))
+        })?;
+        *slot = control;
+        Ok(())
+    }
+
+    /// Remove and return a form control by zero-based index.
+    pub fn remove_form_control(&mut self, index: usize) -> Result<FormControl> {
+        if index >= self.form_controls.len() {
+            return Err(Error::other(format!(
+                "form control index {index} out of bounds (count: {})",
+                self.form_controls.len()
+            )));
+        }
+        Ok(self.form_controls.remove(index))
     }
 
     /// Get the number of form controls.

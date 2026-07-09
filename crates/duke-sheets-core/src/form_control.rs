@@ -28,6 +28,8 @@
 
 use duke_sheets_chart::DrawingAnchor;
 
+use crate::{Error, Result, MAX_COLS, MAX_ROWS};
+
 /// State of a checkbox or option button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CheckState {
@@ -185,6 +187,109 @@ impl FormControlKind {
             _ => None,
         }
     }
+
+    /// Validate kind-specific invariants shared by all bindings and
+    /// writers.
+    pub fn validate(&self) -> Result<()> {
+        let nonempty_formula = |label: &str, value: &Option<String>| -> Result<()> {
+            if value.as_ref().is_some_and(|formula| formula.trim().is_empty()) {
+                return Err(Error::other(format!("{label} cannot be empty")));
+            }
+            Ok(())
+        };
+        match self {
+            FormControlKind::Button { .. } | FormControlKind::Label { .. } => {}
+            FormControlKind::Checkbox { cell_link, .. } => {
+                nonempty_formula("cell link", cell_link)?;
+            }
+            FormControlKind::OptionButton {
+                state, cell_link, ..
+            } => {
+                if *state == CheckState::Mixed {
+                    return Err(Error::other("option buttons cannot use the mixed state"));
+                }
+                nonempty_formula("cell link", cell_link)?;
+            }
+            FormControlKind::GroupBox { .. } => {}
+            FormControlKind::ListBox {
+                input_range,
+                cell_link,
+                selection,
+                selected,
+                ..
+            } => {
+                nonempty_formula("input range", input_range)?;
+                nonempty_formula("cell link", cell_link)?;
+                if *selection == ListSelection::Single && selected.len() > 1 {
+                    return Err(Error::other(
+                        "single-select list boxes can select at most one item",
+                    ));
+                }
+                if selected.contains(&0) {
+                    return Err(Error::other("list selection indices are one-based"));
+                }
+                if selected.windows(2).any(|pair| pair[0] >= pair[1]) {
+                    return Err(Error::other(
+                        "list selection indices must be sorted and unique",
+                    ));
+                }
+            }
+            FormControlKind::Dropdown {
+                input_range,
+                cell_link,
+                selected,
+                lines,
+                ..
+            } => {
+                nonempty_formula("input range", input_range)?;
+                nonempty_formula("cell link", cell_link)?;
+                if selected == &Some(0) {
+                    return Err(Error::other("dropdown selection indices are one-based"));
+                }
+                if *lines == 0 {
+                    return Err(Error::other("dropdown lines must be greater than zero"));
+                }
+            }
+            FormControlKind::Scrollbar {
+                value,
+                min,
+                max,
+                increment,
+                page,
+                cell_link,
+                ..
+            } => {
+                validate_numeric_control(*value, *min, *max, *increment)?;
+                if *page == 0 {
+                    return Err(Error::other("scrollbar page must be greater than zero"));
+                }
+                nonempty_formula("cell link", cell_link)?;
+            }
+            FormControlKind::Spinner {
+                value,
+                min,
+                max,
+                increment,
+                cell_link,
+            } => {
+                validate_numeric_control(*value, *min, *max, *increment)?;
+                nonempty_formula("cell link", cell_link)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_numeric_control(value: u16, min: u16, max: u16, increment: u16) -> Result<()> {
+    if min > max || value < min || value > max {
+        return Err(Error::other(format!(
+            "control requires min <= value <= max, got {min} <= {value} <= {max}"
+        )));
+    }
+    if increment == 0 {
+        return Err(Error::other("control increment must be greater than zero"));
+    }
+    Ok(())
 }
 
 /// A worksheet form control (Forms toolbar object).
@@ -237,6 +342,60 @@ impl FormControl {
     pub fn cell_link(&self) -> Option<&str> {
         self.kind.cell_link()
     }
+
+    /// Validate the anchor and kind-specific properties.
+    pub fn validate(&self) -> Result<()> {
+        validate_anchor(&self.anchor)?;
+        self.kind.validate()
+    }
+}
+
+fn validate_anchor(anchor: &DrawingAnchor) -> Result<()> {
+    let validate_marker = |marker: &duke_sheets_chart::CellMarker| -> Result<()> {
+        if marker.row >= MAX_ROWS {
+            return Err(Error::RowOutOfBounds(marker.row, MAX_ROWS - 1));
+        }
+        if marker.col >= MAX_COLS {
+            return Err(Error::ColumnOutOfBounds(marker.col, MAX_COLS - 1));
+        }
+        Ok(())
+    };
+    match anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            validate_marker(from)?;
+            validate_marker(to)?;
+            if (to.col, to.col_offset_emu) < (from.col, from.col_offset_emu)
+                || (to.row, to.row_offset_emu) < (from.row, from.row_offset_emu)
+            {
+                return Err(Error::other("form control anchor endpoints are reversed"));
+            }
+        }
+        DrawingAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            validate_marker(from)?;
+            if *width_emu < 0 || *height_emu < 0 {
+                return Err(Error::other(
+                    "form control anchor dimensions cannot be negative",
+                ));
+            }
+        }
+        DrawingAnchor::Absolute {
+            x_emu,
+            y_emu,
+            width_emu,
+            height_emu,
+        } => {
+            if *x_emu < 0 || *y_emu < 0 || *width_emu < 0 || *height_emu < 0 {
+                return Err(Error::other(
+                    "absolute form control anchor values cannot be negative",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Partition a sheet's option buttons into radio groups, mirroring
@@ -476,5 +635,88 @@ mod tests {
             }),
         ];
         assert_eq!(radio_groups(&controls), vec![vec![1]]);
+    }
+
+    #[test]
+    fn validates_kind_and_anchor_invariants() {
+        let invalid_radio = FormControl::new(FormControlKind::OptionButton {
+            caption: "radio".to_string(),
+            state: CheckState::Mixed,
+            cell_link: None,
+            first_in_group: false,
+            no_3d: false,
+        });
+        assert!(invalid_radio.validate().unwrap_err().to_string().contains("mixed"));
+
+        let invalid_list = FormControl::new(FormControlKind::ListBox {
+            input_range: None,
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![2, 1],
+            no_3d: false,
+        });
+        assert!(invalid_list
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("sorted and unique"));
+
+        let invalid_anchor = FormControl::with_anchor(
+            FormControlKind::Button {
+                caption: "button".to_string(),
+            },
+            DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col: 4,
+                    col_offset_emu: 0,
+                    row: 4,
+                    row_offset_emu: 0,
+                },
+                to: CellMarker {
+                    col: 2,
+                    col_offset_emu: 0,
+                    row: 2,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
+            },
+        );
+        assert!(invalid_anchor
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("reversed"));
+    }
+
+    #[test]
+    fn worksheet_indexed_mutations_validate_and_shift_indices() {
+        let mut worksheet = crate::Worksheet::new("Sheet1");
+        let first = worksheet
+            .try_add_form_control(FormControl::new(FormControlKind::Button {
+                caption: "one".to_string(),
+            }))
+            .unwrap();
+        let second = worksheet
+            .try_add_form_control(FormControl::new(FormControlKind::Label {
+                caption: "two".to_string(),
+            }))
+            .unwrap();
+        assert_eq!((first, second), (0, 1));
+        assert_eq!(worksheet.form_control_count(), 2);
+
+        worksheet
+            .set_form_control(
+                0,
+                FormControl::new(FormControlKind::Label {
+                    caption: "replaced".to_string(),
+                }),
+            )
+            .unwrap();
+        assert_eq!(worksheet.form_control(0).unwrap().caption(), Some("replaced"));
+
+        let removed = worksheet.remove_form_control(0).unwrap();
+        assert_eq!(removed.caption(), Some("replaced"));
+        assert_eq!(worksheet.form_control(0).unwrap().caption(), Some("two"));
+        assert!(worksheet.remove_form_control(1).is_err());
     }
 }
