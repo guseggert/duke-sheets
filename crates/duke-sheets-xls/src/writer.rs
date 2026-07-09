@@ -249,7 +249,7 @@ fn build_workbook_stream(workbook: &Workbook) -> XlsResult<Vec<u8>> {
     write_print_name_records(&mut stream, workbook);
     sst.write_records(&mut stream)?;
     let drawing_state =
-        compute_drawing_state(workbook, &externsheet_table, &name_table, &addin_table);
+        compute_drawing_state(workbook, &externsheet_table, &name_table, &addin_table)?;
     write_msodrawinggroup(&mut stream, &drawing_state);
     write_eof(&mut stream);
 
@@ -4269,6 +4269,30 @@ impl DrawingState {
     fn is_empty(&self) -> bool {
         self.cdg_total == 0
     }
+
+    fn id_clusters(&self) -> Vec<crate::biff::escher::IdCluster> {
+        let mut clusters = Vec::new();
+        for sheet_idx in &self.ordered_sheet_indices {
+            let Some(drawing) = self.sheets.get(sheet_idx) else {
+                continue;
+            };
+            let first_cluster = drawing.patriarch_spid / 1024;
+            let last_spid = drawing.last_spid();
+            let last_cluster = last_spid / 1024;
+            for cluster in first_cluster..=last_cluster {
+                let cspid_cur = if cluster == last_cluster {
+                    last_spid % 1024 + 1
+                } else {
+                    1024
+                };
+                clusters.push(crate::biff::escher::IdCluster {
+                    dgid: drawing.dgid as u32,
+                    cspid_cur,
+                });
+            }
+        }
+        clusters
+    }
 }
 
 /// A single image queued for emission in the workbook-globals blip
@@ -4294,6 +4318,17 @@ struct SheetDrawing {
     comments: Vec<CommentShape>,
     /// One per form control, in `Worksheet::form_controls()` order.
     controls: Vec<ControlShape>,
+}
+
+impl SheetDrawing {
+    fn last_spid(&self) -> u32 {
+        self.controls
+            .last()
+            .map(|shape| shape.spid)
+            .or_else(|| self.comments.last().map(|shape| shape.spid))
+            .or_else(|| self.pictures.last().map(|shape| shape.spid))
+            .unwrap_or(self.patriarch_spid)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -4380,9 +4415,9 @@ fn compute_drawing_state(
     externsheet: &ExternSheetTable,
     names: &NameTable,
     addins: &AddinTable,
-) -> DrawingState {
+) -> XlsResult<DrawingState> {
     let mut state = DrawingState::default();
-    let mut next_dgid: u16 = 1;
+    let mut next_dgid: u32 = 1;
     let mut next_spid = PATRIARCH_SPID_BASE;
     let mut next_text_id: u32 = 1;
     let mut next_blip_id: u32 = 1;
@@ -4396,14 +4431,25 @@ fn compute_drawing_state(
             continue;
         }
 
-        let patriarch_spid = next_spid;
-        next_spid += 1;
+        validate_sheet_drawing_counts(picture_count, comment_count, control_count)?;
+        if next_dgid > 0x0FFE {
+            return Err(XlsError::InvalidFormat(
+                "XLS OfficeArt supports at most 4094 worksheet drawings".into(),
+            ));
+        }
 
-        let mut next_obj_id: u16 = 1;
+        let patriarch_spid = next_spid;
+        next_spid = next_spid.checked_add(1).ok_or_else(|| {
+            XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
+        })?;
+
+        let mut next_obj_id: u32 = 1;
         let mut pictures = Vec::with_capacity(picture_count);
         for image in sheet.images() {
             let spid = next_spid;
-            next_spid += 1;
+            next_spid = next_spid.checked_add(1).ok_or_else(|| {
+                XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
+            })?;
             let blip_id = next_blip_id;
             next_blip_id += 1;
             state.blip_store.push(BlipEntry {
@@ -4412,7 +4458,7 @@ fn compute_drawing_state(
             });
             pictures.push(PictureShape {
                 spid,
-                obj_id: next_obj_id,
+                obj_id: next_obj_id as u16,
                 blip_id,
                 shape_name: image.name.clone(),
                 anchor: image.anchor.clone(),
@@ -4429,10 +4475,12 @@ fn compute_drawing_state(
         let mut comments = Vec::with_capacity(comment_count);
         for ((row, col), comment) in comments_sorted.iter() {
             let spid = next_spid;
-            next_spid += 1;
+            next_spid = next_spid.checked_add(1).ok_or_else(|| {
+                XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
+            })?;
             comments.push(CommentShape {
                 spid,
-                obj_id: next_obj_id,
+                obj_id: next_obj_id as u16,
                 text_id: next_text_id,
                 row: *row,
                 col: *col,
@@ -4448,7 +4496,9 @@ fn compute_drawing_state(
         for control in sheet.form_controls() {
             use duke_sheets_core::FormControlKind;
             let spid = next_spid;
-            next_spid += 1;
+            next_spid = next_spid.checked_add(1).ok_or_else(|| {
+                XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
+            })?;
             let text_id = if control.caption().is_some() {
                 let id = next_text_id;
                 next_text_id = next_text_id.wrapping_add(1);
@@ -4470,7 +4520,7 @@ fn compute_drawing_state(
             };
             controls.push(ControlShape {
                 spid,
-                obj_id: next_obj_id,
+                obj_id: next_obj_id as u16,
                 text_id,
                 control: control.clone(),
                 link_rgce,
@@ -4489,7 +4539,7 @@ fn compute_drawing_state(
         state.sheets.insert(
             sheet_idx,
             SheetDrawing {
-                dgid: next_dgid,
+                dgid: next_dgid as u16,
                 patriarch_spid,
                 pictures,
                 comments,
@@ -4504,10 +4554,36 @@ fn compute_drawing_state(
         // Round up to the next 1024-aligned base so the next drawing
         // lives in its own cluster (matching Excel's per-drawing
         // cluster allocation in MS-ODRAW §2.2.46).
-        next_spid = next_spid.div_ceil(1024) * 1024;
+        next_spid = next_spid
+            .checked_add(1023)
+            .ok_or_else(|| {
+                XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
+            })?
+            / 1024
+            * 1024;
     }
-    state.spid_max = highest_spid_used + 1;
-    state
+    state.spid_max = highest_spid_used.checked_add(1).ok_or_else(|| {
+        XlsError::InvalidFormat("XLS OfficeArt shape id space exhausted".into())
+    })?;
+    Ok(state)
+}
+
+fn validate_sheet_drawing_counts(
+    picture_count: usize,
+    comment_count: usize,
+    control_count: usize,
+) -> XlsResult<()> {
+    let object_count = picture_count
+        .checked_add(comment_count)
+        .and_then(|count| count.checked_add(control_count))
+        .ok_or_else(|| XlsError::InvalidFormat("XLS drawing object count overflow".into()))?;
+    if object_count > u16::MAX as usize {
+        return Err(XlsError::InvalidFormat(format!(
+            "XLS supports at most {} drawing objects per sheet, got {object_count}",
+            u16::MAX
+        )));
+    }
+    Ok(())
 }
 
 /// Chain a sheet's option buttons into per-group circular
@@ -4542,16 +4618,7 @@ fn write_msodrawinggroup(stream: &mut Vec<u8>, state: &DrawingState) {
     };
 
     let mut dgg_body = Vec::new();
-    let clusters: Vec<IdCluster> = state
-        .ordered_sheet_indices
-        .iter()
-        .filter_map(|i| state.sheets.get(i))
-        .map(|sd| IdCluster {
-            dgid: sd.dgid as u32,
-            // patriarch + pictures + comments.
-            cspid_cur: (1 + sd.pictures.len() + sd.comments.len()) as u32,
-        })
-        .collect();
+    let clusters: Vec<IdCluster> = state.id_clusters();
     OfficeArtFdgg {
         spid_max: state.spid_max,
         csp_saved: state.csp_total,
@@ -5681,7 +5748,56 @@ fn write_biff_record_chunked(stream: &mut Vec<u8>, record_type: u16, body: &[u8]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use duke_sheets_core::{FormControl, FormControlKind};
     use duke_sheets_formula::FormulaExpr;
+
+    fn test_control_shape(spid: u32, obj_id: u16) -> ControlShape {
+        ControlShape {
+            spid,
+            obj_id,
+            text_id: Some(obj_id as u32),
+            control: FormControl::new(FormControlKind::Button {
+                caption: "button".to_string(),
+            }),
+            link_rgce: Vec::new(),
+            input_rgce: Vec::new(),
+            radio_next_id: 0,
+            radio_first: false,
+        }
+    }
+
+    #[test]
+    fn drawing_id_clusters_include_controls_and_split_at_1024() {
+        let controls: Vec<ControlShape> = (1u16..=1024)
+            .map(|id| test_control_shape(1024 + id as u32, id))
+            .collect();
+        let mut state = DrawingState::default();
+        state.sheets.insert(
+            0,
+            SheetDrawing {
+                dgid: 1,
+                patriarch_spid: 1024,
+                pictures: Vec::new(),
+                comments: Vec::new(),
+                controls,
+            },
+        );
+        state.ordered_sheet_indices.push(0);
+
+        let clusters = state.id_clusters();
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(clusters[0].dgid, 1);
+        assert_eq!(clusters[0].cspid_cur, 1024);
+        assert_eq!(clusters[1].dgid, 1);
+        assert_eq!(clusters[1].cspid_cur, 1);
+    }
+
+    #[test]
+    fn drawing_object_limit_is_checked_without_overflow() {
+        validate_sheet_drawing_counts(0, 0, u16::MAX as usize).unwrap();
+        let err = validate_sheet_drawing_counts(0, 0, u16::MAX as usize + 1).unwrap_err();
+        assert!(err.to_string().contains("at most 65535"));
+    }
 
     /// On the u16-offset overflow path, `emit_optimized_if` must return
     /// `Ok(false)` WITHOUT having mutated `out`, so the caller's fallback
