@@ -2814,3 +2814,53 @@ fn excel_can_read_mixed_control_comment_picture_we_emit() {
         other => panic!("expected Checkbox, got {other:?}"),
     }
 }
+
+/// A multi-select list whose bsels array exceeds one OBJ body uses
+/// CONTINUE records and survives Excel without repair.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_large_xls_list_control_we_emit() {
+    use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::{FormControl, FormControlKind, ListSelection};
+
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::ListBox {
+                input_range: Some("$H$1:$H$10000".to_string()),
+                cell_link: None,
+                selection: ListSelection::Multi,
+                selected: vec![1, 5_000, 10_000],
+                no_3d: false,
+            },
+            DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col: 0,
+                    col_offset_emu: 0,
+                    row: 0,
+                    row_offset_emu: 0,
+                },
+                to: CellMarker {
+                    col: 2,
+                    col_offset_emu: 0,
+                    row: 10,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
+            },
+        ));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    match &result.worksheet(0).unwrap().form_controls()[0].kind {
+        FormControlKind::ListBox {
+            selection,
+            selected,
+            ..
+        } => {
+            assert_eq!(*selection, ListSelection::Multi);
+            assert_eq!(selected, &vec![1, 5_000, 10_000]);
+        }
+        other => panic!("expected ListBox, got {other:?}"),
+    }
+}

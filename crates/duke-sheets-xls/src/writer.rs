@@ -5682,7 +5682,11 @@ fn write_control_obj_records(
     body: &mut [u8],
     lbs_start: Option<usize>,
 ) -> XlsResult<()> {
-    if body.len() <= BIFF_MAX_RECORD_BODY {
+    // MS-XLS §2.5.147 requires bsels to continue when it would come
+    // within eight bytes of the record-body limit. Excel therefore
+    // caps a continued list OBJ body at 8216 bytes.
+    const LBS_OBJ_BODY_LIMIT: usize = BIFF_MAX_RECORD_BODY - 8;
+    if body.len() <= LBS_OBJ_BODY_LIMIT {
         write_biff_record(out, OBJ_RECORD, body);
         return Ok(());
     }
@@ -5696,23 +5700,25 @@ fn write_control_obj_records(
     let fields_start = lbs_start.checked_add(4).ok_or_else(|| {
         XlsError::InvalidFormat("XLS FtLbsData continuation offset overflow".into())
     })?;
-    if fields_start >= BIFF_MAX_RECORD_BODY || body.get(lbs_start..lbs_start + 2) != Some(&[0x13, 0x00]) {
+    if fields_start >= LBS_OBJ_BODY_LIMIT
+        || body.get(lbs_start..lbs_start + 2) != Some(&[0x13, 0x00])
+    {
         return Err(XlsError::InvalidFormat(
             "XLS FtLbsData cannot be continued from this OBJ layout".into(),
         ));
     }
 
-    // MS-XLS §2.5.147: when fields continue, cbFContinued is the
-    // number of bytes of this structure in the current record minus
-    // one (excluding ft/cbFContinued themselves).
-    let current_fields = BIFF_MAX_RECORD_BODY - fields_start;
-    let cb_f_continued = u16::try_from(current_fields - 1).map_err(|_| {
+    // Excel writes cbFContinued as the number of FtLbsData field
+    // bytes in the OBJ body after ft/cbFContinued (8166 for its
+    // canonical 8216-byte split).
+    let current_fields = LBS_OBJ_BODY_LIMIT - fields_start;
+    let cb_f_continued = u16::try_from(current_fields).map_err(|_| {
         XlsError::InvalidFormat("XLS FtLbsData continuation length overflow".into())
     })?;
     body[lbs_start + 2..lbs_start + 4].copy_from_slice(&cb_f_continued.to_le_bytes());
 
-    write_biff_record(out, OBJ_RECORD, &body[..BIFF_MAX_RECORD_BODY]);
-    for chunk in body[BIFF_MAX_RECORD_BODY..].chunks(BIFF_MAX_RECORD_BODY) {
+    write_biff_record(out, OBJ_RECORD, &body[..LBS_OBJ_BODY_LIMIT]);
+    for chunk in body[LBS_OBJ_BODY_LIMIT..].chunks(BIFF_MAX_RECORD_BODY) {
         write_biff_record(out, CONTINUE_RECORD, chunk);
     }
     Ok(())

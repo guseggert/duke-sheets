@@ -1450,6 +1450,8 @@ fn excel_can_read_table_we_emit() {
 #[ignore = "requires Excel COM bridge on localhost:9876"]
 fn excel_can_read_xlsb_form_controls_we_emit() {
     use duke_sheets_chart::{CellMarker, DrawingAnchor};
+    use duke_sheets_core::table::{Table, TableColumn};
+    use duke_sheets_core::CellRange;
     use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
 
     let anchor = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
@@ -1477,6 +1479,26 @@ fn excel_can_read_xlsb_form_controls_we_emit() {
     ws.set_cell_value_at(1, 3, true).expect("D2");
     ws.set_cell_value_at(3, 3, 2.0).expect("D4");
     ws.set_cell_value_at(5, 3, 40.0).expect("D6");
+    ws.set_cell_value_at(0, 9, "Name").expect("J1");
+    ws.set_cell_value_at(1, 9, "Alice").expect("J2");
+    ws.add_table(Table {
+        id: 1,
+        name: "People".to_string(),
+        display_name: "People".to_string(),
+        reference: CellRange::parse("J1:J2").unwrap(),
+        columns: vec![TableColumn {
+            id: 1,
+            name: "Name".to_string(),
+            totals_row_function: None,
+            totals_row_formula: None,
+            totals_row_label: None,
+            calculated_column_formula: None,
+        }],
+        style_info: None,
+        header_row_count: 1,
+        totals_row_count: 0,
+        totals_row_shown: false,
+    });
 
     let kinds: Vec<FormControlKind> = vec![
         FormControlKind::Button {
