@@ -7,6 +7,7 @@ use duke_sheets_chart::{CellMarker, DrawingAnchor, EditAs};
 use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use std::collections::HashSet;
 
 /// A `<control>` element collected during worksheet parsing, before
 /// its ctrlProp part and VML caption are resolved.
@@ -34,6 +35,20 @@ impl PendingControl {
             ..Default::default()
         }
     }
+}
+
+/// Markup-compatibility fallbacks may repeat the same `<control>` in
+/// expanded rather than self-closing form. Keep the first entry for
+/// each ctrlProp relationship so serialization style cannot duplicate
+/// model controls.
+pub(super) fn dedupe_pending_controls(
+    controls: Vec<PendingControl>,
+) -> Vec<PendingControl> {
+    let mut seen = HashSet::new();
+    controls
+        .into_iter()
+        .filter(|control| seen.insert(control.rid.clone()))
+        .collect()
 }
 
 /// Build the anchor from parsed `<from>`/`<to>` marker values plus
@@ -291,5 +306,21 @@ mod tests {
             }
             other => panic!("expected Scrollbar, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn duplicate_fallback_controls_are_deduplicated_by_relationship() {
+        let mut first = PendingControl::new();
+        first.rid = "rId3".to_string();
+        first.shape_id = 1025;
+        let mut fallback = first.clone();
+        fallback.shape_id = 9999;
+        let mut second = PendingControl::new();
+        second.rid = "rId4".to_string();
+
+        let deduped = dedupe_pending_controls(vec![first, fallback, second]);
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].shape_id, 1025);
+        assert_eq!(deduped[1].rid, "rId4");
     }
 }

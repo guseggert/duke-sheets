@@ -1758,4 +1758,33 @@ mod tests {
             other => panic!("expected Values filter, got {other:?}"),
         }
     }
+
+    #[test]
+    fn control_anchor_filter_handles_nested_and_self_closing_alternate_content() {
+        let xml = br#"<xdr:wsDr xmlns:xdr="x" xmlns:m="mc" xmlns:a14="a14">
+<m:AlternateContent/>
+<xdr:oneCellAnchor id="keep-one"/>
+<m:AlternateContent><m:Choice>
+  <m:AlternateContent><m:Choice><a14:compatExt spid="_x0000_s1"/></m:Choice></m:AlternateContent>
+</m:Choice><m:Fallback/></m:AlternateContent>
+<m:AlternateContent><m:Choice><xdr:twoCellAnchor id="keep-two"/></m:Choice></m:AlternateContent>
+</xdr:wsDr>"#;
+
+        let filtered = super::super::strip_control_anchors(xml);
+        let text = String::from_utf8(filtered).unwrap();
+        assert!(text.contains("keep-one"));
+        assert!(text.contains("keep-two"));
+        assert!(!text.contains("compatExt"));
+
+        let mut reader = quick_xml::Reader::from_str(&text);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(quick_xml::events::Event::Eof) => break,
+                Ok(_) => {}
+                Err(err) => panic!("filtered XML is malformed: {err}"),
+            }
+            buf.clear();
+        }
+    }
 }

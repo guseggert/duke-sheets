@@ -10,7 +10,7 @@ pub(crate) mod workbook;
 pub(crate) mod worksheet;
 
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufReader, Cursor, Read, Seek, Write};
 use std::path::Path;
 
 use duke_sheets_core::named_range::{NameScope, NamedRange};
@@ -18,6 +18,7 @@ use duke_sheets_core::worksheet::SheetVisibility;
 use duke_sheets_core::Workbook;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use quick_xml::Writer;
 
 use crate::error::{XlsbError, XlsbResult};
 
@@ -304,28 +305,76 @@ fn parse_print_titles_formula(
 /// replaying them verbatim would duplicate every control. Blocks
 /// without a compatExt (e.g. chartEx) are kept.
 fn strip_control_anchors(xml: &[u8]) -> Vec<u8> {
-    let Ok(text) = std::str::from_utf8(xml) else {
-        return xml.to_vec();
-    };
-    const OPEN: &str = "<mc:AlternateContent";
-    const CLOSE: &str = "</mc:AlternateContent>";
-    let mut out = String::with_capacity(text.len());
-    let mut pos = 0;
-    while let Some(start_rel) = text[pos..].find(OPEN) {
-        let start = pos + start_rel;
-        let Some(end_rel) = text[start..].find(CLOSE) else {
-            break;
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut output = Writer::new(Cursor::new(Vec::with_capacity(xml.len())));
+    let mut capture: Option<(Writer<Cursor<Vec<u8>>>, usize, bool)> = None;
+    let mut buf = Vec::new();
+
+    loop {
+        let event = match reader.read_event_into(&mut buf) {
+            Ok(event) => event.into_owned(),
+            Err(_) => return xml.to_vec(),
         };
-        let end = start + end_rel + CLOSE.len();
-        out.push_str(&text[pos..start]);
-        let block = &text[start..end];
-        if !block.contains("compatExt") {
-            out.push_str(block);
+        match event {
+            Event::Start(e) if e.local_name().as_ref() == b"AlternateContent" => {
+                if let Some((writer, depth, _)) = capture.as_mut() {
+                    *depth += 1;
+                    if writer.write_event(Event::Start(e)).is_err() {
+                        return xml.to_vec();
+                    }
+                } else {
+                    let mut writer = Writer::new(Cursor::new(Vec::new()));
+                    if writer.write_event(Event::Start(e)).is_err() {
+                        return xml.to_vec();
+                    }
+                    capture = Some((writer, 1, false));
+                }
+            }
+            Event::End(e) if capture.is_some() => {
+                let is_alternate = e.local_name().as_ref() == b"AlternateContent";
+                let (writer, depth, _) = capture.as_mut().unwrap();
+                if writer.write_event(Event::End(e)).is_err() {
+                    return xml.to_vec();
+                }
+                if is_alternate {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        let (writer, _, has_compat) = capture.take().unwrap();
+                        if !has_compat
+                            && output
+                                .get_mut()
+                                .write_all(&writer.into_inner().into_inner())
+                                .is_err()
+                        {
+                            return xml.to_vec();
+                        }
+                    }
+                }
+            }
+            Event::Eof => {
+                if capture.is_some() {
+                    return xml.to_vec();
+                }
+                break;
+            }
+            event => {
+                if let Some((writer, _, has_compat)) = capture.as_mut() {
+                    if matches!(&event, Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == b"compatExt")
+                    {
+                        *has_compat = true;
+                    }
+                    if writer.write_event(event).is_err() {
+                        return xml.to_vec();
+                    }
+                } else if output.write_event(event).is_err() {
+                    return xml.to_vec();
+                }
+            }
         }
-        pos = end;
+        buf.clear();
     }
-    out.push_str(&text[pos..]);
-    out.into_bytes()
+    output.into_inner().into_inner()
 }
 
 fn resolve_rel_path(base_path: &str, rel_target: &str) -> String {

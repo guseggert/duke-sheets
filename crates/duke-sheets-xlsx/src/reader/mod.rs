@@ -371,7 +371,7 @@ impl XlsxReader {
                     .sheet_order_mut()
                     .push(SheetSlot::Worksheet(sheet_idx));
                 let sheet_rels = read_sheet_rels(&mut archive, path)?;
-                let pending_controls = Self::read_worksheet(
+                let pending_controls = form_controls::dedupe_pending_controls(Self::read_worksheet(
                     &mut archive,
                     path,
                     workbook.worksheet_mut(sheet_idx).unwrap(),
@@ -380,7 +380,7 @@ impl XlsxReader {
                     &dxf_styles,
                     theme_palette.as_ref(),
                     &sheet_rels,
-                )?;
+                )?);
 
                 // Read comments for this worksheet (if present).
                 // Resolve paths via sheet .rels relationships; fall back to
