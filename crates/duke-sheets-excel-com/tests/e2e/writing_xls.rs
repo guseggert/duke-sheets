@@ -2492,6 +2492,13 @@ fn excel_can_read_form_controls_we_emit() {
             increment: 3,
             cell_link: Some("$D$7".to_string()),
         },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![1, 3],
+            no_3d: true,
+        },
     ];
     let count = kinds.len();
     for (i, kind) in kinds.into_iter().enumerate() {
@@ -2630,6 +2637,17 @@ fn excel_can_read_form_controls_we_emit() {
             assert_eq!(cell_link.as_deref(), Some("$D$7"));
         }
         other => panic!("control 10: expected Spinner, got {other:?}"),
+    }
+    match &controls[11].kind {
+        FormControlKind::ListBox {
+            selection,
+            selected,
+            ..
+        } => {
+            assert_eq!(*selection, ListSelection::Multi);
+            assert_eq!(selected, &vec![1, 3], "multi-selection must survive");
+        }
+        other => panic!("control 11: expected ListBox, got {other:?}"),
     }
 
     // Anchors survive (cell coordinates; offsets are requantised by
