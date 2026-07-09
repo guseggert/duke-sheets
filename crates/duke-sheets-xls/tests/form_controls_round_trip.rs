@@ -480,6 +480,146 @@ fn controls_on_multiple_sheets_round_trip() {
     }
 }
 
+#[test]
+fn empty_caption_round_trips() {
+    // Empty captions take the cchText=0 TXO path (header only, no
+    // CONTINUE records).
+    let kind = single_control_round_trip(FormControlKind::Checkbox {
+        caption: String::new(),
+        state: CheckState::Checked,
+        cell_link: None,
+        no_3d: false,
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::Checkbox {
+            caption: String::new(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: false,
+        }
+    );
+}
+
+#[test]
+fn oversized_caption_is_truncated_not_corrupted() {
+    // Captions are capped at 4000 UTF-16 units so the text payload
+    // fits one CONTINUE record; anything longer must truncate rather
+    // than emit an oversized (corrupt) BIFF record.
+    let long: String = "xy".repeat(3000); // 6000 chars
+    let kind = single_control_round_trip(FormControlKind::Label { caption: long });
+    match kind {
+        FormControlKind::Label { caption } => {
+            assert_eq!(caption.len(), 4000, "caption truncated to the cap");
+            assert!(caption.starts_with("xyxy"));
+        }
+        other => panic!("expected Label, got {other:?}"),
+    }
+}
+
+#[test]
+fn list_box_without_input_range_round_trips() {
+    // No input range = ObjFmla with cbFmla=0 inside FtLbsData.
+    let kind = single_control_round_trip(FormControlKind::ListBox {
+        input_range: None,
+        cell_link: Some("$D$5".to_string()),
+        selection: ListSelection::Single,
+        selected: vec![],
+        no_3d: false,
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::ListBox {
+            input_range: None,
+            cell_link: Some("$D$5".to_string()),
+            selection: ListSelection::Single,
+            selected: vec![],
+            no_3d: false,
+        }
+    );
+}
+
+#[test]
+fn cross_sheet_input_range_round_trips() {
+    // Cross-sheet input ranges compile to PtgArea3d.
+    let mut wb = Workbook::new();
+    wb.add_worksheet_with_name("Data").expect("second sheet");
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Dropdown {
+            input_range: Some("Data!$A$1:$A$5".to_string()),
+            cell_link: None,
+            selected: Some(4),
+            lines: 8,
+            no_3d: false,
+        },
+        anchor(0, 0, 2, 1),
+    ));
+
+    let parsed = write_then_read(&wb);
+    let controls = parsed.worksheet(0).unwrap().form_controls();
+    assert_eq!(controls.len(), 1);
+    match &controls[0].kind {
+        FormControlKind::Dropdown {
+            input_range,
+            selected,
+            ..
+        } => {
+            assert_eq!(input_range.as_deref(), Some("Data!$A$1:$A$5"));
+            assert_eq!(*selected, Some(4));
+        }
+        other => panic!("expected Dropdown, got {other:?}"),
+    }
+}
+
+#[test]
+fn uncompilable_cell_link_is_dropped_not_corrupted() {
+    // A cell link that isn't a single reference cannot be encoded in
+    // an ObjectParsedFormula; the writer drops it rather than emit an
+    // out-of-spec record.
+    let kind = single_control_round_trip(FormControlKind::Checkbox {
+        caption: "bad link".to_string(),
+        state: CheckState::Checked,
+        cell_link: Some("SUM(A1:A3)".to_string()),
+        no_3d: false,
+    });
+    match kind {
+        FormControlKind::Checkbox {
+            caption,
+            state,
+            cell_link,
+            ..
+        } => {
+            assert_eq!(caption, "bad link");
+            assert_eq!(state, CheckState::Checked);
+            assert_eq!(cell_link, None, "non-reference link must be dropped");
+        }
+        other => panic!("expected Checkbox, got {other:?}"),
+    }
+}
+
+#[test]
+fn scrollbar_values_above_i16_max_clamp() {
+    // FtSbs fields are signed 16-bit; model values above i16::MAX
+    // clamp instead of wrapping negative.
+    let kind = single_control_round_trip(FormControlKind::Scrollbar {
+        value: 40_000,
+        min: 0,
+        max: 65_535,
+        increment: 1,
+        page: 10,
+        horizontal: false,
+        cell_link: None,
+    });
+    match kind {
+        FormControlKind::Scrollbar { value, max, .. } => {
+            assert_eq!(value, 32_767, "value clamps to i16::MAX");
+            assert_eq!(max, 32_767, "max clamps to i16::MAX");
+        }
+        other => panic!("expected Scrollbar, got {other:?}"),
+    }
+}
+
 /// LibreOffice envelope check: write an XLS carrying one of every
 /// control kind, open via URP, read the anchor cell's value back.
 ///

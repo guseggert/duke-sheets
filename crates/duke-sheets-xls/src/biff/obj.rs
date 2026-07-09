@@ -332,6 +332,13 @@ pub struct LbsData {
     pub sel_type: u16,
     /// Displayed without 3D shading.
     pub no_3d: bool,
+    /// fUseCB - whether `lct` is meaningful. Excel sets this on the
+    /// hidden UI dropdowns it persists for autofilter columns.
+    pub use_cb: bool,
+    /// Behavior class (only meaningful when `use_cb`): 0 regular
+    /// dropdown, 1/7 pivot field, 3 autofilter, 5 autocomplete,
+    /// 6 data validation, 9 table total row.
+    pub lct: u8,
     /// Multi-selection bools, one per item (present iff sel_type != 0).
     pub multi_sel: Vec<bool>,
     /// Dropdown-specific data (present iff the object is a dropdown).
@@ -347,7 +354,10 @@ impl LbsData {
         push_obj_fmla(&mut content, &self.input_rgce);
         content.extend_from_slice(&self.lines.to_le_bytes());
         content.extend_from_slice(&self.sel.to_le_bytes());
-        let flags: u16 = ((self.no_3d as u16) << 3) | ((self.sel_type & 0x3) << 4);
+        let flags: u16 = (self.use_cb as u16)
+            | ((self.no_3d as u16) << 3)
+            | ((self.sel_type & 0x3) << 4)
+            | ((self.lct as u16) << 8);
         content.extend_from_slice(&flags.to_le_bytes());
         content.extend_from_slice(&0u16.to_le_bytes()); // idEdit
         if let Some(drop) = &self.drop {
@@ -381,9 +391,11 @@ impl LbsData {
         let sel = read_u16(data, &mut pos)?;
         let flags_lct = read_u16(data, &mut pos)?;
         let _id_edit = read_u16(data, &mut pos)?;
+        let use_cb = flags_lct & 0x0001 != 0;
         let no_3d = flags_lct & 0x0008 != 0;
         let sel_type = (flags_lct >> 4) & 0x3;
         let valid_plex = flags_lct & 0x0002 != 0;
+        let lct = (flags_lct >> 8) as u8;
 
         let mut drop = None;
         if obj_ot == ot::DROPDOWN {
@@ -426,6 +438,8 @@ impl LbsData {
             sel,
             sel_type,
             no_3d,
+            use_cb,
+            lct,
             multi_sel,
             drop,
         })
@@ -618,6 +632,24 @@ mod tests {
         0x00, 0x00, 0x00, 0x00, // ftEnd
     ];
 
+    /// Excel-authored OBJ body for the hidden dropdown Excel persists
+    /// for an autofilter column: ot=0x14, grbit carries fUIObj, and
+    /// FtLbsData has fUseCB=1 with lct=3 (autofilter behavior class).
+    const EXCEL_AUTOFILTER_DROPDOWN_OBJ: &[u8] = &[
+        0x15, 0x00, 0x12, 0x00, 0x14, 0x00, 0x01, 0x00, 0x01, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ftCmo ot=dropdown grbit=0x2101 (fUIObj)
+        0x0C, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x01,
+        0x00, 0x0A, 0x00, 0x00, 0x00, 0x10, 0x00, 0x01, 0x00, // ftSbs
+        0x13, 0x00, 0xEE, 0x1F, // ftLbsData, cbFContinued magic 0x1FEE
+        0x00, 0x00, // fmla: cbFmla = 0
+        0x00, 0x00, // cLines
+        0x04, 0x00, // iSel
+        0x01, 0x03, // flags: fUseCB, lct = 0x03 (autofilter)
+        0x00, 0x00, // idEdit
+        0x02, 0x00, 0x08, 0x00, 0x00, 0x00, // dropData: wStyle=2 cLine=8 dxMin=0
+        0x00, 0x00, 0x00, 0x00, // empty str + alignment byte
+    ];
+
     /// Excel-authored dropdown FtLbsData bytes (after the ft field):
     /// input range $H$1:$H$4, 4 items, selection 2, 6 dropdown lines.
     const EXCEL_DROPDOWN_LBS: &[u8] = &[
@@ -696,6 +728,8 @@ mod tests {
             sel: 2,
             sel_type: 0,
             no_3d: true,
+            use_cb: false,
+            lct: 0,
             multi_sel: vec![],
             drop: Some(DropData {
                 style: 0,
@@ -717,6 +751,8 @@ mod tests {
             sel: 1,
             sel_type: 1,
             no_3d: false,
+            use_cb: false,
+            lct: 0,
             multi_sel: vec![true, false, true],
             drop: None,
         };
@@ -790,6 +826,21 @@ mod tests {
         assert_eq!(drop.style, 0);
         assert_eq!(drop.lines, 6);
         assert_eq!(drop.min_width, 0);
+    }
+
+    #[test]
+    fn parses_excel_autofilter_dropdown_obj() {
+        let parsed = parse_obj(EXCEL_AUTOFILTER_DROPDOWN_OBJ).unwrap();
+        assert_eq!(parsed.ot, ot::DROPDOWN);
+        assert_ne!(
+            parsed.grbit & super::cmo_flags::UI_OBJ,
+            0,
+            "autofilter dropdowns carry fUIObj"
+        );
+        let lbs = parsed.lbs.expect("lbs");
+        assert!(lbs.use_cb);
+        assert_eq!(lbs.lct, 0x03, "lct = autofilter behavior class");
+        assert!(lbs.input_rgce.is_empty());
     }
 
     #[test]

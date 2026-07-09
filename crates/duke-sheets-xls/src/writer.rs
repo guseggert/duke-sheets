@@ -5183,9 +5183,23 @@ fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) {
     write_biff_record(out, CONTINUE_RECORD, &runs_body);
 }
 
-/// Emit a form control's caption `TXO` (+ CONTINUEs).
+/// Emit a form control's caption `TXO` (+ CONTINUEs). Captions are
+/// capped at 4000 UTF-16 units so the text payload always fits a
+/// single CONTINUE record (Excel's own control captions are far
+/// shorter).
 fn write_control_txo_to_vec(out: &mut Vec<u8>, caption: &str, flags: u16) {
-    write_txo_records(out, caption, flags);
+    const MAX_CAPTION_UTF16: usize = 4000;
+    let mut units = 0usize;
+    let mut end = caption.len();
+    for (i, ch) in caption.char_indices() {
+        let w = ch.len_utf16();
+        if units + w > MAX_CAPTION_UTF16 {
+            end = i;
+            break;
+        }
+        units += w;
+    }
+    write_txo_records(out, &caption[..end], flags);
 }
 
 /// TXO alignment flags per control kind, as pinned from Excel
@@ -5376,12 +5390,15 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
             horizontal,
             ..
         } => {
+            // FtSbs fields are signed; clamp the model's u16 values so
+            // out-of-range input cannot wrap negative.
+            let c = |v: u16| v.min(i16::MAX as u16) as i16;
             obj::SbsData {
-                val: *value as i16,
-                min: *min as i16,
-                max: *max as i16,
-                inc: *increment as i16,
-                page: *page as i16,
+                val: c(*value),
+                min: c(*min),
+                max: c(*max),
+                inc: c(*increment),
+                page: c(*page),
                 horizontal: *horizontal,
                 dx_scroll: 22,
                 flags: 0x0001, // fDraw
@@ -5398,11 +5415,12 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
             increment,
             ..
         } => {
+            let c = |v: u16| v.min(i16::MAX as u16) as i16;
             obj::SbsData {
-                val: *value as i16,
-                min: *min as i16,
-                max: *max as i16,
-                inc: *increment as i16,
+                val: c(*value),
+                min: c(*min),
+                max: c(*max),
+                inc: c(*increment),
                 page: 10,
                 horizontal: false,
                 dx_scroll: 22,
@@ -5453,6 +5471,8 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
                 sel: selected.first().copied().unwrap_or(0),
                 sel_type,
                 no_3d: *no_3d,
+                use_cb: false,
+                lct: 0,
                 multi_sel,
                 drop: None,
             }
@@ -5488,6 +5508,8 @@ fn write_control_obj_to_vec(out: &mut Vec<u8>, control: &ControlShape) {
                 sel: selected.unwrap_or(0),
                 sel_type: 0,
                 no_3d: *no_3d,
+                use_cb: false,
+                lct: 0,
                 multi_sel: Vec::new(),
                 drop: Some(crate::biff::obj::DropData {
                     style: 0,

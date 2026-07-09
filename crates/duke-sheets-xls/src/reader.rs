@@ -2805,6 +2805,19 @@ impl XlsReader {
             if !is_control {
                 continue;
             }
+            // Excel persists auxiliary UI dropdowns (one ot=0x14 OBJ
+            // per autofilter column, and similar pivot/table-total
+            // dropdowns) that are not user Forms controls. They are
+            // marked with fUIObj in ftCmo and a non-regular lct
+            // behavior class in ftLbsData; skip both signals.
+            if parsed.grbit & obj::cmo_flags::UI_OBJ != 0 {
+                continue;
+            }
+            if let Some(lbs) = &parsed.lbs {
+                if lbs.use_cb && lbs.lct != 0 {
+                    continue;
+                }
+            }
             if aligned && shapes[i].shape_type != shape_type::HOST_CONTROL {
                 // OBJ says control but the paired shape isn't a host
                 // control: the pairing is off for this entry, skip it.
@@ -2829,7 +2842,13 @@ impl XlsReader {
                 },
                 ot::OPTION_BUTTON => FormControlKind::OptionButton {
                     caption: caption(),
-                    state,
+                    // Mixed is checkbox-only (MS-XLS 2.5.141); clamp
+                    // out-of-spec radio states to Checked.
+                    state: if state == CheckState::Mixed {
+                        CheckState::Checked
+                    } else {
+                        state
+                    },
                     cell_link,
                     first_in_group: parsed.radio.map(|(_, first)| first).unwrap_or(false),
                     no_3d: parsed.cbls_no_3d,
@@ -4147,6 +4166,93 @@ mod tests {
         let comment = ws.comment_at(0, 0).expect("comment should exist");
         assert_eq!(comment.text, "");
         assert_eq!(comment.author, "");
+    }
+
+    // ── Form control tests ────────────────────────────────────────────
+
+    /// Excel-authored OBJ body of the hidden dropdown persisted for an
+    /// autofilter column (ot=0x14, fUIObj set, ftLbsData lct=3).
+    const AUTOFILTER_DROPDOWN_OBJ: &[u8] = &[
+        0x15, 0x00, 0x12, 0x00, 0x14, 0x00, 0x01, 0x00, 0x01, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x01, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x10, 0x00, 0x01,
+        0x00, 0x13, 0x00, 0xEE, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x03, 0x00, 0x00,
+        0x02, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    /// Minimal checkbox OBJ body: ftCmo(ot=0x0B, id=3) + ftCblsData
+    /// (checked) + ftEnd.
+    fn checkbox_obj_body(id: u16) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&0x0015u16.to_le_bytes()); // ftCmo
+        body.extend_from_slice(&0x0012u16.to_le_bytes());
+        body.extend_from_slice(&0x000Bu16.to_le_bytes()); // ot = checkbox
+        body.extend_from_slice(&id.to_le_bytes());
+        body.extend_from_slice(&0x0011u16.to_le_bytes()); // grbit
+        body.extend_from_slice(&[0u8; 12]);
+        body.extend_from_slice(&0x0012u16.to_le_bytes()); // ftCblsData
+        body.extend_from_slice(&0x0008u16.to_le_bytes());
+        body.extend_from_slice(&1u16.to_le_bytes()); // fChecked
+        body.extend_from_slice(&[0u8; 4]); // accel + reserved
+        body.extend_from_slice(&0x0002u16.to_le_bytes()); // flags (3D)
+        body.extend_from_slice(&[0u8; 4]); // ftEnd
+        body
+    }
+
+    #[test]
+    fn autofilter_dropdown_obj_is_not_a_form_control() {
+        // Excel persists auxiliary dropdown OBJs for autofilter
+        // columns; they must not surface as user Dropdown controls.
+        let ws = parse(vec![rec(records::OBJ, AUTOFILTER_DROPDOWN_OBJ.to_vec())]);
+        assert_eq!(ws.form_control_count(), 0);
+    }
+
+    #[test]
+    fn control_without_escher_shape_gets_default_anchor() {
+        // OBJ present but no MSODRAWING stream: the count mismatch
+        // degrades to a default anchor, not a dropped control.
+        let ws = parse(vec![rec(records::OBJ, checkbox_obj_body(3))]);
+        assert_eq!(ws.form_control_count(), 1);
+        let control = &ws.form_controls()[0];
+        assert_eq!(
+            control.anchor,
+            duke_sheets_chart::DrawingAnchor::default(),
+            "mismatched pairing falls back to the default anchor"
+        );
+        match &control.kind {
+            duke_sheets_core::FormControlKind::Checkbox { state, .. } => {
+                assert_eq!(*state, duke_sheets_core::CheckState::Checked);
+            }
+            other => panic!("expected Checkbox, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn out_of_spec_radio_mixed_state_clamps_to_checked() {
+        // fChecked=2 is only legal for checkboxes; a radio carrying it
+        // reads back as Checked.
+        let mut body = Vec::new();
+        body.extend_from_slice(&0x0015u16.to_le_bytes()); // ftCmo
+        body.extend_from_slice(&0x0012u16.to_le_bytes());
+        body.extend_from_slice(&0x000Cu16.to_le_bytes()); // ot = option button
+        body.extend_from_slice(&4u16.to_le_bytes());
+        body.extend_from_slice(&0x0011u16.to_le_bytes());
+        body.extend_from_slice(&[0u8; 12]);
+        body.extend_from_slice(&0x0012u16.to_le_bytes()); // ftCblsData
+        body.extend_from_slice(&0x0008u16.to_le_bytes());
+        body.extend_from_slice(&2u16.to_le_bytes()); // fChecked = mixed (invalid)
+        body.extend_from_slice(&[0u8; 4]);
+        body.extend_from_slice(&0x0002u16.to_le_bytes());
+        body.extend_from_slice(&[0u8; 4]); // ftEnd
+
+        let ws = parse(vec![rec(records::OBJ, body)]);
+        assert_eq!(ws.form_control_count(), 1);
+        match &ws.form_controls()[0].kind {
+            duke_sheets_core::FormControlKind::OptionButton { state, .. } => {
+                assert_eq!(*state, duke_sheets_core::CheckState::Checked);
+            }
+            other => panic!("expected OptionButton, got {other:?}"),
+        }
     }
 
     // ── Hyperlink tests ───────────────────────────────────────────────
