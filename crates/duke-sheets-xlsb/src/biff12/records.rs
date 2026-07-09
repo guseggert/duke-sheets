@@ -139,8 +139,10 @@ pub const BRT_BEGIN_COMMENT: u16 = 0x027D;
 pub const BRT_END_COMMENT: u16 = 0x027E;
 pub const BRT_COMMENT_TEXT: u16 = 0x027F;
 
-pub const BRT_LEGACY_DRAWING: u16 = 0x0228;
-pub const BRT_DRAWING: u16 = 0x0235;
+// MS-XLSB §2.2.1: BrtDrawing = 550, BrtLegacyDrawing = 551
+// (552 is BrtLegacyDrawingHF, the header/footer variant).
+pub const BRT_DRAWING: u16 = 0x0226;
+pub const BRT_LEGACY_DRAWING: u16 = 0x0227;
 
 pub const BRT_BEGIN_LIST: u16 = 0x0157; // 343
 pub const BRT_END_LIST: u16 = 0x0158; // 344
