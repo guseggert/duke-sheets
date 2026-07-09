@@ -2710,4 +2710,160 @@ mod tests {
             got.comment
         );
     }
+
+    #[test]
+    fn form_controls_roundtrip() {
+        use duke_sheets_chart::{CellMarker, DrawingAnchor};
+        use duke_sheets_core::{CheckState, FormControl, FormControlKind, ListSelection};
+
+        let anchor = |fc: u16, fr: u32, tc: u16, tr: u32| DrawingAnchor::TwoCell {
+            from: CellMarker {
+                col: fc,
+                col_offset_emu: 0,
+                row: fr,
+                row_offset_emu: 0,
+            },
+            to: CellMarker {
+                col: tc,
+                col_offset_emu: 0,
+                row: tr,
+                row_offset_emu: 0,
+            },
+            edit_as: None,
+        };
+
+        let kinds: Vec<FormControlKind> = vec![
+            FormControlKind::Button {
+                caption: "Run Report".to_string(),
+            },
+            FormControlKind::Checkbox {
+                caption: "Enable audit".to_string(),
+                state: CheckState::Checked,
+                cell_link: Some("$D$2".to_string()),
+                no_3d: true,
+            },
+            FormControlKind::Checkbox {
+                caption: "Tri state".to_string(),
+                state: CheckState::Mixed,
+                cell_link: None,
+                no_3d: true,
+            },
+            FormControlKind::OptionButton {
+                caption: "Opt A".to_string(),
+                state: CheckState::Checked,
+                cell_link: Some("$D$3".to_string()),
+                first_in_group: false,
+                no_3d: true,
+            },
+            FormControlKind::Label {
+                caption: "Status".to_string(),
+            },
+            FormControlKind::GroupBox {
+                caption: "Choices".to_string(),
+                no_3d: true,
+            },
+            FormControlKind::ListBox {
+                input_range: Some("$H$1:$H$5".to_string()),
+                cell_link: None,
+                selection: ListSelection::Multi,
+                selected: vec![1, 3, 5],
+                no_3d: true,
+            },
+            FormControlKind::Dropdown {
+                input_range: Some("$H$1:$H$4".to_string()),
+                cell_link: Some("$D$4".to_string()),
+                selected: Some(2),
+                lines: 6,
+                no_3d: true,
+            },
+            FormControlKind::Scrollbar {
+                value: 40,
+                min: 5,
+                max: 95,
+                increment: 2,
+                page: 10,
+                horizontal: false,
+                cell_link: Some("$D$6".to_string()),
+            },
+            FormControlKind::Spinner {
+                value: 12,
+                min: 0,
+                max: 30,
+                increment: 3,
+                cell_link: Some("$D$7".to_string()),
+            },
+        ];
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value_at(0, 0, 42.0).unwrap();
+        let count = kinds.len();
+        for (i, kind) in kinds.iter().enumerate() {
+            let row = 1 + 2 * i as u32;
+            ws.add_form_control(FormControl::with_anchor(
+                kind.clone(),
+                anchor(1, row, 3, row + 1),
+            ));
+        }
+
+        let wb2 = round_trip(&wb);
+        let controls = wb2.worksheet(0).unwrap().form_controls();
+        assert_eq!(controls.len(), count, "every control survives");
+        for (i, control) in controls.iter().enumerate() {
+            // The writer recomputes radio grouping; the single radio
+            // becomes its own group head.
+            let mut expected = kinds[i].clone();
+            if let FormControlKind::OptionButton { first_in_group, .. } = &mut expected {
+                *first_in_group = true;
+            }
+            assert_eq!(control.kind, expected, "control {i} kind mismatch");
+        }
+        match &controls[0].anchor {
+            DrawingAnchor::TwoCell { from, to, .. } => {
+                assert_eq!((from.col, from.row), (1, 1));
+                assert_eq!((to.col, to.row), (3, 2));
+            }
+            other => panic!("expected TwoCell anchor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn form_controls_and_comments_share_vml() {
+        use duke_sheets_chart::{CellMarker, DrawingAnchor};
+        use duke_sheets_core::comment::CellComment;
+        use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_comment_at(0, 0, CellComment::new("Author", "note"));
+        ws.add_form_control(FormControl::with_anchor(
+            FormControlKind::Checkbox {
+                caption: "check".to_string(),
+                state: CheckState::Checked,
+                cell_link: None,
+                no_3d: false,
+            },
+            DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col: 1,
+                    col_offset_emu: 0,
+                    row: 1,
+                    row_offset_emu: 0,
+                },
+                to: CellMarker {
+                    col: 3,
+                    col_offset_emu: 0,
+                    row: 2,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
+            },
+        ));
+
+        let wb2 = round_trip(&wb);
+        let ws2 = wb2.worksheet(0).unwrap();
+        assert_eq!(ws2.comment_count(), 1, "comment survives");
+        assert_eq!(ws2.form_control_count(), 1, "control survives");
+        assert_eq!(ws2.form_controls()[0].caption(), Some("check"));
+    }
 }
