@@ -480,6 +480,116 @@ fn controls_on_multiple_sheets_round_trip() {
     }
 }
 
+/// LibreOffice envelope check: write an XLS carrying one of every
+/// control kind, open via URP, read the anchor cell's value back.
+///
+/// Smoke test — if the OBJ subrecords or the Escher tree are
+/// malformed, LO refuses to open the file and `open_workbook`
+/// errors. Deeper control inspection via UNO is fragile across LO
+/// versions, so this settles for confirming the file loads.
+#[test]
+#[ignore = "requires LibreOffice URP on 127.0.0.1:2002"]
+fn lo_can_open_xls_with_form_controls_we_emit() {
+    duke_sheets_test_harness::lo::ensure_lo();
+
+    const SHARED_DIR: &str = "/tmp/duke-sheets-urp";
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).expect("A1");
+    let kinds: Vec<FormControlKind> = vec![
+        FormControlKind::Button {
+            caption: "Run".to_string(),
+        },
+        FormControlKind::Checkbox {
+            caption: "Check".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".to_string()),
+            no_3d: false,
+        },
+        FormControlKind::OptionButton {
+            caption: "Opt".to_string(),
+            state: CheckState::Checked,
+            cell_link: None,
+            first_in_group: true,
+            no_3d: false,
+        },
+        FormControlKind::Label {
+            caption: "Info".to_string(),
+        },
+        FormControlKind::GroupBox {
+            caption: "Frame".to_string(),
+            no_3d: true,
+        },
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selection: ListSelection::Single,
+            selected: vec![2],
+            no_3d: true,
+        },
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: None,
+            selected: Some(1),
+            lines: 8,
+            no_3d: true,
+        },
+        FormControlKind::Scrollbar {
+            value: 40,
+            min: 0,
+            max: 100,
+            increment: 1,
+            page: 10,
+            horizontal: false,
+            cell_link: None,
+        },
+        FormControlKind::Spinner {
+            value: 3,
+            min: 0,
+            max: 10,
+            increment: 1,
+            cell_link: None,
+        },
+    ];
+    for (i, kind) in kinds.into_iter().enumerate() {
+        let row = 1 + 2 * i as u32;
+        ws.add_form_control(FormControl::with_anchor(kind, anchor(1, row, 3, row + 1)));
+    }
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    std::fs::create_dir_all(SHARED_DIR).expect("shared dir");
+    let pid = std::process::id();
+    let path = format!("{SHARED_DIR}/duke_form_controls_{pid}.xls");
+    std::fs::write(&path, &bytes).expect("write");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<f64, String> = rt.block_on(async {
+        let mut bridge =
+            duke_sheets_libreoffice::bridge::LibreOfficeBridge::connect("127.0.0.1", 2002)
+                .await
+                .map_err(|e| format!("connect: {e}"))?;
+        let mut wb_in = bridge
+            .open_workbook(&path)
+            .await
+            .map_err(|e| format!("open: {e}"))?;
+        let a1 = wb_in
+            .get_cell_value("A1")
+            .await
+            .map_err(|e| format!("A1: {e}"))?;
+        Ok(a1)
+    });
+    let _ = std::fs::remove_file(&path);
+    let a1 = outcome.expect("LO must open our XLS with form controls without error");
+    assert!(
+        (a1 - 42.0).abs() < 1e-9,
+        "A1 must round-trip; got {a1} (expected 42)"
+    );
+}
+
 #[test]
 fn empty_workbook_emits_no_drawing_records() {
     let mut wb = Workbook::new();
