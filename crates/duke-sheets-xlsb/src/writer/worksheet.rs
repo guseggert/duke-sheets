@@ -120,27 +120,27 @@ pub(crate) fn write_worksheet<W: Write + Seek>(
 
     let has_comments = ws.comments().next().is_some();
     let has_vml = has_comments || ws.form_control_count() > 0;
+    // `write_sheet_rels` writes hyperlinks/tables first, then
+    // comments, VML, and Drawing. `rid_counter` only includes the
+    // hyperlink rels here; table rels occupy the next `table_count`
+    // ids.
+    let auxiliary_rid_start = rid_counter + table_count as u32;
 
-    if has_vml {
-        // Rel order written by write_sheet_rels: [comments], vml,
-        // [drawing]; comments occupy rid_counter when present.
-        let vml_rid_num = rid_counter + has_comments as u32;
-        let vml_rid = format!("rId{}", vml_rid_num);
-        let encoded_vml_rid = crate::biff12::encode_wide_str(&vml_rid);
-        rw.write_record(records::BRT_LEGACY_DRAWING, &encoded_vml_rid)?;
-    }
-
+    // MS-XLSB §2.1.7.61 orders BrtDrawing before BrtLegacyDrawing.
     if has_drawing {
-        let mut drawing_rid_num = rid_counter;
-        if has_comments {
-            drawing_rid_num += 1;
-        }
-        if has_vml {
-            drawing_rid_num += 1;
-        }
+        let drawing_rid_num = auxiliary_rid_start
+            + has_comments as u32
+            + has_vml as u32;
         let rid = format!("rId{}", drawing_rid_num);
         let encoded_rid = crate::biff12::encode_wide_str(&rid);
         rw.write_record(records::BRT_DRAWING, &encoded_rid)?;
+    }
+
+    if has_vml {
+        let vml_rid_num = auxiliary_rid_start + has_comments as u32;
+        let vml_rid = format!("rId{}", vml_rid_num);
+        let encoded_vml_rid = crate::biff12::encode_wide_str(&vml_rid);
+        rw.write_record(records::BRT_LEGACY_DRAWING, &encoded_vml_rid)?;
     }
 
     if table_count > 0 {

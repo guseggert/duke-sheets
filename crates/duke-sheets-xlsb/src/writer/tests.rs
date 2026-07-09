@@ -2866,4 +2866,88 @@ mod tests {
         assert_eq!(ws2.form_control_count(), 1, "control survives");
         assert_eq!(ws2.form_controls()[0].caption(), Some("check"));
     }
+
+    #[test]
+    fn form_control_table_relationship_ids_match_sheet_records() {
+        use std::io::Read;
+
+        use duke_sheets_chart::{CellMarker, DrawingAnchor};
+        use duke_sheets_core::table::{Table, TableColumn};
+        use duke_sheets_core::{CellRange, CheckState, FormControl, FormControlKind};
+
+        let mut wb = Workbook::new();
+        let ws = wb.worksheet_mut(0).unwrap();
+        ws.set_cell_value_at(0, 0, "Name").unwrap();
+        ws.set_cell_value_at(1, 0, "Alice").unwrap();
+        ws.add_table(Table {
+            id: 1,
+            name: "People".to_string(),
+            display_name: "People".to_string(),
+            reference: CellRange::parse("A1:A2").unwrap(),
+            columns: vec![TableColumn {
+                id: 1,
+                name: "Name".to_string(),
+                totals_row_function: None,
+                totals_row_formula: None,
+                totals_row_label: None,
+                calculated_column_formula: None,
+            }],
+            style_info: None,
+            header_row_count: 1,
+            totals_row_count: 0,
+            totals_row_shown: false,
+        });
+        ws.add_form_control(FormControl::with_anchor(
+            FormControlKind::Checkbox {
+                caption: "check".to_string(),
+                state: CheckState::Checked,
+                cell_link: None,
+                no_3d: false,
+            },
+            DrawingAnchor::TwoCell {
+                from: CellMarker {
+                    col: 2,
+                    col_offset_emu: 0,
+                    row: 0,
+                    row_offset_emu: 0,
+                },
+                to: CellMarker {
+                    col: 4,
+                    col_offset_emu: 0,
+                    row: 1,
+                    row_offset_emu: 0,
+                },
+                edit_as: None,
+            },
+        ));
+
+        let mut bytes = Vec::new();
+        XlsbWriter::write(&wb, Cursor::new(&mut bytes)).unwrap();
+        let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+
+        let mut rels = String::new();
+        zip.by_name("xl/worksheets/_rels/sheet1.bin.rels")
+            .unwrap()
+            .read_to_string(&mut rels)
+            .unwrap();
+        assert!(rels.contains("Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table\""));
+        assert!(rels.contains("Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing\""));
+
+        let mut sheet = Vec::new();
+        zip.by_name("xl/worksheets/sheet1.bin")
+            .unwrap()
+            .read_to_end(&mut sheet)
+            .unwrap();
+        let mut iter = crate::biff12::RecordIter::new(Cursor::new(sheet));
+        let mut payload = Vec::new();
+        let mut legacy_rid = None;
+        loop {
+            let Ok(record_type) = iter.read_type() else { break };
+            let len = iter.fill_buffer(&mut payload).unwrap();
+            if record_type == crate::biff12::records::BRT_LEGACY_DRAWING {
+                legacy_rid = Some(crate::biff12::parser::wide_str(&payload[..len], 0).unwrap().0);
+            }
+        }
+        assert_eq!(legacy_rid.as_deref(), Some("rId2"));
+    }
 }
