@@ -377,6 +377,10 @@ export declare class Worksheet {
   get images(): Array<JsEmbeddedImage>
   /** Number of embedded images in the worksheet. */
   get imageCount(): number
+  /** Get all form controls in worksheet order. */
+  get formControls(): Array<JsFormControl>
+  /** Number of form controls in the worksheet. */
+  get formControlCount(): number
   /** Get the worksheet name */
   get name(): string
   /**
@@ -439,6 +443,12 @@ export declare class Worksheet {
   mergeCells(rangeStr: string): void
   /** Unmerge cells in a range */
   unmergeCells(rangeStr: string): boolean
+  /** Append a form control and return its zero-based index. */
+  addFormControl(control: JsFormControlInput): number
+  /** Replace a form control by zero-based index. */
+  setFormControl(index: number, control: JsFormControlInput): void
+  /** Remove a form control by zero-based index. */
+  removeFormControl(index: number): void
 }
 
 /**
@@ -920,6 +930,13 @@ export interface JsChartTypeGroup {
   upDownBars?: JsUpDownBars
 }
 
+/** Kind-specific form-control data. `kind` is the TypeScript discriminator. */
+export declare const enum JsCheckState {
+  Unchecked = 'unchecked',
+  Checked = 'checked',
+  Mixed = 'mixed'
+}
+
 /**
  * Color representation. The `colorType` field indicates the variant:
  * `"auto"`, `"rgb"`, `"argb"`, `"theme"`, or `"indexed"`.
@@ -1092,6 +1109,8 @@ export interface JsDrawingAnchor {
   toRow: number
   toColOffset: number
   toRowOffset: number
+  /** One of `"twoCell"`, `"oneCell"`, or `"absolute"`. */
+  editAs: string
 }
 
 export interface JsEmbeddedImage {
@@ -1199,6 +1218,33 @@ export interface JsFontStylePatch {
   scheme?: string
 }
 
+export interface JsFormControl {
+  name?: string
+  anchor: JsDrawingAnchor
+  kind: JsFormControlKind
+  locked: boolean
+  printable: boolean
+}
+
+export interface JsFormControlInput {
+  name?: string
+  anchor: JsDrawingAnchor
+  kind: JsFormControlKind
+  locked?: boolean
+  printable?: boolean
+}
+
+export type JsFormControlKind =
+  | { kind: 'button', caption: string }
+  | { kind: 'checkbox', caption: string, state: JsCheckState, cellLink?: string, no3D: boolean }
+  | { kind: 'optionButton', caption: string, state: JsCheckState, cellLink?: string, firstInGroup: boolean, no3D: boolean }
+  | { kind: 'label', caption: string }
+  | { kind: 'groupBox', caption: string, no3D: boolean }
+  | { kind: 'listBox', inputRange?: string, cellLink?: string, selection: JsListSelection, selected: Array<number>, no3D: boolean }
+  | { kind: 'dropdown', inputRange?: string, cellLink?: string, selected?: number, lines: number, no3D: boolean }
+  | { kind: 'scrollbar', value: number, min: number, max: number, increment: number, page: number, horizontal: boolean, cellLink?: string }
+  | { kind: 'spinner', value: number, min: number, max: number, increment: number, cellLink?: string }
+
 /** A formula cell with address. */
 export interface JsFormulaCell {
   row: number
@@ -1268,6 +1314,12 @@ export interface JsLegend {
   /** One of: `"Right"`, `"Top"`, `"Bottom"`, `"Left"`, `"TopRight"`. */
   position: string
   overlay: boolean
+}
+
+export declare const enum JsListSelection {
+  Single = 'single',
+  Multi = 'multi',
+  Extend = 'extend'
 }
 
 /** Manual layout positioning. */

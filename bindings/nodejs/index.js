@@ -581,4 +581,6 @@ module.exports.CellValue = nativeBinding.CellValue
 module.exports.Workbook = nativeBinding.Workbook
 module.exports.Worksheet = nativeBinding.Worksheet
 module.exports.fromBytesAsync = nativeBinding.fromBytesAsync
+module.exports.JsCheckState = nativeBinding.JsCheckState
+module.exports.JsListSelection = nativeBinding.JsListSelection
 module.exports.openAsync = nativeBinding.openAsync
