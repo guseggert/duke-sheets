@@ -4481,27 +4481,7 @@ fn compute_drawing_state(
             next_obj_id += 1;
         }
 
-        // Chain option buttons into one circular group in insertion
-        // order: each radio's idRadNext points at the next radio's
-        // obj id, the last wraps to the first, and the first carries
-        // fFirstBtn. (Grouping by enclosing group box is not
-        // modelled.)
-        let radio_indices: Vec<usize> = controls
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| {
-                matches!(
-                    c.control.kind,
-                    duke_sheets_core::FormControlKind::OptionButton { .. }
-                )
-            })
-            .map(|(i, _)| i)
-            .collect();
-        for (pos, &idx) in radio_indices.iter().enumerate() {
-            let next_pos = (pos + 1) % radio_indices.len();
-            controls[idx].radio_next_id = controls[radio_indices[next_pos]].obj_id;
-            controls[idx].radio_first = pos == 0;
-        }
+        chain_option_buttons(&mut controls);
 
         highest_spid_used = highest_spid_used.max(next_spid - 1);
 
@@ -4528,6 +4508,102 @@ fn compute_drawing_state(
     }
     state.spid_max = highest_spid_used + 1;
     state
+}
+
+/// Chain a sheet's option buttons into per-group circular
+/// `FtRboData` linked lists, mirroring how Excel persists radio
+/// grouping: each radio belongs to the innermost group box whose
+/// rectangle contains the radio's center, and radios outside every
+/// box form the sheet-level group. Within a group the chain follows
+/// insertion order, wraps to the head, and the head carries
+/// `fFirstBtn`; a single-member group points at itself.
+///
+/// Containment is evaluated in EMU at Excel's default cell metrics
+/// (the same quantisation the ClientAnchor encoding uses), so custom
+/// row heights / column widths that move a radio across a box edge
+/// visually are not accounted for.
+fn chain_option_buttons(controls: &mut [ControlShape]) {
+    use duke_sheets_core::FormControlKind;
+
+    let box_rects: Vec<(i64, i64, i64, i64)> = controls
+        .iter()
+        .filter(|c| matches!(c.control.kind, FormControlKind::GroupBox { .. }))
+        .map(|c| anchor_rect_emu(&c.control.anchor))
+        .collect();
+
+    // Innermost containing box per radio (smallest area wins).
+    let containing_box = |anchor: &duke_sheets_chart::DrawingAnchor| -> Option<usize> {
+        let (x1, y1, x2, y2) = anchor_rect_emu(anchor);
+        let (cx, cy) = ((x1 + x2) / 2, (y1 + y2) / 2);
+        box_rects
+            .iter()
+            .enumerate()
+            .filter(|(_, (bx1, by1, bx2, by2))| {
+                (*bx1..=*bx2).contains(&cx) && (*by1..=*by2).contains(&cy)
+            })
+            .min_by_key(|(_, (bx1, by1, bx2, by2))| {
+                (bx2 - bx1).max(0) * (by2 - by1).max(0)
+            })
+            .map(|(i, _)| i)
+    };
+
+    // Group radio indices by containing box, preserving insertion
+    // order within each group.
+    let mut groups: Vec<(Option<usize>, Vec<usize>)> = Vec::new();
+    for (idx, shape) in controls.iter().enumerate() {
+        if !matches!(shape.control.kind, FormControlKind::OptionButton { .. }) {
+            continue;
+        }
+        let key = containing_box(&shape.control.anchor);
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, members)) => members.push(idx),
+            None => groups.push((key, vec![idx])),
+        }
+    }
+
+    for (_, members) in &groups {
+        for (pos, &idx) in members.iter().enumerate() {
+            let next_pos = (pos + 1) % members.len();
+            controls[idx].radio_next_id = controls[members[next_pos]].obj_id;
+            controls[idx].radio_first = pos == 0;
+        }
+    }
+}
+
+/// Absolute EMU rectangle (x1, y1, x2, y2) for a drawing anchor at
+/// Excel's default cell metrics.
+fn anchor_rect_emu(anchor: &duke_sheets_chart::DrawingAnchor) -> (i64, i64, i64, i64) {
+    use duke_sheets_chart::DrawingAnchor;
+    const COL_EMU: i64 = 609_600;
+    const ROW_EMU: i64 = 190_500;
+    match anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => (
+            from.col as i64 * COL_EMU + from.col_offset_emu,
+            from.row as i64 * ROW_EMU + from.row_offset_emu,
+            to.col as i64 * COL_EMU + to.col_offset_emu,
+            to.row as i64 * ROW_EMU + to.row_offset_emu,
+        ),
+        DrawingAnchor::OneCell {
+            from,
+            width_emu,
+            height_emu,
+        } => {
+            let x1 = from.col as i64 * COL_EMU + from.col_offset_emu;
+            let y1 = from.row as i64 * ROW_EMU + from.row_offset_emu;
+            (x1, y1, x1 + (*width_emu).max(0), y1 + (*height_emu).max(0))
+        }
+        DrawingAnchor::Absolute {
+            x_emu,
+            y_emu,
+            width_emu,
+            height_emu,
+        } => (
+            *x_emu,
+            *y_emu,
+            *x_emu + (*width_emu).max(0),
+            *y_emu + (*height_emu).max(0),
+        ),
+    }
 }
 
 /// Emit the workbook-globals `MSODRAWINGGROUP` (BIFF 0xEB) record

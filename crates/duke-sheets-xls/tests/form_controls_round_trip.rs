@@ -480,6 +480,119 @@ fn controls_on_multiple_sheets_round_trip() {
     }
 }
 
+/// Build the multi-group radio workbook used by the grouping tests:
+/// two group boxes with two radios each (interleaved insertion
+/// order) plus a loose radio outside both boxes.
+///
+/// Controls in insertion order: Box A, Box B, A1, B1, A2, B2, Loose
+/// (obj ids 1-7).
+fn radio_groups_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let radio = |caption: &str, state: CheckState| FormControlKind::OptionButton {
+        caption: caption.to_string(),
+        state,
+        cell_link: None,
+        first_in_group: false,
+        no_3d: false,
+    };
+    let group_box = |caption: &str| FormControlKind::GroupBox {
+        caption: caption.to_string(),
+        no_3d: false,
+    };
+    // Box A spans cols 0-2, Box B cols 4-6; radios sit inside them,
+    // the loose radio at col 8 is outside both.
+    ws.add_form_control(FormControl::with_anchor(group_box("Box A"), anchor(0, 0, 2, 6)));
+    ws.add_form_control(FormControl::with_anchor(group_box("Box B"), anchor(4, 0, 6, 6)));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("A1", CheckState::Checked),
+        anchor(1, 1, 2, 2),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("B1", CheckState::Unchecked),
+        anchor(5, 1, 6, 2),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("A2", CheckState::Unchecked),
+        anchor(1, 3, 2, 4),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("B2", CheckState::Checked),
+        anchor(5, 3, 6, 4),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("Loose", CheckState::Unchecked),
+        anchor(8, 1, 9, 2),
+    ));
+    wb
+}
+
+#[test]
+fn radio_groups_follow_enclosing_group_boxes() {
+    // Each group box forms its own radio group (fFirstBtn on its
+    // first radio); radios outside every box form the sheet group.
+    let parsed = write_then_read(&radio_groups_workbook());
+    let controls = parsed.worksheet(0).unwrap().form_controls();
+    assert_eq!(controls.len(), 7);
+
+    let firsts: Vec<(Option<&str>, bool)> = controls
+        .iter()
+        .filter_map(|c| match &c.kind {
+            FormControlKind::OptionButton {
+                caption,
+                first_in_group,
+                ..
+            } => Some((Some(caption.as_str()), *first_in_group)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        firsts,
+        vec![
+            (Some("A1"), true),
+            (Some("B1"), true),
+            (Some("A2"), false),
+            (Some("B2"), false),
+            (Some("Loose"), true),
+        ],
+        "each group's first radio carries fFirstBtn"
+    );
+}
+
+#[test]
+fn radio_chains_link_within_groups_only() {
+    // Byte-level: the FtRboData idRadNext chains must be circular
+    // per group, matching how Excel persists grouping. The model
+    // only exposes fFirstBtn, so walk the written OBJ records.
+    use duke_sheets_xls::biff::{self, obj};
+    use duke_sheets_xls::cfb::CompoundFile;
+
+    let bytes = XlsWriter::write_to_bytes(&radio_groups_workbook()).expect("serialize");
+    let cfb = CompoundFile::open(Cursor::new(&bytes)).expect("cfb");
+    let stream = cfb.read_stream("/Workbook").expect("workbook stream");
+    let records =
+        biff::read_all_records(&mut Cursor::new(stream)).expect("records");
+
+    let mut chains = std::collections::HashMap::new();
+    for rec in &records {
+        if rec.record_type != biff::records::OBJ {
+            continue;
+        }
+        let parsed = obj::parse_obj(&rec.data).expect("parse obj");
+        if let Some((next, first)) = parsed.radio {
+            chains.insert(parsed.id, (next, first));
+        }
+    }
+
+    // Insertion order gives obj ids: BoxA=1, BoxB=2, A1=3, B1=4,
+    // A2=5, B2=6, Loose=7.
+    assert_eq!(chains[&3], (5, true), "A1 chains to A2 and heads box A");
+    assert_eq!(chains[&5], (3, false), "A2 wraps back to A1");
+    assert_eq!(chains[&4], (6, true), "B1 chains to B2 and heads box B");
+    assert_eq!(chains[&6], (4, false), "B2 wraps back to B1");
+    assert_eq!(chains[&7], (7, true), "loose radio is its own group");
+}
+
 #[test]
 fn empty_caption_round_trips() {
     // Empty captions take the cchText=0 TXO path (header only, no

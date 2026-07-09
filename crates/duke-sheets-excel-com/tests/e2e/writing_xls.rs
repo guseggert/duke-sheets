@@ -2661,6 +2661,89 @@ fn excel_can_read_form_controls_we_emit() {
     }
 }
 
+/// Radio grouping by enclosing group box survives the Excel
+/// round-trip: two boxes with two radios each plus a loose radio
+/// come back as three groups (fFirstBtn on each group's first
+/// radio), with per-group checked states intact.
+#[test]
+#[ignore = "requires Excel COM bridge on localhost:9876"]
+fn excel_can_read_radio_groups_we_emit() {
+    use duke_sheets_core::{CheckState, FormControl, FormControlKind};
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).expect("A1");
+
+    let radio = |caption: &str, state: CheckState| FormControlKind::OptionButton {
+        caption: caption.to_string(),
+        state,
+        cell_link: None,
+        first_in_group: false,
+        no_3d: true,
+    };
+    let group_box = |caption: &str| FormControlKind::GroupBox {
+        caption: caption.to_string(),
+        no_3d: true,
+    };
+    ws.add_form_control(FormControl::with_anchor(
+        group_box("Box A"),
+        control_anchor(0, 0, 2, 6),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        group_box("Box B"),
+        control_anchor(4, 0, 6, 6),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("A1", CheckState::Checked),
+        control_anchor(1, 1, 2, 2),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("B1", CheckState::Unchecked),
+        control_anchor(5, 1, 6, 2),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("A2", CheckState::Unchecked),
+        control_anchor(1, 3, 2, 4),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("B2", CheckState::Checked),
+        control_anchor(5, 3, 6, 4),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        radio("Loose", CheckState::Unchecked),
+        control_anchor(8, 1, 9, 2),
+    ));
+
+    let result = roundtrip_through_excel_xls(&wb);
+    let sheet = result.worksheet(0).unwrap();
+    let controls = sheet.form_controls();
+    assert_eq!(controls.len(), 7, "all controls survive");
+
+    let radios: Vec<(String, CheckState, bool)> = controls
+        .iter()
+        .filter_map(|c| match &c.kind {
+            FormControlKind::OptionButton {
+                caption,
+                state,
+                first_in_group,
+                ..
+            } => Some((caption.clone(), *state, *first_in_group)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        radios,
+        vec![
+            ("A1".to_string(), CheckState::Checked, true),
+            ("B1".to_string(), CheckState::Unchecked, true),
+            ("A2".to_string(), CheckState::Unchecked, false),
+            ("B2".to_string(), CheckState::Checked, false),
+            ("Loose".to_string(), CheckState::Unchecked, true),
+        ],
+        "three radio groups with per-group states must survive Excel"
+    );
+}
+
 /// A form control coexisting with a comment and a picture keeps the
 /// OBJ↔shape pairing straight through Excel's re-save.
 #[test]
