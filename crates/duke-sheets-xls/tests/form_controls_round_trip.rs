@@ -1,0 +1,494 @@
+//! Round-trip tests for BIFF8 form controls.
+//!
+//! Exercises the in-process loop: build a workbook with form
+//! controls, write to BIFF8 bytes, read back, assert kind-specific
+//! properties, captions, cell links, and anchors survive.
+
+use std::io::Cursor;
+
+use duke_sheets_chart::{CellMarker, DrawingAnchor};
+use duke_sheets_core::{
+    CheckState, FormControl, FormControlKind, ListSelection, Workbook,
+};
+use duke_sheets_xls::{XlsReader, XlsWriter};
+
+fn write_then_read(wb: &Workbook) -> Workbook {
+    let bytes = XlsWriter::write_to_bytes(wb).expect("serialize");
+    XlsReader::read(Cursor::new(&bytes)).expect("read back")
+}
+
+fn anchor(from_col: u16, from_row: u32, to_col: u16, to_row: u32) -> DrawingAnchor {
+    DrawingAnchor::TwoCell {
+        from: CellMarker {
+            col: from_col,
+            col_offset_emu: 0,
+            row: from_row,
+            row_offset_emu: 0,
+        },
+        to: CellMarker {
+            col: to_col,
+            col_offset_emu: 0,
+            row: to_row,
+            row_offset_emu: 0,
+        },
+        edit_as: None,
+    }
+}
+
+fn single_control_round_trip(kind: FormControlKind) -> FormControlKind {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").expect("A1");
+    ws.add_form_control(FormControl::with_anchor(kind, anchor(1, 1, 3, 3)));
+
+    let parsed = write_then_read(&wb);
+    let controls = parsed.worksheet(0).unwrap().form_controls();
+    assert_eq!(controls.len(), 1, "control must survive round-trip");
+    controls[0].kind.clone()
+}
+
+#[test]
+fn button_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::Button {
+        caption: "Run Report".to_string(),
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::Button {
+            caption: "Run Report".to_string(),
+        }
+    );
+}
+
+#[test]
+fn checkbox_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::Checkbox {
+        caption: "Enable audit".to_string(),
+        state: CheckState::Checked,
+        cell_link: Some("$D$2".to_string()),
+        no_3d: false,
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::Checkbox {
+            caption: "Enable audit".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("$D$2".to_string()),
+            no_3d: false,
+        }
+    );
+}
+
+#[test]
+fn checkbox_mixed_state_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::Checkbox {
+        caption: "Tri".to_string(),
+        state: CheckState::Mixed,
+        cell_link: None,
+        no_3d: true,
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::Checkbox {
+            caption: "Tri".to_string(),
+            state: CheckState::Mixed,
+            cell_link: None,
+            no_3d: true,
+        }
+    );
+}
+
+#[test]
+fn option_buttons_round_trip_as_group() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    for (i, (caption, state)) in [
+        ("Opt A", CheckState::Checked),
+        ("Opt B", CheckState::Unchecked),
+        ("Opt C", CheckState::Unchecked),
+    ]
+    .iter()
+    .enumerate()
+    {
+        ws.add_form_control(FormControl::with_anchor(
+            FormControlKind::OptionButton {
+                caption: caption.to_string(),
+                state: *state,
+                cell_link: Some("$E$1".to_string()),
+                first_in_group: false,
+                no_3d: false,
+            },
+            anchor(1, 1 + i as u32, 3, 2 + i as u32),
+        ));
+    }
+
+    let parsed = write_then_read(&wb);
+    let controls = parsed.worksheet(0).unwrap().form_controls();
+    assert_eq!(controls.len(), 3);
+    for (i, c) in controls.iter().enumerate() {
+        match &c.kind {
+            FormControlKind::OptionButton {
+                caption,
+                state,
+                cell_link,
+                first_in_group,
+                ..
+            } => {
+                assert_eq!(caption, &format!("Opt {}", ["A", "B", "C"][i]));
+                assert_eq!(
+                    *state,
+                    if i == 0 {
+                        CheckState::Checked
+                    } else {
+                        CheckState::Unchecked
+                    }
+                );
+                assert_eq!(cell_link.as_deref(), Some("$E$1"));
+                // The writer recomputes grouping: first radio carries
+                // the flag.
+                assert_eq!(*first_in_group, i == 0, "radio {i} fFirstBtn");
+            }
+            other => panic!("expected OptionButton, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn label_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::Label {
+        caption: "Status".to_string(),
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::Label {
+            caption: "Status".to_string(),
+        }
+    );
+}
+
+#[test]
+fn group_box_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::GroupBox {
+        caption: "Choices".to_string(),
+        no_3d: true,
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::GroupBox {
+            caption: "Choices".to_string(),
+            no_3d: true,
+        }
+    );
+}
+
+#[test]
+fn list_box_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::ListBox {
+        input_range: Some("$H$1:$H$4".to_string()),
+        cell_link: Some("$D$5".to_string()),
+        selection: ListSelection::Single,
+        selected: vec![3],
+        no_3d: true,
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$5".to_string()),
+            selection: ListSelection::Single,
+            selected: vec![3],
+            no_3d: true,
+        }
+    );
+}
+
+#[test]
+fn list_box_multi_select_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::ListBox {
+        input_range: Some("$H$1:$H$5".to_string()),
+        cell_link: None,
+        selection: ListSelection::Multi,
+        selected: vec![1, 3, 5],
+        no_3d: false,
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::ListBox {
+            input_range: Some("$H$1:$H$5".to_string()),
+            cell_link: None,
+            selection: ListSelection::Multi,
+            selected: vec![1, 3, 5],
+            no_3d: false,
+        }
+    );
+}
+
+#[test]
+fn dropdown_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::Dropdown {
+        input_range: Some("$H$1:$H$4".to_string()),
+        cell_link: Some("$D$4".to_string()),
+        selected: Some(2),
+        lines: 6,
+        no_3d: true,
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::Dropdown {
+            input_range: Some("$H$1:$H$4".to_string()),
+            cell_link: Some("$D$4".to_string()),
+            selected: Some(2),
+            lines: 6,
+            no_3d: true,
+        }
+    );
+}
+
+#[test]
+fn scrollbar_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::Scrollbar {
+        value: 40,
+        min: 5,
+        max: 95,
+        increment: 2,
+        page: 10,
+        horizontal: true,
+        cell_link: Some("$D$6".to_string()),
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::Scrollbar {
+            value: 40,
+            min: 5,
+            max: 95,
+            increment: 2,
+            page: 10,
+            horizontal: true,
+            cell_link: Some("$D$6".to_string()),
+        }
+    );
+}
+
+#[test]
+fn spinner_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::Spinner {
+        value: 12,
+        min: 0,
+        max: 30,
+        increment: 3,
+        cell_link: Some("$D$7".to_string()),
+    });
+    assert_eq!(
+        kind,
+        FormControlKind::Spinner {
+            value: 12,
+            min: 0,
+            max: 30,
+            increment: 3,
+            cell_link: Some("$D$7".to_string()),
+        }
+    );
+}
+
+#[test]
+fn cross_sheet_cell_link_round_trips() {
+    let mut wb = Workbook::new();
+    wb.add_worksheet_with_name("Data").expect("second sheet");
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Checkbox {
+            caption: "linked".to_string(),
+            state: CheckState::Checked,
+            cell_link: Some("Data!$B$2".to_string()),
+            no_3d: false,
+        },
+        anchor(0, 0, 2, 2),
+    ));
+
+    let parsed = write_then_read(&wb);
+    let controls = parsed.worksheet(0).unwrap().form_controls();
+    assert_eq!(controls.len(), 1);
+    assert_eq!(controls[0].cell_link(), Some("Data!$B$2"));
+}
+
+#[test]
+fn unicode_caption_round_trips() {
+    let kind = single_control_round_trip(FormControlKind::Checkbox {
+        caption: " 自行拖车Shipper arrange ✓".to_string(),
+        state: CheckState::Unchecked,
+        cell_link: None,
+        no_3d: false,
+    });
+    match kind {
+        FormControlKind::Checkbox { caption, .. } => {
+            assert_eq!(caption, " 自行拖车Shipper arrange ✓");
+        }
+        other => panic!("expected Checkbox, got {other:?}"),
+    }
+}
+
+#[test]
+fn control_anchor_round_trips() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Button {
+            caption: "here".to_string(),
+        },
+        anchor(2, 3, 5, 8),
+    ));
+
+    let parsed = write_then_read(&wb);
+    let controls = parsed.worksheet(0).unwrap().form_controls();
+    match &controls[0].anchor {
+        DrawingAnchor::TwoCell { from, to, .. } => {
+            assert_eq!(from.col, 2);
+            assert_eq!(from.row, 3);
+            assert_eq!(to.col, 5);
+            assert_eq!(to.row, 8);
+        }
+        other => panic!("expected TwoCell anchor, got {other:?}"),
+    }
+}
+
+#[test]
+fn locked_and_printable_flags_round_trip() {
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    let mut control = FormControl::with_anchor(
+        FormControlKind::Checkbox {
+            caption: "flags".to_string(),
+            state: CheckState::Unchecked,
+            cell_link: None,
+            no_3d: false,
+        },
+        anchor(0, 0, 2, 2),
+    );
+    control.locked = false;
+    control.printable = false;
+    ws.add_form_control(control);
+
+    let parsed = write_then_read(&wb);
+    let controls = parsed.worksheet(0).unwrap().form_controls();
+    assert!(!controls[0].locked);
+    assert!(!controls[0].printable);
+}
+
+#[test]
+fn controls_coexist_with_comments_and_pictures() {
+    // Ordering test: pictures, comments, and controls share the
+    // per-sheet drawing; OBJ↔shape pairing must stay positional.
+    const TEST_PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+        0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78,
+        0x9C, 0x63, 0x60, 0x00, 0x02, 0x00, 0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F,
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", 42.0).expect("A1");
+    ws.add_image(duke_sheets_chart::EmbeddedImage {
+        id: 1,
+        name: "Pic".to_string(),
+        description: None,
+        anchor: anchor(6, 1, 8, 4),
+        format: duke_sheets_chart::ImageFormat::Png,
+        media_path: String::new(),
+        svg_media_path: None,
+        width_emu: 1_000_000,
+        height_emu: 1_000_000,
+        rotation: None,
+        flip_h: false,
+        flip_v: false,
+        data: TEST_PNG_1X1.to_vec(),
+        svg_data: None,
+    });
+    ws.set_comment_at(0, 0, duke_sheets_core::CellComment::new("Author", "note"));
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Checkbox {
+            caption: "check".to_string(),
+            state: CheckState::Checked,
+            cell_link: None,
+            no_3d: false,
+        },
+        anchor(1, 1, 3, 3),
+    ));
+    ws.add_form_control(FormControl::with_anchor(
+        FormControlKind::Button {
+            caption: "go".to_string(),
+        },
+        anchor(1, 5, 3, 7),
+    ));
+
+    let parsed = write_then_read(&wb);
+    let ws2 = parsed.worksheet(0).unwrap();
+    assert_eq!(ws2.image_count(), 1, "picture survives");
+    assert_eq!(ws2.comment_count(), 1, "comment survives");
+    let controls = ws2.form_controls();
+    assert_eq!(controls.len(), 2, "controls survive");
+    assert_eq!(controls[0].caption(), Some("check"));
+    assert_eq!(controls[1].caption(), Some("go"));
+    match &controls[0].kind {
+        FormControlKind::Checkbox { state, .. } => assert_eq!(*state, CheckState::Checked),
+        other => panic!("expected Checkbox, got {other:?}"),
+    }
+}
+
+#[test]
+fn controls_on_multiple_sheets_round_trip() {
+    let mut wb = Workbook::new();
+    wb.add_worksheet_with_name("Second").expect("sheet 2");
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::Checkbox {
+                caption: "one".to_string(),
+                state: CheckState::Checked,
+                cell_link: None,
+                no_3d: false,
+            },
+            anchor(0, 0, 2, 2),
+        ));
+    wb.worksheet_mut(1)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::Spinner {
+                value: 5,
+                min: 0,
+                max: 10,
+                increment: 1,
+                cell_link: None,
+            },
+            anchor(0, 0, 1, 3),
+        ));
+
+    let parsed = write_then_read(&wb);
+    assert_eq!(parsed.worksheet(0).unwrap().form_control_count(), 1);
+    assert_eq!(parsed.worksheet(1).unwrap().form_control_count(), 1);
+    assert_eq!(
+        parsed.worksheet(0).unwrap().form_controls()[0].caption(),
+        Some("one")
+    );
+    match &parsed.worksheet(1).unwrap().form_controls()[0].kind {
+        FormControlKind::Spinner { value, max, .. } => {
+            assert_eq!(*value, 5);
+            assert_eq!(*max, 10);
+        }
+        other => panic!("expected Spinner, got {other:?}"),
+    }
+}
+
+#[test]
+fn empty_workbook_emits_no_drawing_records() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .set_cell_value("A1", "value")
+        .expect("A1");
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+    let parsed = XlsReader::read(Cursor::new(&bytes)).expect("read");
+    assert_eq!(parsed.worksheet(0).unwrap().form_control_count(), 0);
+}
