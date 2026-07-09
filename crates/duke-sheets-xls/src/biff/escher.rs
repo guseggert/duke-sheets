@@ -135,6 +135,9 @@ pub mod shape_type {
     pub const TEXT_BOX: u16 = 0x00CA;
     /// `msosptPictureFrame` — used by embedded pictures.
     pub const PICTURE_FRAME: u16 = 0x004B;
+    /// `msosptHostControl` — used by Forms toolbar controls
+    /// (checkboxes, buttons, list boxes, ...).
+    pub const HOST_CONTROL: u16 = 0x00C9;
 }
 
 /// MS-ODRAW §2.2.32 OfficeArtFBSE blip-type codes (`btWin32`,
