@@ -615,19 +615,33 @@ fn empty_caption_round_trips() {
 }
 
 #[test]
-fn oversized_caption_is_truncated_not_corrupted() {
-    // Captions are capped at 4000 UTF-16 units so the text payload
-    // fits one CONTINUE record; anything longer must truncate rather
-    // than emit an oversized (corrupt) BIFF record.
+fn oversized_caption_round_trips_via_multiple_continue_records() {
     let long: String = "xy".repeat(3000); // 6000 chars
-    let kind = single_control_round_trip(FormControlKind::Label { caption: long });
+    let kind = single_control_round_trip(FormControlKind::Label {
+        caption: long.clone(),
+    });
     match kind {
         FormControlKind::Label { caption } => {
-            assert_eq!(caption.len(), 4000, "caption truncated to the cap");
-            assert!(caption.starts_with("xyxy"));
+            assert_eq!(caption, long);
         }
         other => panic!("expected Label, got {other:?}"),
     }
+}
+
+#[test]
+fn caption_over_u16_character_limit_returns_a_clean_error() {
+    let mut wb = Workbook::new();
+    wb.worksheet_mut(0)
+        .unwrap()
+        .add_form_control(FormControl::with_anchor(
+            FormControlKind::Label {
+                // Each supplementary scalar is two UTF-16 units.
+                caption: "😀".repeat(32_768),
+            },
+            anchor(0, 0, 2, 2),
+        ));
+    let err = XlsWriter::write_to_bytes(&wb).expect_err("caption exceeds cchText");
+    assert!(err.to_string().contains("maximum is 65535"));
 }
 
 #[test]

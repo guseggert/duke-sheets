@@ -4783,7 +4783,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> 
         }
     }
 
-    fn comment_record(comment: &CommentShape) -> ShapeRecord {
+    fn comment_record(comment: &CommentShape) -> XlsResult<ShapeRecord> {
         let mut pre = Vec::new();
         OfficeArtFsp {
             spid: comment.spid,
@@ -4801,14 +4801,14 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> 
         write_comment_obj_to_vec(&mut obj, comment);
 
         let mut post_txo = Vec::new();
-        write_comment_txo_to_vec(&mut post_txo, comment);
+        write_comment_txo_to_vec(&mut post_txo, comment)?;
 
-        ShapeRecord {
+        Ok(ShapeRecord {
             sp_payload: pre,
             post_obj: post,
             obj,
             post_txo,
-        }
+        })
     }
 
     fn control_record(control: &ControlShape) -> XlsResult<ShapeRecord> {
@@ -4828,7 +4828,11 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> 
         let mut post_txo = Vec::new();
         if let Some(caption) = control.control.caption() {
             write_client_textbox(&mut post);
-            write_control_txo_to_vec(&mut post_txo, caption, control_txo_flags(&control.control.kind));
+            write_control_txo_to_vec(
+                &mut post_txo,
+                caption,
+                control_txo_flags(&control.control.kind),
+            )?;
         }
 
         let mut obj = Vec::new();
@@ -4854,7 +4858,7 @@ fn write_sheet_drawing_records(stream: &mut Vec<u8>, drawing: &SheetDrawing) -> 
         shape_records.push(picture_record(picture, anchor));
     }
     for comment in &drawing.comments {
-        shape_records.push(comment_record(comment));
+        shape_records.push(comment_record(comment)?);
     }
     for control in &drawing.controls {
         shape_records.push(control_record(control)?);
@@ -5242,16 +5246,23 @@ fn deterministic_guid(seed: u32) -> [u8; 16] {
 /// - 4 bytes reserved.
 /// Emit a comment's `TXO` record + the two `CONTINUE` records that
 /// carry its text payload and formatting runs.
-fn write_comment_txo_to_vec(out: &mut Vec<u8>, comment: &CommentShape) {
-    write_txo_records(out, &comment.text, 0x0212);
+fn write_comment_txo_to_vec(out: &mut Vec<u8>, comment: &CommentShape) -> XlsResult<()> {
+    write_txo_records(out, &comment.text, 0x0212)
 }
 
 /// Emit a `TXO` record with the given flags, plus (for non-empty
 /// text) the two `CONTINUE` records carrying the text payload and a
 /// single plain formatting run. Empty text writes only the 18-byte
 /// header with `cchText = 0` and `cbRuns = 0` (MS-XLS 2.4.329).
-fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) {
+fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) -> XlsResult<()> {
     let utf16: Vec<u16> = text.encode_utf16().collect();
+    let cch_text = u16::try_from(utf16.len()).map_err(|_| {
+        XlsError::InvalidFormat(format!(
+            "XLS text-box text has {} UTF-16 units; maximum is {}",
+            utf16.len(),
+            u16::MAX
+        ))
+    })?;
     let high_byte = utf16.iter().any(|&u| u > 0xFF);
 
     // TXO header.
@@ -5259,7 +5270,7 @@ fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) {
     header.extend_from_slice(&flags.to_le_bytes());
     header.extend_from_slice(&0u16.to_le_bytes()); // rot
     header.extend_from_slice(&[0u8; 6]); // reserved
-    header.extend_from_slice(&(utf16.len() as u16).to_le_bytes()); // cchText
+    header.extend_from_slice(&cch_text.to_le_bytes()); // cchText
     let cb_runs: u16 = if utf16.is_empty() { 0 } else { 16 };
     header.extend_from_slice(&cb_runs.to_le_bytes()); // cbRuns
     header.extend_from_slice(&[0u8; 2]); // ifntEmpty
@@ -5267,24 +5278,30 @@ fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) {
     write_biff_record(out, TXO_RECORD, &header);
 
     if utf16.is_empty() {
-        return;
+        return Ok(());
     }
 
-    // First CONTINUE: text payload prefixed by a 1-byte grbit
-    // (0x00 = compressed Latin-1, 0x01 = UTF-16LE).
-    let mut text_body = Vec::with_capacity(1 + utf16.len() * 2);
+    // Each text CONTINUE starts with its own encoding grbit. Split on
+    // UTF-16 code-unit boundaries so no BIFF body exceeds 8224 bytes.
     if high_byte {
-        text_body.push(0x01);
-        for u in &utf16 {
-            text_body.extend_from_slice(&u.to_le_bytes());
+        const CHARS_PER_CONTINUE: usize = (BIFF_MAX_RECORD_BODY - 1) / 2;
+        for chunk in utf16.chunks(CHARS_PER_CONTINUE) {
+            let mut text_body = Vec::with_capacity(1 + chunk.len() * 2);
+            text_body.push(0x01);
+            for u in chunk {
+                text_body.extend_from_slice(&u.to_le_bytes());
+            }
+            write_biff_record(out, CONTINUE_RECORD, &text_body);
         }
     } else {
-        text_body.push(0x00);
-        for u in &utf16 {
-            text_body.push(*u as u8);
+        const CHARS_PER_CONTINUE: usize = BIFF_MAX_RECORD_BODY - 1;
+        for chunk in utf16.chunks(CHARS_PER_CONTINUE) {
+            let mut text_body = Vec::with_capacity(1 + chunk.len());
+            text_body.push(0x00);
+            text_body.extend(chunk.iter().map(|unit| *unit as u8));
+            write_biff_record(out, CONTINUE_RECORD, &text_body);
         }
     }
-    write_biff_record(out, CONTINUE_RECORD, &text_body);
 
     // Second CONTINUE: formatting runs. Two TxoRun entries (8 bytes
     // each): (ich=0, ifnt=0, reserved=0) opens the default-font run,
@@ -5298,25 +5315,12 @@ fn write_txo_records(out: &mut Vec<u8>, text: &str, flags: u16) {
     runs_body.extend_from_slice(&0u16.to_le_bytes()); // ifnt = 0
     runs_body.extend_from_slice(&[0u8; 4]); // reserved
     write_biff_record(out, CONTINUE_RECORD, &runs_body);
+    Ok(())
 }
 
-/// Emit a form control's caption `TXO` (+ CONTINUEs). Captions are
-/// capped at 4000 UTF-16 units so the text payload always fits a
-/// single CONTINUE record (Excel's own control captions are far
-/// shorter).
-fn write_control_txo_to_vec(out: &mut Vec<u8>, caption: &str, flags: u16) {
-    const MAX_CAPTION_UTF16: usize = 4000;
-    let mut units = 0usize;
-    let mut end = caption.len();
-    for (i, ch) in caption.char_indices() {
-        let w = ch.len_utf16();
-        if units + w > MAX_CAPTION_UTF16 {
-            end = i;
-            break;
-        }
-        units += w;
-    }
-    write_txo_records(out, &caption[..end], flags);
+/// Emit a form control's caption `TXO` (+ CONTINUEs).
+fn write_control_txo_to_vec(out: &mut Vec<u8>, caption: &str, flags: u16) -> XlsResult<()> {
+    write_txo_records(out, caption, flags)
 }
 
 /// TXO alignment flags per control kind, as pinned from Excel
