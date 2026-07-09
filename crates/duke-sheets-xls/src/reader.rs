@@ -233,6 +233,11 @@ impl XlsReader {
         // records. Indexed 1-based by the FOPT `pib` (picture blip id)
         // property referenced from picture SP_CONTAINERs.
         let mut blip_store: Vec<BlipData> = Vec::new();
+        // Excel splits a large drawing group across multiple
+        // MSODRAWINGGROUP records, each holding a fragment of one
+        // logical DggContainer stream, so bodies are concatenated
+        // here and walked once after the globals loop.
+        let mut msodrawinggroup_bytes: Vec<u8> = Vec::new();
 
         // Find where globals end by iterating until we see an EOF
         // after the first BOF (globals BOF).
@@ -336,10 +341,14 @@ impl XlsReader {
                     }
                 }
                 records::MSODRAWINGGROUP if in_globals => {
-                    Self::parse_msodrawinggroup(&rec.data, &mut blip_store);
+                    msodrawinggroup_bytes.extend_from_slice(&rec.data);
                 }
                 _ => {}
             }
+        }
+
+        if !msodrawinggroup_bytes.is_empty() {
+            Self::parse_msodrawinggroup(&msodrawinggroup_bytes, &mut blip_store);
         }
 
         if globals_end_idx == 0 && !in_globals {

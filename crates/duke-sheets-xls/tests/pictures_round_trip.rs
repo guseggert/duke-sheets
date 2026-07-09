@@ -869,3 +869,61 @@ fn empty_workbook_emits_no_blip_store() {
     let parsed = XlsReader::read(Cursor::new(&bytes)).expect("read");
     assert_eq!(parsed.worksheet(0).unwrap().image_count(), 0);
 }
+
+#[test]
+fn msodrawinggroup_split_across_multiple_records_round_trips() {
+    // Excel splits a large OfficeArt drawing group across multiple
+    // MSODRAWINGGROUP records (not CONTINUE records), each carrying a
+    // fragment of one logical DggContainer byte stream. The reader must
+    // concatenate every MSODRAWINGGROUP body before walking the Escher
+    // tree, or blips after the first split point are lost.
+    let mut wb = Workbook::new();
+    let ws = wb.worksheet_mut(0).unwrap();
+    ws.set_cell_value("A1", "anchor").expect("A1");
+    ws.add_image(test_image(1, "First", 1, 1));
+    ws.add_image(test_image(2, "Second", 6, 10));
+
+    let bytes = XlsWriter::write_to_bytes(&wb).expect("serialize");
+
+    // Extract the Workbook stream and split the single MSODRAWINGGROUP
+    // record body into two MSODRAWINGGROUP records mid-container.
+    let cfb = duke_sheets_xls::cfb::CompoundFile::open(Cursor::new(&bytes)).expect("open cfb");
+    let stream = cfb.read_stream("/Workbook").expect("workbook stream");
+
+    const MSODRAWINGGROUP: u16 = 0x00EB;
+    let mut rebuilt = Vec::with_capacity(stream.len() + 4);
+    let mut cursor = 0usize;
+    let mut split = false;
+    while cursor + 4 <= stream.len() {
+        let id = u16::from_le_bytes([stream[cursor], stream[cursor + 1]]);
+        let len = u16::from_le_bytes([stream[cursor + 2], stream[cursor + 3]]) as usize;
+        let body = &stream[cursor + 4..cursor + 4 + len];
+        if id == MSODRAWINGGROUP && !split {
+            split = true;
+            let mid = len / 2;
+            for part in [&body[..mid], &body[mid..]] {
+                rebuilt.extend_from_slice(&MSODRAWINGGROUP.to_le_bytes());
+                rebuilt.extend_from_slice(&(part.len() as u16).to_le_bytes());
+                rebuilt.extend_from_slice(part);
+            }
+        } else {
+            rebuilt.extend_from_slice(&stream[cursor..cursor + 4 + len]);
+        }
+        cursor += 4 + len;
+    }
+    assert!(split, "expected a MSODRAWINGGROUP record in the stream");
+
+    let mut builder = duke_sheets_xls::cfb::CompoundFileBuilder::new();
+    builder.add_stream("/Workbook", rebuilt).expect("add stream");
+    let patched = builder.build().expect("rebuild cfb");
+
+    let parsed = XlsReader::read(Cursor::new(&patched)).expect("read back");
+    let images = parsed.worksheet(0).unwrap().images();
+    assert_eq!(
+        images.len(),
+        2,
+        "both blips must survive a split MSODRAWINGGROUP"
+    );
+    assert_eq!(images[0].data(), TEST_PNG_1X1);
+    assert_eq!(images[1].data(), TEST_PNG_1X1);
+}
