@@ -71,6 +71,8 @@ pub use duke_sheets_core::{
     CfValueType,
     // Chart sheet types
     ChartSheet,
+    // Form control types
+    CheckState,
     Color,
     ColumnFilter,
     ConditionalFormatRule,
@@ -84,11 +86,14 @@ pub use duke_sheets_core::{
     FilterColumn,
     FilterOperator,
     FontStyle,
+    FormControl,
+    FormControlKind,
     // Sheet-level types
     FreezePanes,
     HorizontalAlignment,
     Hyperlink,
     IconSetStyle,
+    ListSelection,
     // Locale for cell formatting
     Locale,
 

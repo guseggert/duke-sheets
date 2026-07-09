@@ -44,6 +44,9 @@ pub use crate::{
     FileFormat,
     FillStyle,
     FontStyle,
+    // Form control types
+    FormControl,
+    FormControlKind,
     HorizontalAlignment,
     Hyperlink,
     IconSetStyle,

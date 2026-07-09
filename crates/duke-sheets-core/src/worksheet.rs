@@ -13,6 +13,7 @@ use crate::cell::{CellAddress, CellData, CellRange, CellStorage, CellValue, Form
 use crate::comment::CellComment;
 use crate::conditional_format::ConditionalFormatRule;
 use crate::error::{Error, Result};
+use crate::form_control::FormControl;
 use crate::hyperlink::Hyperlink;
 use crate::locale::Locale;
 use crate::style::Style;
@@ -75,6 +76,8 @@ pub struct Worksheet {
     charts_ex: Vec<ChartEx>,
     /// Embedded images from drawing
     images: Vec<EmbeddedImage>,
+    /// Form controls (Forms toolbar objects)
+    form_controls: Vec<FormControl>,
     /// Standalone auto-filter (dropdown filter on columns)
     auto_filter: Option<AutoFilter>,
     /// Horizontal page breaks (row breaks)
@@ -160,6 +163,7 @@ impl Worksheet {
             charts: Vec::new(),
             charts_ex: Vec::new(),
             images: Vec::new(),
+            form_controls: Vec::new(),
             auto_filter: None,
             row_breaks: Vec::new(),
             col_breaks: Vec::new(),
@@ -1306,6 +1310,26 @@ impl Worksheet {
     /// Get the number of embedded images.
     pub fn image_count(&self) -> usize {
         self.images.len()
+    }
+
+    /// Add a form control to this worksheet.
+    pub fn add_form_control(&mut self, control: FormControl) {
+        self.form_controls.push(control);
+    }
+
+    /// Get all form controls.
+    pub fn form_controls(&self) -> &[FormControl] {
+        &self.form_controls
+    }
+
+    /// Get mutable access to the form controls.
+    pub fn form_controls_mut(&mut self) -> &mut Vec<FormControl> {
+        &mut self.form_controls
+    }
+
+    /// Get the number of form controls.
+    pub fn form_control_count(&self) -> usize {
+        self.form_controls.len()
     }
 
     /// Set the standalone auto-filter for this worksheet.
